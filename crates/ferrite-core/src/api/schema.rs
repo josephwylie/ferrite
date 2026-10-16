@@ -25,8 +25,9 @@
 //! - `server_unavailable`: the CLI's own, no Server answered.
 //!
 //! Thread ids are the Store's, so they hold across a Server's restart
-//! (ADR 0029); a Thread's `attention_seq` and `completion_seq` count from
-//! the Server's start.
+//! (ADR 0029); a Thread's `attention_seq` and `completion_seq` are one
+//! count for every Thread of the Server's `boot`, never reset by a park or
+//! a revive, and start over with another `boot` when it restarts.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

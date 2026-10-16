@@ -16,6 +16,9 @@ use crate::store::Provider;
 use crate::transcript::Body;
 use crate::{Decision, DecisionAnswer, SessionEvent};
 
+#[cfg(unix)]
+mod herdr;
+
 pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fs-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -2151,7 +2154,11 @@ fn a_closed_thread_is_revived_in_place() {
         serde_json::json!({ "cwd": harness.dir, "args": ["--model", "opus"] }),
     );
     let thread = started["result"]["thread"]["thread"].clone();
-    let open = caller.answer("2", "thread.revive", serde_json::json!({ "thread": thread }));
+    let open = caller.answer(
+        "2",
+        "thread.revive",
+        serde_json::json!({ "thread": thread }),
+    );
     assert_eq!(open["error"]["code"], "invalid_request", "{open}");
     caller.answer("3", "thread.close", serde_json::json!({ "thread": thread }));
     let revived = caller.answer(
@@ -2160,11 +2167,88 @@ fn a_closed_thread_is_revived_in_place() {
         serde_json::json!({ "thread": thread, "resume": "4f2a", "ready": true }),
     );
     assert_eq!(revived["result"]["thread"]["thread"], thread, "{revived}");
-    assert_eq!(revived["result"]["thread"]["attention"], "idle", "{revived}");
+    assert_eq!(
+        revived["result"]["thread"]["attention"], "idle",
+        "{revived}"
+    );
     let got = caller.answer("5", "thread.get", serde_json::json!({ "thread": thread }));
     assert!(got.get("result").is_some(), "{got}");
     let unknown = caller.answer("6", "thread.revive", serde_json::json!({ "thread": 999 }));
     assert_eq!(unknown["error"]["code"], "unknown_thread", "{unknown}");
+}
+
+/// Herdr's `state_change_seq` never repeats within a run: a Thread's turn
+/// after its revive counts past every turn before its park, so a turn
+/// handled once is never taken for the next one. The boot names the run.
+#[test]
+fn a_revived_thread_counts_on_from_its_boot() {
+    let harness = start("api-revive-count");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({ "cwd": harness.dir, "ready": true }),
+    );
+    let thread = started["result"]["thread"]["thread"].clone();
+    let boot = started["result"]["thread"]["boot"].clone();
+    assert!(
+        boot.as_str().is_some_and(|boot| !boot.is_empty()),
+        "{started}"
+    );
+    let turn = |caller: &mut Caller, id: &str| {
+        let provider = harness
+            .sessions
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        caller.answer(
+            id,
+            "agent.prompt",
+            serde_json::json!({ "thread": thread, "text": "go", "until": ["working"], "timeout_ms": 8000 }),
+        );
+        provider
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let got = caller.answer(id, "thread.get", serde_json::json!({ "thread": thread }));
+            if got["result"]["thread"]["completion_seq"].is_u64() || Instant::now() >= deadline {
+                break (got, provider);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let (first, _provider) = turn(&mut caller, "2");
+    let handled = first["result"]["thread"]["completion_seq"]
+        .as_u64()
+        .unwrap();
+
+    caller.answer("3", "thread.close", serde_json::json!({ "thread": thread }));
+    let revived = caller.answer(
+        "4",
+        "thread.revive",
+        serde_json::json!({ "thread": thread, "ready": true }),
+    );
+    assert!(
+        revived["result"]["thread"]["attention_seq"]
+            .as_u64()
+            .unwrap()
+            > handled,
+        "its opening is counted past the handled turn: {revived}"
+    );
+    assert!(
+        revived["result"]["thread"].get("completion_seq").is_none(),
+        "{revived}"
+    );
+    let (second, _provider) = turn(&mut caller, "5");
+    let info = &second["result"]["thread"];
+    assert!(
+        info["completion_seq"].as_u64().unwrap() > handled,
+        "{second}"
+    );
+    assert_eq!(info["boot"], boot, "{second}");
 }
 
 /// Herdr's `workspace focus`: every window lands on the Project's first
@@ -2198,7 +2282,11 @@ fn a_project_is_focused_by_id() {
         )),
         ServerMessage::Focus { thread }
     );
-    let missing = caller.answer("3", "project.focus", serde_json::json!({ "project": "999" }));
+    let missing = caller.answer(
+        "3",
+        "project.focus",
+        serde_json::json!({ "project": "999" }),
+    );
     assert_eq!(missing["error"]["code"], "project_not_found", "{missing}");
 
     // A Project with no open Thread has nothing to land on: nothing moves.

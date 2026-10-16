@@ -59,6 +59,12 @@ pub fn ask(method: &str, _params: &Value, _socket: Option<&str>) -> HRes<Value> 
 /// (`thread.close`), never signalled, and its pane kept, for its agent to be started there again (`thread.revive`).
 pub fn pane_quit(socket: Option<&str>, pane: &str) -> bool { Ferrite::at(socket, 10000).quit(pane).is_ok() }
 
+/// herdr's `Herdr::pane_focus`, which zooms a pane to put the keyboard on it: every window lands on its Thread
+/// (`thread.focus`). A pane at its shell has none to land on.
+pub fn pane_focus(socket: Option<&str>, pane: &str) -> HRes<()> {
+    Ferrite::at(socket, 5000).focus(pane, "pane").map(|_| ()).map_err(|r| herdr_error(r, "pane"))
+}
+
 fn not_wired(what: &str) -> HerdrError {
     HerdrError { code: "not_wired".into(), message: format!("Ferrite has not wired {what} to its Server yet.") }
 }
@@ -155,8 +161,11 @@ struct Place { id: String, space: String, cwd: String, label: String, thread: Op
 impl Place {
     fn focused(&self) -> bool { self.thread.as_ref().map(|t| t.b("focused")).unwrap_or(false) }
     fn thread_id(&self) -> Option<u64> { self.thread.as_ref().and_then(|t| t.at("thread").as_u64()) }
-    /// herdr's terminal id, which changes when the program behind the pane does: its Thread's.
-    fn terminal(&self) -> String { self.thread_id().map(|t| t.to_string()).unwrap_or_else(|| self.id.clone()) }
+    /// herdr's terminal id, which holds while its server runs and changes when it restarts, its `state_change_seq`
+    /// starting over: its Thread's, in the Server's boot its Attention is counted in (`thread@boot`).
+    fn terminal(&self) -> String {
+        match &self.thread { Some(t) => format!("{}@{}", text(t.at("thread")), t.t("boot")), None => self.id.clone() }
+    }
     fn pane_json(&self) -> Value {
         let t = self.thread.as_ref();
         json!({ "pane_id": self.id, "tab_id": self.id, "workspace_id": self.space, "terminal_id": self.terminal(), "cwd": self.cwd, "foreground_cwd": self.cwd,

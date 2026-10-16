@@ -151,10 +151,10 @@ How each herdr call is answered:
 | `tab create`, `pane split`, `worktree open` | a placed pane (`worktree open` of a Space a pane is in answers that pane, `already_open`) |
 | `worktree create` | `worktree.create`, then a pane placed in its Space |
 | `worktree remove --workspace` | `worktree.remove` by the Space's path; `--force` and a Project's Space are refused |
-| `tab list`, `pane list`, `agent list`, `tab get`, `pane get`, `agent get` | `thread.list` and the placed panes; an agent is a Thread, its Attention herdr's status word for word, `attention_seq` its `state_change_seq` and **added** `completion_seq` its own (absent until a turn ended, as herdr's); `agent get` of a pane at its shell is `agent_not_found` |
+| `tab list`, `pane list`, `agent list`, `tab get`, `pane get`, `agent get` | `thread.list` and the placed panes; an agent is a Thread, its Attention herdr's status word for word, `attention_seq` its `state_change_seq` and **added** `completion_seq` its own (absent until a turn ended, as herdr's), its `terminal_id` `<thread>@<boot>` (**added** `boot`): one per Thread while the Server runs, another after it restarts, as herdr's terminal ids and their counter are; `agent get` of a pane at its shell is `agent_not_found` |
 | `tab rename` | the placed pane's label; any other Thread: `thread.rename` |
 | `tab close`, `pane close` | `thread.close`, and the placed pane forgotten |
-| `tab focus`, `agent focus`, `agent attach` | `thread.focus` (a pane at its shell has nothing to land on) |
+| `tab focus`, `agent focus`, `agent attach`, `Herdr::pane_focus` | `thread.focus` (a pane at its shell has nothing to land on); `pane_focus`, which zooms a pane in herdr, reaches the seam by a `Ferrite:` line, as `pane_quit` does |
 | `agent start` | `thread.start --ready --timeout-ms` (within the call's deadline) (`--args`, `--resume`, `--project`, **added** `--env`); in a pane whose agent of that kind ran before, **added** `thread.revive --ready`, so the Thread keeps its id as the pane does. `claude` and `codex` only: any other kind is refused `no_provider` before anything starts |
 | `pane quit` | `thread.close` (the `Ferrite:` line in `Herdr::pane_quit`) |
 | `pane run` (`env HERDR_PROJECTS_AGENT=<name> bwrap … -- <program> …`) | `agent start` with the mount as **added** `--launcher`, ready within the call's deadline less a margin (so a slow start is refused `agent_not_ready` naming its Thread, which the pane keeps, rather than lost to the socket's timeout); any other command is refused. Only Linux machines with `bwrap` get here: elsewhere upstream refuses a plan in a repo itself |
@@ -168,7 +168,7 @@ How each herdr call is answered:
 | `machine list --json` | `machine.list`, in its order, each `session` `default`, `enabled` |
 | `pane move` (a coordinator from before it had a tab) | refused: no Ferrite install has that layout |
 | `plugin list`, `config-dir`, `disable` | refused: the web UI and herdr-superwork, neither of which Ferrite has (`webui/find.rs` finds no web UI, `take_over`'s `old_plugin_off` is false) |
-| `plugin pane open`, `pane layout`, `pane zoom`, `terminal session control`, `popup.close`, `tab.get`, `events.subscribe` | refused: the board's terminal runtime, replaced by Seam 3. `Herdr::pane_focus` asks `pane layout` first and, refused, does nothing, so it never zooms; `go_to`'s `tab focus` has already landed the window on the Thread |
+| `plugin pane open`, `pane layout`, `pane zoom`, `terminal session control`, `popup.close`, `tab.get`, `events.subscribe` | refused: the board's terminal runtime, replaced by Seam 3. `socket::on_tab_shown` asks the seam for its subscription by a `Ferrite:` line and, refused, connects nowhere (upstream's popup test in `board_stay_keys.rs` is ignored) |
 | `--default-config`, `config check`, `server reload-config` | refused: herdr's first-run setup |
 
 herdr's error codes come back as herdr gives them: no open Thread is
@@ -176,8 +176,8 @@ herdr's error codes come back as herdr gives them: no open Thread is
 Project `workspace_not_found`; a Server that is not running `no_server`,
 one that does not answer in time `timeout` ("herdr did not answer in
 time"), and `cli::launch` still refuses an argument over 131072 bytes
-`too_long` first. `socket::on_tab_shown`, `flow`'s `extras/config.rs`
-and `board`'s `job_far.rs` start herdr themselves; only the terminal
+`too_long` first. `flow`'s `extras/config.rs` and `board`'s
+`job_far.rs` start herdr themselves; only the terminal
 runtime and herdr's first-run setup reach them, and Ferrite runs
 neither.
 
@@ -191,7 +191,8 @@ schema follow, with a v1 fixture. The additions are those marked above:
 |---|---|
 | `thread.start` | gains `env` (set in the agent's environment, under Ferrite's own) and `launcher` (a program the provider's CLI runs through, and its arguments: `bwrap … --`), each for every Session of that provider and saved with its `args`, so a revive or a Server restart starts it the same way; fixture `thread_start_launch` |
 | `project.focus` | every window lands on the Project's first open Thread, as `project.open --focus` does by directory, and the answer names it (`thread`). A Project with no open Thread has nothing for a window to show: nothing moves and no `thread` is named |
-| `ThreadInfo.completion_seq` | `attention_seq` when the Thread's last turn ended (its Attention came to rest, idle or done, from working or blocked): herdr's `completion_seq`, which the hook, the finish line, the Coordinator's pump and clean-up compare to tell a turn ended. Absent until a turn ended since the Server started |
+| `ThreadInfo.completion_seq` | `attention_seq` when the Thread's last turn ended (its Attention came to rest, idle or done, from working or blocked): herdr's `completion_seq`, which the hook, the finish line, the Coordinator's pump and clean-up compare to tell a turn ended. Absent until a turn ended since the Thread last opened |
+| `ThreadInfo.boot`, one `attention_seq` | herdr's `state_change_seq` is one counter for its whole server, so a turn after a pane's agent restarted always counts past the turn handled before (`flow/hook.rs` `after_handled`). So `attention_seq` is one count for every Thread of a boot, never reset by a park or a revive, and `boot` (the Engine's boot id, the one a window's resume names) says which run it counts in: the adapter makes it part of `terminal_id`, which herdr changes when its counter starts over |
 | `thread.revive` | a parked Thread's agent started again in place, keeping its id (`unknown_thread` if no parked Thread has it; an open one is refused `invalid_request`: close it first): its `args`, `env` and `launcher` replace those it was started with, it carries on `resume`'s conversation or starts a new one under its history, and `ready`, `timeout_ms` are `thread.start`'s. `thread.close` stays the stop half |
 
 ### Seam 3: the board in GPUI

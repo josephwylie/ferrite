@@ -893,6 +893,8 @@ pub struct Engine {
     open: Vec<ThreadId>,
     /// When this Engine started: the zero of every `at_ms` it publishes.
     boot: Instant,
+    /// This boot's identity (`boot_id`).
+    boot_id: String,
     /// What the Engine has told its clients and not yet handed over
     /// (`take_messages`), and the state each Thread's last `thread`
     /// message carried.
@@ -946,6 +948,15 @@ pub struct Engine {
     refuse_park: std::collections::HashSet<ThreadId>,
 }
 
+/// A boot's identity, unlike every other boot's.
+fn boot_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{:x}-{:x}", std::process::id(), nanos)
+}
+
 /// How long quitting waits for the drive to take every log's final sync.
 /// The writes themselves are always waited for.
 const QUIT_SYNC_DEADLINE: Duration = Duration::from_millis(500);
@@ -964,6 +975,7 @@ impl Engine {
             groups,
             open: Vec::new(),
             boot: crate::clock::instant(),
+            boot_id: boot_id(),
             outbox: Vec::new(),
             published: BTreeMap::new(),
             published_open: Vec::new(),
@@ -1969,6 +1981,7 @@ impl Engine {
             return Err(error);
         }
         let mut state = self.threads.remove(&thread).expect("checked");
+        self.count_closed(thread);
         if state.session.is_some() {
             crate::log!("thread {thread}: session ended: parked");
         }
@@ -3874,10 +3887,10 @@ impl Engine {
     }
 
     /// Everything a window draws before any transcript (ADR 0025).
-    pub fn snapshot(&mut self, boot_id: &str) -> protocol::Snapshot {
+    pub fn snapshot(&mut self) -> protocol::Snapshot {
         self.publish();
         protocol::Snapshot {
-            boot_id: boot_id.into(),
+            boot_id: self.boot_id.clone(),
             revision: self.revision,
             threads: self
                 .threads
@@ -4011,6 +4024,14 @@ impl Engine {
     /// When this Engine started: the zero of the `at_ms` it publishes.
     pub fn boot(&self) -> Instant {
         self.boot
+    }
+
+    /// This boot's identity: a resume names it, and the API's Attention
+    /// counts are of it. A Server that restarted has another, so no client
+    /// resumes into a stream that is not there, nor reads a count as one
+    /// it has seen.
+    pub fn boot_id(&self) -> &str {
+        &self.boot_id
     }
 
     /// The open Threads, in the order they opened.

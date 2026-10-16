@@ -250,9 +250,9 @@ impl Server {
         Ok(thread)
     }
 
-    /// Start a parked Thread's agent again in place, as `params` says; an
-    /// open Thread is closed first (`thread.close`), as Herdr's pane is
-    /// quit before its agent is started again.
+    /// Start a parked Thread's agent again in place, as `params` says. An
+    /// open Thread is refused: it is closed first (`thread.close`), as
+    /// Herdr's pane is quit before its agent is started again.
     fn revive_thread(&mut self, params: ThreadReviveParams) -> Result<(), ApiError> {
         let thread = params.thread;
         if self.engine.thread(thread).is_some() {

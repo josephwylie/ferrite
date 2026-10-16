@@ -105,9 +105,10 @@ Added for Projects (ADR 0030), each what herdr-projects asks of Herdr:
 `important`. A Thread's answer gains `focused` and `draft`, which the
 windows tell the Server (`focused`, `composing`, gen-1 commands only a
 Server hears), `project`, `provider_session` (the provider's own id,
-which it resumes from), `attention_seq` (Attention changes the Server
-has counted since it started; Thread ids hold across a restart, ADR
-0029), `held_prompt`, `queued_prompts`, `worktree` and its `branch`.
+which it resumes from), `attention_seq` (the change its Attention was
+last counted at, one count for every Thread of the Server's `boot`, so
+a revived Thread counts on past its park; Thread ids hold across a
+restart, ADR 0029, the count and `boot` do not, ADR 0031), `held_prompt`, `queued_prompts`, `worktree` and its `branch`.
 Herdr-projects reads a Terminal's screen for a draft in the prompt box
 and for trust dialogs; Ferrite answers the first with `draft` and has no
 second: whatever an agent asks the operator is a Decision, so `blocked`. `ferrite

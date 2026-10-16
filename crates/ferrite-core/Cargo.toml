@@ -55,3 +55,7 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+# herdr-projects' herdr client, answered by the real Server (ADR 0031).
+[target.'cfg(unix)'.dev-dependencies]
+sw-core = { workspace = true }

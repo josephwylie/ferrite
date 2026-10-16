@@ -51,7 +51,7 @@ impl World {
                 };
                 self.next += 1;
                 let t = json!({ "thread": 20 + self.next, "title": params.at("title"), "provider": params.at("provider"), "attention": "idle", "cwd": cwd, "focused": false,
-                    "project": project, "attention_seq": 0, "held_prompt": false, "queued_prompts": 0, "draft": false });
+                    "project": project, "attention_seq": 0, "boot": "b1", "held_prompt": false, "queued_prompts": 0, "draft": false });
                 self.threads.push(t.clone());
                 json!({ "thread": t })
             }
@@ -140,6 +140,12 @@ fn what_only_a_terminal_has_is_refused_unasked() {
         assert_eq!(refused(s.run(words)).code, "not_wired", "{words:?}");
     }
     assert_eq!(ask("popup.close", &json!({}), None).unwrap_err().code, "not_wired");
+    // herdr's tab events are never subscribed to: nothing connects.
+    let events = s.ferrite.server.socket.with_file_name("events.sock");
+    let listener = UnixListener::bind(&events).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    super::super::socket::on_tab_shown(Some(events.display().to_string()), |_| panic!("never"), || panic!("never"));
+    assert!(listener.accept().is_err());
     assert!(s.asked().is_empty());
 }
 
@@ -171,8 +177,8 @@ fn a_server_that_is_not_running_is_no_server_and_one_that_never_answers_a_timeou
 fn projects_and_worktrees_are_spaces_and_threads_their_panes() {
     let s = Stand::new("spaces");
     s.world.lock().unwrap().threads = vec![
-        json!({ "thread": 12, "title": "hp-demo", "provider": "claude", "attention": "working", "cwd": "/wt", "focused": true, "project": "1", "provider_session": "s-1", "attention_seq": 7, "completion_seq": 6, "worktree": "/wt" }),
-        json!({ "thread": 13, "title": "mine", "provider": "codex", "attention": "idle", "cwd": "/home/me", "focused": false, "project": "2", "attention_seq": 2 }),
+        json!({ "thread": 12, "title": "hp-demo", "provider": "claude", "attention": "working", "cwd": "/wt", "focused": true, "project": "1", "provider_session": "s-1", "attention_seq": 7, "completion_seq": 6, "boot": "b1", "worktree": "/wt" }),
+        json!({ "thread": 13, "title": "mine", "provider": "codex", "attention": "idle", "cwd": "/home/me", "focused": false, "project": "2", "attention_seq": 2, "boot": "b1" }),
     ];
     let spaces = s.run(&["workspace", "list"]).unwrap();
     let ids: Vec<&str> = spaces.arr("workspaces").iter().map(|w| w.s("workspace_id")).collect();
@@ -257,7 +263,7 @@ fn an_agent_starts_as_the_pane_placed_its_thread() {
         "resume": "s-1", "cwd": "/r/app", "provider": "claude", "title": "hp-demo-t-0001", "project": "1" }));
     let a = started.at("agent");
     assert_eq!((a.s("pane_id"), a.s("workspace_id"), a.s("agent"), a.s("agent_status")), (pane.as_str(), "1", "claude", "idle"));
-    assert_eq!(s.run(&["agent", "get", &pane]).unwrap().at("agent").s("terminal_id"), "21");
+    assert_eq!(s.run(&["agent", "get", &pane]).unwrap().at("agent").s("terminal_id"), "21@b1");
     let panes = s.run(&["pane", "list"]).unwrap();
     assert_eq!(panes.arr("panes").iter().map(|p| p.t("pane_id")).collect::<Vec<_>>(), [pane.clone()], "the Thread is the pane, once");
     assert_eq!(refused(s.run(&["agent", "start", "x", "--kind", "claude", "--pane", &pane])).code, "pane_busy");
@@ -297,12 +303,26 @@ fn an_agent_quit_and_started_again_is_its_thread_revived() {
     let again = s.run(&["agent", "start", "hp-demo-t-0001-b", "--kind", "claude", "--pane", &pane, "--", "--resume", "s-1"]).unwrap();
     assert_eq!(s.last("thread.revive"), json!({ "args": [], "env": { "HERDR_PROJECTS_DATA_DIR": "/data" }, "launcher": [], "ready": true, "timeout_ms": 60000, "resume": "s-1", "thread": 21 }));
     assert_eq!(s.last("thread.rename"), json!({ "thread": 21, "title": "hp-demo-t-0001-b" }));
-    assert_eq!(again.at("agent").s("terminal_id"), "21");
+    assert_eq!(again.at("agent").s("terminal_id"), "21@b1", "the same terminal while the Server runs");
     assert_eq!(s.count("thread.start"), 1);
     s.ferrite.quit(&pane).unwrap();
     s.run(&["agent", "start", "hp-demo-t-0001", "--kind", "codex", "--pane", &pane]).unwrap();
     assert_eq!(s.count("thread.start"), 2, "another kind is another Thread");
-    assert_eq!(s.run(&["agent", "get", &pane]).unwrap().at("agent").s("terminal_id"), "22");
+    assert_eq!(s.run(&["agent", "get", &pane]).unwrap().at("agent").s("terminal_id"), "22@b1");
+}
+
+/// herdr's terminal id changes when its server restarts, its `state_change_seq` starting over (`flow/hook.rs`
+/// `after_handled`): a Thread's is its id in the Server's boot.
+#[test]
+fn a_terminal_is_another_after_the_server_restarts() {
+    let s = Stand::new("restart");
+    let pane = s.tab();
+    s.run(&["agent", "start", "hp-demo-t-0001", "--kind", "claude", "--pane", &pane]).unwrap();
+    let before = s.run(&["agent", "get", &pane]).unwrap().at("agent").t("terminal_id");
+    s.world.lock().unwrap().threads[0]["boot"] = json!("b2");
+    let after = s.run(&["agent", "get", &pane]).unwrap().at("agent").t("terminal_id");
+    assert_eq!((before.as_str(), after.as_str()), ("21@b1", "21@b2"));
+    assert_eq!(s.run(&["pane", "get", &pane]).unwrap().at("pane").s("terminal_id"), "21@b2");
 }
 
 /// A start refused `agent_not_ready` leaves its Thread, and the pane names it; a folder outside the Project starts in
@@ -398,7 +418,7 @@ fn a_spaces_close_parks_only_the_boards_threads() {
 #[test]
 fn each_space_made_is_its_own_inside_its_project() {
     let s = Stand::new("made-spaces");
-    let start = |pane: &str, name: &str| { s.run(&["agent", "start", name, "--kind", "claude", "--pane", pane]).unwrap().at("agent").at("terminal_id").as_str().unwrap().parse::<u64>().unwrap() };
+    let start = |pane: &str, name: &str| { s.run(&["agent", "start", name, "--kind", "claude", "--pane", pane]).unwrap().at("agent").at("terminal_id").as_str().unwrap().split('@').next().unwrap().parse::<u64>().unwrap() };
     let made = |cwd: &str, label: &[&str]| s.run(&[&["workspace", "create", "--cwd", cwd][..], label, &["--no-focus"]].concat()).unwrap();
 
     let home_made = made(&home(), &[]);
@@ -429,7 +449,7 @@ fn each_space_made_is_its_own_inside_its_project() {
     s.run(&["workspace", "close", &task_space]).unwrap();
     assert_eq!(s.asked().iter().filter(|(m, _)| m == "thread.close").map(|(_, p)| p.clone()).collect::<Vec<_>>(), [json!({ "thread": task_thread })]);
     assert_eq!(refused(s.run(&["workspace", "get", &task_space])).code, "workspace_not_found", "gone with its panes");
-    assert_eq!(s.run(&["agent", "get", &coordinator]).unwrap().at("agent").s("terminal_id"), coordinator_thread.to_string(), "the Coordinator runs on");
+    assert_eq!(s.run(&["agent", "get", &coordinator]).unwrap().at("agent").s("terminal_id"), format!("{coordinator_thread}@b1"), "the Coordinator runs on");
     let spaces = s.run(&["workspace", "list"]).unwrap();
     let home_now: Vec<&str> = spaces.arr("workspaces").iter().filter(|w| w.s("label") == "~").map(|w| w.s("workspace_id")).collect();
     assert_eq!(home_now, [home_space.as_str()], "`~` is found again, once");
@@ -441,7 +461,7 @@ fn each_space_made_is_its_own_inside_its_project() {
     assert_eq!(a.at("workspace").at("worktree").s("repo_root"), "/r/app", "a Space in a repository's checkout");
     s.run(&["workspace", "close", a.at("workspace").s("workspace_id")]).unwrap();
     assert_eq!(s.last("thread.close"), json!({ "thread": a_thread }));
-    assert_eq!(s.run(&["agent", "get", b.at("root_pane").s("pane_id")]).unwrap().at("agent").s("terminal_id"), b_thread.to_string());
+    assert_eq!(s.run(&["agent", "get", b.at("root_pane").s("pane_id")]).unwrap().at("agent").s("terminal_id"), format!("{b_thread}@b1"));
 }
 
 /// Prompts are confirmed taken; reads are the transcript's tail; focus lands every window.

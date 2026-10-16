@@ -201,7 +201,8 @@ whether the user is looking at the Thread (`focused`), whether they have
 unsent text in its prompt box (`draft`: do not prompt it then), its
 prompts `held_prompt` and `queued_prompts`, its `worktree` and `branch`,
 its agent's own conversation id (`provider_session`), and
-`attention_seq`, which grows with every change of attention. There are
+`attention_seq`, which grows with every change of attention (one count
+for the Server's `boot`, which a restart changes). There are
 no trust or permission screens to read: whatever the agent asks the user
 is a Decision, and its Thread is `blocked` until it is answered.
 

@@ -19,11 +19,17 @@ pub(super) struct Windows {
     composing: BTreeSet<(WindowId, ThreadId)>,
 }
 
-/// Each open Thread's Attention as last counted, and how many changes it
-/// has been counted through: Herdr's `state_change_seq`, for telling that
-/// something happened between two looks. Counted from this Server's start.
+/// Each open Thread's Attention as last counted, and the change it was
+/// last counted at: Herdr's `state_change_seq`, for telling that something
+/// happened between two looks. One count for the whole boot, never reset:
+/// a Thread closing is a change, so one revived after its park counts on
+/// past every number it carried before.
 #[derive(Default)]
-pub(super) struct AttentionCount(HashMap<ThreadId, Counted>);
+pub(super) struct AttentionCount {
+    /// The changes counted this boot, every Thread's.
+    seq: u64,
+    threads: HashMap<ThreadId, Counted>,
+}
 
 /// One Thread's count.
 #[derive(Clone, Copy)]
@@ -98,55 +104,69 @@ impl Engine {
             .any(|(_, composing)| *composing == thread)
     }
 
-    /// How many times `thread`'s Attention has been seen to change since
-    /// this Server started (`count_attention`).
+    /// The change `thread`'s Attention was last counted at this boot
+    /// (`count_attention`): a higher number means something happened since.
     pub fn attention_seq(&self, thread: ThreadId) -> u64 {
         self.attention_count
-            .0
+            .threads
             .get(&thread)
             .map_or(0, |counted| counted.seq)
     }
 
     /// `attention_seq` as it was when `thread`'s last turn ended: its
     /// Attention came to rest (idle or done) from work (working or
-    /// blocked). `None` until a turn has ended since this Server started.
+    /// blocked). `None` until a turn has ended since it last opened.
     pub fn completion_seq(&self, thread: ThreadId) -> Option<u64> {
         self.attention_count
-            .0
+            .threads
             .get(&thread)
             .and_then(|counted| counted.completed)
     }
 
-    /// Count each open Thread's Attention change since the last count; a
-    /// closed Thread's count goes with it. Run with every publish, so a
-    /// change any client hears of is counted.
+    /// A Thread closed: a change, its count gone with it, the boot's kept.
+    /// Counted as it parks, so a revive before the next count starts anew.
+    pub(super) fn count_closed(&mut self, thread: ThreadId) {
+        let count = &mut self.attention_count;
+        if count.threads.remove(&thread).is_some() {
+            count.seq += 1;
+        }
+    }
+
+    /// Count each open Thread's Attention change since the last count, and
+    /// each Thread closed since (`count_closed`). Run with every publish,
+    /// so a change any client hears of is counted.
     pub(super) fn count_attention(&mut self) {
         let open: Vec<ThreadId> = self.threads.keys().copied().collect();
-        let mut counted = std::mem::take(&mut self.attention_count.0);
-        counted.retain(|thread, _| open.contains(thread));
+        let mut count = std::mem::take(&mut self.attention_count);
+        let counted = count.threads.len();
+        count.threads.retain(|thread, _| open.contains(thread));
+        count.seq += (counted - count.threads.len()) as u64;
         for thread in open {
             let Some(attention) = self.attention(thread) else {
                 continue;
             };
-            counted
-                .entry(thread)
-                .and_modify(|counted| {
-                    if counted.attention == attention {
-                        return;
-                    }
-                    let at_work = |a| matches!(a, Attention::Working | Attention::Blocked);
-                    counted.seq += 1;
-                    if at_work(counted.attention) && !at_work(attention) {
-                        counted.completed = Some(counted.seq);
-                    }
-                    counted.attention = attention;
-                })
-                .or_insert(Counted {
-                    attention,
-                    seq: 0,
-                    completed: None,
-                });
+            let Some(counted) = count.threads.get_mut(&thread) else {
+                count.threads.insert(
+                    thread,
+                    Counted {
+                        attention,
+                        seq: count.seq,
+                        completed: None,
+                    },
+                );
+                continue;
+            };
+            if counted.attention == attention {
+                continue;
+            }
+            let at_work = |a| matches!(a, Attention::Working | Attention::Blocked);
+            count.seq += 1;
+            counted.seq = count.seq;
+            if at_work(counted.attention) && !at_work(attention) {
+                counted.completed = Some(count.seq);
+            }
+            counted.attention = attention;
         }
-        self.attention_count.0 = counted;
+        self.attention_count = count;
     }
 }
