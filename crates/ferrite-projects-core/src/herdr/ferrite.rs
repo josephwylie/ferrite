@@ -4,8 +4,9 @@
 //! shapes, so `api.rs` reads the answers as it reads herdr's. One Server per computer: herdr's one session, `default`,
 //! at the Server's API socket.
 //!
-//! A herdr Space is a Ferrite Project, named by its id, except that a linked worktree is a Space of its own, named by
-//! its path, as herdr's worktree Spaces are. A tab, a pane and an agent are one Thread. A pane the board places is kept
+//! A herdr Space is a Ferrite Project, named by its id, or a Space the board made in one (`workspace create`, by an id
+//! of its own, `panes.rs`), or a linked worktree, named by its path, as herdr's worktree Spaces are. A tab, a pane and
+//! an agent are one Thread. A pane the board places is kept
 //! by an id of its own until its Thread starts there and after its agent ends (`panes.rs`); any other Thread is a pane
 //! named by its Thread's id. Ferrite has no shells, screens or keys: a pane whose Thread is not open is at its shell,
 //! a screen is the tail of its Thread's transcript, and a key or typed text is what it meant (`answers.rs`). What
@@ -23,7 +24,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-use panes::{Pane, Panes};
+use panes::{Pane, Panes, Space};
 use server::{Refused, Server};
 
 /// The words a start of an agent kind Ferrite has no Provider for is refused with (`agents/start_failed.rs`).
@@ -31,6 +32,9 @@ pub const NO_PROVIDER: &str = "Ferrite has no Provider for";
 /// A process id no system gives (above every `pid_max`): what `pane process-info` names where no process runs, so
 /// nothing is ever signalled and it has no children.
 const NO_PID: i64 = i32::MAX as i64;
+/// What a wait on the Server leaves its answer of the request's deadline: the most, and the share.
+const ANSWER_MARGIN: Duration = Duration::from_secs(5);
+const ANSWER_SHARE: u32 = 5;
 
 /// The Server's API socket: `FERRITE_SOCKET`, else `api.sock` in the Store (`FERRITE_STORE`, else
 /// `~/.ferrite/threads`), as the `ferrite` CLI finds it.
@@ -87,6 +91,13 @@ fn missing(what: &str, id: &str) -> Refused { Refused::new(&format!("{what}_not_
 fn result(v: Value) -> Result<String, Refused> { Ok(json!({ "id": "ferrite", "result": v }).to_string()) }
 fn done() -> Result<String, Refused> { result(json!({ "type": "ok" })) }
 fn is_path(space: &str) -> bool { Path::new(space).is_absolute() }
+/// What herdr labels a Space after: its folder's name, the home folder `~`.
+fn folder_label(cwd: &str) -> String {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let folder = real(Path::new(cwd));
+    if folder == real(&crate::store::files::user_home()) { return "~".into(); }
+    folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| cwd.into())
+}
 
 /// A flag's value, before `--`.
 fn flag<'a>(args: &[&'a str], name: &str) -> Option<&'a str> {
@@ -160,6 +171,8 @@ impl Place {
         let mut a = json!({ "pane_id": self.id, "tab_id": self.id, "workspace_id": self.space, "terminal_id": self.terminal(), "name": t.t("title"), "agent": t.at("provider"),
             "agent_status": t.at("attention"), "cwd": self.cwd, "foreground_cwd": self.cwd, "state_change_seq": t.at("attention_seq") });
         if let Some(session) = t.so("provider_session") { a["agent_session"] = json!({ "kind": "id", "value": session }); }
+        // Absent until its first finished turn, as herdr's.
+        if let Some(seq) = t.at("completion_seq").as_u64() { a["completion_seq"] = json!(seq); }
         Some(a)
     }
     /// herdr's `pane process-info`: a shell alone where no Thread is open, else a program in front of it.
@@ -209,8 +222,6 @@ impl Ferrite {
             ["tab", "rename", id, label @ ..] => self.rename_tab(id, &label.join(" ")),
             ["tab" | "pane", "close", id] => self.close(id, a[0]),
             ["tab", "focus", id] | ["agent", "focus" | "attach", id] => self.focus(id, a[0]),
-            ["pane", "zoom", id, ..] if has(a, "--on") => self.focus(id, "pane"),
-            ["pane", "zoom", ..] => done(),
             ["worktree", "create", ..] => self.worktree_create(a),
             ["worktree", "open", ..] => self.worktree_open(a),
             ["worktree", "remove", ..] => self.worktree_remove(a),
@@ -235,7 +246,7 @@ impl Ferrite {
             }
             ["agent", "start", name, ..] => {
                 let extra: Vec<String> = a.iter().skip_while(|w| **w != "--").skip(1).map(|w| w.to_string()).collect();
-                let timeout = flag(a, "--timeout").and_then(|t| t.parse().ok()).unwrap_or(60000);
+                let timeout = flag(a, "--timeout").and_then(|t| t.parse().ok()).unwrap_or(60000).min(self.wait_ms());
                 let agent = self.start(flag(a, "--pane").unwrap_or(""), name, flag(a, "--kind").unwrap_or(""), &extra, &[], timeout)?;
                 result(json!({ "type": "agent_started", "agent": agent }))
             }
@@ -249,6 +260,11 @@ impl Ferrite {
     }
 
     fn call(&self, method: &str, params: Value) -> Result<Value, Refused> { self.server.call(method, params) }
+    /// The longest the Server may wait inside one request and still answer before its deadline.
+    fn wait_ms(&self) -> u64 {
+        let timeout = self.server.timeout;
+        timeout.saturating_sub(ANSWER_MARGIN.min(timeout / ANSWER_SHARE)).as_millis() as u64
+    }
 
     /// Every pane: each open Thread, then each placed pane whose Thread is not open.
     fn places(&self) -> Result<Vec<Place>, Refused> {
@@ -281,9 +297,10 @@ impl Ferrite {
 
     // ---- spaces
 
-    /// Every Project, then every linked worktree's Space a pane is in.
+    /// Every Project, then every Space the board made, then every linked worktree's Space a pane is in.
     fn spaces(&self) -> Result<Vec<Value>, Refused> {
         let projects = self.call("project.list", json!({}))?.arr("projects").to_vec();
+        let made = self.panes.spaces().map_err(failed)?;
         let places = self.places()?;
         let space = |id: &str, label: String, worktree: Value| {
             let here = || places.iter().filter(|p| p.space == id);
@@ -291,16 +308,20 @@ impl Ferrite {
             if worktree.is_object() { w["worktree"] = worktree; }
             w
         };
-        let repo_of = |project: &str| projects.iter().find(|p| p.s("id") == project).map(|p| p.at("worktree").t("repo_key")).unwrap_or_default();
-        let mut out: Vec<Value> = projects.iter().map(|p| {
+        let project = |id: &str| projects.iter().find(|p| p.s("id") == id);
+        // A Project's checkout, `repo_root` its `repo_key` as herdr names it.
+        let checkout = |p: &Value| {
             let mut worktree = p.at("worktree").clone();
             if worktree.is_object() { worktree["repo_root"] = worktree.at("repo_key").clone(); }
-            space(p.s("id"), p.t("label"), worktree)
-        }).collect();
+            worktree
+        };
+        let mut out: Vec<Value> = projects.iter().map(|p| space(p.s("id"), p.t("label"), checkout(p))).collect();
+        out.extend(made.iter().map(|(id, s)| space(id, s.label.clone(), project(&s.project).map(checkout).unwrap_or(Value::Null))));
         for p in places.iter().filter(|p| is_path(&p.space)) {
             if out.iter().any(|w| w.s("workspace_id") == p.space) { continue; }
             let placed = p.pane.as_ref();
-            let repo = placed.map(|x| x.repo.clone()).filter(|r| !r.is_empty()).or_else(|| p.thread.as_ref().map(|t| repo_of(t.s("project")))).unwrap_or_default();
+            let repo_of = |t: &Value| project(t.s("project")).map(|p| p.at("worktree").t("repo_key")).unwrap_or_default();
+            let repo = placed.map(|x| x.repo.clone()).filter(|r| !r.is_empty()).or_else(|| p.thread.as_ref().map(repo_of)).unwrap_or_default();
             let label = placed.map(|x| x.space_label.clone()).filter(|l| !l.is_empty())
                 .unwrap_or_else(|| Path::new(&p.space).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
             out.push(space(&p.space, label, json!({ "checkout_path": p.space, "repo_root": repo, "repo_key": repo, "is_linked_worktree": true })));
@@ -310,40 +331,62 @@ impl Ferrite {
     fn space(&self, id: &str) -> Result<Value, Refused> {
         self.spaces()?.into_iter().find(|w| w.s("workspace_id") == id).ok_or_else(|| missing("workspace", id))
     }
+    /// A Space the board made, by its id.
+    fn made_space(&self, id: &str) -> Result<Option<Space>, Refused> { Ok(self.panes.spaces().map_err(failed)?.remove(id)) }
+    /// The Project a Space is in: a Project's own, a made Space's; a worktree's Space is the Server's to place.
+    fn project_of(&self, space: &str) -> Result<Option<String>, Refused> {
+        if is_path(space) { return Ok(None); }
+        Ok(Some(self.made_space(space)?.map(|s| s.project).unwrap_or_else(|| space.into())))
+    }
+    /// The Space is a Project's own, named by the Project's id.
+    fn projects_own(&self, space: &str) -> Result<bool, Refused> { Ok(!is_path(space) && self.made_space(space)?.is_none()) }
 
-    /// The Project holding `--cwd` (registered when there is none), with a pane placed in it.
+    /// A new Space, as herdr's `workspace create` always makes one: of its own, inside the Project holding `--cwd`
+    /// (registered when there is none), with a pane placed in it. Labelled `--label`, else after its folder, the home
+    /// folder `~`, as herdr labels one.
     fn workspace_create(&self, a: &[&str]) -> Result<String, Refused> {
         let cwd = flag(a, "--cwd").unwrap_or(".");
-        // herdr labels a Space after its folder, the home folder `~`.
-        let label = flag(a, "--label").map(String::from).or_else(|| (Path::new(cwd) == crate::store::files::user_home()).then(|| "~".into()));
-        let mut params = json!({ "cwd": cwd });
-        if let Some(label) = label { params["label"] = json!(label); }
-        let project = self.call("project.open", params)?.at("project").t("id");
-        let place = self.place_pane(Pane { space: project.clone(), cwd: cwd.into(), env: envs(a), ..Default::default() })?;
-        result(json!({ "type": "workspace_created", "workspace": self.space(&project)?, "tab": place.tab_json(), "root_pane": place.pane_json() }))
+        let project = self.call("project.open", json!({ "cwd": cwd }))?.at("project").t("id");
+        let label = flag(a, "--label").map(String::from).unwrap_or_else(|| folder_label(cwd));
+        let (id, pane) = self.panes.open_space(Space { project, cwd: cwd.into(), label }, Pane { cwd: cwd.into(), env: envs(a), ..Default::default() }).map_err(failed)?;
+        let place = self.place_or(&pane, "pane")?;
+        result(json!({ "type": "workspace_created", "workspace": self.space(&id)?, "tab": place.tab_json(), "root_pane": place.pane_json() }))
     }
     fn place_pane(&self, pane: Pane) -> Result<Place, Refused> {
         let id = self.panes.place(pane).map_err(failed)?;
         self.place_or(&id, "pane")
     }
-    /// A Project lands every window on it; a worktree's Space on its first open Thread.
+    /// A Project's own Space lands every window on the Project; any other on its first open Thread. With no open
+    /// Thread there is nothing to show, and nothing moves.
     fn focus_space(&self, id: &str) -> Result<String, Refused> {
         self.space(id)?;
-        if !is_path(id) { self.call("project.focus", json!({ "project": id }))?; return done(); }
-        if let Some(thread) = self.places()?.iter().filter(|p| p.space == id).find_map(Place::thread_id) { self.call("thread.focus", json!({ "thread": thread }))?; }
+        if self.projects_own(id)? {
+            self.call("project.focus", json!({ "project": id }))?;
+        } else if let Some(thread) = self.places()?.iter().filter(|p| p.space == id).find_map(Place::thread_id) {
+            self.call("thread.focus", json!({ "thread": thread }))?;
+        }
         done()
     }
+    /// A made Space's label is its own and a worktree Space's is kept with its panes: the Project keeps its own. Only a
+    /// Project's own Space renames it.
     fn rename_space(&self, id: &str, label: &str) -> Result<String, Refused> {
-        if !is_path(id) { self.call("project.rename", json!({ "project": id, "label": label }))?; return done(); }
-        let mine: Vec<String> = self.panes.all().map_err(failed)?.into_iter().filter(|(_, p)| p.space == id).map(|(k, _)| k).collect();
-        for k in mine { self.panes.update(&k, |p| p.space_label = label.into()).map_err(failed)?; }
+        self.space(id)?;
+        if self.projects_own(id)? {
+            self.call("project.rename", json!({ "project": id, "label": label }))?;
+        } else if is_path(id) {
+            let mine: Vec<String> = self.panes.all().map_err(failed)?.into_iter().filter(|(_, p)| p.space == id).map(|(k, _)| k).collect();
+            for k in mine { self.panes.update(&k, |p| p.space_label = label.into()).map_err(failed)?; }
+        } else {
+            self.panes.rename_space(id, label).map_err(failed)?;
+        }
         done()
     }
-    /// The panes in a Space close: their Threads are parked. A Project itself stays, and a Thread of the operator's in
-    /// it stays open: only what the board placed there was the board's Space.
+    /// The panes in a Space close: their Threads are parked, and nothing else. A Project's own Space keeps the
+    /// Project, and a Thread of the operator's in it stays open: only what the board placed there was the board's.
     fn close_space(&self, id: &str) -> Result<String, Refused> {
         self.space(id)?;
-        for p in self.places()?.into_iter().filter(|p| p.space == id && (is_path(id) || p.pane.is_some())) {
+        let projects_own = self.projects_own(id)?;
+        for p in self.places()?.into_iter().filter(|p| p.space == id && (!projects_own || p.pane.is_some())) {
             if let Some(thread) = p.thread_id() { self.close_thread(thread)?; }
         }
         self.panes.retain(|_, p| p.space != id).map_err(failed)?;
@@ -359,7 +402,8 @@ impl Ferrite {
     fn tab_create(&self, a: &[&str]) -> Result<String, Refused> {
         let workspace = flag(a, "--workspace").unwrap_or("");
         let space = self.space(workspace)?;
-        let cwd = flag(a, "--cwd").map(String::from).or_else(|| space.at("worktree").so("checkout_path").map(String::from))
+        let folder = || self.made_space(workspace).ok().flatten().map(|s| s.cwd).or_else(|| space.at("worktree").so("checkout_path").map(String::from));
+        let cwd = flag(a, "--cwd").map(String::from).or_else(folder)
             .ok_or_else(|| Refused::new("invalid_request", format!("Space {workspace} has no folder of its own: give the tab --cwd")))?;
         let place = self.place_pane(Pane { space: workspace.into(), cwd, label: flag(a, "--label").unwrap_or("").into(), env: envs(a), ..Default::default() })?;
         result(json!({ "type": "tab_created", "tab": place.tab_json(), "root_pane": place.pane_json() }))
@@ -473,9 +517,9 @@ impl Ferrite {
         params["cwd"] = json!(pane.cwd);
         params["provider"] = json!(provider);
         params["title"] = json!(name);
-        if !is_path(&pane.space) {
+        if let Some(project) = self.project_of(&pane.space)? {
             let mut in_project = params.clone();
-            in_project["project"] = json!(pane.space);
+            in_project["project"] = json!(project);
             match self.call("thread.start", in_project) { Err(r) if r.code == "invalid_request" => {} started => return started }
         }
         self.call("thread.start", params)
@@ -497,7 +541,7 @@ impl Ferrite {
         let end = rest.iter().position(|w| w == "--").ok_or_else(refused)?;
         let (launcher, program) = (&rest[..=end], rest.get(end + 1).ok_or_else(refused)?);
         let kind = crate::agents::kinds::all().find(|k| crate::agents::kinds::program(k.name) == program.as_str()).map(|k| k.name).unwrap_or(program.as_str());
-        match self.start(id, &name, kind, &rest[end + 2..], launcher, 60000) {
+        match self.start(id, &name, kind, &rest[end + 2..], launcher, self.wait_ms()) {
             Err(r) if r.code != "agent_not_ready" => Err(r),
             _ => done(),
         }
@@ -505,8 +549,7 @@ impl Ferrite {
     /// Sent, and answered once the agent was seen taking it (working, or asking): herdr's `agent prompt`.
     fn prompt(&self, target: &str, text: &str) -> Result<String, Refused> {
         let thread = self.open_thread(target, "agent")?;
-        let timeout_ms = self.server.timeout.as_millis() as u64;
-        self.call("agent.prompt", json!({ "thread": thread, "text": text, "until": ["working", "blocked"], "timeout_ms": timeout_ms }))?;
+        self.call("agent.prompt", json!({ "thread": thread, "text": text, "until": ["working", "blocked"], "timeout_ms": self.wait_ms() }))?;
         let agent = self.agent_place(target)?.and_then(|p| p.agent_json()).unwrap_or(Value::Null);
         result(json!({ "type": "agent_prompted", "agent": agent }))
     }

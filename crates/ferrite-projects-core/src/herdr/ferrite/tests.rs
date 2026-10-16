@@ -5,11 +5,32 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 
-/// What the stand-in Server knows: its Projects, its Threads (open or parked) and pending Decisions.
+/// What the stand-in Server knows: its Projects and the folder each holds, its Threads (open or parked) and pending
+/// Decisions.
 #[derive(Default)]
-struct World { projects: Vec<Value>, threads: Vec<Value>, parked: Vec<Value>, decisions: Vec<Value>, asked: Vec<(String, Value)>, refuse: Vec<(String, Value)>, next: u64 }
+struct World { projects: Vec<Value>, folders: Vec<(String, String)>, threads: Vec<Value>, parked: Vec<Value>, decisions: Vec<Value>, asked: Vec<(String, Value)>, refuse: Vec<(String, Value)>, next: u64 }
+
+/// The home folder, which `workspace create` labels `~`.
+fn home() -> String { crate::store::files::user_home().display().to_string() }
 
 impl World {
+    /// The Project holding `cwd`, the nearest when several do, as the Server's registry finds it.
+    fn containing(&self, cwd: &str) -> Option<String> {
+        let holds = |folder: &str| Path::new(cwd).starts_with(folder);
+        self.folders.iter().filter(|(_, f)| holds(f)).max_by_key(|(_, f)| f.len()).map(|(id, _)| id.clone())
+    }
+    /// The Project holding `cwd`, else `cwd` registered as one.
+    fn open(&mut self, cwd: &str) -> Value {
+        let id = self.containing(cwd).unwrap_or_else(|| {
+            let id = (self.projects.len() + 1).to_string();
+            let label = Path::new(cwd).file_name().unwrap().to_string_lossy().into_owned();
+            self.projects.push(json!({ "id": id, "label": label, "focused": false, "thread_count": 0, "worktree": null }));
+            self.folders.push((id.clone(), cwd.into()));
+            id
+        });
+        self.projects.iter().find(|p| p.s("id") == id).unwrap().clone()
+    }
+
     fn reply(&mut self, method: &str, params: &Value) -> Value {
         self.asked.push((method.into(), params.clone()));
         if let Some(i) = self.refuse.iter().position(|(m, _)| m == method) { return json!({ "error": self.refuse.remove(i).1 }); }
@@ -20,11 +41,17 @@ impl World {
             "thread.list" => json!({ "threads": self.threads }),
             "project.list" => json!({ "projects": self.projects }),
             "project.get" => match self.projects.iter().find(|p| p.at("id") == params.at("project")) { Some(p) => json!({ "project": p }), None => return json!({ "error": { "code": "project_not_found", "message": "no Project has that id" } }) },
-            "project.open" => json!({ "project": self.projects[0] }),
+            "project.open" => json!({ "project": self.open(params.s("cwd")) }),
             "thread.start" => {
+                let cwd = params.s("cwd");
+                let project = match params.so("project") {
+                    Some(p) if self.folders.iter().any(|(id, f)| id == p && Path::new(cwd).starts_with(f)) => p.to_string(),
+                    Some(_) => return json!({ "error": { "code": "invalid_request", "message": format!("{cwd} is not in that Project's directories") } }),
+                    None => self.open(cwd).t("id"),
+                };
                 self.next += 1;
-                let t = json!({ "thread": 20 + self.next, "title": params.at("title"), "provider": params.at("provider"), "attention": "idle", "cwd": params.at("cwd"), "focused": false,
-                    "project": params.at("project").as_str().unwrap_or("1"), "attention_seq": 0, "held_prompt": false, "queued_prompts": 0, "draft": false });
+                let t = json!({ "thread": 20 + self.next, "title": params.at("title"), "provider": params.at("provider"), "attention": "idle", "cwd": cwd, "focused": false,
+                    "project": project, "attention_seq": 0, "held_prompt": false, "queued_prompts": 0, "draft": false });
                 self.threads.push(t.clone());
                 json!({ "thread": t })
             }
@@ -55,7 +82,8 @@ impl Stand {
         let listener = UnixListener::bind(&socket).unwrap();
         let world = Arc::new(Mutex::new(World {
             projects: vec![json!({ "id": "1", "label": "app", "focused": false, "thread_count": 0, "worktree": { "repo_key": "/r/app", "checkout_path": "/r/app", "is_linked_worktree": false } }),
-                json!({ "id": "2", "label": "~", "focused": false, "thread_count": 0, "worktree": null })],
+                json!({ "id": "2", "label": "me", "focused": false, "thread_count": 0, "worktree": null })],
+            folders: vec![("1".into(), "/r/app".into()), ("2".into(), home())],
             ..Default::default()
         }));
         let served = world.clone();
@@ -69,7 +97,7 @@ impl Stand {
                 let _ = stream.write_all(format!("{}\n", json!({ "id": request.at("id"), "result": reply.at("result"), "error": reply.at("error") })).as_bytes());
             }
         });
-        Stand { ferrite: Ferrite { server: Server { socket, timeout: Duration::from_secs(5) }, panes: Panes { path: dir.join("ferrite-panes.json") } }, world }
+        Stand { ferrite: Ferrite { server: Server { socket, timeout: Duration::from_secs(75) }, panes: Panes { path: dir.join("ferrite-panes.json") } }, world }
     }
     /// herdr's printed answer to a command, its `result` unwrapped as `cli::run` does.
     fn run(&self, words: &[&str]) -> HRes<Value> {
@@ -107,7 +135,7 @@ fn a_bare_flag_is_named_as_it_is() {
 #[test]
 fn what_only_a_terminal_has_is_refused_unasked() {
     let s = Stand::new("unwired");
-    for words in [&["pane", "layout", "--pane", "p1"][..], &["pane", "move", "p1", "--new-tab", "--workspace", "2"], &["plugin", "list", "--json"], &["plugin", "config-dir", "herdr-web-ui"],
+    for words in [&["pane", "layout", "--pane", "p1"][..], &["pane", "zoom", "p1", "--on"], &["pane", "move", "p1", "--new-tab", "--workspace", "2"], &["plugin", "list", "--json"], &["plugin", "config-dir", "herdr-web-ui"],
         &["plugin", "disable", "herdr-superwork"], &["terminal", "session", "control", "t1", "--takeover"], &["config", "check"], &["server", "reload-config"]] {
         assert_eq!(refused(s.run(words)).code, "not_wired", "{words:?}");
     }
@@ -143,7 +171,7 @@ fn a_server_that_is_not_running_is_no_server_and_one_that_never_answers_a_timeou
 fn projects_and_worktrees_are_spaces_and_threads_their_panes() {
     let s = Stand::new("spaces");
     s.world.lock().unwrap().threads = vec![
-        json!({ "thread": 12, "title": "hp-demo", "provider": "claude", "attention": "working", "cwd": "/wt", "focused": true, "project": "1", "provider_session": "s-1", "attention_seq": 7, "worktree": "/wt" }),
+        json!({ "thread": 12, "title": "hp-demo", "provider": "claude", "attention": "working", "cwd": "/wt", "focused": true, "project": "1", "provider_session": "s-1", "attention_seq": 7, "completion_seq": 6, "worktree": "/wt" }),
         json!({ "thread": 13, "title": "mine", "provider": "codex", "attention": "idle", "cwd": "/home/me", "focused": false, "project": "2", "attention_seq": 2 }),
     ];
     let spaces = s.run(&["workspace", "list"]).unwrap();
@@ -164,6 +192,8 @@ fn projects_and_worktrees_are_spaces_and_threads_their_panes() {
     assert_eq!((a.s("pane_id"), a.s("tab_id"), a.s("workspace_id"), a.s("name")), ("12", "12", "/wt", "hp-demo"));
     assert_eq!((a.s("agent"), a.s("agent_status"), a.i("state_change_seq")), ("claude", "working", 7));
     assert_eq!(a.at("agent_session"), &json!({ "kind": "id", "value": "s-1" }));
+    assert_eq!(a.i("completion_seq"), 6, "the count its last turn ended at");
+    assert!(s.run(&["agent", "get", "13"]).unwrap().at("agent").get("completion_seq").is_none(), "absent until a turn ended");
     assert_eq!(s.run(&["agent", "get", "mine"]).unwrap().at("agent").s("pane_id"), "13", "an agent by its name");
     assert_eq!(refused(s.run(&["agent", "get", "99"])).code, "agent_not_found");
     assert_eq!(refused(s.run(&["pane", "get", "99"])).code, "pane_not_found");
@@ -180,10 +210,10 @@ fn projects_and_worktrees_are_spaces_and_threads_their_panes() {
 fn a_placed_pane_waits_at_its_shell() {
     let s = Stand::new("placed");
     let made = s.run(&["workspace", "create", "--cwd", "/r/app", "--label", "app", "--env", "A=1", "--no-focus"]).unwrap();
-    assert_eq!(s.last("project.open"), json!({ "cwd": "/r/app", "label": "app" }));
-    assert_eq!(made.at("workspace").s("workspace_id"), "1");
+    assert_eq!(s.last("project.open"), json!({ "cwd": "/r/app" }));
+    let space = made.at("workspace").t("workspace_id");
     let pane = made.at("root_pane");
-    assert_eq!((pane.s("workspace_id"), pane.s("cwd"), pane.s("agent_status")), ("1", "/r/app", "unknown"));
+    assert_eq!((pane.s("workspace_id"), pane.s("cwd"), pane.s("agent_status")), (space.as_str(), "/r/app", "unknown"));
     assert!(pane.at("agent").is_null());
     assert_eq!(made.at("tab").s("tab_id"), pane.s("pane_id"));
     let id = pane.t("pane_id");
@@ -198,15 +228,15 @@ fn a_placed_pane_waits_at_its_shell() {
     s.run(&["tab", "focus", &id]).unwrap();
     assert_eq!(s.count("thread.focus") + s.count("agent.interrupt") + s.count("decision.answer"), 0);
     let split = s.run(&["pane", "split", &id, "--direction", "right", "--no-focus"]).unwrap();
-    assert_eq!((split.at("pane").s("workspace_id"), split.at("pane").s("cwd")), ("1", "/r/app"));
-    assert_eq!(s.run(&["pane", "list", "--workspace", "1"]).unwrap().arr("panes").len(), 2);
+    assert_eq!((split.at("pane").s("workspace_id"), split.at("pane").s("cwd")), (space.as_str(), "/r/app"));
+    assert_eq!(s.run(&["pane", "list", "--workspace", &space]).unwrap().arr("panes").len(), 2);
 }
 
 /// The Coordinator's place: a tab `Coordinator` in the home Space, its agent an ordinary one.
 #[test]
 fn the_coordinator_is_a_staged_tab_in_the_home_project() {
     let s = Stand::new("coordinator");
-    let made = s.run(&["tab", "create", "--workspace", "2", "--cwd", "/home/me/.herdr-projects/coordinator", "--label", "Coordinator", "--no-focus"]).unwrap();
+    let made = s.run(&["tab", "create", "--workspace", "2", "--cwd", &format!("{}/.herdr-projects/coordinator", home()), "--label", "Coordinator", "--no-focus"]).unwrap();
     let pane = made.at("root_pane").t("pane_id");
     assert_eq!(s.run(&["tab", "get", &pane]).unwrap().at("tab"), &json!({ "tab_id": pane, "workspace_id": "2", "label": "Coordinator", "pane_count": 1, "focused": false }));
     let started = s.run(&["agent", "start", "sw-coordinator", "--kind", "claude", "--pane", &pane, "--timeout", "60000"]).unwrap();
@@ -296,13 +326,16 @@ fn a_thread_left_by_a_refused_start_is_the_panes() {
 /// launcher.
 #[test]
 fn a_plan_writer_runs_through_its_mount() {
-    let s = Stand::new("sandbox");
+    let mut s = Stand::new("sandbox");
+    // `Herdr::pane_run`'s deadline.
+    s.ferrite.server.timeout = Duration::from_secs(30);
     let pane = s.tab();
     let line = "env HERDR_PROJECTS_AGENT=hp-demo-t-0001 bwrap --dev-bind / / --ro-bind /r/app /r/app --die-with-parent -- claude --permission-mode plan 'it'\\''s'";
     s.run(&["pane", "run", &pane, line]).unwrap();
     let start = s.last("thread.start");
     assert_eq!(start["launcher"], json!(["bwrap", "--dev-bind", "/", "/", "--ro-bind", "/r/app", "/r/app", "--die-with-parent", "--"]));
     assert_eq!((start["args"].clone(), start["title"].clone(), start["provider"].clone()), (json!(["--permission-mode", "plan", "it's"]), json!("hp-demo-t-0001"), json!("claude")));
+    assert_eq!(start["timeout_ms"], 25000, "ready, or refused naming its Thread, before the request's deadline");
     assert_eq!(s.run(&["agent", "get", &pane]).unwrap().at("agent").s("name"), "hp-demo-t-0001");
     assert_eq!(refused(s.run(&["pane", "run", &pane, "make test"])).code, "not_wired");
 }
@@ -359,6 +392,58 @@ fn a_spaces_close_parks_only_the_boards_threads() {
     assert_eq!(s.last("thread.close"), json!({ "thread": 13 }));
 }
 
+/// herdr's `workspace create` always makes a Space: two in one Project are two Spaces, each renamed, focused and
+/// closed alone, and the Project keeps its label. The Coordinator's home Space `~` holds the home Project, as a task in
+/// a folder under it does; closing or renaming the task's Space leaves the Coordinator, and `~`, as they were.
+#[test]
+fn each_space_made_is_its_own_inside_its_project() {
+    let s = Stand::new("made-spaces");
+    let start = |pane: &str, name: &str| { s.run(&["agent", "start", name, "--kind", "claude", "--pane", pane]).unwrap().at("agent").at("terminal_id").as_str().unwrap().parse::<u64>().unwrap() };
+    let made = |cwd: &str, label: &[&str]| s.run(&[&["workspace", "create", "--cwd", cwd][..], label, &["--no-focus"]].concat()).unwrap();
+
+    let home_made = made(&home(), &[]);
+    let home_space = home_made.at("workspace").t("workspace_id");
+    assert_eq!(home_made.at("workspace").s("label"), "~");
+    let coordinator = s.run(&["tab", "create", "--workspace", &home_space, "--cwd", &format!("{}/.herdr-projects/coordinator", home()), "--label", "Coordinator", "--no-focus"]).unwrap().at("root_pane").t("pane_id");
+    let coordinator_thread = start(&coordinator, "sw-coordinator");
+    assert_eq!(s.last("thread.start")["project"], "2", "the home Project");
+
+    let notes = format!("{}/notes", home());
+    let task = made(&notes, &["--label", "fix notes"]);
+    let task_space = task.at("workspace").t("workspace_id");
+    assert_ne!(task_space, home_space, "a Space of its own, in the same Project");
+    let task_thread = start(task.at("root_pane").s("pane_id"), "hp-notes-t-0001");
+    assert_eq!(s.last("thread.start")["project"], "2");
+    assert_eq!(s.last("thread.start")["cwd"], json!(notes));
+
+    s.run(&["workspace", "rename", &task_space, "fix", "notes", "(review)"]).unwrap();
+    assert_eq!(s.count("project.rename"), 0, "the Project keeps its label");
+    assert_eq!(s.run(&["workspace", "get", &task_space]).unwrap().at("workspace").s("label"), "fix notes (review)");
+    assert_eq!(s.run(&["workspace", "get", "2"]).unwrap().at("workspace").s("label"), "me");
+
+    s.run(&["workspace", "focus", &task_space]).unwrap();
+    assert_eq!(s.last("thread.focus"), json!({ "thread": task_thread }));
+    s.run(&["workspace", "focus", "2"]).unwrap();
+    assert_eq!(s.last("project.focus"), json!({ "project": "2" }));
+
+    s.run(&["workspace", "close", &task_space]).unwrap();
+    assert_eq!(s.asked().iter().filter(|(m, _)| m == "thread.close").map(|(_, p)| p.clone()).collect::<Vec<_>>(), [json!({ "thread": task_thread })]);
+    assert_eq!(refused(s.run(&["workspace", "get", &task_space])).code, "workspace_not_found", "gone with its panes");
+    assert_eq!(s.run(&["agent", "get", &coordinator]).unwrap().at("agent").s("terminal_id"), coordinator_thread.to_string(), "the Coordinator runs on");
+    let spaces = s.run(&["workspace", "list"]).unwrap();
+    let home_now: Vec<&str> = spaces.arr("workspaces").iter().filter(|w| w.s("label") == "~").map(|w| w.s("workspace_id")).collect();
+    assert_eq!(home_now, [home_space.as_str()], "`~` is found again, once");
+
+    // Two tasks in one repository: each closes its own.
+    let a = made("/r/app", &["--label", "a"]);
+    let b = made("/r/app", &["--label", "b"]);
+    let (a_thread, b_thread) = (start(a.at("root_pane").s("pane_id"), "a"), start(b.at("root_pane").s("pane_id"), "b"));
+    assert_eq!(a.at("workspace").at("worktree").s("repo_root"), "/r/app", "a Space in a repository's checkout");
+    s.run(&["workspace", "close", a.at("workspace").s("workspace_id")]).unwrap();
+    assert_eq!(s.last("thread.close"), json!({ "thread": a_thread }));
+    assert_eq!(s.run(&["agent", "get", b.at("root_pane").s("pane_id")]).unwrap().at("agent").s("terminal_id"), b_thread.to_string());
+}
+
 /// Prompts are confirmed taken; reads are the transcript's tail; focus lands every window.
 #[test]
 fn prompts_reads_and_focus_reach_the_thread() {
@@ -366,18 +451,17 @@ fn prompts_reads_and_focus_reach_the_thread() {
     let pane = s.tab();
     s.run(&["agent", "start", "t", "--kind", "claude", "--pane", &pane]).unwrap();
     let prompted = s.run(&["agent", "prompt", &pane, "-x read the brief"]).unwrap();
-    assert_eq!(s.last("agent.prompt"), json!({ "thread": 21, "text": "-x read the brief", "until": ["working", "blocked"], "timeout_ms": 5000 }));
+    assert_eq!(s.last("agent.prompt"), json!({ "thread": 21, "text": "-x read the brief", "until": ["working", "blocked"], "timeout_ms": 70000 }), "answered before the request's deadline");
     assert_eq!(prompted.at("agent").s("pane_id"), pane);
     assert_eq!(s.raw(&["agent", "read", &pane, "--source", "recent-unwrapped", "--lines", "120"]).unwrap(), "line one\nline two");
     assert_eq!(s.last("agent.read"), json!({ "thread": 21, "lines": 120 }));
     s.raw(&["pane", "read", &pane, "--source", "visible"]).unwrap();
     assert_eq!(s.last("agent.read"), json!({ "thread": 21 }));
-    for words in [&["agent", "focus", pane.as_str()][..], &["tab", "focus", &pane], &["agent", "attach", &pane], &["pane", "zoom", &pane, "--on"]] {
+    for words in [&["agent", "focus", pane.as_str()][..], &["tab", "focus", &pane], &["agent", "attach", &pane]] {
         s.run(words).unwrap();
         assert_eq!(s.last("thread.focus"), json!({ "thread": 21 }));
     }
-    s.run(&["pane", "zoom", &pane, "--off"]).unwrap();
-    assert_eq!(s.count("thread.focus"), 4);
+    assert_eq!(s.count("thread.focus"), 3);
     let info = s.run(&["pane", "process-info", "--pane", &pane]).unwrap();
     assert_ne!(info.at("process_info").i("foreground_process_group_id"), info.at("process_info").i("shell_pid"), "its agent runs");
     assert_eq!(s.raw(&["integration", "status"]).unwrap(), "");
