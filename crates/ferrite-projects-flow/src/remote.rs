@@ -7,6 +7,9 @@
 //! `id`, a `label`, a `target` (`user@host` or `ssh://user@host:port`), a `session` and `enabled`. The
 //! `board.machines` setting names them by hand instead. The order the board lists them in is herdr's sidebar's
 //! (remote/sidebar.rs).
+//!
+//! Ferrite: herdr's machine list is Ferrite's `machine.list` (`ferrite machine list`, the adapter answers it), the
+//! machines saved in Ferrite's Settings, under Machines, in their order there; none is added with `herdr machine add`.
 pub mod automations;
 pub mod check;
 pub mod own_names;

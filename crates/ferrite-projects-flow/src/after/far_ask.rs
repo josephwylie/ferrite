@@ -74,7 +74,7 @@ pub fn waits_far(tasks: &[Task]) -> bool { !wanted(tasks).is_empty() }
 pub fn far_pass() {
     for (label, ids) in wanted(&list(ListOpts::default())) {
         let locals: Vec<String> = ids.iter().map(|i| i.split_once(':').map(|(_, l)| l.to_string()).unwrap_or_default()).collect();
-        let answer = match machine(&label) { Some(m) => ask(&m, &locals), None => Err("it is not a machine the board knows any more (herdr machine list, or the board.machines setting)".into()) };
+        let answer = match machine(&label) { Some(m) => ask(&m, &locals), None => Err("it is not a machine the board knows any more (ferrite machine list, or the board.machines setting)".into()) }; // Ferrite: herdr's machine list is Ferrite's.
         let before = heard();
         note(|o| match &answer {
             Err(why) => note_machine(o, &label, Some(why)),

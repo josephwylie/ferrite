@@ -188,7 +188,10 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
   per line the wheel or trackpad moves, so a faster swipe goes further. A
   drag selects the board's own text, drawn in reverse, and letting go
   copies it to the clipboard where the terminal wrote OSC 52 (`Copied N
-  characters.`); a double click copies a word, never the frames.
+  characters.`); a double click copies a word, never the frames. A
+  double click is upstream's, a second press on the same cell within
+  400 ms, not the system's click count, which also counts a quick
+  second click a few pixels away.
 - **Links** (`links`). The words `view/` marks with an address (a pull
   request, `↗ Open review`, `Open report`, `Open plan`, a piece of
   evidence), which a terminal opens as OSC 8 links, open on a click. The
@@ -199,10 +202,13 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
   `machine.list` in its order) at most once a minute, each machine in
   view over upstream's ssh (`herdr-projects remote list`) whenever the
   board polls (every 5 s with other machines shown), one that did not
-  answer only after 30 s unless the poll is for now. Two messages name
-  herdr's way to a machine and say Ferrite's instead (`Ferrite:`): no
+  answer only after 30 s unless the poll is for now. The words that name
+  herdr's way to a machine say Ferrite's instead (`Ferrite:`): no
   machine yet is added in Settings, under Machines, not by `herdr machine
-  add`; another machine's agent brought to the front there is gone to
+  add` (the board's message and `remote check`'s); the machines the board
+  knows are `ferrite machine list`'s, not `herdr machine list`'s (an
+  unreachable machine's why, a wait `--after` a machine it does not
+  know); another machine's agent brought to the front there is gone to
   from the nav, not herdr's sidebar. A machine has one Server, whose
   session is `default`, so the header never says `session <name>`.
 

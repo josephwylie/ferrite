@@ -1,9 +1,11 @@
 //! The board's secondary screens and its mouse, from fixture States in a
 //! GPUI window (ADR 0031, Seam 3): the task panel beside the list and full
-//! screen, the automation panel and its row's keys, the settings page, the
-//! ? menu, find, the archive, other machines, the words of what is under
-//! way; a click, the wheel, a drag or a double click that copies, and a
-//! link that opens. Upstream's own tests check each screen's every word
+//! screen (its parts, its alerts, what gives way, a part that fails), the
+//! automation panel and its row's keys, the settings page, the ? menu, find,
+//! the archive, other machines (their headings, waits, actions, automations
+//! and Coordinator, and going to their agents), the words of what is under
+//! way; a click, the wheel over the list, the chat and the whole task, a
+//! drag or a double click that copies, and a link that opens. Upstream's own tests check each screen's every word
 //! against its world; these drive the vendored `update` with the board's
 //! keys (what a key starts is not run) and read what the board view draws.
 
@@ -11,7 +13,7 @@ use std::sync::Arc;
 
 use gpui::{px, Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext, VisualTestContext};
 use serde_json::{json, Value};
-use sw_board::board::job::Job;
+use sw_board::board::job::{Done, Job, Then};
 use sw_board::board::keys::{key_name, Press};
 use sw_board::board::state::{Pending, State};
 use sw_board::board::update::{list::relist, update, Effect, Event};
@@ -782,6 +784,135 @@ fn other_machines_ring_from_this_one_to_all_to_each_and_say_who_did_not_answer(
     assert!(!lines[0].contains("session"), "{}", lines[0]);
 }
 
+/// vm-b as it answers: a task to do, one at work with its agent, one that
+/// waits for a task here, an automation and its Coordinator.
+fn vm_b_answers() -> Event {
+    let at_work = json!({ "id": "far/2", "title": "Theirs 2", "state": "working", "stage": "working", "agent": "claude", "app": "claude",
+        "msg": "Building", "at": NOW - MIN, "link": { "pane": "w2:p1" } });
+    let waits = json!({ "id": "far/3", "title": "Theirs 3", "state": "working", "stage": "after", "at": NOW - MIN,
+        "after": ["here:proj/5"], "afterLeft": ["here:proj/5"], "afterLine": "queued after here:PRJ-5" });
+    let weekly = json!({ "id": "b1", "name": "Weekly report", "on": true, "trigger": { "kind": "manual" }, "repo": "far",
+        "prompt": "Write the weekly report.", "shown": { "firings": [], "own": [], "settings": [] } });
+    let coordinator = json!({ "state": "idle", "readable": true,
+        "talk": [{ "you": true, "text": "What is left?" }, { "you": false, "text": "Two tasks on vm-b." }] });
+    Event::Remote {
+        label: "vm-b".into(),
+        answer: Ok(
+            json!({ "host": "vm-b", "version": "1.0.1", "tasks": [far_task(1), at_work, waits],
+            "automations": [weekly], "coordinator": coordinator }),
+        ),
+    }
+}
+
+/// A board on this machine and vm-b, every machine shown; one task here
+/// waits for one of vm-b's.
+fn with_vm_b(cx: &mut TestAppContext, columns: usize) -> Shown<'_> {
+    let mut all = tasks();
+    all.push(task(
+        20,
+        json!({ "state": "working", "stage": "after", "title": "Use their build", "after": ["vm-b:far/2"], "afterLeft": ["vm-b:far/2"] }),
+    ));
+    let mut s = state(all, vec![]);
+    // As the runtime opens it (`prepare`): a window, never a bare terminal.
+    s.ctx.in_herdr = true;
+    let mut b = shown(cx, s, columns, 50);
+    b.state(|s| update(s, Event::Machines(vec![machine("vm-b")])));
+    b.state(|s| update(s, vm_b_answers()));
+    b.press("alt+m");
+    b
+}
+
+#[gpui::test]
+fn every_machine_shown_has_its_heading_its_waits_and_its_automations_and_acts_there(
+    cx: &mut TestAppContext,
+) {
+    let mut b = with_vm_b(cx, 120);
+    let lines = b.lines();
+    let list = list_part(&lines);
+    for machine in ["here", "vm-b"] {
+        assert!(
+            list.iter()
+                .any(|l| l.trim_start().starts_with(&format!("▾ {machine} ─"))),
+            "{machine}: {list:#?}"
+        );
+    }
+    let ink = b.inked();
+    assert!(
+        ink.iter()
+            .flat_map(|l| &l.0)
+            .any(|p| p.t == "vm-b" && p.c == Ink::Accent && p.bold),
+        "a machine's heading is bold in the accent"
+    );
+    // Waits across machines: here for vm-b's task, there for one of here.
+    assert!(has(&list, "queued after vm-b:far/2"), "{list:#?}");
+    assert!(has(&list, "queued after here:PRJ-5"), "{list:#?}");
+    assert!(has(&list, "Weekly report"), "{list:#?}");
+    // An action on vm-b's task goes to vm-b, and says so meanwhile.
+    b.select("vm-b:far/2");
+    let fx = b.press("ctrl+x");
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Run(Job::Far { host, action, .. }) if host == "vm-b" && action == "stop")),
+        "{fx:?}"
+    );
+    let msg = b.state(|s| s.msg.clone());
+    assert!(
+        msg.starts_with("Stopping ") && msg.ends_with(" on vm-b…"),
+        "{msg}"
+    );
+    b.state(|s| s.pending.clear());
+    // So does one on vm-b's automation.
+    b.select("vm-b:auto:b1");
+    let fx = b.press("space");
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Run(Job::Far { host, action, .. }) if host == "vm-b" && action == "auto-turn")),
+        "{fx:?}"
+    );
+}
+
+#[gpui::test]
+fn on_vm_bs_board_what_you_type_goes_to_its_coordinator(cx: &mut TestAppContext) {
+    let mut b = with_vm_b(cx, 120);
+    b.press("alt+m");
+    assert_eq!(b.state(|s| s.scope.clone()), "vm-b");
+    assert!(has(&b.lines(), "Coordinator on vm-b"), "{:#?}", b.lines());
+    b.typed("Start the report");
+    let fx = b.press("enter");
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Run(Job::Dispatch { machine, text, .. }) if machine.label == "vm-b" && text == "Start the report")),
+        "{fx:?}"
+    );
+}
+
+#[gpui::test]
+fn entering_another_machines_agent_says_to_go_there_from_the_nav(cx: &mut TestAppContext) {
+    let mut b = with_vm_b(cx, 160);
+    b.select("vm-b:far/2");
+    let fx = b.press("enter");
+    assert!(
+        fx.iter().any(
+            |e| matches!(e, Effect::Run(Job::Far { host, action, req, .. })
+            if host == "vm-b" && action == "reopen" && req.at("focus") == &json!(true))
+        ),
+        "vm-b is asked to put it in front: {fx:?}"
+    );
+    // What vm-b answered (`job_far`, tests/ferrite_remote_open.rs runs it).
+    let there = Done::default().and(Then::OpenedThere {
+        id: "vm-b:far/2".into(),
+        host: "vm-b".into(),
+        agent: true,
+    });
+    b.state(|s| update(s, Event::Done(there)));
+    assert_eq!(
+        b.state(|s| s.msg.clone()),
+        "vm-b: its agent is in front there. Pick vm-b in the nav to go to it: “Theirs 2”; local there brings you back here."
+    );
+    assert!(
+        has(&b.lines(), "Pick vm-b in the nav to go to it"),
+        "{:#?}",
+        b.lines()
+    );
+}
+
 #[gpui::test]
 fn what_a_key_started_shows_on_its_row_at_once_and_red_when_it_did_not_work(
     cx: &mut TestAppContext,
@@ -838,6 +969,195 @@ fn what_a_key_started_shows_on_its_row_at_once_and_red_when_it_did_not_work(
     assert!(red(&mut b));
     b.state(|s| update(s, Event::Tick(NOW + 10_000)));
     assert!(!red(&mut b));
+}
+
+/// The task panel beside the list for `id`: what stands right of its divider.
+fn side_of(b: &mut Shown, id: &str) -> Vec<String> {
+    b.select(id);
+    beside(&b.lines())
+}
+
+/// A task whose plan waits for your yes, with one setting of its own, and
+/// one done twice at once that waits for a pick.
+fn planned() -> Vec<Obj> {
+    let tried = |letter: &str| json!({ "letter": letter, "stage": "tried", "agent": "claude", "created": NOW - 10 * MIN, "triedAt": NOW - 2 * MIN });
+    vec![
+        task(
+            21,
+            json!({ "state": "blocked", "kind": "permission", "stage": "plan", "title": "Plan the cache",
+            "plan": { "writer": { "kind": "claude" }, "at": NOW - 5 * MIN, "link": "http://127.0.0.1:4/p/21", "file": "plan.md" },
+            "snap": { "plan": "Step one.\nStep two.", "problems": [],
+                "settings": [{ "name": "worker.agent", "value": "claude", "place": "task" }] } }),
+        ),
+        task(
+            22,
+            json!({ "state": "blocked", "kind": "permission", "stage": "pick", "title": "Pick a parser",
+            "tries": [tried("A"), tried("B")], "attempts": [{ "letter": "A", "agent": "claude" }, { "letter": "B", "agent": "claude" }],
+            "comparison": { "pick": "B", "why": "Smaller change" } }),
+        ),
+    ]
+}
+
+#[gpui::test]
+fn the_task_panel_has_the_plan_the_attempts_and_the_settings_and_full_screen_the_session(
+    cx: &mut TestAppContext,
+) {
+    let mut b = shown(cx, state(planned(), vec![]), 120, 70);
+    let side = side_of(&mut b, "proj/21");
+    assert!(
+        has(&side, "Plan ─") && has(&side, "waits for your yes") && has(&side, "Step one."),
+        "{side:#?}"
+    );
+    assert!(has(&side, "Open plan"), "{side:#?}");
+    let link = super::links::links(&b.inked())
+        .into_iter()
+        .find(|l| l.url == "http://127.0.0.1:4/p/21");
+    assert!(link.is_some(), "the plan's words open it");
+    // A value set for this task only is starred, and the foot says what the
+    // star means; the agent's session is the whole task's alone.
+    assert!(
+        side.iter().any(|l| l.contains("default model *")),
+        "{side:#?}"
+    );
+    assert!(has(&side, "* this task only"), "{side:#?}");
+    assert!(!has(&side, "Session ─"), "{side:#?}");
+    b.press("alt+t");
+    let whole = b.lines();
+    assert!(
+        has(&whole, "Session ─") && has(&whole, "Task id"),
+        "{whole:#?}"
+    );
+    b.press("alt+t");
+    // The attempts: the one picked by the arrows marked ›, the reviewer's ★.
+    b.state(|s| {
+        s.attempt_at.insert("proj/22".into(), "A".into());
+    });
+    let side = side_of(&mut b, "proj/22");
+    assert!(has(&side, "Pick one of 2"), "{side:#?}");
+    assert!(has(&side, "A ›") && has(&side, "B ★"), "{side:#?}");
+    assert!(has(&side, "recommends B: Smaller change"), "{side:#?}");
+}
+
+/// One task in each state whose panel says what it needs from you.
+fn alerted() -> Vec<Obj> {
+    vec![
+        task(
+            30,
+            json!({ "state": "error", "stage": "failed", "title": "Cut off task",
+            "failure": { "at": NOW - MIN, "title": "Provider overloaded", "detail": "529 overloaded" },
+            "waiting": { "who": "agent", "for": NOW - MIN, "reason": "model is overloaded", "until": NOW + MIN, "error": "529 overloaded" } }),
+        ),
+        task(
+            31,
+            json!({ "state": "blocked", "kind": "auth", "stage": "asks", "msg": "Needs a login", "title": "Log in task" }),
+        ),
+        task(
+            32,
+            json!({ "state": "blocked", "kind": "permission", "stage": "approval", "title": "Behind task", "msg": "Approve to merge?",
+            "syncBlocked": { "why": "main has moved on" } }),
+        ),
+        task(
+            33,
+            json!({ "state": "error", "stage": "stopped", "title": "Limit task", "msg": "Stopped at its time limit",
+            "limitStop": { "what": "time", "used": 600_000, "role": "worker", "limit": "10m" } }),
+        ),
+        task(
+            34,
+            json!({ "state": "working", "stage": "working", "title": "Handed task", "msg": "Going on",
+            "handovers": [{ "at": NOW - 2 * MIN, "role": "worker", "from": "claude", "to": "codex", "why": "out of allowance" }] }),
+        ),
+    ]
+}
+
+#[gpui::test]
+fn the_task_panel_says_what_each_task_needs_from_you(cx: &mut TestAppContext) {
+    let mut all = tasks();
+    all.extend(alerted());
+    let mut b = shown(cx, state(all, vec![]), 120, 70);
+    for (id, said) in [
+        ("proj/30", ["Cut off ─", "Cut off by"]),
+        ("proj/31", ["Needs a login ─", "Log in task"]),
+        ("proj/32", ["Behind main ─", "Cannot be approved yet:"]),
+        (
+            "proj/33",
+            ["Stopped at a limit ─", "Its work is kept as it is"],
+        ),
+        ("proj/34", ["Took over", "took over from"]),
+    ] {
+        let side = side_of(&mut b, id);
+        for words in said {
+            assert!(has(&side, words), "{id}: {words}: {side:#?}");
+        }
+    }
+    // Archived, in the whole task too: read-only, and how to restore it.
+    b.press("alt+a");
+    b.select("proj/16");
+    b.press("alt+t");
+    let whole = b.lines();
+    assert!(
+        has(&whole, "Archived ─") && has(&whole, "Read-only."),
+        "{whole:#?}"
+    );
+}
+
+#[gpui::test]
+fn beside_the_list_what_is_least_needed_gives_way_first(cx: &mut TestAppContext) {
+    let described = |b: &mut Shown| {
+        let side = side_of(b, "proj/11");
+        let lines = side
+            .iter()
+            .filter(|l| l.contains("of a very long description"))
+            .count();
+        (side, lines)
+    };
+    let mut b = shown(cx, state(tasks(), vec![]), 120, 60);
+    let (_, tall) = described(&mut b);
+    b.fit(120, 16);
+    let (side, short) = described(&mut b);
+    assert!(
+        short < tall,
+        "the description gives way: {tall} then {short}"
+    );
+    assert!(
+        side.iter().any(|l| l.trim_start().starts_with("State ")),
+        "where the task stands stays: {side:#?}"
+    );
+    let more = format!("{} shows the whole task", key_name("panel"));
+    assert!(side.iter().any(|l| l.trim() == more), "{side:#?}");
+}
+
+/// Upstream's board_more.rs: a part that fails to draw says so in its place,
+/// in red under its own headline; drawn whole, no panel says so.
+#[gpui::test]
+fn a_part_that_fails_to_draw_says_so_in_its_place(cx: &mut TestAppContext) {
+    use sw_board::board::view::{guard, panel::kit::Kit};
+    let why =
+        guard::part(|| -> usize { panic!("{}", "artifactLines is not defined") }).unwrap_err();
+    assert_eq!(why, "artifactLines is not defined");
+    let mut k = Kit::new(46);
+    k.failed("Reviews", &why);
+    let lines: Vec<String> = Kit::out(k.parts[0].lines.clone())
+        .iter()
+        .map(|l| l.text())
+        .collect();
+    assert!(lines[0].trim().starts_with("Reviews ─"), "{lines:?}");
+    assert_eq!(
+        lines[1..]
+            .iter()
+            .map(|l| l.trim())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "✗ This part could not be shown: artifactLines is not defined"
+    );
+    assert!(k.parts[0].lines[1..]
+        .iter()
+        .all(|l| l.0.iter().all(|p| p.c == Ink::Red)));
+    let mut b = shown(cx, state(tasks(), vec![]), 120, 40);
+    b.select("proj/11");
+    for _ in 0..2 {
+        assert!(!has(&b.lines(), "could not be shown"));
+        b.press("alt+t");
+    }
 }
 
 // --------------------------------------------------------------- the mouse
@@ -927,18 +1247,21 @@ fn a_drag_copies_the_boards_text_and_a_double_click_a_word(cx: &mut TestAppConte
     b.cx.run_until_parked();
     assert_eq!(b.clipboard().as_deref(), Some("herdr-projects"));
     assert_eq!(b.state(|s| s.msg.clone()), "Copied 14 characters.");
+    // Two presses on one cell of the selected row (whose click changes
+    // nothing), as upstream counts a double click: the board's clock stands
+    // still, so they are within 400 ms.
+    b.select("proj/12");
     let list = list_part(&b.lines());
     let row = line_of(&list, "Merge the menus");
     let x = sw_board::text::width(&list[row][..list[row].find("Merge").unwrap()]);
-    let at = b.cell(x + 1, row);
-    b.cx.simulate_event(gpui::MouseDownEvent {
-        position: at,
-        modifiers: Modifiers::none(),
-        button: MouseButton::Left,
-        click_count: 2,
-        first_mouse: false,
-    });
-    b.cx.run_until_parked();
+    b.click(x + 1, row);
+    b.click(x + 2, row);
+    assert_eq!(
+        b.clipboard().as_deref(),
+        Some("herdr-projects"),
+        "two clicks on neighbouring cells copy nothing"
+    );
+    b.click(x + 2, row);
     assert_eq!(b.clipboard().as_deref(), Some("Merge"));
     assert_eq!(b.state(|s| s.msg.clone()), "Copied 5 characters.");
 }
@@ -962,4 +1285,130 @@ fn a_click_on_a_link_opens_it(cx: &mut TestAppContext) {
         "proj/11",
         "the link took the click"
     );
+}
+
+/// `n` tasks to do, numbered.
+fn numbered(n: u32) -> Vec<Obj> {
+    (1..=n)
+        .map(|i| {
+            task(
+                i,
+                json!({ "agent": null, "app": "", "state": "idle", "stage": "todo", "title": format!("Task number {i}") }),
+            )
+        })
+        .collect()
+}
+
+/// The wheel turned `by` steps (down positive, as upstream's `by`) over a
+/// line of the board.
+fn turn(b: &mut Shown, y: usize, by: i64) {
+    b.wheel(5, y, -(by as f32));
+}
+
+/// The first line of the chat's message, as upstream's board_chat_scroll.rs
+/// reads it: inside the box, past the line that names who said it.
+fn chat_first(lines: &[String]) -> String {
+    let (top, end) = chat_box(lines);
+    lines[top + 1..end]
+        .iter()
+        .map(|l| {
+            let c: Vec<char> = l.chars().collect();
+            c[2..c.len() - 2]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .find(|l| !l.starts_with("Coordinator"))
+        .unwrap_or_default()
+}
+
+/// The chat box's first and last line.
+fn chat_box(lines: &[String]) -> (usize, usize) {
+    let top = lines
+        .iter()
+        .rposition(|l| l.starts_with("╭─") && l.ends_with('╮'))
+        .expect("a box");
+    let end = lines
+        .iter()
+        .rposition(|l| l.starts_with("╰─") && l.ends_with('╯'))
+        .expect("a box's end");
+    (top, end)
+}
+
+#[gpui::test]
+fn the_wheel_over_the_chat_scrolls_it_two_lines_a_step_also_with_a_draft(cx: &mut TestAppContext) {
+    let mut s = state(numbered(30), vec![]);
+    s.side = false;
+    // What the Coordinator said, as the loader reads it (upstream's `apply`).
+    let answer: Vec<String> = (1..=40)
+        .map(|i| format!("Line {i} of the answer."))
+        .collect();
+    let c = &mut s.data.coord;
+    c.state = "idle".into();
+    c.readable = true;
+    c.said = answer.join("\n");
+    c.turn = Some(sw_board::agents::read_turn::Turn {
+        id: "turn-1".into(),
+        ..Default::default()
+    });
+    let mut b = shown(cx, s, 120, 30);
+    let (top, end) = chat_box(&b.lines());
+    turn(&mut b, top + 3, 1);
+    assert_eq!(chat_first(&b.lines()), "Line 2 of the answer.");
+    turn(&mut b, top - 1, 3);
+    assert_eq!(chat_first(&b.lines()), "Line 8 of the answer.");
+    turn(&mut b, end, -1);
+    assert_eq!(chat_first(&b.lines()), "Line 6 of the answer.");
+    b.typed("a draft");
+    turn(&mut b, top + 1, 2);
+    assert_eq!(chat_first(&b.lines()), "Line 10 of the answer.");
+    assert_eq!(b.state(|s| s.value()), "a draft");
+    turn(&mut b, top + 1, -100);
+    assert_eq!(chat_first(&b.lines()), "Line 1 of the answer.");
+}
+
+#[gpui::test]
+fn the_wheel_scrolls_the_whole_task_also_with_a_draft(cx: &mut TestAppContext) {
+    let description: Vec<String> = (1..=80).map(|i| format!("Description line {i}.")).collect();
+    let mut one = numbered(1);
+    one[0].put("description", description.join("\n"));
+    let mut b = shown(cx, state(one, vec![]), 120, 30);
+    b.select("proj/1");
+    b.press("alt+t");
+    assert!(b.lines()[0].contains("lines 1–"), "{}", b.lines()[0]);
+    turn(&mut b, 5, 1);
+    assert!(b.lines()[0].contains("lines 3–"), "{}", b.lines()[0]);
+    assert_eq!(b.state(|s| s.sel.clone()), "proj/1");
+    turn(&mut b, 5, 2);
+    assert!(b.lines()[0].contains("lines 7–"), "{}", b.lines()[0]);
+    b.typed("typing");
+    turn(&mut b, 5, -1);
+    assert!(b.lines()[0].contains("lines 5–"), "{}", b.lines()[0]);
+    assert_eq!(b.state(|s| s.value()), "typing");
+}
+
+#[gpui::test]
+fn with_a_draft_the_wheel_moves_the_view_and_never_who_gets_it(cx: &mut TestAppContext) {
+    let mut s = state(numbered(22), vec![]);
+    s.side = false;
+    let mut b = shown(cx, s, 120, 20);
+    // The list's first task, the view at its top.
+    let first = b.state(|s| {
+        s.list_ids
+            .iter()
+            .find(|id| !id.is_empty() && !id.starts_with("head:"))
+            .cloned()
+            .expect("a task in the list")
+    });
+    b.select(&first);
+    b.press("space");
+    b.typed("pebbles please");
+    let top = b.state(|s| s.top);
+    turn(&mut b, 4, 1);
+    turn(&mut b, 4, 1);
+    let (sel, moved, value) = b.state(|s| (s.sel.clone(), s.top, s.value()));
+    assert_eq!(sel, first);
+    assert!(moved > top, "the view moves: {top} then {moved}");
+    assert_eq!(value, "pebbles please");
 }

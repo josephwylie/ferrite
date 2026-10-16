@@ -4,7 +4,9 @@
 //! the pointer scrolls, elsewhere the wheel moves as ↑↓, a click selects a row
 //! or folds a heading). Dragging selects the board's own text, line by line,
 //! and letting go copies it to the clipboard (where the terminal used OSC 52);
-//! a double click selects and copies a word.
+//! a double click selects and copies a word. A double click is upstream's: a
+//! second press on the same cell within 400 ms, not the system's click count,
+//! which also counts a quick second click a few pixels away.
 //!
 //! A click on a link's words opens it (`links.rs`) instead.
 //!
@@ -55,7 +57,12 @@ pub struct Selecting {
     shown: bool,
     /// The wheel's movement not yet a whole step, in steps (down positive).
     wheel: f32,
+    /// The last press: when (the board's clock, ms) and on which cell.
+    last: Option<(i64, Cell)>,
 }
+
+/// The most between the presses of a double click, in ms.
+const DOUBLE_MS: i64 = 400;
 
 impl Selecting {
     /// What the screen holds, for a copy: each character at the cells the
@@ -175,14 +182,19 @@ impl Selecting {
         true
     }
 
-    /// The left button pressed: a double click selects the word under it and
-    /// copies it; one click starts a selection, or a click if nothing is
+    /// The left button pressed at `now` (ms): a second press on the same cell
+    /// within 400 ms is a double click, which selects the word under it and
+    /// copies it; one press starts a selection, or a click if nothing is
     /// dragged.
-    pub fn down(&mut self, at: Cell, clicks: usize) -> Did {
+    pub fn down(&mut self, at: Cell, now: i64) -> Did {
+        let double = self
+            .last
+            .is_some_and(|(then, cell)| cell == at && now - then < DOUBLE_MS);
+        self.last = Some((now, at));
         self.shown = false;
         self.dragging = false;
-        self.pressed = clicks == 1;
-        if clicks == 2 {
+        self.pressed = !double;
+        if double {
             return if self.word_at(at) {
                 copy_of(self.text())
             } else {
@@ -323,7 +335,7 @@ impl BoardView {
         let Some(at) = self.pointer.cell(event.position) else {
             return;
         };
-        let did = self.pointer.selecting.down(at, event.click_count);
+        let did = self.pointer.selecting.down(at, sw_board::clock::now());
         self.did(did, cx);
     }
 
@@ -401,10 +413,17 @@ mod tests {
         s
     }
 
+    /// Two presses on one cell, 100 ms apart, a second after the last press.
+    fn double(s: &mut Selecting, at: Cell) -> Did {
+        let now = s.last.map_or(0, |(then, _)| then + 1000);
+        s.down(at, now);
+        s.down(at, now + 100)
+    }
+
     #[test]
     fn a_press_and_release_on_one_cell_is_a_click() {
         let mut s = screen(&["  ● #12 Fix the title"]);
-        assert_eq!(s.down((4, 0), 1), Did::Nothing);
+        assert_eq!(s.down((4, 0), 0), Did::Nothing);
         assert_eq!(s.up((4, 0)), Did::Click((4, 0)));
         assert!(!s.selected(4, 0), "a click selects no text");
         assert_eq!(
@@ -425,7 +444,7 @@ mod tests {
             "  ○ #1 First task    ",
             "  ○ #2 Second",
         ]);
-        s.down((17, 0), 1);
+        s.down((17, 0), 0);
         assert!(s.drag((5, 1)));
         assert!(s.selected(30, 0) && s.selected(0, 1) && s.selected(5, 1));
         assert!(!s.selected(16, 0) && !s.selected(6, 1));
@@ -435,7 +454,7 @@ mod tests {
         );
         // Dragged upward, the same words.
         let mut s = screen(&["one two", "three four"]);
-        s.down((4, 1), 1);
+        s.down((4, 1), 0);
         s.drag((4, 0));
         assert_eq!(s.up((4, 0)), Did::Copy("two\nthree".into()));
     }
@@ -443,18 +462,18 @@ mod tests {
     #[test]
     fn a_double_click_copies_a_word_and_never_the_frames_around_it() {
         let mut s = screen(&["│ ❯ fix─the│title │"]);
-        assert_eq!(s.down((6, 0), 2), Did::Copy("fix".into()));
+        assert_eq!(double(&mut s, (6, 0)), Did::Copy("fix".into()));
         assert!(s.selected(4, 0) && s.selected(6, 0) && !s.selected(7, 0));
         assert_eq!(
             s.up((6, 0)),
             Did::Nothing,
             "the release after a double click is no click"
         );
-        assert_eq!(s.down((13, 0), 2), Did::Copy("title".into()));
-        assert_eq!(s.down((11, 0), 2), Did::Nothing, "a rule is no word");
-        assert_eq!(s.down((0, 0), 2), Did::Nothing, "a frame is no word");
+        assert_eq!(double(&mut s, (13, 0)), Did::Copy("title".into()));
+        assert_eq!(double(&mut s, (11, 0)), Did::Nothing, "a rule is no word");
+        assert_eq!(double(&mut s, (0, 0)), Did::Nothing, "a frame is no word");
         assert_eq!(
-            s.down((3, 1), 2),
+            double(&mut s, (3, 1)),
             Did::Nothing,
             "below the screen there is nothing"
         );
@@ -472,7 +491,7 @@ mod tests {
             lines,
             "nothing selected, nothing changes"
         );
-        s.down((3, 0), 1);
+        s.down((3, 0), 0);
         s.drag((7, 0));
         let painted = s.paint(lines);
         let parts: Vec<(&str, Ink, bool)> = painted[0]
@@ -493,9 +512,26 @@ mod tests {
     }
 
     #[test]
+    fn a_double_click_is_two_presses_on_one_cell_within_400_ms() {
+        let mut s = screen(&["  ● #12 Fix the title"]);
+        s.down((9, 0), 0);
+        assert_eq!(
+            s.down((10, 0), 100),
+            Did::Nothing,
+            "a quick press on the next cell is a press of its own"
+        );
+        assert_eq!(
+            s.down((10, 0), 500),
+            Did::Nothing,
+            "nor is one 400 ms after the last"
+        );
+        assert_eq!(s.down((10, 0), 899), Did::Copy("Fix".into()));
+    }
+
+    #[test]
     fn a_double_click_on_a_wide_character_copies_the_whole_word() {
         let mut s = screen(&["  日本語 x"]);
-        assert_eq!(s.down((5, 0), 2), Did::Copy("日本語".into()));
+        assert_eq!(double(&mut s, (5, 0)), Did::Copy("日本語".into()));
     }
 
     #[test]
