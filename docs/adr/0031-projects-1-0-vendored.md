@@ -253,7 +253,9 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
   kept while you are on a Thread; `popup`, a sheet over a veil, 90% of the
   board (all of it under 110×30 cells). The projects key shows it, and on
   it, goes back to where you came from; landing on a Thread moves a tab's
-  board aside. `board.notify: bell` rings the system bell.
+  board aside. The popup closes on any move to a Thread (what you typed
+  saved), as herdr's closes when another tab shows. `board.notify: bell`
+  rings the system bell.
 - **Opening an agent.** Every agent runs in a Ferrite window, so
   `cli::in_herdr` is true (a `Ferrite:` mark): Enter's job focuses the
   agent through the adapter (`agent focus`, `thread.focus`) and says

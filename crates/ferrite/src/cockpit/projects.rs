@@ -219,13 +219,19 @@ impl CockpitView {
     }
 
     /// Landing on a Thread (an agent opened from the board, a nav row)
-    /// takes a tab's board out of the way, still open.
+    /// takes a tab's board out of the way, still open; the popup closes,
+    /// as herdr's does when another tab shows, never left over the Thread.
+    /// The move owns the keyboard: nothing goes `back`.
     pub(super) fn board_gives_way(&mut self) {
-        if let Some(board) = self.projects.board.as_mut() {
-            if board.placement == Placement::Tab {
+        let Some(board) = self.projects.board.as_mut() else {
+            return;
+        };
+        match board.placement {
+            Placement::Tab => {
                 board.shown = false;
                 board.back = None;
             }
+            Placement::Popup => self.projects.board = None,
         }
     }
 
@@ -248,12 +254,13 @@ impl CockpitView {
         }
     }
 
-    /// A reference scene's or a test's board: `board` drawn as it is, in
-    /// the board's place.
+    /// A reference scene's or a test's board: `board` drawn as it is, at
+    /// `placement`.
     #[cfg(any(test, feature = "visual-reference"))]
     pub(super) fn stage_board(
         &mut self,
         board: crate::board::Board,
+        placement: Placement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -261,7 +268,7 @@ impl CockpitView {
         let events = cx.subscribe_in(&view, window, Self::on_board_event);
         self.projects.board = Some(BoardSlot {
             view,
-            placement: Placement::Tab,
+            placement,
             shown: true,
             back: None,
             _events: events,
