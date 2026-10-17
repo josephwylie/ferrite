@@ -20,7 +20,6 @@ use gpui::{AppContext, Focusable};
 
 use super::{conversation, Scene, Setup};
 use crate::nav::NavFold;
-use crate::projects::Place;
 use crate::review::ReviewView;
 use crate::sidebar::{self, Sidebar};
 use ferrite_core::ThreadId;
@@ -71,12 +70,6 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 fn projects(board: bool) -> (Scene, Setup) {
     let mut scene = Scene::new(&format!("projects-{}", if board { "board" } else { "nav" }));
     let checkout = scene.project("checkout");
-    let place = Place {
-        root: scene.root.join("projects"),
-        config_dir: scene.root.join("projects-config"),
-    };
-    std::fs::create_dir_all(&place.root).expect("create the projects root");
-    std::fs::create_dir_all(&place.config_dir).expect("create the projects config");
 
     let (head, head_feed) = scene.open(Provider::Claude, &checkout, "Checkout revamp");
     scene
@@ -124,7 +117,7 @@ fn projects(board: bool) -> (Scene, Setup) {
     let setup: Setup = Box::new(move |view, window, cx| {
         view.set_nav_fold(NavFold::Parked, false, cx);
         view.projects.sidebar = sidebar;
-        view.projects.place = Some(place);
+        view.projects.live = true;
         // The cart copy's request stood before the window opened: heard,
         // not toasted over the board.
         view.ring_bell(cx);

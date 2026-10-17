@@ -704,12 +704,9 @@ pub struct Preferences {
     /// The keys in `settings.json` the launch refused, a sentence each
     /// (`keymap::with_user_keys`): the window says them once.
     pub keys_refused: Vec<String>,
-    /// Where Projects keeps its projects (ADR 0030). `None` in the test and
-    /// demo constructors, so no suite reads the operator's own.
-    pub projects: Option<crate::projects::Place>,
-    /// Whether the nav and the bottom bar read 1.0's board (ADR 0031).
-    /// False in the test and demo constructors, so no suite reads the
-    /// operator's own.
+    /// Whether the board opens and the nav and the bottom bar read it
+    /// (ADR 0031). False in the test and demo constructors, so no suite
+    /// reads the operator's own.
     pub board: bool,
 }
 
@@ -729,7 +726,6 @@ impl Preferences {
             whats_new: None,
             unreadable: None,
             keys_refused: Vec::new(),
-            projects: None,
             board: false,
         }
     }
@@ -1550,8 +1546,8 @@ impl CockpitView {
         if prefs.ferrite_updates {
             updating::schedule_checks(cx);
         }
-        let projects_place = prefs.projects.clone();
-        if prefs.board {
+        let board = prefs.board;
+        if board {
             Self::start_sidebar_refresh(cx);
         }
         cx.on_app_quit(|view, _cx| {
@@ -1654,7 +1650,7 @@ impl CockpitView {
             server_bands: Default::default(),
             unreadable_told: false,
             user_commands: Default::default(),
-            projects: projects::ProjectsState::new(projects_place),
+            projects: projects::ProjectsState::new(board),
             leave_asked: false,
             group_error: None,
             bell: Bell::new(),
@@ -1750,7 +1746,6 @@ impl CockpitView {
             whats_new: None,
             unreadable: self.prefs.unreadable.clone(),
             keys_refused: Vec::new(),
-            projects: self.prefs.projects.clone(),
             board: self.prefs.board,
         }
     }
@@ -4577,7 +4572,6 @@ impl CockpitView {
 
     /// One ask: to land on a Thread, as its nav row would; a toast, which
     /// fades as a finished turn's does unless important, with its chime.
-    /// 0.2's nav focus (ADR 0030) is heard and set aside.
     fn present(
         &mut self,
         asked: ferrite_core::cockpit::Asked,
@@ -4608,9 +4602,6 @@ impl CockpitView {
                     self.chime(sound);
                 }
             }
-            // 0.2's `focus` verb: 1.0's board has no project to focus the
-            // nav on, and its sidebar rows sit where their Threads do.
-            Asked::NavFocus(_) => {}
         }
     }
 

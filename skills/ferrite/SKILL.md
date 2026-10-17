@@ -147,9 +147,19 @@ is one event under the same id: `thread_opened`, `thread_closed`,
 `attention`, `decision_requested`, `decision_closed`. It runs until you stop
 it. Prefer `agent wait` when you only need to know when a Thread settles.
 
-## Coordinate a project
+## Work on the board
 
-A project's coordinator and its threads are Projects' (ADR 0030), not this skill's: the project folder's AGENTS.md names the full `ferrite-projects --root …` command; run its `skill` subcommand and follow what it prints.
+The work board (its tasks, the agents delegated to them, the Coordinator)
+is Projects' (ADR 0031), not this skill's. Its program, `ferrite-projects`,
+ships beside Ferrite's and is not on `PATH` either; while Projects run,
+every Thread is told it as `FERRITE_PROJECTS_BIN`:
+
+```bash
+"${FERRITE_PROJECTS_BIN:-$(dirname "$F")/ferrite-projects}" skill
+```
+
+prints how an agent adds, lists, reports on and delegates tasks; follow
+what it prints.
 
 ## Tell the user
 
@@ -227,10 +237,7 @@ prompt was taken, rather than when the turn ends:
 
 `"$F" machine list` names the saved machines `--machine` can ask, and
 `"$F" notification show "Ready" --sound done` rings a chime with the
-toast (`--important` keeps it up). `"$F" nav focus --project <slug>`
-shows only that Projects project's block in the user's nav, and
-`"$F" nav focus` all of them again: Projects' `focus` and `unfocus` do
-it for you.
+toast (`--important` keeps it up).
 
 ## Another machine
 

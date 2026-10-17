@@ -27,11 +27,10 @@ proof of each behaviour is its own test program
 Ferrite, what this crate's seams and the Server decide is proved here, in
 `crates/ferrite-projects/tests/ferrite.rs` and in ferrite-core (named
 below). What the rows marked "adapter" do through Ferrite is only herdr's
-calls, which the adapter answers from the Server (Seam 1): those rows are
-proved through Ferrite once upstream's test program runs on the adapter
-against the Server fake. The adapter is not on this branch (its
-`herdr/ferrite.rs` refuses every call `not_wired`), so until it merges
-those rows are proved against herdr's stand-in only.
+calls, which the adapter (`sw-core`'s `herdr/ferrite.rs`) answers from
+the Server (Seam 1), each call tested there against a stand-in Server
+(`herdr/ferrite/tests.rs`); the rows themselves are proved against
+herdr's stand-in only, as upstream's test program runs on it.
 
 | Behaviour | Upstream's proof | Through Ferrite |
 |---|---|---|
@@ -54,13 +53,11 @@ those rows are proved against herdr's stand-in only.
 
 Still refused, and why:
 
-- No Ferrite-side test runs the rows marked "adapter" on this branch:
-  see above.
-- Every herdr call the adapter has not wired is refused `not_wired`
-  before anything runs (Seam 1); until it lands, the keeper ends after
-  three checks and is started again by the next hook (ADR 0031, Seam 4).
-- The in-app board's own processes need the Server's `environment()` set
-  in the app before the board runs (the board's lane; ADR 0031, Seam 4).
+- No Ferrite-side test runs the rows marked "adapter" end to end: see
+  above.
+- A herdr call Ferrite has no counterpart for (the terminal runtime's,
+  herdr's own setup's) is refused `not_wired` before anything runs (Seam
+  1), which callers treat as any refusal of herdr's.
 - Agent kinds Ferrite has no Provider for (all but `claude` and `codex`)
   fail `no_provider` at `agent start`.
 - The board inside herdr's web UI (`webui/`) finds no web UI and does

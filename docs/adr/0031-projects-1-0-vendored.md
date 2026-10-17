@@ -76,9 +76,9 @@ Upstream's command line crate (`src/`: `cli/`, the `sw` library that
 re-exports every crate, and the docs generator) and its tests (`tests/`,
 one program over `sw`) are taken verbatim into `crates/ferrite-projects`,
 keeping the package and library names (`herdr-projects`, `sw`), edition
-2024 and formatting. Its binary keeps upstream's name until it ships
-(below); it is what agents and hooks will run, and every command, answer
-and refusal is upstream's. `sw` re-exports `sw_board` in place of `sw_web`. Upstream's
+2024 and formatting. Its binary is named `ferrite-projects` (upstream's
+is `herdr-projects`); it is what agents and hooks run, and every command,
+answer and refusal is upstream's. `sw` re-exports `sw_board` in place of `sw_web`. Upstream's
 text keeps its own name, `herdr-projects`: it has no one name constant
 to set at a seam.
 
@@ -98,24 +98,12 @@ lists them):
   source guard) are not taken; a test that also checked the web board
   keeps its terminal part.
 
-It ships with the view that replaces 0.2's, never before. The window's
-Projects view is still 0.2's, and so is the program Ferrite ships as
-`ferrite-projects`: that view runs 0.2 commands (`--root … adopt-workspace`,
-`doctor`, `new`, `sweep`), its "configure" writes 0.2's hooks, which run
-`ferrite-projects --root … hook`, and the Server starts 0.2's ticker. The
-1.0 program refuses every one of them, and its take-over would set aside
-the 0.2 data that view still works on. So until the board's merge the 1.0
-program is built and tested, not bundled. In that merge, together:
-
-- the `[[bin]]` is named `ferrite-projects`, and `scripts/install-app.sh`
-  builds it (`cargo build -p herdr-projects --bin ferrite-projects`) in
-  place of 0.2's and copies it into the app bundle's `Contents/MacOS`,
-  beside `ferrite`, signed with it;
-- the Server runs `ferrite-projects take-over` at start in place of 0.2's
-  coordinators' migration and ticker (below), then starts the keeper;
-- the 0.2 crate (`crates/ferrite-projects-0-2`: its library, binary,
-  `configure`, skill and tests), its Server glue, its CI step and the
-  window's 0.2 view leave.
+It ships with the app: `scripts/install-app.sh` builds it (`cargo build
+-p herdr-projects --bin ferrite-projects`) and copies it into the app
+bundle's `Contents/MacOS`, beside `ferrite`, signed with it; the Server
+runs `ferrite-projects take-over` at start, then starts the keeper (Seam
+4). The 0.2 crate, its Server glue, its CI step, the window's 0.2 view
+and 0.2's nav focus (`nav.focus`) are gone.
 
 ### Seam 1: the herdr adapter
 
@@ -129,9 +117,9 @@ socket as the `ferrite` CLI (ADR 0027) sends it, and refuses one with no
 Ferrite counterpart with the code `not_wired` before anything runs,
 which callers treat as any refusal of herdr's. A refusal is retired by
 wiring it, never by working round it in a caller. Three more `Ferrite:`
-lines reach the seam: `cli::current_socket` is the Server's API socket
-(`FERRITE_SOCKET`, else `api.sock` in the Store), so there is one
-session, `default`, and `Herdr::alive` is the Server answering;
+lines reach the seam: `cli::current_socket` is `HERDR_SOCKET_PATH` when
+set, else the Server's API socket (`FERRITE_SOCKET`, else `api.sock` in
+the Store), so there is one session, `default`, and `Herdr::alive` is the Server answering;
 `Herdr::pane_quit` parks the pane's Thread instead of signalling a
 process; and `agents/start_failed.rs` explains an agent kind with no
 Provider.
@@ -347,18 +335,14 @@ lists each agent's (a Space the board made, a linked worktree, a
 Project's own), its branch still at the right and its numbers under it;
 while the task waits for a pick the name stays and the numbers go, as
 upstream leaves them. Status inks are Ferrite's theme equivalents behind
-one function (`sidebar::ink`) until the board's GPUI drawing lands, when
-that function takes the board theme's inks. The nav reads the
-board whether or not 0.2's projects root resolves. Nothing is reported to
+one function (`sidebar::ink`). Nothing is reported to
 herdr, so `report-metadata` is answered by no call; a task archived or
 removed while its Thread lives simply has no entry. A window on another
 machine draws none of this computer's board. The bottom bar says the
 board header's tally (`3 need you · 1 ready · 2 working`) and opens the
 board. Upstream raises no pop-up of its own when a task needs you, is
 ready or fails: `board.notify` alone decides (a bell where a board is
-open, or a command), so the window adds none. 0.2's nav focus (`nav.focus`)
-has no 1.0 counterpart; the window ignores it until the API drops it,
-which waits on 0.2's crate: its own CLI still calls `nav focus`.
+open, or a command), so the window adds none.
 
 ### Migration from 0.2
 
@@ -376,21 +360,16 @@ Those names are recognised at `Ferrite:` marks beside upstream's (`legacy.rs`
 and `take_over/outside.rs`), so the same take-over sets Ferrite's 0.2 aside:
 nothing deleted, nothing converted, each file it changes backed up first.
 
-It is to run where `migrate-ferrite-coordinators` runs (ADR 0030): at every
-Server start, before the keeper, as `ferrite-projects take-over`, once the
-1.0 program ships (above). As any
-command does, it first runs upstream's start (`take_over::at_start`, then
+It runs at every Server start, before the keeper, as `ferrite-projects
+take-over`. As any command does, it first runs upstream's start (`take_over::at_start`, then
 the home folder's move, the copy of older data and the settings' move);
 then it prints the line upstream keeps for the human until it is said
 (`move_note`, `move_told`), so the take-over is done once and said once.
 The Server logs what it prints and shows it as one toast once a window is
 there (`server/projects.rs`). Between the two, the Server runs the
-startup hook that starts the keeper (Seam 4). While the shipped program
-is still 0.2's (it answers `--version`, which 1.0's refuses), the Server
-runs 0.2's coordinators' migration and ticker instead
-(`server/projects/legacy.rs`) and tells no Session of the program. ADR 0028's `coordinators.json` and
-`ferrite_migrate.rs` leave with the 0.2 crate: neither 0.2 nor ADR 0028
-ever shipped, and the projects that migration made are set aside with
+startup hook that starts the keeper (Seam 4). ADR 0028's
+`coordinators.json` and `ferrite_migrate.rs` left with the 0.2 crate:
+neither 0.2 nor ADR 0028 ever shipped, and the projects that migration made are set aside with
 the rest of 0.2's.
 
 ### Seam 4: the keeper and hooks under the Server
@@ -443,12 +422,6 @@ old one, and that starts a fresh keeper with this Server's environment.
 A restart quicker than those checks keeps the old keeper, which answers
 the same socket with the same program and the same environment.
 
-Until the herdr adapter answers `Herdr::alive` (Seam 1), `keeper-work`
-finds the socket refusing, ends after its three checks and exits 3, and
-the next hook starts it again at most every four seconds
-(`due("keeper-start", 4000)`): the keeper keeps running only once the
-adapter does.
-
 What the hook, the keeper and everything they start are handed:
 `HERDR_SOCKET_PATH`, the Server's API socket, which every task's link
 names as herdr's socket; `FERRITE_SOCKET` and `FERRITE_BIN` for the
@@ -468,10 +441,9 @@ task. Without `HERDR_SOCKET_PATH`, what an agent or the Coordinator
 delegates would link herdr's default socket, which the hook's
 `mine(socket)` and the keeper's `board_for(socket)` never match. All
 three are caller context: a Session never inherits them from whatever
-started Ferrite (`spawn::INHERITED_MARKERS`). Ferrite's app sets
-`HERDR_SOCKET_PATH` in its own process before the board runs (the
-board's lane), or a task the board makes links herdr's default socket
-too. `HERDR_PLUGIN_ID` is not
+started Ferrite (`spawn::INHERITED_MARKERS`). The board in Ferrite's
+app, which is handed none of them, links the Server's API socket all the
+same: `cli::current_socket` falls back to it (Seam 1). `HERDR_PLUGIN_ID` is not
 set: upstream's `login_env` (asking a login shell for `PATH` and gh's
 login) runs only under herdr. The Server already took the login shell's
 environment when launched from the Finder (`login_shell`), and these
@@ -529,12 +501,11 @@ before it ships, record the new commit, and run the crates' tests
 - The workspace's `serde_json` gains `float_roundtrip`, as upstream's
   data needs (a closing note's time read back is the time written);
   `preserve_order` was already unified in.
-- The 0.2.34 crate stays, in `crates/ferrite-projects-0-2`, with its
-  binary (shipped as `ferrite-projects`), its Server glue (the
-  coordinators' migration, the ticker: `server/projects/legacy.rs`) and
-  its CI step, only while the window's 0.2 Projects view still runs on
-  it, and leaves with that view ("The command line"). CONTEXT.md already
-  speaks 1.0's terms.
+- The 0.2.34 crate is gone with its binary, its Server glue (the
+  coordinators' migration, the ticker), its CI step, the window's 0.2
+  Projects view and its API operation `nav.focus` (ADR 0027): 1.0's
+  take-over sets an install of it aside, so nothing of it is needed to
+  migrate.
 - The startup hook, which starts the keeper, runs after `take-over` has
   returned, on the same thread, and the events' hooks only after it
   (`server/projects.rs`): every command takes over at its start, and two

@@ -71,6 +71,10 @@ One exception: ADR 0028's `coordinator.start`, `coordinator.get`,
 `coordinator.update` and `worker.start` were removed with the design they
 served when ADR 0030 made Projects Ferrite's coordinator, fixtures and all.
 A caller that still asks for one is refused as for any unknown method.
+So was `nav.focus`, with the window's `nav_focus` message, when ADR 0031
+removed the 0.2 Projects that alone called it: an older Server's
+`nav_focus` is an unknown message type to a newer window, which ignores
+it (ADR 0025).
 
 | Operation | Does |
 |---|---|
@@ -99,7 +103,6 @@ Added for Projects (ADR 0030), each what herdr-projects asks of Herdr:
 | `worktree.create` | `git worktree add -b branch` from `base` in the registry's layout, for a Thread to start in; `{worktree {path, branch}, project}` |
 | `worktree.remove` | by `path`: `worktree_not_found` unless a linked worktree is there; refuse `dirty_worktree_requires_force` unless `git status` is clean, then park its open Threads, `git worktree remove` (never forced), bind its Threads to the main checkout; the branch stays |
 | `machine.list` | the enabled saved machines, `{id, label, target}` by name |
-| `nav.focus` | `nav_focus {project}` to every window: only that Projects project's block in the nav (by its slug, passed on unread), or all; the Server holds it and tells each window that arrives later, as Herdr's view holds (not across a Server restart) |
 
 `notification.show` gains `sound` (`request`, `done`, `none`) and
 `important`. A Thread's answer gains `focused` and `draft`, which the

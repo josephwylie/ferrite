@@ -1,10 +1,9 @@
-# herdr-projects (to ship as `ferrite-projects`)
+# herdr-projects (shipped as `ferrite-projects`)
 
 herdr-projects 1.0's command line crate: `src/` (`cli/`, the `sw` library
 that passes on every crate below it as its own, and the docs generator) and
 its tests (`tests/`, one test program over `sw`). Its binary is what
-agents, hooks and Ferrite's Server will run, once the board replaces the
-window's 0.2 Projects view (see "Shipped").
+agents, hooks and Ferrite's Server run (see "Shipped").
 
 ## Vendored
 
@@ -25,8 +24,9 @@ it has no one name constant to set, so it is left as it is.
 Each is marked `Ferrite:` in a comment.
 
 - **`Cargo.toml`**: upstream's `[workspace.package]` values written in;
-  `sw-board` in place of `sw-web`. The `[[bin]]` keeps upstream's name,
-  `herdr-projects`, until it ships.
+  `sw-board` in place of `sw-web`. The `[[bin]]` is `ferrite-projects`,
+  the name it ships by, so the tests that run it name it
+  `CARGO_BIN_EXE_ferrite-projects`.
 - **No web crate.** `crates/web` (the board inside herdr-web-ui, a herdr
   plugin that puts herdr's panes in a browser) is not taken: Ferrite has no
   herdr-web-ui and its board is a GPUI view. `src/lib.rs` re-exports
@@ -61,17 +61,13 @@ Each is marked `Ferrite:` in a comment.
 
 ## Shipped
 
-Not yet. While the window's Projects view is 0.2's, the program Ferrite
-ships as `ferrite-projects` is 0.2's (`../ferrite-projects-0-2`): that
-view runs 0.2 commands, and 0.2's hooks run it, which this program
-refuses. This one is built and tested, not bundled. It ships in the same
-merge that replaces the view and removes the 0.2 crate (ADR 0031): then
-`scripts/install-app.sh` builds it in place of 0.2's and copies it into
-the app bundle's `Contents/MacOS` as `ferrite-projects`, beside
-`ferrite`, signed with the app; the Server runs its `take-over` at start
-in place of 0.2's ticker, and the code inside the app hands agents and
-hooks that program (`store::files::bin`, beside `ferrite` or at
-`FERRITE_PROJECTS_BIN`). It is Unix-only, as upstream is.
+`scripts/install-app.sh` builds it (`-p herdr-projects --bin
+ferrite-projects`) and copies it into the app bundle's `Contents/MacOS`
+as `ferrite-projects`, beside `ferrite`, signed with the app. The Server
+runs its `take-over` at start, then its startup hook, which starts the
+keeper, and the code inside the app hands agents and hooks that program
+(`store::files::bin`, beside `ferrite` or at `FERRITE_PROJECTS_BIN`). It
+is Unix-only, as upstream is.
 
 Tested in CI on macOS: `cargo test -p sw-core -p sw-flow -p sw-board -p
 herdr-projects`.

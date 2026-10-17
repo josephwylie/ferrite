@@ -57,7 +57,7 @@ fn a_hook_that_is_neither_0_2s_is_left_alone() {
 /// A copy of the program, run as Ferrite's Server runs it: on a home folder of its own, with nothing of the tests'.
 fn run(w: &World, home: &Path, args: &[&str]) -> (i32, String) {
     let exe = w.base.join("bin").join("ferrite-projects");
-    if !exe.exists() { std::fs::create_dir_all(exe.parent().unwrap()).unwrap(); std::fs::copy(env!("CARGO_BIN_EXE_herdr-projects"), &exe).unwrap(); }
+    if !exe.exists() { std::fs::create_dir_all(exe.parent().unwrap()).unwrap(); std::fs::copy(env!("CARGO_BIN_EXE_ferrite-projects"), &exe).unwrap(); } // Ferrite: the binary is `ferrite-projects`
     let o = std::process::Command::new(&exe).args(args).current_dir(home).env_clear()
         .env("HOME", home).env("PATH", "/usr/bin:/bin").env("HERDR_SOCKET_PATH", "/nonexistent").env("HERDR_BIN_PATH", "/bin/false")
         .stdin(std::process::Stdio::null()).output().unwrap();

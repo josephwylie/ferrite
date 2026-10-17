@@ -2308,12 +2308,10 @@ fn a_project_is_focused_by_id() {
 }
 
 /// Herdr's Spaces are Ferrite's Projects: opened by directory (once),
-/// labelled, renamed, started in, focused in the nav, and closed, which
-/// parks their Threads.
+/// labelled, renamed, started in, and closed, which parks their Threads.
 #[test]
-fn projects_are_opened_renamed_focused_and_closed() {
+fn projects_are_opened_renamed_and_closed() {
     let harness = start("api-projects");
-    let mut window = attach(&harness.address);
     let mut caller = call(&harness);
     let home = harness.dir.join("demo");
     std::fs::create_dir_all(&home).unwrap();
@@ -2387,38 +2385,6 @@ fn projects_are_opened_renamed_focused_and_closed() {
     assert_eq!(elsewhere["error"]["code"], "invalid_request", "{elsewhere}");
     let got = caller.answer("6", "project.get", serde_json::json!({ "project": id }));
     assert_eq!(got["result"]["project"]["thread_count"], 2, "{got}");
-
-    // The nav's focus is by a Projects project's slug, passed on unread.
-    caller.answer(
-        "7",
-        "nav.focus",
-        serde_json::json!({ "project": "billing" }),
-    );
-    caller.answer("8", "nav.focus", serde_json::json!({}));
-    let nav_focus = |message: &ServerMessage| matches!(message, ServerMessage::NavFocus { .. });
-    assert_eq!(
-        told(&mut window, nav_focus),
-        ServerMessage::NavFocus {
-            project: Some("billing".into())
-        }
-    );
-    assert_eq!(
-        told(&mut window, nav_focus),
-        ServerMessage::NavFocus { project: None }
-    );
-    // The focus holds: a window that arrives later is told it.
-    caller.answer(
-        "9",
-        "nav.focus",
-        serde_json::json!({ "project": "billing" }),
-    );
-    let mut later = attach(&harness.address);
-    assert_eq!(
-        told(&mut later, nav_focus),
-        ServerMessage::NavFocus {
-            project: Some("billing".into())
-        }
-    );
 
     let closed = caller.answer("10", "project.close", serde_json::json!({ "project": id }));
     assert_eq!(
