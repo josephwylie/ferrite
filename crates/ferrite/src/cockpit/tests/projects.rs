@@ -3,6 +3,7 @@
 //! in the window (ADR 0031).
 
 use super::*;
+use crate::board::render;
 use crate::board::Placement;
 use crate::cockpit::drawn;
 use crate::sidebar::{coordinator_told, Sidebar, Told};
@@ -38,21 +39,23 @@ fn sidebar(threads: &[ThreadId]) -> Sidebar {
         "40% 3m",
     );
     let coordinator = coordinator_entry("idle", 1, "Done.\nBoth tasks are added.");
+    let theme = render::ferrite_theme(false);
+    let review = render::ink(&theme, Ink::Review);
     Sidebar {
         agents: [
-            (threads[0], coordinator_told(coordinator)),
+            (threads[0], coordinator_told(coordinator, &theme)),
             (
                 threads[1],
                 Told {
                     entry: agent.clone(),
-                    ink: Ink::Review,
+                    ink: review,
                 },
             ),
             (
                 threads[2],
                 Told {
                     entry: reviewer,
-                    ink: Ink::Review,
+                    ink: review,
                 },
             ),
         ]
@@ -94,7 +97,8 @@ fn the_boards_agents_are_their_sidebar_entries(cx: &mut TestAppContext) {
             (task.stands_timed.as_ref(), task.third.as_ref()),
             ("agent \u{b7} under review \u{b7} R#1 \u{b7} 6m", "40% 3m")
         );
-        assert_eq!(task.ink, crate::sidebar::ink(Ink::Review));
+        let review = render::ink(&render::ferrite_theme(false), Ink::Review);
+        assert_eq!(task.ink, review);
         assert_eq!(
             row(threads[2])
                 .task

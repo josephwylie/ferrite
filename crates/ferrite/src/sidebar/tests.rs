@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::nav::task_lines;
+use crate::theme;
 use sw_board::flow::sidebar_entry::{task_name, CAP};
+use sw_board::shown::ink::Inked;
 
 /// The board's data under a home of the tests' own, never the operator's.
 fn isolated() {
@@ -33,8 +35,13 @@ fn threads() -> HashMap<String, ThreadId> {
         .collect()
 }
 
+/// The board's default theme: Ferrite's own colours.
+fn ferrite() -> Theme {
+    render::ferrite_theme(false)
+}
+
 fn sidebar(rows: &[Obj]) -> Sidebar {
-    of(rows, &threads(), "here", NOW)
+    of(rows, &threads(), "here", NOW, &ferrite())
 }
 
 /// A task as the board shows it, its agent live in Thread 7, with `patch`.
@@ -228,7 +235,26 @@ fn every_stage_says_where_it_stands_in_the_status_words() {
                 "{name}: never the row's second line"
             );
         }
-        assert_eq!(told.ink, status_ink(&as_row(&row)), "{name}: its row's ink");
+        let ink = render::ink(&ferrite(), status_ink(&as_row(&row)));
+        assert_eq!(told.ink, ink, "{name}: its row's ink");
+    }
+}
+
+/// A status is coloured in the nav as the board paints it: the board's
+/// own review blue, not a stand-in of Ferrite's.
+#[test]
+fn a_status_inks_the_nav_as_the_board_paints_it() {
+    isolated();
+    for (stage, state) in [
+        ("reviewing", "working"),
+        ("working", "working"),
+        ("approval", "blocked"),
+    ] {
+        let row = task(json!({ "stage": stage, "state": state }));
+        let status = status_ink(&as_row(&row));
+        let painted = render::runs(&Inked::of("x", status), &ferrite())[0].fg;
+        let told = told(std::slice::from_ref(&row), AGENT).expect("the agent's entry");
+        assert_eq!(told.ink, painted, "{stage}: {status:?}");
     }
 }
 
@@ -536,11 +562,15 @@ fn the_tally_is_the_board_headers() {
 #[test]
 fn the_coordinators_entry_says_where_it_stands_and_its_last_message() {
     let stands = |state: &str| coordinator_stands(state, "");
-    let told = coordinator_told(coordinator_entry(
-        &stands("idle"),
-        1,
-        "Done.\nBoth tasks are added.",
-    ));
+    let told = coordinator_told(
+        coordinator_entry(
+            &stands("idle"),
+            1,
+            "Done.
+Both tasks are added.",
+        ),
+        &ferrite(),
+    );
     assert_eq!(told.entry.name, "Coordinator");
     assert_eq!(
         lines(&told),
@@ -553,7 +583,7 @@ fn the_coordinators_entry_says_where_it_stands_and_its_last_message() {
         ("working", "Coordinator \u{b7} working"),
         ("blocked", "Coordinator \u{b7} asks you"),
     ] {
-        let told = coordinator_told(coordinator_entry(&stands(state), 0, ""));
+        let told = coordinator_told(coordinator_entry(&stands(state), 0, ""), &ferrite());
         assert_eq!(lines(&told), [said]);
     }
 }
@@ -562,7 +592,7 @@ fn the_coordinators_entry_says_where_it_stands_and_its_last_message() {
 /// stands is plain text.
 #[test]
 fn only_the_coordinators_message_is_dim() {
-    let told = coordinator_told(coordinator_entry("idle", 0, "Done."));
+    let told = coordinator_told(coordinator_entry("idle", 0, "Done."), &ferrite());
     let inks: Vec<u32> = task_lines(&told.rows(), 2.0)
         .into_iter()
         .map(|(_, ink)| ink)

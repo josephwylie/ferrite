@@ -396,9 +396,10 @@ fn prepare(opening: Opening) -> Board {
     if !said.is_empty() {
         state.flash(said.join("  "), Ink::Green);
     }
-    let want = sw_board::store::settings::lookup::setting("board.theme", None);
-    let theme = render::theme_named(want.as_str().unwrap_or("herdr"));
-    Board { state, theme }
+    Board {
+        state,
+        theme: render::theme_set(),
+    }
 }
 
 /// How many cells a box `width` by `height` pixels holds.
