@@ -495,9 +495,16 @@ turn's end, as upstream does when a hook is missed.
 
 A Thread parked is `pane.closed`, and the hook then reconciles its task,
 which may find it gone. Under herdr, the fallback hand-over's `pane
-quit` keeps the pane, so `thread.revive` (Seam 1) must keep the Thread
-open across the hand-over, or `pane get` must answer for a parked
-Thread, or a hand-over in two calls marks its task's agent gone mid-way.
+quit` keeps the pane, so a hand-over in two calls must not mark its
+task's agent gone mid-way. The adapter keeps the pane the board placed
+after its Thread is parked: between `pane quit` and `agent start`, `pane
+get` answers it at its shell, so the reconcile finds the agent exited,
+not its pane gone. The next agent's Thread is then the pane's: another
+kind starts a new Thread there, whose terminal `agent get` confirms as
+the pane's newest, and the same kind is `thread.revive`, keeping the
+Thread's id and counting past the handled turn. Proved against the real
+Server by ferrite-core's
+`server::tests::herdr::a_fallback_hand_over_keeps_the_task_s_pane_on_the_real_server`.
 
 What proves each flow behaviour, through Ferrite or still only against
 herdr's fake, and what waits on another seam, is listed in
