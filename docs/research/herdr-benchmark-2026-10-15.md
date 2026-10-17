@@ -52,8 +52,8 @@ end of 2026-10-15. "Partial" names what is missing.
 | Review slot | Done | ADR 0021: uncommitted / branch / commits / last turn, line comments; git runs where the checkout is (the owning Server, on a machine too) |
 | Session import + allowance warning | Done | ADR 0022 |
 | Custom palette commands + user keymap | Done | ADR 0024 |
-| Coordinator Threads | Superseded | ADR 0028's own coordinator was removed; herdr-projects is vendored instead (ADR 0030), see the parity table below |
-| Projects (herdr-projects) | Done | ADR 0030: `crates/ferrite-projects`, upstream 0.2.34 verbatim but for its seams; parity table below |
+| Coordinator Threads | Superseded | ADR 0028's own coordinator was removed; herdr-projects 1.0's Coordinator is used instead (ADR 0031), see the parity table below |
+| Projects (herdr-projects) | Done | ADR 0031 (supersedes 0030's 0.2.34): 1.0 vendored in `crates/ferrite-projects*`, the board drawn in GPUI; parity table below |
 | Mermaid diagrams | Done | ADR 0016 |
 | Hygiene: durable settings, banner, clean env, diagnostics, find, self-update, staggered revival | Done | ADRs 0018–0020, 0023 |
 | Hygiene: confirm quit while working | Superseded | Added, then dropped by ADR 0025: quitting the window no longer stops agents |
@@ -62,64 +62,69 @@ end of 2026-10-15. "Partial" names what is missing.
 | Store never reuses a Thread id | Done | ADR 0029 (found while building the API) |
 | Worktree setup / cleanup, debug data folder | Not done | Declined in the plan; a Projects thread's cleanup once resolved (merged PR, `resolve`, `auto_resolve_days`) is the one exception (ADR 0030) |
 
-### herdr-projects parity
+### herdr-projects 1.0 parity
 
-Every herdr-projects feature and where it is in Ferrite. "the sheet" is
-the Projects sheet (`crates/ferrite/src/projects/`), opened with
-`cmd-shift-a` (`projects::Toggle`, upstream's `prefix+a`) or the palette's
-`Projects`; "the CLI" is the `ferrite-projects` binary shipped beside
-`ferrite` (agents call it from the skill, as upstream). The adapter
-(`src/herdr.rs`) answers every herdr call from the Server API (ADR 0027).
+herdr-projects 1.0 (MIT, upstream `c019063`, 1.0.1+8) is vendored by ADR
+0031: `core`, `flow`, `board` and the command line verbatim but for
+`Ferrite:` marks, herdr's calls answered from the Server by the adapter
+(`sw-core`'s `herdr/ferrite.rs`), the board drawn natively in GPUI
+(`crates/ferrite/src/board`). "The board" opens with `cmd-shift-a`
+(`projects::Toggle`, upstream's board key) or the palette's `Projects`;
+"the CLI" is `ferrite-projects`, shipped in the app beside `ferrite`.
+Reference scenes: `projects-nav` and `projects-board*` in
+`cockpit/visual_reference/feature_scenes.rs`.
 
-| herdr-projects feature | In Ferrite | How to reach it |
+| herdr-projects 1.0 feature | In Ferrite | How to reach it |
 |---|---|---|
-| Coordinator that delegates, never does the work | Vendored skill (`skill/COORDINATOR.md`, `THREAD.md`, `autoproject`) | Palette `Projects: open project`, or `ferrite-projects open <slug>`; talk to the coordinator Thread |
-| New project | Sheet ask (upstream's `new` pane) | Palette `Projects: new project`, or `ferrite-projects new "Name" --repo <dir>` |
-| Open / pause / resume / archive / delete / rename | CLI verbs; open/pause/resume as palette commands with a project picker | Palette `Projects: open/pause/resume project`; the sheet's settings; `ferrite-projects archive\|delete\|rename` |
-| Threads on their own worktree and branch, or in a tab | `worktree.create` + staged `thread.start` (`--project`, `--ready`, `--args`, `--resume`) | Coordinator's `ferrite-projects thread start`; Threads appear under the project in the nav |
-| Briefs: goal, standing instructions, memory, task | Vendored `brief.rs` | `PROJECT.md`, `MEMORY.md`, `memory/` under `~/.herdr-projects/<slug>/` |
-| `## Remember` lessons flow into memory | Vendored `report`/memory | Thread reports; the sheet's memory section |
-| Tasks (`TASKS.md`, task owners) | Vendored `tasks.rs` | The sheet's tasks section; the coordinator keeps `TASKS.md` |
-| Inbox | Vendored `inbox.rs` | The sheet's inbox section; `ferrite-projects inbox` |
-| Routines (PR follow-up, approved commands) | Vendored `routine.rs`, run by the ticker | The sheet's routines section; `ferrite-projects routine approve` in a terminal |
-| Settings and safety (`start_threads`, yolo, `auto_resolve_days`) | Vendored `settings.rs`, `safety.rs` | The sheet's settings section; `ferrite-projects safety` |
-| Per-thread next steps (number keys) | Popup screen drawn line for line | The sheet's threads section, digits |
-| Sidebar rows grouped by project, coordinator first, needs-you first | Nav project blocks (`cockpit/projects.rs`), from the crate's data | The nav, while the ticker runs |
-| Row detail line (`review · PR #4`, `~40%`, activity) | Nav sub-lines under each Thread row | The nav |
-| Tab bar `projects: N need you` | Bottom-bar word | Bottom bar; click opens the sheet |
-| Sidebar focus / unfocus on one project | `nav.focus` op; nav shows one project's block | Palette `Projects: focus nav on this project` / `Projects: clear nav focus` |
-| Text overview | Sheet's overview body | Palette `Projects: overview`; `ferrite-projects overview` |
-| `adopt-workspace` / `thread adopt` | Sheet ask (upstream's `adopt` pane) | Palette `Projects: continue this Thread as a project`; `ferrite-projects thread adopt` |
-| Needs-you from agents' own progress reports | Progress hooks (`configure`) and Ferrite's Attention | Palette `Projects: configure` |
-| Notifications naming project and thread | `notification.show` (sound kept), click focuses the Thread | macOS notifications / toasts |
-| PR follow-up: failing checks and review comments back to the thread | Ticker, `gh` | Automatic while the ticker runs |
-| Merged PR resolves the thread, removes worktree and branch (never forced) | Ticker + `worktree.remove` | Automatic; `ferrite-projects thread resolve`, `sweep` |
-| Remote threads on saved SSH machines, reports copied home | `machine.list`, `--machine` (ADR 0026) | Saved machines in `config.toml`; select the machine in the nav |
-| Agent kinds | Claude Code and Codex (Ferrite's Providers) | Agent profiles in the sheet's settings |
-| Ticker | Started by the Server at start (replaces Herdr's `[[startup]]`) | `ferrite-projects ticker status\|start\|stop` |
-| `configure` / `unconfigure` (hooks, skill links) | `setup::configure_ferrite`; Herdr `config.toml` edits removed | Palette `Projects: configure`; `ferrite-projects configure` |
-| `doctor [--fix]` | Checks Ferrite version and Server socket instead of Herdr | Palette `Projects: doctor` (notification); `ferrite-projects doctor` |
-| Ferrite's old coordinators | One-time `migrate-ferrite-coordinators` at Server start | Automatic; notes in one toast |
-| Trust / prompt-box screen reading | Read from the Thread's exact state (`PaneState`) | Internal |
+| One board per machine: five groups (`needs you`, `ready to approve`, `working`, `to do`, `done`), pinned and archived, header tally, marks, review round, PR, percent and time left | Upstream's `view/` laid out on Ferrite's cell grid in Ferrite's colours (`board.theme`) | `cmd-shift-a` or palette `Projects`; `board.open` `tab` (default) or `popup` |
+| A row that asks: its question on the line under it, the question box, `y` / `n` | Upstream's view and `update` | Select the row; `space` answers its agent |
+| Coordinator: type and `Enter` makes tasks, `Tab` delegates each at once | Coordinator a Thread in the home Project, started through the adapter | The board's text box |
+| Chat with a task's agent or the Coordinator: newest message boxed, `alt+k` / `alt+j` scroll, `alt+c` hides | Upstream's chat; the wheel over it scrolls | `space` on a row |
+| Task panel beside the list, whole task full screen (status, description, plan, attempts, report, reviews, findings, evidence, settings, session) | Upstream's `view/panel/`; links open on a click | `alt+p`, `alt+t` |
+| Settings page (task, automation; board settings via CLI) | Upstream's settings page | `ctrl+e` on a row |
+| Automations: schedules, events, by hand, firings | Run by the keeper; panel upstream's | Their rows on the board, `enter` opens one; `ferrite-projects automations …` |
+| `?` menu, find (`ctrl+f`), archive (`alt+a`), group by repo (`alt+s`), all done (`alt+d`), pin, undo | Upstream's `update` | Their keys on the board |
+| Mouse: click selects or folds, wheel moves, drag and double click copy | `board/mouse.rs` (upstream's `run/mouse.rs` for GPUI) | The board |
+| Other machines' tasks, waits, automations and Coordinator | `remote` over SSH as `ferrited projects remote …`; machines from `machine.list` | `alt+m`; machines added in Settings, Machines |
+| Every task on its own worktree and branch, in its own Space | `worktree.create`, placed panes, `thread.start` (adapter) | Delegate a task (`Tab`); its agent is a Thread in the nav |
+| Opening a task's agent | `thread.focus` (Enter's job); the popup closes | `enter` on a row, or the agent's nav row |
+| Finish line: commit, sync with main, check, push, draft PR, conflict send-back | Upstream's flow; git and gh as plain processes | Automatic when an agent's turn ends |
+| Review by a second agent, rounds, gate, send-back | A reviewer Thread per round (`Reviewer #N`) | Automatic; shown on the row and in the panel |
+| Approve and merge (`ctrl+l`), send back (`ctrl+r`), evidence pages | Upstream's flow and page server | Keys on the board; evidence links open in the browser |
+| Plan first, attempts and one kept, limits, research only, after / chains, slots and queue | Upstream's flow through the adapter | Settings page or the Coordinator; panel parts `Plan`, `Pick one of N` |
+| Fallback agents, provider retries, stuck recovery | Upstream's; a hand-over keeps the task's pane (`thread.revive`) | Automatic |
+| Keeper and hooks | The Server runs `take-over`, the startup hook (starts the keeper) and herdr's pane events as hooks (ADR 0031, Seam 4) | Automatic while the Server runs |
+| herdr's sidebar rows for each live agent | Nav rows drawn from the same data, in the board theme's inks; bottom bar tally opens the board | The nav and bottom bar |
+| `board.notify` (bell or command) | Bell is the system bell; a command runs as upstream | `ferrite-projects set board.notify …` |
+| CLI (`add`, `delegate`, `report`, `doctor`, `show`, …) | Upstream's, as `ferrite-projects`; `install`/`update` say Ferrite ships it | Agents use it; palette `Projects: doctor` |
+| Migration from 0.2 | 1.0's take-over sets 0.2 (upstream's and Ferrite's) aside; once, one toast | Automatic at Server start |
 
 Not at parity, and why:
 
-- **`update` and the command link**: removed; Ferrite ships the binary and
-  updates itself (ADR 0023).
-- **Agent kinds beyond Claude Code and Codex** (OpenCode, Droid, …): fail
-  `no_provider`; Ferrite has no Provider for them. Their progress hooks are
-  still configured.
-- **`pane process-info`, `pane run`, raw keys**: a Thread is never a shell;
-  refused `not_wired`, or mapped to the operation meant (interrupt,
-  `decision.answer`).
-- **`open --here`**: never runs a coordinator on the caller's terminal.
-- **A checkout thread** belongs to its repository's Ferrite project, not the
-  coordinator's (upstream: a tab in the coordinator's Space), so archiving
-  the project leaves it open.
-- **Windows**: not built (Unix-only upstream).
-- **Remote**: inherits ADR 0026's gaps (no live branch or status for a
-  machine's Thread's Project).
-- **`docs/*.md`** in the crate stay upstream's Herdr documentation.
+- **pi** (1.0's third full-support agent kind) and every other kind but
+  Claude Code and Codex: `agent start` is refused `no_provider`. A pi
+  Provider is a new Provider Session plus a third stored Provider (about
+  180 match sites); scoped in ADR 0031, not built.
+- **The web board** (`crates/web`, herdr-web-ui, the board on a phone):
+  not taken; Ferrite has no web UI, so `web-ui` and `serve`'s front door
+  do nothing.
+- **Terminal-only parts of the board**: the first-run setup (herdr config
+  blocks, board key), the held-size warning, OSC 7501 records, attaching
+  to another machine's agent (the board says to open it on its machine),
+  loading a new binary in place (Ferrite updates whole).
+- **Text input**: read key by key as a terminal does; no input method, so
+  CJK and dead keys compose nothing in the board's text box (paste with
+  ⌘V works).
+- **`update` / `install`**: Ferrite ships and updates the program.
+- **Turn-end hooks inside the CLIs** (Claude `--settings`, Codex
+  `notify`): passed through and unit tested; that each CLI runs them is
+  proved only by a live run. Until then the keeper's tick and the
+  status hook find a turn's end, as upstream does after a missed hook.
+- **Upstream's test program** runs against herdr's stand-in, not the
+  adapter; the task's flow through the adapter is proved against the
+  real Server in ferrite-core's `server::tests::herdr`.
+- **Plan first on macOS**: refused, as upstream (bwrap is Linux only).
+- **Windows**: not built (Unix only upstream).
 
 ## Where Ferrite is already ahead
 
