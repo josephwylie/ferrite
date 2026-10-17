@@ -131,7 +131,12 @@ fn projects(board: bool) -> (Scene, Setup) {
         view.bell.clear_toasts();
         if board {
             sw_board::clock::set(Some(crate::board::fixture::NOW));
-            view.stage_board(crate::board::fixture::board(), window, cx);
+            view.stage_board(
+                crate::board::fixture::board(),
+                crate::board::Placement::Tab,
+                window,
+                cx,
+            );
         }
         cx.notify();
     });

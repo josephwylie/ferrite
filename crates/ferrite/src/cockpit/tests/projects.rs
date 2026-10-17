@@ -3,6 +3,7 @@
 //! in the window (ADR 0031).
 
 use super::*;
+use crate::board::Placement;
 use crate::cockpit::drawn;
 use crate::sidebar::{coordinator_told, Sidebar, Told};
 use sw_board::flow::sidebar_entry::{coordinator_entry, Entry};
@@ -291,22 +292,7 @@ fn a_board_at_wall_range_takes_the_walls_answer_keys(cx: &mut TestAppContext) {
     tick(cx);
     let flagged = view.read_with(cx, |view, _| view.panes[7].thread().unwrap());
 
-    view.update_in(cx, |view, window, cx| {
-        view.stage_board(crate::board::fixture::board(), window, cx)
-    });
-    let board = view.read_with(cx, |view, _| {
-        view.projects
-            .board
-            .as_ref()
-            .expect("the board")
-            .view
-            .clone()
-    });
-    cx.update(|window, cx| {
-        let focus = board.read(cx).focus.clone();
-        window.focus(&focus, cx);
-    });
-    tick(cx);
+    let board = focused_board(&view, Placement::Tab, cx);
     cx.update(|window, cx| assert_eq!(view.read(cx).level_now(window), Level::Wall));
 
     cx.simulate_keystrokes("y n a 1 2 3");
@@ -325,13 +311,14 @@ fn a_board_at_wall_range_takes_the_walls_answer_keys(cx: &mut TestAppContext) {
     });
 }
 
-/// The tab's work board, staged over the Panes and holding the keyboard.
-fn focused_tab_board(
+/// The work board at `placement`, staged and holding the keyboard.
+fn focused_board(
     view: &Entity<CockpitView>,
+    placement: Placement,
     cx: &mut gpui::VisualTestContext,
 ) -> Entity<crate::board::BoardView> {
     view.update_in(cx, |view, window, cx| {
-        view.stage_board(crate::board::fixture::board(), window, cx)
+        view.stage_board(crate::board::fixture::board(), placement, window, cx)
     });
     let board = view.read_with(cx, |view, _| {
         view.projects
@@ -373,7 +360,7 @@ fn a_nav_row_click_moves_the_tab_board_aside(cx: &mut TestAppContext) {
             .find(|thread| Some(*thread) != focused)
             .expect("a second Thread")
     });
-    let board = focused_tab_board(&view, cx);
+    let board = focused_board(&view, Placement::Tab, cx);
 
     let row = cx
         .debug_bounds(format!("nav-thread-{}", other.get()).leak())
@@ -403,13 +390,69 @@ fn the_next_pane_key_moves_the_tab_board_aside(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
     let before = view.read_with(cx, |view, _| view.focused_thread());
-    let board = focused_tab_board(&view, cx);
+    let board = focused_board(&view, Placement::Tab, cx);
 
     cx.simulate_keystrokes("cmd-]");
     tick(cx);
 
     view.read_with(cx, |view, _| {
         assert!(!view.projects.board_shown(), "the board gave way");
+        assert_ne!(view.focused_thread(), before, "the next Pane");
+    });
+    assert!(!board_holds_the_keyboard(&board, cx));
+}
+
+/// A press on a Thread's nav row closes the popup, as herdr's closes when
+/// another tab shows: it is never left over the Thread.
+#[gpui::test]
+fn a_nav_row_click_closes_the_popup(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("popup-nav-click", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    hold_nav_open(&view, cx);
+    let other = view.read_with(cx, |view, _| {
+        let focused = view.focused_thread();
+        view.panes
+            .iter()
+            .filter_map(|pane| pane.thread())
+            .find(|thread| Some(*thread) != focused)
+            .expect("a second Thread")
+    });
+    let board = focused_board(&view, Placement::Popup, cx);
+
+    let row = cx
+        .debug_bounds(format!("nav-thread-{}", other.get()).leak())
+        .expect("the other Thread's nav row");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+
+    view.read_with(cx, |view, _| {
+        assert!(view.projects.board.is_none(), "the popup closed");
+        assert_eq!(view.focused_thread(), Some(other));
+    });
+    assert!(
+        !board_holds_the_keyboard(&board, cx),
+        "the keyboard went to the Thread"
+    );
+}
+
+/// ⌘] from the popup steps to the next Pane and closes the popup.
+#[gpui::test]
+fn the_next_pane_key_closes_the_popup(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("popup-next-pane", 2);
+    let group = group_all(&mut core);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    let before = view.read_with(cx, |view, _| view.focused_thread());
+    let board = focused_board(&view, Placement::Popup, cx);
+
+    cx.simulate_keystrokes("cmd-]");
+    tick(cx);
+
+    view.read_with(cx, |view, _| {
+        assert!(view.projects.board.is_none(), "the popup closed");
         assert_ne!(view.focused_thread(), before, "the next Pane");
     });
     assert!(!board_holds_the_keyboard(&board, cx));
@@ -425,7 +468,7 @@ fn the_board_key_refocuses_a_shown_board(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("board-refocus", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let board = focused_tab_board(&view, cx);
+    let board = focused_board(&view, Placement::Tab, cx);
     let elsewhere = view.update_in(cx, |view, window, cx| {
         let elsewhere = view.panes[view.focused()]
             .composer
