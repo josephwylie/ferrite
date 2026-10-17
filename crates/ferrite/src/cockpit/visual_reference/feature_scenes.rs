@@ -1,5 +1,6 @@
 //! Scenes for the features the first references predate: the work board
-//! and its rows in the nav (ADR 0031), the Review slot (ADR
+//! (every group, a row that asks, the chat and each panel) and its rows in
+//! the nav (ADR 0031), the Review slot (ADR
 //! 0021), find in a transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
@@ -19,18 +20,33 @@ use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 use gpui::{AppContext, Focusable};
 
 use super::{conversation, Scene, Setup};
+use crate::board::{fixture, Board, Placement};
 use crate::nav::NavFold;
 use crate::review::ReviewView;
 use crate::sidebar::{self, Sidebar};
 use ferrite_core::ThreadId;
+use sw_board::board::keys::Press;
+use sw_board::board::update::{list::relist, update, Event};
 use sw_board::flow::sidebar_entry::coordinator_entry;
-use sw_board::json::{json, obj, Value};
+use sw_board::json::*;
 use sw_board::status_words::coordinator_stands;
 
 /// Every state this module draws, at the app size.
 pub(super) const STATES: &[&str] = &[
     "projects-nav",
     "projects-board",
+    "projects-board-end",
+    "projects-board-asks",
+    "projects-board-chat",
+    "projects-board-panel",
+    "projects-board-task",
+    "projects-board-plan",
+    "projects-board-attempts",
+    "projects-board-settings",
+    "projects-board-automation",
+    "projects-board-menu",
+    "projects-board-find",
+    "projects-board-archive",
     "review-uncommitted",
     "review-commits",
     "review-pr",
@@ -47,8 +63,11 @@ pub(super) fn handles(state: &str) -> bool {
 
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     match state {
-        "projects-nav" => projects(false),
-        "projects-board" => projects(true),
+        "projects-nav" => projects(state, None),
+        board if board.starts_with("projects-board") => {
+            let shown = on_board(board);
+            projects(state, Some(shown))
+        }
         "review-uncommitted" => review(Staged::Uncommitted),
         "review-commits" => review(Staged::Commits),
         "review-pr" => review(Staged::Pr),
@@ -63,12 +82,186 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 
 // ------------------------------------------------------------------ projects
 
+/// What a board scene shows: the board, and the keys pressed on it (what a
+/// key starts is not run).
+struct OnBoard {
+    board: Board,
+    keys: &'static [&'static str],
+}
+
+/// Each board scene's board: upstream's fixture rows, one task in every
+/// state, with what its screen needs added.
+fn on_board(state: &str) -> OnBoard {
+    let (board, keys): (Board, &[&str]) = match state {
+        // Every group, the working task selected.
+        "projects-board" => (fixture::board(), &[]),
+        // The groups below the fold: to do and done, the done task selected.
+        "projects-board-end" => (selected(fixture::board(), "proj/15"), &[]),
+        // The task that asks, selected: its question on the line under it,
+        // under one task pinned to the top.
+        "projects-board-asks" => (selected(pinned("proj/2"), "proj/9"), &[]),
+        // space talks to the working task's agent: its newest message boxed.
+        "projects-board-chat" => (talking(), &[" "]),
+        // alt+p: the task panel beside the list, on the task ready to approve.
+        "projects-board-panel" => (selected(fixture::board(), "proj/11"), &["alt+p"]),
+        // alt+t: the whole task whose review failed, its findings and history.
+        "projects-board-task" => (selected(fixture::board(), "proj/12"), &["alt+t"]),
+        "projects-board-plan" => (with_rows(planned(), "proj/21"), &["alt+p"]),
+        "projects-board-attempts" => (with_rows(planned(), "proj/22"), &["alt+p"]),
+        // ctrl+e: the task's settings page, one value its own.
+        "projects-board-settings" => (with_rows(vec![configured()], "proj/40"), &["ctrl+e"]),
+        // enter on an automation's row: the automation whole, its firings.
+        "projects-board-automation" => (automated(), &["enter"]),
+        "projects-board-menu" => (fixture::board(), &["?"]),
+        // ctrl+f, typed: the list filtered live.
+        "projects-board-find" => (
+            fixture::board(),
+            &["ctrl+f", "c", "o", "n", "f", "l", "i", "c", "t"],
+        ),
+        // alt+a: the archive, read only.
+        "projects-board-archive" => (fixture::board(), &["alt+a"]),
+        _ => unreachable!("`STATES` lists every board scene"),
+    };
+    OnBoard { board, keys }
+}
+
+/// `board` with `id` selected.
+fn selected(mut board: Board, id: &str) -> Board {
+    board.state.sel = id.into();
+    relist(&mut board.state);
+    board
+}
+
+/// The fixture board with `id` pinned to the top.
+fn pinned(id: &str) -> Board {
+    let rows = fixture::rows(fixture::NOW)
+        .into_iter()
+        .map(|(_, mut row)| {
+            if row.s("id") == id {
+                row.put("pinned", true);
+            }
+            row
+        })
+        .collect();
+    fixture::board_of(rows)
+}
+
+/// The fixture board with `rows` added, `id` selected.
+fn with_rows(rows: Vec<Obj>, id: &str) -> Board {
+    let mut all: Vec<Obj> = fixture::rows(fixture::NOW)
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect();
+    all.extend(rows);
+    selected(fixture::board_of(all), id)
+}
+
+/// A task of the fixture's repo: `extra` over its plain fields.
+fn task(n: u32, extra: Value) -> Obj {
+    let at = fixture::NOW - 60_000;
+    let mut task = obj(json!({
+        "id": format!("proj/{n}"), "repo": "proj", "owner": "me", "agent": "claude", "app": "claude",
+        "created": at - 60 * 60_000, "at": at, "reviews": [], "reviewRound": 0, "description": "",
+    }));
+    task.extend(obj(extra));
+    task
+}
+
+/// The working task's agent has a conversation to read.
+fn talking() -> Board {
+    let rows = fixture::rows(fixture::NOW)
+        .into_iter()
+        .map(|(_, mut row)| {
+            if row.s("id") == "proj/5" {
+                row.put("link", json!({ "pane": "w1:p5" }));
+                row.put(
+                    "snap",
+                    json!({ "talk": { "who": "agent", "readable": true, "list": [
+                        { "who": "you", "text": "Check every caller of the resize handler too." },
+                        { "who": "them", "text": "Every caller had the same mistake; all three are fixed, and the resize test now covers each of them." },
+                    ] } }),
+                );
+            }
+            row
+        })
+        .collect();
+    fixture::board_of(rows)
+}
+
+/// A plan that waits for your yes, and two attempts to pick between.
+fn planned() -> Vec<Obj> {
+    let now = fixture::NOW;
+    let tried = |letter: &str| json!({ "letter": letter, "stage": "tried", "agent": "claude", "created": now - 10 * 60_000, "triedAt": now - 2 * 60_000 });
+    vec![
+        task(
+            21,
+            json!({ "state": "blocked", "kind": "permission", "stage": "plan", "title": "Plan the cache",
+            "plan": { "writer": { "kind": "claude" }, "at": now - 5 * 60_000, "link": "http://127.0.0.1:4/p/21", "file": "plan.md" },
+            "snap": { "plan": "Keep the last 50 boards read, keyed by repo.\nDrop an entry when its repo's head moves.\nRead through on a miss.", "problems": [],
+                "settings": [{ "name": "worker.agent", "value": "claude", "place": "task" }] } }),
+        ),
+        task(
+            22,
+            json!({ "state": "blocked", "kind": "permission", "stage": "pick", "title": "Pick a parser",
+            "tries": [tried("A"), tried("B")], "attempts": [{ "letter": "A", "agent": "claude" }, { "letter": "B", "agent": "codex" }],
+            "comparison": { "pick": "B", "why": "Smaller change, and it keeps the old error messages." } }),
+        ),
+    ]
+}
+
+/// A task with a setting of its own beside one it inherits.
+fn configured() -> Obj {
+    task(
+        40,
+        json!({ "state": "idle", "stage": "todo", "agent": null, "app": "", "title": "Cut long titles",
+        "snap": { "problems": [], "settings": [
+            { "name": "worker.agent", "kind": "work", "value": "claude/opus", "own": true },
+            { "name": "review.rounds", "kind": "work", "value": 3, "own": false },
+        ] } }),
+    )
+}
+
+/// The fixture board with one automation, its row selected, fired once by
+/// hand into the working task.
+fn automated() -> Board {
+    let now = fixture::NOW;
+    let mut auto = obj(json!({
+        "id": "a1", "name": "Nightly deps", "on": true, "trigger": { "kind": "manual" }, "repo": "proj", "root": "/work/proj",
+        "prompt": "Update the dependencies and say what changed.",
+    }));
+    let fired = vec![json!({ "at": now - 5 * 60_000, "task": "proj/5", "what": "by hand" })];
+    auto.put(
+        "shown",
+        json!({ "firings": fired, "own": [], "settings": [] }),
+    );
+    auto.put(
+        "rowNow",
+        serde_json::to_value(sw_board::automations::show::row_of(
+            &auto,
+            now,
+            Some(&fired),
+        ))
+        .expect("an automation's row is JSON"),
+    );
+    let mut board = fixture::board();
+    board.state.data.autos = vec![auto];
+    selected(board, "auto:a1")
+}
+
+/// A key by its chord ("alt+t", "ctrl+f"), or one character typed.
+fn press_of(chord: &str) -> Press {
+    match chord.chars().count() {
+        1 => Press::char(chord.chars().next().expect("one character")),
+        _ => Press::chord(chord),
+    }
+}
+
 /// One project's coordinator and three workers fixture Threads, the
 /// board's Coordinator and three tasks' agents in the nav, the board's
 /// tally in the bottom bar. With `board`, the work board (⌘⇧A) over them
-/// in the board's place, on upstream's fixture rows.
-fn projects(board: bool) -> (Scene, Setup) {
-    let mut scene = Scene::new(&format!("projects-{}", if board { "board" } else { "nav" }));
+/// in the board's place, its keys pressed.
+fn projects(name: &str, board: Option<OnBoard>) -> (Scene, Setup) {
+    let mut scene = Scene::new(name);
     let checkout = scene.project("checkout");
 
     let (head, head_feed) = scene.open(Provider::Claude, &checkout, "Checkout revamp");
@@ -122,14 +315,16 @@ fn projects(board: bool) -> (Scene, Setup) {
         // not toasted over the board.
         view.ring_bell(cx);
         view.bell.clear_toasts();
-        if board {
-            sw_board::clock::set(Some(crate::board::fixture::NOW));
-            view.stage_board(
-                crate::board::fixture::board(),
-                crate::board::Placement::Tab,
-                window,
-                cx,
-            );
+        if let Some(OnBoard { board, keys }) = board {
+            sw_board::clock::set(Some(fixture::NOW));
+            view.stage_board(board, Placement::Tab, window, cx);
+            let slot = view.projects.board.as_ref().expect("the board is staged");
+            slot.view.update(cx, |board, _| {
+                let state = board.state().expect("a still board has its state");
+                for key in keys {
+                    update(state, Event::Key(press_of(key)));
+                }
+            });
         }
         cx.notify();
     });
