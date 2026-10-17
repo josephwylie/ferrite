@@ -27,6 +27,8 @@
 # where the Server and the board find it and hand it to agents and hooks
 # (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is.
 #
+#   MACOS_LOCAL_IDENTITY=<name>   sign local builds with this keychain
+#                    identity, so macOS's privacy grants outlive a rebuild
 #   --bundle-only    build the .app in the target dir, don't install it
 #   --dmg <path>     ...and package it as a disk image
 
@@ -221,16 +223,25 @@ if [ "$SIGNING_IDENTITY" = "-" ]; then
   # app rewrites only its own copy. A disk image leaves this machine, where
   # every nested bundle must carry its own seal: each helper is signed (and
   # becomes a copy).
-  codesign --force --sign - "$BUILT/Contents/MacOS/ferrite-projects"
+  #
+  # MACOS_LOCAL_IDENTITY names a code-signing certificate of this machine's
+  # keychain (a self-signed one will do) to sign with instead of ad hoc.
+  # macOS keeps privacy grants (the Desktop folder, and the like) against a
+  # signature's identity: an ad-hoc one is new with every build, so each
+  # rebuild — the app and its bare binary, which the Server runs — asks
+  # again. Signed by one identity, every build is the same app to macOS.
+  # Its helpers are signed too (and become copies), so they carry it.
+  LOCAL="${MACOS_LOCAL_IDENTITY:--}"
+  codesign --force --sign "$LOCAL" "$BUILT/Contents/MacOS/ferrite-projects"
   if [ -n "${FEATURES[*]:-}" ]; then
-    codesign --force --sign - "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
-    if [ -n "$DMG" ]; then
+    codesign --force --sign "$LOCAL" "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
+    if [ -n "$DMG" ] || [ "$LOCAL" != "-" ]; then
       for helper_app in "${HELPERS[@]}"; do
-        codesign --force --sign - "$helper_app"
+        codesign --force --sign "$LOCAL" "$helper_app"
       done
     fi
   fi
-  codesign --force --sign - "$BUILT"
+  codesign --force --sign "$LOCAL" "$BUILT"
 else
   if [ -n "${FEATURES[*]:-}" ]; then
     # Chromium's helpers JIT (V8) and load the framework: under the
