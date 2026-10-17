@@ -753,7 +753,7 @@ fn other_machines_ring_from_this_one_to_all_to_each_and_say_who_did_not_answer(
     // One that cannot be reached: why, in its own words, on its own board.
     let ended = sw_board::remote::why::Ended {
         code: Some(127),
-        stderr: "bash: line 1: herdr-projects: command not found\n".into(),
+        stderr: "bash: line 1: ferrited: command not found\n".into(),
         ..Default::default()
     };
     let why = sw_board::remote::why::why_not(&ended, "vm-a", "me@vm-a");
@@ -775,7 +775,7 @@ fn other_machines_ring_from_this_one_to_all_to_each_and_say_who_did_not_answer(
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        list.contains("vm-a: its tasks cannot be read: herdr-projects is not found there.")
+        list.contains("vm-a: its tasks cannot be read: ferrited is not found there.")
             && list.contains("What came back:"),
         "{lines:#?}"
     );
