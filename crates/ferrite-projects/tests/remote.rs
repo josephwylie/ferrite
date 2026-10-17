@@ -10,15 +10,16 @@ fn end(code: i32, stdout: &str, stderr: &str) -> Ended { Ended { code: Some(code
 
 #[test]
 fn why_a_machine_did_not_answer_each_with_what_to_do() {
+    // Ferrite: the board asks `ferrited projects remote …` (ADR 0031, "Other machines"), so `ferrited` is what a login shell must find.
     let ends: Vec<(&str, Ended, &str, &str)> = vec![
         ("unknownName", end(255, "", "ssh: Could not resolve hostname vm-a: Name or service not known\n"), "connect", r"cannot connect \(its name is not known\)"),
         ("timedOut", end(255, "", "ssh: connect to host vm-a port 22: Connection timed out\n"), "connect", "connecting timed out"),
         ("refused", end(255, "", "ssh: connect to host vm-a port 22: Connection refused\n"), "connect", "it refused the connection"),
         ("hostKey", end(255, "", "@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@@@@\nHost key for vm-a has changed and you have requested strict checking.\nHost key verification failed.\n"), "connect", "its host key changed"),
         ("noKey", end(255, "", "me@vm-a: Permission denied (publickey).\n"), "login", "does not let the board in"),
-        ("bash", end(127, "", "bash: line 1: herdr-projects: command not found\n"), "path", "herdr-projects is not found there"),
-        ("dash", end(127, "", "sh: 1: herdr-projects: not found\n"), "path", "herdr-projects is not found there"),
-        ("zsh", end(127, "", "zsh:1: command not found: herdr-projects\n"), "path", "herdr-projects is not found there"),
+        ("bash", end(127, "", "bash: line 1: ferrited: command not found\n"), "path", "ferrited is not found there"),
+        ("dash", end(127, "", "sh: 1: ferrited: not found\n"), "path", "ferrited is not found there"),
+        ("zsh", end(127, "", "zsh:1: command not found: ferrited\n"), "path", "ferrited is not found there"),
         ("noNode", end(127, "", "env: 'node': No such file or directory\n"), "path", "node is not found there"),
         ("oldNode", end(1, "", "SyntaxError: Unexpected token 'with'\n    at compileSourceTextModule\n\nNode.js v18.19.1\n"), "path", r"its node is too old \(18\)"),
         ("banner", end(0, "Welcome to vm-a\nLast login: today\n", ""), "answer", "something else than the board's answer"),
@@ -30,13 +31,13 @@ fn why_a_machine_did_not_answer_each_with_what_to_do() {
         let why = why_not(e, "vm-a", "me@vm-a");
         assert_eq!(why.s("kind"), *kind, "{name}");
         assert!(regex::Regex::new(line).unwrap().is_match(why.s("line")), "{name}: {}", why.s("line"));
-        assert!(regex::Regex::new(r#"^Test it from this machine: ssh me@vm-a 'exec \$SHELL -lc "herdr-projects remote list"' \| tail -c 200$"#).unwrap().is_match(&text(why.arr("detail").last().unwrap())), "{name}: {}", why.at("detail"));
+        assert!(regex::Regex::new(r#"^Test it from this machine: ssh me@vm-a 'exec \$SHELL -lc "ferrited projects remote list"' \| tail -c 200$"#).unwrap().is_match(&text(why.arr("detail").last().unwrap())), "{name}: {}", why.at("detail"));
         assert!(why.s("line").chars().count() < 60, "{name}");
     }
     let bash = why_not(&ends[5].1, "vm-a", "me@vm-a");
     let d = bash.arr("detail").iter().map(text).collect::<Vec<_>>().join("\n");
-    assert!(d.contains("must be on the PATH that a login shell gets") && d.contains("~/.bashrc does not count") && d.contains("~/.profile") && d.contains(r#"ln -s "$(command -v herdr-projects)" ~/.local/bin/"#), "{d}");
-    assert_eq!(bash.s("said"), "bash: line 1: herdr-projects: command not found");
+    assert!(d.contains("must be on the PATH that a login shell gets") && d.contains("~/.bashrc does not count") && d.contains("~/.profile") && d.contains(r#"ln -s "$(command -v ferrited)" ~/.local/bin/"#), "{d}");
+    assert_eq!(bash.s("said"), "bash: line 1: ferrited: command not found");
     assert!(!why_not(&ends[3].1, "vm-a", "me@vm-a").s("said").contains("@@@"));
     assert!(why_not(&ends[3].1, "vm-a", "ssh://me@vm-a:2200").at("detail").to_string().contains("ssh-keygen -R '[vm-a]:2200' -f"));
     assert!(why_not(&ends[4].1, "vm-a", "me@vm-a").at("detail").to_string().contains("ssh-copy-id me@vm-a"));

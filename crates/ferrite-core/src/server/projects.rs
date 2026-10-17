@@ -125,15 +125,20 @@ pub(super) struct Shipped {
     legacy: bool,
 }
 
+/// This executable, links resolved, so a `ferrite` linked onto `PATH`
+/// finds its sibling; and the shipped program it finds (`program`).
+fn located() -> std::io::Result<(PathBuf, PathBuf)> {
+    let exe = std::env::current_exe().map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))?;
+    let program = program(std::env::var_os("FERRITE_PROJECTS_BIN"), &exe);
+    Ok((exe, program))
+}
+
 /// The shipped program; none, logged, when it is not there.
 pub(super) fn find() -> Option<Shipped> {
-    // Links resolved, so a `ferrite` linked onto `PATH` finds its sibling.
-    let exe = std::env::current_exe().map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe));
-    let Ok(exe) = exe else {
+    let Ok((exe, program)) = located() else {
         crate::log!("server: Projects are off: this executable's path is unknown");
         return None;
     };
-    let program = program(std::env::var_os("FERRITE_PROJECTS_BIN"), &exe);
     if !program.is_file() {
         crate::log!("server: Projects are off: no {}", program.display());
         return None;
@@ -144,6 +149,43 @@ pub(super) fn find() -> Option<Shipped> {
         exe,
         legacy,
     })
+}
+
+/// `ferrited projects <args…>`: the program the Server runs, with the
+/// environment it gives it, for another machine's board (ADR 0031, "Other
+/// machines"): `ferrited` is the one program a remote's `PATH` is sure to
+/// have (ADR 0026). Its exit code, or 127 when there is none.
+pub fn passthrough(store: &Path, args: &[String]) -> i32 {
+    match located() {
+        Ok((exe, program)) => run_program(&program, &exe, store, args),
+        Err(error) => {
+            eprintln!("ferrited: this executable's path is unknown: {error}");
+            127
+        }
+    }
+}
+
+fn run_program(program: &Path, exe: &Path, store: &Path, args: &[String]) -> i32 {
+    use std::os::unix::process::CommandExt;
+    if !program.is_file() {
+        eprintln!("{}", missing(program));
+        return 127;
+    }
+    let error = Command::new(program)
+        .args(args)
+        .envs(environment(store, exe, program))
+        .exec();
+    eprintln!("ferrited: cannot run {}: {error}", program.display());
+    126
+}
+
+/// What `ferrited projects` says without the program, in the words
+/// `remote/why.rs` reads.
+fn missing(program: &Path) -> String {
+    format!(
+        "ferrited: no projects program at {}: put ferrite-projects beside ferrited, or name it in FERRITE_PROJECTS_BIN",
+        program.display()
+    )
 }
 
 /// Whether `program` is still 0.2.34's, which says so to `--version`;
@@ -572,6 +614,22 @@ pub(super) mod tests {
         );
         assert_eq!(program(Some("".into()), exe), program(None, exe));
         assert_eq!(program(Some("/opt/fp".into()), exe), Path::new("/opt/fp"));
+    }
+
+    #[test]
+    fn ferrited_projects_without_the_program_says_how_to_ship_it() {
+        let program = Path::new("/opt/ferrite/ferrite-projects-missing");
+        let said = missing(program);
+        assert!(said.starts_with(
+            "ferrited: no projects program at /opt/ferrite/ferrite-projects-missing:"
+        ));
+        assert!(said.contains("beside ferrited") && said.contains("FERRITE_PROJECTS_BIN"));
+        let exe = Path::new("/opt/ferrite/ferrited");
+        let args = ["remote".to_string(), "list".to_string()];
+        assert_eq!(
+            run_program(program, exe, Path::new("/tmp/store"), &args),
+            127
+        );
     }
 
     #[test]

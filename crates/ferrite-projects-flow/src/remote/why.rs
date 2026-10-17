@@ -28,7 +28,7 @@ pub fn known_host(target: &str) -> String {
     if port == 22 { host } else { format!("[{host}]:{port}") }
 }
 /// The test to run by hand, from the machine that asks.
-pub fn test_line(target: &str) -> String { format!("ssh {} 'exec $SHELL -lc \"herdr-projects remote list\"' | tail -c 200", if target.is_empty() { "<machine>" } else { target }) }
+pub fn test_line(target: &str) -> String { format!("ssh {} 'exec $SHELL -lc \"ferrited projects remote list\"' | tail -c 200", if target.is_empty() { "<machine>" } else { target }) } // Ferrite: asked through `ferrited` (remote.rs `ask`).
 fn tail(text: &str) -> String {
     let lines: Vec<&str> = text.trim_end().lines().filter(|l| { let t = l.trim(); !t.is_empty() && !t.chars().all(|c| c == '@') && !t.starts_with("@ ") }).collect();
     let s = lines[lines.len().saturating_sub(4)..].join("\n");
@@ -39,7 +39,7 @@ fn on_path(what: &str) -> Vec<String> {
     vec![format!("{what} must be on the PATH that a login shell gets when nobody types into it: the board runs `$SHELL -lc` over SSH."),
         "A PATH set in ~/.bashrc does not count where that file stops early for such a shell (its \"if not running interactively, return\" line).".into(),
         "On that machine, either set the PATH in the profile file (~/.profile or ~/.bash_profile for bash, ~/.zprofile for zsh), or link the program into a folder that is on it already:".into(),
-        format!("  ln -s \"$(command -v {})\" ~/.local/bin/   (or /usr/local/bin)", if what == "node" { "node" } else { "herdr-projects" })]
+        format!("  ln -s \"$(command -v {})\" ~/.local/bin/   (or /usr/local/bin)", if what == "node" { "node" } else { "ferrited" })] // Ferrite: `ferrited` is what must be on PATH.
 }
 /// How an SSH call ended, as `ask` saw it.
 #[derive(Default, Clone)]
@@ -61,15 +61,17 @@ pub fn why_not(end: &Ended, label: &str, target: &str) -> Value {
         return make("connect", &if how.is_empty() { "ssh could not connect".into() } else { format!("cannot connect ({how})") }, vec![format!("This machine cannot reach {name} ({target}){}.", if how.is_empty() { "; what ssh said is below".into() } else { format!(": {how}") }), "Check that it is on and on the network, and that its name and port are right (ferrite machine list, or the board.machines setting).".into()]); // Ferrite: herdr's machine list is Ferrite's.
     }
     // The shell on the other side ran, and did not find the program (127, in every shell's own words).
-    let missing = Regex::new(r#"(?m)(?:^|[\s:'"`])(herdr-projects|node)['"`]?: (?:command )?not found|command not found: (herdr-projects|node)|env: ['‘`]?(node)['’`]?: No such file or directory"#).unwrap();
+    let missing = Regex::new(r#"(?m)(?:^|[\s:'"`])(ferrited|node)['"`]?: (?:command )?not found|command not found: (ferrited|node)|env: ['‘`]?(node)['’`]?: No such file or directory"#).unwrap();
     let what = missing.captures(&all).and_then(|c| c.get(1).or(c.get(2)).or(c.get(3)).map(|m| m.as_str().to_string()));
     let path = |w: &str| on_path(w);
     match what.as_deref() {
-        Some("herdr-projects") => { let mut d = vec![format!("A login shell on {name} does not find `herdr-projects`.")]; d.extend(path("`herdr-projects`")); d.push("Not installed there yet? See docs/other-machines.md.".into()); return make("path", "herdr-projects is not found there", d); }
+        Some("ferrited") => { let mut d = vec![format!("A login shell on {name} does not find `ferrited`.")]; d.extend(path("`ferrited`")); d.push("Not installed there yet? See docs/adr/0026-machines-over-ssh.md.".into()); return make("path", "ferrited is not found there", d); } // Ferrite: `ferrited` runs the projects program there (ADR 0031, "Other machines").
         Some("node") => { let mut d = vec![format!("A login shell on {name} finds `herdr-projects` but not `node`, which runs that older version of it. Installing this version there needs no node.")]; d.extend(path("node")); return make("path", "node is not found there", d); }
         _ => {}
     }
-    if end.code == Some(127) { let mut d = vec![format!("A login shell on {name} did not find a program it needs.")]; d.extend(path("`herdr-projects`")); return make("path", "a program is not found there", d); }
+    // Ferrite: `ferrited` there, without the projects program beside it (`server::projects::passthrough`).
+    if in_err(r"(?m)^ferrited: no projects program") { return make("path", "ferrited there has no projects program", vec![format!("`ferrited` on {name} finds no `ferrite-projects` beside it."), "Put it beside `ferrited` there (see docs/adr/0031-projects-1-0-vendored.md, \"Other machines\"), or name it in FERRITE_PROJECTS_BIN in the profile file of that login shell.".into()]); }
+    if end.code == Some(127) { let mut d = vec![format!("A login shell on {name} did not find a program it needs.")]; d.extend(path("`ferrited`")); return make("path", "a program is not found there", d); } // Ferrite: `ferrited`, as above.
     if let Some(c) = crate::re!(r"Node\.js v(\d+)\.").captures(&all) { let v: u32 = c[1].parse().unwrap_or(99); if v < 22 { let mut d = vec![format!("`herdr-projects` on {name} is an older version, started by Node {v}; it needs Node 22.19 or newer. Installing this version there needs no node.")]; d.extend(path("node").into_iter().skip(2)); return make("path", &format!("its node is too old ({v})"), d); } }
     if let Some(code) = end.code.filter(|c| *c != 0) { return make("answer", "it answered with an error", vec![format!("`herdr-projects remote` on {name} ended with an error (exit {code}) and no answer."), "Run the test below to see all of it; updating herdr-projects there often settles it.".into()]); }
     if out.trim().is_empty() { return make("answer", "it answered nothing", vec![format!("{name} ran the command and printed nothing."), "Its shell's start-up file may end the shell early, or `herdr-projects` there is another program.".into()]); }

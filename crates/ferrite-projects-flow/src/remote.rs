@@ -70,7 +70,8 @@ pub fn run_ended(mut c: std::process::Command, ms: u64) -> Ended {
 /// Ask a machine: its answer (one line of JSON, wherever the shell's start-up files printed around it), or why there
 /// is none (remote/why.rs).
 pub fn ask(m: &Machine, what: &str, arg: Option<&Value>, ms: u64) -> Result<Value, Value> {
-    let (cmd, args) = ssh_command(m, &format!("herdr-projects remote {what}{}", arg.map(|a| format!(" {}", b64(a))).unwrap_or_default()), false);
+    // Ferrite: `ferrited`, the one program a machine's PATH is sure to have (ADR 0026), runs the projects program.
+    let (cmd, args) = ssh_command(m, &format!("ferrited projects remote {what}{}", arg.map(|a| format!(" {}", b64(a))).unwrap_or_default()), false);
     let mut c = std::process::Command::new(cmd);
     c.args(args);
     let end = run_ended(c, ms);

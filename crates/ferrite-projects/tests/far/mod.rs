@@ -12,8 +12,9 @@ D='@DIR@'
 h="${1##*@}"
 cmd="$2"
 set -- $2
-while [ $# -gt 0 ] && [ "$1" != "herdr-projects" ]; do shift; done
-what="$3"; arg="$4"; act=""
+# Ferrite: the board asks `ferrited projects remote <what> <arg>`.
+while [ $# -gt 0 ] && [ "$1" != "ferrited" ]; do shift; done
+what="$4"; arg="$5"; act=""
 log="$D/asked"
 case "$cmd" in *"herdr machine list"*) what="herdr-machines"; log="$D/asked-herdr" ;; esac
 [ -n "$arg" ] && act=$(printf %s "$arg" | base64 -d 2>/dev/null | sed -n 's/.*"action":"\([^"]*\)".*/\1/p')
