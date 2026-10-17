@@ -20,7 +20,7 @@ fn run_bare(line: &str, ms: u64) -> Ended {
 /// This machine, as another one would find it.
 pub fn here(ms: u64) -> Value {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let end = run_bare("herdr-projects remote hello", ms);
+    let end = run_bare("ferrited projects remote hello", ms); // Ferrite: as other machines ask it (remote.rs `ask`).
     let j = if end.timed_out || !end.error.is_empty() { None } else { read_answer(&end.stdout) };
     // Found, but an older one that does not know this request: it is found, which is what was asked.
     if let Some(j) = &j { if j.s("msg").starts_with("Unknown request") { return json!({ "label": host(), "here": true, "ok": true, "version": "", "shell": shell }); } if j.b("ok") { return json!({ "label": host(), "here": true, "ok": true, "version": j.t("version"), "shell": shell }); } }
@@ -49,7 +49,7 @@ pub fn say(r: &Value) -> String {
     let wide = rows.iter().map(|x| x.s("label").chars().count()).max().unwrap_or(0);
     let one = |x: &Value| {
         let head = if x.b("here") {
-            if x.b("ok") { format!("this machine: a login shell ({}) finds herdr-projects {}", x.s("shell"), if x.b("version") { x.t("version") } else { "(an older one than this)".into() }) } else { format!("this machine: other machines cannot ask it: {}", x.at("why").s("line")) }
+            if x.b("ok") { format!("this machine: a login shell ({}) finds ferrited projects {}", x.s("shell"), if x.b("version") { x.t("version") } else { "(an older one than this)".into() }) } else { format!("this machine: other machines cannot ask it: {}", x.at("why").s("line")) } // Ferrite: `ferrited projects` is what a login shell must find.
         } else if x.b("ok") { format!("answers · herdr-projects {} · {} task{}", if x.b("version") { x.t("version") } else { "(an older one: update it there)".into() }, x.i("tasks"), if x.i("tasks") == 1 { "" } else { "s" }) } else { format!("does not answer: {}", x.at("why").s("line")) };
         let mut out = vec![format!("{:<wide$}  {head}{}", x.s("label"), if x.b("here") { String::new() } else { format!("  ({})", x.s("target")) })];
         if !x.b("ok") {

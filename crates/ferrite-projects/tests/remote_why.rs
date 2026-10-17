@@ -15,16 +15,19 @@ const LIST: &str = r#"{"host":"vm-a","version":"0.2.0","tasks":[]}"#;
 
 #[test]
 fn the_other_reasons_a_machine_did_not_answer_each_with_what_to_do() {
+    // Ferrite: the board asks `ferrited projects remote …` (ADR 0031, "Other machines"), so `ferrited` is what a login shell must find.
     let ends: Vec<(&str, Ended, &str, &str)> = vec![
         ("password", end(255, "", "me@vm-a: Permission denied (publickey,password).\n"), "login", "does not let the board in"),
         ("noNodeMac", end(127, "", "env: node: No such file or directory\n"), "path", "node is not found there"),
         ("noSsh", Ended { error: "spawn ssh ENOENT".into(), ..Default::default() }, "connect", "ssh could not be started"),
+        // Ferrite: `ferrited` there without the projects program beside it (server::projects::passthrough).
+        ("noProgram", end(127, "", "ferrited: no projects program at /opt/f/ferrite-projects: put ferrite-projects beside ferrited, or name it in FERRITE_PROJECTS_BIN\n"), "path", "ferrited there has no projects program"),
     ];
     for (name, e, kind, line) in &ends {
         let why = why_not(e, "vm-a", "me@vm-a");
         assert_eq!(why.s("kind"), *kind, "{name}");
         assert!(has(why.s("line"), line), "{name}: {}", why.s("line"));
-        assert!(has(&text(why.arr("detail").last().unwrap()), r#"^Test it from this machine: ssh me@vm-a 'exec \$SHELL -lc "herdr-projects remote list"' \| tail -c 200$"#), "{name}");
+        assert!(has(&text(why.arr("detail").last().unwrap()), r#"^Test it from this machine: ssh me@vm-a 'exec \$SHELL -lc "ferrited projects remote list"' \| tail -c 200$"#), "{name}");
         assert!(why.s("line").chars().count() < 60, "{name}");
     }
     let detail = |e: &Ended, target: &str| why_not(e, "vm-a", target).arr("detail").iter().map(text).collect::<Vec<_>>().join("\n");
@@ -48,10 +51,11 @@ fn the_answer_is_read_whatever_a_shells_start_up_files_print_around_it() {
 
 #[test]
 fn real_programs_asking_over_the_ssh_stand_in_keeps_the_exit_code_and_stderr_and_gives_up_on_a_machine_that_hangs() {
+    // Ferrite: the board asks `ferrited projects remote …` (ADR 0031, "Other machines"), so `ferrited` is what a login shell must find.
     let w = world();
     let far = Far::new(&w.base);
     far.ends("good", "list", &format!("Welcome\n{LIST}\nlogout\n"), "warning: something on stderr\n", 0);
-    far.ends("nopath", "list", "Welcome\n", "bash: line 1: herdr-projects: command not found\n", 127);
+    far.ends("nopath", "list", "Welcome\n", "bash: line 1: ferrited: command not found\n", 127);
     far.ends("nonode", "list", "", "env: 'node': No such file or directory\n", 127);
     far.ends("down", "list", "", "ssh: connect to host vm port 22: Connection refused\n", 255);
     far.ends("nokey", "list", "", "me@vm: Permission denied (publickey).\n", 255);
@@ -62,7 +66,7 @@ fn real_programs_asking_over_the_ssh_stand_in_keeps_the_exit_code_and_stderr_and
     let failed: Vec<(String, String, i64)> = ["nopath", "nonode", "down", "nokey", "banner"].iter().map(|n| { let why = ask(n, 20000).unwrap_err(); (n.to_string(), why.t("kind"), why.i("code")) }).collect();
     assert_eq!(failed, [("nopath", "path", 127), ("nonode", "path", 127), ("down", "connect", 255), ("nokey", "login", 255), ("banner", "answer", 0)].map(|(a, b, c)| (a.to_string(), b.to_string(), c)));
     let nopath = ask("nopath", 20000).unwrap_err();
-    assert_eq!((nopath.s("line"), nopath.s("said")), ("herdr-projects is not found there", "bash: line 1: herdr-projects: command not found"));
+    assert_eq!((nopath.s("line"), nopath.s("said")), ("ferrited is not found there", "bash: line 1: ferrited: command not found"));
     assert_eq!(ask("banner", 20000).unwrap_err().s("said"), "Welcome to the machine");
     assert_eq!(ask("hangs", 40).unwrap_err().s("kind"), "slow");
     assert_eq!(far.asked().iter().filter(|a| a.0 == "good").map(|a| a.1.clone()).collect::<Vec<_>>(), vec!["list"]);
@@ -92,7 +96,7 @@ fn real_programs_herdr_projects_machines_this_machine_as_a_bare_login_shell_then
     let had = std::env::var("SHELL").ok();
     unsafe { std::env::set_var("SHELL", &shell) };
     let r = sw::remote::check::check(20000);
-    assert_eq!(read(&w.base.join("shell/ran")), "herdr-projects remote hello");
+    assert_eq!(read(&w.base.join("shell/ran")), "ferrited projects remote hello");
     let env = read(&w.base.join("shell/env"));
     for k in ["HOME", "LOGNAME", "PATH", "SHELL", "USER"] { assert!(env.split(' ').any(|x| x == k), "{k}: {env}"); }
     assert!(!env.split(' ').any(|x| x.starts_with("HERDR") || x.starts_with("GIT_") || x == "TERM"), "nothing of the terminal it was typed in: {env}");
@@ -100,17 +104,17 @@ fn real_programs_herdr_projects_machines_this_machine_as_a_bare_login_shell_then
     let ms: Vec<(String, bool, String, serde_json::Value)> = r.arr("machines").iter().map(|m| (m.t("label"), m.b("ok"), if m.b("version") { m.t("version") } else { m.at("why").t("kind") }, m.at("tasks").clone())).collect();
     assert_eq!(ms, vec![("vm-a".into(), true, "0.2.0".into(), json!(1)), ("vm-b".into(), false, "path".into(), serde_json::Value::Null)]);
     let said = sw::remote::check::say(&r);
-    assert!(has(&said, &format!(r"this machine: a login shell \(.+\) finds herdr-projects {}\n", regex::escape(version))), "{said}");
+    assert!(has(&said, &format!(r"this machine: a login shell \(.+\) finds ferrited projects {}\n", regex::escape(version))), "{said}");
     assert!(has(&said, r"vm-a +answers · herdr-projects 0\.2\.0 · 1 task  \(.*@vm-a\)\n"), "{said}");
     assert!(has(&said, r"vm-b +does not answer: node is not found there  \(.*@vm-b\)\n    A login shell on vm-b finds `herdr-projects` but not `node`"), "{said}");
     assert!(has(&said, r"    What came back:\n      env: 'node': No such file or directory"), "{said}");
     // this machine itself, when a login shell does not find the program: said with the fix, by the same reading
-    fake_shell(&w, "", "bash: line 1: herdr-projects: command not found\n", 127);
+    fake_shell(&w, "", "bash: line 1: ferrited: command not found\n", 127);
     let lost = sw::remote::check::here(20000);
     assert_eq!((lost.at("ok"), lost.at("why").s("kind")), (&json!(false), "path"));
     assert!(has(&lost.at("why").arr("detail").iter().map(text).collect::<Vec<_>>().join("\n"), r"(?s)must be on the PATH that a login shell gets.*Test it from another machine: ssh "));
     // Ferrite: machines are saved in Ferrite's Settings, not by `herdr machine add`.
-    assert!(has(&sw::remote::check::say(&json!({ "here": lost, "machines": [], "off": false })), r"(?s)this machine: other machines cannot ask it: herdr-projects is not found there\n.*No other machines\. Add one in Settings"));
+    assert!(has(&sw::remote::check::say(&json!({ "here": lost, "machines": [], "off": false })), r"(?s)this machine: other machines cannot ask it: ferrited is not found there\n.*No other machines\. Add one in Settings"));
     // an older one that is found is found
     fake_shell(&w, "{\"ok\":false,\"msg\":\"Unknown request hello\"}\n", "", 0);
     assert_eq!(sw::remote::check::here(20000).at("ok"), &json!(true));

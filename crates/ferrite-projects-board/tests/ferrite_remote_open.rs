@@ -44,7 +44,7 @@ impl Far {
         std::fs::write(self.dir.join("answer"), format!("{answer}\n")).unwrap();
     }
 
-    /// The last request it was asked to do: `herdr-projects remote do <base64 JSON>`.
+    /// The last request it was asked to do: `ferrited projects remote do <base64 JSON>`.
     fn last_do(&self) -> Value {
         let asked = std::fs::read_to_string(self.dir.join("asked")).unwrap_or_default();
         let line = asked.lines().rfind(|l| l.contains("remote do ")).unwrap_or_default();

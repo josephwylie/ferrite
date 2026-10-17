@@ -98,11 +98,12 @@ pub fn ferrited(args: &[String]) -> i32 {
         }),
         Some("api-bridge") => bridge::api(&store_dir()),
         Some("bridge") => bridge::run(&store_dir(), &executable),
+        Some("projects") => projects::passthrough(&store_dir(), &args[2..]),
         #[cfg(target_os = "linux")]
         Some("service") => agent::service(&executable, args.get(2).map(String::as_str)),
         _ => {
             eprintln!(
-                "usage: ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
+                "usage: ferrited server | ferrited bridge | ferrited api-bridge | ferrited projects <args…>{USAGE_SERVICE}"
             );
             2
         }

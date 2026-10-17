@@ -293,7 +293,7 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
 - **Other machines** (`machines`). As `run/mod.rs`'s `poll`: the list of
   machines (`remote::machines`, Herdr's machine list, answered from
   `machine.list` in its order) at most once a minute, each machine in
-  view over upstream's ssh (`herdr-projects remote list`) whenever the
+  view over upstream's ssh (`ferrited projects remote list`) whenever the
   board polls (every 5 s with other machines shown), one that did not
   answer only after 30 s unless the poll is for now. The words that name
   herdr's way to a machine say Ferrite's instead (`Ferrite:`): no
@@ -304,6 +304,29 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
   know); another machine's agent brought to the front there is gone to
   from the nav, not herdr's sidebar. A machine has one Server, whose
   session is `default`, so the header never says `session <name>`.
+
+  Upstream asks `herdr-projects remote …` in the remote's login shell,
+  which needs `herdr-projects` on its `PATH`. A Ferrite machine has no
+  such program on `PATH`: the projects program ships inside the app or
+  beside `ferrited`. `ferrited` is the one program ADR 0026 guarantees
+  there, so the board asks `ferrited projects remote …` (`Ferrite:` in
+  `remote.rs`'s `ask`). `ferrited projects <args…>` execs the program the
+  Server runs, found the same way (`server::projects::located`:
+  `FERRITE_PROJECTS_BIN`, else `ferrite-projects` beside the running
+  executable, links resolved), with the same environment the Server gives
+  it. With no program it exits 127, and stderr says `ferrited: no
+  projects program at <path>: …`. `remote/why.rs` reads that line as its
+  own `path` reason, and the PATH fix and the test line name `ferrited`,
+  not `herdr-projects` (`Ferrite:`).
+
+  A headless remote gets the program beside `ferrited` with `cargo install
+  --path crates/ferrite-projects`, next to `cargo install --path
+  crates/ferrite-core --bin ferrited`. Until the bin is renamed from
+  upstream's `herdr-projects` to `ferrite-projects` (see "The command
+  line"), link it under the shipped name: `ln -s herdr-projects
+  ~/.cargo/bin/ferrite-projects`. Or set `FERRITE_PROJECTS_BIN` in the
+  login shell's profile file. Until then, the app bundle's
+  `ferrite-projects` is still 0.2's, which has no `remote`.
 
 Not drawn, being a terminal's alone: the first-run setup (`view/setup.rs`,
 herdr's config blocks and board key), the held-size warning
