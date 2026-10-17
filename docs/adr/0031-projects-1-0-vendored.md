@@ -352,12 +352,8 @@ In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
 
   A headless remote gets the program beside `ferrited` with `cargo install
   --path crates/ferrite-projects`, next to `cargo install --path
-  crates/ferrite-core --bin ferrited`. Until the bin is renamed from
-  upstream's `herdr-projects` to `ferrite-projects` (see "The command
-  line"), link it under the shipped name: `ln -s herdr-projects
-  ~/.cargo/bin/ferrite-projects`. Or set `FERRITE_PROJECTS_BIN` in the
-  login shell's profile file. Until then, the app bundle's
-  `ferrite-projects` is still 0.2's, which has no `remote`.
+  crates/ferrite-core --bin ferrited`, or names it in
+  `FERRITE_PROJECTS_BIN` in the login shell's profile file.
 
 Not drawn, being a terminal's alone: the first-run setup (`view/setup.rs`,
 herdr's config blocks and board key), the held-size warning
