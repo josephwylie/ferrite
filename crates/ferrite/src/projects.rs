@@ -28,7 +28,7 @@ impl Command {
     /// The palette row's name.
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Command::Board => "Projects",
+            Command::Board => "Tasks",
             Command::Doctor => DOCTOR_TITLE,
         }
     }
@@ -43,7 +43,7 @@ impl Command {
 }
 
 /// The doctor action's notification title.
-const DOCTOR_TITLE: &str = "Projects: doctor";
+const DOCTOR_TITLE: &str = "Tasks: doctor";
 
 /// The doctor action: the shipped program's `doctor`, which looks at older
 /// installs again and says where things stand. Blocking: run it off the UI
@@ -93,7 +93,7 @@ mod tests {
                 "No older install of herdr-projects or herdr-superwork on this machine.\n"
             )),
             (
-                "Projects: doctor".into(),
+                "Tasks: doctor".into(),
                 "No older install of herdr-projects or herdr-superwork on this machine.".into(),
                 false
             )
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(
             doctor_said(ended(1, "")),
             (
-                "Projects: doctor".into(),
+                "Tasks: doctor".into(),
                 "Some checks FAILED. Details: ferrite-projects doctor".into(),
                 true
             )
