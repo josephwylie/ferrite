@@ -5053,6 +5053,72 @@ fn a_thread_started_with_args_is_revived_with_them() {
 
 type Launched = (Vec<(String, String)>, Vec<String>);
 
+/// The Coordinator's start names its new conversation (`--session-id`),
+/// which Claude refuses for good once the conversation exists: only the
+/// first Session is given it. A Session started again after the first
+/// ended, and a revive, carry the conversation on by its resume instead.
+#[test]
+fn only_the_first_session_names_the_conversation_it_begins() {
+    let (mut core, fake) = cockpit("launch-session-id");
+    let launch = crate::engine::Launch {
+        args: vec![
+            "--session-id".into(),
+            "4a76".into(),
+            "--dangerously-skip-permissions".into(),
+        ],
+        ..Default::default()
+    };
+    let thread = core
+        .engine_mut()
+        .open_with(Provider::Claude, main_choice(), launch.clone())
+        .unwrap();
+    let first = fake.streams.borrow().last().unwrap().clone();
+    first
+        .send(SessionEvent::Init {
+            session_id: "4a76".into(),
+            model: "claude-opus-5-5".into(),
+        })
+        .unwrap();
+    first
+        .send(SessionEvent::Closed {
+            reason: "claude CLI exited".into(),
+        })
+        .unwrap();
+    core.pump();
+    core.send(thread, "again".into());
+    core.park(thread).unwrap();
+    core.revive(thread).unwrap();
+
+    let later = vec!["--dangerously-skip-permissions".to_string()];
+    assert_eq!(
+        *fake.args.borrow(),
+        [launch.args, later.clone(), later],
+        "first, started again on a send, revived"
+    );
+    assert_eq!(
+        fake.resumed.borrow()[1..],
+        [Some("4a76".to_string()), Some("4a76".to_string())]
+    );
+}
+
+/// A window that has not drawn an open Thread's Pane yet (a `thread.focus`
+/// from Projects just after `thread.start`) lands on it: it never starts it
+/// again, which killed its Session mid-turn and lost what its log had not
+/// taken yet.
+#[test]
+fn reopening_an_open_thread_lands_on_it_without_starting_it_again() {
+    let (mut core, fake) = cockpit("reopen-open");
+    let thread = core.open(Provider::Claude, main_choice()).unwrap();
+    core.reopen(thread).unwrap();
+    assert_eq!(fake.args.borrow().len(), 1, "one Session");
+    assert_eq!(core.roster().focused_thread(), Some(thread));
+    assert!(
+        core.engine_mut().revive(thread).is_err(),
+        "the Engine refuses to revive an open Thread"
+    );
+    assert_eq!(fake.args.borrow().len(), 1, "still one Session");
+}
+
 /// `thread.start --env --launcher` (ADR 0031): saved with the arguments,
 /// so a revive starts its agent the same way.
 #[test]

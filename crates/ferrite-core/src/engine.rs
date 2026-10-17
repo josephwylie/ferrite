@@ -1309,7 +1309,8 @@ impl Engine {
         launch: Launch,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
-        let agent_args = launch_args::LaunchArgs::of(provider, &launch);
+        let first_args = launch_args::LaunchArgs::of(provider, &launch);
+        let agent_args = first_args.clone().and_then(launch_args::LaunchArgs::later);
         let Launch {
             resume, project, ..
         } = launch;
@@ -1413,7 +1414,7 @@ impl Engine {
                 Some(project),
                 Some(binding.cwd()),
             ),
-            launch: launch_args::for_provider(agent_args.as_ref(), provider),
+            launch: launch_args::for_provider(first_args.as_ref(), provider),
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -2036,6 +2037,12 @@ impl Engine {
         delay: Duration,
         launch: Option<Launch>,
     ) -> Result<(), LoadError> {
+        // Reopened while open, a Thread would be replaced whole: its live
+        // Session killed mid-turn, the records its log had not taken yet
+        // lost, and a second CLI started on the conversation.
+        if self.threads.contains_key(&thread) {
+            return Err(LoadError::Io(io::Error::other("the Thread is open")));
+        }
         // Bounded: what Activity retains, not the whole log (ADR 0009).
         let mut revival = self.store.revive(thread)?;
         let snapshot = revival.snapshot();
@@ -2081,15 +2088,18 @@ impl Engine {
         let additional_directories =
             project_additional_directories(&self.registry, project_id, cwd.as_deref());
         let saved = launch_args::path(self.store.dir(), thread);
-        let (agent_args, unreadable_args) = match &launch {
+        // A new launch's own arguments start this Session; every later one
+        // starts with what is saved of them.
+        let (first_args, agent_args, unreadable_args) = match &launch {
             Some(launch) => {
-                let agent_args = launch_args::LaunchArgs::of(provider, launch);
+                let first_args = launch_args::LaunchArgs::of(provider, launch);
+                let agent_args = first_args.clone().and_then(launch_args::LaunchArgs::later);
                 launch_args::save(&saved, agent_args.as_ref())?;
-                (agent_args, None)
+                (first_args, agent_args, None)
             }
             None => match launch_args::load(&saved) {
-                Ok(saved) => (saved, None),
-                Err(error) => (None, Some(error)),
+                Ok(saved) => (saved.clone(), saved, None),
+                Err(error) => (None, None, Some(error)),
             },
         };
         let session = self
@@ -2105,7 +2115,7 @@ impl Engine {
                     cwd: cwd.as_deref(),
                     name: title.as_deref(),
                     additional_directories,
-                    launch: launch_args::for_provider(agent_args.as_ref(), provider),
+                    launch: launch_args::for_provider(first_args.as_ref(), provider),
                 },
             )
             .map_err(LoadError::Io)?;

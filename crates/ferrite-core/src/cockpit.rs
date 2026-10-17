@@ -2215,10 +2215,14 @@ impl Cockpit {
     /// Revive one parked Thread into the view that shows it (#21): a Pane,
     /// focus, and the park order forgetting it — cmd-o must not revive it a
     /// second time. The shared tail of cmd-o and a parked nav row's click.
+    /// An open Thread is only landed on: one a window has no Pane drawn for
+    /// yet (a `thread.focus` from Projects) is not started again.
     pub fn reopen(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        self.revive(thread)?;
+        if self.thread(thread).is_none() {
+            self.revive(thread)?;
+            self.roster.note_revived(thread);
+        }
         self.roster.set_view(self.view_showing(thread));
-        self.roster.note_revived(thread);
         self.roster.focus(PaneIdentity::Thread(thread));
         Ok(())
     }

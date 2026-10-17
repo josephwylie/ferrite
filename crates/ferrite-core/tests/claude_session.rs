@@ -696,6 +696,29 @@ fn an_abnormal_exit_explains_itself_with_stderr() {
     }
 }
 
+/// A CLI that refuses its arguments exits before the start's effort is
+/// set: the start fails with what it said, not the broken pipe it left.
+#[test]
+fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
+    let program = stub(
+        "claude-refuses",
+        &format!("{VERSION_CASE}\necho 'Error: Session ID 4a76 is already in use.' >&2\nexit 1"),
+    );
+    let refused = ClaudeSession::spawn(ClaudeConfig {
+        effort: Some("medium".into()),
+        ..config(program)
+    });
+    let Err(error) = refused else {
+        panic!("expected the start to fail")
+    };
+    let said = error.to_string();
+    assert!(said.contains("exit status: 1"), "{said}");
+    assert!(
+        said.contains("Session ID 4a76 is already in use."),
+        "{said}"
+    );
+}
+
 /// What the CLI is asked to be, and what it is told — recorded so a change to
 /// either is deliberate.
 #[test]

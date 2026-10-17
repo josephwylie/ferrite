@@ -147,6 +147,11 @@ pub enum ClaudeSpawnError {
     VersionCheckFailed {
         detail: String,
     },
+    /// The CLI exited before it was up, and why, as its stderr said
+    /// ("Session ID … is already in use").
+    Exited {
+        reason: String,
+    },
     Io(io::Error),
 }
 
@@ -166,6 +171,7 @@ impl std::fmt::Display for ClaudeSpawnError {
             ClaudeSpawnError::VersionCheckFailed { detail } => {
                 write!(f, "claude CLI version check failed: {detail}")
             }
+            ClaudeSpawnError::Exited { reason } => write!(f, "{reason}"),
             ClaudeSpawnError::Io(e) => write!(f, "io error spawning claude CLI: {e}"),
         }
     }
@@ -340,7 +346,7 @@ impl ClaudeSession {
             stdout,
             sender,
             Arc::clone(&child),
-            stderr_tail,
+            Arc::clone(&stderr_tail),
             setting_reply.clone(),
             control_replies.clone(),
             Arc::clone(&stdin),
@@ -406,7 +412,7 @@ impl ClaudeSession {
                         io::Error::other(format!("effort change was not acknowledged: {e}"))
                     })?
                 })
-                .map_err(ClaudeSpawnError::Io)?;
+                .map_err(|error| exited_at_start(&session.child, &stderr_tail, error))?;
         }
         Ok(session)
     }
@@ -1020,6 +1026,31 @@ fn drain_stderr(stderr: ChildStderr, tail: Arc<Mutex<StderrTail>>) {
 }
 
 fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> SessionEvent {
+    SessionEvent::Closed {
+        reason: exit_reason(child, stderr_tail),
+    }
+}
+
+/// A CLI that exited while starting says why on stderr: that, rather than
+/// the broken pipe or the silence its exit left behind.
+fn exited_at_start(
+    child: &Mutex<Child>,
+    stderr_tail: &Mutex<StderrTail>,
+    error: io::Error,
+) -> ClaudeSpawnError {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if matches!(lock(child).try_wait(), Ok(Some(_))) {
+            return ClaudeSpawnError::Exited {
+                reason: exit_reason(child, stderr_tail),
+            };
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    ClaudeSpawnError::Io(error)
+}
+
+fn exit_reason(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> String {
     let status = reap(child);
     let mut reason = match &status {
         Ok(status) => format!("claude CLI exited: {status}"),
@@ -1032,7 +1063,7 @@ fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> Sessio
             reason.push_str(&lines.join("\n"));
         }
     }
-    SessionEvent::Closed { reason }
+    reason
 }
 
 /// The drain thread reaches EOF just after the child exits; wait for it rather
