@@ -184,6 +184,37 @@ time"), and `cli::launch` still refuses an argument over 131072 bytes
 runtime and herdr's first-run setup reach them, and Ferrite runs
 neither.
 
+Still refused: `pi`, 1.0's third full-support kind. Scoped and not
+built, because it does not fit the Provider seam in a bounded change.
+1.0 runs pi as an interactive program in a terminal pane. It hears a
+turn end from a one-file extension on `agent_settled`, and reads the
+session JSONL under `pi_home()/sessions` for what pi said, its tokens
+and its provider errors. Ferrite has no pane. A Thread is a Provider
+Session (`providers/mod.rs`) that speaks a structured protocol: Claude's
+stream-json, Codex's app-server. Each one owns its process, transcript
+events, Attention, decisions, interrupt and resume. A pi Provider needs
+these pieces:
+
+1. a `PiSession` on pi's own machine protocol (its RPC mode). That
+   means spawn with args, env and launcher, prompt, interrupt, resume by
+   `--session-id`, and translate its events into `SessionEvent`
+   transcript blocks and Attention. pi never asks before it acts, so it
+   has no decisions. This is about the size of `providers/codex.rs` and
+   its wire module (around 1.5k lines), and it rests on a protocol
+   nothing here pins: no pi is installed and 1.0 never uses that mode;
+2. a third `store::Provider` variant. It is persisted in every Thread
+   log, and Ferrite's code names `Provider::Codex` at about 180 places
+   in 27 non-test files: spawner, settings, models and the model cache,
+   CLI updates and version checks, limits, discovery, commands, import,
+   titler, oneshot, and the window's provider choices;
+3. a stub-CLI harness and fixtures for its contract tests, as
+   `tests/codex_session.rs` has for Codex;
+4. then the adapter's `provider()` takes `pi`, and this row and the
+   `no_provider` test row drop it.
+
+Until a pi Provider lands, `agent start --kind pi` is refused
+`no_provider` with every other kind but `claude` and `codex`.
+
 ### Seam 2: the API grows what the board needs
 
 What 1.0 needs and Ferrite lacks is added to the API (ADR 0027):

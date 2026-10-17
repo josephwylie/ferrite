@@ -62,6 +62,8 @@ Still refused, and why:
   herdr's own setup's) is refused `not_wired` before anything runs (Seam
   1), which callers treat as any refusal of herdr's.
 - Agent kinds Ferrite has no Provider for (all but `claude` and `codex`)
-  fail `no_provider` at `agent start`.
+  fail `no_provider` at `agent start`. That includes `pi`, which 1.0
+  supports fully: a pi Provider is a new Provider Session plus a third
+  stored Provider, scoped in ADR 0031 (Seam 1, "Still refused: `pi`").
 - The board inside herdr's web UI (`webui/`) finds no web UI and does
   nothing: Ferrite has none.
