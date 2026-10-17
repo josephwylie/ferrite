@@ -398,6 +398,31 @@ board. Upstream raises no pop-up of its own when a task needs you, is
 ready or fails: `board.notify` alone decides (a bell where a board is
 open, or a command), so the window adds none.
 
+#### Tasks, and where new tasks go
+
+The operator sees the board as **Tasks** (the palette's `Tasks` and
+`Tasks: doctor`, the bottom bar's door, the shortcuts list): "Projects" is
+Ferrite's own nav Projects, repos and folders, and the two were confused.
+Only words the operator reads changed; the crates, the `ferrite-projects`
+binary, `projects::Toggle`, the modules and every path and setting keep
+their names, and the board's own upstream words stay.
+
+The board files a new task, and sends the Coordinator your words (Enter
+and Tab alike), from its folder (`Ctx::cwd`), whose repo its header names
+(upstream's `docs/several-boards.md`). A terminal board takes its pane's
+folder; Ferrite's used the focused Thread's when it first opened, so tasks
+silently went to whatever repo that was. Now a strip over the board
+(`board::aim`) says `New tasks go to: <Project ▾>`, a picker of the nav's
+Projects (the kit choice menu, as the subagent overflow's). The board opens
+at the focused Thread's Project's root, else the first Project's; a pick
+sets `Ctx::cwd` to that root live, and the loader reads the new repo at
+once — the list (every repo's tasks), the selection and the box are kept.
+The strip names the Project the board's folder is in, so it follows the
+board when upstream moves itself (a draft typed for another repo). A
+Project heading's right-press menu has `Open tasks for this project`: the
+board opens there, or an open one moves there and shows. No vendored file
+changed for this.
+
 ### Migration from 0.2
 
 1.0 never converts 0.2: its take-over (`sw_flow::take_over::at_start`,

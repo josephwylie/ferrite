@@ -16,6 +16,7 @@
 //! Ferrite's `projects::Toggle` is herdr's `prefix+a`: it opens the board,
 //! and pressed on it, takes you back to where you came from.
 
+mod aim;
 #[cfg(any(test, feature = "visual-reference"))]
 pub(crate) mod fixture;
 mod keys;
@@ -29,6 +30,7 @@ mod runtime;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use aim::Target;
 #[cfg(any(test, feature = "visual-reference"))]
 pub(crate) use runtime::Board;
 pub(crate) use runtime::{BoardEvent, BoardView, Opening};

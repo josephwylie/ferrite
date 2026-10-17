@@ -31,7 +31,7 @@ use sw_board::board::update::{update, Effect, Event};
 use sw_board::board::view::screen;
 use sw_board::shown::ink::{Ink, Inked};
 
-use super::{keys, machines, mouse, render};
+use super::{aim, keys, machines, mouse, render};
 use crate::components;
 use crate::theme::{CH, PLANE, ROW};
 
@@ -49,7 +49,8 @@ const ATTACH_REFUSED: &str =
 /// Where the board opens, and what it is opened with.
 #[derive(Clone, Debug)]
 pub(crate) struct Opening {
-    /// The folder it opens in: the focused Thread's, else home.
+    /// The folder it opens in, new tasks' (`aim`): a nav Project's root,
+    /// else home.
     pub cwd: PathBuf,
     /// The focused Thread's id, the pane its agent is to the adapter: the
     /// popup opens on the task whose agent that is (`Ctx::from`).
@@ -76,7 +77,9 @@ pub(crate) struct Board {
 
 pub(crate) struct BoardView {
     pub focus: FocusHandle,
-    board: Option<Board>,
+    pub(super) board: Option<Board>,
+    /// Where new tasks go, and the strip that picks it.
+    pub(super) aim: aim::Aim,
     /// The view's size in pixels, as the cockpit hangs it, and in cells
     /// (columns, lines): what the board lays its screen out for.
     pixels: (f32, f32),
@@ -131,6 +134,7 @@ impl BoardView {
         Self {
             focus: cx.focus_handle(),
             board,
+            aim: aim::Aim::default(),
             pixels: (120.0 * CH, 40.0 * ROW),
             size: (120, 40),
             wants: Wants::default(),
@@ -147,7 +151,7 @@ impl BoardView {
     pub(crate) fn fit(&mut self, width: f32, height: f32) {
         self.pixels = (width, height);
         let edge = if self.popup() { 2.0 * POPUP_EDGE } else { 0.0 };
-        self.size = cells(width - edge, height - edge);
+        self.size = cells(width - edge, height - edge - self.aim.height());
     }
 
     fn popup(&self) -> bool {
@@ -158,7 +162,10 @@ impl BoardView {
 
     /// The board read: the beat and the loader start, and other machines
     /// are asked at once when it shows them.
-    fn start(&mut self, board: Board, cx: &mut Context<Self>) {
+    fn start(&mut self, mut board: Board, cx: &mut Context<Self>) {
+        if let Some(cwd) = self.aim.early.take() {
+            board.state.ctx.cwd = cwd;
+        }
         self.wants = Wants {
             ids: vec![board.state.sel.clone()],
             cwd: board.state.ctx.cwd.clone(),
@@ -271,7 +278,7 @@ impl BoardView {
 
     /// What the loader reads closer follows the selected task and the one
     /// the chat talks to; a change has it read now.
-    fn follow_selection(&mut self) {
+    pub(super) fn follow_selection(&mut self) {
         let Some(board) = &self.board else {
             return;
         };
@@ -299,6 +306,10 @@ impl BoardView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The picker's list, while it is open, has the keys.
+        if self.aim.open {
+            return;
+        }
         let keystroke = &event.keystroke;
         let event = if keys::is_paste(keystroke) {
             let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
@@ -426,16 +437,19 @@ impl Render for BoardView {
             div()
         };
         let (width, height) = self.pixels;
+        let strip = self.aim_strip(cx);
         let surface = surface
             .debug_selector(|| "projects-board".into())
             .track_focus(&self.focus)
             .key_context("Projects")
             .w(px(width))
             .h(px(height))
+            .flex()
+            .flex_col()
             .overflow_hidden()
             .bg(rgb(ground))
             .on_key_down(cx.listener(Self::on_key));
-        mouse::listen(surface, cx).child(
+        mouse::listen(surface, cx).children(strip).child(
             components::text_ui()
                 .relative()
                 .flex()

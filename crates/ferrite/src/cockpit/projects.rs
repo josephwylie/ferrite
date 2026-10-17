@@ -1,10 +1,11 @@
-//! Projects' cockpit half (ADR 0030, ADR 0031): the board's sidebar the
-//! nav and the bottom bar read, refreshed off the UI thread; the palette's
-//! Projects commands; and the work board's place on the board (`board`)
-//! and what it asks of the window.
+//! Projects' cockpit half (ADR 0030, ADR 0031), Tasks to the operator: the
+//! board's sidebar the nav and the bottom bar read, refreshed off the UI
+//! thread; the palette's Tasks commands; the work board's place on the
+//! board (`board`), what it asks of the window, and which nav Project its
+//! new tasks go to.
 
 use super::*;
-use crate::board::{BoardEvent, BoardView, Opening, Placement};
+use crate::board::{BoardEvent, BoardView, Opening, Placement, Target};
 use crate::float::{self, FloatPlace};
 use crate::palette::{
     Act, Command as PaletteCommand, Row as PaletteRow, Section as PaletteSection,
@@ -144,8 +145,49 @@ impl CockpitView {
         if self.board_focused(window, cx) {
             self.leave_board(window, cx);
         } else {
-            self.show_board(window, cx);
+            self.show_board(None, window, cx);
         }
+    }
+
+    /// The board with new tasks going to `project` (a nav Project's
+    /// menu): opened there, or an open one moved there, and shown.
+    pub(super) fn show_tasks_for(
+        &mut self,
+        project: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self
+            .cockpit
+            .registry()
+            .project(project)
+            .map(|project| project.root.clone());
+        self.show_board(root, window, cx);
+    }
+
+    /// The nav's Projects, as the board's picker offers them.
+    fn task_targets(&self) -> Vec<Target> {
+        self.cockpit
+            .registry()
+            .projects()
+            .iter()
+            .map(|project| Target {
+                title: project.title.clone().into(),
+                root: project.root.clone(),
+                shown: home_relative(&project.root).into(),
+            })
+            .collect()
+    }
+
+    /// Where new tasks go when the board opens: the focused Thread's
+    /// Project, else the first Project; `None` with no Projects.
+    pub(super) fn task_aim(&self) -> Option<std::path::PathBuf> {
+        let registry = self.cockpit.registry();
+        self.focused_thread()
+            .and_then(|thread| self.cockpit.project_id(thread))
+            .and_then(|project| registry.project(project))
+            .or_else(|| registry.projects().first())
+            .map(|project| project.root.clone())
     }
 
     /// The board's door in the bottom bar, after the bell: the board glyph,
@@ -182,7 +224,7 @@ impl CockpitView {
         .w(px(ICON_BUTTON))
         .h_full()
         .p_0()
-        .accessibility_label("Projects")
+        .accessibility_label("Tasks")
         .child(
             crate::icons::icon(crate::icons::BOARD, ICON_BUTTON_GLYPH, TEXT_MUTED)
                 .text_color(glyph),
@@ -197,7 +239,7 @@ impl CockpitView {
                 .id("projects-board-door-tip")
                 .flex_shrink_0()
                 .h_full()
-                .tooltip(crate::menu::action_tooltip("Projects", "projects::Toggle"))
+                .tooltip(crate::menu::action_tooltip("Tasks", "projects::Toggle"))
                 .child(door)
                 .into_any_element(),
         )
@@ -214,24 +256,42 @@ impl CockpitView {
     }
 
     /// The board, opened where `board.open` says — or a tab's, shown again
-    /// as you left it.
-    fn show_board(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// as you left it — new tasks going to `aim` when it names a folder,
+    /// else, opening, to `task_aim`'s.
+    fn show_board(
+        &mut self,
+        aim: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.projects.live {
             return;
         }
         let back = window.focused(cx);
-        if self.projects.board.is_none() {
+        let targets = self.task_targets();
+        if let Some(board) = self.projects.board.as_ref() {
+            board.view.update(cx, |view, cx| {
+                view.set_targets(targets);
+                if let Some(aim) = &aim {
+                    view.aim_at(aim, cx);
+                }
+            });
+        } else {
             let placement = Placement::read();
             let focused = self.focused_thread();
             let opening = Opening {
-                cwd: focused
-                    .and_then(|thread| self.thread_path(thread))
+                cwd: aim
+                    .or_else(|| self.task_aim())
                     .unwrap_or_else(sw_board::store::files::user_home),
                 from: focused.map(|thread| thread.to_string()).unwrap_or_default(),
                 popup: placement == Placement::Popup,
                 board_key: crate::board::board_key(),
             };
-            let view = cx.new(|cx| BoardView::open(opening, cx));
+            let view = cx.new(|cx| {
+                let mut view = BoardView::open(opening, cx);
+                view.set_targets(targets);
+                view
+            });
             let events = cx.subscribe_in(&view, window, Self::on_board_event);
             self.projects.board = Some(BoardSlot {
                 view,
@@ -320,7 +380,15 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let view = cx.new(|cx| BoardView::still(board, cx));
+        let (targets, aim) = (self.task_targets(), self.task_aim());
+        let view = cx.new(|cx| {
+            let mut view = BoardView::still(board, cx);
+            view.set_targets(targets);
+            if let Some(aim) = aim {
+                view.aim_at(&aim, cx);
+            }
+            view
+        });
         let events = cx.subscribe_in(&view, window, Self::on_board_event);
         self.projects.board = Some(BoardSlot {
             view,
@@ -379,7 +447,7 @@ impl CockpitView {
         .detach();
     }
 
-    /// One of the palette's Projects commands.
+    /// One of the palette's Tasks commands.
     pub(super) fn run_projects_command(
         &mut self,
         command: Command,
@@ -404,7 +472,7 @@ impl CockpitView {
         machines.machine(index).map(|machine| machine.name.clone())
     }
 
-    /// The palette's Projects rows, in the operator's window.
+    /// The palette's Tasks rows, in the operator's window.
     pub(super) fn palette_projects_rows(&self) -> Vec<PaletteRow> {
         if !self.projects.live {
             return Vec::new();

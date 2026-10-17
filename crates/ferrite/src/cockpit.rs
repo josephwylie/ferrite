@@ -974,6 +974,8 @@ enum MenuTarget {
     /// A Pane — the same Thread, but the rename opens in the head.
     Pane(ThreadId),
     Group(GroupId),
+    /// A Project's heading in the nav.
+    Project(ProjectId),
     /// The Parked section's header at the foot of the nav.
     Parked,
     /// A diff line in the Review beside the Thread's Pane (ADR 0021).
@@ -1013,6 +1015,8 @@ enum MenuVerb {
     /// The Thread's PR: ask `gh` again now, or open it in the browser.
     RefreshPr,
     OpenPr,
+    /// The work board, new tasks going to the Project.
+    OpenTasks,
     Delete,
 }
 
@@ -3527,6 +3531,13 @@ impl CockpitView {
                     MenuVerb::DissolveGroup,
                 )));
             }
+            // A Project heading: its tasks (the operator's window only).
+            MenuTarget::Project(_) => {
+                rows.push(Some((
+                    menu::Item::new("Open tasks for this project"),
+                    MenuVerb::OpenTasks,
+                )));
+            }
             // The Parked header: the fold, and the one bulk act the
             // section exists for — clearing the parked history it lists.
             MenuTarget::Parked => {
@@ -3622,7 +3633,10 @@ impl CockpitView {
     fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
         match target {
             MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => self.thread_path(thread),
-            MenuTarget::Group(_) | MenuTarget::Parked | MenuTarget::Review { .. } => None,
+            MenuTarget::Group(_)
+            | MenuTarget::Project(_)
+            | MenuTarget::Parked
+            | MenuTarget::Review { .. } => None,
         }
     }
 
@@ -3793,6 +3807,7 @@ impl CockpitView {
                         .get(group)
                         .and_then(|group| group.members.first().copied())
                         .and_then(|thread| self.cockpit.project_id(thread)),
+                    MenuTarget::Project(project) => Some(project),
                     MenuTarget::Parked | MenuTarget::Review { .. } => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
@@ -3807,6 +3822,9 @@ impl CockpitView {
             }
             (MenuTarget::Thread(thread), MenuVerb::RefreshPr) => self.check_pr(thread, true, cx),
             (MenuTarget::Thread(thread), MenuVerb::OpenPr) => self.open_pr(thread, cx),
+            (MenuTarget::Project(project), MenuVerb::OpenTasks) => {
+                self.show_tasks_for(project, window, cx)
+            }
             (_, MenuVerb::CopyPath) => {
                 if let Some(path) = self.target_path(target) {
                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -13512,7 +13530,8 @@ impl CockpitView {
     }
 
     /// A Project heading (N-12): a plain row whose press folds or unfolds
-    /// the section (N-4). `Other` names no Project and does not fold.
+    /// the section (N-4), and whose right press opens its menu (its tasks,
+    /// where a board opens). `Other` names no Project and does neither.
     fn project_heading(
         &self,
         index: usize,
@@ -13532,6 +13551,24 @@ impl CockpitView {
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                     view.set_nav_fold(fold, !folded, cx);
                 }),
+            )
+            .when_some(
+                section
+                    .project
+                    .filter(|_| !section.mixed && self.projects.live),
+                |heading, project| {
+                    heading.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.open_context_menu(
+                                MenuTarget::Project(project),
+                                event.position,
+                                cx,
+                            );
+                        }),
+                    )
+                },
             )
             .into_any_element()
     }

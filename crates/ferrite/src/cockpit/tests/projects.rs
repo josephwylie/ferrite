@@ -536,3 +536,180 @@ fn the_board_door_sits_after_the_bell_and_opens_the_board(cx: &mut TestAppContex
         "the click shows the board"
     );
 }
+
+/// Two Projects: `here()`'s, with `threads[0]`, and another repo's, with
+/// `threads[1]`, focused. Their roots, in the registry's order.
+fn two_projects(name: &str) -> (Cockpit, Fake, [ThreadId; 2], [std::path::PathBuf; 2]) {
+    let (mut core, fake) = cockpit(name, 1);
+    let first = core.threads()[0];
+    let repo = repo_in(&scratch(&format!("{name}-other")));
+    let opened = core
+        .open(
+            Provider::Claude,
+            WorkspaceChoice::Main {
+                checkout: repo.clone(),
+            },
+        )
+        .unwrap();
+    core.focus_thread(opened);
+    let roots = core
+        .registry()
+        .projects()
+        .iter()
+        .map(|project| project.root.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 2, "two Projects: {roots:?}");
+    assert_eq!(roots[1], repo.canonicalize().unwrap());
+    (
+        core,
+        fake,
+        [first, opened],
+        [roots[0].clone(), roots[1].clone()],
+    )
+}
+
+/// The folder a still board's new tasks go from.
+fn board_cwd(board: &Entity<crate::board::BoardView>, cx: &mut gpui::VisualTestContext) -> String {
+    board.read_with(cx, |board, _| board.cwd().expect("a folder").to_string())
+}
+
+/// New tasks go to the focused Thread's Project when the board opens,
+/// else to the first Project.
+#[gpui::test]
+fn new_tasks_go_to_the_focused_threads_project(cx: &mut TestAppContext) {
+    let (core, _fake, threads, roots) = two_projects("tasks-aim-focused");
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        assert_eq!(view.task_aim().as_ref(), Some(&roots[1]), "the focused one");
+        view.focus_thread(threads[0], cx);
+        assert_eq!(view.task_aim().as_ref(), Some(&roots[0]));
+    });
+
+    let (mut bare, _fake) = cockpit("tasks-aim-none", 0);
+    let repo = repo_in(&scratch("tasks-aim-none-repo"));
+    bare.register_project(&repo).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(bare, cx));
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.task_aim(),
+            Some(repo.canonicalize().unwrap()),
+            "no Thread focused: the first Project"
+        );
+    });
+}
+
+/// The board's strip names where new tasks go; a pick in its picker moves
+/// the board there live — the selection and the words in the box stay —
+/// and Enter (to the Coordinator) and Tab (to delegate) go from there.
+#[gpui::test]
+fn the_tasks_picker_retargets_new_tasks_live(cx: &mut TestAppContext) {
+    use sw_board::board::job::Job;
+    use sw_board::board::keys::Press;
+    use sw_board::board::update::{update, Effect, Event};
+    let (core, _fake, threads, roots) = two_projects("tasks-picker");
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+    tick(cx);
+    let board = focused_board(&view, Placement::Tab, cx);
+    assert_eq!(board_cwd(&board, cx), roots[0].display().to_string());
+    assert!(cx.debug_bounds("board-aim-strip").is_some(), "the strip");
+    let sel = board.update(cx, |board, _| {
+        let state = board.state().unwrap();
+        state.input.set_text("Fix the flaky test");
+        state.sel.clone()
+    });
+
+    let trigger = cx.debug_bounds("board-aim").expect("the picker");
+    cx.simulate_click(trigger.center(), gpui::Modifiers::none());
+    tick(cx);
+    let other = cx.debug_bounds("choice-row-1").expect("the other Project");
+    cx.simulate_click(other.center(), gpui::Modifiers::none());
+    tick(cx);
+
+    assert_eq!(board_cwd(&board, cx), roots[1].display().to_string());
+    board.update(cx, |board, _| {
+        assert_eq!(board.aimed(), Some(1), "the strip names it");
+        let state = board.state().unwrap();
+        assert_eq!(state.sel, sel, "the selection stays");
+        assert_eq!(
+            state.value(),
+            "Fix the flaky test",
+            "the box keeps its words"
+        );
+        // Straight through `update`: what it answers is not run.
+        for key in ["enter", "tab"] {
+            state.input.set_text("Fix the flaky test");
+            let effects = update(state, Event::Key(Press::chord(key)));
+            let cwd = effects.iter().find_map(|effect| match effect {
+                Effect::Run(Job::CoordSend { cwd, .. } | Job::Add { cwd, .. }) => Some(cwd),
+                _ => None,
+            });
+            assert_eq!(
+                cwd,
+                Some(&roots[1].display().to_string()),
+                "{key}: {effects:?}"
+            );
+        }
+    });
+}
+
+/// A Project heading's menu opens Tasks set to that Project: an open board
+/// is moved there and shown.
+#[gpui::test]
+fn a_project_headings_menu_opens_its_tasks(cx: &mut TestAppContext) {
+    let (core, _fake, _threads, roots) = two_projects("tasks-nav");
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    hold_nav_open(&view, cx);
+    let board = focused_board(&view, Placement::Tab, cx);
+    assert_eq!(board_cwd(&board, cx), roots[1].display().to_string());
+    view.update(cx, |view, cx| {
+        view.board_gives_way();
+        view.projects.live = true;
+        cx.notify();
+    });
+    tick(cx);
+    let index = view.read_with(cx, |view, _| {
+        let project = view.cockpit.registry().projects()[0].id;
+        view.nav_state()
+            .sections
+            .iter()
+            .position(|section| section.project == Some(project))
+            .expect("the first Project's section")
+    });
+
+    let heading = cx
+        .debug_bounds(format!("nav-project-section-{index}").leak())
+        .expect("its heading");
+    cx.simulate_mouse_down(
+        heading.center(),
+        MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        heading.center(),
+        MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    tick(cx);
+    view.update_in(cx, |view, window, cx| {
+        let menu = view.context_menu.as_ref().expect("the heading's menu");
+        let project = view.cockpit.registry().projects()[0].id;
+        assert_eq!(menu.target, MenuTarget::Project(project));
+        let labels: Vec<_> = menu
+            .rows
+            .iter()
+            .flatten()
+            .map(|(item, _)| item.label.to_string())
+            .collect();
+        assert_eq!(labels, ["Open tasks for this project"]);
+        view.press_menu_row(0, window, cx);
+    });
+    tick(cx);
+
+    assert_eq!(board_cwd(&board, cx), roots[0].display().to_string());
+    assert!(view.read_with(cx, |view, _| view.projects.board_shown()));
+    assert!(board_holds_the_keyboard(&board, cx), "shown, with the keys");
+}
