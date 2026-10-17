@@ -19,3 +19,8 @@ ratatui.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true
+
+# Ferrite: upstream does not run clippy; this deny-by-default lint would stop
+# `cargo clippy --workspace` on unchanged upstream code (board/textbox/mod.rs).
+[lints.clippy]
+almost_swapped = "allow"

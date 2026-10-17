@@ -1690,7 +1690,7 @@ fn claim(dir: &Path, key: &DirKey) -> io::Result<Option<String>> {
         .open(dir.join(CLAIM))?;
     match lock.try_lock() {
         Ok(()) => {
-            claimed.insert(key.clone(), lock);
+            claimed.insert(*key, lock);
             Ok(None)
         }
         Err(fs::TryLockError::WouldBlock) => Ok(Some(READ_ONLY.to_string())),

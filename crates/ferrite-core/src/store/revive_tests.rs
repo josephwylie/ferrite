@@ -70,7 +70,7 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
             model: "m-0".into(),
         },
     );
-    let switch_at = (seed % 3 == 0).then(|| turns / 2);
+    let switch_at = seed.is_multiple_of(3).then_some(turns / 2);
     for turn in 0..turns {
         writer
             .record_prompt(&format!("turn {turn} {}", rng.text(40)))

@@ -281,15 +281,15 @@ fn system_tag(machine: &crate::machines::MachineKey, thread: ThreadId) -> String
     }
 }
 
+type FreshNotice = (ferrite_core::notifications::NoticeId, ThreadId, bool);
+type LiveRequest = (ferrite_core::notifications::DecisionNoticeId, bool);
+
 /// What a machine's bell may not have heard yet: its Notices born after
 /// `after` (id, Thread, read) and its live requests (id, read).
 fn news(
     notifications: &ferrite_core::notifications::Notifications,
     after: Option<ferrite_core::notifications::NoticeId>,
-) -> (
-    Vec<(ferrite_core::notifications::NoticeId, ThreadId, bool)>,
-    Vec<(ferrite_core::notifications::DecisionNoticeId, bool)>,
-) {
+) -> (Vec<FreshNotice>, Vec<LiveRequest>) {
     let fresh = notifications
         .since(after)
         .map(|notice| (notice.id, notice.thread, notice.read))
@@ -25891,11 +25891,15 @@ mod tests {
         };
 
         escape_on(Subject::Subagent(running.clone()), cx);
-        assert_eq!(*fake.stopped.borrow(), [running.clone()]);
+        assert_eq!(*fake.stopped.borrow(), std::slice::from_ref(&running));
         assert_eq!(*fake.interrupts.borrow(), 0, "Main's turn runs on");
 
         escape_on(Subject::Subagent(finished), cx);
-        assert_eq!(*fake.stopped.borrow(), [running.clone()], "nothing to stop");
+        assert_eq!(
+            *fake.stopped.borrow(),
+            std::slice::from_ref(&running),
+            "nothing to stop"
+        );
         assert_eq!(*fake.interrupts.borrow(), 0, "nor does it reach Main");
 
         escape_on(Subject::Main, cx);

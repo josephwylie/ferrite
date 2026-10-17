@@ -320,8 +320,8 @@ fn refinement(style: &TextStyle) -> TextStyleRefinement {
         font_weight: Some(style.font_weight),
         font_style: Some(style.font_style),
         background_color: style.background_color,
-        underline: style.underline.clone(),
-        strikethrough: style.strikethrough.clone(),
+        underline: style.underline,
+        strikethrough: style.strikethrough,
         white_space: Some(style.white_space),
         text_overflow: style.text_overflow.clone(),
         text_align: Some(style.text_align),
@@ -510,13 +510,16 @@ impl Render for LoopsOverlay {
 /// mask, text style and opacity it was drawn under there.
 struct Layer {
     priority: Option<usize>,
-    built: Vec<(
-        AnyElement,
-        ContentMask<Pixels>,
-        TextStyleRefinement,
-        (EntityId, usize),
-    )>,
+    built: Vec<Built>,
 }
+
+/// A hosted loop built again, with its mask, text style and (owner, slot).
+type Built = (
+    AnyElement,
+    ContentMask<Pixels>,
+    TextStyleRefinement,
+    (EntityId, usize),
+);
 
 impl Layer {
     fn new(priority: Option<usize>) -> Self {
@@ -554,8 +557,10 @@ impl Element for Layer {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        let mut style = gpui::Style::default();
-        style.position = gpui::Position::Absolute;
+        let style = gpui::Style {
+            position: gpui::Position::Absolute,
+            ..Default::default()
+        };
         (window.request_layout(style, None, cx), ())
     }
 
@@ -594,7 +599,7 @@ impl Element for Layer {
                             (
                                 (*owner, slot),
                                 mark.bounds,
-                                mark.mask.clone(),
+                                mark.mask,
                                 mark.text_style.clone(),
                                 mark.build.clone(),
                             )
@@ -606,7 +611,7 @@ impl Element for Layer {
             let mut element = build();
             let text_style = refinement(&text_style);
             window.with_text_style(Some(text_style.clone()), |window| {
-                window.with_content_mask(Some(mask.clone()), |window| {
+                window.with_content_mask(Some(mask), |window| {
                     element.layout_as_root(
                         gpui::size(
                             AvailableSpace::Definite(bounds.size.width),
@@ -645,8 +650,7 @@ impl Element for Layer {
             // shimmer's line height).
             window.with_text_style(Some(text_style.clone()), |window| {
                 window.with_element_opacity(Some(opacity), |window| {
-                    window
-                        .with_content_mask(Some(mask.clone()), |window| element.paint(window, cx));
+                    window.with_content_mask(Some(*mask), |window| element.paint(window, cx));
                 });
             });
         }
@@ -748,10 +752,7 @@ mod tests {
         Rc<Cell<usize>>,
     );
 
-    fn fixture<'a>(
-        tracking: bool,
-        cx: &'a mut TestAppContext,
-    ) -> (Fixture, &'a mut gpui::VisualTestContext) {
+    fn fixture(tracking: bool, cx: &mut TestAppContext) -> (Fixture, &mut gpui::VisualTestContext) {
         let (child_renders, grandchild_renders) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
         let (counted, grand) = (child_renders.clone(), grandchild_renders.clone());
         let mut model = None;

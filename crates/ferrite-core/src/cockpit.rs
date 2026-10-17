@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 
 use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
-    title_from_prompt, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine, HistoryDirection,
-    LogReader, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart, ReviveGroupError,
-    RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
+    title_from_prompt, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine,
+    HistoryDirection, LogReader, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart,
+    ReviveGroupError, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
 use crate::groups::{
     Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,

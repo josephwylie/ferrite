@@ -727,7 +727,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
             .iter()
             .map(|notification| notification.tag.to_string())
             .collect::<Vec<_>>(),
-        [tag.clone()]
+        std::slice::from_ref(&tag)
     );
 
     cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
@@ -839,11 +839,9 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
     home.read_with(cx, |view, _| {
         assert!(view.cockpit.machine().is_none(), "this computer");
         assert_eq!(
-            view.landing
-                .as_ref()
-                .and_then(|(landing, _)| match landing {
-                    Landing::Alert(Alert { away, thread, .. }) => Some((away.clone(), *thread)),
-                }),
+            view.landing.as_ref().map(|(landing, _)| match landing {
+                Landing::Alert(Alert { away, thread, .. }) => (away.clone(), *thread),
+            }),
             Some((None, here)),
             "on its Thread once it answers"
         );
@@ -1067,7 +1065,10 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     );
     cx.simulate_keystrokes("enter");
     view.update(cx, |view, cx| {
-        assert_eq!(view.project_editor.as_ref().unwrap().staged, [repo.clone()]);
+        assert_eq!(
+            view.project_editor.as_ref().unwrap().staged,
+            std::slice::from_ref(&repo)
+        );
         assert_eq!(field.read(cx).text(), "", "the field empties");
     });
     cx.simulate_keystrokes("enter");

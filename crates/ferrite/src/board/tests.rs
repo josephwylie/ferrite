@@ -29,6 +29,9 @@ fn stroke(key: &str, typed: Option<&str>, modifiers: Modifiers) -> Keystroke {
     }
 }
 
+/// What a keystroke should read as: its chord and the character it types.
+type Expected = Option<(&'static str, Option<char>)>;
+
 fn chord(press: Option<Press>) -> Option<(String, Option<char>)> {
     press.map(|press| (press.chord, press.ch))
 }
@@ -52,7 +55,7 @@ fn keystrokes_read_as_the_terminal_board_reads_keys() {
         platform: true,
         ..none
     };
-    let table: [(Keystroke, Option<(&str, Option<char>)>); 18] = [
+    let table: [(Keystroke, Expected); 18] = [
         (stroke("a", Some("a"), none), Some(("a", Some('a')))),
         (stroke("y", Some("Y"), shift), Some(("shift+y", Some('Y')))),
         (stroke("n", Some("N"), shift), Some(("shift+n", Some('N')))),

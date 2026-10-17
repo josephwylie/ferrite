@@ -454,9 +454,18 @@ fn later_samples() -> Vec<(&'static str, Request)> {
                     ("HERDR_PROJECTS_DATA_DIR".into(), "/data".into()),
                 ]
                 .into(),
-                launcher: ["bwrap", "--dev-bind", "/", "/", "--ro-bind", "/r", "/r", "--"]
-                    .map(String::from)
-                    .into(),
+                launcher: [
+                    "bwrap",
+                    "--dev-bind",
+                    "/",
+                    "/",
+                    "--ro-bind",
+                    "/r",
+                    "/r",
+                    "--",
+                ]
+                .map(String::from)
+                .into(),
                 ..thread_start()
             })),
         ),

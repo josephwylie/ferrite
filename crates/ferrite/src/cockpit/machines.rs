@@ -16,6 +16,9 @@ use gpui::App;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+/// An edit to the saved machines list.
+type SavedChange = Box<dyn Fn(&mut Vec<Machine>)>;
+
 /// What a lost machine still shows (ADR 0026): `element` dimmed under a
 /// cover, `id`, that takes every press until the machine is back.
 pub(super) fn held(element: Div, id: &'static str) -> Div {
@@ -270,7 +273,7 @@ impl CockpitView {
             })
             .clone();
         let view = cx.entity().downgrade();
-        let act = |change: Box<dyn Fn(&mut Vec<Machine>)>| -> prefs::Act {
+        let act = |change: SavedChange| -> prefs::Act {
             let view = view.clone();
             Rc::new(move |cx: &mut gpui::App| {
                 let _ = view.update(cx, |view, cx| {

@@ -5099,15 +5099,25 @@ fn a_thread_revived_with_a_new_launch_keeps_its_id() {
     core.engine_mut().revive_with(thread, again).unwrap();
     assert!(core.engine().thread(thread).is_some());
     assert_eq!(fake.args.borrow().last().unwrap(), &["--model", "opus"]);
-    assert_eq!(*fake.resumed.borrow().last().unwrap(), None, "a new conversation");
+    assert_eq!(
+        *fake.resumed.borrow().last().unwrap(),
+        None,
+        "a new conversation"
+    );
     core.park(thread).unwrap();
     let resumed = crate::engine::Launch {
         resume: Some("sess-1".into()),
         ..Default::default()
     };
     core.engine_mut().revive_with(thread, resumed).unwrap();
-    assert_eq!(fake.resumed.borrow().last().unwrap().as_deref(), Some("sess-1"));
-    assert!(fake.args.borrow().last().unwrap().is_empty(), "replaced, not kept");
+    assert_eq!(
+        fake.resumed.borrow().last().unwrap().as_deref(),
+        Some("sess-1")
+    );
+    assert!(
+        fake.args.borrow().last().unwrap().is_empty(),
+        "replaced, not kept"
+    );
     // What the last revive saved is what the next plain one starts with.
     core.park(thread).unwrap();
     core.revive(thread).unwrap();

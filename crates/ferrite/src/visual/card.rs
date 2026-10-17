@@ -60,10 +60,13 @@ pub(crate) enum Stage {
     Hidden,
 }
 
+/// What one of the row's actions does when clicked.
+pub(crate) type Action = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// The row's two actions.
 pub(crate) struct Actions {
-    pub open_in_browser: Rc<dyn Fn(&mut Window, &mut App)>,
-    pub copy_html: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub open_in_browser: Action,
+    pub copy_html: Action,
 }
 
 /// The status word on the call line's right, if the status has one.
@@ -260,7 +263,7 @@ fn note(grid: Grid, words: impl Into<SharedString>) -> AnyElement {
 
 /// `open in browser · copy html`, muted, each brightening under the pointer.
 fn action_line(id: &str, actions: Actions, grid: Grid) -> Div {
-    let action = |key: &str, label: &'static str, run: Rc<dyn Fn(&mut Window, &mut App)>| {
+    let action = |key: &str, label: &'static str, run: Action| {
         let id = SharedString::from(format!("visual-{key}-{id}"));
         div()
             .id(id.clone())

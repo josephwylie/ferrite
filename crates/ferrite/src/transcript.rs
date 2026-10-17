@@ -1039,7 +1039,7 @@ impl TranscriptView {
     /// A row's width (the list's, less the row insets), once laid out.
     fn content_width(&self) -> Option<f32> {
         let width = self.list_w.get();
-        (width > 0.).then(|| width - theme::TX_PAD_L - theme::TX_PAD_R)
+        (width > 0.).then_some(width - theme::TX_PAD_L - theme::TX_PAD_R)
     }
 
     /// A visual's page changed height: the list re-measures its row (off

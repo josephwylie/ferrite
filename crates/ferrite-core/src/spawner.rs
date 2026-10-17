@@ -367,8 +367,8 @@ impl Spawn {
                     self.api.as_deref(),
                     self.projects.as_deref(),
                 )
-                    .into_iter()
-                    .map(|(name, value)| (name.to_string(), value)),
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value)),
             )
             .collect();
         let defaults = self
@@ -553,10 +553,7 @@ mod tests {
         let SessionConfig::Claude(claude) = alone.config(request(Provider::Claude)) else {
             panic!("a Claude request makes a Claude config");
         };
-        assert_eq!(
-            claude.env,
-            [("FERRITE_THREAD_ID".to_string(), "12".into())]
-        );
+        assert_eq!(claude.env, [("FERRITE_THREAD_ID".to_string(), "12".into())]);
     }
 
     /// A Thread's own environment goes under Ferrite's, and its launcher
@@ -583,8 +580,7 @@ mod tests {
                 launcher: &launcher,
             },
         };
-        let SessionConfig::Claude(claude) = Spawn::new(Arc::default(), None).config(request)
-        else {
+        let SessionConfig::Claude(claude) = Spawn::new(Arc::default(), None).config(request) else {
             panic!("a Claude request makes a Claude config");
         };
         assert_eq!(

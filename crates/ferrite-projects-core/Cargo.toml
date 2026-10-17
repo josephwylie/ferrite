@@ -24,3 +24,8 @@ sha1_smol.workspace = true
 toml.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
+
+# Ferrite: upstream does not run clippy; this deny-by-default lint would stop
+# `cargo clippy --workspace` on unchanged upstream code (store/move_home.rs).
+[lints.clippy]
+never_loop = "allow"
