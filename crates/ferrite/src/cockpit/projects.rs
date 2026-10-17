@@ -11,6 +11,7 @@ use crate::palette::{
 };
 use crate::projects::{self, Command};
 use crate::sidebar::{self, Sidebar};
+use crate::theme::{paint, ICON_BUTTON, ICON_BUTTON_GLYPH, TEXT, TEXT_MUTED, TRANSPARENT};
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
 use gpui::{FocusHandle, Subscription};
@@ -145,6 +146,61 @@ impl CockpitView {
         } else {
             self.show_board(window, cx);
         }
+    }
+
+    /// The board's door in the bottom bar, after the bell: the board glyph,
+    /// lit while the board shows; a click does what the board key does.
+    /// None outside the operator's window, where no board opens.
+    pub(super) fn board_door(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.projects.live {
+            return None;
+        }
+        let shown = self
+            .projects
+            .board
+            .as_ref()
+            .is_some_and(|board| board.shown);
+        let id = gpui::ElementId::from("projects-board-door");
+        let key = crate::pointer::hover_key(&id);
+        let (rest, glyph): (gpui::Hsla, gpui::Hsla) = if shown {
+            (paint::HOVER.into(), rgb(TEXT).into())
+        } else {
+            (
+                gpui::rgba(TRANSPARENT).into(),
+                crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into()),
+            )
+        };
+        let door = crate::components::faded_button(
+            id,
+            rest,
+            paint::HOVER.into(),
+            paint::PRESS.into(),
+            rgb(TEXT_MUTED).into(),
+            cx,
+        )
+        .debug_selector(|| "projects-board-door".into())
+        .w(px(ICON_BUTTON))
+        .h_full()
+        .p_0()
+        .accessibility_label("Projects")
+        .child(
+            crate::icons::icon(crate::icons::BOARD, ICON_BUTTON_GLYPH, TEXT_MUTED)
+                .text_color(glyph),
+        )
+        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            view.toggle_projects(window, cx);
+            cx.notify();
+        }));
+        Some(
+            div()
+                .id("projects-board-door-tip")
+                .flex_shrink_0()
+                .h_full()
+                .tooltip(crate::menu::action_tooltip("Projects", "projects::Toggle"))
+                .child(door)
+                .into_any_element(),
+        )
     }
 
     /// Whether the board shows and holds the keyboard: shown but left (a

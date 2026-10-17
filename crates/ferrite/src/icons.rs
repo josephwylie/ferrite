@@ -84,6 +84,7 @@ icons![
     // (end WP-D)
 
     // ---- WP-E icons (append names above the end line)
+    "board",
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
@@ -167,6 +168,8 @@ pub const IMAGE: &str = "icons/image.svg";
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
+/// The work board's door: three columns of cards, in the line family.
+pub const BOARD: &str = "icons/board.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)

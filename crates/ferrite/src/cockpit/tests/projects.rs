@@ -497,3 +497,42 @@ fn the_board_key_refocuses_a_shown_board(cx: &mut TestAppContext) {
     );
     cx.update(|window, _| assert!(elsewhere.is_focused(window)));
 }
+
+/// The bottom bar's board door sits after the bell, in the operator's
+/// window only, and a click does what the board key does.
+#[gpui::test]
+fn the_board_door_sits_after_the_bell_and_opens_the_board(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("board-door", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("projects-board-door").is_none(),
+        "no door where no board opens"
+    );
+    let board = focused_board(&view, Placement::Tab, cx);
+    view.update_in(cx, |view, window, cx| {
+        let composer = view.panes[view.focused()]
+            .composer
+            .read(cx)
+            .focus_handle(cx);
+        window.focus(&composer, cx);
+        view.projects.live = true;
+        cx.notify();
+    });
+    tick(cx);
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    let bell = cx.debug_bounds("notifications-bell").unwrap();
+    let door = cx.debug_bounds("projects-board-door").unwrap();
+    assert!(
+        bell.right() <= door.left() + px(0.5),
+        "bell, board: {bell:?} {door:?}"
+    );
+    assert!(door.top() >= bar.top() && door.bottom() <= bar.bottom());
+
+    cx.simulate_click(door.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        board_holds_the_keyboard(&board, cx),
+        "the click shows the board"
+    );
+}

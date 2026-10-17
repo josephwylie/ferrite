@@ -10806,6 +10806,7 @@ impl CockpitView {
                 .into_any_element(),
             self.bell_element(cx),
         ];
+        doors.extend(self.board_door(cx));
         // Settings keeps its gear only where it has no other visible door:
         // macOS lists it in the app menu (and ⌘,).
         if !cfg!(target_os = "macos") {
