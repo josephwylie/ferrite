@@ -169,7 +169,6 @@ impl Server {
             Method::WorktreeCreate(params) => self.create_worktree(params),
             Method::WorktreeRemove(params) => self.remove_worktree(&params.path),
             Method::MachineList(_) => self.machines(),
-            Method::NavFocus(params) => self.focus_nav(params),
             Method::EventsSubscribe(params) => {
                 self.api.subscribe(&self.engine, caller, id, params.threads);
                 return;

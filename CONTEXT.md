@@ -211,7 +211,7 @@ repository's on this machine, each task tagged with its repository and
 grouped by what it waits for: needs you, ready to approve, working, to do,
 done. Its data is herdr-projects' home folder, `~/.herdr-projects`;
 its command line is herdr-projects 1.0's program, shipped in the app as
-`ferrite-projects` once the board replaces 0.2's Projects view.
+`ferrite-projects`.
 _Avoid_: kanban, queue, project (a Ferrite Project is a registered
 repository root).
 

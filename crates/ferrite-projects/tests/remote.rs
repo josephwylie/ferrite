@@ -51,7 +51,7 @@ fn real_programs_the_door_answers_one_line_of_json_and_actions_run_where_the_tas
     let w = world_with(Opts { repo: true, settings: json!({ "review.when": "never", "board.machines": "exedev@vm-a, vm-b" }), ..Default::default() });
     let id = w.add("Remote task");
     let door = |args: &[&str]| -> serde_json::Value {
-        let o = std::process::Command::new(env!("CARGO_BIN_EXE_herdr-projects")).arg("remote").args(args).current_dir(&w.root).env("HERDR_SOCKET_PATH", "/nonexistent").env("HERDR_BIN_PATH", "/bin/false").output().unwrap();
+        let o = std::process::Command::new(env!("CARGO_BIN_EXE_ferrite-projects")).arg("remote").args(args).current_dir(&w.root).env("HERDR_SOCKET_PATH", "/nonexistent").env("HERDR_BIN_PATH", "/bin/false").output().unwrap(); // Ferrite: the binary is `ferrite-projects`
         let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
         assert_eq!(out.lines().count(), 1, "one line: {out}");
         serde_json::from_str(&out).unwrap()

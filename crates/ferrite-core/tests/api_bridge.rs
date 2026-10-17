@@ -15,7 +15,7 @@ fn ferrited(store: &Path, word: &str) -> Command {
         .env("FERRITE_STORE", store)
         // A terminal's launch: the login shell is not asked.
         .env("TERM", "dumb")
-        // Projects off: its ticker would act on this user's home.
+        // Projects off: its take-over and keeper would act on this user's home.
         .env("FERRITE_PROJECTS_BIN", "/nonexistent/ferrite-projects");
     command
 }

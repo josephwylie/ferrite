@@ -4,7 +4,6 @@ members = [
     "crates/ferrite-core",
     "crates/ferrite",
     "crates/ferrite-projects",
-    "crates/ferrite-projects-0-2",
     "crates/ferrite-projects-core",
     "crates/ferrite-projects-flow",
     "crates/ferrite-projects-board",

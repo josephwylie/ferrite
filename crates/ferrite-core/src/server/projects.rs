@@ -34,10 +34,6 @@
 //! from the Finder took from the login shell (`login_shell`), so `gh`,
 //! `git`, `claude` and `codex` resolve and gh's login is there; nothing
 //! of it is written down. The keeper raises no notification of its own.
-//!
-//! While the shipped program is still 0.2.34's, which has none of this,
-//! the Server runs 0.2's coordinators' migration and ticker instead
-//! (`legacy`), and tells no Session of the program.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -61,8 +57,6 @@ const TELL_TRIES: u32 = 150;
 /// keeper of the Server before it (three failed checks of the socket,
 /// about a second apart), which the first one found still beating.
 const SECOND_LOOK: Duration = Duration::from_secs(10);
-
-mod legacy;
 
 /// The shipped `ferrite-projects`: `FERRITE_PROJECTS_BIN`, else beside
 /// `exe`, the running executable — as `ferrite-projects` names itself.
@@ -120,9 +114,6 @@ pub(super) struct Shipped {
     program: PathBuf,
     /// This executable, links resolved.
     exe: PathBuf,
-    /// Still 0.2.34's (`legacy`), which runs no hooks and wants none of
-    /// herdr's environment.
-    legacy: bool,
 }
 
 /// The shipped program; none, logged, when it is not there.
@@ -138,46 +129,19 @@ pub(super) fn find() -> Option<Shipped> {
         crate::log!("server: Projects are off: no {}", program.display());
         return None;
     }
-    let legacy = is_0_2(&program);
-    Some(Shipped {
-        program,
-        exe,
-        legacy,
-    })
-}
-
-/// Whether `program` is still 0.2.34's, which says so to `--version`;
-/// 1.0's refuses that flag, having done nothing. Asked until the 0.2
-/// crate leaves (ADR 0031), which takes this and `legacy` with it.
-fn is_0_2(program: &Path) -> bool {
-    Command::new(program)
-        .arg("--version")
-        .env_remove("FERRITE_THREAD_ID")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .is_ok_and(|output| output.status.success() && says_0_2(&output.stdout))
-}
-
-fn says_0_2(version: &[u8]) -> bool {
-    version.starts_with(b"ferrite-projects 0.")
+    Some(Shipped { program, exe })
 }
 
 impl Shipped {
-    /// The program every Session is told of: 1.0's, whose hooks run.
-    pub(super) fn hooked(&self) -> Option<PathBuf> {
-        (!self.legacy).then(|| self.program.clone())
+    /// The program every Session is told of.
+    pub(super) fn program(&self) -> PathBuf {
+        self.program.clone()
     }
 
     /// Start Projects for the Store in `store`: the take-over, the startup
     /// hook and the toast in the background (`startup`), and the hooks
-    /// told each Thread event through the answer once that hook returned;
-    /// for 0.2.34's program, its ticker (`legacy`), which hears none.
-    pub(super) fn start(self, store: &Path) -> Option<Projects> {
-        if self.legacy {
-            legacy::start(self.program, &self.exe, store);
-            return None;
-        }
+    /// told each Thread event through the answer once that hook returned.
+    pub(super) fn start(self, store: &Path) -> Projects {
         let env = environment(store, &self.exe, &self.program);
         let projects = Projects::new(self.program, env);
         let (program, env) = (projects.program.clone(), projects.env.clone());
@@ -192,13 +156,13 @@ impl Shipped {
                     || {
                         let _ = started.set(Instant::now());
                     },
-                    |body| toast(&socket, TOOK_OVER, body),
+                    |body| toast(&socket, body),
                 )
             });
         if let Err(error) = spawned {
             crate::log!("server: Projects are off: {error}");
         }
-        Some(projects)
+        projects
     }
 }
 
@@ -241,16 +205,13 @@ fn tell(notes: &[String], mut show: impl FnMut(&str) -> bool, every: Duration, t
     crate::log!("server: Projects: no window showed their notes");
 }
 
-/// The take-over's toast's title.
-const TOOK_OVER: &str = "Projects took over the older version";
-
-/// A toast in every window through the Server's own API; true when a
-/// window was there to show it.
-fn toast(socket: &Path, title: &str, body: &str) -> bool {
+/// The take-over's toast in every window through the Server's own API;
+/// true when a window was there to show it.
+fn toast(socket: &Path, body: &str) -> bool {
     let request = Request {
         id: "projects".into(),
         method: Method::NotificationShow(NotificationShowParams {
-            title: title.into(),
+            title: "Projects took over the older version".into(),
             body: Some(body.into()),
             sound: crate::protocol::WireSound::None,
             important: false,
@@ -278,8 +239,7 @@ fn run(program: &Path, env: &[(&str, OsString)], args: &[&OsStr]) -> Vec<String>
     let said = args.join(OsStr::new(" "));
     let said = said.to_string_lossy();
     match output {
-        // What it says on success is for the user: the take-over's notes,
-        // or 0.2's migration's.
+        // What it says on success is for the user: the take-over's notes.
         Ok(output) if output.status.success() => {
             let notes: Vec<String> = String::from_utf8_lossy(&output.stdout)
                 .lines()
@@ -713,49 +673,6 @@ pub(super) mod tests {
                 .any(|call| call.starts_with("hook pane.closed ")),
             "{said:?}"
         );
-    }
-
-    #[test]
-    fn only_0_2_says_its_version() {
-        assert!(says_0_2(b"ferrite-projects 0.2.34\n"));
-        assert!(!says_0_2(b"herdr-projects 1.0.1 (/f/ferrite-projects)\n"));
-        assert!(!says_0_2(b""));
-    }
-
-    /// 0.2's program keeps 0.2's ticker; 1.0's, refusing `--version`, and
-    /// one that does not run get 1.0's hooks.
-    #[cfg(unix)]
-    #[test]
-    fn the_program_is_asked_whether_it_is_still_0_2() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = scratch("version");
-        let program = |name: &str, body: &str| {
-            let path = dir.join(name);
-            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            path
-        };
-        assert!(is_0_2(&program("old", "echo 'ferrite-projects 0.2.34'")));
-        assert!(!is_0_2(&program(
-            "new",
-            "echo 'herdr-projects does not know --version' >&2; exit 1"
-        )));
-        assert!(!is_0_2(&dir.join("missing")));
-    }
-
-    /// 0.2's program is not 1.0's: no Session is told of it.
-    #[test]
-    fn only_1_0s_program_is_told_to_every_session() {
-        let shipped = |legacy| Shipped {
-            program: "/f/ferrite-projects".into(),
-            exe: "/f/ferrite".into(),
-            legacy,
-        };
-        assert_eq!(
-            shipped(false).hooked(),
-            Some(PathBuf::from("/f/ferrite-projects"))
-        );
-        assert_eq!(shipped(true).hooked(), None);
     }
 
     #[test]

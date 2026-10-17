@@ -9,7 +9,7 @@ use crate::float::{self, FloatPlace};
 use crate::palette::{
     Act, Command as PaletteCommand, Row as PaletteRow, Section as PaletteSection,
 };
-use crate::projects::{self, Command, Place};
+use crate::projects::{self, Command};
 use crate::sidebar::{self, Sidebar};
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::WindowExt as _;
@@ -18,9 +18,9 @@ use gpui::{FocusHandle, Subscription};
 /// What the cockpit holds for Projects.
 #[derive(Default)]
 pub(super) struct ProjectsState {
-    /// Where the projects live; `None` in the test and demo constructors,
-    /// so no suite reads the operator's own (nor opens the board on them).
-    pub place: Option<Place>,
+    /// Whether this is the operator's window: false in the test and demo
+    /// constructors, so no suite opens the board on the operator's own.
+    pub live: bool,
     /// What herdr's sidebar would show of the board: the nav's task rows
     /// and the bottom bar's tally.
     pub sidebar: Sidebar,
@@ -43,9 +43,9 @@ pub(super) struct BoardSlot {
 }
 
 impl ProjectsState {
-    pub(super) fn new(place: Option<Place>) -> Self {
+    pub(super) fn new(live: bool) -> Self {
         Self {
-            place,
+            live,
             ..Default::default()
         }
     }
@@ -160,7 +160,7 @@ impl CockpitView {
     /// The board, opened where `board.open` says — or a tab's, shown again
     /// as you left it.
     fn show_board(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.projects.place.is_none() {
+        if !self.projects.live {
             return;
         }
         let back = window.focused(cx);
@@ -323,23 +323,12 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(place) = self.projects.place.clone() else {
+        if !self.projects.live {
             return;
-        };
+        }
         match command {
             Command::Board => self.toggle_projects(window, cx),
-            Command::Configure => self.projects_work(move || projects::configure(&place), cx),
-            Command::Doctor => self.projects_work(
-                move || {
-                    let (healthy, _) = place.run(&["doctor"]);
-                    (
-                        projects::DOCTOR_TITLE.into(),
-                        projects::doctor_body(healthy).into(),
-                        !healthy,
-                    )
-                },
-                cx,
-            ),
+            Command::Doctor => self.projects_work(projects::doctor, cx),
         }
         cx.notify();
     }
@@ -352,9 +341,9 @@ impl CockpitView {
         machines.machine(index).map(|machine| machine.name.clone())
     }
 
-    /// The palette's Projects rows, while there is a place to read.
+    /// The palette's Projects rows, in the operator's window.
     pub(super) fn palette_projects_rows(&self) -> Vec<PaletteRow> {
-        if self.projects.place.is_none() {
+        if !self.projects.live {
             return Vec::new();
         }
         Command::ALL

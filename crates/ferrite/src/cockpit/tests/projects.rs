@@ -437,10 +437,7 @@ fn the_board_key_refocuses_a_shown_board(cx: &mut TestAppContext) {
     assert!(!board_holds_the_keyboard(&board, cx));
 
     view.update_in(cx, |view, window, cx| {
-        view.projects.place = Some(crate::projects::Place {
-            root: "/nonexistent/projects".into(),
-            config_dir: "/nonexistent/projects-config".into(),
-        });
+        view.projects.live = true;
         view.toggle_projects(window, cx);
     });
     assert!(view.read_with(cx, |view, _| view.projects.board_shown()));

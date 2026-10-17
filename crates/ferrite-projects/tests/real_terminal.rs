@@ -15,7 +15,7 @@ fn start(cwd: &std::path::Path, cols: u16, rows: u16) -> Term {
     assert_eq!(unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
     winsize(m, cols, rows);
     let slave = unsafe { OwnedFd::from_raw_fd(s) };
-    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_herdr-projects"));
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ferrite-projects")); // Ferrite: the binary is `ferrite-projects`
     c.current_dir(cwd).env("TERM", "xterm-256color").env("COLORTERM", "truecolor").env("LANG", "C.UTF-8").env_remove("NO_COLOR")
         .env("HERDR_SOCKET_PATH", "/nonexistent").env("HERDR_BIN_PATH", "/bin/false")
         .stdin(slave.try_clone().unwrap()).stdout(slave.try_clone().unwrap()).stderr(slave);

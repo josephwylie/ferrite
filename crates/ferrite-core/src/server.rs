@@ -165,7 +165,7 @@ pub fn run(options: Options) -> i32 {
     let shipped = projects::find();
     let spawner = Spawn {
         api: api.is_some().then_some(api_address),
-        projects: shipped.as_ref().and_then(projects::Shipped::hooked),
+        projects: shipped.as_ref().map(projects::Shipped::program),
         ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
     };
     let mut engine = match Engine::try_new(store, Box::new(spawner)) {
@@ -199,7 +199,7 @@ pub fn run(options: Options) -> i32 {
         server.info.version,
         server.engine.boot_id()
     );
-    server.projects = shipped.and_then(|shipped| shipped.start(&options.store));
+    server.projects = shipped.map(|shipped| shipped.start(&options.store));
     server.serve(hear)
 }
 
@@ -332,9 +332,6 @@ struct Server {
     api: Api,
     /// The operator's Provider, for a `thread.start` that names none.
     default_provider: Provider,
-    /// The Projects project the nav shows alone (`nav.focus`), told to
-    /// every window that arrives later too, as Herdr's view holds.
-    nav_focus: Option<String>,
     /// How this Server starts its successor (`relaunch`; a test's own).
     relaunch: Box<Relaunch>,
     /// The self-hosted forges a review's pull request is read from.
@@ -371,7 +368,6 @@ impl Server {
             restarting: None,
             api: Api::default(),
             default_provider: Provider::Claude,
-            nav_focus: None,
             relaunch: Box::new(relaunch),
             forge: Default::default(),
             projects: None,
@@ -492,14 +488,6 @@ impl Server {
                     self.list_parked();
                     let snapshot = self.engine.snapshot();
                     self.send(id, ServerMessage::Snapshot(snapshot));
-                    if let Some(project) = self.nav_focus.clone() {
-                        self.send(
-                            id,
-                            ServerMessage::NavFocus {
-                                project: Some(project),
-                            },
-                        );
-                    }
                 }
             }
             return;

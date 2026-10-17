@@ -22,11 +22,10 @@
 # ~320 MB unpacked) is fetched once into $CEF_PATH (default
 # ~/.local/share/cef). FERRITE_NO_CEF=1 builds without visuals.
 #
-# Projects (ADR 0030): `ferrite-projects` ships beside the app's binary, in
-# `Contents/MacOS`, where the Server and `ferrite-projects` itself find it
-# (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is. It is 0.2's
-# until the board replaces 0.2's Projects view; herdr-projects 1.0's program
-# takes its place in that merge (ADR 0031).
+# Projects (ADR 0031): herdr-projects 1.0's program (package `herdr-projects`)
+# ships as `ferrite-projects` beside the app's binary, in `Contents/MacOS`,
+# where the Server and the board find it and hand it to agents and hooks
+# (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is.
 #
 #   --bundle-only    build the .app in the target dir, don't install it
 #   --dmg <path>     ...and package it as a disk image
@@ -82,7 +81,7 @@ if [ -z "${FERRITE_NO_CEF:-}" ]; then
 fi
 
 cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite "${FEATURES[@]+"${FEATURES[@]}"}"
-cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite-projects
+cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p herdr-projects --bin ferrite-projects
 
 metadata="$(cargo metadata --no-deps --format-version 1 --manifest-path "$ROOT/Cargo.toml")"
 TARGET="$(printf '%s' "$metadata" | /usr/bin/python3 -c \

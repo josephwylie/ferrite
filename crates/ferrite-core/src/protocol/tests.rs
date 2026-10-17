@@ -1429,16 +1429,6 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
-            "nav_focus",
-            Sample::Server(ServerMessage::NavFocus {
-                project: Some("billing".into()),
-            }),
-        ),
-        (
-            "nav_focus_clear",
-            Sample::Server(ServerMessage::NavFocus { project: None }),
-        ),
-        (
             "command_focused",
             command(
                 40,

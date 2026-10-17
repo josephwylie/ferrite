@@ -430,7 +430,6 @@ pub(crate) fn capture(output: String) {
         whats_new: None,
         unreadable: None,
         keys_refused: Vec::new(),
-        projects: None,
         board: false,
     };
     let window = cx

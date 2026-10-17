@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use super::super::Server;
-use crate::api::schema::{NavFocusParams, ProjectOpenParams, WorktreeCreateParams};
+use crate::api::schema::{ProjectOpenParams, WorktreeCreateParams};
 use crate::api::{self, ApiError, Code};
 use crate::protocol::{Done, Op, ProjectAction, ServerMessage};
 use crate::settings::Settings;
@@ -207,18 +207,5 @@ impl Server {
             })
             .collect();
         Ok(json!({ "machines": machines }))
-    }
-
-    /// Every window's nav shows only one Projects project's block, or all
-    /// again, until told otherwise: a window that arrives later is told on
-    /// its welcome. The slug is Projects' own; the Server passes it on
-    /// unread.
-    pub(super) fn focus_nav(&mut self, params: NavFocusParams) -> Result<Value, ApiError> {
-        self.nav_focus = params.project.clone();
-        let windows = self.windows();
-        self.say(ServerMessage::NavFocus {
-            project: params.project.clone(),
-        });
-        Ok(json!({ "project": params.project, "windows": windows }))
     }
 }

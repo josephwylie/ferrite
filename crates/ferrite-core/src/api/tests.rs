@@ -188,7 +188,6 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "worktree.create",
             "worktree.remove",
             "machine.list",
-            "nav.focus",
             "events.subscribe",
             "notification.show",
             "project.focus",
@@ -353,9 +352,6 @@ fn samples() -> Vec<Request> {
             path: PathBuf::from("/work/.worktrees/app/hp-billing-t-0001"),
         })),
         request(Method::MachineList(Empty {})),
-        request(Method::NavFocus(NavFocusParams {
-            project: Some("billing".into()),
-        })),
         request(Method::EventsSubscribe(EventsSubscribeParams {
             threads: vec![thread(), ThreadId::new(14)],
         })),
@@ -448,10 +444,6 @@ fn later_samples() -> Vec<(&'static str, Request)> {
                 sound: WireSound::Request,
                 important: true,
             })),
-        ),
-        (
-            "nav_focus_clear",
-            request(Method::NavFocus(NavFocusParams { project: None })),
         ),
         (
             "thread_start_launch",
@@ -1052,7 +1044,7 @@ fn the_version_is_the_name_then_semver() {
 }
 
 /// What herdr-projects asks with: a Thread's start, its prompt confirmed
-/// working or blocked, a Project by id and label, a cleared nav focus.
+/// working or blocked, a Project by id and label.
 #[test]
 fn herdr_projects_calls_read_as_their_parameters() {
     match parse(
@@ -1104,10 +1096,6 @@ fn herdr_projects_calls_read_as_their_parameters() {
             project: "3".into(),
             label: "billing".into(),
         }))
-    );
-    assert_eq!(
-        parse("nav.focus", &[]),
-        Ok(Method::NavFocus(NavFocusParams { project: None }))
     );
     match parse(
         "thread.start",

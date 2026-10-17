@@ -128,8 +128,6 @@ operations! {
         "Remove a clean worktree, parking the Threads in it; its branch stays. Never forced.";
     MachineList(Empty) => "machine.list", [],
         "The saved machines another Server is asked on (--machine).";
-    NavFocus(NavFocusParams) => "nav.focus", [],
-        "Show only one Projects project's block in every window's nav; without one, all.";
     EventsSubscribe(EventsSubscribeParams) => "events.subscribe", [],
         "What the Threads are now, then every change as it happens.";
     NotificationShow(NotificationShowParams) => "notification.show", ["title"],
@@ -339,14 +337,6 @@ pub struct ProjectOpenParams {
 pub struct ProjectRenameParams {
     pub project: String,
     pub label: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct NavFocusParams {
-    /// The slug of the Projects project (ADR 0030) whose block the nav
-    /// shows alone, coordinator first; every block when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

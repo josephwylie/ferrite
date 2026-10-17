@@ -759,13 +759,6 @@ pub enum ServerMessage {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         important: bool,
     },
-    /// An API caller asked every window's nav to show only this Projects
-    /// project's block, by its slug; none shows them all again
-    /// (`nav.focus`, ADR 0030).
-    NavFocus {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        project: Option<String>,
-    },
     /// The Server is about to restart: reconnect.
     Restarting {
         when: When,

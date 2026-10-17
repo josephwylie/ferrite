@@ -380,9 +380,6 @@ impl Cockpit {
                 sound: sound.sound(),
                 important: *important,
             }),
-            ServerMessage::NavFocus { project } => {
-                self.asked.push(Asked::NavFocus(project.clone()))
-            }
             _ => {}
         }
         self.shared.receive(&message);
@@ -2034,9 +2031,6 @@ pub enum Asked {
         sound: Option<crate::sound::Sound>,
         important: bool,
     },
-    /// Show only this Projects project's block in the nav, by its slug,
-    /// its coordinator first; none shows them all (`nav.focus`).
-    NavFocus(Option<String>),
 }
 
 /// What `Cockpit::close` can refuse: the park that ends a Solo Thread's
