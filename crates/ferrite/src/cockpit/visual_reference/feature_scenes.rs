@@ -180,7 +180,8 @@ fn board_sidebar(head: ThreadId, workers: &[ThreadId]) -> Sidebar {
     let threads = (0..rows.len())
         .map(|n| (format!("p{n}"), workers[n]))
         .collect();
-    let mut sidebar = sidebar::of(&rows, &threads, "here", now);
+    let theme = crate::board::render::ferrite_theme(false);
+    let mut sidebar = sidebar::of(&rows, &threads, "here", now, &theme);
     let coordinator = coordinator_entry(
         &coordinator_stands("working", ""),
         0,
@@ -188,7 +189,7 @@ fn board_sidebar(head: ThreadId, workers: &[ThreadId]) -> Sidebar {
     );
     sidebar
         .agents
-        .insert(head, sidebar::coordinator_told(coordinator));
+        .insert(head, sidebar::coordinator_told(coordinator, &theme));
     sidebar
 }
 

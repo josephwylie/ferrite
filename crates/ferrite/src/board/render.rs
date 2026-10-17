@@ -34,6 +34,13 @@ pub(crate) const FERRITE: &str = "ferrite";
 /// between `TEXT_MUTED` and `TEXT`.
 const SOFT: u32 = 0xb6b6bb;
 
+/// The theme `board.theme` is set to. Reads the settings file: off the UI
+/// thread.
+pub(crate) fn theme_set() -> Theme {
+    let want = sw_board::store::settings::lookup::setting("board.theme", None);
+    theme_named(want.as_str().unwrap_or("herdr"))
+}
+
 /// The theme `board.theme` names: `herdr` (or `auto`, `dark`) is Ferrite's.
 pub(crate) fn theme_named(want: &str) -> Theme {
     let plain = theme::no_color();
@@ -119,23 +126,29 @@ pub(crate) struct Run {
     pub under: bool,
 }
 
+/// A named ink's colour in `theme`, as the board paints a piece of it:
+/// `Plain` is the text's, and with `NO_COLOR` every ink is. The one place
+/// board inks become colours, the nav's status inks too.
+pub(crate) fn ink(theme: &Theme, ink: Ink) -> u32 {
+    let text = theme.ink(Ink::Text).drawn().unwrap_or(TEXT);
+    if theme.plain || ink == Ink::Plain {
+        return text;
+    }
+    theme.ink(ink).drawn().unwrap_or(text)
+}
+
 /// A piece's colours, as `draw::style_of` works them out: its ink (made
 /// quieter, or dim), its background ink, then reverse.
 fn colours(theme: &Theme, piece: &Piece) -> (u32, Option<u32>) {
-    let text = theme.ink(Ink::Text).drawn().unwrap_or(TEXT);
+    let text = ink(theme, Ink::Text);
     let ground = theme.ground.drawn().unwrap_or(PLANE);
     let (mut fg, mut bg) = (text, None);
     if !theme.plain {
-        let ink = if piece.quiet {
-            theme.quiet(piece.c)
+        fg = if piece.quiet {
+            theme.quiet(piece.c).drawn().unwrap_or(text)
         } else {
-            theme.ink(if piece.c == Ink::Plain {
-                Ink::Text
-            } else {
-                piece.c
-            })
+            ink(theme, piece.c)
         };
-        fg = ink.drawn().unwrap_or(text);
         bg = piece.bg.and_then(|bg| theme.ink(bg).drawn());
         if piece.dim {
             fg = greys::mix(fg, ground, 0.5);

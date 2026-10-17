@@ -346,9 +346,10 @@ the heading whose placed Threads all share that Space, as the adapter
 lists each agent's (a Space the board made, a linked worktree, a
 Project's own), its branch still at the right and its numbers under it;
 while the task waits for a pick the name stays and the numbers go, as
-upstream leaves them. Status inks are Ferrite's theme equivalents behind
-one function (`sidebar::ink`) until the board's GPUI drawing lands, when
-that function takes the board theme's inks. The nav reads the
+upstream leaves them. Status inks are the board theme's (`board.theme`,
+read once per sidebar read), turned into colours by the one function the
+board paints with (`board::render::ink`), so a status colours alike in
+the nav and on the board, `NO_COLOR` included. The nav reads the
 board whether or not 0.2's projects root resolves. Nothing is reported to
 herdr, so `report-metadata` is answered by no call; a task archived or
 removed while its Thread lives simply has no entry. A window on another
