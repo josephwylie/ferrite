@@ -1,7 +1,8 @@
 //! A Thread's launch arguments (`thread.start --args`, ADR 0030) are
 //! written for Codex's terminal UI, as Herdr launches it: a profile's
 //! `--model gpt-5.5` or `-c model_reasoning_effort="high"`, the safety
-//! settings' `--dangerously-bypass-approvals-and-sandbox`. Ferrite drives
+//! settings' `--dangerously-bypass-approvals-and-sandbox`, Projects'
+//! `--no-daemon`. Ferrite drives
 //! `codex app-server`, which refuses the UI's flags. Each one the
 //! app-server has a setting for becomes that setting; the rest (`-c`,
 //! `--enable`, `--disable`) go to `codex app-server` as they are.
@@ -28,6 +29,10 @@ pub fn from_tui_args(args: &[String]) -> Launch {
             "-m" | "--model" => launch.model = value(),
             "-a" | "--ask-for-approval" => launch.approval_policy = value(),
             "-s" | "--sandbox" => launch.sandbox = value(),
+            // Keeps the UI off a shared background app-server; Ferrite's
+            // is the Thread's own, so there is none to keep off, and the
+            // app-server refuses the flag.
+            "--no-daemon" => {}
             "--dangerously-bypass-approvals-and-sandbox" | "--yolo" => {
                 launch.approval_policy = Some("never".into());
                 launch.sandbox = Some("danger-full-access".into());
@@ -123,5 +128,17 @@ mod tests {
             r#"notify=["/d/bin/herdr-projects","turn-ended","--id","app/1","--role","agent","--token","t"]"#,
         ]);
         assert_eq!(from_tui_args(&args).args, args);
+    }
+
+    #[test]
+    fn projects_no_daemon_flag_is_dropped() {
+        let launch = from_tui_args(&strings(&[
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--no-daemon",
+            "-m",
+            "gpt-6-astra",
+        ]));
+        assert!(launch.args.is_empty(), "{launch:?}");
+        assert_eq!(launch.model.as_deref(), Some("gpt-6-astra"));
     }
 }
