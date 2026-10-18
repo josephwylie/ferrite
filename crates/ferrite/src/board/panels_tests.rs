@@ -165,7 +165,10 @@ fn shown(cx: &mut TestAppContext, state: State, columns: usize, rows: usize) -> 
 impl Shown<'_> {
     fn fit(&mut self, columns: usize, rows: usize) {
         self.view.update(self.cx, |view, cx| {
-            view.fit((columns as f32 + 0.5) * CH, (rows as f32 + 0.5) * ROW);
+            view.fit(
+                (columns as f32 + 0.5) * CH,
+                (rows as f32 + 0.5) * ROW + super::controls::HEIGHT,
+            );
             cx.notify();
         });
         self.cx.run_until_parked();
@@ -217,7 +220,7 @@ impl Shown<'_> {
     fn cell(&mut self, x: usize, y: usize) -> Point<Pixels> {
         let origin = self
             .cx
-            .debug_bounds("projects-board")
+            .debug_bounds("projects-board-rows")
             .expect("the board is drawn")
             .origin;
         gpui::point(

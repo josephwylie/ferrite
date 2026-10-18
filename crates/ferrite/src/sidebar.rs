@@ -11,7 +11,7 @@
 //! placed); its agent is an open Thread, whose id the adapter gives as the
 //! agent's terminal.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ferrite_core::ThreadId;
 use sw_board::board::theme::Theme;
@@ -35,6 +35,8 @@ pub(crate) const REFRESH: std::time::Duration = std::time::Duration::from_secs(1
 /// What the nav and the bottom bar show of the board.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Sidebar {
+    /// Board-owned Threads, including parked agents and the Coordinator.
+    pub owned: HashSet<ThreadId>,
     /// Each live agent's entry, by its Thread: a task's agent, its reviewer
     /// while a review runs, the Coordinator.
     pub agents: HashMap<ThreadId, Told>,
@@ -98,7 +100,15 @@ pub(crate) fn read() -> Sidebar {
     let now = sw_board::clock::now();
     let mut sidebar = of(&rows, &threads_of(&session), &here, now, &theme);
     sidebar.places = places_of(&session);
+    // Ownership comes from placement, never an internal title prefix. It
+    // survives an agent finishing, parking, or being renamed.
+    sidebar.owned = sw_board::herdr::ferrite::owned_threads()
+        .into_iter()
+        .map(ThreadId::new)
+        .collect();
+    sidebar.owned.extend(sidebar.agents.keys().copied());
     if let Some((thread, told)) = coordinator(&here, &theme) {
+        sidebar.owned.insert(thread);
         sidebar.agents.insert(thread, told);
     }
     sidebar

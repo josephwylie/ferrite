@@ -36,18 +36,28 @@ pub fn autos_shown(s: &State, f: &str) -> Vec<Obj> {
     let mut all: Vec<Obj> = if s.scope.is_empty() || s.scope == "*" { s.data.autos.iter().map(|a| { let mut a = a.clone(); let row = format!("auto:{}", a.s("id")); a.put("row", row); a.put("host", ""); a }).collect() } else { vec![] };
     for m in super::remotes::in_view(s) { all.extend(m.autos.iter().cloned()); }
     all.sort_by_key(|a| super::remotes::place(s, a.s("host")));
+    all.retain(|a| in_project(s, a.at("rowNow").as_object().unwrap_or(a)));
     if f.is_empty() { return all; }
     all.into_iter().filter(|a| { let r = a.at("rowNow"); format!("automation {} {} {} {} {}", r.s("name"), r.s("trigger"), r.s("repo"), r.s("state"), a.s("host")).to_lowercase().contains(f) }).collect()
 }
+/// Project scope uses repository roots, never a substring of task titles.
+fn in_project(s: &State, r: &Obj) -> bool {
+    let Some(root) = &s.project_root else { return true };
+    if r.b("host") { return false; }
+    let task_root = if r.b("root") { r.s("root") } else { s.data.roots.get(r.s("repo")).map(String::as_str).unwrap_or("") };
+    std::path::Path::new(task_root) == std::path::Path::new(root)
+}
+
 /// What the list is made of, from the items: call after anything changed what shows (a load, a key, a filter).
 pub fn relist(s: &mut State) {
     super::remotes::reorder(s);
     let mine = &s.data.items;
     s.items = if s.scope.is_empty() { mine.clone() } else if s.scope == "*" { mine.iter().cloned().chain(super::remotes::others(s).into_iter().flat_map(|m| m.items.iter().cloned())).collect() } else { s.remotes.get(&s.scope).map(|m| m.items.clone()).unwrap_or_default() };
+    s.items = s.items.iter().filter(|r| in_project(s, r)).cloned().collect();
     super::pending::overlay(s);
     s.jobs = if s.archive_view { vec![] } else { s.data.jobs.clone() };
     let f = filter_now(s);
-    let layout = serde_json::to_string(&json!([s.scope, s.by_repo, s.all_done, s.archive_view, f])).unwrap_or_default();
+    let layout = serde_json::to_string(&json!([s.scope, s.project_root, s.by_repo, s.all_done, s.archive_view, f])).unwrap_or_default();
     // The task the selection is held on (or that the panel shows whole, in the same list) keeps its row whatever it has
     // become meanwhile.
     let held = |r: &Obj| r.s("id") == s.sel && (r.s("id") == s.stick || (s.full && layout == s.selection_layout));

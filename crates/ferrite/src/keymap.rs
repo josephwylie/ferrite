@@ -68,16 +68,16 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
     let with_edge = |key: &str| format!("{edge}-{key}");
     let with_primary = |key: &str| format!("{primary}-{key}");
     let mut table = vec![
-        ("backspace".into(), "composer::Backspace", None),
-        ("delete".into(), "composer::Delete", None),
-        ("left".into(), "composer::Left", None),
-        ("right".into(), "composer::Right", None),
-        ("home".into(), "composer::Home", None),
-        ("end".into(), "composer::End", None),
-        (with_primary("v"), "composer::Paste", None),
-        // ⌘V with the keyboard anywhere but a Composer still pastes into
-        // the focused Pane's Composer, and moves the keyboard there.
-        (with_primary("v"), "cockpit::Paste", None),
+        ("backspace".into(), "composer::Backspace", Some("Composer")),
+        ("delete".into(), "composer::Delete", Some("Composer")),
+        ("left".into(), "composer::Left", Some("Composer")),
+        ("right".into(), "composer::Right", Some("Composer")),
+        ("home".into(), "composer::Home", Some("Composer")),
+        ("end".into(), "composer::End", Some("Composer")),
+        (with_primary("v"), "composer::Paste", Some("Composer")),
+        // Outside a text field, paste into the focused Pane's Composer.
+        // Kit inputs (including question answers) keep their native paste.
+        (with_primary("v"), "cockpit::Paste", Some(NO_TEXT_FIELD)),
         // Word-wise editing, the basic text-field grammar: one word at a
         // time backwards and forwards, the line halves, word steps, and
         // shift-selection — all scoped to the Composer so nothing else

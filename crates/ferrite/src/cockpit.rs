@@ -5116,9 +5116,6 @@ impl CockpitView {
         about.splice(1..1, self.ferrite_update_rows(window, cx));
         let mut about = vec![prefs::Group::new(None).rows(about)];
         let server = self.server_rows(window, cx);
-        if !server.is_empty() {
-            about.push(prefs::Group::new(Some("Server")).rows(server));
-        }
         about.extend(machines);
         about.push(prefs::Group::new(Some("Provider CLIs")).rows(clis));
         let pages = vec![
@@ -5144,6 +5141,10 @@ impl CockpitView {
                     prefs::Group::new(Some("By provider")).rows(provider_sounds),
                     prefs::Group::new(Some("System")).rows(system),
                 ],
+            ),
+            prefs::page(
+                prefs::PageKey::Server,
+                vec![prefs::Group::new(None).rows(server)],
             ),
             prefs::page(prefs::PageKey::About, about),
         ];
@@ -8820,6 +8821,9 @@ impl CockpitView {
         threads.sort();
         let mut sections = nav::SmartSections::default();
         for thread in threads {
+            if !self.admitted(thread) {
+                continue;
+            }
             let row = self.thread_row(thread);
             match row.status.attention() {
                 Attention::Working => sections.working.push(row),
@@ -8836,6 +8840,9 @@ impl CockpitView {
     /// `All projects` alone, rather than being quietly filed under someone
     /// else's Project.
     fn admitted(&self, thread: ThreadId) -> bool {
+        if self.projects.sidebar.owned.contains(&thread) {
+            return false;
+        }
         let Some(wanted) = self.nav_filter else {
             return true;
         };
@@ -14012,6 +14019,7 @@ mod tests {
     mod find;
     mod floats_parity;
     mod frame_parity;
+    mod interaction_regressions;
     mod layout_polish;
     mod leaving;
     mod loops_overlay;
@@ -16469,7 +16477,8 @@ mod tests {
             .unwrap();
         cx.simulate_click(input.center(), gpui::Modifiers::none());
         cx.run_until_parked();
-        cx.simulate_input("neither, wait 2 days");
+        cx.simulate_input("neither, wait 2 dayss");
+        cx.simulate_keystrokes("backspace");
         cx.run_until_parked();
         let submit = cx
             .debug_bounds(Box::leak(
@@ -21164,6 +21173,8 @@ mod tests {
     /// launch binds.
     fn bind_production_keys(cx: &mut TestAppContext) {
         cx.update(|cx| {
+            // Launch initializes the toolkit before binding Ferrite’s keys.
+            crate::theme::init_components(cx);
             let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
             let bindings = crate::load_bindings(table, cx);
             cx.bind_keys(bindings);
@@ -23836,11 +23847,11 @@ mod tests {
         assert_eq!(page(cx), prefs::PageKey::About, "held at the foot");
         cx.simulate_keystrokes("up");
         tick(cx);
-        assert_eq!(page(cx), prefs::PageKey::Notifications);
-        cx.simulate_keystrokes("up");
+        assert_eq!(page(cx), prefs::PageKey::Server);
+        cx.simulate_keystrokes("up up");
         tick(cx);
         assert_eq!(page(cx), prefs::PageKey::Behaviour);
-        cx.simulate_keystrokes("down down");
+        cx.simulate_keystrokes("down down down");
         tick(cx);
 
         let threads = cx

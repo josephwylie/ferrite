@@ -155,15 +155,17 @@ pub enum PageKey {
     Permissions,
     Behaviour,
     Notifications,
+    Server,
     About,
 }
 
 impl PageKey {
-    pub const ALL: [PageKey; 5] = [
+    pub const ALL: [PageKey; 6] = [
         PageKey::NewThreads,
         PageKey::Permissions,
         PageKey::Behaviour,
         PageKey::Notifications,
+        PageKey::Server,
         PageKey::About,
     ];
 
@@ -173,6 +175,7 @@ impl PageKey {
             PageKey::Permissions => "Permissions",
             PageKey::Behaviour => "Behaviour",
             PageKey::Notifications => "Notifications",
+            PageKey::Server => "Server",
             PageKey::About => "About",
         }
     }
@@ -184,6 +187,7 @@ impl PageKey {
             PageKey::Permissions => "settings-page-permissions",
             PageKey::Behaviour => "settings-page-behaviour",
             PageKey::Notifications => "settings-page-notifications",
+            PageKey::Server => "settings-page-server",
             PageKey::About => "settings-page-about",
         }
     }
@@ -395,6 +399,7 @@ pub fn body(
                     PageKey::Permissions,
                     PageKey::Behaviour,
                     PageKey::Notifications,
+                    PageKey::Server,
                 ]
                 .map(|key| nav_row(key, cx)),
             ),
@@ -1222,10 +1227,10 @@ mod tests {
     fn pages_step_in_sidebar_order_and_hold_at_the_ends() {
         assert_eq!(PageKey::NewThreads.step(1), PageKey::Permissions);
         assert_eq!(PageKey::Behaviour.step(1), PageKey::Notifications);
-        assert_eq!(PageKey::Notifications.step(1), PageKey::About);
+        assert_eq!(PageKey::Notifications.step(1), PageKey::Server);
         assert_eq!(PageKey::About.step(1), PageKey::About);
         assert_eq!(PageKey::NewThreads.step(-1), PageKey::NewThreads);
-        assert_eq!(PageKey::About.step(-4), PageKey::NewThreads);
+        assert_eq!(PageKey::About.step(-5), PageKey::NewThreads);
         assert_eq!(PageKey::default(), PageKey::NewThreads);
     }
 

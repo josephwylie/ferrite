@@ -51,6 +51,8 @@ pub struct Space {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Book {
     next: u64,
+    #[serde(default)]
+    owned_threads: std::collections::BTreeSet<u64>,
     panes: BTreeMap<String, Pane>,
     #[serde(default)]
     spaces: BTreeMap<String, Space>,
@@ -60,6 +62,11 @@ struct Book {
 pub struct Panes { pub path: PathBuf }
 
 impl Panes {
+    pub fn owned_threads(&self) -> Res<Vec<u64>> {
+        let mut book = self.read()?;
+        book.owned_threads.extend(book.panes.values().filter_map(|p| p.thread));
+        Ok(book.owned_threads.into_iter().collect())
+    }
     pub fn all(&self) -> Res<BTreeMap<String, Pane>> { Ok(self.read()?.panes) }
     pub fn spaces(&self) -> Res<BTreeMap<String, Space>> { Ok(self.read()?.spaces) }
     /// A new pane; its id.
@@ -102,7 +109,9 @@ impl Panes {
         // Held until `lock` is dropped, at the end of this change.
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 { return Err(std::io::Error::last_os_error().into()); }
         let mut book = self.read()?;
+        book.owned_threads.extend(book.panes.values().filter_map(|p| p.thread));
         let out = f(&mut book);
+        book.owned_threads.extend(book.panes.values().filter_map(|p| p.thread));
         crate::store::files::write_atomic(&self.path, &serde_json::to_vec(&book)?)?;
         Ok(out)
     }

@@ -2846,3 +2846,27 @@ fn projects_hook_hears_a_removed_worktree() {
         "no worktree.removed for {tree}: {calls:#?}"
     );
 }
+
+#[test]
+fn manual_install_with_the_same_version_is_detected() {
+    use std::time::{Duration, SystemTime};
+    let dir = std::env::temp_dir().join(format!("ferrite-build-age-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let executable = dir.join("ferrite");
+    let file = std::fs::File::create(&executable).unwrap();
+    let boot = SystemTime::now() - Duration::from_secs(60);
+    let server = ServerInfo {
+        version: "0.4.0".into(),
+        executable: executable.clone(),
+    };
+    file.set_modified(boot - Duration::from_secs(1)).unwrap();
+    assert!(!executable_replaced_since(&executable, &server, boot));
+    file.set_modified(boot + Duration::from_secs(1)).unwrap();
+    assert!(executable_replaced_since(&executable, &server, boot));
+    assert!(!executable_replaced_since(
+        &dir.join("another"),
+        &server,
+        boot
+    ));
+    std::fs::remove_dir_all(dir).unwrap();
+}

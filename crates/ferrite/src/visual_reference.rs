@@ -412,6 +412,8 @@ const STATES: &[(&str, &[&str])] = &[
     ("settings-behaviour", &["app"]),
     ("settings-notifications", &["app"]),
     ("settings-about", &["app"]),
+    ("settings-server", &["app"]),
+    ("large-pinned-prompt", &["app", "narrow"]),
     ("settings-search", &["app"]),
     // (end WP-E)
 
@@ -711,6 +713,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         | "settings-permissions"
         | "settings-behaviour"
         | "settings-notifications"
+        | "settings-server"
         | "settings-about" => {
             let scene = conversation(label);
             let page = match state {
@@ -718,6 +721,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 "settings-behaviour" => crate::prefs::PageKey::Behaviour,
                 "settings-notifications" => crate::prefs::PageKey::Notifications,
                 "settings-about" => crate::prefs::PageKey::About,
+                "settings-server" => crate::prefs::PageKey::Server,
                 _ => crate::prefs::PageKey::NewThreads,
             };
             let setup: Setup = Box::new(move |view, _, cx| {
@@ -755,6 +759,32 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let mut scene = Scene::new("empty-transcript");
             let ferrite = scene.project("ferrite");
             let _ = scene.open(Provider::Claude, &ferrite, "");
+            (scene, none)
+        }
+        "large-pinned-prompt" => {
+            let mut scene = Scene::new("large-pinned-prompt");
+            let root = scene.project("ferrite");
+            let (thread, feed) = scene.open(
+                Provider::Claude,
+                &root,
+                "A long prompt stays out of the way",
+            );
+            scene.core.send(
+                thread,
+                (0..60)
+                    .map(|n| format!("Requirement {n}: preserve the reader's scroll position.\n"))
+                    .collect(),
+            );
+            feed.text(
+                &(0..40)
+                    .map(|n| {
+                        format!(
+                            "Answer paragraph {n}: the full prompt remains available above.\n\n"
+                        )
+                    })
+                    .collect::<String>(),
+            )
+            .end(0.1);
             (scene, none)
         }
         "starting" => {

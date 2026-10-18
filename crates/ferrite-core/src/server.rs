@@ -1164,6 +1164,26 @@ pub fn wants_restart(
     newer(app_version, &server.version) && same(app_executable, &server.executable)
 }
 
+/// A manual install may keep the same version. Compare the executable's
+/// modification time with this Server's boot, including older servers that
+/// do not advertise a build id. Never restart a different executable.
+pub fn executable_replaced_since(
+    app_executable: &std::path::Path,
+    server: &ServerInfo,
+    started: std::time::SystemTime,
+) -> bool {
+    let same = app_executable == server.executable
+        || app_executable
+            .canonicalize()
+            .ok()
+            .zip(server.executable.canonicalize().ok())
+            .is_some_and(|(a, b)| a == b);
+    same && std::fs::metadata(app_executable)
+        .and_then(|m| m.modified())
+        .ok()
+        .is_some_and(|modified| modified > started)
+}
+
 /// Whether semantic version `a` is newer than `b`. Anything unreadable is
 /// not newer.
 fn newer(a: &str, b: &str) -> bool {

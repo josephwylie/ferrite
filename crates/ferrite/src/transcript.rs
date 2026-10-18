@@ -1548,7 +1548,8 @@ impl TranscriptView {
     /// The pinned prompt band (the prototype's sticky `.prompt`): exactly
     /// the turn's band — its `❯`, its words, its attachment chip and its
     /// send time — laid over the top of the list on the plane so it hides
-    /// what scrolls under it. It answers nothing under the pointer.
+    /// what scrolls under it. Long prompts show a compact preview; their
+    /// full text remains in the list. Wheel gestures scroll that same list.
     fn pinned_band(&self, index: usize, shift: gpui::Pixels) -> Option<AnyElement> {
         let row = self.rows.get(index)?;
         let block = row.blocks().first()?;
@@ -1556,7 +1557,13 @@ impl TranscriptView {
             return None;
         };
         let selection = self.text_runs();
-        let band = pane::prompt_row(block, line, &self.row_cx(&selection), true);
+        let line_height = Grid::of(self.input.reading_size).line;
+        let available = f32::from(self.scroll.list_state().viewport_bounds().size.height) / 3.;
+        // Reserve a line for the band's padding, then keep whole text lines.
+        let lines = ((available / line_height) as usize)
+            .saturating_sub(1)
+            .clamp(1, 3);
+        let band = pane::prompt_row(block, line, &self.row_cx(&selection), Some(lines));
         let measured = self.pinned_h.clone();
         Some(
             div()
@@ -1575,7 +1582,7 @@ impl TranscriptView {
                             "transcript-pinned-{}",
                             self.input.namespace
                         )))
-                        .occlude()
+                        .block_mouse_except_scroll()
                         .cursor_default()
                         .w_full()
                         // The band over an opaque plane: together they hide

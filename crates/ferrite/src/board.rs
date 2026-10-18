@@ -17,6 +17,7 @@
 //! and pressed on it, takes you back to where you came from.
 
 mod aim;
+mod controls;
 #[cfg(any(test, feature = "visual-reference"))]
 pub(crate) mod fixture;
 mod keys;

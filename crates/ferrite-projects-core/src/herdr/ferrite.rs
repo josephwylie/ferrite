@@ -191,6 +191,12 @@ impl Place {
     }
 }
 
+/// Threads placed by the board, including closed and replaced agents.
+pub fn owned_threads() -> Vec<u64> {
+    Panes { path: crate::store::files::data_dir().join("ferrite-panes.json") }
+        .owned_threads().unwrap_or_default()
+}
+
 /// The Server one herdr call is answered from, and the panes the board placed.
 struct Ferrite { server: Server, panes: Panes }
 

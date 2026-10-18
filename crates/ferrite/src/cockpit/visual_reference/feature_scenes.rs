@@ -43,6 +43,7 @@ pub(super) const STATES: &[&str] = &[
     "projects-board-plan",
     "projects-board-attempts",
     "projects-board-settings",
+    "projects-board-pickers",
     "projects-board-automation",
     "projects-board-menu",
     "projects-board-find",
@@ -109,6 +110,7 @@ fn on_board(state: &str) -> OnBoard {
         "projects-board-plan" => (with_rows(planned(), "proj/21"), &["alt+p"]),
         "projects-board-attempts" => (with_rows(planned(), "proj/22"), &["alt+p"]),
         // ctrl+e: the task's settings page, one value its own.
+        "projects-board-pickers" => (with_rows(vec![configured()], "proj/40"), &[]),
         "projects-board-settings" => (with_rows(vec![configured()], "proj/40"), &["ctrl+e"]),
         // enter on an automation's row: the automation whole, its firings.
         "projects-board-automation" => (automated(), &["enter"]),
@@ -216,6 +218,7 @@ fn configured() -> Obj {
         json!({ "state": "idle", "stage": "todo", "agent": null, "app": "", "title": "Cut long titles",
         "snap": { "problems": [], "settings": [
             { "name": "worker.agent", "kind": "work", "value": "claude/opus", "own": true },
+            { "name": "reviewer.agent", "kind": "work", "value": "codex", "own": false },
             { "name": "review.rounds", "kind": "work", "value": 3, "own": false },
         ] } }),
     )
@@ -306,7 +309,10 @@ fn projects(name: &str, board: Option<OnBoard>) -> (Scene, Setup) {
         feed.text("PR #48 is up for review.").end(0.14);
     }
 
-    let sidebar = board_sidebar(head, &threads);
+    let mut sidebar = board_sidebar(head, &threads);
+    sidebar.owned.extend(sidebar.agents.keys().copied());
+    let _ = scene.open(Provider::Claude, &checkout, "Checkout notes");
+    scene.core.focus_thread(head);
     let setup: Setup = Box::new(move |view, window, cx| {
         view.set_nav_fold(NavFold::Parked, false, cx);
         view.projects.sidebar = sidebar;

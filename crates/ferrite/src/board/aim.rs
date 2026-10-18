@@ -1,10 +1,5 @@
-//! Where new tasks go (ADR 0031). The board files a task, and sends the
-//! Coordinator your words, from its folder (`Ctx::cwd`), whose repo its
-//! header names (upstream's `docs/several-boards.md`). A terminal board
-//! takes the folder of the pane it opened in; Ferrite's opens at a nav
-//! Project's root and says so in a strip over the board — `New tasks go
-//! to: <Project ▾>` — whose picker moves the folder live. The list, the
-//! selection and the box stay as they are: every repo's tasks still show.
+//! The board's Project picker and list scope. New tasks use the selected
+//! Project's folder; the list can show that Project or every Project.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -66,7 +61,13 @@ impl BoardView {
     pub(crate) fn aim_at(&mut self, root: &Path, cx: &mut Context<Self>) {
         let cwd = root.display().to_string();
         match self.state() {
-            Some(state) => state.ctx.cwd = cwd,
+            Some(state) => {
+                state.ctx.cwd = cwd.clone();
+                if state.project_root.is_some() {
+                    state.project_root = Some(cwd);
+                    sw_board::board::update::list::relist(state);
+                }
+            }
             None => self.aim.early = Some(cwd),
         }
         self.follow_selection();
@@ -87,8 +88,7 @@ impl BoardView {
         target_of(&self.aim.targets, Path::new(self.cwd()?))
     }
 
-    /// `New tasks go to: <Project ▾>`, a cell in from the edge as the
-    /// header's name is; none without Projects to pick from.
+    /// The Project picker and scope, above the board's task list.
     pub(super) fn aim_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.aim.targets.is_empty() {
             return None;
@@ -127,7 +127,8 @@ impl BoardView {
             .debug_selector(|| "board-aim".into())
             .h(px(ROW))
             .px(px(CH))
-            .accessibility_label("New tasks go to")
+            .max_w(px(30. * CH))
+            .accessibility_label("Project for new tasks")
             .child(
                 div()
                     .flex()
@@ -137,7 +138,7 @@ impl BoardView {
                     .text_size(px(FS_UI))
                     .line_height(px(LH_UI))
                     .text_color(rgb(TEXT))
-                    .child(name)
+                    .child(div().min_w_0().truncate().child(name))
                     .child(crate::icons::icon(
                         crate::icons::CHEVRON_DOWN,
                         ICON_CHEVRON,
@@ -178,8 +179,11 @@ impl BoardView {
                 .whitespace_nowrap()
                 // Its presses are its own, not a click on the board's cells.
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child("New tasks go to:")
+                .child("Project:")
                 .child(picker)
+                .child(div().flex_1())
+                .child(self.project_scope_button(true, cx))
+                .child(self.project_scope_button(false, cx))
                 .into_any_element(),
         )
     }

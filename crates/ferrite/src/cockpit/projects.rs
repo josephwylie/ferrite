@@ -171,6 +171,18 @@ impl CockpitView {
             .registry()
             .projects()
             .iter()
+            .filter(|project| {
+                project.root != std::path::Path::new("/")
+                    || self
+                        .cockpit
+                        .threads()
+                        .into_iter()
+                        .chain(self.facts.parked().iter().copied())
+                        .any(|thread| {
+                            self.cockpit.project_id(thread) == Some(project.id)
+                                && !self.projects.sidebar.owned.contains(&thread)
+                        })
+            })
             .map(|project| Target {
                 title: project.title.clone().into(),
                 root: project.root.clone(),
@@ -182,12 +194,13 @@ impl CockpitView {
     /// Where new tasks go when the board opens: the focused Thread's
     /// Project, else the first Project; `None` with no Projects.
     pub(super) fn task_aim(&self) -> Option<std::path::PathBuf> {
-        let registry = self.cockpit.registry();
+        let targets = self.task_targets();
         self.focused_thread()
             .and_then(|thread| self.cockpit.project_id(thread))
-            .and_then(|project| registry.project(project))
-            .or_else(|| registry.projects().first())
-            .map(|project| project.root.clone())
+            .and_then(|project| self.cockpit.registry().project(project))
+            .and_then(|project| targets.iter().find(|target| target.root == project.root))
+            .or_else(|| targets.first())
+            .map(|target| target.root.clone())
     }
 
     /// The board's door in the bottom bar, after the bell: the board glyph,

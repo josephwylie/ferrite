@@ -5292,7 +5292,7 @@ pub(crate) fn render_block(
         // A visual's row owns a live page, so the transcript's `Shelf`
         // draws it (`TranscriptView::render_row`); it never reaches here.
         Body::Visual(_) => row.into_any_element(),
-        Body::Prompt(line) => prompt_row(block, line, row_cx, false),
+        Body::Prompt(line) => prompt_row(block, line, row_cx, None),
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.
         Body::Paragraph { spans } => row
@@ -5548,8 +5548,14 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
 /// under the band in its 1px frame with its caption. Nothing on the band
 /// answers the pointer. `pinned` draws exactly the band again for the top
 /// of the body (not part of the selection, no image).
-pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx, pinned: bool) -> AnyElement {
+pub(crate) fn prompt_row(
+    block: &Block,
+    line: &str,
+    row_cx: &RowCx,
+    preview_lines: Option<usize>,
+) -> AnyElement {
     let grid = row_cx.grid();
+    let pinned = preview_lines.is_some();
     let (text, files) = prompt_text(line);
     // The chips close the prompt; their line stands taller, as the
     // prototype's inline chip makes it.
@@ -5565,6 +5571,7 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx, pinned: bool
             div()
                 .w_full()
                 .min_w_0()
+                .when_some(preview_lines, |words, lines| words.line_clamp(lines))
                 .child(SharedString::from(words))
                 .into_any_element(),
         ),
@@ -5626,7 +5633,17 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx, pinned: bool
                 .debug_selector(|| "prompt-mark".into())
                 .child(components::prompt_mark(ACCENT)),
         ))
-        .child(div().flex().flex_col().flex_1().min_w_0().children(words))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .when_some(preview_lines, |column, lines| {
+                    column.max_h(px(lines as f32 * grid.line)).overflow_hidden()
+                })
+                .children(words),
+        )
         .children(time.map(|time| {
             div()
                 .debug_selector(|| "prompt-time".into())

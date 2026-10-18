@@ -713,6 +713,7 @@ fn a_view_that_fails_whole_says_how_to_close() {
 /// closes it — through the view, as GPUI delivers the keys.
 #[gpui::test]
 fn ctrl_c_twice_closes_the_board(cx: &mut TestAppContext) {
+    cx.update(crate::theme::init_components);
     let (view, cx) = cx.add_window_view(|_, cx| BoardView::still(fixture::board(), cx));
     let closed = std::rc::Rc::new(std::cell::Cell::new(false));
     cx.update(|_, cx| {
@@ -776,4 +777,35 @@ fn the_board_key_is_the_projects_toggle() {
         crate::keymap::Platform::Windows => "ctrl+shift+a",
     };
     assert_eq!(super::board_key(), want);
+}
+
+#[test]
+fn project_scope_survives_refresh_and_combines_with_search() {
+    let rows = vec![
+        obj(
+            json!({"id":"a/1", "repo":"a", "root":"/work/a", "title":"needle", "state":"idle", "stage":"todo"}),
+        ),
+        obj(
+            json!({"id":"b/1", "repo":"b", "root":"/work/b", "title":"/work/a needle", "state":"idle", "stage":"todo"}),
+        ),
+    ];
+    let mut state = fixture::board_of(rows).state;
+    state.project_root = Some("/work/a".into());
+    state.filter = "needle".into();
+    relist(&mut state);
+    assert_eq!(state.items.len(), 1);
+    assert_eq!(state.items[0].s("id"), "a/1");
+    let data = state.data.clone();
+    update(&mut state, Event::Loaded(Box::new(data)));
+    assert_eq!(state.items.len(), 1);
+    state.project_root = None;
+    relist(&mut state);
+    assert_eq!(state.items.len(), 2, "all data remains available");
+    state.project_root = Some("/work/missing".into());
+    relist(&mut state);
+    assert!(state.items.is_empty());
+    assert!(
+        state.current().is_none(),
+        "the previous selection cannot act on a hidden task"
+    );
 }

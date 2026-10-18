@@ -713,3 +713,38 @@ fn a_project_headings_menu_opens_its_tasks(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.projects.board_shown()));
     assert!(board_holds_the_keyboard(&board, cx), "shown, with the keys");
 }
+
+#[gpui::test]
+fn board_owned_threads_stay_out_of_navigation_even_when_opened(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("board-hidden", 4);
+    let threads = sorted_threads(&core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.projects.sidebar.owned = threads[..3].iter().copied().collect();
+        for thread in &threads[..3] {
+            let at = view
+                .panes
+                .iter()
+                .position(|p| p.thread() == Some(*thread))
+                .unwrap();
+            view.focus_pane(at);
+            let state = view.nav_state();
+            assert_eq!(
+                state
+                    .ordered_solos()
+                    .iter()
+                    .map(|r| r.thread)
+                    .collect::<Vec<_>>(),
+                vec![threads[3]]
+            );
+            assert!(
+                view.cockpit.thread(*thread).is_some(),
+                "board can still open the agent"
+            );
+        }
+        view.cockpit.park(threads[1]).unwrap();
+        view.pump(cx);
+        assert!(!view.parked_threads().contains(&threads[1]));
+    });
+}

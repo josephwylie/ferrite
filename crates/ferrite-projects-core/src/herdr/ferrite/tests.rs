@@ -531,3 +531,26 @@ fn the_one_session_is_the_servers_socket() {
     assert_eq!(crate::herdr::cli::session_name(&socket()), "default");
     assert_eq!(herdr_error(Refused::new("project_not_found", "x"), "workspace").code, "workspace_not_found");
 }
+
+#[test]
+fn board_thread_ownership_survives_replacement_and_pane_removal() {
+    let stand = Stand::new("owned-threads");
+    let panes = &stand.ferrite.panes;
+    let pane = panes.place(Pane { thread: Some(41), ..Default::default() }).unwrap();
+    panes.update(&pane, |pane| pane.thread = Some(42)).unwrap();
+    panes.retain(|_, _| false).unwrap();
+    assert!(panes.all().unwrap().is_empty());
+    assert_eq!(panes.owned_threads().unwrap(), vec![41, 42]);
+}
+
+#[test]
+fn existing_pane_files_supply_ownership_before_the_next_write() {
+    let stand = Stand::new("owned-legacy");
+    let panes = &stand.ferrite.panes;
+    std::fs::write(&panes.path, serde_json::to_vec(&json!({
+        "next": 1, "panes": { "p1": { "space": "1", "cwd": "/r/app", "thread": 43 } }
+    })).unwrap()).unwrap();
+    assert_eq!(panes.owned_threads().unwrap(), vec![43]);
+    panes.retain(|_, _| false).unwrap();
+    assert_eq!(panes.owned_threads().unwrap(), vec![43]);
+}

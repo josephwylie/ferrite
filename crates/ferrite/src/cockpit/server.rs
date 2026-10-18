@@ -29,7 +29,7 @@ pub(crate) enum Gone {
     SignIn,
     NotInstalled,
 }
-/// The band saying the Server will update.
+/// The offer to restart an older Server.
 struct Updating;
 
 /// What the window has said about its Server this run.
@@ -68,12 +68,13 @@ impl CockpitView {
         true
     }
 
-    /// Say when there is no Server, and ask an older one running this
-    /// window's own executable to restart onto it once its agents are idle.
+    /// Say when there is no Server, or offer to restart one running an
+    /// older build from this window's executable.
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.cockpit.server() {
             None => {}
             Some(ServerState::Detached { reason, attention }) => {
+                self.server_bands.restart_asked = false;
                 if std::mem::take(&mut self.server_bands.updating) {
                     window.remove_notification::<Updating>(cx);
                 }
@@ -148,31 +149,40 @@ impl CockpitView {
                     cx,
                 );
             }
-            Some(ServerState::Attached { server, .. }) => {
+            Some(ServerState::Attached { server, since }) => {
                 self.server_bands.attached = true;
                 if self.server_bands.detached.take().is_some() {
                     window.remove_notification::<Detached>(cx);
                 }
-                if self.server_bands.restart_asked || !self.server_is_older(&server) {
+                if !self.server_is_older(&server, since) {
+                    if std::mem::take(&mut self.server_bands.updating) {
+                        window.remove_notification::<Updating>(cx);
+                    }
+                    self.server_bands.restart_asked = false;
+                    return;
+                }
+                if self.server_bands.restart_asked {
                     return;
                 }
                 self.server_bands.restart_asked = true;
-                if let Err(error) = self.cockpit.restart_server(When::Idle) {
-                    ferrite_core::log!("the server was not asked to update: {error}");
-                    return;
-                }
                 self.server_bands.updating = true;
                 let view = cx.entity().downgrade();
                 window.push_notification(
                     Notification::new()
                         .id::<Updating>()
-                        .title("Ferrite's server will update when your agents are idle")
-                        .message("Click to restart it now.")
+                        .title("Ferrite’s server is running an older build")
+                        .message("Click to open Server settings and restart when ready.")
                         .with_type(NotificationType::Info)
                         .autohide(false)
-                        .on_click(move |_, window, cx| {
-                            view.update(cx, |view, cx| view.restart_server(window, cx))
-                                .ok();
+                        .on_click(move |_, _window, cx| {
+                            view.update(cx, |view, cx| {
+                                if !view.settings_open {
+                                    view.toggle_settings(cx);
+                                }
+                                view.settings_page = prefs::PageKey::Server;
+                                cx.notify();
+                            })
+                            .ok();
                         }),
                     cx,
                 );
@@ -193,9 +203,26 @@ impl CockpitView {
 
     /// Whether the Server is an older build of this very executable: one
     /// running any other is never asked, since it restarts into itself.
-    fn server_is_older(&self, server: &ferrite_core::protocol::ServerInfo) -> bool {
+    fn server_is_older(
+        &self,
+        server: &ferrite_core::protocol::ServerInfo,
+        since: std::time::Instant,
+    ) -> bool {
+        if self.cockpit.machine().is_some() {
+            return false;
+        }
         std::env::current_exe().is_ok_and(|executable| {
             ferrite_core::server::wants_restart(crate::ferrite_update::VERSION, &executable, server)
+                || server.version == crate::ferrite_update::VERSION
+                    && std::time::SystemTime::now()
+                        .checked_sub(since.elapsed())
+                        .is_some_and(|started| {
+                            ferrite_core::server::executable_replaced_since(
+                                &executable,
+                                server,
+                                started,
+                            )
+                        })
         })
     }
 
@@ -269,7 +296,10 @@ impl CockpitView {
     /// Settings › Server, for a window attached to one.
     pub(super) fn server_rows(&self, window: &Window, cx: &Context<Self>) -> Vec<prefs::Row> {
         let Some(state) = self.cockpit.server() else {
-            return Vec::new();
+            return vec![prefs::fact(
+                "Server",
+                "This window runs without a separate server".into(),
+            )];
         };
         let status: SharedString = match state {
             ServerState::Attached { server, since } => {
@@ -284,6 +314,9 @@ impl CockpitView {
                     server.version,
                     uptime(since.elapsed())
                 );
+                if self.server_is_older(&server, since) {
+                    status.push_str(" · restart to use the installed build");
+                }
                 if std::env::current_exe().is_ok_and(|exe| exe != server.executable) {
                     status.push_str(&format!(" · runs {}", server.executable.display()));
                 }

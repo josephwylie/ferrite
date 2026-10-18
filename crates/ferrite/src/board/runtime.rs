@@ -31,7 +31,7 @@ use sw_board::board::update::{update, Effect, Event};
 use sw_board::board::view::screen;
 use sw_board::shown::ink::{Ink, Inked};
 
-use super::{aim, keys, machines, mouse, render};
+use super::{aim, controls, keys, machines, mouse, render};
 use crate::components;
 use crate::theme::{CH, PLANE, ROW};
 
@@ -80,6 +80,7 @@ pub(crate) struct BoardView {
     pub(super) board: Option<Board>,
     /// Where new tasks go, and the strip that picks it.
     pub(super) aim: aim::Aim,
+    pub(super) controls: controls::Controls,
     /// The view's size in pixels, as the cockpit hangs it, and in cells
     /// (columns, lines): what the board lays its screen out for.
     pixels: (f32, f32),
@@ -131,10 +132,12 @@ impl BoardView {
     }
 
     fn new(board: Option<Board>, keeps_view: bool, cx: &mut Context<Self>) -> Self {
+        crate::theme::init_components(cx);
         Self {
             focus: cx.focus_handle(),
             board,
             aim: aim::Aim::default(),
+            controls: controls::Controls::default(),
             pixels: (120.0 * CH, 40.0 * ROW),
             size: (120, 40),
             wants: Wants::default(),
@@ -151,7 +154,10 @@ impl BoardView {
     pub(crate) fn fit(&mut self, width: f32, height: f32) {
         self.pixels = (width, height);
         let edge = if self.popup() { 2.0 * POPUP_EDGE } else { 0.0 };
-        self.size = cells(width - edge, height - edge - self.aim.height());
+        self.size = cells(
+            width - edge,
+            height - edge - self.aim.height() - controls::HEIGHT,
+        );
     }
 
     fn popup(&self) -> bool {
@@ -237,7 +243,7 @@ impl BoardView {
         cx.notify();
     }
 
-    fn effect(&mut self, effect: Effect, cx: &mut Context<Self>) {
+    pub(super) fn effect(&mut self, effect: Effect, cx: &mut Context<Self>) {
         match effect {
             Effect::Run(job) => answer(cx, move || Event::Done(job::run(job))),
             Effect::Load => self.kick(),
@@ -307,7 +313,7 @@ impl BoardView {
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // The picker's list, while it is open, has the keys.
-        if self.aim.open {
+        if self.aim.open || self.controls.open.is_some() {
             return;
         }
         let keystroke = &event.keystroke;
@@ -438,6 +444,7 @@ impl Render for BoardView {
         };
         let (width, height) = self.pixels;
         let strip = self.aim_strip(cx);
+        let controls = self.controls(cx);
         let surface = surface
             .debug_selector(|| "projects-board".into())
             .track_focus(&self.focus)
@@ -449,13 +456,17 @@ impl Render for BoardView {
             .overflow_hidden()
             .bg(rgb(ground))
             .on_key_down(cx.listener(Self::on_key));
-        mouse::listen(surface, cx).children(strip).child(
-            components::text_ui()
-                .relative()
-                .flex()
-                .flex_col()
-                .children(rows)
-                .child(self.pointer.layer()),
-        )
+        mouse::listen(surface, cx)
+            .children(strip)
+            .child(controls)
+            .child(
+                components::text_ui()
+                    .debug_selector(|| "projects-board-rows".into())
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .children(rows)
+                    .child(self.pointer.layer()),
+            )
     }
 }
