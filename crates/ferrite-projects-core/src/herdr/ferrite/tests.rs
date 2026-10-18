@@ -488,6 +488,26 @@ fn prompts_reads_and_focus_reach_the_thread() {
     assert_eq!(s.raw(&["integration", "status"]).unwrap(), "");
 }
 
+/// The Coordinator keeps a refused prompt queued only for herdr's retryable
+/// errors. Ferrite's occupied startup slot must use that same contract.
+#[test]
+fn a_prompt_waiting_for_startup_is_retryable_without_restarting_the_agent() {
+    let s = Stand::new("prompt-starting");
+    let pane = s.tab();
+    s.run(&["agent", "start", "sw-coordinator", "--kind", "codex", "--pane", &pane]).unwrap();
+    let message = "this Thread's Session is starting and already holds a prompt; nothing was sent: retry once the Thread is working";
+    s.world.lock().unwrap().refuse.push(("agent.prompt".into(), json!({ "code": "agent_starting", "message": message })));
+
+    let error = refused(s.run(&["agent", "prompt", &pane, "Hello?"]));
+    assert_eq!(error.code, "agent_not_ready", "the board must keep retrying this queued message");
+    assert_eq!(error.message, message);
+
+    s.run(&["agent", "prompt", &pane, "Hello?"]).unwrap();
+    assert_eq!(s.last("agent.prompt").s("text"), "Hello?");
+    assert_eq!(s.count("thread.start"), 1);
+    assert_eq!(s.count("thread.close"), 0);
+}
+
 const PERMISSION: &str = r#"[{"thread":21,"handle":{},"decision":{"id":"perm_01","kind":{"kind":"approval"},"description":"Run git push","tool_name":"Bash","input":{"command":"git push"},"suggestions":[{"label":"always","value":{"rule":"Bash(git push)"},"standing":true}]}}]"#;
 
 /// Escape interrupts; a menu key answers the pending Decision; text answers a question that takes it.

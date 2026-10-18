@@ -83,6 +83,9 @@ fn command(args: &[String]) -> String {
 /// Space.
 fn herdr_error(r: Refused, area: &str) -> HerdrError {
     let code = match (r.code.as_str(), area) {
+        // A full startup prompt slot is temporary. The board keeps the
+        // message queued for agent_not_ready instead of latching a failure.
+        ("agent_starting", "agent") => "agent_not_ready",
         ("unknown_thread", "agent") => "agent_not_found",
         ("unknown_thread", "tab") => "tab_not_found",
         ("unknown_thread", _) => "pane_not_found",
