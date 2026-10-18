@@ -45,6 +45,35 @@ impl Command {
 /// The doctor action's notification title.
 const DOCTOR_TITLE: &str = "Tasks: doctor";
 
+/// Resolve the Coordinator without moving another window or restarting a
+/// running agent. Only an absent Coordinator needs the board's open request.
+/// Blocking: called on the background executor.
+pub(crate) fn coordinator_thread() -> Result<ferrite_core::ThreadId, String> {
+    let socket = sw_board::herdr::cli::current_socket();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut asked = false;
+    loop {
+        let look = sw_board::coordinator::look::look(&socket);
+        if let Some(thread) = crate::sidebar::thread_in(&look.agent) {
+            sw_board::coordinator::requests::typed_there(&socket);
+            return Ok(thread);
+        }
+        if asked && !look.error.is_empty() {
+            return Err(look.error);
+        }
+        if !asked {
+            sw_board::coordinator::requests::open(&socket).map_err(|error| error.to_string())?;
+            asked = true;
+        }
+        if std::time::Instant::now() >= until {
+            return Err(
+                "The Coordinator is taking longer to start. Try opening the chat again.".into(),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 /// The doctor action: the shipped program's `doctor`, which looks at older
 /// installs again and says where things stand. Blocking: run it off the UI
 /// thread. Its toast: title, words, whether it failed.

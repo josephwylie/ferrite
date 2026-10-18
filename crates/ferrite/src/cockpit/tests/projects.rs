@@ -748,3 +748,102 @@ fn board_owned_threads_stay_out_of_navigation_even_when_opened(cx: &mut TestAppC
         assert!(!view.parked_threads().contains(&threads[1]));
     });
 }
+
+/// The two Tasks views reuse a running Coordinator and retain the board's
+/// draft/selection. Clicking or typing in the chat never leaves Tasks.
+#[gpui::test]
+fn coordinator_chat_keeps_history_and_board_state_without_restarting(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("tasks-chat", 2);
+    let threads = sorted_threads(&core);
+    let coordinator = threads[0];
+    for text in [
+        "First update from the Coordinator.",
+        "A later update with the next steps.",
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: text.into() })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        core.pump();
+    }
+    bind_band_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    let board = focused_board(&view, Placement::Tab, cx);
+    let selection = board.update(cx, |board, _| {
+        let state = board.state().unwrap();
+        state.input.set_text("Keep this unfinished task");
+        state.sel.clone()
+    });
+    view.update(cx, |view, cx| {
+        view.projects.live = true;
+        view.projects.sidebar.coordinator = Some(coordinator);
+        cx.notify();
+    });
+    tick(cx);
+    let click = |id: &'static str, cx: &mut gpui::VisualTestContext| {
+        let bounds = cx.debug_bounds(id).expect(id);
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        tick(cx);
+    };
+    click("tasks-coordinator-tab", cx);
+    assert!(cx.debug_bounds("tasks-coordinator-page").is_some());
+    let transcript = view.update(cx, |view, _cx| {
+        assert_eq!(view.focused_thread(), Some(coordinator));
+        assert_eq!(view.visible_indices().len(), 1);
+        let index = view.pane_for(coordinator).unwrap();
+        view.focus_pane(index);
+        assert!(
+            view.projects.coordinator_shown(),
+            "clicks within the chat keep its tabs"
+        );
+        let blocks = view
+            .cockpit
+            .thread(coordinator)
+            .unwrap()
+            .transcript()
+            .blocks();
+        assert!(blocks.iter().any(
+            |b| ferrite_core::transcript::plain_text(std::slice::from_ref(b))
+                .contains("First update")
+        ));
+        assert!(blocks.iter().any(
+            |b| ferrite_core::transcript::plain_text(std::slice::from_ref(b))
+                .contains("later update")
+        ));
+        view.panes[index].transcript().unwrap().clone()
+    });
+    cx.simulate_input("What is next?");
+    click("tasks-board-tab", cx);
+    assert!(board_holds_the_keyboard(&board, cx));
+    board.update(cx, |board, _| {
+        let state = board.state().unwrap();
+        assert_eq!(state.sel, selection);
+        assert_eq!(state.value(), "Keep this unfinished task");
+    });
+    click("tasks-coordinator-tab", cx);
+    view.read_with(cx, |view, cx| {
+        let pane = &view.panes[view.pane_for(coordinator).unwrap()];
+        assert_eq!(
+            pane.transcript().unwrap().entity_id(),
+            transcript.entity_id()
+        );
+        assert_eq!(pane.composer.read(cx).text(), "What is next?");
+    });
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(fake
+        .sent
+        .borrow()
+        .iter()
+        .any(|text| text == "What is next?"));
+    assert_eq!(fake.spawned.borrow().len(), 2, "neither agent restarted");
+    assert_eq!(*fake.interrupts.borrow(), 0);
+    view.update(cx, |view, cx| view.land_on_thread(threads[1], cx));
+    assert!(!view.read_with(cx, |view, _| view.projects.coordinator_shown()));
+}

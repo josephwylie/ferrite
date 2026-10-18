@@ -44,6 +44,7 @@ pub(super) const STATES: &[&str] = &[
     "projects-board-attempts",
     "projects-board-settings",
     "projects-board-pickers",
+    "projects-coordinator",
     "projects-board-automation",
     "projects-board-menu",
     "projects-board-find",
@@ -65,6 +66,7 @@ pub(super) fn handles(state: &str) -> bool {
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     match state {
         "projects-nav" => projects(state, None),
+        "projects-coordinator" => projects(state, Some(on_board("projects-board"))),
         board if board.starts_with("projects-board") => {
             let shown = on_board(board);
             projects(state, Some(shown))
@@ -264,6 +266,7 @@ fn press_of(chord: &str) -> Press {
 /// tally in the bottom bar. With `board`, the work board (⌘⇧A) over them
 /// in the board's place, its keys pressed.
 fn projects(name: &str, board: Option<OnBoard>) -> (Scene, Setup) {
+    let chat = name == "projects-coordinator";
     let mut scene = Scene::new(name);
     let checkout = scene.project("checkout");
 
@@ -316,6 +319,7 @@ fn projects(name: &str, board: Option<OnBoard>) -> (Scene, Setup) {
     let setup: Setup = Box::new(move |view, window, cx| {
         view.set_nav_fold(NavFold::Parked, false, cx);
         view.projects.sidebar = sidebar;
+        view.projects.sidebar.coordinator = Some(head);
         view.projects.live = true;
         // The cart copy's request stood before the window opened: heard,
         // not toasted over the board.
@@ -331,6 +335,9 @@ fn projects(name: &str, board: Option<OnBoard>) -> (Scene, Setup) {
                     update(state, Event::Key(press_of(key)));
                 }
             });
+        }
+        if chat {
+            view.enter_coordinator(head, cx);
         }
         cx.notify();
     });

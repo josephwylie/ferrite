@@ -12,9 +12,12 @@ use sw_board::json::*;
 
 use super::BoardView;
 use crate::components::{self, Tip};
-use crate::theme::{CH, ICON_CHEVRON, ROW, TEXT, TEXT_MUTED};
+use crate::theme::{
+    BAND2, CH, CHROME, CONTROL_H, ICON_CHEVRON, LINE, ON_ACCENT, PLANE, ROW, TEXT, TEXT_MUTED,
+    TEXT_STRONG, W_STRONG,
+};
 
-pub(super) const HEIGHT: f32 = ROW * 2.;
+pub(super) const HEIGHT: f32 = ROW * 3.;
 
 #[derive(Default)]
 pub(super) struct Controls {
@@ -29,26 +32,32 @@ impl BoardView {
             .is_some_and(|b| b.state.project_root.is_some())
             == only;
         let label = if only { "This project" } else { "All" };
-        components::button(if only {
+        let id = if only {
             "board-project-only"
         } else {
             "board-project-all"
-        })
-        .h(px(ROW))
-        .px(px(CH))
-        .selected(selected)
-        .accessibility_label(label)
-        .child(components::text_ui().child(label))
-        .on_click(cx.listener(move |view, _, _, cx| {
-            let root = view.cwd().map(str::to_owned);
-            if let Some(state) = view.state() {
-                state.project_root = if only { root } else { None };
-                sw_board::board::update::list::relist(state);
-            }
-            view.follow_selection();
-            cx.notify();
-        }))
-        .into_any_element()
+        };
+        components::form_button_on(id, rgb(if selected { BAND2 } else { PLANE }).into(), cx)
+            .tab_stop(false)
+            .h(px(CONTROL_H))
+            .px(px(CH))
+            .selected(selected)
+            .accessibility_label(label)
+            .child(
+                components::text_ui()
+                    .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_MUTED }))
+                    .child(label),
+            )
+            .on_click(cx.listener(move |view, _, _, cx| {
+                let root = view.cwd().map(str::to_owned);
+                if let Some(state) = view.state() {
+                    state.project_root = if only { root } else { None };
+                    sw_board::board::update::list::relist(state);
+                }
+                view.follow_selection();
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     /// Use the same dispatch as a key, including drafts and confirmations.
@@ -70,13 +79,36 @@ impl BoardView {
         disabled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        components::button(id)
+        let working = self
+            .board
+            .as_ref()
+            .and_then(|b| b.state.current())
+            .is_some_and(running);
+        let primary = matches!(id, "board-start" | "board-confirm" | "board-send")
+            || id == "board-open" && working;
+        let button = if primary {
+            components::primary_button(id, disabled, cx)
+        } else {
+            components::form_button_on(id, rgb(CHROME).into(), cx).disabled(disabled)
+        };
+        button
+            .tab_stop(false)
             .debug_selector(move || id.into())
-            .h(px(ROW))
+            .h(px(CONTROL_H))
             .px(px(CH))
             .disabled(disabled)
             .accessibility_label(label)
-            .child(components::text_ui().child(label))
+            .child(
+                components::text_ui()
+                    .text_color(rgb(if disabled {
+                        TEXT_MUTED
+                    } else if primary {
+                        ON_ACCENT
+                    } else {
+                        TEXT
+                    }))
+                    .child(label),
+            )
             .on_click(cx.listener(move |view, _, window, cx| view.press_action(key, window, cx)))
             .into_any_element()
     }
@@ -89,6 +121,7 @@ impl BoardView {
         let modal =
             state.is_some_and(|s| s.menu.is_some() || s.editing.is_some() || s.mode == Mode::Find);
         let disabled = task.is_none() || draft || modal || asking;
+        let working = task.is_some_and(running);
         let actions = if asking {
             div()
                 .flex()
@@ -114,27 +147,40 @@ impl BoardView {
         } else {
             div()
                 .flex()
-                .child(self.action_button(
-                    "board-start",
-                    "Start agent",
-                    K::Delegate,
-                    disabled || task.is_some_and(|r| running(r) || r.b("archivedAt")),
-                    cx,
-                ))
+                .when(!working, |actions| {
+                    actions.child(self.action_button(
+                        "board-start",
+                        "Start agent",
+                        K::Delegate,
+                        disabled || task.is_some_and(|r| r.b("archivedAt")),
+                        cx,
+                    ))
+                })
                 .child(self.action_button("board-open", "Open agent", K::Enter, disabled, cx))
                 .child(self.action_button("board-details", "Details", K::Panel, disabled, cx))
-                .child(self.action_button(
-                    "board-talk",
-                    if state.is_some_and(|s| s.reply) {
-                        "Coordinator"
-                    } else {
-                        "Talk about task"
-                    },
-                    K::Talk,
-                    disabled,
-                    cx,
-                ))
                 .child(self.more_menu(disabled, cx))
+        };
+        let selected = match (state, task) {
+            (Some(state), Some(task)) => div()
+                .flex()
+                .items_center()
+                .gap(px(CH))
+                .min_w_0()
+                .flex_1()
+                .child(components::text_meta().flex_shrink_0().child(
+                    sw_board::store::keys::say_id(task.s("id"), &state.data.keys),
+                ))
+                .child(
+                    components::text_ui()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(TEXT_STRONG))
+                        .font_weight(W_STRONG)
+                        .child(task.t("title")),
+                ),
+            _ => div()
+                .flex_1()
+                .child(components::text_meta().child("Select a task")),
         };
         components::text_ui()
             .flex()
@@ -142,16 +188,39 @@ impl BoardView {
             .flex_shrink_0()
             .h(px(HEIGHT))
             .text_color(rgb(TEXT))
-            .pl(px(CH))
+            .px(px(CH * 1.5))
+            .border_b_1()
+            .border_color(rgb(LINE))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(actions.h(px(ROW)))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(ROW))
+                    .gap(px(CH * 2.))
+                    .h(px(HEIGHT / 2.))
+                    .child(selected)
+                    .child(actions.items_center().gap(px(CH / 2.)).flex_shrink_0()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(HEIGHT / 2.))
+                    .gap(px(CH))
                     .child(self.role_picker("worker.agent", "Developer", disabled, cx))
-                    .child(self.role_picker("reviewer.agent", "Reviewer", disabled, cx)),
+                    .child(self.role_picker("reviewer.agent", "Reviewer", disabled, cx))
+                    .child(div().flex_1())
+                    .child(self.action_button(
+                        "board-talk",
+                        if state.is_some_and(|s| s.reply) {
+                            "Coordinator"
+                        } else {
+                            "Talk about task"
+                        },
+                        K::Talk,
+                        disabled,
+                        cx,
+                    )),
             )
             .into_any_element()
     }
@@ -215,10 +284,16 @@ impl BoardView {
         components::ChoiceMenu {
             id: "board-more".into(),
             anchor: gpui::Anchor::TopLeft,
-            trigger: components::button("board-more")
-                .h(px(ROW))
+            trigger: components::form_button_on("board-more", rgb(CHROME).into(), cx)
+                .tab_stop(false)
+                .h(px(CONTROL_H))
                 .px(px(CH))
-                .child(components::text_ui().child("More")),
+                .child(components::text_ui().child("More"))
+                .child(crate::icons::icon(
+                    crate::icons::CHEVRON_DOWN,
+                    ICON_CHEVRON,
+                    TEXT_MUTED,
+                )),
             choices,
             open: self.controls.open == Some("more"),
             return_focus: self.focus.clone(),
@@ -294,19 +369,22 @@ impl BoardView {
         components::ChoiceMenu {
             id: name.into(),
             anchor: gpui::Anchor::TopLeft,
-            trigger: components::button(name)
+            trigger: components::form_button(name, cx)
+                .tab_stop(false)
                 .debug_selector(move || name.into())
-                .h(px(ROW))
-                .px(px(CH))
-                .max_w(px(36. * CH))
+                .h(px(CONTROL_H))
+                .px(px(CH / 2.))
+                .max_w(px(29. * CH))
+                .gap(px(CH / 2.))
                 .disabled(disabled || setting.is_none() || archived)
                 .accessibility_label(label)
-                .tip("Applies to this task’s next agent run")
+                .tip(format!("{title} · applies to this task’s next agent run"))
+                .child(components::text_meta().child(label))
                 .child(
                     components::text_ui()
-                        .text_color(rgb(TEXT_MUTED))
                         .truncate()
-                        .child(title),
+                        .text_color(rgb(if disabled { TEXT_MUTED } else { TEXT }))
+                        .child(shown.to_owned()),
                 )
                 .child(crate::icons::icon(
                     crate::icons::CHEVRON_DOWN,

@@ -2767,7 +2767,7 @@ impl CockpitView {
     /// threshold by `LEVEL_HYSTERESIS` on both axes — a resize that hovers
     /// at the edge never flickers between tiers.
     fn board_level(&self, window: &Window) -> Level {
-        if self.cockpit.roster().fullscreen().is_some() {
+        if self.projects.coordinator_shown() || self.cockpit.roster().fullscreen().is_some() {
             return Level::Transcript;
         }
         // Mid-ride the board is measured where the ride ends (F-12): the
@@ -3003,6 +3003,23 @@ impl CockpitView {
     /// whole board.
     fn pane_rects(&self, window: &Window) -> Vec<(usize, layout::Rect)> {
         let bounds = self.board_bounds(window);
+        if self.projects.coordinator_shown() {
+            return self
+                .projects
+                .coordinator_thread()
+                .and_then(|thread| self.pane_for(thread))
+                .map(|index| {
+                    vec![(
+                        index,
+                        layout::Rect {
+                            y: bounds.y + projects::TASKS_HEADER_H,
+                            h: (bounds.h - projects::TASKS_HEADER_H).max(0.),
+                            ..bounds
+                        },
+                    )]
+                })
+                .unwrap_or_default();
+        }
         if let Some(identity) = self.cockpit.roster().fullscreen() {
             return self
                 .index_of(identity)
@@ -3263,6 +3280,14 @@ impl CockpitView {
     /// The Panes on screen, as indices into the mirror — the roster's
     /// `visible`, in its order.
     fn visible_indices(&self) -> Vec<usize> {
+        if self.projects.coordinator_shown() {
+            return self
+                .projects
+                .coordinator_thread()
+                .and_then(|thread| self.pane_for(thread))
+                .into_iter()
+                .collect();
+        }
         // A Solo pair (`open_beside`) shows both of its Panes.
         if let Some((owner, companion)) = self.solo_pair() {
             return [owner, companion]
@@ -9066,7 +9091,9 @@ impl CockpitView {
     /// of the way, as herdr's board tab gives way to the tab you pick.
     fn focus_pane(&mut self, index: usize) {
         if let Some(identity) = self.panes.get(index).map(|pane| pane.identity) {
-            self.board_gives_way();
+            if self.projects.coordinator_thread().map(PaneIdentity::Thread) != Some(identity) {
+                self.board_gives_way();
+            }
             self.cockpit.focus(identity);
         }
     }
@@ -9988,6 +10015,12 @@ impl CockpitView {
         // went is read-only (ADR 0026): the root holds the keyboard, so no
         // Composer or control on its board takes a key until it is back.
         let lost = self.machine_lost();
+        let coordinator_waiting = self.projects.coordinator_shown()
+            && self
+                .projects
+                .coordinator_thread()
+                .and_then(|thread| self.pane_for(thread))
+                .is_none();
         let wanted = self
             .rename
             .as_ref()
@@ -10036,7 +10069,7 @@ impl CockpitView {
             .unwrap_or_else(|| self.focus.clone());
         // The empty board's list holds the keyboard while it shows (F-13):
         // its rows answer ↑ ↓ ⏎ under the `EmptyBoard` context.
-        let wanted = if lost {
+        let wanted = if lost || coordinator_waiting {
             self.focus.clone()
         } else if self.rename.is_none() && fullscreen.is_none() && self.empty_board_shown() {
             self.empty_focus.clone()
@@ -10130,7 +10163,12 @@ impl CockpitView {
             self.probe_cli_versions(cx);
         }
         let board = self.board_bounds(window);
-        let grid = if self.empty_shown && fullscreen.is_none() {
+        let grid = if self.projects.coordinator_shown() {
+            frame()
+                .flex()
+                .flex_col()
+                .child(self.coordinator_page(window, cx))
+        } else if self.empty_shown && fullscreen.is_none() {
             // Shown on purpose while Threads stay open (`show_empty_board`).
             frame().flex().child(self.empty_board(cx))
         } else if let Some(index) = fullscreen {
@@ -10208,7 +10246,7 @@ impl CockpitView {
             })
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
-            .when(!lost, |root| {
+            .when(!lost && !coordinator_waiting, |root| {
                 root.on_action(cx.listener(Self::submit))
                     .on_action(cx.listener(Self::unqueue_from_backspace))
                     .on_action(cx.listener(Self::allow))

@@ -231,6 +231,16 @@ schema follow, with a v1 fixture. The additions are those marked above:
 
 ### Seam 3: the board in GPUI
 
+Ferrite's Tasks workspace has two views: **Board** and **Coordinator chat**.
+The Board keeps its cached state when switching views. Coordinator chat
+shows the existing Coordinator Thread through the normal Transcript and
+Composer, including history and Decisions; switching views never restarts
+its Session. The adapter's terminal id resolves that Thread even after a
+Provider handover. If no Coordinator is running, opening the view uses the
+board's ordinary open request, with a loading state and a retry on failure.
+The workspace header and native task controls surround the vendored board;
+board-owned Threads remain reachable without appearing in the nav.
+
 The board is a GPUI view that replaces `board/run/` and nothing else.
 It owns the vendored `State`, turns GPUI's keys, mouse, a one-second
 tick and the loader's reads into the board's `Event`s, does the

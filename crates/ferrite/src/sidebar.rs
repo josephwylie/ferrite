@@ -35,6 +35,8 @@ pub(crate) const REFRESH: std::time::Duration = std::time::Duration::from_secs(1
 /// What the nav and the bottom bar show of the board.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Sidebar {
+    /// The live Coordinator's Thread, independent of its provider or title.
+    pub coordinator: Option<ThreadId>,
     /// Board-owned Threads, including parked agents and the Coordinator.
     pub owned: HashSet<ThreadId>,
     /// Each live agent's entry, by its Thread: a task's agent, its reviewer
@@ -108,6 +110,7 @@ pub(crate) fn read() -> Sidebar {
         .collect();
     sidebar.owned.extend(sidebar.agents.keys().copied());
     if let Some((thread, told)) = coordinator(&here, &theme) {
+        sidebar.coordinator = Some(thread);
         sidebar.owned.insert(thread);
         sidebar.agents.insert(thread, told);
     }
@@ -140,8 +143,14 @@ fn places_of(session: &Session) -> HashMap<ThreadId, String> {
 
 /// The Thread an agent of the adapter's runs in: its terminal's id. A pane
 /// with no open Thread has no agent.
-fn thread_in(agent: &Value) -> Option<ThreadId> {
-    agent.s("terminal_id").parse().ok().map(ThreadId::new)
+pub(crate) fn thread_in(agent: &Value) -> Option<ThreadId> {
+    agent
+        .s("terminal_id")
+        .split('@')
+        .next()?
+        .parse()
+        .ok()
+        .map(ThreadId::new)
 }
 
 /// The entries of the board's rows (`flow::live::board_for`'s), each by

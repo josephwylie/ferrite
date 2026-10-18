@@ -494,7 +494,7 @@ fn a_panes_thread_is_its_agents_terminal() {
     let agents = [
         (
             "p3",
-            json!({ "pane_id": "p3", "terminal_id": "7", "workspace_id": "s1", "agent_status": "working" }),
+            json!({ "pane_id": "p3", "terminal_id": "7@server-boot", "workspace_id": "s1", "agent_status": "working" }),
         ),
         (
             "12",

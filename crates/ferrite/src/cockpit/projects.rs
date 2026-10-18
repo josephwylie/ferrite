@@ -14,8 +14,18 @@ use crate::projects::{self, Command};
 use crate::sidebar::{self, Sidebar};
 use crate::theme::{paint, ICON_BUTTON, ICON_BUTTON_GLYPH, TEXT, TEXT_MUTED, TRANSPARENT};
 use gpui::component::notification::{Notification, NotificationType};
+use gpui::component::Selectable;
 use gpui::component::WindowExt as _;
 use gpui::{FocusHandle, Subscription};
+
+pub(super) const TASKS_HEADER_H: f32 = crate::theme::ROW * 2.;
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum TasksPage {
+    #[default]
+    Board,
+    Coordinator,
+}
 
 /// What the cockpit holds for Projects.
 #[derive(Default)]
@@ -39,8 +49,13 @@ pub(super) struct BoardSlot {
     /// Shown now: a tab's board stays open, hidden, while you are on a
     /// Thread, as herdr's board tab does.
     pub shown: bool,
+    page: TasksPage,
+    coordinator: Option<ThreadId>,
+    opening: bool,
+    error: Option<String>,
     /// What held the keyboard before it showed: it goes back there.
     back: Option<FocusHandle>,
+    back_thread: Option<ThreadId>,
     _events: Subscription,
 }
 
@@ -54,14 +69,29 @@ impl ProjectsState {
 
     /// Whether the board shows and holds the keyboard.
     pub(super) fn board_shown(&self) -> bool {
-        self.board.as_ref().is_some_and(|board| board.shown)
+        self.board
+            .as_ref()
+            .is_some_and(|board| board.shown && board.page == TasksPage::Board)
+    }
+
+    pub(super) fn coordinator_shown(&self) -> bool {
+        self.board
+            .as_ref()
+            .is_some_and(|board| board.shown && board.page == TasksPage::Coordinator)
+    }
+
+    pub(super) fn coordinator_thread(&self) -> Option<ThreadId> {
+        self.board
+            .as_ref()
+            .filter(|board| board.shown && board.page == TasksPage::Coordinator)?
+            .coordinator
     }
 
     /// Whether the board shows as the popup, over a veil.
     pub(super) fn popup_shown(&self) -> bool {
-        self.board
-            .as_ref()
-            .is_some_and(|board| board.shown && board.placement == Placement::Popup)
+        self.board.as_ref().is_some_and(|board| {
+            board.shown && board.page == TasksPage::Board && board.placement == Placement::Popup
+        })
     }
 
     /// Take the popup down for another float; a tab's board stays.
@@ -142,7 +172,7 @@ impl CockpitView {
     pub(super) fn toggle_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(test)]
         super::drawn::toggled_projects();
-        if self.board_focused(window, cx) {
+        if self.board_focused(window, cx) || self.projects.coordinator_shown() {
             self.leave_board(window, cx);
         } else {
             self.show_board(None, window, cx);
@@ -281,6 +311,7 @@ impl CockpitView {
             return;
         }
         let back = window.focused(cx);
+        let back_thread = self.focused_thread();
         let targets = self.task_targets();
         if let Some(board) = self.projects.board.as_ref() {
             board.view.update(cx, |view, cx| {
@@ -310,7 +341,12 @@ impl CockpitView {
                 view,
                 placement,
                 shown: false,
+                page: TasksPage::Board,
+                coordinator: None,
+                opening: false,
+                error: None,
                 back: None,
+                back_thread: None,
                 _events: events,
             });
         }
@@ -323,11 +359,191 @@ impl CockpitView {
         let Some(board) = self.projects.board.as_mut() else {
             return;
         };
+        if !board.shown || board.page == TasksPage::Board {
+            board.back = back;
+            board.back_thread = back_thread;
+        }
         board.shown = true;
-        board.back = back;
+        board.page = TasksPage::Board;
         let focus = board.view.read(cx).focus.clone();
         window.focus(&focus, cx);
         cx.notify();
+    }
+
+    /// Switch Tasks to its real Coordinator Thread. The cached BoardView
+    /// retains its selection, scroll position, filters, and unfinished draft.
+    fn show_coordinator(&mut self, cx: &mut Context<Self>) {
+        let Some(board) = self.projects.board.as_mut() else {
+            return;
+        };
+        board.page = TasksPage::Coordinator;
+        board.shown = true;
+        board.error = None;
+        let known = self.projects.sidebar.coordinator.or(board.coordinator);
+        if let Some(thread) = known.filter(|thread| self.cockpit.thread(*thread).is_some()) {
+            self.enter_coordinator(thread, cx);
+            return;
+        }
+        let board = self.projects.board.as_mut().unwrap();
+        if board.opening {
+            return;
+        }
+        board.coordinator = None;
+        board.opening = true;
+        let source = board.view.entity_id();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async { projects::coordinator_thread() })
+                .await;
+            this.update(cx, |view, cx| {
+                let Some(board) = view
+                    .projects
+                    .board
+                    .as_mut()
+                    .filter(|board| board.view.entity_id() == source)
+                else {
+                    return;
+                };
+                board.opening = false;
+                match result {
+                    Ok(thread) => {
+                        board.coordinator = Some(thread);
+                        if board.shown && board.page == TasksPage::Coordinator {
+                            view.enter_coordinator(thread, cx);
+                        }
+                    }
+                    Err(error) => board.error = Some(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn enter_coordinator(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        // The mirror may have just learned about a newly opened Thread.
+        self.pump(cx);
+        self.sync_panes(cx);
+        self.cockpit.focus_thread(thread);
+        self.empty_shown = false;
+        self.projects.sidebar.owned.insert(thread);
+        if let Some(board) = self.projects.board.as_mut() {
+            board.coordinator = Some(thread);
+            board.page = TasksPage::Coordinator;
+            board.shown = true;
+        }
+        cx.notify();
+    }
+
+    /// Shared navigation for the task list and the full conversation.
+    fn tasks_header(&self, cx: &mut Context<Self>) -> Div {
+        use crate::theme::{CH, CHROME, CONTROL_H, LINE, TEXT_STRONG, W_STRONG};
+        let chat = self.projects.coordinator_shown();
+        let tab = |id: &'static str, label: &'static str, selected: bool| {
+            crate::components::form_button(id, cx)
+                .debug_selector(move || id.into())
+                .h(px(CONTROL_H))
+                .px(px(CH))
+                .selected(selected)
+                .accessibility_label(label)
+                .child(
+                    crate::components::text_ui()
+                        .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_MUTED }))
+                        .font_weight(if selected {
+                            W_STRONG
+                        } else {
+                            gpui::FontWeight::NORMAL
+                        })
+                        .child(label),
+                )
+        };
+        let board =
+            tab("tasks-board-tab", "Board", !chat).on_click(cx.listener(|view, _, window, cx| {
+                cx.stop_propagation();
+                view.show_board(None, window, cx);
+            }));
+        let coordinator = tab("tasks-coordinator-tab", "Coordinator chat", chat).on_click(
+            cx.listener(|view, _, _, cx| {
+                cx.stop_propagation();
+                view.show_coordinator(cx);
+            }),
+        );
+        crate::components::text_ui()
+            .debug_selector(|| "tasks-header".into())
+            .flex()
+            .items_center()
+            .flex_shrink_0()
+            .h(px(TASKS_HEADER_H))
+            .px(px(CH * 1.5))
+            .gap(px(CH))
+            .bg(rgb(CHROME))
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .border_b_1()
+            .border_color(rgb(LINE))
+            .child(crate::icons::icon(crate::icons::BOARD, 16., TEXT_MUTED))
+            .child(
+                crate::components::text_ui()
+                    .text_color(rgb(TEXT_STRONG))
+                    .font_weight(W_STRONG)
+                    .child("Tasks"),
+            )
+            .child(
+                div()
+                    .w(px(1.))
+                    .h(px(crate::theme::ROW))
+                    .mx(px(CH / 2.))
+                    .bg(rgb(LINE)),
+            )
+            .child(board)
+            .child(coordinator)
+    }
+
+    pub(super) fn coordinator_page(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let mut page = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .debug_selector(|| "tasks-coordinator-page".into())
+            .child(self.tasks_header(cx));
+        if let Some(index) = self
+            .projects
+            .coordinator_thread()
+            .and_then(|thread| self.pane_for(thread))
+        {
+            page = page.child(self.pane_slot(index, Level::Transcript, window, cx));
+        } else {
+            let error = self
+                .projects
+                .board
+                .as_ref()
+                .and_then(|board| board.error.as_ref());
+            let message = error
+                .cloned()
+                .unwrap_or_else(|| "Opening Coordinator chat…".into());
+            page = page.child(
+                crate::components::text_ui()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(crate::theme::ROW))
+                    .p(px(crate::theme::ROW))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(message)
+                    .when(error.is_some(), |body| {
+                        body.child(
+                            crate::components::form_button("coordinator-retry", cx)
+                                .label("Try again")
+                                .on_click(cx.listener(|view, _, _, cx| view.show_coordinator(cx))),
+                        )
+                    }),
+            );
+        }
+        page
     }
 
     /// Back to where you came from: a tab's board stays open, hidden; the
@@ -338,8 +554,12 @@ impl CockpitView {
         };
         board.shown = false;
         let back = board.back.take();
+        let back_thread = board.back_thread.take();
         if board.placement == Placement::Popup {
             self.projects.board = None;
+        }
+        if let Some(thread) = back_thread {
+            self.cockpit.focus_thread(thread);
         }
         if let Some(back) = back {
             window.focus(&back, cx);
@@ -407,7 +627,12 @@ impl CockpitView {
             view,
             placement,
             shown: true,
+            page: TasksPage::Board,
+            coordinator: None,
+            opening: false,
+            error: None,
             back: None,
+            back_thread: self.focused_thread(),
             _events: events,
         });
         cx.notify();
@@ -514,7 +739,12 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(board_slot) = self.projects.board.as_ref().filter(|board| board.shown) else {
+        let Some(board_slot) = self
+            .projects
+            .board
+            .as_ref()
+            .filter(|board| board.shown && board.page == TasksPage::Board)
+        else {
             return Vec::new();
         };
         let board = self.board_bounds(window);
@@ -525,20 +755,27 @@ impl CockpitView {
             (board.w, board.h)
         };
         let view = board_slot.view.clone();
-        view.update(cx, |view, _| view.fit(width, height));
+        view.update(cx, |view, _| {
+            view.fit(width, (height - TASKS_HEADER_H).max(0.))
+        });
         let anchor = gpui::Bounds::new(
             gpui::point(px(board.x), px(board.y)),
             gpui::size(px(board.w), px(board.h)),
         );
-        let float = float::hang(
-            view.into(),
+        let float = float::hang_element(
+            div()
+                .flex()
+                .flex_col()
+                .w(px(width))
+                .h(px(height))
+                .child(self.tasks_header(cx))
+                .child(view)
+                .into_any_element(),
             anchor,
             FloatPlace::BoardTop {
                 top: (board.h - height) / 2.0,
                 width,
             },
-            window,
-            cx,
         );
         if !popup {
             return vec![float];

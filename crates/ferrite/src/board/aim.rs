@@ -9,7 +9,9 @@ use gpui::{div, px, rgb, AnyElement, Context, SharedString};
 
 use super::BoardView;
 use crate::components;
-use crate::theme::{CH, FS_UI, ICON_CHEVRON, LH_UI, ROW, TEXT, TEXT_MUTED};
+use crate::theme::{
+    CH, CHROME, CONTROL_H, FS_UI, ICON_CHEVRON, LH_UI, LINE, ROW, TEXT, TEXT_MUTED,
+};
 
 /// A nav Project new tasks can go to.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,7 +37,7 @@ impl Aim {
         if self.targets.is_empty() {
             0.0
         } else {
-            ROW
+            ROW * 2.
         }
     }
 }
@@ -123,9 +125,10 @@ impl BoardView {
         );
         let weak = cx.entity().downgrade();
         let picking = weak.clone();
-        let trigger = components::button("board-aim")
+        let trigger = components::form_button("board-aim", cx)
+            .tab_stop(false)
             .debug_selector(|| "board-aim".into())
-            .h(px(ROW))
+            .h(px(CONTROL_H))
             .px(px(CH))
             .max_w(px(30. * CH))
             .accessibility_label("Project for new tasks")
@@ -173,17 +176,26 @@ impl BoardView {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .h(px(ROW))
-                .pl(px(CH))
+                .h(px(self.aim.height()))
+                .px(px(CH * 1.5))
+                .gap(px(CH))
+                .bg(rgb(CHROME))
+                .border_b_1()
+                .border_color(rgb(LINE))
                 .text_color(rgb(TEXT_MUTED))
                 .whitespace_nowrap()
                 // Its presses are its own, not a click on the board's cells.
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child("Project:")
                 .child(picker)
                 .child(div().flex_1())
-                .child(self.project_scope_button(true, cx))
-                .child(self.project_scope_button(false, cx))
+                .child(
+                    div()
+                        .flex()
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .child(self.project_scope_button(true, cx))
+                        .child(self.project_scope_button(false, cx)),
+                )
                 .into_any_element(),
         )
     }
