@@ -45,6 +45,7 @@ pub fn look(socket: &str) -> Look {
         return Look { state: "none".into(), run: def.clone(), def, ..Default::default() };
     };
     let agent = if c.b("pane") && (crate::herdr::cli::fake().is_some() || socket_exists(socket)) { Herdr::new(Some(socket.into())).agent_get(c.s("pane")).ok().flatten() } else { None };
+    let c = super::state::follow_agent(socket, &c, agent.as_ref()); // Ferrite: the native chat owns its Provider choice.
     let status = agent.as_ref().map(|a| a.t("agent_status"));
     let run = c.o("run").cloned().or_else(|| c.o("pick").cloned()).or_else(|| c.at("want").o("pick").cloned()).or_else(|| def.clone());
     let busy = pumping(&c) || c.b("want");

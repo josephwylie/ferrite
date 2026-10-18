@@ -302,7 +302,7 @@ fn an_agent_quit_and_started_again_is_its_thread_revived() {
     assert!(refused(s.run(&["agent", "get", &pane])).code == "agent_not_found", "the pane is at its shell");
     assert!(s.run(&["pane", "get", &pane]).unwrap().at("pane").at("agent").is_null());
     let again = s.run(&["agent", "start", "hp-demo-t-0001-b", "--kind", "claude", "--pane", &pane, "--", "--resume", "s-1"]).unwrap();
-    assert_eq!(s.last("thread.revive"), json!({ "args": [], "env": { "HERDR_PROJECTS_DATA_DIR": "/data" }, "launcher": [], "ready": true, "timeout_ms": 60000, "resume": "s-1", "thread": 21 }));
+    assert_eq!(s.last("thread.revive"), json!({ "args": [], "env": { "HERDR_PROJECTS_DATA_DIR": "/data" }, "launcher": [], "ready": true, "timeout_ms": 60000, "resume": "s-1", "thread": 21, "launch_provider": "claude" }));
     assert_eq!(s.last("thread.rename"), json!({ "thread": 21, "title": "hp-demo-t-0001-b" }));
     assert_eq!(again.at("agent").s("terminal_id"), "21@b1", "the same terminal while the Server runs");
     assert_eq!(s.count("thread.start"), 1);
@@ -310,6 +310,20 @@ fn an_agent_quit_and_started_again_is_its_thread_revived() {
     s.run(&["agent", "start", "hp-demo-t-0001", "--kind", "codex", "--pane", &pane]).unwrap();
     assert_eq!(s.count("thread.start"), 2, "another kind is another Thread");
     assert_eq!(s.run(&["agent", "get", &pane]).unwrap().at("agent").s("terminal_id"), "22@b1");
+}
+
+#[test]
+fn a_native_provider_switch_is_remembered_when_the_pane_is_parked() {
+    let s = Stand::new("handover-revive");
+    let pane = s.tab();
+    s.run(&["agent", "start", "coordinator", "--kind", "claude", "--pane", &pane]).unwrap();
+    s.world.lock().unwrap().threads[0]["provider"] = json!("codex");
+    assert_eq!(s.run(&["agent", "get", &pane]).unwrap().at("agent").s("agent"), "codex");
+    s.ferrite.quit(&pane).unwrap();
+    s.run(&["agent", "start", "coordinator", "--kind", "codex", "--pane", &pane, "--", "resume", "codex-current"]).unwrap();
+    assert_eq!(s.count("thread.start"), 1, "the native handover keeps the Thread");
+    assert_eq!(s.last("thread.revive").s("launch_provider"), "codex");
+    assert_eq!(s.last("thread.revive").s("resume"), "codex-current");
 }
 
 /// herdr's terminal id changes when its server restarts, its `state_change_seq` starting over (`flow/hook.rs`

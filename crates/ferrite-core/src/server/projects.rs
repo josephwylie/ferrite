@@ -505,6 +505,8 @@ pub(super) mod tests {
             thread: ThreadId::new(7),
             title: None,
             provider: Provider::Claude,
+            model: None,
+            effort: None,
             attention,
             cwd: None,
             focused: false,

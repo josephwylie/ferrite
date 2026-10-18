@@ -30,6 +30,51 @@ fn touch(f: &Path, ms: i64) { let at = std::time::UNIX_EPOCH + std::time::Durati
 fn write(f: &Path, text: &str, ms: i64) { std::fs::create_dir_all(f.parent().unwrap()).unwrap(); std::fs::write(f, text).unwrap(); touch(f, ms); }
 fn now() -> i64 { sw::clock::now() }
 
+// Ferrite: changing Provider in the native chat must change the board's next restart too.
+#[test]
+fn ferrite_coordinator_follows_provider_handover_before_restart() {
+    for (from, to) in [("claude", "codex"), ("codex", "claude")] {
+        let w = coord_world_with(json!({ "coordinator.agent": from }));
+        tell(&w, "hello");
+        let session = "22222222-2222-4222-8222-222222222222";
+        w.patch(|st| { for p in st["panes"].as_array_mut().unwrap() { if p.at("agent").is_object() {
+            p["agent"]["kind"] = json!(to); p["agent"]["session"] = json!(session);
+        } } });
+        if to == "codex" {
+            let file = PathBuf::from(std::env::var("CODEX_HOME").unwrap()).join("sessions/2026").join(format!("rollout-2026-{session}.jsonl"));
+            write(&file, &format!("{}\n", json!({ "type": "session_meta", "payload": { "id": session, "cwd": real_home(&w), "source": "cli" } })), now() + 500);
+        } else {
+            let folder: String = real_home(&w).chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+            let file = PathBuf::from(std::env::var("CLAUDE_CONFIG_DIR").unwrap()).join("projects").join(folder).join(format!("{session}.jsonl"));
+            write(&file, &format!("{}\n", json!({ "type": "assistant", "uuid": "handover", "timestamp": sw::clock::iso(now()), "message": { "role": "assistant", "content": [{ "type": "text", "text": "continued" }], "stop_reason": "end_turn" } })), now() + 500);
+        }
+        sw::coordinator::pump::active(&w.socket, &get(&w));
+        assert_eq!(get(&w).at("run").s("kind"), to, "the board retained the pre-handover provider");
+        assert_eq!(get(&w).s("session"), session);
+        again(&w);
+        assert_eq!(agents(&w)[0].at("agent").s("kind"), to);
+        assert_eq!(get(&w).s("session"), session, "restart kept the selected conversation");
+        if to == "codex" { assert!(!args(&w).iter().any(|a| a == "--session-id" || a == "--dangerously-skip-permissions")); }
+        else { assert!(!args(&w).iter().any(|a| a == "--no-daemon")); }
+    }
+}
+
+// Ferrite: a native handover's model and effort belong to the new Provider; its queue stays intact.
+#[test]
+fn ferrite_coordinator_handover_keeps_the_selected_model_and_pending_messages() {
+    let w = coord_world_with(json!({}));
+    tell(&w, "hello");
+    state::change(&w.socket, |c| { c.put("queue", json!([{ "text": "keep this message" }])); true }).unwrap();
+    let before = get(&w);
+    let after = state::follow_agent(&w.socket, &before, Some(&json!({
+        "agent": "codex", "model": "gpt-6-astra", "effort": "high",
+        "agent_session": { "kind": "id", "value": "codex-current" }
+    })));
+    assert_eq!(after.at("run").s("model"), "gpt-6-astra");
+    assert_eq!(after.at("run").s("effort"), "high");
+    assert_eq!(after.at("queue"), before.at("queue"));
+}
+
 #[test]
 fn a_program_that_names_its_own_conversations_codex_is_restarted_in_the_same_one_without_the_board_having_looked_first() {
     let w = coord_world_with(json!({ "coordinator.agent": "codex" }));

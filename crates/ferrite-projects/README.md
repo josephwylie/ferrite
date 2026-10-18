@@ -49,6 +49,11 @@ Each is marked `Ferrite:` in a comment.
   they exit. Detaching their session alone left zombies under the long-lived
   keeper and window, consuming process slots. The waiter starts before its
   child so a thread-creation failure cannot orphan an unowned child.
+- **Coordinator handovers** (`flow/coordinator/{state,pump,look}.rs`):
+  follow the native Thread's Provider before reading its conversation or
+  restarting it. The Ferrite adapter remembers that Provider in its pane
+  and scopes revive overrides with `launch_provider`, so stale Claude flags
+  cannot replace a Codex Thread's saved launch (or the reverse).
 - **Tests.** Not taken: the web board's tests (`web_*.rs` but `web_link`
   and `web_link_ask`, and `web` and `web_as` in `common/board.rs`,
   `answered` and `ask_again` in `far/mod.rs`); a test that also checked the

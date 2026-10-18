@@ -50,6 +50,9 @@ pub use windows::WindowId;
 /// ADR 0031).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Launch {
+    /// The Provider these overrides were written for. On revival after a
+    /// handover, foreign overrides leave the current conversation intact.
+    pub launch_provider: Option<Provider>,
     /// Extra arguments for the provider's CLI, after Ferrite's own, for
     /// every Session of that provider while the Thread is open.
     pub args: Vec<String>,
@@ -2047,6 +2050,14 @@ impl Engine {
         let mut revival = self.store.revive(thread)?;
         let snapshot = revival.snapshot();
         let provider = snapshot.provider();
+        // The board may still remember the Provider from before a handover.
+        // Its flags, launcher and resume id belong to that Provider alone;
+        // keep the Thread's current conversation and saved launch instead.
+        let launch = launch.filter(|launch| {
+            launch
+                .launch_provider
+                .is_none_or(|target| target == provider)
+        });
         let mut workspace = snapshot.workspace();
         let session_project_root = snapshot.session_project_root();
         let model = snapshot.model();

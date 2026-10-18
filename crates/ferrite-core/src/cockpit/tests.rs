@@ -5053,6 +5053,92 @@ fn a_thread_started_with_args_is_revived_with_them() {
 
 type Launched = (Vec<(String, String)>, Vec<String>);
 
+/// A board restart can still name the provider from before a handover.
+/// Its flags and conversation id must never be applied to the new one.
+#[test]
+fn stale_board_launch_after_handover_resumes_the_current_provider() {
+    for (from, to, args) in [
+        (
+            Provider::Claude,
+            Provider::Codex,
+            vec![
+                "--session-id",
+                "old-claude",
+                "--dangerously-skip-permissions",
+            ],
+        ),
+        (
+            Provider::Codex,
+            Provider::Claude,
+            vec!["--no-daemon", "-c", "notify=[\"old-hook\"]"],
+        ),
+    ] {
+        let (mut core, fake) = cockpit(&format!("stale-board-launch-{from}"));
+        let thread = core.open(from, main_choice()).unwrap();
+        core.send(thread, "keep this conversation".into());
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        core.pump();
+        core.set_provider(
+            thread,
+            ProviderChoice {
+                provider: to,
+                model: None,
+            },
+        )
+        .unwrap();
+        fake.streams
+            .borrow()
+            .last()
+            .unwrap()
+            .send(SessionEvent::Init {
+                session_id: "current-conversation".into(),
+                model: "current-model".into(),
+            })
+            .unwrap();
+        core.pump();
+        core.send(thread, "continue on this provider".into());
+        fake.streams.borrow().last().unwrap().send(ended()).unwrap();
+        core.pump();
+        core.park(thread).unwrap();
+        core.engine_mut()
+            .revive_with(
+                thread,
+                crate::engine::Launch {
+                    launch_provider: Some(from),
+                    args: args.into_iter().map(String::from).collect(),
+                    resume: Some("old-conversation".into()),
+                    env: vec![("OLD_PROVIDER".into(), "1".into())],
+                    launcher: vec!["old-provider-launcher".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(core.engine().thread(thread).unwrap().provider(), to);
+        assert!(
+            fake.args.borrow().last().unwrap().is_empty(),
+            "foreign flags reached {to}"
+        );
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap().as_deref(),
+            Some("current-conversation")
+        );
+        assert_eq!(
+            fake.launched.borrow().last().unwrap(),
+            &(Vec::new(), Vec::new())
+        );
+        core.park(thread).unwrap();
+        core.revive(thread).unwrap();
+        assert!(
+            fake.args.borrow().last().unwrap().is_empty(),
+            "foreign flags were saved"
+        );
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap().as_deref(),
+            Some("current-conversation")
+        );
+    }
+}
+
 /// The Coordinator's start names its new conversation (`--session-id`),
 /// which Claude refuses for good once the conversation exists: only the
 /// first Session is given it. A Session started again after the first

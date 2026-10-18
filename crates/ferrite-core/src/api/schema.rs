@@ -212,6 +212,11 @@ pub struct ThreadStartParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadReviveParams {
     pub thread: ThreadId,
+    /// The Provider these launch overrides target. If the Thread has
+    /// switched since, resume its current conversation with its saved
+    /// launch instead. This does not switch the Thread's Provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_provider: Option<Provider>,
     /// As `thread.start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,

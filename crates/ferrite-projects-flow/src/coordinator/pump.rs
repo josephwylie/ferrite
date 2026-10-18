@@ -55,18 +55,18 @@ pub fn tick(socket: &str) {
 /// The conversation it is in: the newest one saved in its folder since this Coordinator began; for a program whose
 /// files the board does not read, the one herdr's integration names for its pane.
 pub fn active(socket: &str, c: &Obj) -> Option<String> {
+    let agent = if c.b("pane") && up(socket) { Herdr::new(Some(socket.into())).agent_get(c.s("pane")).ok().flatten() } else { None };
+    let followed = super::state::follow_agent(socket, c, agent.as_ref()); // Ferrite: observe handovers before using run.kind.
+    let changed = followed.at("run").s("kind") != c.at("run").s("kind");
+    let c = &followed;
     let Some(run) = c.o("run") else { return c.so("session").map(String::from) };
     let since = if c.b("since") { c.i("since") } else { c.i("startedAt") };
     let h = home(socket);
-    let id = adapter::latest_session(run.s("kind"), &h, since, moved_from(&h).as_deref()).or_else(|| told_session(socket, c));
+    let told = agent.as_ref().and_then(|a| a.at("agent_session").so("value")).filter(|s| !s.is_empty()).map(String::from);
+    let latest = || adapter::latest_session(run.s("kind"), &h, since, moved_from(&h).as_deref());
+    let id = if changed { told.or_else(latest) } else { latest().or(told) };
     if let Some(i) = &id { if i != c.s("session") { let (since_v, i2) = (c.at("since").clone(), i.clone()); let _ = change(socket, |x| { if *x.at("since") != since_v || x.s("session") == i2 { return false; } x.put("session", i2.clone()); true }); } }
     id.or_else(|| c.so("session").map(String::from))
-}
-/// The conversation herdr's integration names for the Coordinator's pane, if any.
-fn told_session(socket: &str, c: &Obj) -> Option<String> {
-    if !c.b("pane") || !up(socket) { return None; }
-    let a = Herdr::new(Some(socket.into())).agent_get(c.s("pane")).ok().flatten()?;
-    Some(a.at("agent_session").t("value")).filter(|s| !s.is_empty())
 }
 fn ensure(api: &Herdr, socket: &str) -> Res<(Obj, bool)> {
     let mut c = get(socket).unwrap_or_default();
@@ -102,8 +102,9 @@ fn ensure(api: &Herdr, socket: &str) -> Res<(Obj, bool)> {
     change(socket, |c| { c.put("starting", began); true })?;
     let args = start::start_args(&k, &start::StartOpts { model: run.t("model"), effort: run.t("effort"), access: if run.b("access") { run.t("access") } else { "full".into() }, fast: run.b("fast").then_some(true), resume: resume.clone().unwrap_or_default(), session: session.clone().unwrap_or_default(), ..Default::default() })?;
     let mut blocked = false;
+    let mut started_agent = None; // Ferrite: a guarded revive can return the Provider selected in the native chat.
     match api.agent_start(&name, &k, pane.s("pane_id"), &args, 60000) {
-        Ok(_) => { settle(api, pane.s("pane_id"), &std::iter::once(crate::agents::kinds::program(&k).to_string()).chain(args).collect::<Vec<_>>().join(" ")); }
+        Ok(agent) => { started_agent = Some(agent); settle(api, pane.s("pane_id"), &std::iter::once(crate::agents::kinds::program(&k).to_string()).chain(args).collect::<Vec<_>>().join(" ")); }
         Err(e) if e.code == "agent_not_ready" => blocked = true, // a dialog is in the way: what you said waits
         Err(e) => {
             // Why, in plain words, read from its terminal before its tab is closed; the whole account goes in its log.
@@ -120,6 +121,7 @@ fn ensure(api: &Herdr, socket: &str) -> Res<(Obj, bool)> {
         if resume.is_none() { c.put("session", session.clone().map(Value::String).unwrap_or(Value::Null)); c.put("transcript", Value::Null); c.put("since", began); c.put("seen", Value::Null); }
         true
     })?;
+    c = super::state::follow_agent(socket, &c, started_agent.as_ref()); // Ferrite: use the actual Provider before sending anything.
     Ok((c, blocked))
 }
 pub fn pump(socket: &str) {

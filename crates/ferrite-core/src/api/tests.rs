@@ -366,6 +366,7 @@ fn samples() -> Vec<Request> {
         })),
         request(Method::ThreadRevive(ThreadReviveParams {
             thread: thread(),
+            launch_provider: None,
             args: vec!["--model".into(), "opus".into()],
             resume: Some("4f2a".into()),
             env: [("HERDR_PROJECTS_DATA_DIR".into(), "/data".into())].into(),
@@ -561,6 +562,8 @@ fn answers_refusals_and_events_keep_their_shape() {
         thread: thread(),
         title: Some("reviewer".into()),
         provider: Provider::Codex,
+        model: None,
+        effort: None,
         attention: Attention::Done,
         cwd: Some(PathBuf::from("/work/app")),
         focused: true,
@@ -1129,6 +1132,7 @@ fn herdr_projects_calls_read_as_their_parameters() {
         parse("thread.revive", &["12", "--resume", "4f2a", "--ready"]),
         Ok(Method::ThreadRevive(ThreadReviveParams {
             thread: thread(),
+            launch_provider: None,
             args: Vec::new(),
             resume: Some("4f2a".into()),
             env: Default::default(),

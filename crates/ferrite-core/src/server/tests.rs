@@ -2183,6 +2183,71 @@ fn a_closed_thread_is_revived_in_place() {
     assert_eq!(unknown["error"]["code"], "unknown_thread", "{unknown}");
 }
 
+/// The board scopes restart flags to its remembered Provider. A stale
+/// request preserves the actual Provider's launch and conversation.
+#[test]
+fn api_revival_scopes_launch_overrides_to_their_provider() {
+    let harness = start("api-revive-provider");
+    let mut caller = call(&harness);
+    let started = caller.answer(
+        "1",
+        "thread.start",
+        serde_json::json!({
+            "cwd": harness.dir, "provider": "codex", "ready": true,
+            "args": ["-c", "model_reasoning_effort=high"],
+        }),
+    );
+    let thread = started["result"]["thread"]["thread"].clone();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    provider
+        .send(SessionEvent::Init {
+            session_id: "codex-current".into(),
+            model: "codex-model".into(),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let got = caller.answer("2", "thread.get", serde_json::json!({ "thread": thread }));
+        if got["result"]["thread"]["provider_session"] == "codex-current" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Init was not observed: {got}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    caller.answer("3", "thread.close", serde_json::json!({ "thread": thread }));
+    let revived = caller.answer(
+        "4",
+        "thread.revive",
+        serde_json::json!({
+            "thread": thread, "launch_provider": "claude", "ready": true,
+            "args": ["--session-id", "claude-old", "--dangerously-skip-permissions"],
+            "resume": "claude-old",
+        }),
+    );
+    assert_eq!(
+        revived["result"]["thread"]["provider"], "codex",
+        "{revived}"
+    );
+    assert_eq!(
+        revived["result"]["thread"]["provider_session"], "codex-current",
+        "{revived}"
+    );
+    let saved = harness
+        .dir
+        .join("threads")
+        .join(thread.as_u64().unwrap().to_string())
+        .join("args.json");
+    let args: serde_json::Value = serde_json::from_slice(&std::fs::read(saved).unwrap()).unwrap();
+    assert_eq!(args["provider"], "codex");
+    assert_eq!(
+        args["args"],
+        serde_json::json!(["-c", "model_reasoning_effort=high"])
+    );
+}
+
 /// Herdr's `state_change_seq` never repeats within a run: a Thread's turn
 /// after its revive counts past every turn before its park, so a turn
 /// handled once is never taken for the next one. The boot names the run.

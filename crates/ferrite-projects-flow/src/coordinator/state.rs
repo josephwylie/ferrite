@@ -8,6 +8,19 @@ use std::path::PathBuf;
 pub fn dir_of(socket: &str) -> PathBuf { data_dir().join("coordinator").join(session_name(socket)) }
 fn file_of(socket: &str) -> PathBuf { dir_of(socket).join("state.json") }
 pub fn get(socket: &str) -> Option<Obj> { read_obj(&file_of(socket)) }
+/// Ferrite: the operator can hand the native chat to another Provider. Follow that choice before reading its
+/// conversation or restarting it; a model, effort and transcript from the old Provider do not cross the handover.
+pub fn follow_agent(socket: &str, before: &Obj, agent: Option<&Value>) -> Obj {
+    let Some(agent) = agent.filter(|a| a.b("agent") && a.s("agent") != before.at("run").s("kind")) else { return before.clone() };
+    change(socket, |c| {
+        if c.s("pane") != before.s("pane") || c.at("run").s("kind") != before.at("run").s("kind") { return false; }
+        let mut run = c.o("run").cloned().unwrap_or_default();
+        run.put("kind", agent.at("agent").clone()); run.put("model", agent.t("model")); run.put("effort", agent.t("effort"));
+        c.put("run", run); c.put("transcript", Value::Null);
+        c.put("session", agent.at("agent_session").at("value").clone());
+        true
+    }).unwrap_or_else(|_| before.clone())
+}
 /// A pump (the detached job that starts it and types into it) is at work for this herdr session.
 pub fn pumping(c: &Obj) -> bool { c.at("pump").is_object() && marker_alive(c.at("pump")) }
 /// The one way its state changes: under its lock. `f` returning false writes nothing.

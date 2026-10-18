@@ -226,6 +226,7 @@ impl Server {
         };
         let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
         let launch = Launch {
+            launch_provider: params.provider,
             args: params.args,
             env: params.env.into_iter().collect(),
             launcher: params.launcher,
@@ -271,6 +272,7 @@ impl Server {
             ));
         }
         let launch = Launch {
+            launch_provider: params.launch_provider,
             args: params.args,
             env: params.env.into_iter().collect(),
             launcher: params.launcher,

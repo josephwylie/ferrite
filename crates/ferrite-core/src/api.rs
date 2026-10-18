@@ -180,6 +180,10 @@ pub struct ThreadInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub provider: Provider,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     pub attention: Attention,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
@@ -227,6 +231,8 @@ pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
         thread,
         title: view.title().map(Into::into),
         provider: view.provider(),
+        model: view.model().map(Into::into),
+        effort: view.effort().map(Into::into),
         attention: engine.attention(thread)?,
         cwd: view.workspace().map(|binding| binding.cwd().to_path_buf()),
         focused: engine.focused_thread() == Some(thread),

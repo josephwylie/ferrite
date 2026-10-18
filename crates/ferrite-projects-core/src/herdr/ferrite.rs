@@ -183,6 +183,7 @@ impl Place {
         let mut a = json!({ "pane_id": self.id, "tab_id": self.id, "workspace_id": self.space, "terminal_id": self.terminal(), "name": t.t("title"), "agent": t.at("provider"),
             "agent_status": t.at("attention"), "cwd": self.cwd, "foreground_cwd": self.cwd, "state_change_seq": t.at("attention_seq") });
         if let Some(session) = t.so("provider_session") { a["agent_session"] = json!({ "kind": "id", "value": session }); }
+        for key in ["model", "effort"] { if let Some(value) = t.so(key) { a[key] = json!(value); } }
         // Absent until its first finished turn, as herdr's.
         if let Some(seq) = t.at("completion_seq").as_u64() { a["completion_seq"] = json!(seq); }
         Some(a)
@@ -292,7 +293,12 @@ impl Ferrite {
         for t in threads {
             let thread = t.at("thread").as_u64();
             let id = panes.iter().find(|(_, p)| p.thread.is_some() && p.thread == thread).map(|(id, _)| id.clone());
-            let pane = id.as_ref().and_then(|id| panes.remove(id));
+            let mut pane = id.as_ref().and_then(|id| panes.remove(id));
+            // A native-chat handover changes the Thread's Provider, also for its next board restart.
+            if let (Some(id), Some(p)) = (&id, &mut pane) { if p.kind != t.s("provider") {
+                p.kind = t.t("provider");
+                self.panes.update(id, |saved| { if saved.thread == thread { saved.kind = p.kind.clone(); } }).map_err(failed)?;
+            } }
             // A Thread in a linked worktree is in that worktree's Space; any other in its Project's.
             let space = pane.as_ref().map(|p| p.space.clone()).unwrap_or_else(|| if t.b("worktree") { t.t("worktree") } else { t.t("project") });
             let label = pane.as_ref().map(|p| p.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| t.t("title"));
@@ -512,6 +518,7 @@ impl Ferrite {
         let again = pane.thread.filter(|_| pane.kind == kind).map(|thread| {
             let mut params = how.clone();
             params["thread"] = json!(thread);
+            params["launch_provider"] = json!(provider);
             self.call("thread.revive", params).and_then(|r| {
                 if r.at("thread").s("title") != name { self.call("thread.rename", json!({ "thread": thread, "title": name }))?; }
                 Ok(r)
