@@ -20,6 +20,21 @@ pub fn detach(c: &mut Command) {
     use std::os::unix::process::CommandExt;
     unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
 }
+/// Ferrite: detaching a session does not reap its process. Start the waiter before the child, so even a failure to
+/// create a waiter cannot leave a child behind. Only the spawn result is synchronous; the job still runs freely.
+pub(crate) fn spawn_background(mut command: Command) -> std::io::Result<u32> {
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new().name("projects-child".into()).spawn(move || {
+        match command.spawn() {
+            Ok(mut child) => {
+                let _ = send.send(Ok(child.id()));
+                let _ = child.wait();
+            }
+            Err(error) => { let _ = send.send(Err(error)); }
+        }
+    })?;
+    receive.recv().map_err(std::io::Error::other)?
+}
 /// Start a detached runner for one job on one task. Returns at once.
 pub fn spawn_runner(job: &str, id: &str, extra: &[&str]) -> u32 {
     if inline() { JOBS.with(|j| j.borrow_mut().push((job.into(), id.into(), extra.iter().map(|s| s.to_string()).collect()))); return 0; }
@@ -32,7 +47,7 @@ pub fn spawn_runner(job: &str, id: &str, extra: &[&str]) -> u32 {
     for k in DROP_ENV { c.env_remove(k); }
     match log { Ok(f) => { let f2 = f.try_clone().ok(); c.stdout(f); if let Some(f2) = f2 { c.stderr(f2); } } Err(_) => { c.stdout(Stdio::null()).stderr(Stdio::null()); } }
     detach(&mut c);
-    c.spawn().map(|ch| ch.id()).unwrap_or(0)
+    spawn_background(c).unwrap_or(0) // Ferrite: the keeper and window outlive these jobs; reap every exit.
 }
 /// Tests drain the jobs that would have been detached.
 pub fn drain_jobs(run: &dyn Fn(&str, &str, &[String])) {
@@ -50,7 +65,7 @@ pub fn detached_sh(cmd: &str, env: &[(&str, String)]) {
     c.args(["-c", cmd]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     for (k, v) in env { c.env(k, v); }
     detach(&mut c);
-    let _ = c.spawn();
+    let _ = spawn_background(c); // Ferrite: a notification also needs a waiter.
 }
 pub fn runner_alive(t: &Task) -> bool { marker_alive(t.at("runner")) }
 fn mine(m: &Value) -> bool { m.i("pid") == std::process::id() as i64 }

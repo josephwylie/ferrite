@@ -20,8 +20,8 @@ pub fn ensure_server() -> Value {
     let mut c = std::process::Command::new(bin());
     c.arg("serve").current_dir(data_dir()).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     crate::runner::detach(&mut c);
-    let Ok(child) = c.spawn() else { return Value::Null };
-    let pid = child.id() as i64;
+    let Ok(pid) = crate::runner::spawn_background(c) else { return Value::Null }; // Ferrite: reap the page server when it exits.
+    let pid = pid as i64;
     for _ in 0..40 {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if let Some(i) = read_json(&serve_file()) { if i.i("pid") == pid && i.b("port") { return i; } }

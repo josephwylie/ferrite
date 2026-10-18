@@ -96,7 +96,7 @@ pub fn fetch_mains() {
     }
 }
 /// A detached job that belongs to no single task.
-pub fn spawn_loose(a: &[&str]) -> u32 { loose(a).spawn().map(|ch| ch.id()).unwrap_or(0) }
+pub fn spawn_loose(a: &[&str]) -> u32 { crate::runner::spawn_background(loose(a)).unwrap_or(0) } // Ferrite: reap detached jobs too.
 /// The command `spawn_loose` starts, for a caller that follows what became of it (the keeper's successor).
 pub fn loose(a: &[&str]) -> std::process::Command {
     use std::process::{Command, Stdio};

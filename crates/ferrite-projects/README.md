@@ -44,6 +44,11 @@ Each is marked `Ferrite:` in a comment.
   home folder's move, the old copy, the settings' move); then it prints the
   line upstream keeps for the human until it is said, once, for the
   Server's toast (with `--json`, `{"said": …}`, empty once said).
+- **Background jobs** (`flow/runner.rs`, `housekeeping.rs`, `review_page.rs`):
+  detached runners, notifications and the evidence server keep a waiter until
+  they exit. Detaching their session alone left zombies under the long-lived
+  keeper and window, consuming process slots. The waiter starts before its
+  child so a thread-creation failure cannot orphan an unowned child.
 - **Tests.** Not taken: the web board's tests (`web_*.rs` but `web_link`
   and `web_link_ask`, and `web` and `web_as` in `common/board.rs`,
   `answered` and `ask_again` in `far/mod.rs`); a test that also checked the
