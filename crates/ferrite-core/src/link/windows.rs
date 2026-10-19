@@ -9,11 +9,11 @@ use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{null, null_mut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, LocalFree, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, HANDLE,
-    INVALID_HANDLE_VALUE,
+    CloseHandle, GetLastError, LocalFree, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY,
+    ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -27,7 +27,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, WaitNamedPipeW,
     PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
     PIPE_WAIT,
 };
@@ -35,7 +35,7 @@ use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
 use super::TryClone;
 
@@ -57,9 +57,23 @@ impl Drop for Handle {
     }
 }
 
-pub struct Stream(Arc<Handle>);
+struct Pipe {
+    handle: Handle,
+    // Serialize starting I/O with shutdown, but never hold this while waiting
+    // for I/O: the reader and writer must remain independent.
+    closed: Mutex<bool>,
+}
+
+pub struct Stream(Arc<Pipe>);
 
 impl Stream {
+    fn new(handle: Handle) -> Self {
+        Self(Arc::new(Pipe {
+            handle,
+            closed: Mutex::new(false),
+        }))
+    }
+
     /// One overlapped transfer, waited for.
     fn transfer(&self, read: bool, buf: *mut u8, len: usize) -> io::Result<usize> {
         // SAFETY: a manual-reset event, unnamed, owned by `event` below.
@@ -72,12 +86,19 @@ impl Stream {
         overlapped.hEvent = event.0;
         let len = len.min(u32::MAX as usize) as u32;
         let mut done = 0u32;
+        let closed = self.0.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "pipe is closed",
+            ));
+        }
         // SAFETY: `buf` is valid for `len` bytes until the wait completes.
         let started = unsafe {
             if read {
-                ReadFile(self.0 .0, buf, len, &mut done, &mut overlapped)
+                ReadFile(self.0.handle.0, buf, len, &mut done, &mut overlapped)
             } else {
-                WriteFile(self.0 .0, buf, len, &mut done, &mut overlapped)
+                WriteFile(self.0.handle.0, buf, len, &mut done, &mut overlapped)
             }
         };
         // SAFETY: GetLastError has no preconditions.
@@ -89,8 +110,11 @@ impl Stream {
                 Err(error)
             };
         }
-        // SAFETY: the operation above was started on this OVERLAPPED.
-        if unsafe { GetOverlappedResult(self.0 .0, &overlapped, &mut done, 1) } == 0 {
+        drop(closed);
+        // SAFETY: the operation above was started on this OVERLAPPED. Even
+        // after shutdown cancels it, wait for completion before freeing its
+        // buffer, event or OVERLAPPED.
+        if unsafe { GetOverlappedResult(self.0.handle.0, &overlapped, &mut done, 1) } == 0 {
             let error = io::Error::last_os_error();
             return if read && error.raw_os_error() == Some(109) {
                 Ok(0)
@@ -124,9 +148,19 @@ impl TryClone for Stream {
     }
 
     fn shutdown(&self) -> io::Result<()> {
-        // SAFETY: the handle is live; disconnecting a client end fails
-        // harmlessly.
-        unsafe { DisconnectNamedPipe(self.0 .0) };
+        let mut closed = self.0.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if !*closed {
+            *closed = true;
+            // SAFETY: the handle remains live until all transfers finish.
+            // Cancel the reader on either end so its Arc can be released;
+            // DisconnectNamedPipe alone cannot shut down a client handle.
+            // No new transfer can start after this cancellation.
+            unsafe {
+                CancelIoEx(self.0.handle.0, null());
+                // Closing the last handle after cancellation lets the peer
+                // drain queued bytes. DisconnectNamedPipe would discard them.
+            }
+        }
         Ok(())
     }
 }
@@ -150,18 +184,32 @@ pub fn listen(path: &Path) -> io::Result<Listener> {
 
 impl Listener {
     pub fn accept(&self) -> io::Result<Stream> {
+        loop {
+            match self.accept_one() {
+                // A readiness probe may close before we accept it. It must
+                // not end the listener serving all subsequent connections.
+                Err(error) if error.raw_os_error() == Some(ERROR_NO_DATA as i32) => continue,
+                result => return result,
+            }
+        }
+    }
+
+    fn accept_one(&self) -> io::Result<Stream> {
         let pipe = match self.next.lock().unwrap_or_else(|e| e.into_inner()).take() {
             Some(pipe) => pipe,
             None => instance(&self.name, false)?,
         };
-        let stream = Stream(Arc::new(pipe));
+        // Keep a listening instance alive even if this was a probe that
+        // already closed; reconnects must not see a missing pipe.
+        *self.next.lock().unwrap_or_else(|e| e.into_inner()) = Some(instance(&self.name, false)?);
+        let stream = Stream::new(pipe);
         // SAFETY: a manual-reset event for the connect below.
         let event = Handle(unsafe { CreateEventW(null(), 1, 0, null()) });
         // SAFETY: zeroed is a valid OVERLAPPED, alive until the wait ends.
         let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
         overlapped.hEvent = event.0;
         // SAFETY: the pipe was created overlapped; the OVERLAPPED is ours.
-        let connected = unsafe { ConnectNamedPipe(stream.0 .0, &mut overlapped) };
+        let connected = unsafe { ConnectNamedPipe(stream.0.handle.0, &mut overlapped) };
         if connected == 0 {
             // SAFETY: GetLastError has no preconditions.
             match unsafe { GetLastError() } {
@@ -169,14 +217,15 @@ impl Listener {
                 ERROR_IO_PENDING => {
                     let mut done = 0;
                     // SAFETY: the connect was started on this OVERLAPPED.
-                    if unsafe { GetOverlappedResult(stream.0 .0, &overlapped, &mut done, 1) } == 0 {
+                    if unsafe { GetOverlappedResult(stream.0.handle.0, &overlapped, &mut done, 1) }
+                        == 0
+                    {
                         return Err(io::Error::last_os_error());
                     }
                 }
                 _ => return Err(io::Error::last_os_error()),
             }
         }
-        *self.next.lock().unwrap_or_else(|e| e.into_inner()) = Some(instance(&self.name, false)?);
         Ok(stream)
     }
 }
@@ -184,22 +233,41 @@ impl Listener {
 /// Connect, and refuse a pipe whose server is not this user's process.
 pub fn connect(path: &Path) -> io::Result<Stream> {
     let name = pipe_name(path)?;
-    // SAFETY: a NUL-terminated name; the handle returned is ours.
-    let handle = unsafe {
-        CreateFileW(
-            name.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            null(),
-            OPEN_EXISTING,
-            FILE_FLAG_OVERLAPPED,
-            null_mut(),
-        )
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let handle = loop {
+        // SAFETY: a NUL-terminated name; the handle returned is ours.
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED,
+                null_mut(),
+            )
+        };
+        if handle != INVALID_HANDLE_VALUE {
+            break handle;
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_PIPE_BUSY as i32) {
+            return Err(error);
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "pipe remained busy",
+            ));
+        }
+        // SAFETY: name is NUL-terminated. Another client can take the instance
+        // after this wait, so retry CreateFile within the same deadline.
+        if unsafe { WaitNamedPipeW(name.as_ptr(), left.as_millis().max(1) as u32) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
     };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    let stream = Stream(Arc::new(Handle(handle)));
+    let stream = Stream::new(Handle(handle));
     let mut pid = 0u32;
     // SAFETY: the handle is a connected pipe client end.
     if unsafe { GetNamedPipeServerProcessId(handle, &mut pid) } == 0 {
@@ -360,4 +428,53 @@ fn user_sid() -> io::Result<String> {
     // SAFETY: allocated by ConvertSidToStringSidW, freed once.
     unsafe { LocalFree(text as *mut c_void) };
     Ok(sid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_probe_does_not_stop_the_next_connection() {
+        let path = std::env::temp_dir().join(format!("ferrite-pipe-probe-{}", std::process::id()));
+        let listener = listen(&path).unwrap();
+        drop(connect(&path).unwrap());
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            send.send(byte).unwrap();
+        });
+        let mut client = connect(&path).unwrap();
+        client.write_all(b"x").unwrap();
+        assert_eq!(
+            receive
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap(),
+            *b"x"
+        );
+    }
+
+    #[test]
+    fn shutdown_prevents_a_clone_from_starting_more_io() {
+        let path =
+            std::env::temp_dir().join(format!("ferrite-pipe-shutdown-{}", std::process::id()));
+        let listener = listen(&path).unwrap();
+        let client = connect(&path).unwrap();
+        let _server = listener.accept().unwrap();
+        let mut reader = client.try_clone().unwrap();
+        client.shutdown().unwrap();
+        client.shutdown().unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            send.send((reader.read(&mut [0]), reader.write(b"late")))
+                .unwrap();
+        });
+        let (read, write) = receive
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("shutdown must reject I/O even if it starts after cancellation");
+        assert_eq!(read.unwrap_err().kind(), io::ErrorKind::NotConnected);
+        assert_eq!(write.unwrap_err().kind(), io::ErrorKind::NotConnected);
+    }
 }

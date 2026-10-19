@@ -522,8 +522,14 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     });
     let listing = listed.into_inner().unwrap().unwrap();
     assert_eq!(listing.checked_out.as_deref(), Some("main"));
+    // Git uses forward slashes on Windows, while canonicalize may return
+    // a verbatim path. Compare directory identity, not those spellings.
+    let mut worktrees = listing.worktrees;
+    for worktree in &mut worktrees {
+        worktree.path = std::fs::canonicalize(&worktree.path).unwrap();
+    }
     assert_eq!(
-        listing.worktrees,
+        worktrees,
         [crate::workspace::ListedWorktree {
             path: std::fs::canonicalize(&tree).unwrap(),
             branch: Some("fix".into()),
