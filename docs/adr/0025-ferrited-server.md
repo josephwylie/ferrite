@@ -72,6 +72,15 @@ app test run `Engine` in-process over the in-process link.
 
 ### Process lifecycle
 
+The window reconciles its Pane views with the client Roster on each pump,
+including Threads opened or parked by another client. It does this after
+bootstrap completions adopt their Draft's Composer, retaining surviving
+editors and their unsent text. Focus resolves by Pane identity, and removing
+an unfocused Pane preserves the focused identity. The ordinal survivor rule
+applies only when the focused Pane itself goes away. Without these rules,
+background task closures could leave keyboard input and paste aimed at an
+offscreen editor. The two-client Composer regression covers this path.
+
 **Where it listens.** `server.sock` in the Store's directory,
 `~/.ferrite/threads/server.sock` (the directory 0700, the socket 0600), refused to any peer whose `getpeereid` uid is not ours. A
 stale socket (nothing answers a connect) is removed before binding; a live

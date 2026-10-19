@@ -269,8 +269,8 @@ impl Roster {
     }
 
     /// A Thread stopped being open under the roster — parked or deleted by
-    /// a path that focused nothing. Its Pane goes, the clamped index keeps
-    /// focus, and a fullscreen aimed at it falls back to the grid rather
+    /// a path that focused nothing. Its Pane goes, a surviving focused Pane
+    /// keeps focus, and a fullscreen aimed at it falls back to the grid rather
     /// than showing a Pane the operator did not pick.
     pub(crate) fn remove_thread(&mut self, thread: ThreadId) {
         let identity = PaneIdentity::Thread(thread);
@@ -300,11 +300,14 @@ impl Roster {
     }
 
     fn remove(&mut self, identity: PaneIdentity) {
+        let focused = self.focused();
         self.panes.retain(|pane| *pane != identity);
         if let PaneIdentity::Draft(draft) = identity {
             self.drafts.remove(&draft);
         }
-        self.focused = self.focused.min(self.panes.len().saturating_sub(1));
+        self.focused = focused
+            .and_then(|focused| self.index_of(focused))
+            .unwrap_or_else(|| self.focused.min(self.panes.len().saturating_sub(1)));
     }
 
     // ------------------------------------------------------------ drafts

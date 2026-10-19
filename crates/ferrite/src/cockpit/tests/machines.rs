@@ -205,6 +205,104 @@ fn connection(
     })
 }
 
+/// Another client (the board or another window) can close and open Threads
+/// while this window is editing. Its UI mirror must follow the Server roster
+/// before routing keyboard input by pane index.
+#[gpui::test]
+fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppContext) {
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    let dir = scratch("input-sync");
+    let dial =
+        ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
+            .unwrap();
+    let bridge = std::sync::Arc::new(Bridge::new(
+        "box",
+        dir.join("bridge").join("bridge.sock"),
+        dial,
+    ));
+    let attach = |name: &str| {
+        let mut core = Cockpit::attach(Attach {
+            store: dir.join(name).join("threads"),
+            server: Endpoint::Machine(bridge.clone()),
+            client: ferrite_core::protocol::Peer {
+                name: name.into(),
+                version: "0".into(),
+            },
+            renderer: None,
+            discovery: Box::new(Fake::default()),
+        })
+        .unwrap();
+        for _ in 0..500 {
+            core.pump();
+            if matches!(core.server(), Some(ServerState::Attached { .. })) {
+                return core;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("client did not attach");
+    };
+    let mut background = attach("background");
+    let earlier = background
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    let editing = background
+        .open(Provider::Codex, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    background
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    let mut core = attach("window");
+    core.focus_thread(editing);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    tick(cx);
+    cx.simulate_input("draft");
+    tick(cx);
+    let composer = view.read_with(cx, |view, _| {
+        view.panes[view.pane_for(editing).unwrap()].composer.clone()
+    });
+
+    background.park_thread(earlier).unwrap();
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.cockpit.thread(earlier).is_none())
+    });
+    let editor = cx
+        .debug_bounds("focused-prompt-editor")
+        .expect("the surviving editor is focused");
+    cx.simulate_click(editor.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("end");
+    cx.simulate_input(" typed");
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(" pasted".into())));
+    cx.dispatch_action(Paste);
+    tick(cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.text().to_owned()),
+        "draft typed pasted"
+    );
+    assert!(cx.debug_bounds("prompt-placeholder").is_none());
+
+    let opened = background
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.cockpit.thread(opened).is_some())
+    });
+    view.read_with(cx, |view, cx| {
+        assert!(
+            view.pane_for(opened).is_some(),
+            "a background open gets a UI Pane too"
+        );
+        assert_eq!(view.focused_thread(), Some(editing));
+        assert_eq!(
+            view.panes[view.focused()].composer,
+            composer,
+            "the existing editor survives roster changes"
+        );
+        assert_eq!(composer.read(cx).text(), "draft typed pasted");
+    });
+}
+
 #[gpui::test]
 fn a_machine_off_screen_heads_its_rows_with_its_connection(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("machines-listed", 1);

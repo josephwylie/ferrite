@@ -2263,6 +2263,19 @@ impl CockpitView {
                 );
             }
         }
+        // The Server can open or park Threads without a window action (the
+        // board and other windows do both). Keep this mirror in roster order
+        // before using pane indices. Finish bootstraps first so a Draft keeps
+        // its existing Composer when it becomes a Thread.
+        let panes_changed = !self.panes.iter().map(|pane| pane.identity).eq(self
+            .cockpit
+            .roster()
+            .panes()
+            .iter()
+            .copied());
+        if panes_changed {
+            self.sync_panes(cx);
+        }
         let focused = self.focused_thread();
         if focused != self.pr_focus {
             self.pr_focus = focused;
@@ -2329,6 +2342,7 @@ impl CockpitView {
             && !walls_settled
             && !server_moved
             && !parked_moved
+            && !panes_changed
         {
             return;
         }
@@ -2380,6 +2394,7 @@ impl CockpitView {
             && !swept_change
             && !server_moved
             && !parked_moved
+            && !panes_changed
             && !startup_changed
             && !models_changed
             && !commands_changed
@@ -5746,9 +5761,15 @@ impl CockpitView {
             .position(|pane| pane.thread() == Some(thread))
     }
 
-    /// The grid index of the Pane holding the keyboard — the roster's.
+    /// The focused identity's index in this window's mirror. A core act can
+    /// receive roster changes before the next pump reconciles the Panes;
+    /// another Thread's old index must never receive this one's input.
     fn focused(&self) -> usize {
-        self.cockpit.roster().focused_index()
+        self.cockpit
+            .roster()
+            .focused()
+            .and_then(|identity| self.index_of(identity))
+            .unwrap_or(0)
     }
 
     fn focused_thread(&self) -> Option<ThreadId> {
