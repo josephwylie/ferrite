@@ -102,6 +102,18 @@ fn local_head(t: &Task, root: &Path, merged: &str, reviewed: &str, base_head: &s
     Ok(head)
 }
 
+/// The keeper refreshes the read timestamp even when the same finished turn stands still.
+/// Only that timestamp may move; status, terminal, turn sequences and every other task field
+/// must still match. The update preserves the newest observation instead of writing the snapshot back.
+fn same_task(a: &Task, b: &Task) -> bool {
+    let normalize = |t: &Task| {
+        let mut t = t.clone();
+        if t.at("last").is_object() { t.obj_mut("last").del("at"); }
+        t
+    };
+    normalize(a) == normalize(b)
+}
+
 /// `check` performs every validation without changing the task. A real repair writes an exclusive
 /// evidence file before the compare-and-swap under the normal task lock. No history is rewritten.
 pub fn reconcile(id: &str, pr: &str, reviewed: &str, check: bool) -> Res<Value> {
@@ -141,7 +153,7 @@ pub fn reconcile(id: &str, pr: &str, reviewed: &str, check: bool) -> Res<Value> 
     let evidence = json!({ "task": before, "github": github, "localHead": head, "baseHead": base_head, "reviewHead": reviewed, "checkedAt": now() });
     if check {
         update(before.s("id"), |t| {
-            if *t != before { crate::fail!("Task changed during verification; retry after it is at rest."); }
+            if !same_task(t, &before) { crate::fail!("Task changed during verification; retry after it is at rest."); }
             refuse_busy(t)?;
             if local_head(t, root, merged, reviewed, &base_head)? != head { crate::fail!("Branch moved during verification."); }
             Ok(Change::Keep)
@@ -157,7 +169,7 @@ pub fn reconcile(id: &str, pr: &str, reviewed: &str, check: bool) -> Res<Value> 
     out.write_all(serde_json::to_string_pretty(&evidence)?.as_bytes())?;
     out.sync_all()?;
     let restored = update(before.s("id"), |t| {
-        if *t != before { crate::fail!("Task changed during verification; retry after it is at rest."); }
+        if !same_task(t, &before) { crate::fail!("Task changed during verification; retry after it is at rest."); }
         refuse_busy(t)?;
         if local_head(t, root, merged, reviewed, &base_head)? != head { crate::fail!("Branch moved during verification."); }
         t.put("stage", "done"); t.put("pr", pr); t.put("prMerged", true); t.put("prState", "merged");

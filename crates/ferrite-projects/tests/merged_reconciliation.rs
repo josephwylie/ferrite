@@ -46,6 +46,7 @@ fn delivery(w: &World) -> Delivery {
     patch(&id, |t| {
         t.put("stage", "stopped"); t.put("branch", "work/component"); t.put("worktree", tree.display().to_string());
         t.put("link", json!({"socket":w.socket,"pane":"gone-worker","reviewer":{"pane":"gone-reviewer"}}));
+        t.put("last", json!({"status":"done","seq":1,"comp":1,"term":"test","at":1000}));
         t.put("reviews", json!([review])); t.put("reviewRound", 2); t.put("turnOpen", false);
         t.put("mergeCommit", merged.clone());
     }).unwrap();
@@ -153,6 +154,13 @@ fn recovery_refuses_unavailable_session_missing_review_and_changed_task() {
     patch(&d.id, |t| { *t = original.clone(); t.put("reviews",json!([])); }).unwrap();
     let before = task(&d.id); assert!(recover(&d, false).unwrap_err().msg.contains("review history")); assert_eq!(task(&d.id), before);
     patch(&d.id, |t| *t = original.clone()).unwrap();
+    let id = d.id.clone(); let response = d.github.clone();
+    sw::flow::git::set_fake_gh(Some(std::rc::Rc::new(move |_| {
+        patch(&id, |t| t.obj_mut("last").put("at", 2000)).unwrap();
+        sw::flow::git::GhOut { status:0, stdout:response.to_string(), stderr:String::new() }
+    })));
+    recover(&d, true).unwrap(); // a keeper polling the same finished turn must not prevent recovery
+    assert_eq!(task(&d.id).at("last").i("at"), 2000);
     let id = d.id.clone(); let response = d.github.clone();
     sw::flow::git::set_fake_gh(Some(std::rc::Rc::new(move |_| {
         patch(&id, |t| t.put("title", "Changed while verifying")).unwrap();
