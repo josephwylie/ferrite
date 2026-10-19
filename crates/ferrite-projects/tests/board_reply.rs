@@ -120,7 +120,7 @@ fn a_reply_put_away_comes_back_as_a_reply_to_the_same_task_never_as_a_new_task()
 }
 
 #[test]
-fn a_reply_to_work_that_was_merged_and_cleaned_up_starts_a_new_round() {
+fn a_merged_reply_preserves_delivery_until_an_explicit_follow_up_starts_a_new_round() {
     let w = world_with(Opts { repo: true, settings: json!({ "review.when": "never" }), ..Default::default() });
     unsafe { std::env::set_var("HERDR_ENV", "1") };
     w.script(json!({ "worker": [{ "files": { "f.txt": "v1\n" }, "commit": "v1", "note": "Did v1." }] }));
@@ -134,8 +134,24 @@ fn a_reply_to_work_that_was_merged_and_cleaned_up_starts_a_new_round() {
     s.s.sel = id.clone(); s.load();
     s.press(&["space"]);
     w.script(json!({ "worker": [{ "files": { "g.txt": "g\n" }, "commit": "g", "note": "Did g." }] }));
+    // Ferrite: a board reply carries no explicit new-delivery intent, even when its words sound like new work.
     s.typed("now add g"); s.press(&["enter"]);
-    assert!(s.text().contains("new round"), "{}", s.text()); assert!(s.s.value().is_empty());
+    assert!(flat(&s.text()).contains("completed delivery"), "{}", s.text());
+    assert!(flat(&s.text()).contains("--follow-up"), "{}", s.text());
+    let after_reply = task(&id);
+    for key in ["stage", "cleaned", "link", "branch", "pr", "prMerged", "mergeCommit", "review", "reviews", "reviewedHead"] {
+        assert_eq!(after_reply.at(key), t.at(key), "reply changed {key}");
+    }
+    assert!(sw::runner::JOBS.with(|j| j.borrow().is_empty()));
+    assert_eq!(s.s.value(), "now add g", "the rejected reply remains available to edit");
+    let args = ["tell", &id, "--follow-up", "now add g"].map(String::from);
+    let flags = sw::cli::flags::parse(&args);
+    sw::cli::flags::refuse_unknown("tell", &flags).unwrap();
+    sw::cli::tasks::command("tell", &flags).unwrap();
+    let kept = task(&id).arr("deliveries").last().cloned().unwrap();
+    for key in ["pr", "prMerged", "review", "reviews", "reviewedHead", "branch"] {
+        assert_eq!(kept.at(key), t.at(key), "follow-up lost {key}");
+    }
     let t = settle(&id);
     assert_eq!(t.s("stage"), "approval", "{}", t.at("failure"));
     assert!(!t.s("description").contains("now add g"));
