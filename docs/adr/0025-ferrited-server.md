@@ -224,6 +224,14 @@ Server → Client:
 | `allowance_warning {provider, window, threshold, used_fraction}` | reliable | A provider's allowance rose past one of the operator's thresholds. |
 | `restarting {when}` / `stopping` | reliable | The client reconnects. |
 
+The window binds pending Decisions to the Server's exact handles from the
+snapshot and `decision` messages. History replay omits requests already
+answered, so its local serial counter cannot reconstruct those identities.
+The bindings survive a history rebuild and apply before submitting state or
+answers are consumed. Reopening a window must preserve both existing requests
+and the identity of the next request; blocking and async questions share this
+rule.
+
 An `input` carries `{"record": …}`, a Store `Record` exactly as the log
 spells it and applied live; `{"replay": …}`, the same line replayed (a
 revive's history, a Subagent's history loading); or `{"live": …}`, a

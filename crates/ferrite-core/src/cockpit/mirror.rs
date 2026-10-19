@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::activity::{Activity, ActivityInput, ActivityView, Subject, ToolTiming};
+use crate::activity::{Activity, ActivityInput, ActivityView, DecisionHandle, Subject, ToolTiming};
 use crate::engine::{event_changes_content, PaneUpdate};
 use crate::protocol::{self, ServerMessage, ThreadState, WireInput};
 use crate::store::Provider;
@@ -23,6 +23,8 @@ pub(crate) struct Mirror {
     /// The last input applied.
     pub(crate) seq: u64,
     facts: Option<Facts>,
+    /// Server identities survive a history rebuild; local replay counters do not.
+    decision_handles: HashMap<String, DecisionHandle>,
 }
 
 /// A `ThreadState` in core types, so a view can lend borrows of it.
@@ -109,6 +111,7 @@ impl Mirror {
             generation: 0,
             seq: 0,
             facts: None,
+            decision_handles: HashMap::new(),
         }
     }
 
@@ -130,6 +133,13 @@ impl Mirror {
             self.generation = generation;
         }
         update.absorb(self.activity.apply(input), content_changed);
+        self.restore_decision_handles(update);
+    }
+
+    fn restore_decision_handles(&mut self, update: &mut PaneUpdate) {
+        for handle in self.decision_handles.values() {
+            update.activity_changed |= self.activity.restore_decision_handle(handle);
+        }
     }
 
     fn apply_wire(&mut self, input: &WireInput, at: Instant, update: &mut PaneUpdate) {
@@ -217,11 +227,46 @@ impl Mirrors {
                 mirror.facts = Some(facts);
                 updated(&mut self.updates, thread).activity_changed = true;
             }
+            ServerMessage::Decision { thread, handle, .. } => {
+                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let handle: DecisionHandle = (&handle).into();
+                mirror
+                    .decision_handles
+                    .insert(handle.request_id.clone(), handle);
+                mirror.restore_decision_handles(updated(&mut self.updates, thread));
+            }
+            ServerMessage::DecisionClosed { thread, handle, .. } => {
+                if let Some(mirror) = self.threads.get_mut(&thread) {
+                    let handle: DecisionHandle = (&handle).into();
+                    if mirror.decision_handles.get(&handle.request_id) == Some(&handle) {
+                        mirror.decision_handles.remove(&handle.request_id);
+                    }
+                }
+            }
             ServerMessage::Roster { roster, .. } => {
                 self.threads
                     .retain(|thread, _| roster.open.contains(thread));
             }
             _ => {}
+        }
+    }
+
+    /// A reconnect's snapshot precedes history and may already name a
+    /// pending request. Keep those identities when the history resets Activity.
+    pub(crate) fn restore_decisions(&mut self, pending: &[protocol::PendingEntry]) {
+        for mirror in self.threads.values_mut() {
+            mirror.decision_handles.clear();
+        }
+        for entry in pending {
+            self.receive(
+                ServerMessage::Decision {
+                    thread: entry.thread,
+                    subject: entry.subject.clone(),
+                    handle: entry.handle.clone(),
+                    decision: entry.decision.clone(),
+                },
+                crate::clock::instant(),
+            );
         }
     }
 

@@ -989,6 +989,27 @@ impl Activity {
         ActivityView { activity: self }
     }
 
+    /// A window rebuilds Activity without the requests already answered on
+    /// the Server. Its local counter cannot recover their serials, so bind
+    /// each live request to the exact handle the Server supplied.
+    pub(crate) fn restore_decision_handle(&mut self, handle: &DecisionHandle) -> bool {
+        if handle.generation != self.generation {
+            return false;
+        }
+        let Some(pending) = self.pending.iter_mut().find(|pending| {
+            pending.handle.generation == handle.generation
+                && pending.handle.request_id == handle.request_id
+        }) else {
+            return false;
+        };
+        self.next_decision = self.next_decision.max(handle.serial);
+        if pending.handle == *handle {
+            return false;
+        }
+        pending.handle = handle.clone();
+        true
+    }
+
     pub fn apply(&mut self, input: ActivityInput) -> ActivityUpdate {
         self.sequence = self.sequence.wrapping_add(1);
         let old_order = self.order.clone();

@@ -1100,6 +1100,138 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     pump_until(&mut second, |second| second.thread(thread).is_none());
 }
 
+/// A window never saw the requests answered before it attached. Their
+/// serials still belong to the Server, for both providers' question forms.
+#[test]
+fn a_reopened_window_can_answer_questions() {
+    for (delivery, already_pending) in [
+        (crate::DecisionDelivery::Blocking, false),
+        (crate::DecisionDelivery::Blocking, true),
+        (crate::DecisionDelivery::Async, false),
+        (crate::DecisionDelivery::Async, true),
+    ] {
+        let harness = start(&format!("reopen-{delivery:?}-{already_pending}"));
+        let mut window = cockpit(&harness);
+        let thread = window
+            .open(
+                Provider::Claude,
+                crate::workspace::WorkspaceChoice::Main {
+                    checkout: harness.dir.clone(),
+                },
+            )
+            .unwrap();
+        let provider = harness
+            .sessions
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        provider.send(decision()).unwrap();
+        let pending = |window: &crate::cockpit::Cockpit| {
+            window
+                .thread(thread)
+                .is_some_and(|open| open.pending().is_some())
+        };
+        pump_until(&mut window, pending);
+        let first_handle = window.thread(thread).unwrap().activity().decisions()[0]
+            .handle
+            .clone();
+        assert!(window
+            .respond_decision(
+                thread,
+                &first_handle,
+                DecisionAnswer::Allow {
+                    input: serde_json::json!({})
+                }
+            )
+            .unwrap());
+        pump_until(&mut window, |window| !pending(window));
+
+        let question = SessionEvent::DecisionRequested {
+            decision: Decision {
+                id: "question-after-reopen".into(),
+                delivery,
+                kind: crate::DecisionKind::Questions(vec![crate::questions::Question {
+                    id: None,
+                    question: "Does typing work now?".into(),
+                    header: String::new(),
+                    options: vec![crate::questions::Choice {
+                        label: "Yes".into(),
+                        description: String::new(),
+                        preview: None,
+                    }],
+                    multi_select: false,
+                    secret: false,
+                    allow_other: true,
+                }]),
+                policy: Default::default(),
+                tool_use_id: "question-call".into(),
+                tool_name: "Question".into(),
+                description: String::new(),
+                input: serde_json::json!({}),
+                suggestions: vec![],
+            },
+        };
+        if already_pending {
+            provider.send(question.clone()).unwrap();
+            pump_until(&mut window, pending);
+        }
+        drop(window);
+        let mut reopened = cockpit(&harness);
+        pump_until(&mut reopened, |window| {
+            window
+                .thread(thread)
+                .is_some_and(|open| open.activity().connected())
+        });
+        if !already_pending {
+            provider.send(question).unwrap();
+        }
+        pump_until(&mut reopened, pending);
+        let handle = reopened.thread(thread).unwrap().activity().decisions()[0]
+            .handle
+            .clone();
+        assert_eq!(
+            handle.serial,
+            first_handle.serial + 1,
+            "the window must retain the Server's identity"
+        );
+        let answer = DecisionAnswer::Questions {
+            answers: vec![if already_pending {
+                crate::questions::Answer {
+                    picks: vec![],
+                    other: Some("Typing works".into()),
+                }
+            } else {
+                crate::questions::Answer {
+                    picks: vec![0],
+                    other: None,
+                }
+            }],
+        };
+        let sent = reopened
+            .respond_decision(thread, &handle, answer.clone())
+            .unwrap();
+        assert!(
+            sent,
+            "Send must reach the provider after reopening the window: {delivery:?}, {handle:?}"
+        );
+        assert_eq!(harness.answers.lock().unwrap().len(), 2);
+        assert_eq!(harness.answers.lock().unwrap().last().unwrap().1, answer);
+        if delivery == crate::DecisionDelivery::Async {
+            pump_until(&mut reopened, |window| {
+                window.thread(thread).unwrap().activity().decisions()[0].submitting
+            });
+            provider
+                .send(SessionEvent::Activity(
+                    crate::activity::ActivityEvent::DecisionReply {
+                        id: handle.request_id.clone(),
+                        error: None,
+                    },
+                ))
+                .unwrap();
+        }
+        pump_until(&mut reopened, |window| !pending(window));
+    }
+}
+
 /// An Engine on its own Store, its Sessions scripted.
 pub(super) fn engine(dir: &Path, spawner: Box<dyn Spawner>) -> Engine {
     Engine::try_new(Store::open(dir).unwrap(), spawner).unwrap()

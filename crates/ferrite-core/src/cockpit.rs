@@ -319,6 +319,7 @@ impl Cockpit {
                     self.shared.attached(&snapshot);
                     self.parked.attached(&snapshot);
                     self.mirrors.retain(&self.shared.open);
+                    self.mirrors.restore_decisions(&snapshot.decisions);
                     for state in snapshot.threads {
                         self.mirrors.receive(
                             ServerMessage::Thread {
