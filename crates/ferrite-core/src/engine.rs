@@ -824,6 +824,7 @@ impl Thread {
             && !self.busy()
             && !view.main_operator_turn()
             && view.working_descendants() == 0
+            && self.transcript().progress().working_background() == 0
             && view.decisions().is_empty()
             && !self.native_queue.pending()
     }
@@ -4119,7 +4120,7 @@ impl Engine {
                     live: Vec::new(),
                 });
             }
-            for input in thread.activity.applied.drain(..) {
+            for input in std::mem::take(&mut thread.activity.applied) {
                 let at_ms = match &input {
                     ActivityInput::Main { at, .. }
                     | ActivityInput::Observe { at, .. }
@@ -4398,6 +4399,11 @@ pub struct History {
 }
 
 impl History {
+    /// The last `seq` this history covers: the Thread's inputs continue after it.
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+
     /// Read the log and hand `send` its `history` pieces, then
     /// `history_end`. A log that cannot be read leaves the history empty:
     /// the watcher still gets the live state and what follows.

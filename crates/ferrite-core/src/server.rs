@@ -309,7 +309,9 @@ struct Server {
     engine: Engine,
     info: ServerInfo,
     clients: BTreeMap<ClientId, Client>,
-    /// Each open Thread's recent inputs, for a client that reconnects.
+    /// Each watched open Thread's recent inputs, for a client that
+    /// reconnects. A Thread no client has watched has none: nobody holds a
+    /// `seq` to resume from, so a boot's replay never fills one.
     rings: HashMap<ThreadId, Ring>,
     /// The pending Decisions the clients were told of.
     decisions: BTreeSet<(ThreadId, WireHandle)>,
@@ -526,6 +528,9 @@ impl Server {
                 let Some(history) = self.engine.history(thread) else {
                     return;
                 };
+                self.rings
+                    .entry(thread)
+                    .or_insert_with(|| Ring::after(history.seq()));
                 let Some(client) = self.clients.get(&id) else {
                     return;
                 };
@@ -916,14 +921,15 @@ impl Server {
             self.api.relay(&message);
             match &message {
                 ServerMessage::Input { thread, seq, .. } => {
-                    self.rings
-                        .entry(*thread)
-                        .or_default()
-                        .push(*seq, message.clone());
+                    if let Some(ring) = self.rings.get_mut(thread) {
+                        ring.push(*seq, message.clone());
+                    }
                 }
                 // A new Activity: a resume cannot cross its start.
                 ServerMessage::HistoryEnd { thread, seq, .. } => {
-                    self.rings.insert(*thread, Ring::after(*seq));
+                    if let Some(ring) = self.rings.get_mut(thread) {
+                        *ring = Ring::after(*seq);
+                    }
                 }
                 ServerMessage::Roster { roster, .. } => {
                     self.rings.retain(|thread, _| roster.open.contains(thread));

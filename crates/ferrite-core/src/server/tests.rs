@@ -181,6 +181,9 @@ struct Window {
     replies: Vec<ServerMessage>,
     /// The `decision` and `decision_closed` messages, in order.
     decisions: Vec<ServerMessage>,
+    /// How many history pieces the Server sent this window: a resume
+    /// the ring met needs none.
+    histories: usize,
 }
 
 fn attach(address: &Path) -> Window {
@@ -204,6 +207,7 @@ fn attach(address: &Path) -> Window {
         mirrors: Mirrors::default(),
         replies: Vec::new(),
         decisions: Vec::new(),
+        histories: 0,
     };
     for state in snapshot.threads {
         window.receive(ServerMessage::Thread { revision: 0, state });
@@ -218,7 +222,15 @@ impl Window {
             ServerMessage::Decision { .. } | ServerMessage::DecisionClosed { .. } => {
                 self.decisions.push(message)
             }
-            message => self.mirrors.receive(message, Instant::now()),
+            message => {
+                if matches!(
+                    message,
+                    ServerMessage::History { .. } | ServerMessage::HistoryEnd { .. }
+                ) {
+                    self.histories += 1;
+                }
+                self.mirrors.receive(message, Instant::now())
+            }
         }
     }
 
@@ -795,6 +807,46 @@ fn a_resume_within_the_ring_reads_as_if_never_gone() {
     assert_eq!(back.said(thread), steady.said(thread));
 }
 
+/// A reopened Thread replays its log before anyone watches it; the first
+/// window to watch still leaves a ring behind it to resume from.
+#[test]
+fn a_resume_after_a_reopen_needs_no_second_history() {
+    let harness = start("resume-reopened");
+    let mut steady = attach(&harness.address);
+    let (thread, provider) = open(&mut steady, &harness);
+    provider.send(text("first life ")).unwrap();
+    steady.command(2, Op::Park { thread });
+    steady.command(3, Op::Revive { thread });
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let heard = |text: &'static str| {
+        move |window: &Window| window.said(thread).iter().any(|said| said.contains(text))
+    };
+    steady.watch(thread, None);
+    let mut leaving = attach(&harness.address);
+    leaving.watch(thread, None);
+    provider.send(text("before ")).unwrap();
+    leaving.until(heard("before"));
+
+    let Window {
+        mut mirrors,
+        boot_id,
+        ..
+    } = leaving;
+    provider.send(text("while away")).unwrap();
+    steady.until(heard("while away"));
+    let mut back = attach(&harness.address);
+    std::mem::swap(&mut back.mirrors, &mut mirrors);
+    let after = back.mirrors.seq(thread).unwrap();
+    back.watch(thread, Some(Resume { boot_id, after }));
+    back.until(heard("while away"));
+
+    assert_eq!(back.histories, 0, "resumed from the ring");
+    assert_eq!(back.said(thread), steady.said(thread));
+}
+
 /// A resume into another boot (or past the ring) cannot be met: the
 /// window rebuilds the Thread from its history and the live state.
 #[test]
@@ -962,6 +1014,57 @@ fn a_restart_when_idle_waits_for_the_turn_and_happens_once() {
     assert_eq!(restarting, When::Idle);
     assert_eq!(harness.server.join().unwrap(), 0);
     assert!(harness.relaunched.try_recv().is_err(), "restarted once");
+}
+
+/// A background shell outlives its turn; ending the Session would end it.
+#[test]
+fn a_restart_when_idle_waits_for_background_work() {
+    use crate::progress::{ProgressEvent, TaskStatus};
+    let background = |status| SessionEvent::Progress {
+        event: ProgressEvent::Background {
+            id: "shell".into(),
+            label: "npm run dev".into(),
+            status,
+            detail: String::new(),
+        },
+    };
+    let harness = start("restart-background");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    window.command(
+        2,
+        Op::Send {
+            thread,
+            text: "go".into(),
+        },
+    );
+    provider.send(background(TaskStatus::Working)).unwrap();
+    provider
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+
+    let reply = window.command(3, Op::Restart { when: When::Idle });
+    assert!(
+        matches!(reply, ServerMessage::Reply { error: None, .. }),
+        "{reply:?}"
+    );
+    assert!(
+        harness
+            .relaunched
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "not while the shell runs"
+    );
+
+    provider.send(background(TaskStatus::Completed)).unwrap();
+    harness
+        .relaunched
+        .recv_timeout(Duration::from_secs(5))
+        .expect("restarted once the shell ended");
 }
 
 #[test]
