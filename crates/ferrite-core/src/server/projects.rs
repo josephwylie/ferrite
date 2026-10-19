@@ -152,15 +152,22 @@ pub fn passthrough(store: &Path, args: &[String]) -> i32 {
 }
 
 fn run_program(program: &Path, exe: &Path, store: &Path, args: &[String]) -> i32 {
-    use std::os::unix::process::CommandExt;
     if !program.is_file() {
         eprintln!("{}", missing(program));
         return 127;
     }
-    let error = Command::new(program)
-        .args(args)
-        .envs(environment(store, exe, program))
-        .exec();
+    let mut command = Command::new(program);
+    command.args(args).envs(environment(store, exe, program));
+    #[cfg(unix)]
+    let error = {
+        use std::os::unix::process::CommandExt;
+        command.exec()
+    };
+    #[cfg(not(unix))]
+    let error = match command.status() {
+        Ok(status) => return status.code().unwrap_or(1),
+        Err(error) => error,
+    };
     eprintln!("ferrited: cannot run {}: {error}", program.display());
     126
 }
@@ -591,6 +598,18 @@ pub(super) mod tests {
         assert_eq!(
             run_program(program, exe, Path::new("/tmp/store"), &args),
             127
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn passthrough_returns_the_child_exit_code() {
+        let program =
+            PathBuf::from(std::env::var_os("COMSPEC").expect("Windows command processor"));
+        let args = ["/D", "/C", "exit 23"].map(String::from);
+        assert_eq!(
+            run_program(&program, &program, Path::new("store"), &args),
+            23
         );
     }
 
