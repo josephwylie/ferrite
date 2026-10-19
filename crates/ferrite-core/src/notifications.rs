@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::activity::{ActivityView, AgentStatus, DecisionHandle, Subject};
+use crate::protocol::WireNotice;
 use crate::{DecisionKind, ThreadId, TurnOutcome};
 
 /// How long Main may sit idle after its last child settles before the
@@ -88,6 +89,12 @@ pub struct DecisionNotice {
     pub subject: Option<Subject>,
     pub kind: RequestKind,
     pub read: bool,
+    /// When the request was first seen: what its age in the bell counts
+    /// from, and — with `seq` — the order the Needs-you queue answers in.
+    pub at: SystemTime,
+    /// Arrival order across every Thread: the first request raised is the
+    /// first answered (`Cockpit::needs_you`).
+    pub seq: u64,
     dismissed: bool,
 }
 
@@ -121,6 +128,8 @@ pub struct Notifications {
     decisions: BTreeMap<DecisionNoticeId, DecisionNotice>,
     phases: BTreeMap<ThreadId, Phase>,
     next: u64,
+    /// The last request's arrival number (`DecisionNotice::seq`).
+    raised: u64,
     grace: Duration,
 }
 
@@ -137,6 +146,7 @@ impl Notifications {
             decisions: BTreeMap::new(),
             phases: BTreeMap::new(),
             next: 0,
+            raised: 0,
             grace,
         }
     }
@@ -222,6 +232,13 @@ impl Notifications {
         Some(self.push(thread, born?))
     }
 
+    /// Fixtures only (the parity scenes): a Notice for `thread`, born now —
+    /// the news of a turn a fixture's script cannot end without drawing its
+    /// turn stamp.
+    pub fn fixture_push(&mut self, thread: ThreadId, outcome: TurnOutcome) -> NoticeId {
+        self.push(thread, outcome)
+    }
+
     fn push(&mut self, thread: ThreadId, outcome: TurnOutcome) -> NoticeId {
         self.next += 1;
         let id = NoticeId(self.next);
@@ -229,7 +246,7 @@ impl Notifications {
             id,
             thread,
             outcome,
-            at: SystemTime::now(),
+            at: crate::clock::system_time(),
             read: false,
         });
         while self.notices.len() > CAPACITY {
@@ -269,6 +286,11 @@ impl Notifications {
                         RequestKind::Permission
                     },
                     read: false,
+                    at: crate::clock::system_time(),
+                    seq: {
+                        self.raised += 1;
+                        self.raised
+                    },
                     dismissed: false,
                 });
             notice.subject = pending.subject.clone();
@@ -368,9 +390,56 @@ impl Notifications {
         }
     }
 
+    /// The bell's `mark all read`: every Notice and every live request is
+    /// read. Nothing is removed — the rows stay, their titles drop from
+    /// unread to plain, and the badge clears.
+    pub fn mark_all_read(&mut self) {
+        for notice in self.notices.iter_mut() {
+            notice.read = true;
+        }
+        for notice in self.decisions.values_mut() {
+            notice.read = true;
+        }
+    }
+
+    /// The bell's badge: live requests nobody has read or dismissed yet.
+    /// A finished turn, failed or not, never counts — only what waits on
+    /// the operator.
+    pub fn unread_requests(&self) -> usize {
+        self.decisions
+            .values()
+            .filter(|notice| !notice.read && !notice.dismissed)
+            .count()
+    }
+
+    /// Fixtures only (the parity scenes): date every record about `thread`
+    /// at `at`, so a scene's ages read as the prototype's (`2m`, `9m`).
+    pub fn fixture_backdate(&mut self, thread: ThreadId, at: SystemTime) {
+        for notice in self.notices.iter_mut() {
+            if notice.thread == thread {
+                notice.at = at;
+            }
+        }
+        for notice in self.decisions.values_mut() {
+            if notice.id.thread == thread {
+                notice.at = at;
+            }
+        }
+    }
+
     /// Every live Decision attention record, ordered by its stable key.
     pub fn decisions(&self) -> impl Iterator<Item = &DecisionNotice> {
         self.decisions.values().filter(|notice| !notice.dismissed)
+    }
+
+    /// A Thread's oldest live request, dismissed or not: when it started
+    /// waiting on the operator, and what it waits for. The Needs-you queue
+    /// orders by it (`Cockpit::needs_you`).
+    pub fn first_request(&self, thread: ThreadId) -> Option<&DecisionNotice> {
+        self.decisions
+            .values()
+            .filter(|notice| notice.id.thread == thread)
+            .min_by_key(|notice| notice.seq)
     }
 
     pub fn decision(&self, id: &DecisionNoticeId) -> Option<&DecisionNotice> {
@@ -399,6 +468,90 @@ impl Notifications {
         changed
     }
 
+    /// Every Notice and live request, as a window's copy is built from
+    /// them (ADR 0025).
+    pub fn to_wire(&self) -> Vec<WireNotice> {
+        let finished = self.notices.iter().map(|notice| WireNotice::Finished {
+            id: notice.id.0,
+            thread: notice.thread,
+            outcome: (&notice.outcome).into(),
+            at_ms: epoch_ms(notice.at),
+            read: notice.read,
+        });
+        let requests = self.decisions.values().map(|notice| WireNotice::Request {
+            thread: notice.id.thread,
+            handle: (&notice.id.handle).into(),
+            subject: notice.subject.as_ref().map(Into::into),
+            question: notice.kind == RequestKind::Question,
+            read: notice.read,
+            at_ms: epoch_ms(notice.at),
+            seq: notice.seq,
+            dismissed: notice.dismissed,
+        });
+        finished.chain(requests).collect()
+    }
+
+    /// A window's read-only copy of the Server's Notices: it answers every
+    /// question the bell and the Needs-you queue ask, and folds nothing.
+    pub fn from_wire(wire: &[WireNotice]) -> Self {
+        let mut notifications = Self::default();
+        for notice in wire {
+            match notice {
+                WireNotice::Finished {
+                    id,
+                    thread,
+                    outcome,
+                    at_ms,
+                    read,
+                } => {
+                    let Ok(outcome) = outcome.try_into() else {
+                        continue;
+                    };
+                    notifications.notices.push_back(Notice {
+                        id: NoticeId(*id),
+                        thread: *thread,
+                        outcome,
+                        at: at_epoch_ms(*at_ms),
+                        read: *read,
+                    });
+                }
+                WireNotice::Request {
+                    thread,
+                    handle,
+                    subject,
+                    question,
+                    read,
+                    at_ms,
+                    seq,
+                    dismissed,
+                } => {
+                    let id = DecisionNoticeId {
+                        thread: *thread,
+                        handle: handle.into(),
+                    };
+                    notifications.decisions.insert(
+                        id.clone(),
+                        DecisionNotice {
+                            id,
+                            subject: subject.as_ref().and_then(|subject| subject.try_into().ok()),
+                            kind: if *question {
+                                RequestKind::Question
+                            } else {
+                                RequestKind::Permission
+                            },
+                            read: *read,
+                            at: at_epoch_ms(*at_ms),
+                            seq: *seq,
+                            dismissed: *dismissed,
+                        },
+                    );
+                }
+                WireNotice::Unknown => {}
+            }
+        }
+        notifications
+    }
+
     /// The live Session ended: discard any deferred finish, but keep its
     /// existing Notices so the operator can still open the parked Thread.
     pub fn disconnect(&mut self, thread: ThreadId) {
@@ -411,6 +564,15 @@ impl Notifications {
         self.notices.retain(|notice| notice.thread != thread);
         self.disconnect(thread);
     }
+}
+
+fn epoch_ms(at: SystemTime) -> u64 {
+    at.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as u64)
+}
+
+fn at_epoch_ms(ms: u64) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_millis(ms)
 }
 
 #[cfg(test)]
@@ -779,6 +941,80 @@ mod tests {
         let applied = b.activity.apply(ActivityInput::Disconnect);
         assert_eq!(b.frame(applied), None);
         assert_eq!(b.wait(Duration::from_secs(60)), None, "the Session is gone");
+    }
+
+    /// A live request's record, as `observe_decisions` makes one.
+    fn request(b: &mut Bench, thread: u64, serial: u64) -> DecisionNoticeId {
+        let id = DecisionNoticeId {
+            thread: ThreadId::new(thread),
+            handle: DecisionHandle {
+                generation: 7,
+                serial,
+                request_id: format!("r{serial}"),
+            },
+        };
+        b.notifications.decisions.insert(
+            id.clone(),
+            DecisionNotice {
+                id: id.clone(),
+                subject: Some(Subject::Main),
+                kind: RequestKind::Permission,
+                read: false,
+                at: crate::clock::system_time(),
+                seq: serial,
+                dismissed: false,
+            },
+        );
+        id
+    }
+
+    /// The badge counts unread, undismissed live requests only; `mark all
+    /// read` reads everything and removes nothing.
+    #[test]
+    fn the_badge_counts_waiting_requests_and_mark_all_read_keeps_every_row() {
+        let mut b = Bench::new(DEFAULT_GRACE);
+        for _ in 0..3 {
+            b.prompt();
+            b.turn_ended(done()).unwrap();
+        }
+        let first = request(&mut b, 2, 1);
+        let _second = request(&mut b, 3, 2);
+        let dismissed = request(&mut b, 4, 3);
+        assert!(b.notifications.dismiss_decision(&dismissed));
+        assert_eq!(
+            b.notifications.unread_requests(),
+            2,
+            "2 waiting; 3 unread completions never count"
+        );
+        assert_eq!(b.notifications.unread(), 5);
+        assert_eq!(
+            b.notifications.open_decision(&first),
+            Some(ThreadId::new(2))
+        );
+        assert_eq!(b.notifications.unread_requests(), 1);
+
+        b.notifications.mark_all_read();
+        assert_eq!(b.notifications.unread_requests(), 0);
+        assert_eq!(b.notifications.unread(), 0);
+        assert_eq!(b.notifications.notices().count(), 3, "nothing is removed");
+        assert!(b.notifications.notices().all(|notice| notice.read));
+        assert_eq!(b.notifications.decisions().count(), 2);
+        assert!(b.notifications.decisions().all(|notice| notice.read));
+    }
+
+    /// A fixture can date a Thread's records for its scene.
+    #[test]
+    fn a_fixture_backdates_one_threads_records() {
+        let mut b = Bench::new(DEFAULT_GRACE);
+        b.prompt();
+        b.turn_ended(done()).unwrap();
+        let waiting = request(&mut b, 1, 9);
+        let other = request(&mut b, 5, 10);
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        b.notifications.fixture_backdate(ThreadId::new(1), then);
+        assert!(b.notifications.notices().all(|notice| notice.at == then));
+        assert_eq!(b.notifications.decision(&waiting).unwrap().at, then);
+        assert_ne!(b.notifications.decision(&other).unwrap().at, then);
     }
 
     #[test]

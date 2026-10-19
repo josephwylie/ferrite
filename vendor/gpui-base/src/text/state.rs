@@ -18,8 +18,9 @@ use crate::{
     input::{self, SelectAll},
     text::{
         CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
-        TableActionsFn, TextViewStyle,
+        TableActionsFn, TextFind, TextViewStyle,
         document::ParsedDocument,
+        find::FindTally,
         format,
         node::{self, NodeContext},
         selection_adapter::TextViewSelectionAdapter,
@@ -101,11 +102,15 @@ pub struct TextViewState {
     pub(super) clamped: bool,
     pub(super) text_view_style: TextViewStyle,
     pub(super) code_block_actions: Option<std::sync::Arc<CodeBlockActionsFn>>,
+    pub(super) code_block_view: Option<std::sync::Arc<super::text_view::CodeBlockViewFn>>,
     pub(super) code_block_highlighter: Option<std::sync::Arc<CodeBlockHighlighterFn>>,
     pub(super) table_actions: Option<std::sync::Arc<TableActionsFn>>,
     pub(super) link_renderer: Option<std::sync::Arc<super::text_view::LinkRendererFn>>,
     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
+    // Ferrite: a find bar's marks, and their ordinals as this frame paints.
+    pub(super) find: Option<TextFind>,
+    pub(super) find_tally: std::cell::RefCell<FindTally>,
 
     pub(super) is_selecting: bool,
     multi_click_selection: Option<TextViewMultiClickSelection>,
@@ -160,7 +165,7 @@ impl TextViewState {
 
                         match parsed_update.result {
                             Ok(content) => {
-                                state.parsed_content = content;
+                                state.parsed_content = *content;
                                 state.parsed_error = None;
                                 state.compatible_layout_update = parsed_update.selection_compatible;
                             }
@@ -201,11 +206,14 @@ impl TextViewState {
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)).measure_all(),
             text_view_style: TextViewStyle::default(),
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
+            find: None,
+            find_tally: Default::default(),
             is_selecting: false,
             auto_scroll: AutoScroll::default(),
             selection_adapter,
@@ -612,6 +620,7 @@ impl Render for TextViewState {
         let mut node_cx = self.parsed_content.node_cx.clone();
 
         node_cx.code_block_actions = self.code_block_actions.clone();
+        node_cx.code_block_view = self.code_block_view.clone();
         node_cx.code_block_highlighter = self.code_block_highlighter.clone();
         node_cx.table_actions = self.table_actions.clone();
         node_cx.link_click_handler = self.link_click_handler.clone();
@@ -729,7 +738,7 @@ impl Future for UpdateFuture {
                         full_parse: !options.append,
                         selection_compatible: options.mode == ParseMode::Compatible,
                         baseline_ack: options.mode == ParseMode::BaselineAck,
-                        result: res,
+                        result: res.map(Box::new),
                     });
                     if hit_coalesce_budget {
                         cx.waker().wake_by_ref();
@@ -772,8 +781,16 @@ struct ParsedUpdate {
     full_parse: bool,
     selection_compatible: bool,
     baseline_ack: bool,
-    result: Result<ParsedContent, SharedString>,
+    // Ferrite (vendor/README.md): boxed. The style knobs made `ParsedContent`
+    // ~10 KB, and the unbounded channel builds a 31-slot block of these on the
+    // stack in debug builds: a ~670 KB frame that overflowed the 512 KB
+    // dispatch worker stack on the first parse.
+    result: Result<Box<ParsedContent>, SharedString>,
 }
+
+// Keep it boxed: this crate's tests do not run in Ferrite, so the guard is a
+// compile-time one.
+const _: () = assert!(std::mem::size_of::<ParsedUpdate>() <= 64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParseMode {

@@ -32,6 +32,9 @@ pub(super) struct InlineFlow {
     id: ElementId,
     items: Vec<InlineFlowItem>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    // Ferrite: see `Inline::code_style`.
+    code_font: Option<SharedString>,
+    code_wash: Option<crate::text::style::InlineCodeWash>,
 }
 
 pub(super) enum InlineFlowItem {
@@ -126,7 +129,20 @@ impl InlineFlow {
             id: id.into(),
             items,
             link_click_handler,
+            code_font: None,
+            code_wash: None,
         }
+    }
+
+    /// Ferrite: inline code's family and ground, handed to every fragment.
+    pub(super) fn code_style(
+        mut self,
+        font: Option<SharedString>,
+        wash: Option<crate::text::style::InlineCodeWash>,
+    ) -> Self {
+        self.code_font = font;
+        self.code_wash = wash;
+        self
     }
 
     pub(super) fn has_elements(&self) -> bool {
@@ -318,10 +334,13 @@ impl Element for InlineFlow {
             .collect::<Vec<_>>();
         let layout_state = InlineFlowLayoutState::default();
         let layout_ref = layout_state.layout.clone();
+        let code_font = self.code_font.clone();
+        // The measure closure runs during layout computation, outside this
+        // element's text-style stack: capture the inherited style here.
+        let text_style = window.text_style();
 
         let layout_id = window.request_measured_layout(Default::default(), {
             move |known_dimensions, available_space, window, _cx| {
-                let text_style = window.text_style();
                 let wrap_width = if text_style.white_space == WhiteSpace::Normal {
                     known_dimensions.width.or(match available_space.width {
                         AvailableSpace::Definite(width) => Some(width),
@@ -340,13 +359,16 @@ impl Element for InlineFlow {
                         }
                     }
                 }
-                let layout = layout_flow(
-                    &measure_items,
-                    &image_sizes,
-                    &text_style,
-                    wrap_width,
-                    window,
-                );
+                let layout = window.with_rem_size(Some(rem_size), |window| {
+                    layout_flow(
+                        &measure_items,
+                        &image_sizes,
+                        &text_style,
+                        wrap_width,
+                        code_font.as_ref(),
+                        window,
+                    )
+                });
                 let size = layout.size;
                 if let Ok(mut state) = layout_ref.lock() {
                     *state = Some(layout);
@@ -414,6 +436,7 @@ impl Element for InlineFlow {
                         highlights,
                         self.link_click_handler.clone(),
                     )
+                    .code_style(self.code_font.clone(), self.code_wash)
                     .into_any_element();
                     element.prepaint_as_root(
                         bounds.origin + origin,
@@ -457,7 +480,8 @@ impl Element for InlineFlow {
                                 .child(
                                     gpui::canvas(
                                         |_, _, _| {},
-                                        move |bounds, _, _window, cx| {
+                                        move |bounds, _, window, cx| {
+                                            paint_card_find(&state, bounds, window, cx);
                                             let projection = InlineSelectionProjection::atomic(
                                                 state.clone(),
                                                 bounds,
@@ -554,6 +578,43 @@ impl Element for InlineFlow {
     }
 }
 
+/// Ferrite: a find's occurrences in an inline card's label (its slice of
+/// the source run) wash the whole card, over it: the card paints its own
+/// ground. The label counts like the text around it, so it is marked too.
+fn paint_card_find(
+    state: &Arc<Mutex<InlineState>>,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+    cx: &App,
+) {
+    let Some(view) = GlobalState::global(cx).text_view_state() else {
+        return;
+    };
+    let view = view.read(cx);
+    if view.find.is_none() {
+        return;
+    }
+    let (root, offset) = InlineState::source_metadata(state);
+    let Some(len) = state.lock().ok().map(|state| state.text.len()) else {
+        return;
+    };
+    let Some(source) = root
+        .upgrade()
+        .and_then(|root| root.try_lock().ok().map(|root| root.text.clone()))
+    else {
+        return;
+    };
+    super::find::paint_marks(
+        view,
+        root.as_ptr() as usize,
+        &source,
+        offset..offset + len,
+        bounds,
+        |_| vec![bounds],
+        window,
+    );
+}
+
 impl From<&InlineFlowItem> for MeasureItem {
     fn from(item: &InlineFlowItem) -> Self {
         match item {
@@ -594,10 +655,11 @@ fn layout_flow(
     image_sizes: &[Option<Size<Pixels>>],
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
+    code_font: Option<&SharedString>,
     window: &mut Window,
 ) -> InlineFlowLayout {
-    let line_height = window.line_height();
     let rem_size = window.rem_size();
+    let line_height = text_style.line_height_in_pixels(rem_size);
     let total_len = items.iter().map(MeasureItem::len).sum::<usize>();
     if total_len == 0 {
         return InlineFlowLayout::default();
@@ -642,9 +704,14 @@ fn layout_flow(
                         let links = slice_ranges(links, local_start, local_end, |range, link| {
                             (range, link.clone())
                         });
-                        let runs = runs_for_highlights(&subtext, text_style, highlights.clone());
+                        let runs = runs_for_highlights(
+                            &subtext,
+                            text_style,
+                            highlights.clone(),
+                            code_font,
+                        );
                         let shaped_line = shape_line(subtext.clone(), font_size, &runs, window);
-                        let width = shaped_line.width();
+                        let width = layout_unit(shaped_line.width());
                         line_width += width;
                         line_fragments.push(LineFragmentLayout {
                             item_ix,
@@ -660,8 +727,9 @@ fn layout_flow(
                 }
                 MeasureItem::Image { .. } | MeasureItem::Element { .. } => {
                     if line_range.start <= item_start && item_end <= line_range.end {
-                        let size = image_sizes[item_ix]
+                        let mut size = image_sizes[item_ix]
                             .expect("image size should be measured before layout");
+                        size.width = layout_unit(size.width);
                         line_width += size.width;
                         actual_line_height = actual_line_height.max(size.height);
                         line_fragments.push(LineFragmentLayout {
@@ -712,6 +780,13 @@ fn layout_flow(
         fragments,
         size: size(max_width, y),
     }
+}
+
+/// A fragment's advance as a browser lays an inline box out: its width
+/// rounded up to the layout unit, 1/64px (Ferrite: the next fragment
+/// starts where the browser's would).
+fn layout_unit(width: Pixels) -> Pixels {
+    px((f32::from(width) * 64.0).ceil() / 64.0)
 }
 
 fn line_ranges(
@@ -903,20 +978,29 @@ fn runs_for_highlights(
     text: &str,
     default_style: &TextStyle,
     highlights: Vec<(Range<usize>, HighlightStyle)>,
+    code_font: Option<&SharedString>,
 ) -> Vec<TextRun> {
     let mut runs = Vec::new();
     let mut ix = 0;
 
     for (range, highlight) in highlights {
+        if !super::inline::highlight_fits(text, ix, &range) {
+            continue;
+        }
         if ix < range.start {
             runs.push(default_style.clone().to_run(range.start - ix));
         }
-        runs.push(
-            default_style
-                .clone()
-                .highlight(highlight)
-                .to_run(range.len()),
-        );
+        let mut run = default_style
+            .clone()
+            .highlight(highlight)
+            .to_run(range.len());
+        // Ferrite: measure inline code in the family it paints in.
+        if let Some(family) = code_font.filter(|_| {
+            highlight.fade_out == crate::text::style::INLINE_CODE_MARK
+        }) {
+            run.font.family = family.clone();
+        }
+        runs.push(run);
         ix = range.end;
     }
 

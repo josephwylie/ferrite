@@ -1,0 +1,85 @@
+== the list
+ herdr-projects  proj · 5 need you · 1 …
+ ◇ #4     Max length for task titles
+          Starting                    1m
+▌◐ #5     Max length for task titles
+▌         Found the cause; now checking
+▌         every caller of the resize ha…
+▌         ██████░░░░  60% 11m left    1m
+
+
+ ↓ 9 more · ↑ 7 more
+
+ + New task  added word for word
+────────────────────────────────────────
+❯ Add a task
+────────────────────────────────────────
+  enter open this task's agent
+== the task beside it
+ herdr-projects  proj · 5 need you · 1 …
+ ◇ #4     Max length for task titles
+          Starting                    1m
+▌◐ #5     Max length for task titles
+▌         Found the cause; now checking
+▌         every caller of the resize ha…
+▌         ██████░░░░  60% 11m left    1m
+
+ ↓ 9 more · ↑ 7 more
+
+ + New task  added word for word
+────────────────────────────────────────
+❯ Add a task
+────────────────────────────────────────
+  Side panel on. alt+p hides it.
+  enter open this task's agent
+== the whole task
+ Task details  #5 "Max…  lines 1–8 of 2…
+────────────────────────────────────────
+
+ #5 Max length for task titles
+
+ Status ───────────────────────────────
+ State        ◐ working · for 1m
+ Progress     ██████░░░░ 60% · 11m left
+ Now          Found the cause; now
+              checking every caller of
+
+ + New task  added word for word
+────────────────────────────────────────
+❯ Add a task
+────────────────────────────────────────
+  ↑↓ scroll the task
+== the ? menu
+ Menu  for #5 "Max length for task tit…
+ plain keys
+   ↑ ↓          move between tasks and
+                headings
+   pgup pgdn    a page of tasks up or
+                down (in the whole
+                task: a page of its
+                text)
+   enter        send what is typed;
+ ↓ 85 more
+
+ + New task  added word for word
+────────────────────────────────────────
+❯ Add a task
+────────────────────────────────────────
+  ↑↓ pick a key · esc close the menu
+== a draft
+ herdr-projects  proj · 5 need you · 1 …
+ ◇ #4     Max length for task titles
+          Starting                    1m
+▌◐ #5     Max length for task titles
+▌         Found the cause; now checking
+▌         every caller of the resize ha…
+▌         ██████░░░░  60% 11m left    1m
+
+
+ ↓ 9 more · ↑ 7 more
+
+ + New task  added word for word
+────────────────────────────────────────
+❯ Hello 日本 🚀
+────────────────────────────────────────
+  enter add it as a task · esc put away

@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde_json::Value;
 
@@ -11,26 +12,34 @@ use crate::{import::Candidate, store::Provider};
 
 const MAX_SCAN_BYTES: u64 = 256 * 1024;
 
-/// List the newest main Claude session files below `root`.
+/// List the newest main Claude session files below `root`. Files are
+/// ordered by mtime first and read newest-first until `cap` sessions are
+/// found, so a long history costs its stat calls, not a read of every file.
 pub fn list(root: &Path, cap: usize) -> io::Result<Vec<Candidate>> {
     if cap == 0 || !root.exists() {
         return Ok(Vec::new());
     }
     let mut paths = Vec::new();
     walk(root, &mut paths)?;
-    let mut rows = paths
+    let mut dated = paths
         .into_iter()
-        .filter_map(|path| candidate(&path))
+        .map(|path| {
+            let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+            (modified, path)
+        })
         .collect::<Vec<_>>();
-    rows.sort_by_key(|row| std::cmp::Reverse(row.modified));
+    dated.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
     let mut seen = HashSet::new();
-    rows.retain(|row| {
-        row.session_id
-            .as_ref()
-            .is_none_or(|id| seen.insert(id.clone()))
-    });
-    rows.truncate(cap);
-    Ok(rows)
+    Ok(dated
+        .into_iter()
+        .filter_map(|(modified, path)| candidate(&path, modified))
+        .filter(|row| {
+            row.session_id
+                .as_ref()
+                .is_none_or(|id| seen.insert(id.clone()))
+        })
+        .take(cap)
+        .collect())
 }
 
 fn walk(dir: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()> {
@@ -60,8 +69,7 @@ fn is_subagent(path: &Path) -> bool {
         .is_some_and(|stem| stem.to_string_lossy().starts_with("agent-"))
 }
 
-fn candidate(path: &Path) -> Option<Candidate> {
-    let modified = fs::metadata(path).and_then(|meta| meta.modified()).ok();
+fn candidate(path: &Path, modified: Option<SystemTime>) -> Option<Candidate> {
     let text = scan(path).ok()?;
     let mut session_id = None;
     let mut cwd = None;

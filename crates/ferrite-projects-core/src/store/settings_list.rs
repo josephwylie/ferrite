@@ -1,0 +1,119 @@
+//! The settings, each one defined once: its name, its built-in value, what it may be, whether it is a work or a board
+//! setting, and what it means. Checking a value, the lookup, `show`, the task panel and the table in docs/settings.md
+//! are all made from this list. A new setting is one entry here, beside the ones of its area.
+//!
+//! An entry: `name` (everywhere: config.json, the command line, a task), `kind` (work: task -> your entry for the repo
+//! -> you -> the repo's file -> built in; board: yours only; repo: a fact about one repo), `ty` (what a value is:
+//! settings/values.rs), `builtin`, `values` (a choice's words), `none` (an agent or a time that may be `none`), `min`
+//! (a count's smallest), `repo` (one of the facts the repo's own file may hold), `adds` (its values add up across the
+//! places), `label` (its plain name on the settings page), `means` (a few words beside what the row may be), `doc`.
+use crate::json::{json, Value};
+use std::sync::LazyLock;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind { Work, Board, Repo }
+impl Kind { pub fn name(self) -> &'static str { match self { Kind::Work => "work", Kind::Board => "board", Kind::Repo => "repo" } } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ty { Switch, Choice, Time, Count, Tokens, Agent, Agents, Effort, Access, Text, List, Machines, Notify, Key, Attempts }
+
+#[derive(Clone, Debug)]
+pub struct Entry {
+    pub name: String, pub label: String, pub kind: Kind, pub ty: Ty, pub builtin: Value,
+    pub values: Vec<String>, pub none: bool, pub min: i64, pub repo: bool, pub adds: bool, pub means: String, pub doc: String,
+}
+fn e(name: &str, label: &str, kind: Kind, ty: Ty, builtin: Value, doc: &str) -> Entry {
+    Entry { name: name.into(), label: label.into(), kind, ty, builtin, values: vec![], none: false, min: 0, repo: false, adds: false, means: String::new(), doc: doc.into() }
+}
+impl Entry {
+    fn values(mut self, v: &[&str]) -> Self { self.values = v.iter().map(|s| s.to_string()).collect(); self }
+    fn none(mut self) -> Self { self.none = true; self }
+    fn min(mut self, n: i64) -> Self { self.min = n; self }
+    fn repo(mut self) -> Self { self.repo = true; self }
+    fn means(mut self, m: &str) -> Self { self.means = m.into(); self }
+}
+
+/// The five every role has. `who` is the role as a sentence names it.
+fn role(name: &str, who: &str, agent: &str, fast: bool, kind: Kind) -> Vec<Entry> {
+    let cap = if name == "worker" { "Agent's".to_string() } else { format!("{}{}'s", name[..1].to_uppercase(), &name[1..]) };
+    let names = crate::agents::kinds::KIND_NAMES.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", ");
+    let mut agent_doc = format!("{who}'s program: one of {names}, with an optional model after a slash (`codex/gpt-6.1-sol`, `agy/gemini-3-pro`). The model travels with the program, so one program's model is never handed to another; a name the program does not take is refused with the ones it does (`herdr-projects models` lists them, [models](models.md)). A program that cannot do this role, or take a model or an effort, is refused with the reason ([agents](agents.md))");
+    if name == "coordinator" { agent_doc.push_str(". `none`: no Coordinator"); }
+    if name == "reviewer" { agent_doc.push_str(". Not installed here: the worker's program reviews, on its own model, and the task says so"); }
+    let mut a = e(&format!("{name}.agent"), &format!("{cap} program"), kind, Ty::Agent, json!(agent), &agent_doc);
+    a.none = name == "coordinator";
+    let mut text = e(&format!("{name}.instructions"), &format!("{cap} instructions"), kind, Ty::Text, json!("none"),
+        &format!("your own words for {who}, added after the board's own fixed rules{}", if kind == Kind::Work { ". They add up across the places, broadest first, and the agent is told that later ones win" } else { "" }));
+    text.adds = kind == Kind::Work;
+    vec![a,
+        e(&format!("{name}.effort"), &format!("{cap} effort"), kind, Ty::Effort, json!("default"), &format!("{who}'s effort level: one its program accepts (checked against `{name}.agent`), or `default` for the program's own")),
+        e(&format!("{name}.fast"), &format!("{cap} fast mode"), kind, Ty::Switch, json!(fast), &format!("{who} in its program's fast mode: a faster service tier that uses more of your allowance. Only Codex has one; for another program it does nothing, and `show` says so")),
+        e(&format!("{name}.access"), &format!("{cap} access"), kind, Ty::Access, json!("full"), &format!("what {who} may do without asking: `full` or `ask`. The board turns it into each program's own flags. `ask` is refused for a program that cannot ask ({})", crate::agents::kinds::all().filter(|k| k.access_ask.is_none()).map(|k| k.name).collect::<Vec<_>>().join(", "))),
+        text]
+}
+
+pub static SETTINGS: LazyLock<Vec<Entry>> = LazyLock::new(|| {
+    use Kind::*;
+    let mut s = vec![];
+    // who works, who reviews, who you talk to
+    s.extend(role("worker", "the working agent", "claude", false, Work));
+    s.push(e("worker.fallback", "Agent's fallback", Work, Ty::Agents, json!("none"), "who takes over when the working agent cannot go on: a list of agents tried in order (`codex, claude/claude-opus-5-5`; a model after a slash, as in `worker.agent`), or `none`. It takes over in the same worktree, with the task, what was done so far and the open findings, when the agent's provider is down (after the board's own tries), the agent is out of allowance or logged out, or its work still fails the review or the check after `review.rounds` rounds. With the list used up the task waits for you. Nobody extra runs until then. More: [the fallback agent](fallback.md)"));
+    s.extend(role("reviewer", "the reviewer", "codex", true, Work));
+    s.push(e("reviewer.fallback", "Reviewer's fallback", Work, Ty::Agents, json!("none"), "who takes over when the reviewer cannot go on: a list of agents tried in order (`codex, claude/claude-opus-5-5`; a model after a slash, as in `reviewer.agent`), or `none`. It reviews in its place when the reviewer's provider is down (after the board's own tries), the reviewer is out of allowance or logged out, or its program is not installed here; it then reviews the later rounds of that task too. With the list used up the review fails as before. Nobody extra runs until then. More: [the fallback agent](fallback.md)"));
+    s.extend(role("coordinator", "the Coordinator, the agent you talk to in the chat", "claude", false, Board));
+    // the Watcher
+    s.push(e("watcher.agent", "Watcher's program", Board, Ty::Agent, json!("claude/claude-haiku-5-5"), "the Watcher: a small model behind the \"doing now\" line, the progress guess and the minutes left. `none`: none of the three. A program with no headless one-shot is refused ([agents](agents.md)). More: [the Watcher](watcher.md)").none());
+    s.push(e("watcher.every", "Watcher looks every", Board, Ty::Time, json!("60s"), "the least time between two looks of the Watcher at one working agent. One hidden model call covers every agent whose look is due, one call runs at a time on the machine, a screen that has not changed costs none, and a busy machine is looked at up to five times less often"));
+    // what the work is
+    s.push(e("research.only", "Research only", Work, Ty::Switch, json!(false), "research only: the task's agent changes nothing in the repo and its result is a report, with a private link. Nothing is committed, pushed, opened as a pull request or merged for it, and its row says `[research]`. Read when the agent starts: a change counts from the task's next start, and turning it on is refused once the agent has changed the repo or a pull request is open. `--research` and `--no-research` on `add` and `delegate` are short for it. More: [reports and research-only tasks](research.md)").repo().means("its agent changes nothing in the repo; the result is a report, and nothing is pushed, opened or merged"));
+    // where it works
+    s.push(e("workspace.from", "Worktree starts from", Work, Ty::Choice, json!("main"), "where a worktree starts: `main` (the remote's main branch, fetched first) or `here` (the commit your checkout is on)").values(&["main", "here"]));
+    s.push(e("workspace.setup", "Set-up command", Work, Ty::Text, json!("none"), "a command run in the fresh worktree before the agent starts").repo());
+    s.push(e("workspace.include", "Files copied in", Work, Ty::List, json!("none"), "ignored files a fresh worktree lacks and gets a copy of (`.env`); `.worktreeinclude` in the repo names more").repo());
+    s.push(e("workspace.teardown", "Teardown command", Work, Ty::Text, json!("none"), "a command run in the worktree before it is removed").repo());
+    s.push(e("workspace.cleanup", "Clean up when done", Work, Ty::Switch, json!(true), "remove a done task's space, worktree and branch"));
+    // how many try it, and who picks
+    s.push(e("attempts.by", "Attempts by", Work, Ty::Attempts, json!(1), "how many attempts are made at once, and by whom: a count (`3`), or a list of agents (`claude, codex, pi`; a model after a slash; a name may repeat). A count means that many of `worker.agent`. Each attempt has its own worktree, branch and tab, runs the check, and holds one of `board.agents`' slots; one that finds no free slot waits its turn. At most 5. `1`: the task is done once, as ever. More: [several attempts](attempts.md)"));
+    s.push(e("attempts.pick", "Attempt picked by", Work, Ty::Choice, json!("you"), "who chooses among the attempts that passed the check. `you`: the task waits as \"pick one\", the attempts side by side, with the reviewer's comparison when there is a reviewer. `reviewer`: the reviewer compares them, names one and says why, and that one goes on by itself. Only the chosen attempt is reviewed in full, pushed and merged. More: [several attempts](attempts.md)").values(&["you", "reviewer"]));
+    // a plan first
+    s.push(e("plan.approve", "Plan approved by", Work, Ty::Choice, json!("none"), "whether the work starts with a plan, and who says yes to it; nothing in the repo is changed before that yes. `none`: no plan. `you`: the agent writes its plan and the task waits as `plan ready` for your yes; a reply sends the plan back with your words, and it is written again. `reviewer`: the reviewer checks the plan against the task's description and the build goes on, or the plan goes back to its writer with the reviewer's points. Read when the agent starts and again when the plan is written. More: [a plan first](plan.md)").values(&["none", "you", "reviewer"]));
+    s.push(e("plan.agent", "Plan written by", Work, Ty::Agent, json!("none"), "who writes the plan, where there is one (`plan.approve`). `none`: the working agent, in its program's own plan mode where it has one (Claude Code). A program, with an optional model after a slash (`claude/claude-opus-5-5`): that one writes the plan into the task's folder, in a tab of its own (`Planner`), and the working agent builds from it. More: [a plan first](plan.md)").none());
+    // how it is checked
+    s.push(e("check.command", "Check command", Work, Ty::Text, json!("none"), "the test command: the work only counts as done when it passes").repo());
+    s.push(e("check.again", "Check on a fix round", Work, Ty::Text, json!("none"), "a shorter check run instead of `check.command` on a later round of a task (sent back by a review, a failed check or GitHub's checks), once the full check has passed on its branch, and only while GitHub runs its checks before the merge (`merge.checks` is `github`, the pull request is open and a workflow of the branch runs for it). It is told the commit the full check passed on, in `HERDR_PROJECTS_CHECKED`, to run only the tests the change since then reaches. `none`: the full check every time. More: [shorter checks on fix rounds](shorter-checks.md)").repo());
+    s.push(e("check.timeout", "Check may run for", Work, Ty::Time, json!("15m"), "how long the check may run before it is stopped and counts as failed").repo());
+    s.push(e("review.when", "Review when", Work, Ty::Choice, json!("repos"), "what gets a review when finished: `repos` (work in a repo), `always` (work outside one too) or `never`").values(&["always", "repos", "never"]));
+    s.push(e("review.mustFix", "Send back from", Work, Ty::Choice, json!("major"), "a finding that bad or worse fails the review. More: [the gate](gate.md)").values(&["critical", "major", "minor", "trivial"]));
+    s.push(e("review.rounds", "Rounds by itself", Work, Ty::Count, json!(3), "how many times work goes back to the agent by itself, for any one reason: findings, a failed check, a conflict with main, pull request feedback. `0`: nothing goes back by itself, and a failed review waits for you").min(0));
+    s.push(e("review.afterChat", "Review after a chat", Work, Ty::Time, json!("60s"), "how long a chat with the agent of a task whose work was reviewed (under review, waiting for your yes, done) must be quiet before the code it changed is reviewed: no new message from you and the agent at rest for this long, or you left the chat (another task on the board, another space in herdr). Then one review runs on the final state. A chat that changed no code reviews nothing: the task goes back to where it was, with the same review. More: [how work gets done](how-work-gets-done.md)"));
+    s.push(e("review.evidence", "Reviewer brings evidence", Work, Ty::Switch, json!(true), "the reviewer brings evidence: screenshots, a recording, a link, test output"));
+    // how much it may take (limits/). Never a fact of the repo's own file: code an agent writes cannot lift a limit.
+    s.push(e("limit.time", "Longest run", Work, Ty::Time, json!("none"), "the longest one run of an agent may take, the working agent's or the reviewer's: a time (`2h`, `45m`) or `none`. Read when a run starts: set while one is under way, it counts from the next. Reached: the agent is stopped, its work is kept as it is, and the task waits for you under \"needs you\" (`stopped at its 2h limit`). Nothing is merged. More: [limits](limits.md)").none().means("the longest one run of an agent may take, the working agent's or the reviewer's. At it the agent is stopped, its work is kept, nothing merges, and the task waits for you. Read when a run starts"));
+    s.push(e("limit.tokens", "Most tokens", Work, Ty::Tokens, json!("none"), "the most tokens a task may use, all its agents, attempts and reviews together, what is read again from the provider's cache included: a count (`2m`, `500k`) or `none`. Counted at the end of each turn, so one turn can pass it. Reached: as `limit.time` (`stopped at 2m tokens`). For a program whose tokens cannot be counted it does nothing, and `show <id>` says so. More: [limits](limits.md)").means("the most tokens the task may use, all its agents and reviews together, counted at the end of each turn. At it the task is stopped, its work is kept, nothing merges, and it waits for you"));
+    // how it lands
+    s.push(e("merge.by", "Merged by", Work, Ty::Choice, json!("you"), "`you`: finished work waits for your yes. `itself`: it merges the moment it may: its review passed, its checks pass, nothing conflicts. Read right before the merge, so a change counts for tasks under way. More: [the gate](gate.md#merging-by-itself)").values(&["you", "itself"]));
+    s.push(e("merge.method", "Merge method", Work, Ty::Choice, json!("squash"), "how approved work lands").values(&["squash", "merge", "rebase"]));
+    s.push(e("merge.pr", "Open a pull request", Work, Ty::Switch, json!(true), "push the branch and open a draft pull request after the check passes"));
+    s.push(e("merge.checks", "GitHub's checks", Work, Ty::Choice, json!("github"), "whether a pull request waits for its checks on GitHub before it merges, by itself or on your yes. `github`: still running, it waits for them, at most `check.timeout`, then it waits for you with that reason; failed, nothing merges and the failure goes back to the agent with each failing check's name and the end of its log, as a failed check does, within `review.rounds`, then it waits for you (`approve <id> --anyway` merges it all the same); passed, and nothing expected still out, it merges: each workflow of the branch that runs for the pull request (its events, branches and paths, as GitHub reads them) must have its run on the commit through, every job and matrix member of it, each check the branch requires must be listed, and a check gone from the list is still waited for; with nothing listed at all, only a repo where no outside CI reports merges. A fine-grained token (which cannot have the Checks permission) is enough: the checks are then read from Actions and Commit statuses, and what it cannot read (another app's check runs) is said on the task, not asked as a login. `none`: GitHub's checks are not looked at. More: [how work gets done](how-work-gets-done.md)").values(&["github", "none"]));
+    // how its tasks are named
+    s.push(e("repo.key", "Repo's short key", Repo, Ty::Key, json!("none"), "the short key of this repo's tasks, as `SKL` for gtm-skills: 2 to 5 letters or digits, the first a letter, kept in capitals. Every repo and folder has one: the board makes it from the name the moment it first sees the repo (`SKL` for gtm-skills, `HOME` for the home folder, `ROOT` for `/`) and saves it as your entry for the repo, so `none` lasts only until then. A task's tag on the board reads `HSW-134`, and `HSW-134` (in any letter case) names the task wherever its id `herdr-projects/134` does. Set it to change it: the old key still names the tasks. A key another repo already has is refused; `unset` goes back to the repo's file's key, or to the one made from the name. More: [task numbers and keys](task-numbers.md)").repo());
+    // the board (yours only)
+    s.push(e("board.agents", "Agents at once", Board, Ty::Count, json!(4), "how many agents work at once").min(1));
+    s.push(e("board.machines", "Other machines", Board, Ty::Machines, json!("auto"), "other machines: `auto` (herdr's saved machines), names (`exedev@vm-a, vm-b`) or `none`"));
+    s.push(e("board.open", "The board key opens", Board, Ty::Choice, json!("tab"), "what the board key opens. `tab`: the board in a herdr tab of its own, which stays when you go into an agent; pressed on the board itself, the key takes you back to where you came from. `popup`: the board as herdr's popup, a framed window in the middle of herdr's screen, over whatever is there (in a window under 110 columns or 30 rows it takes the whole pane: a margin would cost half the board); the key again or `Esc` closes it, as its hint line says (`esc close`), it closes when you go into an agent, and it is never left behind on a tab. More: [the board](board.md)").values(&["tab", "popup"]));
+    s.push(e("board.notify", "Tell me by", Board, Ty::Notify, json!("none"), "when a task needs you, is ready to approve, or failed: `bell` rings the terminal bell, a command is run with `HERDR_PROJECTS_ID`, `HERDR_PROJECTS_TITLE` and `HERDR_PROJECTS_EVENT` (`needs you`, `ready to approve` or `failed`) in its environment, `none` does neither"));
+    s.push(e("board.webUi", "Board in the web UI", Board, Ty::Choice, json!("auto"), "the board inside the herdr web UI. `auto`: when the web UI plugin (`devswha.herdr-web-ui`) is installed, a small front door of the board's own runs in front of it and adds a Boards section to its sidebar; without that plugin nothing runs. `none`: never. More: [the board in the web UI](web-ui.md)").values(&["auto", "none"]));
+    let mut themes = vec!["herdr", "dark", "light"];
+    themes.extend_from_slice(crate::herdr::palette::THEME_NAMES);
+    s.push(e("board.theme", "Colours", Board, Ty::Choice, json!("herdr"), "the board's colours. `herdr`: herdr's own theme, read from this machine's `config.toml` and resolved as herdr does, so with no theme set there it is herdr's default (Catppuccin); `dark` or `light` picks that theme's dark or light one by hand; the name of one of herdr's themes (`nord`, `gruvbox`, … and `terminal` for the terminal's own colours) is that theme whatever the config says, for a herdr opened from another machine whose config names another one. More: [colours](colours.md)").values(&themes));
+    s
+});
+
+pub fn names() -> Vec<&'static str> { SETTINGS.iter().map(|s| s.name.as_str()).collect() }
+/// Asked for every lookup of every setting.
+pub fn entry_of(name: &str) -> Option<&'static Entry> { SETTINGS.iter().find(|s| s.name == name) }
+pub fn work() -> Vec<&'static str> { SETTINGS.iter().filter(|s| s.kind == Kind::Work).map(|s| s.name.as_str()).collect() }
+pub fn board() -> Vec<&'static str> { SETTINGS.iter().filter(|s| s.kind == Kind::Board).map(|s| s.name.as_str()).collect() }
+/// The facts a repo's own committed file may hold, and no more.
+pub fn repo_facts() -> Vec<&'static str> { SETTINGS.iter().filter(|s| s.repo).map(|s| s.name.as_str()).collect() }
+/// These mean nothing for a task in no repo.
+pub fn needs_repo(name: &str) -> bool { ["workspace.", "check.", "merge.", "attempts."].iter().any(|p| name.starts_with(p)) }

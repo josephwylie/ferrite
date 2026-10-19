@@ -249,7 +249,7 @@ impl NativeRequests {
                 };
                 Some(NativeRequest::Approval {
                     allow: choices.iter().any(|choice| choice == "accept"),
-                    deny: choices.iter().any(|choice| choice == "decline"),
+                    deny: super::wire::refusable(&choices),
                     choices,
                 })
             }

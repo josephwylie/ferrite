@@ -10,6 +10,7 @@ use gpui::{
 
 use crate::StyledExt;
 use crate::text::TextViewFormat;
+use crate::text::find::TextFind;
 use crate::text::markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
 use crate::text::node::{CodeBlock, NodeContext, TableData};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
@@ -18,6 +19,11 @@ use crate::{GlobalState, TextSelection, TextSelectionDocument, text::TextViewSty
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
     dyn Fn(&CodeBlock, &mut Window, &mut App) -> AnyElement + Send + Sync;
+
+/// Ferrite: what a fenced code block draws as, given the block and its native
+/// element.
+pub(crate) type CodeBlockViewFn =
+    dyn Fn(&CodeBlock, AnyElement, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
 pub(crate) type CodeBlockHighlighterFn =
     dyn Fn(&CodeBlock) -> Vec<(Range<usize>, gpui::HighlightStyle)> + Send + Sync;
@@ -134,12 +140,14 @@ pub struct TextView {
     scrollable: bool,
     max_lines: Option<usize>,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    code_block_view: Option<Arc<CodeBlockViewFn>>,
     code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     table_actions: Option<Arc<TableActionsFn>>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
     link_renderer: Option<Arc<LinkRendererFn>>,
     markdown_extensions: Arc<MarkdownExtensions>,
     selection_document: Option<(TextSelectionDocument, SharedString)>,
+    find: Option<TextFind>,
 }
 
 /// A plugin that can configure a [`TextView`].
@@ -174,6 +182,15 @@ impl TextView {
             .unwrap_or_else(|_| source.to_string())
     }
 
+    /// Ferrite: the text a find counts in — the plain text with every
+    /// source run on a line of its own (a table's cells too), so a one-line
+    /// needle never spans two runs, as the view's marks never do.
+    pub fn markdown_find_text(source: &str) -> String {
+        crate::text::format::markdown::parse(source, &mut NodeContext::default())
+            .map(|document| document.find_text())
+            .unwrap_or_else(|_| source.to_string())
+    }
+
     /// Create new TextView with managed state.
     pub fn new(state: &Entity<TextViewState>) -> Self {
         Self {
@@ -188,12 +205,14 @@ impl TextView {
             scrollable: false,
             max_lines: None,
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
             selection_document: None,
+            find: None,
         }
     }
 
@@ -211,12 +230,14 @@ impl TextView {
             scrollable: false,
             max_lines: None,
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
             selection_document: None,
+            find: None,
         }
     }
 
@@ -234,12 +255,14 @@ impl TextView {
             scrollable: false,
             max_lines: None,
             code_block_actions: None,
+            code_block_view: None,
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
             selection_document: None,
+            find: None,
         }
     }
 
@@ -262,6 +285,12 @@ impl TextView {
         key: impl Into<SharedString>,
     ) -> Self {
         self.selection_document = Some((document, key.into()));
+        self
+    }
+
+    /// Ferrite: mark a find bar's occurrences in this view's text.
+    pub fn find(mut self, find: Option<TextFind>) -> Self {
+        self.find = find;
         self
     }
 
@@ -326,6 +355,22 @@ impl TextView {
         self.code_block_actions = Some(Arc::new(move |code_block, window, cx| {
             f(&code_block, window, cx).into_any_element()
         }));
+        self
+    }
+
+    /// Ferrite: draw fenced code blocks through `view`, which receives the
+    /// [`CodeBlock`] and its native element (the code, its padding and its
+    /// actions) and returns what to draw in its place: the element itself,
+    /// wrapped, or something else entirely. The block's text stays in the
+    /// document for selection and copy either way.
+    pub fn code_block_view<F>(mut self, view: F) -> Self
+    where
+        F: Fn(&CodeBlock, AnyElement, &mut Window, &mut App) -> AnyElement
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.code_block_view = Some(Arc::new(view));
         self
     }
 
@@ -604,6 +649,7 @@ impl Element for TextView {
 
         state.update(cx, |state, cx| {
             state.code_block_actions = self.code_block_actions.clone();
+            state.code_block_view = self.code_block_view.clone();
             state.code_block_highlighter = code_block_highlighter.clone();
             state.table_actions = self.table_actions.clone();
             state.link_click_handler = self.link_click_handler.clone();
@@ -613,6 +659,7 @@ impl Element for TextView {
             state.selection_format = self.selection_format;
             state.scrollable = self.scrollable;
             state.max_lines = max_lines;
+            state.find = self.find.clone();
             if state.text_view_style != text_view_style {
                 state.selection_revision = state.selection_revision.wrapping_add(1);
             }
@@ -749,6 +796,8 @@ impl Element for TextView {
         if self.selectable {
             state.update(cx, |state, _| state.selection_adapter.begin_frame());
         }
+        // Ferrite: the occurrences count afresh in this frame's paint order.
+        state.read(cx).find_tally.borrow_mut().clear();
 
         GlobalState::global_mut(cx)
             .text_view_state_stack

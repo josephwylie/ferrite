@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::groups::{grid, GroupId, Groups};
+use crate::groups::{GroupId, Groups};
 use crate::ThreadId;
 
 /// A draft Pane's identity (#29): a Composer and a pre-prompt band with no
@@ -77,18 +77,6 @@ pub struct DraftScope {
     pub pending_leave: Option<ThreadId>,
 }
 
-/// The grid the visible Panes lay out on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Layout {
-    pub columns: usize,
-    pub rows: usize,
-    /// The prototype's tall-left board: exactly four Panes of a Group, two
-    /// columns and three rows with the left Pane spanning all of them. The
-    /// prototype specifies a board for four Panes and no other count, so
-    /// every other count keeps the chunked rows (R-01).
-    pub tall_left: bool,
-}
-
 #[derive(Clone, Copy)]
 struct PendingPair {
     thread: ThreadId,
@@ -100,7 +88,7 @@ pub struct Roster {
     panes: Vec<PaneIdentity>,
     focused: usize,
     view: View,
-    /// The Pane cmd-f fullscreened, if any: it takes the whole grid area at
+    /// The Pane ⌘⇧⏎ fullscreened, if any: it takes the whole grid area at
     /// Level::Transcript while every other Session keeps streaming (#20).
     /// Deliberate moves re-aim it through `focus` — cmd-w's survivor fills
     /// the screen like the next browser tab — and a Pane removed by a path
@@ -221,31 +209,6 @@ impl Roster {
         }
     }
 
-    /// The grid the visible Panes lay out on: one column in Solo, the
-    /// near-square `groups::grid` for a Group, and the prototype's
-    /// tall-left board for exactly four.
-    pub fn layout(&self, groups: &Groups) -> Layout {
-        let visible = self.visible(groups).len();
-        let tall_left = matches!(self.view, View::Group(_)) && visible == 4;
-        if tall_left {
-            return Layout {
-                columns: 2,
-                rows: 3,
-                tall_left,
-            };
-        }
-        let columns = match self.view {
-            View::Solo if self.pending_pair().is_some() => grid(visible).1.max(1),
-            View::Solo => 1,
-            View::Group(_) => grid(visible).1.max(1),
-        };
-        Layout {
-            columns,
-            rows: visible.div_ceil(columns).max(1),
-            tall_left,
-        }
-    }
-
     // ------------------------------------------------------------- focus
 
     /// The one door to `focused`: every move — keys, clicks, nav rows —
@@ -286,7 +249,7 @@ impl Roster {
         self.view = view;
     }
 
-    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
     /// restores the grid.
     pub(crate) fn toggle_fullscreen(&mut self) {
         self.fullscreen = match self.fullscreen {
@@ -306,8 +269,8 @@ impl Roster {
     }
 
     /// A Thread stopped being open under the roster — parked or deleted by
-    /// a path that focused nothing. Its Pane goes, the clamped index keeps
-    /// focus, and a fullscreen aimed at it falls back to the grid rather
+    /// a path that focused nothing. Its Pane goes, a surviving focused Pane
+    /// keeps focus, and a fullscreen aimed at it falls back to the grid rather
     /// than showing a Pane the operator did not pick.
     pub(crate) fn remove_thread(&mut self, thread: ThreadId) {
         let identity = PaneIdentity::Thread(thread);
@@ -337,11 +300,14 @@ impl Roster {
     }
 
     fn remove(&mut self, identity: PaneIdentity) {
+        let focused = self.focused();
         self.panes.retain(|pane| *pane != identity);
         if let PaneIdentity::Draft(draft) = identity {
             self.drafts.remove(&draft);
         }
-        self.focused = self.focused.min(self.panes.len().saturating_sub(1));
+        self.focused = focused
+            .and_then(|focused| self.index_of(focused))
+            .unwrap_or_else(|| self.focused.min(self.panes.len().saturating_sub(1)));
     }
 
     // ------------------------------------------------------------ drafts
@@ -532,7 +498,19 @@ mod tests {
         assert_eq!(roster.visible(&groups), [PaneIdentity::Thread(threads[0])]);
         roster.focus(PaneIdentity::Thread(threads[3]));
         assert_eq!(roster.visible(&groups), [PaneIdentity::Thread(threads[3])]);
-        assert_eq!(roster.layout(&groups).columns, 1);
+        assert_eq!(
+            crate::layout::grid_shape(
+                roster.visible(&groups).len(),
+                crate::layout::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1134.0,
+                    h: 838.0
+                }
+            )
+            .0,
+            1
+        );
 
         roster.set_view(View::Group(group));
         assert_eq!(
@@ -555,48 +533,6 @@ mod tests {
             roster.visible(&groups),
             [PaneIdentity::Thread(threads[0]), PaneIdentity::Draft(draft)],
             "a member whose leave waits on the draft is already gone"
-        );
-    }
-
-    #[test]
-    fn four_of_a_group_lay_out_on_the_tall_left_board_and_others_on_the_grid() {
-        let (mut groups, threads) = groups("layout", 6);
-        let group = groups
-            .apply(GroupChange::Create {
-                first: threads[0],
-                second: threads[1],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        for thread in &threads[2..] {
-            groups
-                .apply(GroupChange::Join {
-                    thread: *thread,
-                    group,
-                    index: None,
-                })
-                .unwrap();
-        }
-        let mut roster = roster(&threads[..4]);
-        roster.set_view(View::Group(group));
-        assert_eq!(
-            roster.layout(&groups),
-            Layout {
-                columns: 2,
-                rows: 3,
-                tall_left: true
-            }
-        );
-        roster.insert_thread(threads[4]);
-        roster.insert_thread(threads[5]);
-        assert_eq!(
-            roster.layout(&groups),
-            Layout {
-                columns: 3,
-                rows: 2,
-                tall_left: false
-            }
         );
     }
 

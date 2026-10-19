@@ -1,0 +1,1470 @@
+//! Stabilization tests: behaviour and state gaps closed after the work
+//! packages merged.
+#[allow(unused_imports)]
+use super::*;
+
+/// Reduced motion holds the working line's mark still; otherwise it moves.
+/// A wall tile draws no working line at all: its state word says it.
+#[gpui::test]
+fn the_working_mark_rests_under_reduced_motion(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("working-mark-motion", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking marks**".into(),
+            summary_index: 0,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_some());
+    assert!(cx.debug_bounds("progress-mark-still").is_none());
+
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    tick(cx);
+    assert!(cx.debug_bounds("progress-mark-still").is_some(), "L1");
+    assert!(cx.debug_bounds("progress-mark-live").is_none(), "L1");
+
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    tick(cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Wall,
+        "the premise: the cell is a wall tile"
+    );
+    assert!(cx.debug_bounds("progress-mark-still").is_none(), "a tile");
+    assert!(cx.debug_bounds("progress-mark-live").is_none(), "a tile");
+    assert!(cx.debug_bounds("wall-tile").is_some());
+}
+
+/// While a Pane is dragged by its title its own cell dims in its slot, and
+/// the release — on a Pane or anywhere else — brings it back.
+#[gpui::test]
+fn a_dragged_pane_dims_its_source_until_the_release(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("drag-source-dims", 2);
+    let threads = core.threads();
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    let (a, b) = (threads[0], threads[1]);
+    let source = format!("pane-drag-source-{}", a.get());
+    let source: &'static str = Box::leak(source.into_boxed_str());
+    let title: &'static str = Box::leak(format!("pane-title-{}", a.get()).into_boxed_str());
+    let target = cx.update(|window, cx| {
+        let view = view.read(cx);
+        let index = view.pane_for(b).unwrap();
+        view.pane_rects(window)
+            .into_iter()
+            .find(|(i, _)| *i == index)
+            .map(|(_, r)| gpui::point(px(r.x + r.w / 2.0), px(r.y + r.h / 2.0)))
+            .unwrap()
+    });
+    let outside = gpui::point(px(5.), px(890.));
+
+    for release in [target, outside] {
+        assert!(
+            cx.debug_bounds(source).is_none(),
+            "at rest nothing is dimmed"
+        );
+        let grab = cx.debug_bounds(title).expect("the title is drawn").center();
+        cx.simulate_mouse_down(grab, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_mouse_move(
+            grab + gpui::point(px(12.), px(12.)),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.run_until_parked();
+        cx.simulate_mouse_move(release, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert_eq!(view.dragging, Some(a)));
+        assert!(
+            cx.debug_bounds(source).is_some(),
+            "the source cell dims while the drag is live"
+        );
+        cx.simulate_mouse_up(release, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        tick(cx);
+        view.read_with(cx, |view, _| assert_eq!(view.dragging, None));
+        assert!(cx.debug_bounds(source).is_none(), "the release restores it");
+    }
+}
+
+/// Native files dragged over a Pane lay the drop sheet over that Pane and
+/// edge its Composer in the accent; the sheet follows the pointer to the
+/// next Pane, and leaving the window or dropping clears both.
+#[gpui::test]
+fn files_over_a_pane_edge_its_composer_in_the_accent(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("drop-composer-edge", 2);
+    let threads = core.threads();
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    let rects: Vec<_> = cx.update(|window, cx| {
+        view.read(cx)
+            .pane_rects(window)
+            .into_iter()
+            .map(|(_, r)| r)
+            .collect()
+    });
+    let inside = |r: &layout::Rect, at: gpui::Point<Pixels>| {
+        at.x >= px(r.x) && at.x <= px(r.x + r.w) && at.y >= px(r.y) && at.y <= px(r.y + r.h)
+    };
+    let centre = |r: &layout::Rect| gpui::point(px(r.x + r.w / 2.), px(r.y + r.h / 2.));
+    let paths = gpui::ExternalPaths(vec![here().join("notes.txt")].into());
+    assert!(cx.debug_bounds("prompt-drop-sheet").is_none());
+    assert!(cx.debug_bounds("composer-drop-target").is_none());
+
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position: centre(&rects[0]),
+        paths: paths.clone(),
+    });
+    tick(cx);
+    for rect in [&rects[0], &rects[1]] {
+        if rect != &rects[0] {
+            cx.simulate_event(gpui::FileDropEvent::Pending {
+                position: centre(rect),
+            });
+            tick(cx);
+        }
+        let sheet = cx.debug_bounds("prompt-drop-sheet").expect("the sheet");
+        let edged = cx
+            .debug_bounds("composer-drop-target")
+            .expect("the Composer wears the accent edge");
+        assert!(inside(rect, sheet.center()), "{sheet:?} over {rect:?}");
+        assert!(inside(rect, edged.center()), "{edged:?} in {rect:?}");
+    }
+
+    cx.simulate_event(gpui::FileDropEvent::Exited);
+    tick(cx);
+    assert!(cx.debug_bounds("prompt-drop-sheet").is_none(), "left");
+    assert!(cx.debug_bounds("composer-drop-target").is_none(), "left");
+
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position: centre(&rects[1]),
+        paths,
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("composer-drop-target").is_some());
+    cx.simulate_event(gpui::FileDropEvent::Submit {
+        position: centre(&rects[1]),
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("prompt-drop-sheet").is_none(), "dropped");
+    assert!(cx.debug_bounds("composer-drop-target").is_none(), "dropped");
+}
+
+/// The command key is drawn, never typed: the empty board's keycaps and the
+/// context menu's shortcuts both place the one `⌘` glyph on macOS.
+#[gpui::test]
+fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
+    if crate::keymap::PLATFORM != crate::keymap::Platform::Mac {
+        return;
+    }
+    let (core, _fake) = cockpit("command-glyph", 1);
+    let thread = core.threads()[0];
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    // At rest no key is on screen: `?` is the way in (ADR 0014).
+    assert!(cx.debug_bounds("command-key").is_none());
+
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(thread),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("command-key").is_some(),
+        "the Pane menu's shortcuts draw the glyph"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(cx.debug_bounds("empty-board").is_some());
+    assert!(
+        cx.debug_bounds("command-key").is_some(),
+        "the empty board's keycaps draw the glyph"
+    );
+}
+
+/// The Subject strip is Ferrite's own tab row: exactly one active pill,
+/// which follows the pick, on a row no taller than a chip (no kit rule
+/// hanging under it).
+#[gpui::test]
+fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (core, fake) = cockpit("subject-pill", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    let key = AgentKey::new(Provider::Claude, "ui-fixture", "Atlas");
+    let mut info = AgentInfo::new(key.clone());
+    info.name = Some("Atlas".into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    for event in [
+        ActivityEvent::Discovered(info),
+        ActivityEvent::Status {
+            key: key.clone(),
+            state: AgentStatus::Idle,
+        },
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap();
+    }
+    tick(cx);
+    let strip = cx.debug_bounds("subject-strip-1").expect("the strip");
+    let pill = cx.debug_bounds("subject-tab-selected").expect("one pill");
+    let main = cx.debug_bounds("subject-main-1").unwrap();
+    assert_eq!(pill, main, "Main is active first");
+    assert_eq!(pill.size.height, px(crate::theme::CHIP_H));
+    assert!(strip.size.height <= px(crate::theme::SUBJECT_STRIP_H));
+
+    let atlas: &'static str =
+        Box::leak(format!("subject-agent-1-{}", key.as_str()).into_boxed_str());
+    let tab = cx.debug_bounds(atlas).expect("Atlas's tab");
+    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("subject-tab-selected").unwrap(),
+        cx.debug_bounds(atlas).unwrap(),
+        "the pill follows the pick"
+    );
+}
+
+/// A long popover list scrolls with the keyboard: the draft's Project
+/// chip over two dozen Projects keeps every row the arrows land on inside
+/// its capped list, going down past the fold and back up.
+#[gpui::test]
+fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("popover-cursor-in-view", 1);
+    let base = scratch("popover-cursor-in-view-projects");
+    for n in 0..24 {
+        let dir = base.join(format!("project-{n:02}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        core.register_project(&dir).unwrap();
+    }
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.open_draft(DraftTarget::Main, cx);
+        view.open_band_popover(pane::BandChip::Project, cx);
+    });
+    tick(cx);
+    let rows = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().rows.len());
+    assert!(
+        rows as f32 * crate::theme::MENU_ROW_H > crate::theme::MENU_MAX_H,
+        "the premise: {rows} rows overflow the list"
+    );
+    let visible = |cx: &mut gpui::VisualTestContext| {
+        let selected = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().selected);
+        let list = cx.debug_bounds("composer-menu-rows").expect("the list");
+        let selector: &'static str =
+            Box::leak(format!("composer-menu-row-{selected}").into_boxed_str());
+        let row = cx.debug_bounds(selector).expect("the cursor row");
+        assert!(
+            row.top() >= list.top() - px(0.5) && row.bottom() <= list.bottom() + px(0.5),
+            "row {selected} {row:?} is outside the list {list:?}"
+        );
+        selected
+    };
+    let first = visible(cx);
+    for _ in 0..rows {
+        view.update(cx, |view, cx| view.step_popover(1, cx));
+        tick(cx);
+        visible(cx);
+    }
+    assert!(visible(cx) + 2 >= rows, "the cursor reached the end");
+    for _ in 0..rows {
+        view.update(cx, |view, cx| view.step_popover(-1, cx));
+        tick(cx);
+        visible(cx);
+    }
+    assert!(visible(cx) <= first.max(1));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The Project card's name field wears the focus ink while the keyboard is
+/// in it, like every other field, and its resting edge otherwise.
+#[gpui::test]
+fn the_project_name_field_shows_keyboard_focus(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("project-name-focus", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    view.update(cx, |view, cx| view.open_project_creator(cx));
+    tick(cx);
+    let name = view.read_with(cx, |view, _| {
+        view.project_editor.as_ref().unwrap().name.clone()
+    });
+    cx.update(|window, cx| {
+        let handle = name.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("project-name-focused").is_some(),
+        "focused: the edge is the focus ink"
+    );
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript_focus.clone());
+    cx.update(|window, cx| window.focus(&transcript, cx));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("project-name-focused").is_none(),
+        "elsewhere: the resting edge"
+    );
+}
+
+/// The watchdog sweeps on the executor's clock, not the wall clock: a slow
+/// or loaded machine that takes longer than `SWEEP_INTERVAL` of real time
+/// over a test must not drop a sweep (and its repaint and git refresh) into
+/// the middle of it. Only the executor's time moving past the interval does.
+#[gpui::test]
+fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("sweep-clock", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let before = view.read_with(cx, |view, _| view.swept);
+    std::thread::sleep(SWEEP_INTERVAL + Duration::from_millis(50));
+    view.update(cx, |view, cx| view.pump(cx));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.swept),
+        before,
+        "real time alone never sweeps"
+    );
+    cx.executor().advance_clock(SWEEP_INTERVAL);
+    view.update(cx, |view, cx| view.pump(cx));
+    assert!(
+        view.read_with(cx, |view, _| view.swept) > before,
+        "the executor's time does"
+    );
+}
+
+/// The bottom-left toast card is gone (C8): with the nav open, finishes off
+/// the board toast nothing — the tree and the bell say it — so the Parked
+/// fold never moves and there is no `+N` bubble. The bell still lists them.
+#[gpui::test]
+fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("toast-parked", 5);
+    let threads = core.threads();
+    core.park(threads[4]).unwrap();
+    for (n, thread) in threads[..4].iter().enumerate() {
+        core.send(*thread, format!("task {n}"));
+    }
+    core.pump();
+    core.focus_thread(threads[0]);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let resting = cx.debug_bounds("nav-parked").expect("the Parked fold");
+
+    for stream in &fake.streams.borrow()[1..4] {
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    // The kit's entrance slide runs on the wall clock and its stack springs
+    // on the executor's: let both settle before reading where toasts are.
+    std::thread::sleep(Duration::from_millis(600));
+    for _ in 0..8 {
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt as _;
+        assert_eq!(
+            window.notifications(cx).len(),
+            0,
+            "the nav is open: the tree and the bell say it, nothing toasts"
+        );
+    });
+    assert_eq!(
+        view.read_with(cx, |view, _| view.cockpit.notifications().unread()),
+        3,
+        "the bell lists every finish"
+    );
+    for thread in &threads[1..4] {
+        let toast: &'static str = format!("toast-{}", thread.get()).leak();
+        assert!(cx.debug_bounds(toast).is_none(), "no toast for {thread}");
+    }
+    assert!(cx.debug_bounds("toast-more").is_none(), "no `+N` bubble");
+    assert_eq!(
+        cx.debug_bounds("nav-parked"),
+        Some(resting),
+        "the fold never moves"
+    );
+}
+
+/// A Solo Pane's agent strip stands at every width, and with room it fits
+/// every tab without folding them into `+N`.
+#[gpui::test]
+fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (mut core, fake) = cockpit("head-title-floor", 1);
+    let thread = core.threads()[0];
+    core.rename_thread(thread, "Audit every surface of the overhaul")
+        .unwrap();
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    for name in [
+        // Short names: on a wide Pane the head spans the reading column
+        // (720), and the title at its cap, the checkout and all four tabs
+        // must fit there.
+        "nav", "cmp", "set", "tok",
+    ] {
+        let key = AgentKey::new(Provider::Claude, "ui-fixture", name);
+        let mut info = AgentInfo::new(key.clone());
+        info.name = Some(name.into());
+        info.parent = Some(Subject::Main);
+        info.coverage = TranscriptCoverage::Live;
+        for event in [
+            ActivityEvent::Discovered(info),
+            ActivityEvent::Status {
+                key,
+                state: AgentStatus::Idle,
+            },
+        ] {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Activity(event))
+                .unwrap();
+        }
+    }
+    // Solo has no head (C2): the tabs keep a strip of their own.
+    for width in [900., 1800., 2400.] {
+        cx.simulate_resize(gpui::size(px(width), px(800.)));
+        tick(cx);
+        tick(cx);
+        assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
+        assert!(
+            cx.debug_bounds("pane-tabs-1").is_some(),
+            "the tabs keep a strip"
+        );
+    }
+    assert!(
+        cx.debug_bounds("subject-overflow-1").is_none(),
+        "the wide strip fits every tab"
+    );
+}
+
+/// A Group head names the Thread and nothing else (theme WP-C, rule 7):
+/// no branch — default or not — and no state word, even while a question
+/// pends; the title keeps its floor beside the provider's mark. A wall
+/// tile's head is the same head.
+#[gpui::test]
+fn a_tile_head_names_no_branch_and_no_state(cx: &mut TestAppContext) {
+    use ferrite_core::workspace::BranchStatus;
+    let (mut core, fake) = cockpit("l2-no-branch-twice", 2);
+    let thread = core.threads()[0];
+    core.rename_thread(thread, "Board recipes and the long tail")
+        .unwrap();
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(860.), px(480.)));
+    tick(cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Wall
+    );
+    assert!(cx.debug_bounds("pane-head-title-1").is_some());
+    let branch = |name: &str, cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            view.facts.set_branches(vec![(
+                thread,
+                Some(BranchStatus {
+                    branch: Some(name.into()),
+                    ..Default::default()
+                }),
+            )]);
+            cx.notify();
+        });
+        tick(cx);
+    };
+    branch("main", cx);
+    assert!(
+        cx.debug_bounds("pane-head-branch-1").is_none(),
+        "the default branch is not named"
+    );
+    branch("feat/board", cx);
+    assert!(
+        cx.debug_bounds("pane-head-branch-1").is_none(),
+        "the head carries no branch: the sidebar does"
+    );
+    fake.streams.borrow()[0]
+        .send(question("l2-head-question"))
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("head-slot-1").is_none(),
+        "no state word rides the head"
+    );
+    let title = cx.debug_bounds("pane-head-title-1").unwrap();
+    let mark = cx
+        .debug_bounds("pane-head-provider-1")
+        .expect("the provider's mark");
+    assert!(
+        title.size.width >= px(crate::theme::HEAD_TITLE_MIN_W),
+        "the title keeps its floor: {title:?}"
+    );
+    assert!(title.right() <= mark.left(), "{title:?} / {mark:?}");
+}
+
+/// A wall tile's call line reads as the transcript spells it, `● Name(args)`,
+/// on one row that truncates at the tile's edge (F-6): a long command never
+/// runs out through it, and never wraps.
+#[gpui::test]
+fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("l2-tail-inside", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "long".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({
+                "command": "cargo check --workspace --all-targets --features visual-reference,test-support --message-format=short"
+            }),
+        })
+        .unwrap();
+    tick(cx);
+    let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Wall
+    );
+    let row = cx.debug_bounds("wall-line").expect("the call's line");
+    assert!(
+        row.right() <= px(rect.x + rect.w - crate::theme::WALL_PAD_X) + px(0.5),
+        "the row {row:?} ends inside the tile {rect:?}"
+    );
+    assert_eq!(row.size.height, px(crate::theme::LH_UI), "one row: {row:?}");
+}
+
+/// A draft in a narrow Pane keeps its whole controls row inside the
+/// Composer: the Project and branch chips truncate first, and the model
+/// and effort pair stays whole and in the block.
+#[gpui::test]
+fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("narrow-draft-controls", 1);
+    let dir = scratch("narrow-draft-controls-a-rather-long-project-directory-name");
+    std::fs::create_dir_all(&dir).unwrap();
+    core.register_project(&dir).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(720.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    tick(cx);
+    let block = cx
+        .debug_bounds("composer-block")
+        .expect("the draft Composer");
+    let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
+    let model = cx.debug_bounds("draft-model-picker").expect("model");
+    // Terminal-native (WP-D): the pair rides the status line under the
+    // band, inside the band's width (there is no send control to clear).
+    assert!(
+        effort.right() <= block.right() + px(0.5),
+        "effort {effort:?} stays inside the band {block:?}"
+    );
+    assert!(model.right() <= effort.left());
+    let band = cx.debug_bounds("draft-band").expect("the setup chips");
+    assert!(
+        band.top() >= block.bottom(),
+        "the setup chips ride the meta row under the box: {band:?} / {block:?}"
+    );
+    // The meter gives way first, so the setup chips keep their names.
+    assert!(cx.debug_bounds("usage-meter-draft-1").is_none());
+    for chip in ["band-chip-0", "band-chip-1"] {
+        let chip = cx.debug_bounds(chip).expect("a setup chip");
+        assert!(
+            chip.size.width >= px(48.),
+            "{chip:?} keeps a readable label"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A Subagent's read-only footer is the Composer's own block: in the
+/// reading column, inset from the Pane's foot, its `❯` on the Composer's
+/// axis and its text at C1.
+#[gpui::test]
+fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (core, fake) = cockpit("child-footer-block", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    let key = AgentKey::new(Provider::Claude, "ui-fixture", "Atlas");
+    let mut info = AgentInfo::new(key.clone());
+    info.name = Some("Atlas".into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    for event in [
+        ActivityEvent::Discovered(info),
+        ActivityEvent::Status {
+            key: key.clone(),
+            state: AgentStatus::Idle,
+        },
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap();
+    }
+    tick(cx);
+    let main_block = cx.debug_bounds("composer-block").expect("Main's Composer");
+    let tab: &'static str = Box::leak(format!("subject-agent-1-{}", key.as_str()).into_boxed_str());
+    let at = cx.debug_bounds(tab).expect("Atlas's tab").center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    tick(cx);
+    let footer = cx
+        .debug_bounds("child-footer-1")
+        .expect("the read-only footer");
+    let text = cx.debug_bounds("child-footer-text-1").unwrap();
+    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    // Terminal-native: Main's Composer is a full-width band now (WP-D); the
+    // footer keeps its column until WP-F takes it onto the band, so only
+    // its own placement is asserted here.
+    assert!(main_block.size.width >= footer.size.width);
+    assert!(
+        (px(pane.y + pane.h) - footer.bottom() - px(crate::theme::COMPOSER_INSET_B)).abs()
+            <= px(1.5),
+        "inset from the Pane's foot: {footer:?} / {pane:?}"
+    );
+    assert_eq!(
+        text.left() - footer.left(),
+        px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W),
+        "the text starts at C1"
+    );
+}
+
+/// A question's own answer is not a second field (rule 2.8.6): one bare
+/// line, a list line's text height, its text starting on the option
+/// labels' column — the glyph column holds its digit as it holds theirs.
+#[gpui::test]
+fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("own-answer-field", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(900.)));
+    fake.streams.borrow()[0].send(question("own")).unwrap();
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .pending_decisions()[0]
+            .handle
+            .serial
+    });
+    let field = cx
+        .debug_bounds(Box::leak(
+            format!("request-other-{}-{serial}-0", thread.get()).into_boxed_str(),
+        ))
+        .expect("the own-answer field");
+    let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
+    assert_eq!(field.size.height, px(crate::theme::QUESTION_OTHER_H));
+    // An option reads `❯ 1. label`: the `❯` gutter, then the ordinal's
+    // three cells, then the label.
+    let labels = choice.left() + px(crate::theme::GLYPH_GUTTER + 3.0 * crate::theme::CH);
+    assert!(
+        (field.left() - labels).abs() <= px(0.5),
+        "the line's text starts on the labels' column: {:?} / {labels:?}",
+        field.left()
+    );
+}
+
+/// The image preview's scrim covers the whole window, nav and titlebar
+/// included, like every modal's; its sheet stays centred on its Pane.
+#[gpui::test]
+fn the_image_preview_dims_the_whole_window(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("preview-scrim", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let image = scratch("preview-scrim-image").join("shot.png");
+    std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+    std::fs::write(&image, include_bytes!("../../../assets/app-icon.png")).unwrap();
+    view.update_in(cx, |view, window, cx| {
+        view.panes[0]
+            .preview
+            .open(image.clone(), "Screenshot".into(), window, cx);
+    });
+    tick(cx);
+    tick(cx);
+    let scrim = cx
+        .debug_bounds("attachment-preview-scrim")
+        .expect("a scrim");
+    let window = cx.update(|window, _| window.viewport_size());
+    assert_eq!(scrim.origin, gpui::point(px(0.), px(0.)));
+    assert_eq!(scrim.size, window, "the scrim covers the window");
+    let sheet = cx.debug_bounds("attachment-preview-content").unwrap();
+    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    assert!((sheet.center().x - px(pane.x + pane.w / 2.)).abs() <= px(2.));
+    let _ = std::fs::remove_dir_all(image.parent().unwrap());
+}
+
+/// A draft's body holds only the embossed mark, and neither it nor an
+/// empty Thread centres a second copy of the guidance: the Composer's
+/// placeholder says how to start, once (rule 2.11.4).
+#[gpui::test]
+fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("draft-empty", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("transcript-empty").is_none(),
+        "an empty Thread has no centred block"
+    );
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    tick(cx);
+    let empty = cx
+        .debug_bounds("draft-empty")
+        .expect("the draft's body spacer");
+    let block = cx.debug_bounds("composer-block").unwrap();
+    assert!(empty.bottom() <= block.top(), "{empty:?} / {block:?}");
+    assert!(
+        cx.debug_bounds("transcript-empty").is_none(),
+        "no centred empty state anywhere"
+    );
+    let ghost = cx.debug_bounds("prompt-placeholder").expect("the ghost");
+    assert!(ghost.top() >= block.top(), "the guidance is the Composer's");
+    assert!(
+        cx.debug_bounds("prompt-placeholder-hint").is_none(),
+        "the draft's ghost names no keys (ADR 0014)"
+    );
+}
+
+/// On the empty board the titlebar says nothing either (ADR 0014): no
+/// name, no build badge (F-10: Settings › About keeps that).
+#[gpui::test]
+fn the_empty_board_titlebar_says_nothing(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("empty-titlebar", 1);
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(cx.debug_bounds("empty-board").is_some());
+    for gone in ["titlebar-location", "titlebar-word-0", "titlebar-dev-badge"] {
+        assert!(cx.debug_bounds(gone).is_none(), "{gone}");
+    }
+    assert!(
+        cx.debug_bounds("composer-meta").is_none(),
+        "no Pane's status line on the empty board"
+    );
+}
+
+/// Expanding the nav must not remove the window's top drag region. The
+/// board sits below that region so its controls still receive their clicks.
+#[gpui::test]
+fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("titlebar-band", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let check = |cx: &mut gpui::VisualTestContext, crosses: bool| {
+        let board = view.read_with(cx, |view, _| view.board.get());
+        let plane = cx.debug_bounds("titlebar-plane");
+        if crosses {
+            assert_eq!(
+                board.y,
+                crate::theme::WIN_CHROME_H,
+                "the board starts under the band"
+            );
+            let plane = plane.expect("the band's plane");
+            assert!(
+                (plane.left() - px(board.x)).abs() < px(1.),
+                "{plane:?} / {board:?}"
+            );
+        } else {
+            assert_eq!(board.y, 0.0, "the board starts at the window's top");
+            assert!(plane.is_none(), "the band ends at the nav");
+        }
+        if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
+            let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
+            assert_eq!(drag.left(), px(0.), "the band over the nav drags");
+            assert!(
+                drag.contains(&gpui::point(px(600.), px(16.))),
+                "the middle of the window's top must drag: {drag:?}"
+            );
+            if cfg!(target_os = "macos") {
+                let moves = cx.window_move_requests();
+                cx.simulate_click(gpui::point(px(600.), px(16.)), gpui::Modifiers::none());
+                assert_eq!(cx.window_move_requests(), moves + 1);
+            }
+        }
+    };
+    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    tick(cx);
+    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
+}
+
+/// The checks card grows to its own tally: the counts line is never cut
+/// while the card is under its cap.
+#[gpui::test]
+fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("checks-card-width", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    let pr = pr_with_checks();
+    let tally = pr.tally();
+    let text = [
+        (tally.failing, "failed"),
+        (tally.pending, "running"),
+        (tally.passing, "passed"),
+        (tally.skipped, "skipped"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, word)| format!("{count} {word}"))
+    .collect::<Vec<_>>()
+    .join(" · ");
+    view.update(cx, |view, cx| {
+        view.facts.pr_answered(thread, Some(pr));
+        cx.notify();
+    });
+    tick(cx);
+    cx.update(|window, cx| view.update(cx, |view, cx| view.open_checks(window, cx)));
+    tick(cx);
+    let card = cx.debug_bounds("context-checks-card").expect("the card");
+    assert!(card.size.width >= px(crate::theme::CHECKS_CARD_W));
+    assert!(card.size.width <= px(crate::theme::CHECKS_CARD_MAX_W));
+    let tally = cx.debug_bounds("checks-tally").unwrap();
+    let natural = cx.update(|window, _| {
+        window
+            .text_system()
+            .shape_line(
+                text.clone().into(),
+                px(crate::theme::FS_UI),
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font: gpui::font(crate::theme::FONT_UI),
+                    color: gpui::rgb(crate::theme::TEXT).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            )
+            .width
+    });
+    assert!(
+        tally.size.width + px(0.5) >= natural,
+        "the tally `{text}` is whole: {tally:?} for {natural:?}"
+    );
+}
+
+/// A Project with Threads still offers "Remove project", disabled, with the
+/// reason in its tooltip; pressing it removes nothing.
+#[gpui::test]
+fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("remove-project-in-use", 1);
+    let thread = core.threads()[0];
+    let project = core.project_id(thread).expect("the Thread's Project");
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    view.update(cx, |view, cx| view.open_project_editor(project, cx));
+    tick(cx);
+    let remove = cx.debug_bounds("remove-project").expect("the remove verb");
+    cx.simulate_click(remove.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.cockpit.registry().project(project).is_some());
+        assert!(view.project_editor.is_some(), "the sheet stays up");
+    });
+}
+
+/// Theme rule 6, sampled where each face is set: the app's own copy is in
+/// the UI face (Geist), and only code and machine text is in the code face
+/// (Geist Mono).
+#[gpui::test]
+fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
+    use crate::theme::{FONT_CODE, FONT_UI};
+    use gpui::Styled as _;
+    let (core, fake) = cockpit("font-roles", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(1000.)));
+    tick(cx);
+    cx.simulate_input("Check the fixture");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let stream = fake.streams.borrow()[0].clone();
+    for (id, name, input) in [
+        (
+            "run",
+            "Bash",
+            serde_json::json!({ "command": "cargo test -p ferrite" }),
+        ),
+        (
+            "read",
+            "Read",
+            serde_json::json!({ "file_path": "src/lib.rs" }),
+        ),
+    ] {
+        stream
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input,
+            })
+            .unwrap();
+        stream
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "ok".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    stream
+        .send(SessionEvent::TextDelta {
+            text: "Use `cargo test` here.\n\n```rust\nlet x = 1;\n```\n\n".into(),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolStarted {
+            id: "edit".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": "/workspace/x.txt" }),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolCompleted {
+            id: "edit".into(),
+            output: "applied".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::FileEdit {
+                path: "/workspace/x.txt".into(),
+                hunks: vec![ferrite_core::Hunk {
+                    old_start: 1,
+                    old_lines: 2,
+                    new_start: 1,
+                    new_lines: 2,
+                    lines: vec![" alpha".into(), "-bravo".into(), "+delta".into()],
+                    section: None,
+                }],
+            },
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    drop(stream);
+    tick(cx);
+    tick(cx);
+
+    let (namespace, blocks, composer) = view.read_with(cx, |view, _| {
+        let pane = &view.panes[0];
+        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
+        let blocks: Vec<_> = thread
+            .transcript()
+            .blocks()
+            .iter()
+            .map(|block| (block.id, block.body.clone()))
+            .collect();
+        (pane.text_namespace(), blocks, pane.composer.entity_id())
+    });
+    let id_of = |pick: &dyn Fn(&Body) -> bool| {
+        blocks
+            .iter()
+            .find(|(_, body)| pick(body))
+            .map(|(id, _)| *id)
+            .expect("the fixture's block")
+    };
+    let face = |cx: &mut gpui::VisualTestContext, prefix: String| {
+        cx.update(|_, cx| crate::rich::testing::font_family(&prefix, cx))
+            .unwrap_or_else(|| panic!("{prefix} was drawn"))
+    };
+    let prompt = id_of(&|body| matches!(body, Body::Prompt(_)));
+    let group = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Bash"));
+    let edit = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Edit"));
+    let stamp = id_of(&|body| matches!(body, Body::TurnEnd(_)));
+
+    // UI: the prompt echo, a group summary, a tool call's line (its name;
+    // the arguments carry the code mark, `call_highlights`), the stamp.
+    for (what, prefix) in [
+        ("prompt", format!("literal-{namespace}-{prompt:?}-0")),
+        (
+            "a command's call line",
+            format!("literal-{namespace}-{group:?}-0"),
+        ),
+        ("call line", format!("literal-{namespace}-{edit:?}-0")),
+        ("stamp", format!("literal-{namespace}-{stamp:?}-0")),
+    ] {
+        assert_eq!(face(cx, prefix).as_ref(), FONT_UI, "{what} is UI text");
+    }
+    // Code: the diff's lines and the Composer's line.
+    // A settled edit's diff shows once it is disclosed.
+    for disclosure in [pane::DisclosureId::Tool("edit".into())] {
+        if let Some(control) =
+            view.read_with(cx, |view, _| view.panes[0].tool_bounds(disclosure.clone()))
+        {
+            cx.simulate_click(control.center(), gpui::Modifiers::none());
+            tick(cx);
+        }
+    }
+    let diff_faces: Vec<_> = (0..10)
+        .filter_map(|ordinal| {
+            let prefix = format!("literal-{namespace}-{edit:?}-{ordinal}");
+            cx.update(|_, cx| {
+                let text = crate::rich::testing::full_text(&prefix, cx)?;
+                ["alpha", "bravo", "delta"]
+                    .iter()
+                    .any(|line| text.trim() == *line)
+                    .then(|| crate::rich::testing::font_family(&prefix, cx))
+                    .flatten()
+            })
+        })
+        .collect();
+    assert!(!diff_faces.is_empty(), "the diff is drawn");
+    assert!(
+        diff_faces.iter().all(|face| face.as_ref() == FONT_CODE),
+        "every diff line is code: {diff_faces:?}"
+    );
+    assert_eq!(
+        cx.update(|_, cx| crate::composer::testing::face(composer, cx))
+            .as_deref(),
+        Some(FONT_CODE),
+        "the Composer's line is code"
+    );
+    // Code in prose: fenced blocks and inline spans.
+    let style = crate::rich::style(px(16.));
+    assert_eq!(
+        style.code_block().text.font_family.as_deref(),
+        Some(FONT_CODE)
+    );
+    assert_eq!(style.inline_code_font().as_deref(), Some(FONT_CODE));
+
+    // The surfaces chrome inherits its face from.
+    let ui = |mut div: gpui::Div| div.style().text.font_family.clone();
+    for (what, family) in [
+        ("nav", ui(crate::nav::shell(crate::nav::WIDTH))),
+        (
+            "menu row",
+            ui(crate::components::menu_row_content(
+                &crate::components::MenuItem::new("Rename"),
+                false,
+                false,
+            )),
+        ),
+        (
+            "floating surface",
+            ui(crate::components::floating_surface()),
+        ),
+        ("settings sheet", ui(crate::prefs::sheet(400., 300.))),
+        ("settings label", ui(crate::components::text_ui())),
+        ("metadata", ui(crate::components::text_meta())),
+    ] {
+        assert_eq!(family.as_deref(), Some(FONT_UI), "{what} is UI text");
+    }
+    for (what, family) in [
+        ("keycap", ui(crate::components::kbd("y"))),
+        (
+            "keys",
+            ui(crate::components::key_combo("cmd-F", crate::theme::TEXT)),
+        ),
+        (
+            "command well",
+            ui(crate::decision::well(false, gpui::div())),
+        ),
+    ] {
+        assert_eq!(family.as_deref(), Some(FONT_CODE), "{what} is code");
+    }
+}
+
+/// Focus is drawn only when it tells the operator something: a lone Pane
+/// rests on its transparent edge with no head rule, and the focus ink
+/// appears once a second Pane shares the board.
+#[gpui::test]
+fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("focus-only-when-shared", 2);
+    let threads = core.threads();
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.visible_indices().len()),
+        1
+    );
+    for thread in &threads {
+        assert!(
+            cx.debug_bounds(Box::leak(
+                format!("pane-focus-edge-{}", thread.get()).into_boxed_str(),
+            ))
+            .is_none(),
+            "a lone Pane draws no focus"
+        );
+    }
+
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.visible_indices().len()) > 1);
+    let shown = threads
+        .iter()
+        .filter(|thread| {
+            cx.debug_bounds(Box::leak(
+                format!("pane-focus-edge-{}", thread.get()).into_boxed_str(),
+            ))
+            .is_some()
+        })
+        .count();
+    assert_eq!(
+        shown, 1,
+        "exactly the focused Pane of the two wears the ring"
+    );
+}
+
+/// Terminal-native (WP-D, FL-10): the Composer is one input row on its band
+/// — no box, no send control, no verb hint. Its status line is the
+/// window's, in the bottom bar (ADR 0014), and no key hint rides it: `?`
+/// is the one way in. Enter sends and Esc interrupts.
+#[gpui::test]
+fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("composer-one-row", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let block = cx.debug_bounds("composer-block").unwrap();
+    let meta = cx.debug_bounds("composer-meta").expect("the meta row");
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    assert_eq!(
+        block.size.height,
+        px(2. * crate::theme::COMPOSER_PAD_Y + crate::theme::COMPOSER_ROW_H),
+        "one row on the band"
+    );
+    assert!(
+        meta.top() >= bar.top() && meta.bottom() <= bar.bottom(),
+        "the status line rides the bar: {meta:?} in {bar:?}"
+    );
+    assert!(
+        cx.debug_bounds("prompt-placeholder").is_some(),
+        "the resting line says what to do"
+    );
+    assert!(cx.debug_bounds("prompt-placeholder-hint").is_none());
+    assert!(cx.debug_bounds("status-keys").is_none(), "no key hints");
+    assert!(cx.debug_bounds("bottom-bar-help").is_some(), "`?` instead");
+    for verb in ["send", "stop"] {
+        let hint: &'static str = Box::leak(
+            format!("composer-{verb}-{:?}", PaneIdentity::Thread(thread)).into_boxed_str(),
+        );
+        assert!(cx.debug_bounds(hint).is_none(), "no `{verb}` hint is drawn");
+    }
+
+    cx.simulate_input("go");
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(fake.sent.borrow().as_slice(), ["go"], "Enter sends");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1, "Esc still interrupts");
+}
+
+/// The prompt heads its turn: the operator's line is at prose size, the
+/// same size as the answer under it, on its band. Terminal-native: one
+/// blank line sits above the band, and the band's half line above its text.
+#[gpui::test]
+fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("prompt-heads-turn", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(900.)));
+    tick(cx);
+    for (prompt, answer) in [
+        ("first ask", "First answer."),
+        ("second ask", "Second answer."),
+    ] {
+        cx.simulate_input(prompt);
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        let stream = fake.streams.borrow()[0].clone();
+        stream
+            .send(SessionEvent::TextDelta {
+                text: format!("{answer}\n\n"),
+            })
+            .unwrap();
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+    }
+    let (namespace, prompts, stamps) = view.read_with(cx, |view, _| {
+        let pane = &view.panes[0];
+        let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
+        let ids = |kind: fn(&Body) -> bool| -> Vec<_> {
+            thread
+                .transcript()
+                .blocks()
+                .iter()
+                .filter(|block| kind(&block.body))
+                .map(|block| block.id)
+                .collect()
+        };
+        (
+            pane.text_namespace(),
+            ids(|body| matches!(body, Body::Prompt(_))),
+            ids(|body| matches!(body, Body::TurnEnd(_))),
+        )
+    });
+    let size = cx.update(|_, cx| {
+        crate::rich::testing::font_size(&format!("literal-{namespace}-{:?}-0", prompts[1]), cx)
+    });
+    assert_eq!(size, Some(px(crate::theme::FS_PROSE)), "prose size");
+    let mut line = |id| {
+        cx.update(|_, cx| {
+            crate::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx).unwrap()
+        })
+    };
+    // Measured, not just declared: the first turn's stamp to the second
+    // prompt is the turn step.
+    assert_eq!(
+        line(prompts[1]).top() - line(stamps[0]).bottom(),
+        px(crate::theme::LH_PROSE + crate::theme::tx_half(crate::theme::LH_PROSE)),
+        "turns sit a blank line and the band's half line apart"
+    );
+}
+
+/// A Decision card's head names its kind and says nothing more while it
+/// simply waits: no `waiting` beside the card that is plainly waiting.
+#[gpui::test]
+fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("decision-head-quiet", 1);
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(900.)));
+    fake.streams.borrow()[0].send(question("quiet")).unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("question-island").is_some(),
+        "the card is up"
+    );
+    assert!(
+        cx.debug_bounds("decision-status").is_none(),
+        "a waiting card carries no status word"
+    );
+}
+
+/// The Group head sits on the grid at every width (theme WP-C): its dot
+/// column a cell in from the Pane's inner edge (`HEAD_PAD_X`), two cells
+/// wide (`HEAD_DOT_W`), its title right after it — so every head on a
+/// board shares one vertical of dots. Solo has no head at all: the
+/// nav's selected row names the Thread.
+#[gpui::test]
+fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("head-on-column", 2);
+    let threads = core.threads().to_vec();
+    let group = group_all(&mut core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    for width in [1800., 1440., 900.] {
+        cx.simulate_resize(gpui::size(px(width), px(900.)));
+        tick(cx);
+        let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
+        for (index, rect) in rects {
+            let key = threads[index].get();
+            let head = cx
+                .debug_bounds(Box::leak(format!("pane-head-{key}").into_boxed_str()))
+                .expect("a board cell has its head");
+            let title = cx
+                .debug_bounds(Box::leak(format!("pane-head-title-{key}").into_boxed_str()))
+                .unwrap();
+            let dot = cx
+                .debug_bounds(Box::leak(format!("pane-head-dot-{key}").into_boxed_str()))
+                .unwrap();
+            // The edge is an overlay (F-1): the head starts at the Pane's
+            // own left edge.
+            let inner = px(rect.x);
+            let c1 = inner + px(crate::theme::HEAD_PAD_X + crate::theme::HEAD_DOT_W);
+            // gpui snaps every edge to a device pixel: up to a pixel off
+            // the unsnapped split.
+            assert!(
+                (title.left() - c1).abs() < px(1.),
+                "{width}: the title {title:?} starts after the dot column {c1:?}"
+            );
+            let axis = inner + px(crate::theme::HEAD_PAD_X);
+            assert!(
+                (dot.left() - axis).abs() < px(1.),
+                "{width}: the dot column {dot:?} sits a cell in {axis:?}"
+            );
+            assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
+        }
+    }
+}
+
+/// A cell with an approval keeps its mode where every cell of its kind has
+/// it: on a board the grid Composer has no status line (C4) and the head
+/// carries no word (rule 7); one Pane filling the board keeps the status
+/// line under a Decision — the mode is what the answer will run under. The
+/// raw id never renders.
+#[gpui::test]
+fn an_approval_cell_keeps_its_mode(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("l2-approval-facts", 2);
+    let group = group_all(&mut core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    for event in [
+        SessionEvent::Init {
+            session_id: "facts".into(),
+            model: "claude-opus-5-5[1m]".into(),
+        },
+        SessionEvent::PermissionMode {
+            mode: "acceptEdits".into(),
+        },
+    ] {
+        fake.streams.borrow()[0].send(event).unwrap();
+    }
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
+    let mode: &'static str = Box::leak(format!("composer-mode-{thread}").into_boxed_str());
+    let slot: &'static str = Box::leak(format!("head-slot-{thread}").into_boxed_str());
+    fake.streams.borrow()[0].send(decision("l2-facts")).unwrap();
+    tick(cx);
+
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    cx.simulate_resize(gpui::size(px(860.), px(480.)));
+    tick(cx);
+    assert!(cx.debug_bounds(mode).is_none(), "no status line in a grid");
+    assert!(
+        cx.debug_bounds(slot).is_none(),
+        "the head carries no word (theme rule 7)"
+    );
+
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds(mode).is_some(),
+        "one Pane filling the board keeps the mode under a Decision"
+    );
+}
+
+/// The status line rides the bottom bar (ADR 0014), so the Composer's top
+/// never moves: not when a mode is announced, not under a Decision (rule
+/// 2.6.6).
+#[gpui::test]
+fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("solo-status-line", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let rest = cx.debug_bounds("composer-block").expect("the Composer");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::PermissionMode {
+            mode: "acceptEdits".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert_eq!(cx.debug_bounds("composer-block"), Some(rest));
+    fake.streams.borrow()[0]
+        .send(decision("solo-status-line"))
+        .unwrap();
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("composer-block"),
+        Some(rest),
+        "a Decision never moves the Composer"
+    );
+}
+
+/// A window with no Server says so once, keeps saying it on screen, and
+/// keeps trying; it never runs the agents itself (ADR 0025).
+#[gpui::test]
+fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
+    let dir = scratch("no-server");
+    let core = Cockpit::attach(ferrite_core::cockpit::Attach {
+        store: dir.clone(),
+        server: ferrite_core::cockpit::Endpoint::Local {
+            executable: dir.join("no-such-ferrite"),
+        },
+        client: ferrite_core::protocol::Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        discovery: Box::new(Fake::default()),
+    })
+    .unwrap();
+    assert!(matches!(
+        core.server(),
+        Some(ferrite_core::cockpit::ServerState::Detached { .. })
+    ));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    tick(cx);
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt;
+        assert_eq!(window.notifications(cx).len(), 1, "said once");
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.leaving_warning(), None, "quitting ends nothing");
+    });
+}

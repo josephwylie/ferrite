@@ -37,16 +37,18 @@ type FallbackRow = (
 
 /// The models a provider offers when its adapter has no live or saved
 /// list. Values are the spellings the CLI accepts today; the display is
-/// what the picker shows; the efforts are what each took when last
-/// probed. The first row is the provider's own default.
+/// what the picker shows; the detail is the picker's one lowercase line
+/// (the prototype's `#picker`, untruncated at 66 cells); the efforts are
+/// what each took when last probed. The first row is the provider's own
+/// default.
 pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
     let rows: &[FallbackRow] = match provider {
         Provider::Claude => &[
             (
                 "default",
                 None,
-                "Default",
-                "The CLI's own default model",
+                "default",
+                "the CLI's own default",
                 CLAUDE_EFFORTS,
                 None,
             ),
@@ -54,7 +56,7 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
                 "fable",
                 Some("claude-fable-5-1"),
                 "Fable 5.1",
-                "Most capable, for the hardest and longest tasks",
+                "most capable, for the hardest work",
                 CLAUDE_EFFORTS,
                 None,
             ),
@@ -62,15 +64,15 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
                 "opus[1m]",
                 Some("claude-opus-5-5[1m]"),
                 "Opus 5.5 (1M)",
-                "Opus 5.5 with 1M context, for long sessions with large codebases",
+                "1M context, for long sessions",
                 CLAUDE_EFFORTS,
                 None,
             ),
             (
                 "sonnet",
-                Some("claude-sonnet-5"),
-                "Sonnet 5",
-                "Efficient for routine tasks",
+                Some("claude-sonnet-5-5"),
+                "Sonnet 5.5",
+                "efficient for routine tasks",
                 CLAUDE_EFFORTS,
                 None,
             ),
@@ -78,7 +80,7 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
                 "haiku",
                 Some("claude-haiku-4-5-20251001"),
                 "Haiku 4.5",
-                "Fastest, for quick answers",
+                "fastest, for quick answers",
                 &[],
                 None,
             ),
@@ -88,7 +90,7 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
                 "gpt-6-astra",
                 None,
                 "GPT-6 Astra",
-                "Frontier intelligence for the most demanding work",
+                "frontier, for the hardest tasks",
                 CODEX_EFFORTS_ULTRA,
                 Some("medium"),
             ),
@@ -96,7 +98,7 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
                 "gpt-6-sol",
                 None,
                 "GPT-6 Sol",
-                "Workhorse model for coding and everyday work",
+                "workhorse for coding",
                 CODEX_EFFORTS_ULTRA,
                 Some("medium"),
             ),
@@ -104,7 +106,7 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
                 "gpt-6-luna",
                 None,
                 "GPT-6 Luna",
-                "Fast and affordable model for easier tasks",
+                "fast and affordable",
                 CODEX_EFFORTS_MAX,
                 Some("medium"),
             ),
@@ -159,6 +161,42 @@ pub fn efforts_for(
         }
     }
     union
+}
+
+/// The effort the provider's own CLI runs `model` at when nobody chose one
+/// (`None` is the provider's default model): what the model picker's
+/// effort ladder shows inverse while no effort resolves. Not the catalog's
+/// `default_effort`, which the status line reads (rule 2.6.5): a Claude
+/// Thread with no choice says `opus 5.5`, and its picker still says which
+/// level the CLI is using. `None` for a model that takes no effort.
+pub fn cli_default_effort(provider: Provider, model: Option<&str>) -> Option<&'static str> {
+    let ladder = efforts_for(provider, model, &[]);
+    if ladder.is_empty() {
+        return None;
+    }
+    let level = match provider {
+        // Claude Code runs its models at `high` unless told otherwise.
+        Provider::Claude => "high",
+        // The Codex CLI's `model_reasoning_effort` default.
+        Provider::Codex => "medium",
+    };
+    ladder.iter().any(|step| step == level).then_some(level)
+}
+
+/// A model's one-line description in the picker's voice: lowercase-first
+/// (`Most capable for…` → `most capable for…`), an acronym or a figure
+/// left as written (`GPT-6…`, `1M context…`).
+pub fn groom_detail(detail: &str) -> String {
+    let detail = detail.trim();
+    let mut chars = detail.chars();
+    let (Some(first), second) = (chars.next(), chars.next()) else {
+        return detail.to_string();
+    };
+    if first.is_uppercase() && second.is_none_or(|second| second.is_lowercase()) {
+        first.to_lowercase().chain(detail.chars().skip(1)).collect()
+    } else {
+        detail.to_string()
+    }
 }
 
 /// The name to show for `model` — a chosen value or an Init's full id:
@@ -326,10 +364,10 @@ mod tests {
     #[test]
     fn the_fallback_names_are_versioned_and_labels_agree_with_them() {
         for (value, display) in [
-            ("default", "Default"),
+            ("default", "default"),
             ("fable", "Fable 5.1"),
             ("opus[1m]", "Opus 5.5 (1M)"),
-            ("sonnet", "Sonnet 5"),
+            ("sonnet", "Sonnet 5.5"),
             ("haiku", "Haiku 4.5"),
             ("gpt-6-astra", "GPT-6 Astra"),
             ("gpt-6-sol", "GPT-6 Sol"),
@@ -352,10 +390,85 @@ mod tests {
             ("claude-opus-5-5[1m]", "Opus 5.5 (1M)"),
             ("claude-opus-5-5", "Opus 5.5"),
             ("claude-sonnet-5", "Sonnet 5"),
+            ("claude-sonnet-5-5", "Sonnet 5.5"),
             ("claude-haiku-4-5-20251001", "Haiku 4.5"),
         ] {
             assert_eq!(label(id, &[]), display, "{id}");
         }
+    }
+
+    /// The picker's fallback rows read exactly as the prototype's model
+    /// picker: lowercase-first details, each untruncated at 66 cells beside
+    /// its name.
+    #[test]
+    fn the_fallback_rows_read_as_the_prototype_picker() {
+        let rows = |provider| -> Vec<(String, String)> {
+            fallback(provider)
+                .into_iter()
+                .map(|row| (row.display, row.detail))
+                .collect()
+        };
+        let pair = |display: &str, detail: &str| (display.to_string(), detail.to_string());
+        assert_eq!(
+            rows(Provider::Claude),
+            vec![
+                pair("default", "the CLI's own default"),
+                pair("Fable 5.1", "most capable, for the hardest work"),
+                pair("Opus 5.5 (1M)", "1M context, for long sessions"),
+                pair("Sonnet 5.5", "efficient for routine tasks"),
+                pair("Haiku 4.5", "fastest, for quick answers"),
+            ]
+        );
+        assert_eq!(
+            rows(Provider::Codex),
+            vec![
+                pair("GPT-6 Astra", "frontier, for the hardest tasks"),
+                pair("GPT-6 Sol", "workhorse for coding"),
+                pair("GPT-6 Luna", "fast and affordable"),
+            ]
+        );
+        // The gutter, the name, two cells, the detail, the check: 66 cells.
+        for (display, detail) in rows(Provider::Claude)
+            .into_iter()
+            .chain(rows(Provider::Codex))
+        {
+            let cells = 1 + 2 + display.chars().count() + 2 + detail.chars().count() + 2 + 1;
+            assert!(cells <= 66, "{display} · {detail} needs {cells} cells");
+        }
+    }
+
+    /// The CLI's own effort for a model with a ladder (what the picker
+    /// inverts with nothing chosen), none for one without; announced
+    /// descriptions read lowercase-first.
+    #[test]
+    fn the_cli_default_effort_and_groomed_details() {
+        assert_eq!(cli_default_effort(Provider::Claude, None), Some("high"));
+        assert_eq!(
+            cli_default_effort(Provider::Claude, Some("opus[1m]")),
+            Some("high")
+        );
+        assert_eq!(cli_default_effort(Provider::Claude, Some("haiku")), None);
+        assert_eq!(
+            cli_default_effort(Provider::Codex, Some("gpt-6-luna")),
+            Some("medium")
+        );
+        for provider in [Provider::Claude, Provider::Codex] {
+            for row in fallback(provider) {
+                assert_eq!(
+                    cli_default_effort(provider, Some(row.value.as_str())).is_some(),
+                    !row.efforts.is_empty(),
+                    "{}",
+                    row.value
+                );
+            }
+        }
+        assert_eq!(
+            groom_detail("Most capable for your hardest tasks"),
+            "most capable for your hardest tasks"
+        );
+        assert_eq!(groom_detail("GPT-6 for coding"), "GPT-6 for coding");
+        assert_eq!(groom_detail("1M context"), "1M context");
+        assert_eq!(groom_detail(""), "");
     }
 
     #[test]

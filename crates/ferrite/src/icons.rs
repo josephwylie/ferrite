@@ -24,11 +24,12 @@ use std::borrow::Cow;
 
 use gpui::prelude::*;
 use gpui::{
-    div, point, px, rgb, svg, Animation, AnimationExt, AnyElement, AssetSource, ElementId,
-    SharedString, Svg, Transformation,
+    div, point, px, rgb, svg, AnyElement, App, AssetSource, ElementId, SharedString, Svg,
+    Transformation, Window,
 };
 use std::time::Duration;
 
+use crate::motion;
 use crate::theme;
 
 macro_rules! icons {
@@ -56,10 +57,7 @@ icons![
     "claude",
     "ferrite-upper",
     "ferrite-lower",
-    "plus",
     "gear",
-    "list-filter",
-    "group",
     "subagents",
     "window-minimize",
     "window-maximize",
@@ -67,6 +65,33 @@ icons![
     "window-close",
     "copy",
     "resend",
+    "ferrite-mono",
+    // ---- WP-A icons (append names above the end line)
+    "reasoning",
+    // (end WP-A)
+
+    // ---- WP-B icons (append names above the end line)
+    // (end WP-B)
+
+    // ---- WP-C icons (append names above the end line)
+    "bell",
+    // (end WP-C)
+
+    // ---- WP-D icons (append names above the end line)
+    "stop",
+    "file",
+    "image",
+    // (end WP-D)
+
+    // ---- WP-E icons (append names above the end line)
+    "board",
+    // (end WP-E)
+
+    // ---- WP-F icons (append names above the end line)
+    // (end WP-F)
+
+    // ---- WP-G icons (append names above the end line)
+    // (end WP-G)
     "update",
 ];
 
@@ -76,6 +101,8 @@ pub const SIDEBAR: &str = "icons/sidebar.svg";
 pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
 pub const CHEVRON_RIGHT: &str = "icons/chevron-right.svg";
 pub const CLOSE: &str = "icons/close.svg";
+/// A pending or delivered file that is not an image: a 12px outline page.
+pub const FILE: &str = "icons/file.svg";
 #[allow(dead_code)]
 pub const FOLDER: &str = "icons/folder.svg";
 #[allow(dead_code)]
@@ -92,15 +119,11 @@ pub const CODEX: &str = "icons/codex.svg";
 pub const CLAUDE: &str = "icons/claude.svg";
 const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
 const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
-/// `+` — add a Project.
-pub const PLUS: &str = "icons/plus.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
-/// Sort and grouping choices for the Thread list.
-pub const LIST_FILTER: &str = "icons/list-filter.svg";
-/// Four Panes held together as one durable Group.
-pub const GROUP: &str = "icons/group.svg";
-/// A parent Agent branching to two children.
+/// A parent Agent branching to two children. (The nav no longer draws it:
+/// a row's subagents are its tooltip.)
+#[allow(dead_code)]
 pub const SUBAGENTS: &str = "icons/subagents.svg";
 /// The four caption marks the Windows titlebar draws (`titlebar.rs`). They
 /// are 10px chrome, not 16px UI: on a 10-unit viewBox the line family's 1.5
@@ -116,9 +139,44 @@ pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
 #[allow(dead_code)]
 pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 pub const COPY: &str = "icons/copy.svg";
+#[cfg_attr(not(test), allow(dead_code))]
 pub const RESEND: &str = "icons/resend.svg";
-/// A newer provider CLI is ready to install.
-pub const UPDATE: &str = "icons/update.svg";
+/// Ferrite's mark as one monochrome path, for the answer gutter (the
+/// gradient mark is reserved for the animated working line).
+#[allow(dead_code)]
+pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
+
+// ---- WP-A icon names (append consts above the end line)
+/// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
+pub const REASONING: &str = "icons/reasoning.svg";
+// (end WP-A)
+
+// ---- WP-B icon names (append consts above the end line)
+// (end WP-B)
+
+// ---- WP-C icon names (append consts above the end line)
+/// The notifications bell, in the line family (it replaces the kit's
+/// Lucide bell, whose 24-box stroke read heavier than the gear beside it).
+#[allow(dead_code)]
+pub const BELL: &str = "icons/bell.svg";
+// (end WP-C)
+
+// ---- WP-D icon names (append consts above the end line)
+/// An image attachment's mark (the prototype's `#image` symbol): a frame,
+/// a ridge and a sun, in the 16-unit line family.
+pub const IMAGE: &str = "icons/image.svg";
+// (end WP-D)
+
+// ---- WP-E icon names (append consts above the end line)
+/// The work board's door: three columns of cards, in the line family.
+pub const BOARD: &str = "icons/board.svg";
+// (end WP-E)
+
+// ---- WP-F icon names (append consts above the end line)
+// (end WP-F)
+
+// ---- WP-G icon names (append consts above the end line)
+// (end WP-G)
 
 pub struct Assets;
 
@@ -180,53 +238,65 @@ pub fn ferrite_icon(size: f32) -> AnyElement {
 
 /// Ferrite's two shards pull apart and snap home on the supplied logo's
 /// three-second timeline. GPUI rasterizes SVG rather than running its CSS, so
-/// the two paths are embedded separately and their transforms run on GPUI's
-/// animation clock. That also gives reduced-motion users the assembled mark.
-pub fn animated_ferrite_icon(size: f32, id: impl Into<ElementId>) -> AnyElement {
-    let id = id.into();
-    let animation = || {
-        Animation::new(Duration::from_millis(theme::FERRITE_SNAP_MS))
-            .repeat_synced()
-            .with_easing(ferrite_snap)
-    };
-    let shard = |path, id: ElementId, x: f32, y: f32| {
-        svg()
-            .absolute()
-            .top_0()
-            .left_0()
-            .w(px(size))
-            .h(px(size))
-            .path(path)
-            // GPUI skips `paint_svg` entirely without a concrete text color,
-            // even when the SVG paints only its own gradient. Set it on the
-            // shard itself because AnimationElement does not carry the
-            // surrounding text style into the animated child.
-            .text_color(rgb(theme::TEXT))
-            .with_animation(id, animation(), move |shard, displacement| {
-                shard.with_transformation(Transformation::translate(point(
+/// the two paths are embedded separately and translated by hand. The phase
+/// comes from the shared pulse clock (`motion::loop_phase`), not a
+/// per-frame `with_animation` loop: the painting view re-renders at ~30fps
+/// while the shards move, not at all while they rest, and nothing is
+/// scheduled once the mark is gone. Every
+/// mark reads the same clock, so no per-element state keys it and `_id` is
+/// kept for callers only. Reduced motion holds the assembled mark.
+pub fn animated_ferrite_icon(size: f32, _id: impl Into<ElementId>) -> AnyElement {
+    crate::loops_overlay::hosted(move || FerriteSnap { size }.into_any_element()).into_any_element()
+}
+
+#[derive(IntoElement)]
+struct FerriteSnap {
+    size: f32,
+}
+
+impl RenderOnce for FerriteSnap {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let period = Duration::from_millis(theme::FERRITE_SNAP_MS);
+        // Drawn again only while the shards pull apart and snap home.
+        let moves = motion::Motion::Spans(&[
+            (theme::FERRITE_PULL_START, theme::FERRITE_PULL_END),
+            (theme::FERRITE_HOLD_END, theme::FERRITE_SNAP_END),
+        ]);
+        let displacement =
+            ferrite_snap(motion::loop_phase(period, moves, window.current_view(), cx));
+        let size = self.size;
+        let shard = |path, x: f32, y: f32| {
+            svg()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(size))
+                .h(px(size))
+                .path(path)
+                // GPUI skips `paint_svg` entirely without a concrete text
+                // color, even when the SVG paints only its own gradient.
+                .text_color(rgb(theme::TEXT))
+                .with_transformation(Transformation::translate(point(
                     px(x * size * displacement),
                     px(y * size * displacement),
                 )))
-            })
-    };
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(size))
-        .h(px(size))
-        .child(shard(
-            FERRITE_UPPER,
-            (id.clone(), "upper").into(),
-            theme::FERRITE_SHARD_X,
-            -theme::FERRITE_SHARD_Y,
-        ))
-        .child(shard(
-            FERRITE_LOWER,
-            (id, "lower").into(),
-            -theme::FERRITE_SHARD_X,
-            theme::FERRITE_SHARD_Y,
-        ))
-        .into_any_element()
+        };
+        div()
+            .relative()
+            .flex_shrink_0()
+            .w(px(size))
+            .h(px(size))
+            .child(shard(
+                FERRITE_UPPER,
+                theme::FERRITE_SHARD_X,
+                -theme::FERRITE_SHARD_Y,
+            ))
+            .child(shard(
+                FERRITE_LOWER,
+                -theme::FERRITE_SHARD_X,
+                theme::FERRITE_SHARD_Y,
+            ))
+    }
 }
 
 fn ferrite_snap(phase: f32) -> f32 {
@@ -296,6 +366,7 @@ mod tests {
     fn every_icon_key_loads_an_svg() {
         for key in [
             SIDEBAR,
+            BELL,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
             CLOSE,
@@ -309,8 +380,6 @@ mod tests {
             FERRITE_UPPER,
             FERRITE_LOWER,
             GEAR,
-            LIST_FILTER,
-            GROUP,
             SUBAGENTS,
             WINDOW_MINIMIZE,
             WINDOW_MAXIMIZE,
@@ -318,6 +387,10 @@ mod tests {
             WINDOW_CLOSE,
             COPY,
             RESEND,
+            FERRITE_MONO,
+            REASONING,
+            IMAGE,
+            BOARD,
         ] {
             let bytes = Assets
                 .load(key)
@@ -329,8 +402,10 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            24,
-            "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
+            29,
+            "the prototype and app controls, including close, the four \
+             Windows caption glyphs, the image mark, the CLI update mark and the board door; every glyph \
+             Geist Mono lacks is typed in the face the platform falls back to (theme rule 10)"
         );
     }
 
@@ -338,18 +413,37 @@ mod tests {
     /// root, or resvg renders them as filled blobs; the logomarks must not.
     #[test]
     fn line_icons_bake_the_stroke_class_and_logomarks_do_not() {
+        // The sidebar toggle is the prototype's own drawing: a 20-unit box
+        // stroked 1.6, at the titlebar doors' 15px.
+        let sidebar = Assets.load(SIDEBAR).unwrap().unwrap();
+        let sidebar = std::str::from_utf8(&sidebar).unwrap();
+        assert!(sidebar.contains(r#"fill="none""#));
+        assert!(sidebar.contains(r#"stroke="currentColor""#));
+        assert!(sidebar.contains(r#"viewBox="0 0 20 20""#));
+        assert!(sidebar.contains(r#"stroke-width="1.6""#));
+        assert!(sidebar.contains(r#"<rect x="2.5" y="3" width="15" height="14" rx="2.5"/>"#));
+        assert!(sidebar.contains(r#"<path d="M7.5 3v14"/>"#));
+
+        // The bell is the prototype's own too: a 16-unit box stroked 1.4.
+        let bell = Assets.load(BELL).unwrap().unwrap();
+        let bell = std::str::from_utf8(&bell).unwrap();
+        assert!(bell.contains(r#"stroke-width="1.4""#));
+        assert!(bell.contains(r#"viewBox="0 0 16 16""#));
+        // The check is the picker's `✓` as the prototype's face draws it: a
+        // 12-unit box stroked 1.15.
+        let check = Assets.load(CHECK).unwrap().unwrap();
+        let check = std::str::from_utf8(&check).unwrap();
+        assert!(check.contains(r#"viewBox="0 0 12 12""#));
+        assert!(check.contains(r#"stroke-width="1.15""#));
+
         for key in [
-            SIDEBAR,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
             CLOSE,
             FOLDER,
             WARNING,
             PENCIL,
-            CHECK,
             GEAR,
-            LIST_FILTER,
-            GROUP,
             SUBAGENTS,
             COPY,
             RESEND,
@@ -358,8 +452,21 @@ mod tests {
             let svg = std::str::from_utf8(&bytes).unwrap();
             assert!(svg.contains(r#"fill="none""#), "{key} does not fill");
             assert!(svg.contains(r#"stroke="currentColor""#), "{key} strokes");
-            assert!(svg.contains(r#"stroke-width="1.5""#), "{key} is 1.5");
+            // One drawn weight whatever the viewBox: 1.5px at 16px.
+            assert!(
+                (effective_stroke(svg) - 1.5).abs() < 0.01,
+                "{key} draws {} at 16px, not 1.5",
+                effective_stroke(svg)
+            );
         }
+
+        // The image mark is the prototype's `#image` symbol as written: a
+        // 16-unit box stroked 1.3, square-ended, its sun filled.
+        let image = Assets.load(IMAGE).unwrap().unwrap();
+        let image = std::str::from_utf8(&image).unwrap();
+        assert!(image.contains(r#"viewBox="0 0 16 16""#));
+        assert!(image.contains(r#"stroke-width="1.3""#));
+        assert!(!image.contains("stroke-linecap"));
 
         let branch = Assets.load(BRANCH).unwrap().unwrap();
         let branch = std::str::from_utf8(&branch).unwrap();
@@ -376,12 +483,29 @@ mod tests {
         }
     }
 
+    /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.
+    fn effective_stroke(svg: &str) -> f32 {
+        let attr = |name: &str| {
+            let at = svg.find(&format!("{name}=\"")).unwrap() + name.len() + 2;
+            let end = at + svg[at..].find('"').unwrap();
+            svg[at..end].to_string()
+        };
+        let stroke: f32 = attr("stroke-width").parse().unwrap();
+        let view: f32 = attr("viewBox")
+            .split_whitespace()
+            .nth(2)
+            .unwrap()
+            .parse()
+            .unwrap();
+        stroke * 16.0 / view
+    }
+
     /// A name nothing embeds is `Ok(None)`, not an error: gpui asks for a
     /// path per frame and must not be handed a failure it cannot act on.
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 24);
+        assert_eq!(Assets.list("icons/").unwrap().len(), ICONS.len());
     }
 
     #[test]

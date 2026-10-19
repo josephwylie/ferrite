@@ -1,0 +1,166 @@
+//! The board's state: one plain record of everything it shows and everything you have open, typed or picked. Only
+//! update/ changes it (and the drawer, for what a draw measures: where the list scrolled to, how tall the panel is).
+//! Nothing here reads a file or asks herdr: what was read comes in as data (data.rs).
+use super::data::{Data, Remote};
+use super::textbox::TextBox;
+use crate::json::*;
+use crate::shown::ink::Ink;
+use std::collections::{BTreeMap, HashMap};
+/// A task as a row of the board, shared: the list, its groups and its rows hold the same one, never a copy.
+pub type Rec = std::sync::Arc<Obj>;
+
+/// What the text box is for: a message or a new task, or the words of find.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode { New, Find }
+/// Where the board runs, and what it was opened with. Fixed while it runs, but for the folder a draft brings it back to.
+#[derive(Clone, Debug, Default)]
+pub struct Ctx {
+    pub cwd: String, pub popup: bool, pub from: String, pub pane: String, pub own_pane: String, pub board_key: String,
+    pub own_key: Option<(Vec<String>, String)>, pub can_reload: bool, pub web: bool, pub leave_ms: i64, pub settle_ms: i64, pub in_herdr: bool,
+}
+/// What `yes` on a question does, and when the question is still about what it names.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Valid { Always, Mark(String, String) }
+#[derive(Clone, Debug)]
+pub struct Ask {
+    pub q: String, pub yes: super::job::Job, pub no: Option<super::job::Job>, pub valid: Valid, pub keys: Vec<(&'static str, String)>,
+    pub detail: String, pub danger: bool, pub nudge: bool,
+}
+/// The ? menu: which line is picked (-1: none), and how far it is scrolled.
+#[derive(Clone, Debug, Default)]
+pub struct Menu { pub at: i64, pub top: usize, pub over: i64, pub follow: bool, pub max_top: usize }
+/// Words put away, and whom they were for ("" the Coordinator) and where they were typed.
+#[derive(Clone, Debug, Default)]
+pub struct Away { pub text: String, pub to: String, pub cwd: String, pub warned: bool }
+/// What the archive view put aside, to come back to.
+#[derive(Clone, Debug, Default)]
+pub struct Back { pub sel: String, pub top: usize, pub filter: String, pub mode: Option<Mode>, pub value: String }
+/// The settings page: whose (a task, or an automation's row), the picked row, and the setting being typed for.
+#[derive(Clone, Debug, Default)]
+pub struct Editing { pub id: String, pub at: usize, pub typing: String, pub auto: bool }
+/// The first run's one screen.
+#[derive(Clone, Debug, Default)]
+pub struct Setup { pub file: String, pub typing: bool, pub key: Option<(bool, String, String)>, pub sidebar: Option<bool> }
+/// What you sent a task's agent, until it says something new.
+#[derive(Clone, Debug, Default)]
+pub struct Sent { pub text: String, pub over: (String, Value, Value) }
+/// A chat message longer than its box: where you scrolled to, in which chat (`key`). Opened (`top`), it stays open while
+/// its conversation changes: `lines` its lines as last drawn, to find the place again, `end` whether it showed the end.
+#[derive(Clone, Debug, Default)]
+pub struct ChatAt { pub key: String, pub top: Option<usize>, pub lines: Vec<String>, pub end: bool }
+#[derive(Clone, Debug, Default)]
+pub struct ChatFit { pub total: usize, pub rows: usize, pub top: usize, pub above: usize, pub below: usize, pub latest: usize }
+/// One row of the folded list: a heading, a task, a note ("↓ 3 more done"), or an automation. A heading is a machine's
+/// (`machine`, with every machine shown) or a group's (a repo, a status), selectable by its `id` (update/heads.rs), and
+/// folded holds how many tasks it hides (0: open); the automations' heading has no id.
+#[derive(Clone, Debug)]
+pub enum Row { Head { name: String, autos: bool, id: String, machine: bool, folded: usize }, Rec(Rec), Note(String), Auto(Obj) }
+/// The selection's row in the list as last laid out, to keep the selection steady when rows move: `group` is the
+/// heading it stands under (a heading's own id; update/landing.rs for the rows that are no task's).
+#[derive(Clone, Debug, Default)]
+pub struct SelRow { pub id: String, pub order: String, pub at: i64, pub done: bool, pub base: i64, pub group: String }
+/// What a key started on a row, shown on it until what it did is read (update/pending.rs): its word ("Stopping…") and
+/// what it says if it fails ("Could not stop"), when, another machine's row as it was then (`was`), whether a read
+/// must show it (`wait`), and how it went: `answered` the reads started when its job ended, `failed` why it did not
+/// work. `polls`: another machine's answers taken in since the job ended. `kind`: which job it is (Job::kind), the only
+/// one whose answer counts, `out` how many of that kind are under way, `through` words or a pane being opened.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pending { pub word: String, pub fail: String, pub at: i64, pub was: String, pub far: bool, pub wait: bool, pub answered: Option<u64>, pub answered_at: i64, pub failed: Option<String>, pub polls: u32, pub kind: String, pub out: u32, pub through: bool }
+/// A size somebody else holds the board's terminal at (held.rs), as last seen.
+#[derive(Clone, Debug, Default)]
+pub struct Held { pub columns: u16, pub rows: u16, pub room: (u16, u16), pub by: Vec<(i64, i64)>, pub known: bool }
+
+/// The web board's own (webui/web.rs): the agent page to go to, how often the settings part was asked for, the messages
+/// counted (a page shows each once), and the web UI's PCs with the one its page is on. `own_scope`: whose board it
+/// shows was picked on the web, and is kept as the web's own; else it is the terminal board's (web.rs).
+#[derive(Clone, Debug, Default)]
+pub struct Web { pub go: Option<Value>, pub show_settings: i64, pub msg_n: i64, pub pcs: Option<Vec<crate::webui::pcs::Pc>>, pub at: Option<String>, pub stranger: String, pub stranger_tried: i64, pub followed: Option<String>, pub own_scope: bool }
+
+pub struct State {
+    pub ctx: Ctx,
+    pub web: Web,
+    pub data: Data,
+    pub remotes: BTreeMap<String, Remote>,
+    /// The machines ("" this one) in the order of herdr's sidebar (remote/sidebar.rs), the other machine whose sidebar
+    /// was followed last (kept with the view), and herdr's own list here (None: named by hand in board.machines).
+    pub order: Vec<String>, pub sidebar_from: Option<String>, pub own_order: Option<Vec<String>>,
+    /// The tasks of whoever's board shows, as rows (shown/states.rs: as_row), and what the list makes of them.
+    pub items: Vec<Rec>, pub rows: Vec<Row>, pub grouped: Vec<(String, Vec<Rec>)>, pub whole: bool, pub autos: Vec<Obj>, pub jobs: Vec<Obj>, pub steps: Vec<String>,
+    pub selection_rows: Vec<SelRow>, pub selection_layout: String,
+    pub sel: String, pub top: usize, pub stick: String, pub top_free: bool,
+    pub all_done: bool, pub archive_view: bool, pub archive_back: Option<Back>, pub archive_undo: Option<Obj>,
+    /// Who the chat talks to: the selected task's agent after space (`reply`), the Coordinator otherwise.
+    pub reply: bool, pub reply_id: String,
+    pub side: bool, pub full: bool, pub panel_top: usize, pub panel_height: usize, pub panel_length: usize, pub width: usize,
+    pub mode: Mode, pub menu: Option<Menu>, pub ask: Option<Ask>, pub by_repo: bool, pub draft_away: Option<Away>,
+    pub auto_open: bool, pub auto_at: i64,
+    /// The headings folded to their one line, by id (update/heads.rs): kept with the view when the board closes.
+    pub folded: std::collections::BTreeSet<String>,
+    /// Whose board you see: "" this machine, "*" every machine, or one machine by name.
+    pub scope: String,
+    /// Native board project filter; separate from typed search and machine scope.
+    pub project_root: Option<String>,
+    pub filter: String, pub msg: String, pub msg_kind: Ink,
+    pub chat_open: bool, pub chat_folded: bool, pub just_sent: HashMap<String, Sent>, pub chat_at: Option<ChatAt>, pub chat_fit: Option<ChatFit>, pub chat_rows: Option<(usize, usize)>,
+    pub input: TextBox,
+    pub editing: Option<Editing>, pub edit_line: usize,
+    pub setup: Option<Setup>, pub paste_text: String,
+    /// The first ctrl+c (or the last esc) shows how the board closes: until then (ms), and whether esc showed it.
+    pub closing: Option<(i64, bool)>, pub leaving: bool, pub leave_at: i64,
+    pub attempt_at: HashMap<String, String>,
+    /// What a key started and the board has not yet read the result of, by row id (update/pending.rs).
+    pub pending: HashMap<String, Pending>,
+    pub list_room: usize, pub list_tall: bool, pub list_width: usize, pub fold_sel: String, pub unread_top: usize, pub unread_max: usize,
+    pub list_at: Option<(usize, usize)>, pub list_ids: Vec<String>,
+    pub told: i64, pub rang: i64, pub err_hid: String, pub told_reply: String, pub lone_at: i64, pub prefixed: i64,
+    /// The plugin changed under the board: since when (the stamp it changed to).
+    pub stale: String,
+    /// A task that just left the list: once it is read again, the message says which task the selection went to.
+    pub left: String,
+    pub held: Option<Held>, pub guest: bool, pub viewed: bool, pub off_note: String,
+    /// What herdr shows of the pane, a viewer holding the terminal, a size that changed for a moment (update/size.rs).
+    pub size: super::update::size::Size,
+    /// What the last draw put where: the chat's key on the hint line while the message is hidden.
+    pub chat_key_shown: bool,
+    /// The board looked once whether to ask about showing itself in the herdr web UI (update/web_ui.rs).
+    pub web_ui_asked: bool,
+    /// The list was too narrow for the numbers' column at the last draw: an automation says on or off in its words.
+    pub tags_gone: bool,
+    pub now: i64, pub ticks: u64,
+    /// The tasks as last told to the terminal (OSC 7501), by id.
+    pub osc_sent: HashMap<String, String>,
+}
+impl State {
+    pub fn new(ctx: Ctx, data: Data) -> State {
+        State {
+            ctx, web: Web::default(), data, remotes: BTreeMap::new(), order: vec![], sidebar_from: None, own_order: None, items: vec![], rows: vec![], grouped: vec![], whole: false, autos: vec![], jobs: vec![], steps: vec![],
+            selection_rows: vec![], selection_layout: String::new(), sel: String::new(), top: 0, stick: String::new(), top_free: false,
+            all_done: false, archive_view: false, archive_back: None, archive_undo: None, reply: false, reply_id: String::new(),
+            side: false, full: false, panel_top: 0, panel_height: 1, panel_length: 0, width: 120,
+            mode: Mode::New, menu: None, ask: None, by_repo: false, draft_away: None, auto_open: false, auto_at: -1, folded: Default::default(), scope: String::new(),
+            project_root: None, filter: String::new(), msg: String::new(), msg_kind: Ink::Muted, chat_open: true, chat_folded: false, just_sent: HashMap::new(), chat_at: None, chat_fit: None, chat_rows: None,
+            input: TextBox::default(), editing: None, edit_line: 0, setup: None, paste_text: String::new(), closing: None, leaving: false, leave_at: 0,
+            attempt_at: HashMap::new(), pending: HashMap::new(), list_room: 0, list_tall: false, list_width: 0, fold_sel: String::new(), unread_top: 0, unread_max: 0, list_at: None, list_ids: vec![],
+            told: 0, rang: 0, err_hid: String::new(), told_reply: String::new(), lone_at: 0, prefixed: 0, stale: String::new(), left: String::new(),
+            held: None, guest: false, viewed: false, off_note: String::new(), size: Default::default(), chat_key_shown: false, web_ui_asked: false, tags_gone: false, now: crate::clock::now(), ticks: 0, osc_sent: HashMap::new(),
+        }
+    }
+    /// The selected task, when a task is selected.
+    pub fn current(&self) -> Option<&Obj> { self.items.iter().find(|r| r.s("id") == self.sel).map(|r| &**r) }
+    /// The selected words on their way to another machine, when those are selected.
+    pub fn job(&self) -> Option<&Obj> { self.jobs.iter().find(|j| j.s("id") == self.sel) }
+    /// The selected automation, when the selected row is one.
+    pub fn auto(&self) -> Option<&Obj> { self.autos.iter().find(|a| a.s("row") == self.sel) }
+    pub fn value(&self) -> String { self.input.text() }
+    pub fn all(&self) -> bool { !self.scope.is_empty() }
+    /// A message stays until the next key press; an error (red) stays until esc dismisses it.
+    pub fn flash(&mut self, text: impl Into<String>, kind: Ink) {
+        let said = crate::text::clean(&text.into());
+        let said = if crate::re!(r"herdr-projects \w").is_match(&said) { said } else { crate::store::keys::tag_ids(&said, &self.data.repos, &self.data.keys) };
+        self.msg = said; self.msg_kind = kind; self.web.msg_n += 1;
+    }
+    /// Nothing of yours is open or half typed: the board can be swapped for its new version without losing anything.
+    pub fn at_rest(&self) -> bool { self.value().is_empty() && self.ask.is_none() && self.menu.is_none() && self.setup.is_none() && self.paste_text.is_empty() && self.mode == Mode::New }
+    /// With nothing of a task's open, your words go to a Coordinator: this machine's, or the one machine you look at.
+    pub fn talks_to_coord(&self) -> bool { self.data.can_dispatch || (!self.scope.is_empty() && self.scope != "*" && self.remotes.contains_key(&self.scope)) }
+}

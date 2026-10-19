@@ -45,8 +45,37 @@ Replacement, park, Handover, watchdog, and disconnect invalidate old handles.
 Main retains prompting, model/effort changes, and interrupt. Child completion,
 usage, and requests cannot change Main's resume identity, interrupt target,
 accounting, or queued prompt. Autonomous Claude background Main results also
-cannot release a foreground Main queue. Child views support observation and
-answering actual requests, not independent execution controls.
+cannot release a foreground Main queue. Child views support observation,
+answering actual requests, and one execution control: stop.
+
+## Escape stops what the Pane shows
+
+Escape on Main interrupts Main's current turn and nothing else: Subagents,
+background agents, background shell tasks and workflows run on. Escape on a
+Subagent's tab stops that Subagent alone (`Session::stop_subagent`, the
+`stop_subagent` op); on a finished Subagent it does nothing, and never falls
+through to Main. Nothing Ferrite sends kills every agent at once.
+
+- Claude's CLI kills every background agent and workflow on an `interrupt`
+  unless the host declares `perTaskStopAffordance: true` at `initialize`
+  ("ABSENCE also fails closed", 2.1.299). Ferrite declares it: it does stop
+  tasks one by one (the background shelf's ×, a Subagent's escape). Confirmed
+  by capture on 2.1.299: without it, an interrupt answered a `stopped`
+  notification for a background agent and killed its shell; with it, the
+  agent and a background `sleep` survived while Main's turn ended
+  `error_during_execution`. A Subagent stops by `stop_task` with its task id,
+  the one alias that names it to the CLI; one with no task id is refused,
+  never guessed.
+- Codex children run their own threads. `turn/interrupt` names a thread and
+  its turn, so Main's interrupt cannot reach a child; a child stops by
+  `turn/interrupt` on its own thread's running turn, and one running no turn
+  is left be. An interrupt leaves the turn's command running (0.163.0: an
+  interrupted child's `sleep` ran to completion, and Main's own did too), so
+  stopping a child also sends `thread/backgroundTerminals/clean` for its
+  thread; Main's survivors stay visible as background terminals instead.
+  Main's interrupt leaves children running, including one Main was `wait`ing
+  on. A stopped child sends Main no completion, so a `wait` on it does not
+  return (over 240 s observed) until Main is interrupted.
 
 ## Persistence and recovery
 
@@ -68,8 +97,11 @@ flush a byte checkpoint, scan aliases then bounded child content from that
 prefix, and replay the separately buffered live tail once. Generation, request
 identity, and header changes invalidate obsolete loads. Disk reads stay off
 the paint path. Each scan retains one encoded line and decoded record; an
-individual line has no hard size cap. Ordinary Thread loading still reads a
-full snapshot. Omitted saved content remains on disk and is marked Partial.
+individual line has no hard size cap. A revive reads only from a replay
+base onward ([ADR 0009](0009-store-off-the-ui-thread.md)). Children known from
+before the base come back with identity, status and outcome but no content,
+and this worker restores them when shown. Omitted saved content remains on
+disk and is marked Partial.
 
 Claude forwards complete child frames with `Live` coverage. Preserve outer
 frame/block identity, because multiple frames can share an inner message ID;

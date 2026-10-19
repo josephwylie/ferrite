@@ -4,36 +4,157 @@
 //! history retention nor renders a row; it only preserves the identities a
 //! `ListState` needs to reconcile changing transcript content.
 
-use std::{collections::HashMap, ops::Range, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    rc::Rc,
+};
 
-use ferrite_core::transcript::{Block, BlockId, Body, ToolActivity, TurnDiff};
+use ferrite_core::transcript::{Block, BlockId, Body, ToolBlock, ToolState};
 
 /// A stable semantic-row identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RowId {
+    /// The Thread's banner, the first row of every transcript.
+    Banner,
     /// An adjacent native Markdown answer, named by its original run.
     Markdown(BlockId),
-    /// A consecutive tool disclosure, named by the leader's provider call.
-    ToolActivity(String),
-    /// One non-grouped transcript block.
+    /// One transcript block: a prompt, a tool call, a note.
     Block(BlockId),
-    /// The native turn-wide change summary.
-    TurnDiff(String),
+    /// A run of routine calls folded under one summary, named by its first
+    /// call's block: the run grows at its tail, so the name holds.
+    Group(BlockId),
+    /// What a package appends after the last row (the pending Decision).
+    Tail,
+}
+
+/// What a row is, for the gap table: derived once in `project`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowKind {
+    Banner,
+    Prompt,
+    /// An agent answer. `commentary` is a lone paragraph, the kind that
+    /// introduces the work under it.
+    Answer {
+        commentary: bool,
+    },
+    /// One tool call. `diff_shown`: its diff is drawn under it, and the
+    /// call after it sits a line below.
+    Activity {
+        diff_shown: bool,
+    },
+    /// Two or more routine calls in a row, folded under one summary
+    /// (`Ran 4 commands, read 1 file`). It spaces as a call does.
+    Group,
+    Reasoning,
+    Notice,
+    /// A decision record or a revival note: it hangs on an elbow under the
+    /// row it answers.
+    Meta,
+    /// A turn's end: its stamp, or (`hangs`) the elbow note that it was
+    /// interrupted or failed.
+    TurnEnd {
+        hangs: bool,
+    },
+    /// An agent's visual: its call line and the page. It spaces as a
+    /// diffed call does: a line above and below it, so the page never sits
+    /// flush against the calls around it.
+    Visual,
+    /// The tail row (the Decision), a line under the row before it.
+    Tail,
+    /// A fallback prose or code block.
+    Other,
+}
+
+impl RowKind {
+    fn of(block: &Block) -> Self {
+        match &block.body {
+            Body::Prompt(_) => Self::Prompt,
+            Body::Tool(tool) => Self::Activity {
+                diff_shown: !tool.diffs.is_empty(),
+            },
+            Body::Visual(_) => Self::Visual,
+            Body::Thinking(_) => Self::Reasoning,
+            Body::Notice(_) => Self::Notice,
+            Body::Meta(_) => Self::Meta,
+            Body::TurnEnd(end) => Self::TurnEnd {
+                hangs: !matches!(end.outcome, ferrite_core::TurnOutcome::Completed),
+            },
+            Body::Paragraph { .. }
+            | Body::Heading { .. }
+            | Body::Bullet { .. }
+            | Body::Code { .. } => Self::Other,
+        }
+    }
+}
+
+/// The space above a row, from the row before it (`None`: the first row),
+/// its own kind and the answer size `reading`: the transcript's one table
+/// of vertical rhythm (the transcript grammar in `theme.rs`). Blocks are
+/// one blank line apart, as a terminal prints them: the banner, a turn's
+/// prompt band, prose, a run of tool calls, the stamp, the Decision. The
+/// calls of one run sit flush — a group of calls is a call here — except
+/// that a call after a drawn diff sits a line below it — and a row that
+/// hangs on an elbow under the row it answers
+/// (a decision record, an interrupted or failed turn's end) sits flush under
+/// it. A first row is flush to the top when it is a prompt band and a line
+/// down otherwise (the banner, first whenever there is one, takes the
+/// body's own top padding instead).
+pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32) -> f32 {
+    use RowKind::*;
+    let line = crate::theme::prose_line_height(reading);
+    let Some(previous) = previous else {
+        return if kind == Prompt { 0. } else { line };
+    };
+    match (previous, kind) {
+        (_, Tail) => line,
+        (Activity { diff_shown: true }, Activity { .. } | Group) => line,
+        (_, TurnEnd { hangs: true } | Meta)
+        | (Activity { .. } | Group, Activity { .. } | Group) => 0.,
+        _ => line,
+    }
+}
+
+/// What a projection reads besides the blocks: the banner and its top
+/// padding, the tail row's key, the call a pending Decision gates (hidden
+/// while it waits), and the later edits whose folded diff the operator
+/// opened.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RowShape {
+    pub banner: bool,
+    pub banner_pad: f32,
+    pub tail: Option<u64>,
+    pub pending_call: Option<String>,
+    /// The model's thinking drawn as `∴` rows; off, it draws nothing.
+    pub thinking: bool,
+    pub opened_diffs: HashSet<String>,
 }
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
 /// does not borrow the transient slice passed to [`TranscriptRows::reconcile`].
+///
+/// Everything a row draws is in its equality — its gap and its diff fold
+/// included — so a row whose neighbour changed its spacing is a changed row,
+/// re-measured by reconcile and never per frame.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TranscriptRow {
     id: RowId,
     blocks: Rc<[Block]>,
     source: Option<Rc<str>>,
-    turn_diff: Option<TurnDiff>,
+    kind: RowKind,
+    gap: f32,
+    /// The answer wears the Ferrite mark (`AnswerMarks`): it is the first
+    /// prose since a prompt or a tool row.
+    answer_mark: bool,
+    /// A later edit to a file already diffed in its turn: its diff starts
+    /// folded behind `+ show diff`.
+    diff_folds: bool,
+    /// The tail row's key: a change re-renders it.
+    tail_key: Option<u64>,
 }
 
 impl TranscriptRow {
     /// Stable identity used by list reconciliation and element keys.
-    #[cfg(test)]
     pub(crate) fn id(&self) -> &RowId {
         &self.id
     }
@@ -48,8 +169,35 @@ impl TranscriptRow {
         self.source.as_deref()
     }
 
-    pub(crate) fn turn_diff(&self) -> Option<&TurnDiff> {
-        self.turn_diff.as_ref()
+    /// What the row is, for the gap table and the prompt band.
+    pub(crate) fn kind(&self) -> RowKind {
+        self.kind
+    }
+
+    /// The space above this row (`gap_before`).
+    pub(crate) fn gap(&self) -> f32 {
+        self.gap
+    }
+
+    /// This answer wears the Ferrite mark (`AnswerMarks`).
+    pub(crate) fn answer_mark(&self) -> bool {
+        self.answer_mark
+    }
+
+    /// The call's diff folds behind `+ show diff` (a later edit to a file
+    /// already diffed in its turn).
+    pub(crate) fn diff_folds(&self) -> bool {
+        self.diff_folds
+    }
+
+    /// The call's diff is drawn.
+    pub(crate) fn diff_shown(&self) -> bool {
+        matches!(self.kind, RowKind::Activity { diff_shown: true })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tail_key(&self) -> Option<u64> {
+        self.tail_key
     }
 }
 
@@ -57,13 +205,24 @@ impl TranscriptRow {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TranscriptRows {
     rows: Rc<[Rc<TranscriptRow>]>,
+    /// The indices of the visual rows, for the per-layout reach pass.
+    visuals: Rc<[usize]>,
 }
 
 impl TranscriptRows {
-    /// Project the caller-owned retained window into semantic rows.
-    pub(crate) fn new(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Self {
-        let rows = project(blocks, turn_diff);
-        Self { rows: rows.into() }
+    /// Project the caller-owned retained window into semantic rows, spaced
+    /// for answers at `reading` px.
+    pub(crate) fn new(blocks: &[Block], shape: &RowShape, reading: f32) -> Self {
+        let rows = project(blocks, shape, reading);
+        Self {
+            visuals: visual_indices(&rows),
+            rows: rows.into(),
+        }
+    }
+
+    /// The indices of the rows that are visuals.
+    pub(crate) fn visual_rows(&self) -> &[usize] {
+        &self.visuals
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -88,9 +247,14 @@ impl TranscriptRows {
     /// The returned splices are applied in order to the old list. Existing
     /// rows whose content changed are named in their final indices for lazy
     /// height invalidation.
-    pub(crate) fn reconcile(&mut self, blocks: &[Block], turn_diff: Option<&TurnDiff>) -> RowDelta {
+    pub(crate) fn reconcile(
+        &mut self,
+        blocks: &[Block],
+        shape: &RowShape,
+        reading: f32,
+    ) -> RowDelta {
         let previous = self.rows.clone();
-        let projected = project(blocks, turn_diff);
+        let projected = project(blocks, shape, reading);
         let old_by_id: HashMap<_, _> = previous
             .iter()
             .map(|row| (row.id.clone(), row.clone()))
@@ -103,9 +267,18 @@ impl TranscriptRows {
             })
             .collect();
         let delta = RowDelta::between(&previous, &next);
+        self.visuals = visual_indices(&next);
         self.rows = next.into();
         delta
     }
+}
+
+fn visual_indices(rows: &[Rc<TranscriptRow>]) -> Rc<[usize]> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.kind == RowKind::Visual)
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// One structural replacement in a [`gpui::ListState`].
@@ -195,8 +368,103 @@ impl RowDelta {
     }
 }
 
-fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptRow>> {
+/// Whether `call` is the call a pending Decision gates: the same id, or the
+/// provider's item id inside an attributed key (`["turn","item"]`).
+pub(crate) fn gated(call: &str, pending: &str) -> bool {
+    call == pending || call.ends_with(&format!("\"{pending}\"]"))
+}
+
+/// Whether a call is routine work that folds into a group with the calls
+/// beside it: a command, a read, a search, a fetch, an MCP call. An edit
+/// is the work itself, its diff drawn under it, and a subagent has a
+/// transcript of its own: each keeps its own row, between groups. Decided
+/// by the tool, never by a result still to come, so a running edit never
+/// leaves a group when its diff lands.
+pub(crate) fn groups(tool: &ToolBlock) -> bool {
+    const OWN_ROW: &[&str] = &[
+        "Edit",
+        "MultiEdit",
+        "Write",
+        "Update",
+        "NotebookEdit",
+        "fileChange",
+        "apply_patch",
+        "Task",
+        "Agent",
+        "collabAgentToolCall",
+    ];
+    tool.diffs.is_empty() && !OWN_ROW.contains(&tool.name.as_str())
+}
+
+/// A block that projects to no row: blank or hidden thinking, an answered
+/// request's record, the `opened in` note, the call a pending Decision
+/// gates. A group of calls reads across it.
+fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
+    if block.markdown.is_some() {
+        return false;
+    }
+    match &block.body {
+        Body::Thinking(text) => text.trim().is_empty() || !shape.thinking,
+        Body::Meta(text) => ferrite_core::transcript::is_decision_record(text),
+        Body::Notice(text) => ferrite_core::transcript::is_opened_notice(text),
+        Body::Tool(tool) => is_gated(tool, shape),
+        _ => false,
+    }
+}
+
+/// The call a pending Decision gates waits in the Decision itself; it
+/// shows once answered.
+fn is_gated(tool: &ToolBlock, shape: &RowShape) -> bool {
+    tool.state == ToolState::Running
+        && shape
+            .pending_call
+            .as_deref()
+            .is_some_and(|pending| gated(&tool.call, pending))
+}
+
+/// The routine calls that fold with the one at `blocks[start]`: it and
+/// every routine call after it up to the first row that is not one,
+/// reading across blocks that draw nothing. Returns the members' indices
+/// and the index after the run.
+fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, usize) {
+    let mut members = vec![start];
+    let mut end = start + 1;
+    let mut index = end;
+    while let Some(block) = blocks.get(index) {
+        match &block.body {
+            Body::Tool(tool) if block.markdown.is_none() && !is_gated(tool, shape) => {
+                if !groups(tool) {
+                    break;
+                }
+                members.push(index);
+                index += 1;
+                end = index;
+            }
+            _ if draws_nothing(block, shape) => index += 1,
+            _ => break,
+        }
+    }
+    (members, end)
+}
+
+fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<TranscriptRow>> {
     let mut rows = Vec::new();
+    let row = |id, blocks: &[Block], source: Option<Rc<str>>, kind| TranscriptRow {
+        id,
+        blocks: blocks.to_vec().into(),
+        source,
+        kind,
+        gap: 0.,
+        answer_mark: false,
+        diff_folds: false,
+        tail_key: None,
+    };
+    if shape.banner {
+        rows.push(row(RowId::Banner, &[], None, RowKind::Banner));
+    }
+    // A file's first diff in a turn is drawn; a later edit to it in the same
+    // turn folds behind `+ show diff` until the operator opens it.
+    let mut diffed: HashSet<&str> = HashSet::new();
     let mut index = 0;
     while index < blocks.len() {
         let block = &blocks[index];
@@ -205,51 +473,120 @@ fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptR
             let start = index;
             let mut source = String::new();
             while let Some(markdown) = blocks.get(index).and_then(|block| block.markdown.as_ref()) {
+                // A section still open when its item ended (its last, with
+                // no newline of its own) closes its paragraph before the next
+                // item's prose: two messages read `…hello.` and `The
+                // workspace…`, never `hello.The workspace`.
+                if !source.is_empty() && !source.ends_with('\n') {
+                    source.push_str("\n\n");
+                }
                 source.push_str(markdown);
                 index += 1;
             }
-            rows.push(Rc::new(TranscriptRow {
-                id: RowId::Markdown(first),
-                blocks: blocks[start..index].to_vec().into(),
-                source: Some(source.into()),
-                turn_diff: None,
-            }));
+            let run = &blocks[start..index];
+            let commentary = run.len() == 1 && matches!(&run[0].body, Body::Paragraph { .. });
+            rows.push(row(
+                RowId::Markdown(first),
+                run,
+                Some(source.into()),
+                RowKind::Answer { commentary },
+            ));
             continue;
-        }
-        if let Some(activity) = ToolActivity::at_start(&blocks[index..]) {
-            let len = activity.blocks.len();
-            rows.push(Rc::new(TranscriptRow {
-                id: RowId::ToolActivity(activity.leader().call.clone()),
-                blocks: blocks[index..index + len].to_vec().into(),
-                source: None,
-                turn_diff: None,
-            }));
-            index += len;
-            continue;
-        }
-        if !is_blank(block) {
-            rows.push(Rc::new(TranscriptRow {
-                id: RowId::Block(block.id),
-                blocks: vec![block.clone()].into(),
-                source: None,
-                turn_diff: None,
-            }));
         }
         index += 1;
+        match &block.body {
+            Body::Prompt(_) => {
+                diffed.clear();
+                rows.push(row(
+                    RowId::Block(block.id),
+                    std::slice::from_ref(block),
+                    None,
+                    RowKind::Prompt,
+                ));
+            }
+            Body::Tool(tool) => {
+                if is_gated(tool, shape) {
+                    continue;
+                }
+                if groups(tool) {
+                    let (members, end) = group_at(blocks, index - 1, shape);
+                    if members.len() > 1 {
+                        let run: Vec<Block> =
+                            members.iter().map(|at| blocks[*at].clone()).collect();
+                        rows.push(row(RowId::Group(block.id), &run, None, RowKind::Group));
+                        index = end;
+                        continue;
+                    }
+                }
+                let mut entry = row(
+                    RowId::Block(block.id),
+                    std::slice::from_ref(block),
+                    None,
+                    RowKind::of(block),
+                );
+                if !tool.diffs.is_empty() {
+                    let seen = tool
+                        .diffs
+                        .iter()
+                        .any(|diff| diffed.contains(diff.path.as_str()));
+                    for diff in &tool.diffs {
+                        diffed.insert(diff.path.as_str());
+                    }
+                    entry.diff_folds = seen;
+                    entry.kind = RowKind::Activity {
+                        diff_shown: !seen || shape.opened_diffs.contains(&tool.call),
+                    };
+                }
+                rows.push(entry);
+            }
+            // Hidden thinking; an answered request's record (`allowed
+            // Bash`), whose call's own row is its account, as the approved
+            // transcript draws it; and where the Thread works, which the
+            // banner says.
+            _ if draws_nothing(block, shape) => {}
+            _ => rows.push(row(
+                RowId::Block(block.id),
+                std::slice::from_ref(block),
+                None,
+                RowKind::of(block),
+            )),
+        }
     }
-    if let Some(turn_diff) = turn_diff {
-        rows.push(Rc::new(TranscriptRow {
-            id: RowId::TurnDiff(turn_diff.turn_id.clone()),
-            blocks: Vec::new().into(),
-            source: None,
-            turn_diff: Some(turn_diff.clone()),
-        }));
+    if let Some(key) = shape.tail {
+        let mut tail = row(RowId::Tail, &[], None, RowKind::Tail);
+        tail.tail_key = Some(key);
+        rows.push(tail);
     }
-    rows
+    let mut previous = None;
+    let mut marks = crate::transcript::AnswerMarks::default();
+    for row in rows.iter_mut() {
+        row.gap = if row.kind == RowKind::Banner {
+            shape.banner_pad
+        } else {
+            gap_before(previous, row.kind, reading)
+        };
+        row.answer_mark = marks.next(row.speaker());
+        previous = Some(row.kind);
+    }
+    rows.into_iter().map(Rc::new).collect()
 }
 
-fn is_blank(block: &Block) -> bool {
-    matches!(&block.body, Body::Thinking(text) if text.trim().is_empty())
+impl TranscriptRow {
+    /// Who the row speaks for: an answer is the agent, a tool row or group
+    /// a machine; a lone block its own body's speaker. The banner and the
+    /// tail speak for no one.
+    fn speaker(&self) -> Option<crate::transcript::Speaker> {
+        use crate::transcript::Speaker;
+        match self.kind {
+            RowKind::Answer { .. } => Some(Speaker::Agent),
+            RowKind::Activity { .. } | RowKind::Group => Some(Speaker::Other),
+            RowKind::Banner | RowKind::Tail => None,
+            _ => self
+                .blocks
+                .first()
+                .and_then(|block| Speaker::of(&block.body)),
+        }
+    }
 }
 
 fn common_prefix<T: Eq>(left: &[T], right: &[T]) -> usize {
@@ -283,6 +620,16 @@ mod tests {
         SessionEvent,
     };
 
+    /// Answers at the Standard reading size.
+    const READING: f32 = crate::theme::FS_PROSE;
+
+    fn shape() -> RowShape {
+        RowShape {
+            thinking: true,
+            ..RowShape::default()
+        }
+    }
+
     fn text(transcript: &mut Transcript, text: &str) {
         transcript.apply(Input::Event(SessionEvent::TextDelta { text: text.into() }));
     }
@@ -299,6 +646,70 @@ mod tests {
         }));
     }
 
+    fn edit(transcript: &mut Transcript, id: &str, path: &str) {
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": path }),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: String::new(),
+            is_error: false,
+            result: ferrite_core::ToolResult::FileEdit {
+                path: path.into(),
+                hunks: vec![ferrite_core::Hunk {
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec!["-a".into(), "+b".into()],
+                    section: None,
+                }],
+            },
+        }));
+    }
+
+    fn bash(transcript: &mut Transcript, id: &str) {
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo test" }),
+        }));
+    }
+
+    /// The model's thinking, an answered request's record and the
+    /// `opened in` note leave no row of their own unless thinking is shown.
+    #[test]
+    fn thinking_records_and_the_opened_note_draw_no_rows_by_default() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Notice(format!(
+            "{}/work/repo",
+            ferrite_core::transcript::OPENED_IN
+        )));
+        prompt(&mut transcript, "run it");
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "The user wants the tests run.".into(),
+        }));
+        bash(&mut transcript, "b1");
+        transcript.apply(Input::Answered {
+            allowed: true,
+            tool_name: "Bash".into(),
+        });
+        let kinds = |shape: &RowShape| -> Vec<RowKind> {
+            TranscriptRows::new(transcript.blocks(), shape, READING)
+                .rows()
+                .iter()
+                .map(|row| row.kind())
+                .collect()
+        };
+        let hidden = kinds(&RowShape::default());
+        assert!(!hidden.contains(&RowKind::Reasoning), "{hidden:?}");
+        assert!(!hidden.contains(&RowKind::Notice), "{hidden:?}");
+        assert!(!hidden.contains(&RowKind::Meta), "{hidden:?}");
+        assert!(kinds(&shape()).contains(&RowKind::Reasoning));
+    }
+
     #[test]
     fn contiguous_markdown_blocks_share_one_native_answer_row() {
         let mut transcript = Transcript::default();
@@ -306,11 +717,13 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ContentBoundary));
         text(&mut transcript, "second");
 
-        let rows = TranscriptRows::new(transcript.blocks(), None);
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
         assert_eq!(rows.len(), 1);
         assert!(matches!(rows.get(0).unwrap().id(), RowId::Markdown(_)));
         assert_eq!(rows.get(0).unwrap().blocks().len(), 2);
-        assert_eq!(rows.get(0).unwrap().source(), Some("firstsecond"));
+        // Each item's prose closes its paragraph: `first` and `second`
+        // read as two, never `firstsecond`.
+        assert_eq!(rows.get(0).unwrap().source(), Some("first\n\nsecond"));
     }
 
     #[test]
@@ -318,11 +731,11 @@ mod tests {
         let mut transcript = Transcript::default();
         text(&mut transcript, "first");
         prompt(&mut transcript, "next");
-        let mut rows = TranscriptRows::new(transcript.blocks(), None);
+        let mut rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
         let first = rows.get(0).unwrap().clone();
 
         text(&mut transcript, "second");
-        let delta = rows.reconcile(transcript.blocks(), None);
+        let delta = rows.reconcile(transcript.blocks(), &shape(), READING);
         assert!(Rc::ptr_eq(&first, rows.get(0).unwrap()));
         assert_eq!(
             delta.splices,
@@ -340,12 +753,12 @@ mod tests {
             prompt(&mut transcript, text_part);
             text(&mut transcript, text_part);
         }
-        let mut rows = TranscriptRows::new(transcript.blocks(), None);
+        let mut rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
         let old = rows.rows().to_vec();
 
         prompt(&mut transcript, "d");
         text(&mut transcript, "d");
-        let delta = rows.reconcile(&transcript.blocks()[2..], None);
+        let delta = rows.reconcile(&transcript.blocks()[2..], &shape(), READING);
         assert_eq!(
             delta.splices,
             vec![
@@ -359,7 +772,13 @@ mod tests {
                 }
             ]
         );
-        assert!(Rc::ptr_eq(&old[2], rows.get(0).unwrap()));
+        // The new head is a prompt band flush to the top in place of its
+        // blank line: a changed row, re-measured, while the rest keep their
+        // Rcs.
+        assert!(!Rc::ptr_eq(&old[2], rows.get(0).unwrap()));
+        assert_eq!(rows.get(0).unwrap().gap(), 0.);
+        assert_eq!(delta.remeasure, vec![0]);
+        assert!(Rc::ptr_eq(&old[3], rows.get(1).unwrap()));
     }
 
     #[test]
@@ -370,9 +789,9 @@ mod tests {
         prompt(&mut transcript, "b");
         text(&mut transcript, "b");
 
-        let mut rows = TranscriptRows::new(&transcript.blocks()[2..], None);
-        let old = rows.get(0).unwrap().clone();
-        let delta = rows.reconcile(transcript.blocks(), None);
+        let mut rows = TranscriptRows::new(&transcript.blocks()[2..], &shape(), READING);
+        let old = rows.rows().to_vec();
+        let delta = rows.reconcile(transcript.blocks(), &shape(), READING);
         assert_eq!(
             delta.splices,
             vec![RowSplice {
@@ -380,29 +799,435 @@ mod tests {
                 new_count: 2
             }]
         );
-        assert!(Rc::ptr_eq(&old, rows.get(2).unwrap()));
+        // The old head is now a later turn's prompt: its gap grew from
+        // flush to one blank line, so only it is re-measured.
+        assert_eq!(rows.get(2).unwrap().gap(), crate::theme::LH_PROSE);
+        assert_eq!(delta.remeasure, vec![2]);
+        assert!(Rc::ptr_eq(&old[1], rows.get(3).unwrap()));
+    }
+
+    fn settle(transcript: &mut Transcript, id: &str, is_error: bool) {
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: "done".into(),
+            is_error,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+    }
+
+    /// Adjacent routine calls fold into one group row, named by its first
+    /// call's block, holding every call in order.
+    #[test]
+    fn adjacent_routine_calls_fold_into_one_group() {
+        let mut transcript = Transcript::default();
+        tool(&mut transcript, "first");
+        bash(&mut transcript, "second");
+        tool(&mut transcript, "third");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        assert_eq!(rows.len(), 1);
+        let group = rows.get(0).unwrap();
+        assert_eq!(group.kind(), RowKind::Group);
+        assert_eq!(group.id(), &RowId::Group(transcript.blocks()[0].id));
+        let calls: Vec<_> = group
+            .blocks()
+            .iter()
+            .map(|block| match &block.body {
+                Body::Tool(tool) => tool.call.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(calls, ["first", "second", "third"]);
+    }
+
+    /// A lone call stays its own row; the second turns it into a group
+    /// under the same first block, and a third joins it without renaming
+    /// the row — a group grows in place.
+    #[test]
+    fn a_group_forms_at_the_second_call_and_grows_in_place() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "a");
+        let mut rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let first = transcript.blocks()[1].id;
+        assert_eq!(rows.get(1).unwrap().id(), &RowId::Block(first));
+        bash(&mut transcript, "b");
+        rows.reconcile(transcript.blocks(), &shape(), READING);
+        assert_eq!(rows.get(1).unwrap().id(), &RowId::Group(first));
+        bash(&mut transcript, "c");
+        let delta = rows.reconcile(transcript.blocks(), &shape(), READING);
+        assert!(delta.splices.is_empty(), "{delta:?}");
+        assert_eq!(delta.remeasure, vec![1]);
+        assert_eq!(rows.get(1).unwrap().blocks().len(), 3);
+    }
+
+    /// Visible rows split groups: prose, a prompt, a turn's end, shown
+    /// thinking. Edits keep their own rows, with their diffs, between groups.
+    #[test]
+    fn prose_prompts_edits_and_shown_thinking_split_groups() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        tool(&mut transcript, "r1");
+        tool(&mut transcript, "r2");
+        edit(&mut transcript, "e1", "src/lib.rs");
+        bash(&mut transcript, "b1");
+        bash(&mut transcript, "b2");
+        text(&mut transcript, "Now the tests.");
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+        bash(&mut transcript, "b3");
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "checking the output".into(),
+        }));
+        bash(&mut transcript, "b4");
+        let kinds = |shape: &RowShape| -> Vec<RowKind> {
+            TranscriptRows::new(transcript.blocks(), shape, READING)
+                .rows()
+                .iter()
+                .map(|row| row.kind())
+                .collect()
+        };
+        let call = RowKind::Activity { diff_shown: false };
+        assert_eq!(
+            kinds(&shape()),
+            vec![
+                RowKind::Prompt,
+                RowKind::Group,
+                RowKind::Activity { diff_shown: true },
+                RowKind::Group,
+                RowKind::Answer { commentary: true },
+                call,
+                RowKind::Reasoning,
+                call,
+            ]
+        );
+        // Hidden thinking draws nothing, so the calls either side of it
+        // read as one run.
+        assert_eq!(
+            kinds(&RowShape::default())[4..],
+            [RowKind::Answer { commentary: true }, RowKind::Group]
+        );
+    }
+
+    /// An answered request's record and the gated call draw nothing, so a
+    /// group reads across them; the gated call is no member while it waits.
+    #[test]
+    fn a_group_reads_across_rows_that_draw_nothing() {
+        let mut transcript = Transcript::default();
+        bash(&mut transcript, "b1");
+        settle(&mut transcript, "b1", false);
+        transcript.apply(Input::Answered {
+            allowed: true,
+            tool_name: "Bash".into(),
+        });
+        bash(&mut transcript, "b2");
+        bash(&mut transcript, "gated");
+        let pending = RowShape {
+            pending_call: Some("gated".into()),
+            ..RowShape::default()
+        };
+        let rows = TranscriptRows::new(transcript.blocks(), &pending, READING);
+        assert_eq!(rows.len(), 1);
+        let group = rows.get(0).unwrap();
+        assert_eq!(group.kind(), RowKind::Group);
+        assert_eq!(
+            group.blocks().len(),
+            2,
+            "the gated call waits in the Decision"
+        );
+        // A gated call alone beside one call leaves no group.
+        let mut lone = Transcript::default();
+        bash(&mut lone, "b1");
+        bash(&mut lone, "gated");
+        let rows = TranscriptRows::new(lone.blocks(), &pending, READING);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows.get(0).unwrap().id(), RowId::Block(_)));
+    }
+
+    /// Edits and subagents never fold, even running with no diff yet: a
+    /// call never leaves a group when its result lands.
+    #[test]
+    fn edits_and_subagents_keep_their_own_rows() {
+        let mut transcript = Transcript::default();
+        for (id, name) in [("w", "Write"), ("e", "Edit"), ("t", "Task"), ("a", "Agent")] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input: serde_json::json!({ "file_path": "src/lib.rs" }),
+            }));
+        }
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        assert_eq!(rows.len(), 4);
+        assert!(rows
+            .rows()
+            .iter()
+            .all(|row| matches!(row.id(), RowId::Block(_))));
+    }
+
+    /// Terminal-native rhythm: blocks one blank line apart, the calls of a
+    /// run and the rows hung on an elbow flush, a call after a drawn diff a
+    /// line down, a leading prompt band flush to the top.
+    #[test]
+    fn the_gap_table_spaces_blocks_a_line_apart_and_runs_flush() {
+        use RowKind::*;
+        let line = crate::theme::LH_PROSE;
+        let prose = Answer { commentary: false };
+        let commentary = Answer { commentary: true };
+        let stamp = TurnEnd { hangs: false };
+        let hung = TurnEnd { hangs: true };
+        let call = Activity { diff_shown: false };
+        let diffed = Activity { diff_shown: true };
+        for (previous, kind, gap) in [
+            (None, Prompt, 0.),
+            (None, call, line),
+            (Some(Banner), Prompt, line),
+            (Some(stamp), Prompt, line),
+            (Some(hung), Prompt, line),
+            (Some(prose), Prompt, line),
+            (Some(Prompt), prose, line),
+            (Some(Prompt), call, line),
+            (Some(Prompt), Reasoning, line),
+            (Some(call), call, 0.),
+            (Some(call), diffed, 0.),
+            (Some(Group), call, 0.),
+            (Some(call), Group, 0.),
+            (Some(diffed), Group, line),
+            (Some(Group), prose, line),
+            (Some(prose), Group, line),
+            (Some(Group), Tail, line),
+            (Some(diffed), call, line),
+            (Some(commentary), call, line),
+            (Some(prose), call, line),
+            (Some(call), prose, line),
+            (Some(Reasoning), call, line),
+            (Some(call), Reasoning, line),
+            // The stamp is a block of its turn; an elbow note hangs on the
+            // row it answers.
+            (Some(prose), stamp, line),
+            (Some(call), stamp, line),
+            (Some(prose), hung, 0.),
+            (Some(call), hung, 0.),
+            (Some(call), Meta, 0.),
+            (Some(prose), Notice, line),
+            (Some(prose), Tail, line),
+            (Some(call), Tail, line),
+            (Some(Other), Other, line),
+        ] {
+            assert_eq!(
+                gap_before(previous, kind, READING),
+                gap,
+                "{previous:?} → {kind:?}"
+            );
+        }
     }
 
     #[test]
-    fn adjacent_tools_merge_into_the_leaders_stable_activity_row() {
-        let mut transcript = Transcript::default();
-        tool(&mut transcript, "first");
-        let mut rows = TranscriptRows::new(transcript.blocks(), None);
-        assert!(matches!(rows.get(0).unwrap().id(), RowId::Block(_)));
+    fn the_blank_line_scales_with_the_reading_size_and_runs_stay_flush() {
+        use crate::theme::answer_text_size;
+        use ferrite_core::settings::ReadingSize;
+        use RowKind::*;
+        let prose = Answer { commentary: false };
+        let call = Activity { diff_shown: false };
+        for (size, line) in [
+            (ReadingSize::STANDARD, 20.),
+            (ReadingSize::nearest(14), 21.),
+            (ReadingSize::nearest(16), 24.),
+            (ReadingSize::nearest(18), 27.),
+        ] {
+            let reading = answer_text_size(size);
+            assert_eq!(gap_before(Some(prose), Prompt, reading), line, "{size:?}");
+            assert_eq!(gap_before(Some(Prompt), prose, reading), line, "{size:?}");
+            assert_eq!(gap_before(Some(call), call, reading), 0.);
+            assert_eq!(line, crate::theme::answer_line_height(size), "{size:?}");
+        }
+    }
 
-        tool(&mut transcript, "second");
-        let delta = rows.reconcile(transcript.blocks(), None);
-        assert!(matches!(
-            rows.get(0).unwrap().id(),
-            RowId::ToolActivity(call) if call == "first"
-        ));
-        assert_eq!(
-            delta.splices,
-            vec![RowSplice {
-                old_range: 0..1,
-                new_count: 1
-            }]
+    #[test]
+    fn a_reading_size_change_respaces_every_row_after_the_first() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "done");
+        prompt(&mut transcript, "again");
+        let mut rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let first = rows.get(0).unwrap().clone();
+        let large =
+            crate::theme::answer_text_size(ferrite_core::settings::ReadingSize::nearest(18));
+        let delta = rows.reconcile(transcript.blocks(), &shape(), large);
+        assert!(delta.splices.is_empty());
+        assert_eq!(delta.remeasure, vec![1, 2]);
+        assert!(
+            Rc::ptr_eq(&first, rows.get(0).unwrap()),
+            "the body padding does not scale"
         );
+        assert_eq!(rows.get(2).unwrap().gap(), 27.);
+    }
+
+    #[test]
+    fn a_row_is_classified_and_spaced_by_its_neighbour_at_projection() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "Looking first.");
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+        tool(&mut transcript, "a");
+        tool(&mut transcript, "b");
+        edit(&mut transcript, "e", "src/lib.rs");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let kinds: Vec<_> = rows.rows().iter().map(|row| row.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RowKind::Prompt,
+                RowKind::Answer { commentary: true },
+                RowKind::Group,
+                RowKind::Activity { diff_shown: true },
+            ]
+        );
+        let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
+        let line = crate::theme::LH_PROSE;
+        assert_eq!(
+            gaps,
+            vec![0., line, line, 0.],
+            "a call sits flush under a group"
+        );
+    }
+
+    /// Q2: the mark goes on the first prose after a prompt or a tool row;
+    /// prose after reasoning (no speaker) is the same answer and wears none.
+    #[test]
+    fn the_answer_mark_is_drawn_once_per_speaker_change_to_the_agent() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "first");
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "weighing it".into(),
+        }));
+        text(&mut transcript, "still the agent");
+        tool(&mut transcript, "t1");
+        text(&mut transcript, "after the tool");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let marks: Vec<_> = rows
+            .rows()
+            .iter()
+            .map(|row| (row.kind(), row.answer_mark()))
+            .collect();
+        assert_eq!(
+            marks,
+            vec![
+                (RowKind::Prompt, false),
+                (RowKind::Answer { commentary: true }, true),
+                (RowKind::Reasoning, false),
+                (RowKind::Answer { commentary: true }, false),
+                (RowKind::Activity { diff_shown: false }, false),
+                (RowKind::Answer { commentary: true }, true),
+            ]
+        );
+    }
+
+    /// CT-34/41: the banner heads the rows on the body's padding, the
+    /// Decision closes them a line down, and a changed tail key is a
+    /// changed row.
+    #[test]
+    fn the_banner_heads_the_rows_and_the_tail_closes_them() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "answer");
+        let line = crate::theme::LH_PROSE;
+        let solo = RowShape {
+            banner: true,
+            banner_pad: crate::theme::BANNER_PAD_T,
+            tail: Some(7),
+            ..RowShape::default()
+        };
+        let mut rows = TranscriptRows::new(transcript.blocks(), &solo, READING);
+        let ids: Vec<_> = rows.rows().iter().map(|row| row.id().clone()).collect();
+        assert_eq!(ids.first(), Some(&RowId::Banner));
+        assert_eq!(ids.last(), Some(&RowId::Tail));
+        assert_eq!(rows.get(0).unwrap().gap(), crate::theme::BANNER_PAD_T);
+        assert_eq!(
+            rows.get(1).unwrap().gap(),
+            line,
+            "the first band a line down"
+        );
+        assert_eq!(rows.rows().last().unwrap().gap(), line);
+        let board = RowShape {
+            banner_pad: 0.,
+            tail: Some(8),
+            ..solo.clone()
+        };
+        let delta = rows.reconcile(transcript.blocks(), &board, READING);
+        assert!(delta.remeasure.contains(&0), "the banner's padding changed");
+        assert!(
+            delta.remeasure.contains(&(rows.len() - 1)),
+            "the tail's key changed"
+        );
+        assert_eq!(rows.rows().last().unwrap().tail_key(), Some(8));
+        // An empty Thread still has its banner.
+        let empty = TranscriptRows::new(&[], &solo, READING);
+        assert_eq!(empty.len(), 2);
+    }
+
+    /// CT-40: the call a pending Decision gates stays out of the rows until
+    /// it is answered.
+    #[test]
+    fn the_gated_call_hides_while_its_decision_pends() {
+        let mut transcript = Transcript::default();
+        bash(&mut transcript, "call_gh");
+        let pending = RowShape {
+            pending_call: Some("call_gh".into()),
+            ..RowShape::default()
+        };
+        assert!(TranscriptRows::new(transcript.blocks(), &pending, READING).is_empty());
+        assert!(gated("[\"turn\",\"item_1\"]", "item_1"));
+        assert!(!gated("item_10", "item_1"));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "call_gh".into(),
+            output: "closed".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+        assert_eq!(
+            TranscriptRows::new(transcript.blocks(), &pending, READING).len(),
+            1
+        );
+    }
+
+    /// CT-17/18: a file's first diff in a turn shows; a later edit to it
+    /// folds until opened, and only a drawn diff spaces the next call.
+    #[test]
+    fn a_later_edit_to_a_diffed_file_folds_its_diff() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "fix it");
+        edit(&mut transcript, "e1", "crates/ferrite/src/nav.rs");
+        bash(&mut transcript, "t1");
+        edit(&mut transcript, "e2", "crates/ferrite/src/nav.rs");
+        bash(&mut transcript, "t2");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let calls: Vec<_> = rows
+            .rows()
+            .iter()
+            .filter(|row| matches!(row.kind(), RowKind::Activity { .. }))
+            .map(|row| (row.diff_shown(), row.diff_folds(), row.gap()))
+            .collect();
+        let line = crate::theme::LH_PROSE;
+        assert_eq!(
+            calls,
+            vec![
+                (true, false, line),
+                (false, false, line),
+                (false, true, 0.),
+                (false, false, 0.),
+            ]
+        );
+        let opened = RowShape {
+            opened_diffs: HashSet::from(["e2".to_string()]),
+            ..RowShape::default()
+        };
+        let rows = TranscriptRows::new(transcript.blocks(), &opened, READING);
+        let last = rows.rows().last().unwrap();
+        assert_eq!(last.gap(), line, "an opened diff spaces the next call too");
+        // A new turn diffs the file afresh.
+        prompt(&mut transcript, "again");
+        edit(&mut transcript, "e3", "crates/ferrite/src/nav.rs");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        assert!(rows.rows().last().unwrap().diff_shown());
     }
 
     #[test]
@@ -411,6 +1236,6 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
             text: "   ".into(),
         }));
-        assert!(TranscriptRows::new(transcript.blocks(), None).is_empty());
+        assert!(TranscriptRows::new(transcript.blocks(), &shape(), READING).is_empty());
     }
 }

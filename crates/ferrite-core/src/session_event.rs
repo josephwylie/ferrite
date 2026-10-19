@@ -42,6 +42,16 @@ pub enum SessionEvent {
         name: String,
         input: serde_json::Value,
     },
+    /// A tool call's input as far as it has streamed, before the call is
+    /// settled (`ToolStarted` follows with the whole input). Only for tools
+    /// whose row draws its input live — today Ferrite's own `show_visual`
+    /// (see `visual`), whose page builds up as it arrives. Live only: never
+    /// recorded, since the start that follows carries all of it.
+    ToolDraft {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     /// A tool call finished. `output` is exactly what the provider fed back to
     /// the model — text as text, anything else as its compact JSON.
     ///
@@ -387,7 +397,7 @@ pub struct FileEdit {
 }
 
 /// One changed region of a file, in the provider's own unified-diff form.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Hunk {
     pub old_start: u32,
     pub old_lines: u32,
@@ -395,6 +405,11 @@ pub struct Hunk {
     pub new_lines: u32,
     /// Each line keeps its marker: ' ' context, '-' removed, '+' added.
     pub lines: Vec<String>,
+    /// The enclosing section a unified-diff header names after its second
+    /// `@@` (`fn thread_row`), or one derived by git's default funcname rule
+    /// from the hunk's leading context (`transcript::hunk_section`). `None`
+    /// draws no header at all.
+    pub section: Option<String>,
 }
 
 /// Provider-normalized delivery, independent of tool names and input schemas.
@@ -419,6 +434,36 @@ pub enum DecisionKind {
     External { url: String },
     /// A native request Ferrite can safely dismiss but cannot render yet.
     Unsupported { reason: String },
+}
+
+impl DecisionKind {
+    /// Whether `answer` is one this kind of Decision can take, whatever the
+    /// provider: the shape every adapter refuses otherwise. An adapter may
+    /// still refuse what only it knows, such as a choice it never offered.
+    pub fn validate_answer(&self, answer: &DecisionAnswer) -> Result<(), String> {
+        use DecisionAnswer as A;
+        match (self, answer) {
+            (Self::Questions(questions), A::Questions { answers }) => {
+                if answers.len() != questions.len() {
+                    return Err("question answer count does not match".into());
+                }
+                questions
+                    .iter()
+                    .zip(answers)
+                    .try_for_each(|(question, answer)| {
+                        crate::questions::selected_values(question, answer).map(drop)
+                    })
+            }
+            (Self::Form { fields }, A::Form { values }) => validate_form(fields, values),
+            (_, A::Deny { .. } | A::Cancel)
+            | (Self::Approval, A::Allow { .. } | A::AllowAlways { .. } | A::Choose { .. })
+            | (
+                Self::Questions(_) | Self::External { .. },
+                A::Allow { .. } | A::AllowAlways { .. },
+            ) => Ok(()),
+            _ => Err("that answer does not fit this request".into()),
+        }
+    }
 }
 
 /// Provider-normalized controls for an approval card.

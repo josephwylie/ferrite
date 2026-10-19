@@ -128,11 +128,10 @@ fn thinking_details(
     })
 }
 
-/// The prefix repeats leave the disclosed paragraph one word wider than the
-/// shaping helper's grid at this width, so nudge the fixture until the two
-/// agree: the reflow assertions below compare native positions, and they are
-/// only meaningful where the helper models the same wrap.
-
+/// Aim at a byte of a disclosed Thinking row's body through its native wrap.
+/// The offsets are into the disclosed body (`thinking_details`), so that is
+/// the text the helper shapes; shaping the whole thought would wrap a
+/// different string and aim off the row's own lines.
 fn wrapped_thinking_caret(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -140,22 +139,7 @@ fn wrapped_thinking_caret(
     byte: usize,
 ) -> gpui::Point<gpui::Pixels> {
     let id = thinking_id(view, cx, row);
-    let text = view.read_with(cx, |view, _| {
-        let thread = view.panes[0].thread().unwrap();
-        let block = &view
-            .cockpit
-            .thread(thread)
-            .unwrap()
-            .activity()
-            .subject(&view.panes[0].selected)
-            .unwrap()
-            .transcript()
-            .blocks()[row];
-        let Body::Thinking(text) = &block.body else {
-            unreachable!("fixture has one Thinking Block per virtual row")
-        };
-        text.trim().to_owned()
-    });
+    let text = thinking_details(view, cx, row);
     cx.update(|window, cx| {
         crate::rich::testing::wrapped_caret(&id, &text, byte, window, cx)
             .expect("the wrapped native Thinking row is mounted")
@@ -246,9 +230,7 @@ fn typing_in_a_focused_composer_does_not_render_sibling_native_transcripts(
 }
 
 #[gpui::test]
-fn streaming_without_drawing_releases_temporary_transcript_elements(
-    cx: &mut TestAppContext,
-) {
+fn streaming_without_drawing_releases_temporary_transcript_elements(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("stream-without-drawing", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -271,7 +253,8 @@ fn streaming_without_drawing_releases_temporary_transcript_elements(
         }
     });
     assert_eq!(
-        cache.retained_handles(), before,
+        cache.retained_handles(),
+        before,
         "stream updates must release all temporary native text handles"
     );
 }
@@ -340,9 +323,13 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     std::fs::write(&file, "guide\n").unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    // The column stays open, so the narrowest window below leaves the Pane
+    // narrower than the line (folded, the nav gives the board its width).
+    hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(600.)));
 
-    let suffix = " after reading the detailed notes about this change and the next steps.";
+    // Short enough to sit on one line of the 720px reading column.
+    let suffix = " after reading the notes on this change.";
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: format!("Before [guide](docs/guide.md:12){suffix}"),
@@ -364,9 +351,9 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
         Some(file.clone()),
         "the file card opens the Thread-workspace file in the native reader"
     );
-    let close = debug_bounds(cx, "close-markdown-reader".to_string())
-        .expect("the native reader exposes its close control");
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    // The reader closes from the keyboard (escape, or cmd-w in it; F-14).
+    view.update(cx, |view, cx| view.close_reader(0, cx));
+    tick(cx);
 
     let id = view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
@@ -384,12 +371,13 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
     let start = caret(&view, cx, 0, 0);
     // Select through the last word, leaving the final period unselected. The
-    // native card has its own width, so measure the suffix from its right edge.
+    // native card has its own width and the flow reserves its trailing
+    // `INLINE_CODE_OVERHANG` margin, so measure the suffix from there.
     let end = cx.update(|window, cx| {
         let suffix_caret =
             crate::rich::testing::caret(&id, 0, 1, suffix, suffix.len() - 1, window, cx).unwrap();
         gpui::point(
-            card.right() + suffix_caret.x - before.left(),
+            card.right() + px(crate::theme::INLINE_CODE_OVERHANG) + suffix_caret.x - before.left(),
             card.center().y,
         )
     });
@@ -405,7 +393,8 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
 
     cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("stale".into())));
-    cx.simulate_resize(gpui::size(px(700.), px(600.)));
+    // The narrowest window: its column is narrower than the line.
+    cx.simulate_resize(gpui::size(px(crate::theme::WINDOW_MIN_W), px(600.)));
     cx.run_until_parked();
     let after = cx.update(|_, cx| crate::rich::testing::bounds(&id, 0, cx).unwrap());
     assert!(
@@ -425,7 +414,7 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
     cx: &mut TestAppContext,
 ) {
     let (core, fake) = cockpit("render-viewport-budget", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     reasoning_rows(&fake, 0, 30);
     tick(cx);
@@ -509,7 +498,7 @@ fn native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows(
 fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("virtual-logical-selection", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     let rows = short_reasoning_rows(&fake, 0, 160);
     tick(cx);
@@ -606,7 +595,8 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
 fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("selection-resize-reflow", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
 
     let selected = "βeta🙂 exact selection";
@@ -689,7 +679,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
 ) {
     let (core, fake) = cockpit("selection-snapshot-replacement", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     let rows = short_reasoning_rows(&fake, 0, 160);
     tick(cx);
@@ -807,11 +797,11 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     );
 }
 
-/// Reading preference changes layout, not the native source/selection identity.
-/// Group rendering always keeps its compact type, including after fullscreen.
+/// Reading preference changes layout, not the native source/selection identity,
+/// and it is one size for every transcript: Solo, a Group, fullscreen.
 #[gpui::test]
-fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppContext) {
-    use ferrite_core::settings::SoloReadingSize;
+fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppContext) {
+    use ferrite_core::settings::ReadingSize;
     let (mut core, fake) = cockpit("solo-reading-size", 2);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -837,12 +827,12 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
         )
     });
     view.update(cx, |view, cx| {
-        view.prefs.settings.solo_reading_size = SoloReadingSize::Large;
+        view.prefs.settings.reading_size = ReadingSize::nearest(18);
         cx.notify();
     });
     tick(cx);
     cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(17.)));
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)
@@ -855,7 +845,8 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
     view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
     cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(13.)));
+        // One size for every transcript: a Group reads at it too.
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)
@@ -868,7 +859,7 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
     });
     tick(cx);
     cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(17.)));
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)
@@ -891,7 +882,7 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     let thread = core.threads()[0];
     core.send(thread, "prior prompt".into());
     bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     let stream = fake.streams.borrow();
     stream[0]
@@ -1020,6 +1011,7 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
         })
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     let mut heights = Vec::new();
     for width in [1200., 700.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));
@@ -1029,22 +1021,42 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
         let text = view.read_with(cx, |view, cx| {
             let thread = view.panes[0].thread().unwrap();
             let block = &view.cockpit.thread(thread).unwrap().transcript().blocks()[0];
-            let id = format!("markdown-{}-{:?}", view.panes[0].text_namespace(),
-                block.markdown_run.unwrap_or(block.id));
+            let id = format!(
+                "markdown-{}-{:?}",
+                view.panes[0].text_namespace(),
+                block.markdown_run.unwrap_or(block.id)
+            );
             crate::rich::testing::bounds(&id, 0, cx).unwrap()
         });
+        let mark = debug_bounds(cx, "answer-mark".into()).unwrap();
+        let gutter = px(theme::tx_gutter(theme::FS_PROSE));
         for delta in [
-            text.left() - answer.left() - px(theme::GUTTER_W + theme::ANSWER_GAP),
-            // A lone paragraph is commentary and takes the tighter padding.
-            text.top() - answer.top() - px(theme::COMMENTARY_PAD_Y),
-            answer.bottom() - text.bottom() - px(theme::COMMENTARY_PAD_Y),
-            answer.right() - text.right(),
+            // Terminal-native: prose starts on the content column, one
+            // 2-cell gutter in.
+            text.left() - answer.left() - gutter,
+            // The row owns no padding: the list's gap table spaces rows.
+            text.top() - answer.top(),
+            answer.bottom() - text.bottom(),
+            // The text runs one cell past the row: a trailing space hangs
+            // there (`rich::Markdown`).
+            answer.right() + px(theme::tx_cell(theme::FS_PROSE)) - text.right(),
+            // The `●` hangs in the gutter at the row's left edge, on the
+            // first prose line box.
+            mark.left() - answer.left(),
+            mark.size.width - gutter,
+            (mark.top() + mark.size.height / 2.) - (text.top() + px(theme::LH_PROSE / 2.)),
         ] {
-            assert!(delta.abs() <= px(1.), "answer/text geometry differs: {answer:?} {text:?}");
+            assert!(
+                delta.abs() <= px(1.),
+                "answer/text geometry differs: {answer:?} {text:?}"
+            );
         }
         heights.push(text.size.height);
     }
-    assert!(heights[1] > heights[0], "narrower Markdown must wrap naturally");
+    assert!(
+        heights[1] > heights[0],
+        "narrower Markdown must wrap naturally"
+    );
 }
 
 /// Reproducible CPU layout probe; uses synthetic sessions and no local logs.
@@ -1058,16 +1070,889 @@ fn streaming_layout_probe(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     view.update(cx, |view, cx| view.enter_group(group, cx));
-    for _ in 0..4 { tick(cx); }
+    for _ in 0..4 {
+        tick(cx);
+    }
     let started = std::time::Instant::now();
     for _ in 0..60 {
         for stream in fake.streams.borrow().iter() {
-            stream.send(SessionEvent::TextDelta { text: "more words ".into() }).unwrap();
+            stream
+                .send(SessionEvent::TextDelta {
+                    text: "more words ".into(),
+                })
+                .unwrap();
         }
         tick(cx);
     }
-    eprintln!("STREAM_LAYOUT iterations=60 panes=4 elapsed_ms={:.3}", started.elapsed().as_secs_f64() * 1000.);
-    let prefix = view.read_with(cx, |view, _| format!("markdown-{}-", view.panes[0].text_namespace()));
-    assert!(cx.update(|_, cx| crate::rich::testing::full_text(&prefix, cx))
+    eprintln!(
+        "STREAM_LAYOUT iterations=60 panes=4 elapsed_ms={:.3}",
+        started.elapsed().as_secs_f64() * 1000.
+    );
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[0].text_namespace())
+    });
+    assert!(cx
+        .update(|_, cx| crate::rich::testing::full_text(&prefix, cx))
         .is_some_and(|text| text.contains("more words ".repeat(60).trim_end())));
+}
+
+/// Delivers the display frame the last draw asked for, and says how many
+/// animation-frame requests were waiting on it.
+fn display_frames(cx: &mut gpui::VisualTestContext) -> usize {
+    let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    frames
+}
+
+/// First paint settles (measurement passes, springs arriving at rest) over
+/// a few frames; deliver them until the window asks for none.
+fn settle(cx: &mut gpui::VisualTestContext) {
+    for _ in 0..64 {
+        if display_frames(cx) == 0 {
+            return;
+        }
+        cx.executor().advance_clock(Duration::from_millis(16));
+    }
+    panic!("the window never stopped asking for frames");
+}
+
+fn pulse_parked(cx: &mut gpui::VisualTestContext) -> bool {
+    cx.update(|_, cx| crate::motion::pulse_parked(cx))
+}
+
+/// The motion kit's budget: with nothing animating, a window asks for no
+/// display frame and arms no clock, however long it sits. Unfocused, so
+/// the Composer's caret, which blinks on the clock, is still.
+#[gpui::test]
+fn an_idle_window_with_the_motion_kit_schedules_no_animation_frames(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-idle", 2);
+    let (_view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    assert_eq!(display_frames(cx), 0, "an idle window asks for no frame");
+    assert!(pulse_parked(cx), "and holds no pulse lease");
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(display_frames(cx), 0, "time passing changes nothing");
+    assert!(pulse_parked(cx));
+}
+
+/// What an operator actually leaves on screen: an active window, the
+/// keyboard in a Composer, two idle Threads, nothing changing. The caret may
+/// blink, but holding still must not rebuild the whole Cockpit at the pulse
+/// clock's rate — that is the idle CPU the shipped app burns. The caret's
+/// blink is drawn by the loops overlay, over a cached Cockpit.
+#[gpui::test]
+fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (core, _fake) = cockpit("idle-focused", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    let frames = |cx: &mut gpui::VisualTestContext, ms: u64| {
+        for _ in 0..ms / 16 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+        }
+    };
+    // First paint settles: measurement passes, springs arriving at rest.
+    frames(cx, 1_000);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (before, ticks) = (renders(), crate::motion::testing::pulse_ticks());
+    frames(cx, 5_000);
+    let (rendered, ticked) = (
+        renders() - before,
+        crate::motion::testing::pulse_ticks() - ticks,
+    );
+    eprintln!("IDLE_FOCUSED cockpit_renders_5s={rendered} pulse_ticks_5s={ticked}");
+    assert!(
+        rendered <= 10,
+        "an untouched focused window rebuilt the Cockpit {rendered} times in 5s \
+         ({ticked} pulse ticks); budget is 10 (2/s)"
+    );
+}
+
+/// A working Thread's loops — the working line's mark, the nav's breathing
+/// dot — ride the shared pulse clock instead of asking for every display
+/// frame, and the clock parks once the turn ends and its lease lapses
+/// (unfocused, so the Composer's caret holds no lease of its own).
+#[gpui::test]
+fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-working", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    let (_view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking marks**".into(),
+            summary_index: 0,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_some());
+    assert!(!pulse_parked(cx), "the working mark leases the clock");
+    settle(cx);
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert!(!pulse_parked(cx), "and keeps it while it is mounted");
+    assert_eq!(
+        display_frames(cx),
+        0,
+        "the loops ask the clock for ~30fps, never the display for every frame"
+    );
+
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_none());
+    cx.executor().advance_clock(Duration::from_millis(
+        crate::theme::MOTION_WORKING_FRAME_MS + 2 * crate::theme::MOTION_PULSE_TICK_MS,
+    ));
+    cx.run_until_parked();
+    assert!(pulse_parked(cx), "the lapsed clock parks");
+    // The turn's completion toast arrives on its own springs; once they
+    // rest, the window is idle again.
+    settle(cx);
+    assert!(pulse_parked(cx));
+}
+
+/// A pulse tick repaints what paints the loop and nothing cached beside it:
+/// the working mark animates while the Pane's retained transcript — the
+/// expensive native text — is reused from its cache on every tick.
+#[gpui::test]
+fn a_pulse_tick_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-tick-isolation", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_some());
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[0].text_namespace())
+    });
+    assert!(
+        mounted_native_texts(&prefix, cx) > 0,
+        "the premise: the transcript's native text is mounted"
+    );
+
+    reset_native_text_renders(cx);
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(Duration::from_millis(crate::theme::MOTION_PULSE_TICK_MS));
+        cx.run_until_parked();
+    }
+    assert!(!pulse_parked(cx), "the mark kept the clock running");
+    assert_eq!(
+        native_text_renders(&prefix, cx),
+        0,
+        "ten ticks rebuilt none of the cached transcript's native text"
+    );
+    assert_eq!(display_frames(cx), 0, "and asked the display for nothing");
+}
+
+/// A row appended while the operator watches rises in over
+/// `motion::FADE_IN` and then asks for nothing.
+#[gpui::test]
+fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-arrival", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    let arrivals = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .map_or(0, |transcript| transcript.read(cx).arrivals())
+        })
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "arrival-run".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "cargo test"}),
+        })
+        .unwrap();
+    tick(cx);
+    assert_eq!(arrivals(cx), 1, "the appended row is stamped");
+    assert!(display_frames(cx) > 0, "and rises in");
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_FADE_IN_MS));
+    settle(cx);
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}
+
+/// One clock, one breath (rule 2.10.8): N working Panes and N unread Panes
+/// on one board cost at most the pulse clock's 1000/33 ticks a second, and
+/// never a display frame of their own.
+#[gpui::test]
+fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-breath-budget", 4);
+    let threads = core.threads().to_vec();
+    for thread in &threads {
+        core.send(*thread, "Inspect progress".into());
+    }
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    for stream in 0..2 {
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::ReasoningSummaryDelta {
+                text: "**Checking marks**".into(),
+                summary_index: 0,
+            })
+            .unwrap();
+    }
+    for stream in 2..4 {
+        for event in [
+            SessionEvent::TextDelta {
+                text: "Done here.".into(),
+            },
+            SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            },
+        ] {
+            fake.streams.borrow()[stream].send(event).unwrap();
+        }
+    }
+    tick(cx);
+    settle(cx);
+    assert!(
+        cx.debug_bounds("progress-mark-live").is_some(),
+        "the premise: a working mark is on screen"
+    );
+    // The nav pulses no dot now (theme rule 8): unread is ink. The loop it
+    // keeps is a working Thread's braille spinner, on the same clock.
+    assert!(
+        cx.debug_bounds("braille-spinner").is_some(),
+        "the premise: a working Thread's spinner turns in the nav"
+    );
+    let before = cx.update(|_, _| crate::motion::testing::pulse_ticks());
+    let step = Duration::from_millis(11);
+    let mut elapsed = Duration::ZERO;
+    while elapsed < Duration::from_secs(1) {
+        cx.executor().advance_clock(step);
+        cx.run_until_parked();
+        assert_eq!(
+            display_frames(cx),
+            0,
+            "the loops never ask the display for a frame"
+        );
+        elapsed += step;
+    }
+    let ticks = cx.update(|_, _| crate::motion::testing::pulse_ticks()) - before;
+    assert!(ticks > 0, "the loops are alive: {ticks}");
+    assert!(
+        ticks <= (1000 / crate::theme::MOTION_PULSE_TICK_MS) as usize,
+        "{ticks} ticks in one second: more than 1000/33"
+    );
+}
+
+fn nav_column_width(cx: &mut gpui::VisualTestContext) -> f32 {
+    f32::from(
+        cx.debug_bounds("nav-column")
+            .expect("the nav column")
+            .size
+            .width,
+    )
+}
+
+/// cmd-b tweens the column's width over `motion::RESIZE` and asks for frames
+/// only while it moves; flipped back mid-flight it turns around from the
+/// width on screen instead of jumping to an end; settled, it asks for none.
+#[gpui::test]
+fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-nav", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    // Layout snaps to whole pixels: 36 cells (280.8) lays out at 281.
+    assert!(
+        (nav_column_width(cx) - nav::WIDTH).abs() <= 0.5,
+        "first paint: no tween"
+    );
+
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert!(display_frames(cx) > 0, "a moving column asks for frames");
+    let mid = nav_column_width(cx);
+    assert!(
+        mid < nav::WIDTH && mid > nav::FOLDED_WIDTH,
+        "mid-flight at 100ms: {mid}"
+    );
+
+    view.update(cx, |view, cx| view.set_nav_collapsed(false, cx));
+    cx.run_until_parked();
+    let turned = nav_column_width(cx);
+    assert!(
+        (turned - mid).abs() < 1.0,
+        "the flip starts from the width on screen: {mid} -> {turned}"
+    );
+
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert!(
+        (nav_column_width(cx) - nav::WIDTH).abs() <= 0.5,
+        "settled on its target"
+    );
+    assert_eq!(display_frames(cx), 0, "and asks for nothing more");
+}
+
+/// Reduced motion: the column lands at its new width at once.
+#[gpui::test]
+fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-nav-reduced", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    tick(cx);
+    settle(cx);
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    cx.run_until_parked();
+    assert!((nav_column_width(cx) - nav::FOLDED_WIDTH).abs() <= 0.5);
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// A nav row's hover blends in over `motion::HOVER_FADE`: frames while it
+/// fades, none once it has landed or once the pointer has left and the
+/// blend has returned to rest.
+#[gpui::test]
+fn a_nav_row_hover_fades_and_then_asks_for_no_frames(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-hover", 2);
+    let thread = core.threads()[1];
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    let row = debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("the row");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    assert!(display_frames(cx) > 0, "the blend is mid-flight");
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_HOVER_FADE_MS));
+    display_frames(cx);
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+
+    cx.simulate_mouse_move(
+        gpui::point(px(900.), px(450.)),
+        None,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_HOVER_FADE_MS));
+    display_frames(cx);
+    assert_eq!(display_frames(cx), 0, "back at rest: no more frames");
+}
+
+/// Root Cockpit renders while `ms` pass on a 60Hz display: the clock moves
+/// a display frame at a time, and each frame the window asked for is
+/// delivered.
+fn cockpit_renders_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let before = renders();
+    for _ in 0..ms / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        display_frames(cx);
+    }
+    renders() - before
+}
+
+/// A board at work: four Panes, two of them working, an active window. The
+/// loops on screen — the working lines' stars, the braille spinners in the
+/// heads and the nav, the caret, and the focused working Pane's shimmer —
+/// are drawn by the loops overlay when one of them steps, never more than
+/// once a pulse tick, and the Cockpit is rebuilt only for its clocks.
+#[gpui::test]
+fn a_working_board_renders_the_cockpit_only_when_a_loop_steps(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("working-board-budget", 4);
+    let group = group_all(&mut core);
+    let threads = core.threads().to_vec();
+    for thread in &threads[..2] {
+        core.send(*thread, "Inspect progress".into());
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.enter_group(group, cx);
+        view.focus_pane(0);
+        cx.notify();
+    });
+    for stream in 0..2 {
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::ReasoningSummaryDelta {
+                text: "**Checking marks**".into(),
+                summary_index: 0,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    assert!(
+        cx.debug_bounds("progress-mark-live").is_some(),
+        "the premise: a working mark is on screen"
+    );
+    let ticks = crate::motion::testing::pulse_ticks();
+    let shimmering = cockpit_renders_over(cx, 5_000);
+    let ticked = crate::motion::testing::pulse_ticks() - ticks;
+
+    // The keyboard on an idle Pane: no shimmer, only the steps.
+    view.update(cx, |view, cx| {
+        view.focus_pane(2);
+        cx.notify();
+    });
+    cockpit_renders_over(cx, 1_000);
+    let stepping = cockpit_renders_over(cx, 5_000);
+    eprintln!(
+        "WORKING_BOARD cockpit_renders_5s focused_working={shimmering} (pulse ticks {ticked}) \
+         focused_idle={stepping}"
+    );
+    // The shimmer's crest moves every tick: the Cockpit draws at the
+    // clock's rate, never faster (A-2 takes the loops off the Cockpit).
+    let tick_rate = (5_000 / crate::theme::MOTION_PULSE_TICK_MS) as usize;
+    assert!(
+        ticked <= tick_rate + 1,
+        "{ticked} pulse ticks in 5s: more than one a tick"
+    );
+    for (keyboard, rendered) in [("a working", shimmering), ("an idle", stepping)] {
+        assert!(
+            rendered <= WORKING_BOARD_BUDGET,
+            "a working board with the keyboard on {keyboard} Pane rebuilt the Cockpit \
+             {rendered} times in 5s; budget is {WORKING_BOARD_BUDGET}"
+        );
+    }
+}
+
+/// What a working board may rebuild the Cockpit in 5s: its loops are drawn
+/// by the overlay, so only the working clocks' seconds (two Threads) and
+/// the sweep redraw it.
+const WORKING_BOARD_BUDGET: usize = 30;
+
+/// The pointer sweeping down the nav, a row every 250ms: each crossing
+/// blends a row's wash in and the last one's out, redrawing the Cockpit
+/// while a blend moves — and never the transcript beside it, which the
+/// pointer did not touch.
+#[gpui::test]
+fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (core, fake) = cockpit("nav-hover-sweep", 4);
+    let threads = core.threads().to_vec();
+    long_transcripts(&fake);
+    // Every turn over: nothing on the board moves but the pointer.
+    for stream in fake.streams.borrow().iter() {
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    let focused = view.read_with(cx, |view, _| view.focused());
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[focused].text_namespace())
+    });
+    assert!(
+        mounted_native_texts(&prefix, cx) > 0,
+        "the premise: the transcript's native text is mounted"
+    );
+    let rows: Vec<_> = threads
+        .iter()
+        .map(|thread| debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("a nav row"))
+        .collect();
+    // The transcript's scrollbar, shown by the stream, fades out first,
+    // and the off-board finishes' toasts come and go.
+    cockpit_renders_over(
+        cx,
+        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
+            + 1_000,
+    );
+    reset_native_text_renders(cx);
+    let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
+    let mut rendered = 0;
+    for crossing in 0..20 {
+        let row = rows[crossing % rows.len()];
+        cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+        rendered += cockpit_renders_over(cx, 250);
+    }
+    let transcript = native_text_renders(&prefix, cx);
+    let nav = crate::cockpit::drawn::nav_renders() - nav;
+    let built: usize = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .sum();
+    eprintln!(
+        "NAV_HOVER_SWEEP cockpit_renders_5s={rendered} nav_builds={nav} pane_builds={built} \
+         transcript_text_renders={transcript}"
+    );
+    assert_eq!(
+        transcript, 0,
+        "a hover in the nav rebuilt the transcript's native text"
+    );
+    assert_eq!(built, 0, "a hover in the nav rebuilt a Pane");
+}
+
+/// A Thread waiting on the operator: a Decision pending in the focused
+/// Pane of an active window, nothing else happening. Waiting is not
+/// working: it costs the Cockpit no more than an idle window does.
+#[gpui::test]
+fn a_pending_decision_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (core, fake) = cockpit("decision-idle", 2);
+    let thread = core.threads()[0];
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    fake.streams.borrow()[0]
+        .send(decision("perm-idle"))
+        .unwrap();
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .pending_decisions()
+                .len(),
+            1,
+            "the premise: a Decision waits"
+        );
+    });
+    let rendered = cockpit_renders_over(cx, 5_000);
+    eprintln!("DECISION_PENDING cockpit_renders_5s={rendered}");
+    assert!(
+        rendered <= IDLE_BUDGET,
+        "a pending Decision rebuilt the Cockpit {rendered} times in 5s; \
+         budget is {IDLE_BUDGET}"
+    );
+}
+
+/// What an untouched window may rebuild the Cockpit in 5s: the sweep's
+/// rare redraw for a fact that moved, never a loop's.
+const IDLE_BUDGET: usize = 10;
+
+/// Under reduced motion nothing loops, yet a working Thread's clock still
+/// moves: the sweep redraws a busy Cockpit, its `12s` turning over.
+#[gpui::test]
+fn reduced_motion_still_advances_a_working_clock(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("reduced-working-clock", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    cx.update(|window, _| window.activate_window());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking marks**".into(),
+            summary_index: 0,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("progress-mark-still").is_some(),
+        "the premise: reduced motion holds the working mark still"
+    );
+    cockpit_renders_over(cx, 1_000);
+    let rendered = cockpit_renders_over(cx, 5_000);
+    assert!(pulse_parked(cx), "nothing loops");
+    assert!(
+        rendered >= 2,
+        "the working clock's text must still be redrawn: {rendered} renders in 5s"
+    );
+}
+
+/// A path the pointer rests on keeps its underline while its transcript
+/// streams: the Cockpit around the cached transcript redraws on every step
+/// of the working Thread's loops without drawing the transcript, and the
+/// hover must outlive those frames.
+#[gpui::test]
+fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake, workspace) = bound_cockpit("hovered-link-streams", Provider::Claude);
+    let file = workspace.join("docs").join("guide.md");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "guide\n").unwrap();
+    let thread = core.threads()[0];
+    core.send(thread, "Read the guide".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "See [guide](docs/guide.md:12) for the notes.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    tick(cx);
+    // The loops redraw the Cockpit and reuse the cached transcript, whose
+    // selectors a test window keeps only for a frame that drew it.
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let link = debug_bounds(cx, format!("file-attachment-{}", file.display()))
+        .or_else(|| debug_bounds(cx, "inline-file".to_string()))
+        .expect("the transcript draws the link");
+    cx.simulate_mouse_move(link.center(), None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cockpit_renders_over(cx, 300);
+    let underlined = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, _| crate::motion::testing::hover_values())
+            .into_iter()
+            .any(|(_, value)| value == 1.0)
+    };
+    assert!(underlined(cx), "the premise: the link is underlined");
+    // The working loops redraw the Cockpit; the cached transcript is reused.
+    cockpit_renders_over(cx, 600);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "One more streamed line.\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        underlined(cx),
+        "the transcript drew again under the pointer and lost the link's underline"
+    );
+}
+
+// ----------------------------------------------- the parts each change builds
+
+fn pane_builds(threads: &[ThreadId]) -> Vec<usize> {
+    threads
+        .iter()
+        .map(|thread| {
+            crate::cockpit::drawn::pane_renders(ferrite_core::roster::PaneIdentity::Thread(*thread))
+        })
+        .collect()
+}
+
+/// A four-Pane Group in an active window, the keyboard in the first Pane,
+/// `working` mid-turn, first paint settled.
+fn group_board<'a>(
+    name: &str,
+    working: &[usize],
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<CockpitView>,
+    Fake,
+    Vec<ThreadId>,
+    &'a mut gpui::VisualTestContext,
+) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit(name, 4);
+    let group = group_all(&mut core);
+    let threads = core.threads().to_vec();
+    for index in working {
+        core.send(threads[*index], "Keep going".into());
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.enter_group(group, cx);
+        view.focus_pane(0);
+        cx.notify();
+    });
+    for index in working {
+        fake.streams.borrow()[*index]
+            .send(SessionEvent::ReasoningSummaryDelta {
+                text: "**Working**".into(),
+                summary_index: 0,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    cockpit_renders_over(cx, 1_000);
+    (view, fake, threads, cx)
+}
+
+/// Typing twenty characters into one Pane of a four-Pane Group rebuilds
+/// that Pane, never its siblings.
+#[gpui::test]
+fn typing_rebuilds_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
+    let (_view, _fake, threads, cx) = group_board("typing-parts", &[], cx);
+    // The first key moves the window from pointer to keyboard, which every
+    // view redraws for (gpui's focus-visible styling): measure typing after.
+    cx.simulate_keystrokes("left");
+    cx.run_until_parked();
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    for character in "the quick brown foxes".chars().take(20) {
+        cx.simulate_input(&character.to_string());
+        cx.run_until_parked();
+    }
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    eprintln!(
+        "TYPING_20 cockpit_renders={} pane_builds={built:?}",
+        renders() - cockpit
+    );
+    assert!(built[0] >= 20, "the typed-into Pane redraws its line");
+    assert_eq!(&built[1..], [0, 0, 0], "typing rebuilt a sibling Pane");
+}
+
+/// Streaming into one Pane rebuilds that Pane, never its siblings.
+#[gpui::test]
+fn streaming_rebuilds_its_pane_and_not_its_siblings(cx: &mut TestAppContext) {
+    let (_view, fake, threads, cx) = group_board("streaming-parts", &[1], cx);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    for line in 0..20 {
+        fake.streams.borrow()[1]
+            .send(SessionEvent::TextDelta {
+                text: format!("streamed line {line}\n\n"),
+            })
+            .unwrap();
+        tick(cx);
+    }
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    eprintln!(
+        "STREAMING_20 cockpit_renders={} pane_builds={built:?}",
+        renders() - cockpit
+    );
+    assert!(built[1] > 0, "the streaming Pane redraws");
+    assert_eq!(
+        [built[0], built[2], built[3]],
+        [0, 0, 0],
+        "streaming rebuilt a sibling Pane"
+    );
+}
+
+/// The working clocks turning over rebuild the working Pane alone; the
+/// idle Panes beside it sit still.
+#[gpui::test]
+fn a_clock_rollover_rebuilds_only_the_working_pane(cx: &mut TestAppContext) {
+    let (_view, _fake, threads, cx) = group_board("clock-parts", &[1], cx);
+    // The first sweep's git labels land on every Pane's head: past it.
+    cockpit_renders_over(cx, 2_500);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    std::thread::sleep(Duration::from_millis(1_100));
+    cockpit_renders_over(cx, 3_000);
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    eprintln!(
+        "CLOCK_3S cockpit_renders={} pane_builds={built:?}",
+        renders() - cockpit
+    );
+    assert!(built[1] > 0, "the working Pane redrew its clock");
+    assert_eq!(
+        [built[0], built[2], built[3]],
+        [0, 0, 0],
+        "a clock rebuilt an idle Pane"
+    );
+}
+
+/// With the palette open its line blinks, under the float, without the
+/// Cockpit or any Pane being rebuilt for it.
+#[gpui::test]
+fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("palette-parts", &[], cx);
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cockpit_renders_over(cx, 1_000);
+    let renders = || crate::cockpit::RENDERS.with(std::cell::Cell::get);
+    let (cockpit, panes) = (renders(), pane_builds(&threads));
+    cockpit_renders_over(cx, 5_000);
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    let rendered = renders() - cockpit;
+    eprintln!("PALETTE_OPEN cockpit_renders_5s={rendered} pane_builds={built:?}");
+    assert!(
+        rendered <= 10,
+        "an open palette rebuilt the Cockpit {rendered} times in 5s"
+    );
+    assert_eq!(built, [0, 0, 0, 0]);
+}
+
+/// The arrows in an open model picker move its cursor by rebuilding the
+/// status line it rides in the bottom bar (ADR 0014), not any Pane.
+#[gpui::test]
+fn a_pickers_arrows_rebuild_the_status_line_and_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("picker-parts", &[], cx);
+    bind_production_keys(cx);
+    // The window moves from pointer to keyboard first (see the typing
+    // test above).
+    cx.simulate_keystrokes("left");
+    cx.run_until_parked();
+    view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
+    cockpit_renders_over(cx, 1_000);
+    let panes = pane_builds(&threads);
+    let status = crate::cockpit::drawn::status_renders();
+    for key in ["down", "down", "up", "down"] {
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+    }
+    let built: Vec<usize> = pane_builds(&threads)
+        .iter()
+        .zip(&panes)
+        .map(|(after, before)| after - before)
+        .collect();
+    let status = crate::cockpit::drawn::status_renders() - status;
+    eprintln!("PICKER_ARROWS_4 pane_builds={built:?} status_builds={status}");
+    assert!(status >= 4, "the status line redraws the picker's cursor");
+    assert_eq!(built, [0, 0, 0, 0], "an arrow rebuilt a Pane");
 }
