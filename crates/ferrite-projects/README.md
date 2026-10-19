@@ -54,6 +54,21 @@ Each is marked `Ferrite:` in a comment.
   restarting it. The Ferrite adapter remembers that Provider in its pane
   and scopes revive overrides with `launch_provider`, so stale Claude flags
   cannot replace a Codex Thread's saved launch (or the reverse).
+- **Completed deliveries** (`flow/actions/talk.rs`, `start.rs`): ordinary `tell`
+  refuses to reopen completed deliveries. `tell --follow-up` and explicit
+  delegation still start genuine new work, retaining the previous PR, merge and
+  review in `deliveries` before resetting the current delivery.
+- **Merged reconciliation** (`flow/actions/reconcile_merged.rs`, `cli/tasks.rs`):
+  `reconcile-merged <id> --pr <url> --review-head <full-sha> [--check]` repairs
+  stopped cleanup-only reopenings. It requires the exact task branch, origin
+  repository, GitHub MERGED head and commit, the original passing review, a clean
+  worktree with no novel unmerged commits, and idle worker/reviewer and runner.
+  Unknown or conflicting evidence refuses the repair. `--check` validates without
+  task changes; repair saves the pre-repair task and GitHub evidence under the
+  task's `reconciliation/` directory, then restores the original delivery under
+  the normal task lock. Review history and counters are retained. Neither mode
+  starts reviews, dependent tasks or cleanup; source work and worktree stay in
+  place for separately coordinated cleanup. Review/merge gates are unchanged.
 - **Tests.** Not taken: the web board's tests (`web_*.rs` but `web_link`
   and `web_link_ask`, and `web` and `web_as` in `common/board.rs`,
   `answered` and `ask_again` in `far/mod.rs`); a test that also checked the

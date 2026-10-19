@@ -104,7 +104,9 @@ fn run(cmd: &str, a: &Args) -> Res<i32> {
     // What a person reads names a task by its repo's short key where it has one (`HSW-134: updated`); --json keeps ids.
     if a.flags.b("json") { println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default()); }
     else { println!("{}", if said.is_empty() { serde_json::to_string_pretty(&value).unwrap_or_default() } else { say_ids(&said, &repo_keys()) }); }
-    crate::housekeeping::housekeeping(&crate::herdr::cli::current_socket(), crate::housekeeping::Force::No);
+    // Ferrite: reconciliation is an explicit, scoped repair (including its read-only check). It must not
+    // incidentally start dependent tasks, other runners, or workspace cleanup.
+    if cmd != "reconcile-merged" { crate::housekeeping::housekeeping(&crate::herdr::cli::current_socket(), crate::housekeeping::Force::No); }
     Ok(0)
 }
 /// For the task that owns the focused pane, from the invocation context; does nothing otherwise. A merge cannot be

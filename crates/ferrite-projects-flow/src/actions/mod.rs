@@ -6,6 +6,7 @@ pub mod finish_line;
 pub mod finish_stuck;
 pub mod limits;
 pub mod plan;
+pub mod reconcile_merged;
 pub mod settings;
 pub mod shared;
 pub mod start;

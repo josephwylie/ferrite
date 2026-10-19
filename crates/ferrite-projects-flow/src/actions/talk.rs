@@ -19,8 +19,12 @@ use crate::store::tasks::{assert_unarchived, find, get, update, Change, Task};
 /// Words a person typed for a task's agent (`by`: "you", or "coordinator"): noted as theirs, so its conversation says
 /// who said them, then told.
 pub fn reply(id: &str, text: &str, by: &str) -> Res<Said> {
+    reply_with_follow_up(id, text, by, false)
+}
+/// Ferrite: completed deliveries require deliberate new-work intent; housekeeping text is never classified by keywords.
+pub fn reply_with_follow_up(id: &str, text: &str, by: &str, follow_up: bool) -> Res<Said> {
     if let Ok(t) = find(id) { crate::store::said_by::note_person(t.s("id"), by, text.trim()); }
-    tell_as(id, text, false, true)
+    tell_with_intent(id, text, false, true, follow_up)
 }
 /// Who runs this command: the Coordinator where it runs in the Coordinator's own folder, else you.
 pub fn asker() -> &'static str {
@@ -33,8 +37,12 @@ pub fn tell(id: &str, text: &str, keep_intent: bool) -> Res<Said> { tell_as(id, 
 /// `chat`: these are a person's own words (`reply`), so a chat with reviewed work re-reviews only what it changes
 /// (flow/chat.rs). The board's own messages on your key (send the review back, retry, carry on) are no chat.
 pub fn tell_as(id: &str, text: &str, keep_intent: bool, chat: bool) -> Res<Said> {
+    tell_with_intent(id, text, keep_intent, chat, false)
+}
+fn tell_with_intent(id: &str, text: &str, keep_intent: bool, chat: bool, follow_up: bool) -> Res<Said> {
     let cur = find(id)?;
     assert_unarchived(&cur)?;
+    require_follow_up(&cur, follow_up)?;
     let cid = cur.t("id");
     let typed = text.trim();
     if typed.is_empty() { crate::fail!("Nothing to send."); }
@@ -70,12 +78,11 @@ pub fn tell_as(id: &str, text: &str, keep_intent: bool, chat: bool) -> Res<Said>
     flow::git::cancel_auto_merge(&cur)?; // a failure sends nothing and keeps the draft
     let live = flow::live::live_of(&cur, &flow::live::read_session(cur.at("link").s("socket")), &crate::herdr::cli::current_socket());
     if live.b("gone") || live.at("status").is_null() { // the agent has exited: start it again, with the words waiting for it
-        queue_text(&cid, &words, Obj::new())?;
-        update(&cid, |t| { rearm(t, keep_intent, false, chat)?; if back { sent_back(t); } Ok(Change::Write) })?;
+        update(&cid, |t| { require_follow_up(t, follow_up)?; rearm(t, keep_intent, false, chat)?; queue_text(&cid, &words, Obj::new())?; if back { sent_back(t); } Ok(Change::Write) })?;
         spawn_runner("restart", &cid, &[]);
         return Ok(say(get(&cid).unwrap_or(cur), "The agent had exited: starting it again with your message."));
     }
-    let t = update(&cid, |t| { rearm(t, keep_intent, true, chat)?; if back { sent_back(t); } Ok(Change::Write) })?;
+    let t = update(&cid, |t| { require_follow_up(t, follow_up)?; rearm(t, keep_intent, true, chat)?; if back { sent_back(t); } Ok(Change::Write) })?;
     flow::sidebar::tell_sidebar(&t);
     let how = flow::send::deliver(&t, &words, None, false)?;
     let goes_on = flow::chat::during(&t) && ["reviewing", "reviewneeds"].contains(&t.s("stage"));
@@ -91,6 +98,7 @@ fn cleaning_up(t: &Task) -> Res<()> {
 /// review under way goes on while you chat with it (flow/chat.rs), the stage stays and the turn is the chat's.
 pub fn rearm(t: &mut Task, keep_intent: bool, live: bool, chat: bool) -> Res<()> {
     cleaning_up(t)?;
+    keep_delivery(t);
     if !chat { t.del("chat"); }
     else if flow::chat::begin(t, "board", live && runner_alive(t)) == flow::chat::Began::During { granted(t); return Ok(()); }
     granted(t); // stopped at a limit: your word gives it the limit once more
@@ -152,4 +160,22 @@ pub fn stop(id: &str) -> Res<Task> {
     if t.at("link").at("reviewer").b("pane") { flow::tabs::close_reviewer_tab(&flow::task::h(&t), t.at("link").at("reviewer")); }
     flow::sidebar::tell_sidebar(&t);
     Ok(get(&cid).unwrap_or(t))
+}
+
+fn require_follow_up(t: &Task, follow_up: bool) -> Res<()> {
+    if completed_delivery(t) && !follow_up {
+        crate::fail!("{} is a completed delivery. Its PR and review are retained; no message was sent. For genuine new work use tell {} --follow-up <text> (or delegate explicitly).", t.s("id"), t.s("id"));
+    }
+    Ok(())
+}
+/// Ferrite: the last delivery stays attributable when explicit new work starts.
+pub fn completed_delivery(t: &Task) -> bool {
+    t.s("stage") == "done" && (t.b("pr") || t.b("prMerged") || t.b("mergeCommit"))
+}
+pub fn keep_delivery(t: &mut Task) {
+    if !completed_delivery(t) { return; }
+    let keys = ["branch", "from", "baseSha", "pr", "prMerged", "prState", "prHead", "mergeCommit", "mergedAt", "review", "reviewedHead", "reviewRound", "reviews", "summary", "reconciled"];
+    let delivery = Value::Object(keys.iter().filter(|k| t.has(**k)).map(|k| (k.to_string(), t.at(k).clone())).collect());
+    let mut saved = t.arr("deliveries").to_vec();
+    if saved.last() != Some(&delivery) { saved.push(delivery); t.put("deliveries", saved); }
 }

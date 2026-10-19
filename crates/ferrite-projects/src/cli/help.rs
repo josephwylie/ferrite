@@ -20,7 +20,7 @@ pub const HELP: &str = r#"herdr-projects: a work board for herdr
                                        vm-str:ELA-3) are done, by itself;
                                       --now: start a task that waits without waiting
   herdr-projects after <id> [ID[,ID…] | --clear]   what a task waits for: shown, changed, or dropped (it starts then)
-  herdr-projects tell <id> <text>              send a message to the task's agent
+  herdr-projects tell <id> <text>              send a message (--follow-up explicitly starts new work on a completed delivery)
   herdr-projects stop <id>                     stop its agent
   herdr-projects approve <id> [--anyway]       merge finished work that waits for approval (--anyway: also when its review
                                                 or its pull request's checks on GitHub failed);
@@ -32,6 +32,10 @@ pub const HELP: &str = r#"herdr-projects: a work board for herdr
   herdr-projects fix <id>                      send failure details to the agent (never approves a merge)
   herdr-projects finish <id>                   finish anyway, when the agent stopped without a summary or at a limit,
                                                 or when the board missed it finishing (its agent at rest, the row still "Finishing")
+  herdr-projects reconcile-merged <id> --pr <url> --review-head <full-sha> [--check]
+                                                restore a stopped, already-merged delivery after verifying GitHub,
+                                                original passing review, clean merged work and idle agents; retains evidence
+                                                and worktree, starts no review; --check validates without task changes
   herdr-projects details <id>                  failure details, review, next steps, and what it used against its limits
   herdr-projects pin|archive|restore|clear <id>
   herdr-projects set <name> <value> [--repo NAME | --task ID | --automation NAME]
