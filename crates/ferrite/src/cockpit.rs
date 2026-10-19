@@ -10,6 +10,7 @@ mod leaving;
 mod machines;
 mod palette;
 mod parts;
+#[cfg_attr(not(unix), path = "cockpit/projects_unavailable.rs")]
 mod projects;
 mod server;
 pub(crate) mod subagents;
@@ -14084,6 +14085,7 @@ mod tests {
     mod machines;
     mod nav_parity;
     mod pr;
+    #[cfg(unix)]
     mod projects;
     mod provider_controls;
     mod provider_forms;

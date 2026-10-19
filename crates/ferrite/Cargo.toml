@@ -26,10 +26,6 @@ ferrite-focus-notify = { path = "../ferrite-focus-notify" }
 # herdr-reviewr's review core, vendored: the Review slot's rows, comments and
 # their prompt text (ADR 0021).
 ferrite-reviewr = { path = "../ferrite-reviewr" }
-# Projects 1.0 (ADR 0031): herdr-projects' board, vendored; its state,
-# update and view drive the GPUI work board (`board`). Its theme reads a
-# palette from a TOML table; its text is measured in graphemes.
-sw-board = { workspace = true }
 toml = { workspace = true }
 unicode-segmentation = { workspace = true }
 # The kit facade keeps the renderer, native platform and components on one
@@ -55,6 +51,11 @@ image = { version = "0.25.1", default-features = false, features = ["png"] }
 # The visual engine's wake -> cx.notify bridge (a channel a foreground task
 # drains). Already in the tree via gpui.
 futures = "0.3"
+
+# Projects 1.0 uses Unix sockets, signals and flock (ADR 0031).
+# Keep its runtime out of Windows builds; the cockpit reports unavailability.
+[target.'cfg(unix)'.dependencies]
+sw-board = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Chromium Embedded Framework bindings (tauri-apps/cef-rs), the `cef`

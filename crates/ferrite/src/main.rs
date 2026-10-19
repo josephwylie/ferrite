@@ -6,6 +6,7 @@
 mod attachment_preview;
 mod attachments;
 mod background_chips;
+#[cfg(unix)]
 mod board;
 mod cli_updates;
 mod cockpit;
@@ -43,6 +44,7 @@ mod rich;
 mod scrollbar;
 mod select;
 mod shortcuts;
+#[cfg(unix)]
 mod sidebar;
 mod status;
 mod system_notifications;

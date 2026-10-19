@@ -4,6 +4,7 @@
 //! `ferrite-projects`. The cockpit's half — the palette commands, the
 //! board's place — is `cockpit::projects`.
 
+#[cfg(unix)]
 use std::process::{Command as Process, Output, Stdio};
 
 gpui::actions!(
@@ -48,6 +49,7 @@ const DOCTOR_TITLE: &str = "Tasks: doctor";
 /// Resolve the Coordinator without moving another window or restarting a
 /// running agent. Only an absent Coordinator needs the board's open request.
 /// Blocking: called on the background executor.
+#[cfg(unix)]
 pub(crate) fn coordinator_thread() -> Result<ferrite_core::ThreadId, String> {
     let socket = sw_board::herdr::cli::current_socket();
     let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -77,6 +79,7 @@ pub(crate) fn coordinator_thread() -> Result<ferrite_core::ThreadId, String> {
 /// The doctor action: the shipped program's `doctor`, which looks at older
 /// installs again and says where things stand. Blocking: run it off the UI
 /// thread. Its toast: title, words, whether it failed.
+#[cfg(unix)]
 pub(crate) fn doctor() -> (String, String, bool) {
     let output = Process::new(sw_board::store::files::bin())
         .arg("doctor")
@@ -86,6 +89,7 @@ pub(crate) fn doctor() -> (String, String, bool) {
 }
 
 /// What `doctor` ended with, as its toast: what it said when it succeeded.
+#[cfg(unix)]
 fn doctor_said(output: std::io::Result<Output>) -> (String, String, bool) {
     let (body, failed) = match output {
         Ok(output) if output.status.success() => (
