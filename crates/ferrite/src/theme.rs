@@ -773,11 +773,9 @@ pub const R_TIGHT: f32 = 0.0;
 /// nav stays part of the semantic-zoom input.
 pub const NAV_WIDTH: f32 = 36.0 * CH;
 /// 32px — the window-chrome band, the prototype's titlebar (`TITLEBAR_H`).
-/// It says nothing (ADR 0014): it is the nav column's own top chrome, where
-/// the host traffic lights centre (`TRAFFIC_Y`) and the window drags by.
-/// The board starts at the window's top beside it; the band crosses the
-/// board only on Windows (the caption buttons) and, on macOS, while the
-/// nav is a rail (`titlebar::board_top`).
+/// It says nothing (ADR 0014): the host traffic lights centre here
+/// (`TRAFFIC_Y`), and the window drags by the empty band across its width.
+/// On macOS and Windows the board starts below it (`titlebar::board_top`).
 pub const WIN_CHROME_H: f32 = TITLEBAR_H;
 /// 32px — the titlebar band, and `STATUS_BAR_H` 24 the bottom bar (one
 /// `ROW` and 4px, closed above by a `LINE`).
@@ -1437,7 +1435,7 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 //
 // **The window chrome** (ADR 0014). The titlebar band says nothing: it is
 // the nav's top chrome, the traffic lights' row and the window's drag
-// strip; the board runs to the window's top beside it. The window's one
+// strip; the board starts below it on macOS and Windows. The window's one
 // bar is the bottom bar (`STATUS_BAR_H`), on the chrome under a
 // `paint::LINE` rule: the sidebar toggle and the bell, the session in
 // `ACCENT` at the strong weight, `1 solo` and a tab per Group (the current

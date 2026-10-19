@@ -407,10 +407,9 @@ fn main() {
                                 px(theme::TRAFFIC_Y),
                             )),
                         }),
-                        // The board starts at the window's top, where a
-                        // Pane head is dragged to rearrange it: AppKit must
-                        // not move the window from there. The nav's top
-                        // chrome drags it instead (`titlebar::strip`).
+                        // Only the empty top strip moves the window;
+                        // Pane heads and transcript text below it keep
+                        // their own drag gestures (`titlebar::strip`).
                         app_owns_titlebar_drag: cfg!(target_os = "macos"),
                         // Below this the title, the add control and the
                         // caption group collide, and no Pane reaches L2.

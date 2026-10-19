@@ -796,13 +796,10 @@ fn the_empty_board_titlebar_says_nothing(cx: &mut TestAppContext) {
     );
 }
 
-/// The band is the nav's top chrome (ADR 0014): the board starts at the
-/// window's top beside it and, on macOS, the window drags by the nav's top.
-/// Where the band crosses the board — always on Windows, and on macOS while
-/// the nav is a rail the traffic lights overhang — the board starts under
-/// it and the band paints the plane from the board's own left edge.
+/// Expanding the nav must not remove the window's top drag region. The
+/// board sits below that region so its controls still receive their clicks.
 #[gpui::test]
-fn the_titlebar_band_is_the_navs_top(cx: &mut TestAppContext) {
+fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("titlebar-band", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
@@ -828,13 +825,18 @@ fn the_titlebar_band_is_the_navs_top(cx: &mut TestAppContext) {
         if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
             let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
             assert_eq!(drag.left(), px(0.), "the band over the nav drags");
-            if !crosses {
-                // gpui snaps the edge to a device pixel.
-                assert!(drag.right() <= px(board.x + 1.), "no drag over the board");
+            assert!(
+                drag.contains(&gpui::point(px(600.), px(16.))),
+                "the middle of the window's top must drag: {drag:?}"
+            );
+            if cfg!(target_os = "macos") {
+                let moves = cx.window_move_requests();
+                cx.simulate_click(gpui::point(px(600.), px(16.)), gpui::Modifiers::none());
+                assert_eq!(cx.window_move_requests(), moves + 1);
             }
         }
     };
-    check(cx, crate::titlebar::CUSTOM);
+    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));

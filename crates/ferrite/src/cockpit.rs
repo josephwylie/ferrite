@@ -2818,7 +2818,7 @@ impl CockpitView {
     /// `titlebar::board_top`) to the bottom bar, with no gutter of its own.
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         let viewport = window.viewport_size();
-        let top = crate::titlebar::board_top(self.nav_railed());
+        let top = crate::titlebar::board_top();
         let left = self.board_left();
         let bounds = layout::Rect {
             x: left,
@@ -10171,7 +10171,7 @@ impl CockpitView {
         // The board starts at the window's top, or flush under the
         // titlebar band where it crosses the board (`titlebar::board_top`);
         // nothing pads it on its other sides.
-        let board_top = crate::titlebar::board_top(self.nav_railed());
+        let board_top = crate::titlebar::board_top();
         let frame = || div().flex_1().min_w_0().min_h_0().pt(px(board_top));
         let visible = self.visible_indices();
         // The empty board names the provider CLIs it found: ask once.
@@ -10489,7 +10489,6 @@ impl CockpitView {
             // the drag region stands down while one is open.
             .child(crate::titlebar::strip(
                 self.board_left(),
-                self.nav_railed(),
                 !self.overlay_open(),
                 self.maximized,
             ))

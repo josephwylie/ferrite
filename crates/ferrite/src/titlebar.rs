@@ -3,9 +3,9 @@
 //! macOS keeps the host's traffic lights, but the app owns the drag
 //! (`app_owns_titlebar_drag`): AppKit would otherwise move the window from
 //! any press in the titlebar's height, and Pane heads, which are dragged to
-//! rearrange the board, start at the window's top. The window drags by the
-//! nav's empty chrome above its first row, where the lights sit
-//! (`mac_drag_region`). Windows gives nothing — a window either wears the
+//! rearrange the board, must remain interactive. An empty strip across the
+//! whole window starts the native move (`mac_drag_region`), with the board
+//! below it. Windows gives nothing — a window either wears the
 //! whole system titlebar or draws every part of one itself. Ferrite draws
 //! the titlebar there: one empty band the window drags by, and the caption
 //! buttons at the window's top-right corner where Windows puts them.
@@ -54,18 +54,15 @@ pub const DEV: bool = option_env!("FERRITE_RELEASE").is_none();
 /// hiding it there would take the traffic lights with it.
 pub const CUSTOM: bool = cfg!(target_os = "windows");
 
-/// Whether the titlebar band runs across the board too, holding it down by
-/// `WIN_CHROME_H` (ADR 0014): on Windows, for the caption buttons, and on
-/// macOS while the nav is a rail, when the traffic lights would overhang
-/// the top Pane. Otherwise the band is the nav's own top chrome and the
-/// board starts at the window's top.
-pub fn band_over_board(nav_railed: bool) -> bool {
-    CUSTOM || (cfg!(target_os = "macos") && nav_railed)
+/// Keep a dedicated window-drag strip above interactive Pane content on
+/// macOS and Windows, independent of whether the nav is expanded.
+pub fn band_over_board() -> bool {
+    CUSTOM || cfg!(target_os = "macos")
 }
 
 /// Where the Pane board starts: under the band, or at the window's top.
-pub fn board_top(nav_railed: bool) -> f32 {
-    if band_over_board(nav_railed) {
+pub fn board_top() -> f32 {
+    if band_over_board() {
         WIN_CHROME_H
     } else {
         0.0
@@ -85,8 +82,8 @@ pub fn board_top(nav_railed: bool) -> f32 {
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and the drag would take
 /// the press meant for the row under the pointer.
-pub fn strip(board_left: f32, nav_railed: bool, draggable: bool, maximized: bool) -> Div {
-    let over_board = band_over_board(nav_railed);
+pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
+    let over_board = band_over_board();
     let stretch = if !draggable {
         div().flex_1().h_full()
     } else if CUSTOM {
@@ -492,29 +489,21 @@ mod tests {
     fn the_strip_is_an_overlay_of_the_band(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init_components(cx);
-            let mut strip = strip(crate::nav::WIDTH, false, true, false);
+            let mut strip = strip(crate::nav::WIDTH, true, false);
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });
     }
 
-    /// The board starts at the window's top unless the band must run over
-    /// it: always on Windows (the caption buttons), and on macOS only while
-    /// the nav is a rail the traffic lights overhang.
+    /// The window-drag strip has its own space above the board's controls.
     #[test]
     fn the_board_starts_at_the_top_unless_the_band_crosses_it() {
-        let expected = |railed: bool| {
-            if CUSTOM || (cfg!(target_os = "macos") && railed) {
-                WIN_CHROME_H
-            } else {
-                0.0
-            }
+        let expected = if CUSTOM || cfg!(target_os = "macos") {
+            WIN_CHROME_H
+        } else {
+            0.0
         };
-        assert_eq!(board_top(false), expected(false));
-        assert_eq!(board_top(true), expected(true));
-        if cfg!(target_os = "macos") {
-            assert_eq!((board_top(false), board_top(true)), (0.0, WIN_CHROME_H));
-        }
+        assert_eq!(board_top(), expected);
     }
 
     /// F-9: a usage segment reads the provider's more used window, the 5h

@@ -779,6 +779,11 @@ impl VisualTestContext {
         self.cx.test_window(self.window).0.lock().title.clone()
     }
 
+    /// Number of native window moves requested by the app.
+    pub fn window_move_requests(&self) -> usize {
+        self.cx.test_window(self.window).0.lock().window_move_requests
+    }
+
     /// Read the document path off the window (set by `Window#set_document_path`)
     pub fn document_path(&mut self) -> Option<std::path::PathBuf> {
         self.cx
