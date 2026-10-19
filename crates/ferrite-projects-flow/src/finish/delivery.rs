@@ -17,8 +17,10 @@ pub fn timeout(s: &str) -> bool {
 fn eligible(t: &Task) -> bool {
     if t.b("archivedAt") || t.b("prMerged") || runner_alive(t) || t.b("turnOpen") || t.b("chat") || !t.b("summary") || !flow::task::is_agent_task(t) { return false; }
     let f = t.at("failure");
+    let delivery_failure = f.s("stage") == "push" ||
+        (f.s("stage") == "merge" && f.s("phase") == "fetch" && t.at("deliveryRetry").is_object());
     (t.s("stage") == "pushing" && t.at("deliveryRetry").b("until")) ||
-        (t.s("stage") == "failed" && f.s("stage") == "push" && !f.b("auth") && timeout(f.s("detail")) && !t.at("deliveryRetry").b("exhausted"))
+        (t.s("stage") == "failed" && delivery_failure && !f.b("auth") && timeout(f.s("detail")) && !t.at("deliveryRetry").b("exhausted"))
 }
 /// Re-enter the normal check/review pipeline, once. The stage transition is the queue reservation, under the task
 /// lock; a second tick cannot enqueue it again. No agent is started or prompted here.
@@ -67,22 +69,29 @@ pub fn push(g: &mut Guard, tree: &Path, branch: &str) -> Res<bool> {
             Ok(true)
         }
         Err(e) if timeout(&e.msg) => {
-            let t = g.check()?;
-            let r = t.at("deliveryRetry");
-            let tries = if r.s("head") == head { r.i("tries") } else { 0 };
-            if let Some(delay) = DELAYS.get(tries as usize) {
-                let t = g.set(|t| {
-                    t.put("stage", "pushing"); t.put("failure", Value::Null);
-                    t.put("deliveryRetry", json!({"head": head, "tries": tries + 1, "until": now() + delay, "detail": e.msg}));
-                    t.put("msg", format!("Push response timed out; reconciling and retrying in {}s ({} of {})", delay / 1000, tries + 1, DELAYS.len()));
-                })?;
-                flow::sidebar::tell_sidebar(&t);
-                Ok(false)
-            } else {
-                g.set(|t| { t.obj_mut("deliveryRetry").put("exhausted", true); })?;
-                Err(crate::err::Error::new(format!("Push transport retries exhausted after {} retries: {}", DELAYS.len(), e.msg)))
-            }
+            if backoff(g, &head, "Push response", &e.msg)? { Ok(false) }
+            else { Err(crate::err::Error::new(format!("Delivery transport retries exhausted after {} retries: {}", DELAYS.len(), e.msg))) }
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Fetch and push are parts of one delivery attempt. A preliminary fetch must consume the same budget instead
+/// of stranding the task or starting a fresh retry sequence. True means the runner should yield until the deadline.
+pub(super) fn backoff(g: &mut Guard, head: &str, step: &str, detail: &str) -> Res<bool> {
+    let t = g.check()?;
+    let r = t.at("deliveryRetry");
+    let tries = if r.s("head") == head { r.i("tries") } else { 0 };
+    if let Some(delay) = DELAYS.get(tries as usize) {
+        let t = g.set(|t| {
+            t.put("stage", "pushing"); t.put("failure", Value::Null);
+            t.put("deliveryRetry", json!({"head": head, "tries": tries + 1, "until": now() + delay, "detail": detail}));
+            t.put("msg", format!("{step} timed out; reconciling and retrying in {}s ({} of {})", delay / 1000, tries + 1, DELAYS.len()));
+        })?;
+        flow::sidebar::tell_sidebar(&t);
+        Ok(true)
+    } else {
+        g.set(|t| { t.obj_mut("deliveryRetry").put("exhausted", true); })?;
+        Ok(false)
     }
 }

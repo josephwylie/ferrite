@@ -79,11 +79,17 @@ impl PushTransport {
         let real = String::from_utf8(git.stdout).unwrap().trim().to_string();
         let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
         let body = format!("#!/bin/sh\nif [ \"$1\" = push ]; then\n echo push >> {}\n {}\n echo 'herdr did not answer in time' >&2\n exit 1\nfi\nexec {} \"$@\"\n", quote(&count.display().to_string()), if finish { format!("{} \"$@\" || exit $?", quote(&real)) } else { ":".into() }, quote(&real));
+        let fetch = format!("if [ \"$1\" = fetch ] && [ -f {} ]; then\n cat {} >&2\n exit 1\nfi\n", quote(&dir.join("fetch-error").display().to_string()), quote(&dir.join("fetch-error").display().to_string()));
+        let body = body.replacen("#!/bin/sh\n", &format!("#!/bin/sh\n{fetch}"), 1);
         std::fs::write(dir.join("git"), body).unwrap();
         std::fs::set_permissions(dir.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut paths = vec![dir]; paths.extend(std::env::split_paths(&path));
         unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()); }
         Self { path, count }
+    }
+    fn fetch_error(&self, error: Option<&str>) {
+        let path = self.count.parent().unwrap().join("fetch-error");
+        if let Some(error) = error { std::fs::write(path, error).unwrap(); } else { std::fs::remove_file(path).unwrap(); }
     }
     fn pushes(&self) -> usize { read(&self.count).lines().count() }
 }
@@ -168,4 +174,83 @@ fn recovery_preserves_review_ci_and_human_decision_gates() {
         let before_task = task(&id); recover(&w, &id); assert_eq!(task(&id), before_task);
     }
     assert_eq!(pane_prompts(&w, &id), before);
+}
+
+#[test]
+fn fetch_timeout_during_push_recovery_resumes_when_transport_returns() {
+    let w = pr_world(json!({}));
+    let id = to_approval(&w, "Fetch during push recovery");
+    let original = task(&id);
+    let tree = std::path::Path::new(original.s("worktree"));
+    let head = git(tree, &["rev-parse", "HEAD"]);
+    assert!(git(tree, &["ls-remote", "origin", &format!("refs/heads/{}", original.s("branch"))]).starts_with(&head));
+    let before = pane_prompts(&w, &id);
+    lost_push(&id);
+    let transport = PushTransport::new(&w, false);
+    transport.fetch_error(Some("herdr did not answer in time"));
+    recover(&w, &id); let waiting = settle(&id);
+    assert_eq!(waiting.s("stage"), "pushing");
+    assert_eq!(waiting.at("deliveryRetry").i("tries"), 1);
+    assert!(waiting.s("msg").starts_with("Fetch timed out"));
+    sw::clock::set(Some(waiting.at("deliveryRetry").i("until") - 1));
+    recover(&w, &id);
+    assert!(sw::runner::JOBS.with(|j| j.borrow().is_empty()), "no early or duplicate attempt");
+    transport.fetch_error(None);
+    sw::clock::set(Some(sw::clock::now() + 120_000));
+    recover(&w, &id); housekeeping(&w.socket, Force::Yes);
+    let t = settle(&id);
+    assert_eq!(t.s("stage"), "approval", "{}", t.at("failure"));
+    assert_eq!(t.s("reviewedHead"), head);
+    assert_eq!(transport.pushes(), 0);
+    assert_eq!(pane_prompts(&w, &id), before);
+    assert_eq!(t.at("summary"), original.at("summary"));
+}
+
+#[test]
+fn recovery_fetch_shares_push_budget_and_keeps_permanent_failures_visible() {
+    let w = pr_world(json!({}));
+    let id = to_approval(&w, "Fetch retry budget");
+    let original = task(&id);
+    let before = pane_prompts(&w, &id);
+    // The first timeout is a push, the remaining ones are fetches: changing the failing step cannot reset the budget.
+    git(std::path::Path::new(original.s("worktree")), &["push", "origin", &format!(":{}", original.s("branch"))]);
+    lost_push(&id);
+    let transport = PushTransport::new(&w, false);
+    recover(&w, &id); let mut t = settle(&id);
+    transport.fetch_error(Some("herdr did not answer in time"));
+    for tries in 1..=3 {
+        assert_eq!(t.at("deliveryRetry").i("tries"), tries);
+        assert_eq!(t.s("stage"), "pushing");
+        sw::clock::set(Some(t.at("deliveryRetry").i("until")));
+        recover(&w, &id); t = settle(&id);
+    }
+    assert_eq!(t.s("stage"), "failed");
+    assert!(t.at("deliveryRetry").b("exhausted"));
+    assert_eq!(t.at("failure").s("title"), "Delivery transport retries exhausted");
+    transport.fetch_error(None);
+    sw::clock::set(Some(sw::clock::now() + 120_000));
+    recover(&w, &id); assert_eq!(settle(&id).s("stage"), "failed");
+    assert_eq!(transport.pushes(), 1);
+    // Auth and unknown fetch errors are not transient merely because this is delivery recovery.
+    for error in ["Authentication failed", "fatal: couldn't find remote ref main"] {
+        update(&id, |t| { t.put("deliveryRetry", Value::Null); Ok(Change::Write) }).unwrap();
+        lost_push(&id); transport.fetch_error(Some(error));
+        recover(&w, &id); let t = settle(&id);
+        assert_eq!(t.s("stage"), "failed"); assert_eq!(t.at("failure").s("phase"), "fetch");
+        assert_eq!(t.at("deliveryRetry").i("tries"), 0);
+        assert_eq!(t.at("failure").b("auth"), error == "Authentication failed");
+        transport.fetch_error(None);
+        recover(&w, &id); assert_eq!(settle(&id).s("stage"), "failed");
+    }
+    // A fetch timeout saved by the previous CLI is recognized only within an existing delivery recovery.
+    update(&id, |t| {
+        t.put("failure", json!({"stage": "merge", "phase": "fetch", "detail": "herdr did not answer in time"}));
+        Ok(Change::Write)
+    }).unwrap();
+    recover(&w, &id);
+    assert_eq!(task(&id).s("stage"), "checking");
+    assert_eq!(sw::runner::JOBS.with(|j| j.borrow().iter().filter(|(job, who, _)| job == "pipeline" && who == &id).count()), 1);
+    settle(&id);
+    assert_eq!(pane_prompts(&w, &id), before);
+    assert!(!merged(&w));
 }

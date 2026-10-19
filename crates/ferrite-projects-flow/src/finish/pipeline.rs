@@ -75,7 +75,15 @@ pub fn pipeline(id: &str, g: &mut Guard, text: &str, keep_intent: bool, reason: 
         let r = sync::sync_main(&t, &tree);
         if r.status == "conflict" { sync::conflict_back(id, g, &tree, &r, &mut |g, failure, seen| { let _ = fail(g, failure, FailHow { keep_intent: true, patch: seen }); }); return Ok(()); }
         // Main could not be read: work that was not brought up to date is never reviewed or put up for approval.
-        if r.status == "error" { let mut f = failure("merge", "Could not synchronize main", &format!("Branch: {}\nFolder: {tree}\n\n{}", t.s("branch"), r.detail), "Investigate the fetch/Git error and fix what you safely can without altering the human's checkout. Finish again so the board retries the sync."); f.put("phase", "fetch"); fail(g, f, FailHow { keep_intent: true, ..Default::default() })?; return Ok(()); }
+        if r.status == "error" {
+            // Ferrite: delivery recovery includes this preliminary fetch. It shares the push retry budget and
+            // must still succeed before checks/review; unrelated sync errors keep their existing failure path.
+            let recovering = t.at("deliveryRetry").is_object() && super::delivery::timeout(&r.detail);
+            if recovering && super::delivery::backoff(g, &flow::git::head_of(Path::new(&tree)), "Fetch", &r.detail)? { return Ok(()); }
+            let title = if recovering { "Delivery transport retries exhausted" } else { "Could not synchronize main" };
+            let mut f = failure("merge", title, &format!("Branch: {}\nFolder: {tree}\n\n{}", t.s("branch"), r.detail), "Investigate the fetch/Git error and fix what you safely can without altering the human's checkout. Finish again so the board retries the sync.");
+            f.put("phase", "fetch"); fail(g, f, FailHow { keep_intent: true, ..Default::default() })?; return Ok(());
+        }
         own_sync = Some(r);
     }
     let sync_r = synced.or(own_sync.as_ref());
