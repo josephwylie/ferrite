@@ -42,8 +42,7 @@
 //! 3. **Grey, not near-black.** The opaque ladder, darkest first: `NODIFF`
 //!    (a split diff's empty side) < `PLANE` #1b1b1c (the reading plane: a
 //!    Pane's body, the empty board) < `HUNK` (a hunk's header row) <
-//!    `CHROME` #242425 (the sidebar, the titlebar cell over it, the bottom
-//!    bar; also `HEAD`, the focused Pane's head band, and `INBAND`, the
+//!    `CHROME` #242425 (the sidebar, the bottom bar; also `HEAD`, the focused Pane's head band, and `INBAND`, the
 //!    Composer's input band) < `FLOAT` (floating ground) < `HOVER` #2c2c2e
 //!    (under the pointer) < `BAND` #2e2e30 (the prompt echo, sticky over its
 //!    turn; a diff's file head; a Decision's command well) < `SELECTION`
@@ -229,13 +228,13 @@ impl From<Paint> for gpui::Fill {
 // (`0xRRGGBBAA`). Paint a region with `paint::*`, which picks between them.
 
 /// `#1b1b1c` — the reading plane: a Pane's body, the empty board, the
-/// titlebar cell over the board. The darkest working plane.
+/// titlebar band over the board. The darkest working plane.
 pub const PLANE: u32 = 0x1b1b1c;
 /// The reading plane as glass: 94%, a terminal's background opacity.
 #[allow(dead_code)]
 pub const PLANE_GLASS: u32 = 0x1a1a1bf0;
-/// `#242425` — chrome, lifted off the plane: the sidebar, the titlebar cell
-/// over it, the bottom bar.
+/// `#242425` — chrome, lifted off the plane: the sidebar, the bottom
+/// bar.
 pub const CHROME: u32 = 0x242425;
 /// Chrome as glass, 88%. The window's blur shows whatever sits behind
 /// Ferrite — other windows included — so a bright window behind turned a
@@ -372,8 +371,7 @@ pub const TEXT_MUTED: u32 = 0x98989d;
 /// `#5e5e63` — structure, never words: the `·` seam, `└` elbows, rails,
 /// disclosure glyphs, the parked ring.
 pub const TEXT_FAINT: u32 = 0x5e5e63;
-/// The muted ink on the chrome glass (the sidebar, the titlebar cell over it,
-/// the bottom bar). Over a see-through ground the opaque `TEXT_MUTED` loses
+/// The muted ink on the chrome glass (the sidebar, the bottom bar). Over a see-through ground the opaque `TEXT_MUTED` loses
 /// its contrast against a bright desktop, so on glass it lifts a step;
 /// opaque builds keep `TEXT_MUTED`.
 pub const CHROME_MUTED: u32 = if GLASS { 0xb6b6bb } else { TEXT_MUTED };
@@ -421,6 +419,12 @@ pub const ACCENT_EDGE: u32 = 0x8eb1f066;
 pub const ACCENT_WASH: u32 = 0x8eb1f024;
 /// `#8eb1f040` (25%) — native text selection, painted over glyphs.
 pub const TEXT_SELECTION_WASH: u32 = 0x8eb1f040;
+/// `#eda87933` (20%) — every occurrence a find (⌘F) marks, under its
+/// glyphs: orange, a hue no state wears, kept apart from the accent's
+/// selection and from yellow, which means "needs you".
+pub const FIND_WASH: u32 = 0xeda87933;
+/// `#eda87980` (50%) — the occurrence the find is on.
+pub const FIND_ACTIVE_WASH: u32 = 0xeda87980;
 /// The caret: the soft block in the focused Composer.
 pub const CARET: u32 = ACCENT;
 
@@ -442,6 +446,8 @@ pub const BLOCKED: u32 = RED;
 pub const BLOCKED_WASH: u32 = 0xef8a801f;
 /// The idle/parked dot: the muted ink in a dot role.
 pub const IDLE: u32 = TEXT_MUTED;
+/// Teal — a turn finished that the operator has not seen: the `✓`.
+pub const FINISHED: u32 = CYAN;
 /// The permission mode word in the status line (`accept edits`, `plan`).
 #[allow(dead_code)]
 pub const MODE_INK: u32 = MAGENTA;
@@ -470,6 +476,14 @@ pub mod words {
     pub const INTERRUPTED: &str = "interrupted";
     /// Live work.
     pub const WORKING: &str = "working";
+    /// Main is idle while its Subagents or background tasks still work.
+    pub const BACKGROUND: &str = "background";
+    /// What a waiting agent needs: its plan approved.
+    pub const PLAN: &str = "plan";
+    /// Not working and nothing unseen.
+    pub const IDLE: &str = "idle";
+    /// Waiting on the operator: the status filter's name for it.
+    pub const BLOCKED: &str = "blocked";
     /// Launched, not yet working.
     pub const STARTING: &str = "starting";
     /// Held by the operator.
@@ -480,7 +494,15 @@ pub mod words {
     pub const UNAVAILABLE: &str = "unavailable";
     /// An answer is on its way to the provider.
     pub const SENDING: &str = "sending";
+    /// A machine's Server is being reached, or reached again (ADR 0026).
+    pub const CONNECTING: &str = "connecting";
+    /// A machine the operator turned off in Settings.
+    pub const OFF: &str = "off";
 }
+
+/// A machine whose Server went (ADR 0026): what it last showed stays, at
+/// this opacity, and takes no input until it is back.
+pub const MACHINE_LOST_OPACITY: f32 = 0.5;
 
 /// The ink a lexicon word wears when it leads a line: `needs you` is
 /// `ATTENTION`, `failed`/`failing` are `BLOCKED`, every other word is
@@ -750,25 +772,16 @@ pub const R_TIGHT: f32 = 0.0;
 /// it is nothing. `CockpitView::cell()` subtracts whichever is live, so the
 /// nav stays part of the semantic-zoom input.
 pub const NAV_WIDTH: f32 = 36.0 * CH;
-/// 32px — the window-chrome band across the top of the window, the
-/// prototype's titlebar (`TITLEBAR_H`). Over the nav it is the column's own
-/// chrome row (the traffic-light reserve and the collapse button,
-/// `nav::win_chrome`); over the board it is the titlebar strip (location,
-/// `dev`, add control; on Windows the caption buttons, `titlebar::strip`),
-/// an overlay that adds no layout. The Pane board starts under it, at
-/// `BOARD_TOP`; the host traffic lights centre in it (`TRAFFIC_Y`).
+/// 32px — the window-chrome band, the prototype's titlebar (`TITLEBAR_H`).
+/// It says nothing (ADR 0014): the host traffic lights centre here
+/// (`TRAFFIC_Y`), and the window drags by the empty band across its width.
+/// On macOS and Windows the board starts below it (`titlebar::board_top`).
 pub const WIN_CHROME_H: f32 = TITLEBAR_H;
 /// 32px — the titlebar band, and `STATUS_BAR_H` 24 the bottom bar (one
 /// `ROW` and 4px, closed above by a `LINE`).
 pub const TITLEBAR_H: f32 = 32.0;
 #[allow(dead_code)]
 pub const STATUS_BAR_H: f32 = ROW + SPACE_1;
-/// 77px — the horizontal room the window-chrome band reserves before the
-/// collapse button: the traffic lights plus the prototype's 8px flex gap
-/// and 4px button margin. Measured from the prototype (button left edge
-/// x = 77). On macOS the *host* lights occupy it; nothing else may be drawn
-/// or hit-testable there, or AppKit's native drag region stops working.
-pub const TRAFFIC_RESERVE: f32 = 77.0;
 /// Where the host traffic-light group's close button sits: 13px in from the
 /// window's left edge, vertically centred for a 14px button in the band.
 pub const TRAFFIC_X: f32 = 13.0;
@@ -779,11 +792,6 @@ pub const TRAFFIC_Y: f32 = (WIN_CHROME_H - 14.0) / 2.0;
 /// rule restores 10px. Port 10px.)
 pub const GRID_GAP: f32 = ferrite_core::layout::GRID_GAP;
 pub const GRID_PAD: f32 = 10.0;
-/// Where the board starts: under the titlebar band, then the same 10px it
-/// keeps on its other three sides. Flush to the band, a Pane's top-right
-/// corner sits directly beneath the caption buttons, and their hover face
-/// — edge-to-edge by design — reads as lying over the Pane.
-pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
 /// A toast's width: 52 cells (the prototype's `.toast`).
 pub const TOAST_W: f32 = 52.0 * CH;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
@@ -825,10 +833,9 @@ pub const FOCUS_RING_W: f32 = 1.0;
 
 // ------------------------------------------------ shared controls and rows
 
-/// 28px — an icon button's width (the prototype's `.ib`), and
-/// `ICON_BUTTON_H` 24 its height: the titlebar's doors.
+/// 28px — an icon button's width (the prototype's `.ib`): the bottom
+/// bar's doors, the bar's full height.
 pub const ICON_BUTTON: f32 = 28.0;
-pub const ICON_BUTTON_H: f32 = 24.0;
 /// 15px — an icon button's glyph, centred in its door.
 pub const ICON_BUTTON_GLYPH: f32 = 15.0;
 /// 12px — the chevron beside a picker or a disclosure.
@@ -1046,14 +1053,14 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    // A toast is the rail's voice only (C8): with the nav open the
-    // Needs-you strip is the queue, and a toast shows only while the nav is
+    // A toast is the rail's voice only (C8): with the nav open its rows'
+    // marks are the queue, and a toast shows only while the nav is
     // collapsed and its Thread is off the board (`Bell::present`). It
     // stands BottomRight, above the Composer, one at a time; the bell
     // holds the rest.
     theme.notification.placement = gpui::Anchor::BottomRight;
     theme.notification.margins = gpui::base::Edges {
-        top: px(BOARD_TOP),
+        top: px(WIN_CHROME_H + GRID_PAD),
         right: px(GRID_PAD),
         bottom: px(TOAST_ABOVE_COMPOSER),
         left: px(SPACE_2),
@@ -1109,10 +1116,9 @@ pub fn init_components(cx: &mut gpui::App) {
 //   `RUNNING` live, `BLOCKED` failed; never pulsing); `✻` (in the
 //   provider's colour) the turn's end; `◆` (`ATTENTION`) a Decision — all
 //   typed (rule 10). `∴` (drawn) heads reasoning.
-// - **The banner.** Every transcript opens on the Thread's banner: the
-//   steel mark three rows tall, then three lines — the title (`W_STRONG`
-//   `TEXT_STRONG`), `claude · opus 5.5 (1M) · medium · ~/ferrite on dev`
-//   and `started 7:18 pm · 2 turns · 41s working` (both `TEXT_MUTED`).
+// - **The banner.** Every transcript opens on one `TEXT_MUTED` line:
+//   `~/ferrite on dev · started 7:18 pm` (ADR 0014). The nav row names
+//   the Thread and the status line its model.
 // - **The prompt band.** The prompt echo is a full-width `paint::BAND` with
 //   half a line above and below its text: `❯` in the gutter, the text in
 //   `TEXT_STRONG` at body weight, its attachments inline after the words
@@ -1262,13 +1268,9 @@ pub const MINIMAP_BAND_HOVER: u32 = 0xffffff1c;
 /// A minimap jump's scroll: eased over this long (reduced motion jumps).
 pub const MINIMAP_SCROLL_MS: u64 = 300;
 
-/// **The banner** (the prototype's `.banner` in a transcript): the steel
-/// mark `BANNER_MARK_ROWS` rows tall `BANNER_MARK_X_CELLS` in, a
-/// `BANNER_GAP_CELLS` gap, its three lines; Solo pads `BANNER_PAD_T` above
-/// it (board Panes none, `.tx{padding-top:0}`), and the first band sits a
-/// line below it.
-pub const BANNER_MARK_ROWS: f32 = 3.0;
-pub const BANNER_GAP_CELLS: f32 = 3.0;
+/// **The banner** (a transcript's first row): one muted line; Solo pads
+/// `BANNER_PAD_T` above it (board Panes none, `.tx{padding-top:0}`), and the
+/// first band sits a line below it.
 pub const BANNER_PAD_T: f32 = LH_UI;
 /// The prompt band's send time: its own right-aligned column, this many
 /// cells of padding on its left (the prototype's `.when{padding-left:2ch}`).
@@ -1364,9 +1366,9 @@ pub const CODE_ACTIONS_TOP: f32 = 0.0;
 pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
-/// The html preview dialog: the reading column's width, and a height cap
-/// before its body scrolls.
-pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
+/// A reading dialog (the html preview, What's New): the reading column's
+/// width, and a height cap before its body scrolls.
+pub const READING_DIALOG_MAX_H: f32 = 520.0;
 pub const INLINE_FILE_MIN_W: f32 = CH;
 pub const INLINE_FILE_MAX_W: f32 = 280.0;
 /// **Scrollbars** are a thin overlay with no track, never in layout: a
@@ -1388,8 +1390,9 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // Edit values and append tokens only inside this section.
 //
 // **The board is a terminal multiplexer's** (theme rules 2, 3, 7). The window
-// is three rows: the titlebar band (`WIN_CHROME_H`), the board beside the
-// sidebar, the bottom bar (`STATUS_BAR_H`). Panes sit flush, square and
+// is two rows: the board beside the sidebar, and the bottom bar
+// (`STATUS_BAR_H`); the sidebar keeps the titlebar band (`WIN_CHROME_H`)
+// at its own top. Panes sit flush, square and
 // flat on the reading plane (`paint::PLANE`), split by `BOARD_SEAM` 1px
 // `paint::LINE` seams; there is no gutter and no card. The sidebar owns the
 // one `CHROME_SEAM_W` column between it and the board, and the board's left
@@ -1409,8 +1412,8 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // something. Focus is drawn only while more than one Pane is on the board.
 // Every Pane root is the `pane::PANE_GROUP` hover group.
 //
-// **Solo has no head**: the titlebar carries the Thread (`ferrite / title ·
-// state · branch`) and the body starts at the plane's top edge.
+// **Solo has no head**: the nav's selected row names the Thread and the
+// body starts at the plane's top edge.
 //
 // **The Group head is one row** (`PANE_HEAD_H`, a row and 4px, its rule
 // inside it) at every size: the state dot the size of the face's `●` in
@@ -1430,14 +1433,15 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // and, while it waits, quick answers boxed in `paint::LINE2`; no meter, no
 // sparkline.
 //
-// **The window chrome.** The titlebar's right cell lies on the plane: the
-// location dim with the title the one strong word (`ferrite / Perf sweep ·
-// 4 · 1 needs you · dev`), and the one trailing door, `⌘K commands`, dim at
-// the right; no rule closes the band, and no build badge. The bottom bar
-// (`STATUS_BAR_H`) lies on the chrome under a `paint::LINE` rule: the
-// session in `ACCENT` at the strong weight, `1 solo` and a tab per Group
-// (the current view's `TEXT_STRONG` on `paint::BAND2`), each provider's
-// usage behind its mark, and the clock. No state counts in either.
+// **The window chrome** (ADR 0014). The titlebar band says nothing: it is
+// the nav's top chrome, the traffic lights' row and the window's drag
+// strip; the board starts below it on macOS and Windows. The window's one
+// bar is the bottom bar (`STATUS_BAR_H`), on the chrome under a
+// `paint::LINE` rule: the sidebar toggle and the bell, the session in
+// `ACCENT` at the strong weight, `1 solo` and a tab per Group (the current
+// view's `TEXT_STRONG` on `paint::BAND2`), the focused Pane's status line
+// (mode, model, `ctx`, changed files), each provider's usage behind its
+// mark, `?` and the clock. No state counts.
 //
 // **Text rasterisation** (F-17). The prototype's glyphs are greyscale with
 // no stem darkening (`-webkit-font-smoothing: antialiased`); gpui-pre-macos
@@ -1469,15 +1473,8 @@ pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
 pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
-/// The titlebar's right cell (over the board) holds its words two cells in
-/// from either edge, the transcript's own gutter.
-pub const TITLE_PAD_X: f32 = 2.0 * CH;
-/// The titlebar's one trailing door (`⌘K commands`): dim words on the
-/// plane, no box, a cell between the chord and its word, ending
-/// `TITLE_PAD_X` in from the window's edge.
-pub const TITLE_DOOR_GAP: f32 = CH;
 /// The smallest window the chrome still lays out in: the nav plus one wall
-/// tile, the title, the door and the Windows caption group.
+/// tile and the Windows caption group.
 pub const WINDOW_MIN_W: f32 = 640.0;
 pub const WINDOW_MIN_H: f32 = 420.0;
 
@@ -1628,29 +1625,25 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 ///   window — and the character under it takes `ON_ACCENT`; an unfocused
 ///   board Pane draws a still, hollow 1px box in `CARET_HOLLOW`. Typing
 ///   restarts the blink solid.
-/// - **The placeholder** sits after the caret cell and a space, `TEXT_MUTED`
-///   throughout (its `·` too), its pieces dropping out whole from the right
-///   where the band is narrow: Solo `Steer this thread · / for commands ·
-///   drop or paste images`; the focused Pane while a turn runs `queue a
-///   follow-up · ⏎ sends when the turn ends`; a Pane a Decision waits in
-///   `answer above, or steer`; any other unfocused Pane nothing.
+/// - **The placeholder** sits after the caret cell and a space, `TEXT_MUTED`,
+///   a couple of words and no keys (`?` lists them, ADR 0014): `Steer this
+///   thread`; while a turn runs `Queue a follow-up`; a Pane a Decision
+///   waits in `Answer above`; any other unfocused Pane nothing.
 /// - **The working line** (`pane::working_line`, the spinner, the caption
 ///   and its facts) is the Composer's first row while a turn runs,
 ///   `COMPOSER_WORKING_GAP` above the band's rule.
 /// - **The band** stands between two `COMPOSER_RULE` rules (transparent on
 ///   the grey and glass themes, the prototype's `--rule`).
-/// - **The status line** sits under the lower rule (`COMPOSER_STATUS_GAP`
-///   above, `COMPOSER_STATUS_PAD_B` below), in Solo and the focused board
-///   Pane only. An unfocused board Pane is flush: its band, the rule and
-///   `COMPOSER_STATUS_PAD_B` to the Pane's foot.
-///   Solo: `⏵⏵ accept edits` (the mode, `MODE_INK`) · the provider's
+/// - **Under the band** the lower rule and `COMPOSER_STATUS_PAD_B` to the
+///   Pane's foot, focused or not.
+/// - **The status line** is the focused Pane's, in the window's bottom bar
+///   (ADR 0014): `⏵⏵ accept edits` (the mode, `MODE_INK`) · the provider's
 ///   logomark and `opus 5.5 (1M) · medium` (one control: the model and its
 ///   effort, a `TEXT_MUTED` `·` between) · `ctx`, an 8-cell meter and
-///   `32%` · `1 file +9 −4`; at its right `⇧⇥ mode · ? shortcuts`. The
-///   focused board Pane: the mode, the model and `ctx` only, nothing at the
-///   right. Every segment is a quiet control (`COMPOSER_SEG_PAD_X` padding,
-///   `paint::HOVER` under the pointer, no chevron) that opens what it
-///   always opened; segments are split by a `TEXT_FAINT` `·`.
+///   `32%` · `1 file +9 −4`. Every segment is a quiet control
+///   (`COMPOSER_SEG_PAD_X` padding, `paint::HOVER` under the pointer, no
+///   chevron) that opens what it always opened; segments are split by a
+///   `TEXT_FAINT` `·`.
 ///
 /// Any pad or line change here must update `pane::composer_fixed_height` in
 /// the same commit.
@@ -1661,16 +1654,11 @@ pub const COMPOSER_PAD_Y: f32 = 6.0;
 pub const COMPOSER_GUTTER: f32 = GLYPH_GUTTER;
 pub const COMPOSER_ROW_H: f32 = LH_UI;
 pub const COMPOSER_STATUS_H: f32 = LH_UI;
-pub const COMPOSER_STATUS_GAP: f32 = 2.0;
 pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
-/// A status segment's inline padding: one cell each side, so the first
-/// segment's text (hung one cell out) starts on the `❯` column.
+/// A status segment's inline padding: one cell each side.
 pub const COMPOSER_SEG_PAD_X: f32 = CH;
 /// A segment's trailing cell.
 pub const COMPOSER_SEG_PAD_TAIL: f32 = CH;
-/// The status line's own lead before its first segment, which hangs its
-/// padding out (`COMPOSER_PAD_L - COMPOSER_SEG_PAD_X`, one cell).
-pub const STATUS_HANG_PAD: f32 = CH;
 /// Legacy names other modules still read (the Subagent footer, the send
 /// controls' corner).
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
@@ -1742,8 +1730,9 @@ pub const USAGE_CARD_BAR_H: f32 = 4.0;
 pub const USAGE_TIGHT: f32 = 0.80;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside
-/// its state and two quiet actions.
-pub const SESSION_CARD_W: f32 = 320.0;
+/// its state and two quiet actions (`needs sign-in`, `Sign in`,
+/// `Reconnect`): 52 cells.
+pub const SESSION_CARD_W: f32 = 52.0 * CH;
 /// The changed-files card: wide enough for a file name, a short directory
 /// and its `+N −N` on one menu row.
 pub const CHANGED_FILES_CARD_W: f32 = 360.0;
@@ -1838,7 +1827,7 @@ pub const TOOLTIP_MAX_W: f32 = 40.0 * CH;
 /// The notifications list (the prototype's `#notes`): 76 cells; a row is
 /// one line in four columns — the mark (2 cells), the state word (10), the
 /// title and its detail, the age (5, right). It hangs from the bell, its
-/// left on the bell's, `NOTICE_PANEL_GAP` under it.
+/// left on the bell's, its foot `NOTICE_PANEL_GAP` over it.
 pub const NOTICE_PANEL_W: f32 = 76.0 * CH;
 pub const NOTICE_PANEL_GAP: f32 = 4.0;
 pub const NOTICE_MARK_W: f32 = 2.0 * CH;
@@ -1851,14 +1840,8 @@ pub const BADGE_FS: f32 = 10.0;
 pub const BADGE_LH: f32 = 12.0;
 /// The kit's own toast stack (unused by the bell, kept for the kit's
 /// margins in `init_components`): this far up from the window's foot.
-pub const TOAST_ABOVE_COMPOSER: f32 = GRID_PAD
-    + 1.0
-    + 2.0 * COMPOSER_PAD_Y
-    + COMPOSER_ROW_H
-    + COMPOSER_STATUS_GAP
-    + COMPOSER_STATUS_H
-    + COMPOSER_STATUS_PAD_B
-    + HALF_ROW;
+pub const TOAST_ABOVE_COMPOSER: f32 =
+    GRID_PAD + 1.0 + 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H + COMPOSER_STATUS_PAD_B + HALF_ROW;
 /// **A toast** (the prototype's `.toast`): a float `TOAST_W` wide, its
 /// right edge two cells in from the window's (`TOAST_BOX_*` as laid out on
 /// whole pixels), its foot `TOAST_BOTTOM`
@@ -1887,6 +1870,10 @@ pub const PALETTE_TOP: f32 = 56.0;
 pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
 pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
 pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
+/// **The find bar** (⌘F): a one-row float 40 cells wide, hung
+/// `FLOAT_OFFSET` under the top right of the text it searches — `❯`, the
+/// query, the count.
+pub const FIND_W: f32 = 40.0 * CH;
 /// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
 /// float stays opaque.** The prototype frosts its floats (`.glass .float`:
 /// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
@@ -2006,6 +1993,8 @@ pub const SETTINGS_STEPPER_VALUE_W: f32 = 6.0 * CH;
 pub const SETTINGS_MENU_MAX_W: f32 = 28.0 * CH;
 /// An About key's column, so every value starts on one edge.
 pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
+/// A typed field on a Settings row (Machines' ssh target).
+pub const SETTINGS_FIELD_W: f32 = 24.0 * CH;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents
@@ -2101,16 +2090,13 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // row is laid out in character cells from its 1ch inline padding
 // (`NAV_PAD_X`), the prototype's `.nrow` grammar:
 //
-//   strip     needs you 2 …………………………………… ⌘D
-//             ● title……………………………………… approval
-//   Project   ▾ ferrite………………………………………… dev
-//   Thread    ❯ ● title……………………………………… word
-//   Group     ❯ ▾ title……………………………………… 4
+//   Project   ▾ ● ferrite……………………………………… dev
+//   Thread    ❯ ● title……………………………… ↑2* word
+//   Group     ❯ ▾ ● title…………………………………… 4
 //   member        ├ ● title………………………………… word
 //   Parked    ▸ parked 3
 //
-// The needs-you strip opens the column, a half row above the tree. The
-// tree is one section per Project in creation order — its heading only
+// The tree is one section per Project in creation order — its heading only
 // while it has a row to show, its loose Threads, then its Groups (each
 // under the Project of its first member), a half row between sections —
 // then `Other` for Threads with no Project, the ground, and the Parked
@@ -2120,15 +2106,16 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // A Thread row's first 2ch cell is the cursor (`❯` in `ACCENT` on the
 // selected row, else blank), then a 2ch mark cell (the status dot, the
 // braille spinner of a working Thread), then the title, then one
-// right-aligned word 1ch after it. A Group row's mark is its disclosure
-// triangle; its members hang on faint tree glyphs (`├ ` / `└ ` at 3ch, the
+// right-aligned word 1ch after it, its checkout's facts before the word.
+// A Group row's triangle comes before its roll-up mark (as does a Project
+// heading's); its members hang on faint tree glyphs (`├ ` / `└ ` at 3ch, the
 // dot at 5ch, the title at 7ch). A Project heading and the Parked header
 // have no cursor cell, so their triangle sits where the cursor does. The
 // triangles fold for real (`CockpitView::set_nav_fold`). Every mark
 // centres on the first character of its cell, as a typed glyph would; the
-// dot sits at its cell's start. Hierarchy is ink and weight, never size: a
-// Project is `W_STRONG` `TEXT_STRONG`; every title is `TEXT`, read or
-// unread — only the selected row's reaches `TEXT_STRONG` — and a parked
+// dot sits at its cell's start. Hierarchy is ink, never size: every
+// heading is a lowercase label in `CHROME_MUTED`; every title is `TEXT` —
+// only the selected row's reaches `TEXT_STRONG` — and a parked
 // title is `TEXT_MUTED`; every right-hand word is `TEXT_MUTED` (the
 // prototype's `.nrow .s` outranks its state classes: the dot carries the
 // colour).
@@ -2144,12 +2131,12 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // Thread is a faint ring.
 //
 // **Folding (cmd-B).** The column rides its width from `NAV_WIDTH` to
-// nothing over `motion::RESIZE` (200ms) while its content fades
-// independently (`MOTION_NAV_FADE_MS`, CSS `ease`: 1 → 0 folding, 0 → 1
-// opening). The titlebar cell over it rides to `NAV_CHROME_FOLDED_W`,
-// keeping the traffic lights, the sidebar toggle and the bell, and
-// cross-fades as one colour from `paint::CHROME` to `paint::PLANE`
-// (`MOTION_NAV_BAND_MS`, CSS `ease`).
+// the rail (`NAV_FOLDED_W`) over `motion::RESIZE` (200ms) while its
+// content fades independently (`MOTION_NAV_FADE_MS`, CSS `ease`: 1 → 0
+// folding, 0 → 1 opening). The titlebar band over it says nothing, so it
+// has nothing to keep: folded, the traffic lights overhang the rail, and
+// on macOS the band crosses the board so they overhang the plane rather
+// than the top Pane (`titlebar::board_top`).
 
 /// 20px — one nav line, the pitch of every item in the column: a Thread, a
 /// Group, a member, a Project heading, the section headers.
@@ -2166,11 +2153,13 @@ pub const NAV_CELL: f32 = 2.0 * CH;
 pub const NAV_WORD_GAP: f32 = CH;
 /// 34ch — the text box of every row: the column less its inline padding.
 pub const NAV_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_PAD_X;
-/// A half row — under the Needs-you strip and between two Project
-/// sections (the prototype's `.half`).
+/// A half row — between two Project sections (the prototype's `.half`).
 pub const NAV_SECTION_GAP: f32 = HALF_ROW;
 /// The most cells a Project heading's branch takes before it truncates.
 pub const NAV_BRANCH_MAX_CH: usize = 16;
+/// The fewest cells a Thread row's title keeps before the facts and the
+/// word at its right give way (`nav::row_words`).
+pub const NAV_TITLE_MIN_CH: f32 = 16.0;
 /// 4px — a drop target that takes no layout of its own ("insert above this
 /// Group", "append after the last member"): an absolute hit band over the
 /// edge of the row it borders.
@@ -2179,26 +2168,9 @@ pub const NAV_DROP_BAND: f32 = SPACE_1;
 /// scrolls past this, so a hundred parked Threads never push the running
 /// tree out of sight.
 pub const NAV_PARKED_MAX_SHARE: f32 = 0.5;
-/// The column folded by cmd-B: nothing. The board takes the whole width;
-/// the titlebar cell keeps the window's doors (`nav::chrome_width`).
-pub const NAV_FOLDED_W: f32 = 0.0;
-/// Where the titlebar cell's doors may start: after the host traffic
-/// lights' reserve on macOS, one cell in elsewhere. The doors sit at the
-/// cell's right; the lead only keeps them clear of the lights.
-pub const NAV_CHROME_LEAD: f32 = if cfg!(target_os = "windows") {
-    NAV_PAD_X
-} else {
-    TRAFFIC_RESERVE
-};
-/// The titlebar cell's own doors: the sidebar toggle and the bell, and the
-/// Settings gear where Settings has no other visible door (not macOS,
-/// whose app menu lists it).
-pub const NAV_CHROME_DOORS: f32 = if cfg!(target_os = "macos") { 2.0 } else { 3.0 };
-/// 20ch (156px) — the folded titlebar cell, the prototype's collapsed
-/// `--tbw`: 14px, the lights, 2ch, a stretch, the toggle at 92.2–120.2,
-/// the bell at 120.2–148.2 and 1ch of air (`NAV_PAD_X`). The gear, where
-/// it shows, and a waiting CLI update each add a door.
-pub const NAV_CHROME_FOLDED_W: f32 = 20.0 * CH + (NAV_CHROME_DOORS - 2.0) * ICON_BUTTON;
+/// 6ch — the column folded by cmd-B: the rail, a cell of padding, a
+/// Thread's number in two cells, a space and its mark cell.
+pub const NAV_FOLDED_W: f32 = NAV_PAD_X + 3.0 * CH + NAV_CELL;
 /// Narrow windows fold the nav (rule 2.7.7) — shown, never saved — once the
 /// board beside the full column would be narrower than this, or a board
 /// cell narrower than the L2 floor (`INSTRUMENTS_WIDTH`). It unfolds only
@@ -2211,14 +2183,11 @@ pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
 /// `transition: background .08s`): quicker than the 150ms blend, because
 /// the pointer sweeps these lines constantly.
 pub const MOTION_NAV_HOVER_MS: u64 = 80;
-/// 100ms — a titlebar door's hover, ground and glyph (`.ib`'s `.1s`).
+/// 100ms — the sidebar toggle's hover, ground and glyph (`.ib`'s `.1s`).
 pub const MOTION_NAV_DOOR_MS: u64 = 100;
 /// 150ms — the column's content fading out as it folds and in as it
 /// opens, on CSS `ease`, apart from the width's 200ms ride (`.nav > *`).
 pub const MOTION_NAV_FADE_MS: u64 = 150;
-/// 200ms — the titlebar cell over the column cross-fading between
-/// `paint::CHROME` and `paint::PLANE`, on CSS `ease` (`.tbl`).
-pub const MOTION_NAV_BAND_MS: u64 = 200;
 // (end WP-G) — append above this line only
 
 // ======================================== motion

@@ -1,0 +1,1 @@
+{"id":"1","method":"thread.start","params":{"cwd":"/work/app","provider":"codex","env":{"HERDR_PROJECTS_CONFIG_DIR":"/config","HERDR_PROJECTS_DATA_DIR":"/data"},"launcher":["bwrap","--dev-bind","/","/","--ro-bind","/r","/r","--"]}}

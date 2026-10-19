@@ -595,6 +595,47 @@ impl Inline {
         }
     }
 
+    /// Ferrite: a wash under each occurrence of the enclosing view's find
+    /// needle (`TextFind`), one quad per wrapped line, over this inline's
+    /// slice of its source run (`root`), `offset` into the run.
+    fn paint_find(
+        &self,
+        text_layout: &TextLayout,
+        root: &Weak<Mutex<InlineState>>,
+        offset: usize,
+        window: &mut Window,
+        cx: &App,
+    ) {
+        let Some(view) = GlobalState::global(cx).text_view_state() else {
+            return;
+        };
+        let view = view.read(cx);
+        if view.find.is_none() {
+            return;
+        }
+        let source = if std::ptr::eq(root.as_ptr(), Arc::as_ptr(&self.state)) {
+            self.text.clone()
+        } else {
+            let Some(text) = root
+                .upgrade()
+                .and_then(|root| root.try_lock().ok().map(|root| root.text.clone()))
+            else {
+                return;
+            };
+            text
+        };
+        let line_height = text_layout.line_height();
+        super::find::paint_marks(
+            view,
+            root.as_ptr() as usize,
+            &source,
+            offset..offset + self.text.len(),
+            text_layout.bounds(),
+            |range| code_line_bounds(&self.text, text_layout, range, line_height),
+            window,
+        );
+    }
+
     /// Ferrite: each underline, one stroke per wrapped line, from its first
     /// glyph to the right edge of its last non-whitespace glyph, on the
     /// baseline offset gpui's own line painter uses.
@@ -861,6 +902,8 @@ impl Element for Inline {
         if let Some(wash) = self.code_wash {
             self.paint_code_wash(&text_layout, wash, window);
         }
+        // Ferrite: a find bar's occurrences, under the text.
+        self.paint_find(&text_layout, &source_root, source_offset, window, cx);
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
         let hover_only = GlobalState::global(cx)

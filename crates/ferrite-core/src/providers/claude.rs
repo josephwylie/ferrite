@@ -17,7 +17,7 @@ mod shell_output;
 mod suggestions;
 pub(super) mod wire;
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 use super::{FileSuggestion, SettingAck};
@@ -99,6 +100,15 @@ pub struct ClaudeConfig {
     /// level and the app's renderer. `None`, or a level of Off, offers
     /// nothing. Fixed for the Session: the CLI lists its tools once.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Ferrite's caller context for the agent (`api::caller_environment`):
+    /// set over whatever the CLI inherited, after the Thread's own
+    /// (`thread.start --env`).
+    pub env: Vec<(String, std::ffi::OsString)>,
+    /// The program the CLI is run through, and its arguments
+    /// (`thread.start --launcher`); empty runs it directly.
+    pub launcher: Vec<String>,
+    /// Extra arguments, after Ferrite's own (`thread.start --args`).
+    pub args: Vec<String>,
 }
 
 impl Default for ClaudeConfig {
@@ -114,6 +124,9 @@ impl Default for ClaudeConfig {
             permission_mode: None,
             resume: None,
             visuals: None,
+            env: Vec::new(),
+            launcher: Vec::new(),
+            args: Vec::new(),
         }
     }
 }
@@ -134,6 +147,11 @@ pub enum ClaudeSpawnError {
     VersionCheckFailed {
         detail: String,
     },
+    /// The CLI exited before it was up, and why, as its stderr said
+    /// ("Session ID … is already in use").
+    Exited {
+        reason: String,
+    },
     Io(io::Error),
 }
 
@@ -153,6 +171,7 @@ impl std::fmt::Display for ClaudeSpawnError {
             ClaudeSpawnError::VersionCheckFailed { detail } => {
                 write!(f, "claude CLI version check failed: {detail}")
             }
+            ClaudeSpawnError::Exited { reason } => write!(f, "{reason}"),
             ClaudeSpawnError::Io(e) => write!(f, "io error spawning claude CLI: {e}"),
         }
     }
@@ -220,8 +239,11 @@ impl ClaudeSession {
         let program = super::spawnable_program(&config.program);
         check_version(&program)?;
 
-        let mut command = Command::new(&program);
-        command.no_console_window();
+        let mut command = super::launched(&config.launcher, &program);
+        command
+            .no_console_window()
+            .agent_environment()
+            .envs(config.env.iter().cloned());
         command.args([
             "-p",
             "--input-format",
@@ -283,6 +305,7 @@ impl ClaudeSession {
             // permission mode asks for it (verified on 2.1.292 in `default`).
             command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
         }
+        command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -323,7 +346,7 @@ impl ClaudeSession {
             stdout,
             sender,
             Arc::clone(&child),
-            stderr_tail,
+            Arc::clone(&stderr_tail),
             setting_reply.clone(),
             control_replies.clone(),
             Arc::clone(&stdin),
@@ -358,7 +381,13 @@ impl ClaudeSession {
         // back a Session so that reason reaches the Pane.
         let id = session.take_request_id();
         debug_assert_eq!(id, HANDSHAKE_REQUEST_ID);
-        let mut initialize = serde_json::json!({"subtype": "initialize"});
+        // `perTaskStopAffordance` says this host stops a background task by
+        // `stop_task` (the shelf's ×, a Subagent tab's escape). Without it the
+        // CLI fails closed: an interrupt also kills every background agent and
+        // workflow (2.1.299, `per_task_stop_sparing`, confirmed by capture).
+        // With it, an interrupt aborts only Main's turn.
+        let mut initialize =
+            serde_json::json!({"subtype": "initialize", "perTaskStopAffordance": true});
         if visuals {
             // The in-band server (`mcp`): the CLI tunnels its MCP traffic
             // back over this pipe, starting before it answers this request.
@@ -383,7 +412,7 @@ impl ClaudeSession {
                         io::Error::other(format!("effort change was not acknowledged: {e}"))
                     })?
                 })
-                .map_err(ClaudeSpawnError::Io)?;
+                .map_err(|error| exited_at_start(&session.child, &stderr_tail, error))?;
         }
         Ok(session)
     }
@@ -597,7 +626,17 @@ impl ClaudeSession {
         }))
     }
 
-    /// Interrupt the running turn over the stdio control protocol.
+    /// Stop one Subagent and nothing else: `stop_task` with its task id.
+    pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        let id = lock(&self.decoder).task_of(key).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "this subagent has no task to stop")
+        })?;
+        self.control(SessionControl::StopTask { id })
+    }
+
+    /// Interrupt Main's running turn over the stdio control protocol.
+    /// Background agents, workflows and tasks survive it: the handshake
+    /// declared `perTaskStopAffordance`.
     pub fn interrupt(&mut self) -> io::Result<()> {
         let request_id = self.take_request_id();
         self.write_line(&serde_json::json!({
@@ -987,6 +1026,31 @@ fn drain_stderr(stderr: ChildStderr, tail: Arc<Mutex<StderrTail>>) {
 }
 
 fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> SessionEvent {
+    SessionEvent::Closed {
+        reason: exit_reason(child, stderr_tail),
+    }
+}
+
+/// A CLI that exited while starting says why on stderr: that, rather than
+/// the broken pipe or the silence its exit left behind.
+fn exited_at_start(
+    child: &Mutex<Child>,
+    stderr_tail: &Mutex<StderrTail>,
+    error: io::Error,
+) -> ClaudeSpawnError {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if matches!(lock(child).try_wait(), Ok(Some(_))) {
+            return ClaudeSpawnError::Exited {
+                reason: exit_reason(child, stderr_tail),
+            };
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    ClaudeSpawnError::Io(error)
+}
+
+fn exit_reason(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> String {
     let status = reap(child);
     let mut reason = match &status {
         Ok(status) => format!("claude CLI exited: {status}"),
@@ -999,7 +1063,7 @@ fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> Sessio
             reason.push_str(&lines.join("\n"));
         }
     }
-    SessionEvent::Closed { reason }
+    reason
 }
 
 /// The drain thread reaches EOF just after the child exits; wait for it rather
@@ -1050,6 +1114,7 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     let output = Command::new(program)
         .arg("--version")
         .no_console_window()
+        .agent_environment()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
@@ -1074,8 +1139,8 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
         });
     }
     if version >= CLAUDE_CLI_TESTED_BELOW {
-        eprintln!(
-            "ferrite: claude CLI {found} is newer than Ferrite is tested against \
+        crate::log!(
+            "claude CLI {found} is newer than Ferrite is tested against \
              (below {TESTED_BELOW_DISPLAY}); running it anyway"
         );
     }

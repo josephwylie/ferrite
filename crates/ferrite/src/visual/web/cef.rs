@@ -111,7 +111,10 @@ pub fn boot() -> Result<Boot, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
 
     let global = Arc::new(Global::default());
-    global.trace.store(std::env::var_os("FERRITE_CEF_TRACE").is_some(), Ordering::SeqCst);
+    global.trace.store(
+        std::env::var_os("FERRITE_CEF_TRACE").is_some(),
+        Ordering::SeqCst,
+    );
 
     if is_subprocess {
         let helper = platform::Helper::enter(&exe)?;
@@ -135,14 +138,21 @@ impl Dormant {
         let Dormant { global, library } = self;
         let args = Args::new();
         let mut app = handlers::InlineApp::new(global.clone());
-        let code = execute_process(Some(args.as_main_args()), Some(&mut app), std::ptr::null_mut());
+        let code = execute_process(
+            Some(args.as_main_args()),
+            Some(&mut app),
+            std::ptr::null_mut(),
+        );
         if code >= 0 {
-            return Err(format!("cef_execute_process ran as a helper ({code}) in the browser process"));
+            return Err(format!(
+                "cef_execute_process ran as a helper ({code}) in the browser process"
+            ));
         }
 
         let profile = profile_dir();
         // FERRITE_CEF_NO_SANDBOX=1 is the escape hatch if helpers won't start.
-        let no_sandbox = !platform::SANDBOXED || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some();
+        let no_sandbox =
+            !platform::SANDBOXED || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some();
         let settings = Settings {
             no_sandbox: no_sandbox as i32,
             windowless_rendering_enabled: 1,
@@ -156,7 +166,13 @@ impl Dormant {
             log_severity: cef::LogSeverity::WARNING,
             ..Default::default()
         };
-        if initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()) != 1 {
+        if initialize(
+            Some(args.as_main_args()),
+            Some(&settings),
+            Some(&mut app),
+            std::ptr::null_mut(),
+        ) != 1
+        {
             return Err("cef_initialize failed".into());
         }
 
@@ -181,10 +197,17 @@ fn profile_dir() -> PathBuf {
     if let Ok(entries) = std::fs::read_dir(&base) {
         for entry in entries.flatten() {
             let name = entry.file_name();
-            let Some(pid) = name.to_str().and_then(|n| n.strip_prefix("ferrite-cef-profile-")) else {
+            let Some(pid) = name
+                .to_str()
+                .and_then(|n| n.strip_prefix("ferrite-cef-profile-"))
+            else {
                 continue;
             };
-            if pid.parse::<u32>().map(|pid| !platform::process_alive(pid)).unwrap_or(false) {
+            if pid
+                .parse::<u32>()
+                .map(|pid| !platform::process_alive(pid))
+                .unwrap_or(false)
+            {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }
@@ -344,7 +367,10 @@ impl Engine for CefEngine {
         let id = engine.next_id.get();
         engine.next_id.set(id + 1);
 
-        let doc = Arc::new(PageDoc { url: format!("{SCHEME}://page/{id}"), page: Mutex::new(page) });
+        let doc = Arc::new(PageDoc {
+            url: format!("{SCHEME}://page/{id}"),
+            page: Mutex::new(page),
+        });
         let state = Arc::new(ViewState {
             geometry: Mutex::new(Geometry {
                 width: viewport.width.max(1),
@@ -408,7 +434,9 @@ impl Engine for CefEngine {
         engine.global.due_ms.0.store(u64::MAX, Ordering::SeqCst);
         let before_work = Instant::now();
         do_message_loop_work();
-        if engine.global.trace.load(Ordering::SeqCst) && started.elapsed() > Duration::from_millis(4) {
+        if engine.global.trace.load(Ordering::SeqCst)
+            && started.elapsed() > Duration::from_millis(4)
+        {
             eprintln!(
                 "ferrite visuals: pump {:.1}ms (cef work {:.1}ms)",
                 started.elapsed().as_secs_f64() * 1e3,
@@ -429,9 +457,14 @@ impl Engine for CefEngine {
             && engine.global.live_browsers.load(Ordering::SeqCst) == 0
             && engine.global.context_ready.load(Ordering::SeqCst);
         if due == u64::MAX {
-            return if idle { IDLE_PUMP_DELAY } else { MAX_PUMP_DELAY };
+            return if idle {
+                IDLE_PUMP_DELAY
+            } else {
+                MAX_PUMP_DELAY
+            };
         }
-        Duration::from_millis(due.saturating_sub(now_ms())).clamp(Duration::from_millis(1), MAX_PUMP_DELAY)
+        Duration::from_millis(due.saturating_sub(now_ms()))
+            .clamp(Duration::from_millis(1), MAX_PUMP_DELAY)
     }
 }
 
@@ -510,7 +543,12 @@ impl ViewInner {
         self.state.loaded.store(false, Ordering::SeqCst);
         // The reloaded page has the latest theme built in.
         self.state.restyle_unpainted.store(false, Ordering::SeqCst);
-        let mut client = handlers::client(self.state.clone(), self.doc.clone(), self.global.clone(), generation);
+        let mut client = handlers::client(
+            self.state.clone(),
+            self.doc.clone(),
+            self.global.clone(),
+            generation,
+        );
         let window_info = WindowInfo {
             windowless_rendering_enabled: 1,
             // CPU OnPaint path: GPUI's surface() can't take BGRA IOSurfaces.
@@ -534,7 +572,7 @@ impl ViewInner {
             None,
         );
         if browser.is_none() {
-            eprintln!("ferrite visuals: cef_browser_host_create_browser_sync returned null");
+            ferrite_core::log!("visuals: cef_browser_host_create_browser_sync returned null");
         }
         *self.browser.borrow_mut() = browser;
         // The browser loads the document as it is now.
@@ -543,7 +581,11 @@ impl ViewInner {
         if self.global.trace.load(Ordering::SeqCst) {
             eprintln!(
                 "ferrite visuals: {} {} in {:.1}ms",
-                if self.released.get() { "reopened" } else { "opened" },
+                if self.released.get() {
+                    "reopened"
+                } else {
+                    "opened"
+                },
                 self.doc.url,
                 started.elapsed().as_secs_f64() * 1e3
             );
@@ -552,8 +594,13 @@ impl ViewInner {
     }
 
     fn finish_deferred_hide(&self) {
-        let waited = self.hidden_since.get().is_some_and(|t| t.elapsed() >= HIDE_DEFER_MAX);
-        if self.hide_deferred.get() && (waited || !self.state.restyle_unpainted.load(Ordering::SeqCst)) {
+        let waited = self
+            .hidden_since
+            .get()
+            .is_some_and(|t| t.elapsed() >= HIDE_DEFER_MAX);
+        if self.hide_deferred.get()
+            && (waited || !self.state.restyle_unpainted.load(Ordering::SeqCst))
+        {
             self.hide_now();
         }
     }
@@ -569,7 +616,10 @@ impl ViewInner {
     /// Close the browser of a view that has been hidden for [`RELEASE_AFTER`].
     /// Everything the host gave the view stays; in-page state goes.
     fn release_if_hidden_long_enough(&self) {
-        let due = self.hidden_since.get().is_some_and(|t| t.elapsed() >= RELEASE_AFTER);
+        let due = self
+            .hidden_since
+            .get()
+            .is_some_and(|t| t.elapsed() >= RELEASE_AFTER);
         if !due || self.browser.borrow().is_none() {
             return;
         }
@@ -577,7 +627,12 @@ impl ViewInner {
         // Retire the generation first: anything the closing browser still
         // sends is ignored.
         self.state.generation.fetch_add(1, Ordering::SeqCst);
-        if let Some(host) = self.browser.borrow_mut().take().and_then(|browser| browser.host()) {
+        if let Some(host) = self
+            .browser
+            .borrow_mut()
+            .take()
+            .and_then(|browser| browser.host())
+        {
             host.close_browser(1);
         }
         self.released.set(true);
@@ -601,7 +656,8 @@ impl ViewInner {
         let age = self.created_at.get().map(|t| t.elapsed());
         // A page that never reports its height (a script stuck in a loop)
         // still gives way to new HTML, after a while.
-        let settled = self.state.loaded.load(Ordering::SeqCst) || age.is_some_and(|age| age >= STUCK_LOAD);
+        let settled =
+            self.state.loaded.load(Ordering::SeqCst) || age.is_some_and(|age| age >= STUCK_LOAD);
         let due = self.html_pending.get()
             && self.visible.get()
             && settled
@@ -610,7 +666,12 @@ impl ViewInner {
             return;
         }
         self.state.generation.fetch_add(1, Ordering::SeqCst);
-        if let Some(host) = self.browser.borrow_mut().take().and_then(|browser| browser.host()) {
+        if let Some(host) = self
+            .browser
+            .borrow_mut()
+            .take()
+            .and_then(|browser| browser.host())
+        {
             host.close_browser(1);
         }
         self.focused.set(false);
@@ -618,7 +679,10 @@ impl ViewInner {
     }
 
     fn host(&self) -> Option<cef::BrowserHost> {
-        self.browser.borrow().as_ref().and_then(|browser| browser.host())
+        self.browser
+            .borrow()
+            .as_ref()
+            .and_then(|browser| browser.host())
     }
 }
 
@@ -664,24 +728,54 @@ impl View for CefView {
                 let (x, y) = view.pointer.get();
                 host.send_mouse_move_event(Some(&input::mouse_event(x, y, view.pressed.get())), 1);
             }
-            Input::Down { x, y, button, clicks, modifiers } => {
+            Input::Down {
+                x,
+                y,
+                button,
+                clicks,
+                modifiers,
+            } => {
                 if !view.focused.replace(true) {
                     // Keys only reach a focused browser. There is no blur in
                     // the seam, so focus stays once given.
                     host.set_focus(1);
                 }
-                view.pressed.set(view.pressed.get() | input::button_flag(button));
+                view.pressed
+                    .set(view.pressed.get() | input::button_flag(button));
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
                 let event = input::mouse_event(x, y, flags);
-                host.send_mouse_click_event(Some(&event), input::button_type(button), 0, clicks.max(1) as i32);
+                host.send_mouse_click_event(
+                    Some(&event),
+                    input::button_type(button),
+                    0,
+                    clicks.max(1) as i32,
+                );
             }
-            Input::Up { x, y, button, clicks, modifiers } => {
-                view.pressed.set(view.pressed.get() & !input::button_flag(button));
+            Input::Up {
+                x,
+                y,
+                button,
+                clicks,
+                modifiers,
+            } => {
+                view.pressed
+                    .set(view.pressed.get() & !input::button_flag(button));
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
                 let event = input::mouse_event(x, y, flags);
-                host.send_mouse_click_event(Some(&event), input::button_type(button), 1, clicks.max(1) as i32);
+                host.send_mouse_click_event(
+                    Some(&event),
+                    input::button_type(button),
+                    1,
+                    clicks.max(1) as i32,
+                );
             }
-            Input::Wheel { x, y, dx, dy, modifiers } => {
+            Input::Wheel {
+                x,
+                y,
+                dx,
+                dy,
+                modifiers,
+            } => {
                 // Same sign convention as GPUI's ScrollDelta (positive = toward
                 // the top/left), in logical pixels.
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
@@ -691,7 +785,12 @@ impl View for CefView {
                     dy.round() as i32,
                 );
             }
-            Input::Key { key, text, down, modifiers } => {
+            Input::Key {
+                key,
+                text,
+                down,
+                modifiers,
+            } => {
                 for event in input::key_events(&key, text.as_deref(), down, modifiers) {
                     host.send_key_event(Some(&event));
                 }
@@ -702,11 +801,19 @@ impl View for CefView {
     fn set_theme(&self, theme_css: &str) {
         let view = &self.0;
         view.doc.page.lock().unwrap().theme_css = theme_css.to_owned();
-        let frame = view.browser.borrow().as_ref().and_then(|browser| browser.main_frame());
+        let frame = view
+            .browser
+            .borrow()
+            .as_ref()
+            .and_then(|browser| browser.main_frame());
         if let Some(frame) = frame {
             view.state.restyle_unpainted.store(true, Ordering::SeqCst);
             let script = document::theme_script(theme_css);
-            frame.execute_java_script(Some(&script.as_str().into()), Some(&view.doc.url.as_str().into()), 0);
+            frame.execute_java_script(
+                Some(&script.as_str().into()),
+                Some(&view.doc.url.as_str().into()),
+                0,
+            );
         }
     }
 

@@ -75,6 +75,91 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
     );
 }
 
+#[gpui::test]
+fn async_question_sends_picks_and_typed_answers_while_work_continues(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("async-question-send", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
+    for typed in [false, true] {
+        let SessionEvent::DecisionRequested { mut decision } = question(if typed {
+            "typed-answer"
+        } else {
+            "picked-answer"
+        }) else {
+            unreachable!()
+        };
+        decision.delivery = ferrite_core::DecisionDelivery::Async;
+        decision.tool_name = "request_user_input_async".into();
+        let DecisionKind::Questions(questions) = &mut decision.kind else {
+            unreachable!()
+        };
+        questions[0].question = "With the updated window open, can you type into the previously broken prompt and see pasted text normally?".into();
+        questions[0].header.clear();
+        questions[0].options[0].label = "Yes, typing and paste are visible".into();
+        questions[0].options[1].label = "The prompt is still broken".into();
+        for option in &mut questions[0].options {
+            option.description.clear();
+        }
+        fake.streams.borrow()[0]
+            .send(SessionEvent::DecisionRequested { decision })
+            .unwrap();
+        tick(cx);
+        let serial = view.read_with(cx, |v, _| {
+            v.cockpit
+                .thread(v.panes[0].thread().unwrap())
+                .unwrap()
+                .activity()
+                .pending_decisions()
+                .last()
+                .unwrap()
+                .handle
+                .serial
+        });
+        if typed {
+            cx.simulate_keystrokes("3");
+            cx.simulate_input("Typing and paste work now");
+        } else {
+            cx.simulate_keystrokes("1");
+        }
+        cx.run_until_parked();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "Still checking the input controls.\n".repeat(50),
+            })
+            .unwrap();
+        tick(cx);
+        let submit = bounds(cx, format!("request-submit-1-{serial}"));
+        cx.simulate_click(submit.center(), gpui::Modifiers::none());
+        tick(cx);
+        let delivered = fake.answered.borrow();
+        assert_eq!(
+            delivered.len(),
+            usize::from(typed) + 1,
+            "Send must deliver the answer while the agent works"
+        );
+        let DecisionAnswer::Questions { answers } = &delivered.last().unwrap().1 else {
+            panic!("expected a question answer");
+        };
+        if typed {
+            assert_eq!(
+                answers[0].other.as_deref(),
+                Some("Typing and paste work now")
+            );
+        } else {
+            assert_eq!(answers[0].picks, [0]);
+        }
+        let id = delivered.last().unwrap().0.clone();
+        drop(delivered);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(
+                ferrite_core::activity::ActivityEvent::DecisionReply { id, error: None },
+            ))
+            .unwrap();
+        tick(cx);
+    }
+}
+
 /// Regression: the live Claude question that crashed Ferrite twice on Windows.
 /// Keep the real labels and descriptions here: the contract is that a provider
 /// can present this ordinary two-choice form without overflowing the UI thread.

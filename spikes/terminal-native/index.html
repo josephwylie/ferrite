@@ -59,18 +59,18 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .shot #stage{top:0}
 
 /* ------------------------------------------------------------------ window */
-.win{width:1440px;height:900px;background:var(--bg);display:grid;grid-template-rows:32px minmax(0,1fr) calc(var(--lh) + 4px);
+.win{width:1440px;height:900px;background:var(--bg);display:grid;grid-template-rows:var(--tbh) minmax(0,1fr) calc(var(--lh) + 4px);
   position:relative;overflow:hidden;border-radius:10px;box-shadow:0 0 0 1px var(--frame),0 30px 80px rgba(0,0,0,.6)}
 .shot .win{border-radius:0;box-shadow:none}
-.win{--navw:36ch;--tbw:36ch}
-.win.collapsed{--navw:0px;--tbw:20ch}
-.tb{display:grid;grid-template-columns:var(--tbw) 1px minmax(0,1fr);align-items:stretch;background:var(--bg);white-space:pre;transition:grid-template-columns .2s ease}
-.dark .tb{border-bottom:1px solid var(--line)}
-.tbl{display:flex;align-items:center;background:var(--nav);padding:0 1ch 0 14px;min-width:0;overflow:hidden;transition:background .2s ease}
-.collapsed .tbl{background:var(--bg)}
+.win{--navw:36ch;--tbw:36ch;--tbh:32px}
+.win.collapsed{--navw:0px;--tbw:0px;--tbh:32px}
+/* the titlebar says nothing (ADR 0014): the lights' row and the drag strip,
+   across the whole window, independent of whether the nav is folded */
+.tb{position:relative;overflow:hidden;display:grid;grid-template-columns:var(--tbw) 1px minmax(0,1fr);align-items:stretch;background:var(--bg);white-space:pre;transition:grid-template-columns .2s ease}
+.dark .collapsed .tb{border-bottom:1px solid var(--line)}
+.tbl{background:var(--nav);min-width:0}
 .collapsed .tb .vline,.collapsed .main > .vline{background:var(--bg)}
-.tbl .sp{flex:1}
-.lights{display:flex;gap:8px;align-items:center;flex:none;margin-right:2ch}
+.lights{position:absolute;left:14px;top:0;height:32px;z-index:1;display:flex;gap:8px;align-items:center}
 .ib{flex:none;width:28px;height:24px;display:grid;place-items:center;color:var(--dim);position:relative;transition:background .1s,color .1s}
 .ib:hover,.ib.on{background:var(--hover);color:var(--fg)}
 .ib svg{width:15px;height:15px}
@@ -78,16 +78,14 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}
 .lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
 .tb .vline{height:100%}
-.tb .title{display:flex;align-items:center;justify-content:space-between;padding:0 2ch;color:var(--dim);overflow:hidden}
-.tb .title .hi{color:var(--hi);font-weight:500}
 .vline{background:var(--vline)}
 .main{display:grid;grid-template-columns:var(--navw) 1px minmax(0,1fr);min-height:0;transition:grid-template-columns .2s ease}
 
 /* --------------------------------------------------------------------- nav */
-.nav{background:var(--nav);overflow:hidden;padding:calc(var(--lh)/2) 0;display:flex;flex-direction:column;min-height:0;min-width:0}
+.nav{background:var(--nav);overflow:hidden;padding:calc(var(--lh)/2) 0 calc(var(--lh)/2);display:flex;flex-direction:column;min-height:0;min-width:0}
 .nav > *{min-width:36ch;transition:opacity .15s ease}
 .collapsed .nav > *{opacity:0}
-#notes{width:76ch;left:8px;top:30px}
+#notes{width:76ch;left:8px;bottom:calc(var(--lh) + 8px)}
 .nt{display:grid;grid-template-columns:2ch 10ch minmax(0,1fr) 5ch;height:var(--lh);align-items:center;padding:0 1ch;white-space:pre;cursor:default}
 .nt > :nth-child(3){overflow:hidden;text-overflow:ellipsis}
 .nt > :last-child{text-align:right;color:var(--dim)}
@@ -105,12 +103,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .nrow .s{margin-left:1ch;color:var(--dim)}
 .nrow.head{color:var(--dim)}
 .nrow.head .t{color:var(--dim)}
-.nrow.proj .t{color:var(--hi);font-weight:600}
+.nrow.proj .t{color:var(--dim)}
 .nav .fill{flex:1}
 .dot{flex:none;width:2ch}
 .d-run{color:var(--green)}
 .dot.d-run{font-weight:600}
-.d-attn{color:var(--yellow)} .d-fail{color:var(--red)} .d-done{color:var(--dim)} .d-park{color:var(--faint)}
+.d-attn{color:var(--yellow)} .d-fail{color:var(--red)} .d-done{color:var(--cyan)} .d-park{color:var(--faint)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 svg.logo{width:11px;height:11px;flex:none;margin-left:1ch;vertical-align:-1px}
 svg.logo.claude{color:var(--claude)} svg.logo.codex{color:var(--codex)}
@@ -122,6 +120,9 @@ svg.logo.claude{color:var(--claude)} svg.logo.codex{color:var(--codex)}
 .sb .tab.cur{color:var(--hi);background:var(--band2)}
 .sb .tab:hover,.sb .seg:hover{color:var(--fg);background:var(--hover)}
 .sb .sp{flex:1}
+.sb > .ib{padding:0;width:28px;height:auto}
+.sb > .status{padding:0;min-width:0;overflow:hidden}
+.sb > .status:not(.on){display:none}
 .sb .clock{color:var(--fg)}
 
 /* ----------------------------------------------------------------- cockpit */
@@ -251,7 +252,7 @@ table.t .num{text-align:right}
 .opt.sel .txt{color:var(--hi)}
 
 /* --------------------------------------------------------------- composer */
-.comp{flex:none;padding:0 3ch 0 2ch}
+.comp{flex:none;padding:0 3ch 6px 2ch}
 .comp .rule{height:1px;background:var(--rule);margin:0 -3ch 0 -2ch}
 .comp .in{display:grid;grid-template-columns:2ch minmax(0,1fr);padding:6px 3ch 6px 2ch;margin:0 -3ch 0 -2ch;background:var(--inband)}
 .comp .in .g{color:var(--accent);font-weight:600}
@@ -259,12 +260,11 @@ table.t .num{text-align:right}
 @keyframes blink{0%,45%{opacity:1}55%,95%{opacity:.12}100%{opacity:1}}
 .pane:not(.focus):not(.solo) .caret{animation:none;background:transparent;box-shadow:inset 0 0 0 1px var(--faint)}
 .ph-text{color:var(--dim)}
-.status{display:flex;white-space:pre;color:var(--dim);height:var(--lh);align-items:center;margin:2px 0 6px}
+/* the focused Pane's status line rides the bottom bar (ADR 0014) */
+.status{display:flex;white-space:pre;color:var(--dim);align-items:center}
 .status .seg{cursor:pointer;padding:0 1ch;transition:background .1s,color .1s}
-.status .seg:first-child{margin-left:-1ch}
 .status .seg:hover{background:var(--hover);color:var(--fg)}
 .status .mode{color:var(--magenta)}
-.status .sp{flex:1}
 .meter{display:inline-block;width:8ch;height:4px;background:var(--line2);vertical-align:middle;position:relative;margin:0 1ch;border-radius:1px;overflow:hidden}
 .meter > i{position:absolute;left:0;top:0;bottom:0;background:var(--green)}
 .status svg.logo{margin:0 1ch 0 0}
@@ -351,14 +351,11 @@ table.t .num{text-align:right}
    spinner), each fact shows in one place, unfocused Panes carry no
    composer, and blocks lose the boxes around them. Q toggles it. */
 .clean .g-run{animation:none}
-.clean .pane:not(.focus):not(.solo) .comp .status{display:none}
-.clean .pane:not(.focus):not(.solo) .comp{padding-bottom:6px}
 .clean .pane:not(.focus) .shim{animation:none}
 .clean .ph .n{display:none}
 .clean .nav svg.logo{display:none}
 .clean #nav-hints{display:none}
 .clean .sb .count{display:none}
-.clean .tb .warn,.clean .tb .bad{color:inherit}
 .clean .mm{opacity:0;transition:opacity .15s}
 .clean .pane:hover .mm{opacity:1}
 .clean .diff{border-color:transparent}
@@ -392,7 +389,7 @@ table.t .num{text-align:right}
 .glass .win{background:transparent;-webkit-backdrop-filter:blur(60px) saturate(1.35);backdrop-filter:blur(60px) saturate(1.35);
   box-shadow:0 0 0 1px var(--frame),0 30px 80px rgba(0,0,0,.45)}
 .glass .tb{background:transparent}
-.glass .tb .title{background:var(--bg)}
+.glass .tb > :last-child{background:var(--bg)}
 .glass #v-empty{background:var(--bg)}
 .glass .prompt{background:linear-gradient(rgba(255,255,255,.07),rgba(255,255,255,.07)),var(--bg);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px)}
 .glass .float{-webkit-backdrop-filter:blur(30px) saturate(1.6);backdrop-filter:blur(30px) saturate(1.6)}
@@ -446,35 +443,27 @@ table.t .num{text-align:right}
 
   <!-- ============================================================ titlebar -->
   <div class="tb">
-    <div class="tbl">
-      <div class="lights"><i></i><i></i><i></i></div>
-      <span class="sp"></span>
-      <button class="ib" id="b-side" title="Toggle sidebar ⌘B"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="15" height="14" rx="2.5"/><path d="M7.5 3v14"/></svg></button>
-      <button class="ib" id="b-bell" title="Notifications"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.33a4 4 0 0 1 8 0c0 4.67 2 6 2 6H2s2-1.33 2-6"/><path d="M6.87 14a1.3 1.3 0 0 0 2.26 0"/></svg><span class="badge">2</span></button>
-    </div>
+    <div class="tbl"></div>
     <div class="vline"></div>
-    <div class="title" id="title"></div>
+    <div></div>
   </div>
+  <div class="lights"><i></i><i></i><i></i></div>
 
   <div class="main">
     <!-- ========================================================== nav -->
     <div class="nav" id="nav">
-      <div class="nrow head"><span class="t">needs you 2</span><span class="s">⌘D</span></div>
-      <div class="nrow" data-for="group"><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s warn">approval</span><svg class="logo codex"><use href="#codex"/></svg></div>
-      <div class="nrow"><span class="dot d-attn">●</span><span class="t">Flaky provider test</span><span class="s warn">question</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="half"></div>
-      <div class="nrow proj"><span class="tr">▾ </span><span class="t">ferrite</span><span class="s">dev</span></div>
-      <div class="nrow" id="n-solo"><span class="cur"></span><span class="dot d-done">●</span><span class="t">Nav rows jitter on stream start</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow" id="n-group"><span class="cur"></span><span class="tr">▾ </span><span class="t">Perf sweep</span><span class="s">4</span></div>
+      <div class="nrow proj"><span class="tr">▾ </span><span class="dot d-attn">●</span><span class="t">ferrite</span><span class="s">dev</span></div>
+      <div class="nrow" id="n-solo"><span class="cur"></span><span class="dot d-done">✓</span><span class="t">Nav rows jitter on stream start</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow" id="n-group"><span class="cur"></span><span class="tr">▾ </span><span class="dot d-attn">●</span><span class="t">Perf sweep</span><span class="s">4</span></div>
       <div class="nrow"><span class="tr">  ├ </span><span class="dot d-run">●</span><span class="t">Perf: layout cache</span><span class="s">1m04s</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s warn">needs you</span><svg class="logo codex"><use href="#codex"/></svg></div>
-      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-done">●</span><span class="t">Theme retune</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
+      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-attn">●</span><span class="t">Close stale issues</span><span class="s">approval</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="nrow"><span class="tr">  ├ </span><span class="dot d-done">✓</span><span class="t">Theme retune</span><span class="s">done</span><svg class="logo claude"><use href="#claude"/></svg></div>
       <div class="nrow"><span class="tr">  └ </span><span class="dot d-fail">●</span><span class="t">Fold regression</span><span class="s bad">failing 2</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow" id="n-wall"><span class="cur"></span><span class="tr">▸ </span><span class="t">Everything</span><span class="s">9</span></div>
+      <div class="nrow" id="n-wall"><span class="cur"></span><span class="tr">▸ </span><span class="dot d-attn">●</span><span class="t">Everything</span><span class="s">9</span></div>
       <div class="half"></div>
-      <div class="nrow proj"><span class="tr">▾ </span><span class="t">zeron</span><span class="s">main</span></div>
+      <div class="nrow proj"><span class="tr">▾ </span><span class="dot d-done">✓</span><span class="t">zeron</span><span class="s">main</span></div>
       <div class="nrow"><span class="cur"></span><span class="dot d-run">●</span><span class="t">Port onboarding flow</span><span class="s">12s</span><svg class="logo claude"><use href="#claude"/></svg></div>
-      <div class="nrow"><span class="cur"></span><span class="dot d-done">●</span><span class="t">Bump deps</span><span class="s">done</span><svg class="logo codex"><use href="#codex"/></svg></div>
+      <div class="nrow"><span class="cur"></span><span class="dot d-done">✓</span><span class="t">Bump deps</span><span class="s">done</span><svg class="logo codex"><use href="#codex"/></svg></div>
       <div class="nrow"><span class="cur"></span><span class="dot d-run">●</span><span class="t">Docs: ADR 0008</span><span class="s">3s</span><svg class="logo codex"><use href="#codex"/></svg></div>
       <div class="fill"></div>
       <div class="nrow head"><span class="tr">▸ </span><span class="t">parked 3</span></div>
@@ -492,14 +481,7 @@ table.t .num{text-align:right}
             <div class="scroll" id="solo-scroll">
               <div class="tx">
 
-                <div class="banner" style="margin-bottom:var(--lh);width:fit-content;padding-right:3ch" data-gpui="1">
-                  <svg viewBox="280 30 700 1130"><path fill="url(#steel)" stroke="url(#steel)" stroke-width="26" stroke-linejoin="round" d="M628 50 950 572 901 658 469 307Z"/><path fill="url(#steel)" stroke="url(#steel)" stroke-width="26" stroke-linejoin="round" d="M437 363 305 568 619 1139 806 834 751 767Z"/></svg>
-                  <div>
-                    <div class="b">Nav rows jitter on stream start</div>
-                    <div class="dim">claude · opus 5.5 (1M) · medium · <span class="path">~/ferrite</span> on dev</div>
-                    <div class="dim">started 7:18 pm · 2 turns · 41s working</div>
-                  </div>
-                </div>
+                <div class="dim" style="margin-bottom:var(--lh)" data-gpui="1"><span class="path">~/ferrite</span> on dev · started 7:18 pm</div>
 
                 <!-- ============ turn 1 -->
                 <div class="turn" data-mark="prompt">
@@ -603,16 +585,8 @@ row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary).<
           </div>
           <div class="comp">
             <div class="rule"></div>
-            <div class="in"><span class="g">❯</span><span><span class="caret" data-gpui="11"></span><span class="ph-text"> Steer this thread · / for commands · drop or paste images</span></span></div>
+            <div class="in"><span class="g">❯</span><span><span class="caret" data-gpui="11"></span><span class="ph-text"> Steer this thread</span></span></div>
             <div class="rule"></div>
-            <div class="status" data-gpui="9">
-              <span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span>
-              <span class="seg" id="model-seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5 (1M) · medium</span><span class="faint">·</span>
-              <span class="seg">ctx<span class="meter" data-gpui="8"><i style="width:32%"></i></span>32%</span><span class="faint">·</span>
-              <span class="seg">1 file <span class="add">+9</span> <span class="del">−4</span></span>
-              <span class="sp"></span>
-              <span class="seg">⇧⇥ mode · ? shortcuts</span>
-            </div>
           </div>
         </div>
       </div>
@@ -649,9 +623,8 @@ row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary).<
             <div class="comp">
               <div class="r" style="margin-bottom:6px"><span class="g spin">✶</span><span><span class="shim" data-gpui="11">Reticulating…</span> <span class="dim">(<span class="secs" data-s="64">1m04s</span> · ↑ 4.1k tokens · esc to interrupt)</span></span></div>
               <div class="rule"></div>
-              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> queue a follow-up · ⏎ sends when the turn ends</span></span></div>
+              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> Queue a follow-up</span></span></div>
               <div class="rule"></div>
-              <div class="status"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:61%;background:var(--yellow)"></i></span>61%</span></div>
             </div>
           </div>
 
@@ -683,9 +656,8 @@ row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary).<
             </div></div><div class="mm" data-pos></div></div>
             <div class="comp">
               <div class="rule"></div>
-              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> answer above, or steer</span></span></div>
+              <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> Answer above</span></span></div>
               <div class="rule"></div>
-              <div class="status"><span class="seg mode">⏵ on request</span><span class="faint">·</span><span class="seg"><svg class="logo codex"><use href="#codex"/></svg>gpt-6 astra · medium</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:9%"></i></span>9%</span></div>
             </div>
           </div>
 
@@ -718,7 +690,6 @@ row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary).<
               <div class="rule"></div>
               <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> </span></span></div>
               <div class="rule"></div>
-              <div class="status"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg"><svg class="logo claude"><use href="#claude"/></svg>sonnet 5.5</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:18%"></i></span>18%</span></div>
             </div>
           </div>
 
@@ -745,7 +716,6 @@ row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary).<
               <div class="rule"></div>
               <div class="in"><span class="g">❯</span><span><span class="caret"></span><span class="ph-text"> </span></span></div>
               <div class="rule"></div>
-              <div class="status"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:44%"></i></span>44%</span></div>
             </div>
           </div>
 
@@ -847,16 +817,21 @@ row.<span class="sf">child</span>(<span class="sf">status_line</span>(summary).<
 
   <!-- ========================================================== status bar -->
   <div class="sb" id="sb">
+    <button class="ib" id="b-side" title="Toggle sidebar ⌘B"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="15" height="14" rx="2.5"/><path d="M7.5 3v14"/></svg></button>
+    <button class="ib" id="b-bell" title="Notifications"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.33a4 4 0 0 1 8 0c0 4.67 2 6 2 6H2s2-1.33 2-6"/><path d="M6.87 14a1.3 1.3 0 0 0 2.26 0"/></svg><span class="badge">2</span></button>
     <span class="sess">ferrite</span>
     <span class="tab" data-tab="solo"> 1 solo </span>
     <span class="tab" data-tab="group"> 2 perf sweep </span>
     <span class="tab" data-tab="wall"> 3 everything </span>
+    <span class="status" data-view="solo" data-gpui="9"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg" id="model-seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5 (1M) · medium</span><span class="faint">·</span><span class="seg">ctx<span class="meter" data-gpui="8"><i style="width:32%"></i></span>32%</span><span class="faint">·</span><span class="seg">1 file <span class="add">+9</span> <span class="del">−4</span></span></span>
+    <span class="status" data-view="group"><span class="seg mode">⏵⏵ accept edits</span><span class="faint">·</span><span class="seg"><svg class="logo claude"><use href="#claude"/></svg>opus 5.5</span><span class="faint">·</span><span class="seg">ctx<span class="meter"><i style="width:61%;background:var(--yellow)"></i></span>61%</span></span>
     <span class="sp"></span>
     <span class="seg count"><span class="ok">●</span> 4 working</span>
     <span class="seg count"><span class="warn">◆</span> 2 need you</span>
     <span class="seg count"><span class="bad">✗</span> 1 failing</span>
     <span class="seg"><svg class="logo claude" style="margin:0 1ch 0 0"><use href="#claude"/></svg>5h 41%</span>
     <span class="seg"><svg class="logo codex" style="margin:0 1ch 0 0"><use href="#codex"/></svg>wk 12%</span>
+    <span class="seg" title="Shortcuts">?</span>
     <span class="clock" id="clock">7:41 pm</span>
   </div>
 </div>
@@ -888,19 +863,13 @@ const LEGEND=[
 $('#legend-list').innerHTML=LEGEND.map((t,i)=>`<li><b>${i+1}</b><span>${t}</span></li>`).join('');
 
 /* ------------------------------------------------------------ views */
-const TITLES={
-  solo:'<span>ferrite / <span class="hi">Nav rows jitter on stream start</span> · done · dev</span><span>⌘K commands</span>',
-  group:'<span>ferrite / <span class="hi">Perf sweep</span> · 4 · <span class="warn">1 needs you</span> · dev</span><span>⌘K commands</span>',
-  wall:'<span>all projects / <span class="hi">Everything</span> · 9 · <span class="warn">2 need you</span> · <span class="bad">1 failing</span></span><span>⌘K commands</span>',
-  empty:'<span>Ferrite</span><span>⌘K commands</span>',
-};
 let view=P.get('view')||'solo';
 function setView(v){
   view=v;
   $$('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));
   $$('#controls [data-view]').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
   $$('.sb .tab').forEach(t=>t.classList.toggle('cur',t.dataset.tab===v));
-  $('#title').innerHTML=TITLES[v];
+  $$('.sb > .status').forEach(e=>e.classList.toggle('on',e.dataset.view===v));
   ['solo','group','wall'].forEach(k=>{
     const n=$('#n-'+k); n.classList.toggle('sel',k===v); n.querySelector('.cur').textContent=k===v?'❯':'';
   });
@@ -988,7 +957,7 @@ $('#b-toast').onclick=toggleToast;
 function toggleNotes(){
   const on=!$('#notes').classList.contains('on'); closeFloats(); if(!on) return;
   const n=$('#notes'); n.classList.add('on'); $('#b-bell').classList.add('on'); $('#b-notes').classList.add('on');
-  const r=relRect($('#b-bell'),win); n.style.left=Math.max(8,r.x+r.w-n.offsetWidth*0+0-28)+'px'; n.style.top=(r.y+r.h+4)+'px';
+  const r=relRect($('#b-bell'),win); n.style.left=r.x+'px';
 }
 function toggleSidebar(force){
   const on=win.classList.toggle('collapsed',force); $('#b-side').classList.toggle('on',false); $('#b-sidebar').classList.toggle('on',on);

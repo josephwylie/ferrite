@@ -60,10 +60,13 @@ pub(crate) enum Stage {
     Hidden,
 }
 
+/// What one of the row's actions does when clicked.
+pub(crate) type Action = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// The row's two actions.
 pub(crate) struct Actions {
-    pub open_in_browser: Rc<dyn Fn(&mut Window, &mut App)>,
-    pub copy_html: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub open_in_browser: Action,
+    pub copy_html: Action,
 }
 
 /// The status word on the call line's right, if the status has one.
@@ -199,8 +202,8 @@ pub(crate) fn render(
     if let Some(failure) = failure(visual) {
         let lead = theme::words::FAILED.len();
         row = row.child(
-            pane::elbow_line(grid, TEXT_MUTED).child(
-                div().flex_1().min_w_0().child(selection.line(
+            pane::elbow_line(grid, TEXT_MUTED).child(div().flex_1().min_w_0().child(
+                selection.line(
                     block,
                     failure,
                     vec![(
@@ -210,8 +213,8 @@ pub(crate) fn render(
                             ..Default::default()
                         },
                     )],
-                )),
-            ),
+                ),
+            )),
         );
     }
     let replaced = matches!(stage, Stage::Replaced);
@@ -260,12 +263,14 @@ fn note(grid: Grid, words: impl Into<SharedString>) -> AnyElement {
 
 /// `open in browser · copy html`, muted, each brightening under the pointer.
 fn action_line(id: &str, actions: Actions, grid: Grid) -> Div {
-    let action = |key: &str, label: &'static str, run: Rc<dyn Fn(&mut Window, &mut App)>| {
+    let action = |key: &str, label: &'static str, run: Action| {
         let id = SharedString::from(format!("visual-{key}-{id}"));
         div()
             .id(id.clone())
             .group(id.clone())
-            .debug_selector(move || format!("visual-{key_owned}", key_owned = label.replace(' ', "-")))
+            .debug_selector(move || {
+                format!("visual-{key_owned}", key_owned = label.replace(' ', "-"))
+            })
             .flex_shrink_0()
             .whitespace_nowrap()
             .cursor_pointer()
@@ -311,7 +316,11 @@ mod tests {
         assert_eq!(status_word(&VisualStatus::Drawing), Some("drawing"));
         assert_eq!(status_word(&VisualStatus::Checking), Some("checking"));
         assert_eq!(status_word(&VisualStatus::Shown), None);
-        assert_eq!(status_word(&VisualStatus::Failed("x".into())), None, "its elbow says it");
+        assert_eq!(
+            status_word(&VisualStatus::Failed("x".into())),
+            None,
+            "its elbow says it"
+        );
     }
 
     #[test]
@@ -319,8 +328,15 @@ mod tests {
         let v = visual(VisualStatus::Failed("render timed out".into()));
         assert_eq!(call_text(&v), "Visual  Token usage");
         assert_eq!(caption(&v).as_deref(), Some("Daily cost, last 30 days"));
-        assert_eq!(failure(&v).as_deref(), Some("failed \u{b7} render timed out"));
-        let untitled = Visual { title: "  ".into(), caption: Some(" ".into()), ..visual(VisualStatus::Shown) };
+        assert_eq!(
+            failure(&v).as_deref(),
+            Some("failed \u{b7} render timed out")
+        );
+        let untitled = Visual {
+            title: "  ".into(),
+            caption: Some(" ".into()),
+            ..visual(VisualStatus::Shown)
+        };
         assert_eq!(call_text(&untitled), "Visual");
         assert_eq!(caption(&untitled), None);
         assert_eq!(failure(&untitled), None);

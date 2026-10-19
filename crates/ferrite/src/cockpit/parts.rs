@@ -32,10 +32,14 @@ use crate::nav;
 /// A part of the Cockpit drawn as a cached view of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Part {
-    /// The nav's rows: the needs-you strip, the tree and the parked fold.
+    /// The nav's rows: the tree and the parked fold.
     Nav,
     /// One Pane's cell, wherever the board lays it out.
     Pane(PaneIdentity),
+    /// The focused Pane's status line, in the bottom bar (ADR 0014): its
+    /// pickers' arrows redraw it alone, and a stream reaching the focused
+    /// Thread redraws it with that Pane.
+    Status,
 }
 
 /// The view that draws one part, by asking the Cockpit for it.
@@ -64,6 +68,8 @@ pub(crate) struct Parts {
     views: HashMap<Part, Entity<PartView>>,
     /// The Level each Pane was last laid out at (the board's, one for all).
     levels: HashMap<PaneIdentity, Level>,
+    /// The Level the status line was last laid out at.
+    status_level: Option<Level>,
 }
 
 impl Parts {
@@ -128,10 +134,17 @@ impl CockpitView {
     }
 
     /// The nav's rows at the column's content width, at `opacity`: their
-    /// cached part, or the rows themselves without parts.
-    pub(super) fn nav_rows(&self, opacity: f32, cx: &mut Context<Self>) -> Div {
+    /// cached part, or the rows themselves without parts, drawn from
+    /// `state` (built once, shared with the rail).
+    pub(super) fn nav_rows(
+        &self,
+        opacity: f32,
+        state: &std::cell::OnceCell<nav::NavState>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         if !self.parts.borrow().on {
-            return self.nav_content(cx).opacity(opacity);
+            let state = state.get_or_init(|| self.nav_state());
+            return self.nav_content(state, cx).opacity(opacity);
         }
         // The box `nav::content` has in the column.
         let frame = div()
@@ -142,12 +155,24 @@ impl CockpitView {
         self.mount_part(Part::Nav, frame, cx)
     }
 
+    /// The focused Pane's status line, in the bar's stretch: its cached
+    /// part, or the line itself without parts.
+    pub(super) fn status_slot(&self, level: Level, cx: &mut Context<Self>) -> Div {
+        // The box the line has in the bar: the stretch before the usage.
+        let frame = div().flex().flex_1().min_w_0().h_full();
+        if !self.parts.borrow().on {
+            return frame.children(self.pane_status(level, cx));
+        }
+        self.parts.borrow_mut().status_level = Some(level);
+        self.mount_part(Part::Status, frame, cx)
+    }
+
     /// Forget the parts of Panes no longer open.
     pub(super) fn prune_parts(&self) {
         let mut parts = self.parts.borrow_mut();
         let open: Vec<PaneIdentity> = self.panes.iter().map(|pane| pane.identity).collect();
         parts.views.retain(|part, _| match part {
-            Part::Nav => true,
+            Part::Nav | Part::Status => true,
             Part::Pane(identity) => open.contains(identity),
         });
         parts.levels.retain(|identity, _| open.contains(identity));
@@ -161,7 +186,15 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match part {
-            Part::Nav => self.nav_content(cx).into_any_element(),
+            Part::Nav => self.nav_content(&self.nav_state(), cx).into_any_element(),
+            Part::Status => {
+                let level = self.parts.borrow().status_level;
+                div()
+                    .size_full()
+                    .flex()
+                    .children(level.and_then(|level| self.pane_status(level, cx)))
+                    .into_any_element()
+            }
             Part::Pane(identity) => {
                 let level = self.parts.borrow().levels.get(&identity).copied();
                 match (self.index_of(identity), level) {

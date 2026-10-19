@@ -84,6 +84,7 @@ icons![
     // (end WP-D)
 
     // ---- WP-E icons (append names above the end line)
+    "board",
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
@@ -167,6 +168,8 @@ pub const IMAGE: &str = "icons/image.svg";
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
+/// The work board's door: three columns of cards, in the line family.
+pub const BOARD: &str = "icons/board.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)
@@ -387,6 +390,7 @@ mod tests {
             FERRITE_MONO,
             REASONING,
             IMAGE,
+            BOARD,
         ] {
             let bytes = Assets
                 .load(key)
@@ -398,9 +402,9 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            28,
+            29,
             "the prototype and app controls, including close, the four \
-             Windows caption glyphs, the image mark and the CLI update mark; every glyph \
+             Windows caption glyphs, the image mark, the CLI update mark and the board door; every glyph \
              Geist Mono lacks is typed in the face the platform falls back to (theme rule 10)"
         );
     }

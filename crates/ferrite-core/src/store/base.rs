@@ -95,14 +95,20 @@ fn classify(record: &Record) -> Carry {
             PersistedActivity::Discovered { .. } | PersistedActivity::Alias { .. } => {
                 Carry::Identity
             }
-            PersistedActivity::Status { key, .. } => Carry::Slot(Slot::Child("status", key.clone())),
+            PersistedActivity::Status { key, .. } => {
+                Carry::Slot(Slot::Child("status", key.clone()))
+            }
             PersistedActivity::Coverage { key, .. } => {
                 Carry::Slot(Slot::Child("coverage", key.clone()))
             }
-            PersistedActivity::Detached { key } => Carry::Slot(Slot::Child("detached", key.clone())),
+            PersistedActivity::Detached { key } => {
+                Carry::Slot(Slot::Child("detached", key.clone()))
+            }
             PersistedActivity::Content { key, event, .. }
             | PersistedActivity::HistoryContent { key, event, .. } => execution(event)
-                .map_or(Carry::None, |kind| Carry::Slot(Slot::Child(kind, key.clone()))),
+                .map_or(Carry::None, |kind| {
+                    Carry::Slot(Slot::Child(kind, key.clone()))
+                }),
             PersistedActivity::CompletionObservation { subject, .. } => match subject.key() {
                 Some(key) => Carry::Slot(Slot::Child("completion", key.to_string())),
                 None => Carry::None,

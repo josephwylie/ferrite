@@ -16,6 +16,7 @@ pub(super) mod catalog;
 mod controls;
 pub(super) mod discovery;
 mod file_search;
+pub(crate) mod launch;
 mod live_catalogs;
 mod questions;
 mod queue;
@@ -23,7 +24,7 @@ mod requests;
 pub(super) mod wire;
 pub(crate) use wire::file_change_diffs;
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -33,6 +34,8 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::activity::AgentKey;
+use crate::store::Provider;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 use super::FileSuggestion;
@@ -126,6 +129,17 @@ pub struct CodexConfig {
     /// tool (and description) it began with — so the level only shapes new
     /// threads; the renderer still answers a resumed thread's calls.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Ferrite's caller context for the agent (`api::caller_environment`):
+    /// set over whatever the CLI inherited, after the Thread's own
+    /// (`thread.start --env`).
+    pub env: Vec<(String, std::ffi::OsString)>,
+    /// The program the CLI is run through, and its arguments
+    /// (`thread.start --launcher`); empty runs it directly.
+    pub launcher: Vec<String>,
+    /// Extra arguments to `codex app-server`: what `launch::from_tui_args`
+    /// leaves of a Thread's launch arguments, a `-c key=value` override,
+    /// say.
+    pub args: Vec<String>,
 }
 
 impl Default for CodexConfig {
@@ -140,6 +154,9 @@ impl Default for CodexConfig {
             sandbox: None,
             resume: None,
             visuals: None,
+            env: Vec::new(),
+            launcher: Vec::new(),
+            args: Vec::new(),
         }
     }
 }
@@ -283,8 +300,13 @@ impl CodexSession {
     }
 
     fn spawn_once(program: &str, config: &CodexConfig) -> Result<Self, CodexSpawnError> {
-        let mut command = Command::new(program);
-        command.arg("app-server").no_console_window();
+        let mut command = super::launched(&config.launcher, program);
+        command
+            .arg("app-server")
+            .args(&config.args)
+            .no_console_window()
+            .agent_environment()
+            .envs(config.env.iter().cloned());
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.
@@ -644,6 +666,22 @@ impl CodexSession {
         let result = self.write_line(&request);
         if result.is_err() {
             lock(&self.requests).discard(id);
+        }
+        result
+    }
+
+    /// Stop one Subagent: interrupt its own thread's running turn and end
+    /// the terminals it started. Main and the other Subagents run on; a
+    /// Subagent running no turn is left be.
+    pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        let ids = [self.take_request_id(), self.take_request_id()];
+        let requests = lock(&self.requests).stop_child(ids, key)?;
+        let result = requests
+            .iter()
+            .try_for_each(|request| self.write_line(request));
+        if result.is_err() {
+            let mut pending = lock(&self.requests);
+            ids.into_iter().for_each(|id| pending.discard(id));
         }
         result
     }
@@ -1185,8 +1223,9 @@ fn publish_activity(
     true
 }
 
-/// Main's interrupt target. Child lifecycle shares this connection but cannot
-/// replace or retire Main's turn. The handshake is the sole identity authority.
+/// Main's interrupt target, and each Subagent's own. Child lifecycle shares
+/// this connection but cannot replace or retire Main's turn; it names only
+/// the child's. The handshake is the sole identity authority.
 struct MainTurnTracker {
     main_thread_id: Option<String>,
     early_turns: HashMap<String, String>,
@@ -1216,11 +1255,15 @@ impl MainTurnTracker {
             return;
         };
         if let Some(main_thread_id) = &self.main_thread_id {
-            if thread_id != main_thread_id {
-                return;
-            }
             let mut requests = lock(&self.requests);
-            if started {
+            if thread_id != main_thread_id {
+                let key = AgentKey::new(Provider::Codex, main_thread_id, thread_id);
+                if started {
+                    requests.child_started(key, thread_id, turn_id, EARLY_TURN_THREAD_LIMIT);
+                } else {
+                    requests.child_completed(&key, turn_id);
+                }
+            } else if started {
                 requests.started(turn_id);
             } else {
                 requests.completed(turn_id);
@@ -1323,6 +1366,7 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
     let output = Command::new(program)
         .arg("--version")
         .no_console_window()
+        .agent_environment()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
@@ -1347,8 +1391,8 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
         });
     }
     if version >= CODEX_CLI_TESTED_BELOW {
-        eprintln!(
-            "ferrite: codex CLI {found} is newer than Ferrite is tested against \
+        crate::log!(
+            "codex CLI {found} is newer than Ferrite is tested against \
              (below {TESTED_BELOW_DISPLAY}); running it anyway"
         );
     }

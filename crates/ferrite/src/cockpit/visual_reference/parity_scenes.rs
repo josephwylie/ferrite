@@ -7,7 +7,6 @@
 //! the operator would have done on the way to that view: scroll, hover a
 //! path, open a picker, the palette or the bell, fold the nav.
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 
 use ferrite_core::groups::GroupId;
@@ -15,7 +14,7 @@ use ferrite_core::workspace::BranchStatus;
 use ferrite_core::ThreadId;
 use gpui::{Context, Window};
 
-use super::{CockpitView, Scene, Setup};
+use super::{CockpitView, Home, Scene, Setup};
 use crate::demo::parity::{self, Cast, Clock, Fixture, Look, World, CAPTURE};
 use crate::motion;
 use crate::nav::NavFold;
@@ -37,7 +36,8 @@ enum Shot {
     SoloPicker,
     /// group.png: Perf sweep, four transcript Panes.
     Group,
-    /// group-toast.png: Close stale's request arriving as a toast.
+    /// group-toast.png: Close stale's request arriving as a toast, the
+    /// operator away.
     Toast,
     /// group-notes.png: the notifications list down.
     Notes,
@@ -128,19 +128,6 @@ impl Drop for Held {
     }
 }
 
-/// HOME as it was before the capture pointed it at the world's: restored
-/// when the scene is dropped, after its screenshot is saved.
-struct Home(Option<OsString>);
-
-impl Drop for Home {
-    fn drop(&mut self) {
-        match self.0.take() {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
-    }
-}
-
 /// The parity scene `state` (one of `SHOTS`) and its setup.
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     let shot = SHOTS
@@ -176,8 +163,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     );
     // Paths read `~/ferrite` and `~/Desktop/Projects`, as the prototype
     // prints them, for as long as the capture runs.
-    let home = Home(std::env::var_os("HOME"));
-    std::env::set_var("HOME", &world.home);
+    let home = Home::point_at(&world.home);
     let World {
         core,
         feeds,
@@ -221,6 +207,15 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
             Shot::Toast => {
                 board_scroll(view, &cast, cx);
                 // The one request that arrives while the window is up.
+                // Its Pane is on the board, and a request in view rings
+                // nothing while the operator is there (ADR 0017), so the
+                // Cockpit counts the operator away once the window's
+                // activation has landed. The window keeps the keyboard, so
+                // the caret still draws as the prototype's.
+                let cockpit = cx.entity();
+                window.on_next_frame(move |_, cx| {
+                    cockpit.update(cx, |view, _| view.cockpit.set_window_active(false));
+                });
                 if let Some((feed, event)) = held {
                     let _ = feed.send(event);
                     view.pump(cx);
@@ -300,9 +295,9 @@ fn prepare(
     view.set_nav_fold(NavFold::Group(everything), true, cx);
     use gpui::component::WindowExt as _;
     window.clear_notifications(cx);
-    // The requests standing when the window opened were presented then:
-    // none of them toasts (the toast scene delivers its one request after).
-    view.present_notices(window, cx);
+    // The requests standing when the window opened were heard then: none
+    // of them toasts (the toast scene delivers its one request after).
+    view.ring_bell(cx);
     view.bell.clear_toasts();
     // The prototype's window has the keyboard: the focused Composer's caret
     // is the solid block, not the hollow one an inactive window draws.

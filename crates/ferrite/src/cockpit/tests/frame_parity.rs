@@ -336,7 +336,7 @@ fn the_board_rides_the_sidebar_every_frame(cx: &mut TestAppContext) {
             let (left, column, width) = view.update_in(cx, |view, window, cx| {
                 view.nav_ride.set(view.nav_ride_now(cx));
                 let left = view.board_bounds(window).x;
-                let column = view.nav_column_now(cx);
+                let column = view.nav_ride_now(cx).unwrap_or_else(|| view.nav_width());
                 let width = view.pane_rects(window)[0].1.w;
                 (left, column, width)
             });

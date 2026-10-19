@@ -97,6 +97,9 @@ enum BlockTextKind {
     /// Like `Selected`, but reconstructs Markdown source for the selection
     /// instead of the rendered plain text.
     SelectedSource,
+    /// Ferrite: like `All`, but a table's cells each on a line of their own,
+    /// so every source run is (`TextView::markdown_find_text`).
+    Runs,
 }
 
 impl BlockNode {
@@ -144,6 +147,10 @@ impl BlockNode {
         self.text_by_kind(BlockTextKind::All)
     }
 
+    pub(super) fn find_text(&self) -> String {
+        self.text_by_kind(BlockTextKind::Runs)
+    }
+
     /// The selected text within this block, in `format`.
     ///
     /// [`SelectionFormat::Source`] reconstructs the Markdown source of the
@@ -167,7 +174,7 @@ impl BlockNode {
             }
             BlockNode::Paragraph(paragraph) => {
                 let block_text = match kind {
-                    BlockTextKind::All => paragraph.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => paragraph.text(),
                     BlockTextKind::Selected => paragraph.selected_text(),
                     BlockTextKind::SelectedSource => paragraph.selected_source(),
                 };
@@ -180,7 +187,7 @@ impl BlockNode {
                 level, children, ..
             } => {
                 let block_text = match kind {
-                    BlockTextKind::All => children.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => children.text(),
                     BlockTextKind::Selected => children.selected_text(),
                     BlockTextKind::SelectedSource => children.selected_source(),
                 };
@@ -251,13 +258,18 @@ impl BlockNode {
                         let mut row_texts = vec![];
                         for cell in row.children.iter() {
                             row_texts.push(match kind {
-                                BlockTextKind::All => cell.children.text(),
+                                BlockTextKind::All | BlockTextKind::Runs => cell.children.text(),
                                 // Source is handled above; only Selected reaches here.
                                 _ => cell.children.selected_text(),
                             });
                         }
                         if !row_texts.is_empty() {
-                            block_text.push_str(&row_texts.join(" "));
+                            let gap = if matches!(kind, BlockTextKind::Runs) {
+                                "\n"
+                            } else {
+                                " "
+                            };
+                            block_text.push_str(&row_texts.join(gap));
                             block_text.push('\n');
                         }
                     }
@@ -270,7 +282,7 @@ impl BlockNode {
             }
             BlockNode::CodeBlock(code_block) => {
                 let block_text = match kind {
-                    BlockTextKind::All => code_block.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => code_block.text(),
                     BlockTextKind::Selected => code_block.selected_text(),
                     BlockTextKind::SelectedSource => code_block.selected_source(),
                 };
@@ -280,7 +292,7 @@ impl BlockNode {
                 }
             }
             BlockNode::Custom(node) => {
-                if let BlockTextKind::All = kind {
+                if let BlockTextKind::All | BlockTextKind::Runs = kind {
                     let content = node.as_text();
                     if !content.is_empty() {
                         text.push_str(content);
@@ -1356,47 +1368,57 @@ impl CodeBlock {
     ) -> AnyElement {
         let style = &node_cx.style;
 
-        div()
+        let block = div()
+            .id(("codeblock", options.ix))
             .w_full()
             .min_w_0()
-            .child(
-                div()
-                    .id(("codeblock", options.ix))
-                    .w_full()
-                    .min_w_0()
-                    .p_3()
-                    .bg(style.code_background())
-                    .font_family(cx.theme().tokens.typography.mono.clone())
-                    .text_size(cx.theme().tokens.typography.mono_md.size)
-                    .relative()
-                    .refine_style(&style.code_block())
-                    .child(Inline::new(
-                        "code",
-                        self.state.clone(),
-                        vec![],
-                        node_cx
-                            .code_block_highlighter
-                            .as_ref()
-                            .map(|highlighter| self.highlighted_styles(highlighter))
-                            .unwrap_or_default(),
-                        node_cx.link_click_handler.clone(),
-                    ))
-                    // Ferrite: actions are an overlay over the whole block,
-                    // painted after the code and taking no layout, so a block
-                    // with actions is exactly as tall as one without. The
-                    // actions element places itself inside the overlay.
-                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
-                        this.child(
-                            div()
-                                .id("actions")
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full()
-                                .child(actions(&self, window, cx)),
-                        )
-                    }),
-            )
+            .p_3()
+            .bg(style.code_background())
+            .font_family(cx.theme().tokens.typography.mono.clone())
+            .text_size(cx.theme().tokens.typography.mono_md.size)
+            .relative()
+            .refine_style(&style.code_block())
+            .child(Inline::new(
+                "code",
+                self.state.clone(),
+                vec![],
+                node_cx
+                    .code_block_highlighter
+                    .as_ref()
+                    .map(|highlighter| self.highlighted_styles(highlighter))
+                    .unwrap_or_default(),
+                node_cx.link_click_handler.clone(),
+            ))
+            // Ferrite: actions are an overlay over the whole block,
+            // painted after the code and taking no layout, so a block
+            // with actions is exactly as tall as one without. The
+            // actions element places itself inside the overlay.
+            .when_some(node_cx.code_block_actions.clone(), |this, actions| {
+                this.child(
+                    div()
+                        .id("actions")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(actions(&self, window, cx)),
+                )
+            })
+            .into_any_element();
+        // Ferrite: the application may draw the block as something else;
+        // a find still counts the code's occurrences where it paints.
+        let (block, drawn) = match &node_cx.code_block_view {
+            Some(view) => (view(self, block, window, cx), true),
+            None => (block, false),
+        };
+        div()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .when(drawn, |this| {
+                this.child(super::find::count_drawn(self.state.clone()))
+            })
+            .child(block)
             .into_any_element()
     }
 }
@@ -1410,6 +1432,7 @@ pub(crate) struct NodeContext {
     pub(crate) link_refs: HashMap<SharedString, LinkMark>,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    pub(crate) code_block_view: Option<Arc<super::text_view::CodeBlockViewFn>>,
     pub(crate) code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     pub(crate) table_actions: Option<Arc<TableActionsFn>>,
     pub(crate) link_renderer: Option<Arc<super::text_view::LinkRendererFn>>,

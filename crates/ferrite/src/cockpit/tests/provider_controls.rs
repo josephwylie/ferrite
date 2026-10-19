@@ -103,7 +103,8 @@ fn contract_session_controls_use_shared_native_handles(cx: &mut TestAppContext) 
         .contains(&ferrite_core::SessionControl::RefreshMcp));
     cx.simulate_keystrokes("cmd-k");
     cx.run_until_parked();
-    cx.simulate_input("background");
+    // `background` alone also finds the Thread whose word it is now.
+    cx.simulate_input("background tasks");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -272,8 +273,8 @@ fn contract_native_turn_diff_is_kept_without_a_fake_tool(cx: &mut TestAppContext
     view.read_with(cx, |v, _| {
         let thread = v.panes[0].thread().unwrap();
         let open = v.cockpit.thread(thread).unwrap();
-        // The turn's change set is the compare reader's to show; the
-        // transcript keeps it and draws no summary row for it.
+        // The transcript keeps the turn's change set and draws no summary
+        // row for it.
         assert_eq!(
             open.transcript()
                 .turn_diff()
@@ -316,16 +317,13 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     view.read_with(cx, |view, _| {
         assert!(view.mode_picker.is_some(), "the menu survives a redraw");
     });
-    // Anchored BottomLeft, the menu rests above the Composer's edge, clear
-    // of the chip; its one item is the pick.
+    // Anchored BottomLeft, the menu rests above the bar, clear of the
+    // chip; its one item is the pick.
     let item = cx
         .debug_bounds("choice-row-0")
         .expect("the mode menu's item is drawn");
-    let composer = cx.debug_bounds("composer-block").unwrap();
-    assert!(
-        item.bottom() <= composer.top(),
-        "{item:?} over {composer:?}"
-    );
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    assert!(item.bottom() <= bar.top(), "{item:?} over {bar:?}");
     cx.simulate_click(item.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(

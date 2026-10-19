@@ -154,14 +154,18 @@ pub enum PageKey {
     NewThreads,
     Permissions,
     Behaviour,
+    Notifications,
+    Server,
     About,
 }
 
 impl PageKey {
-    pub const ALL: [PageKey; 4] = [
+    pub const ALL: [PageKey; 6] = [
         PageKey::NewThreads,
         PageKey::Permissions,
         PageKey::Behaviour,
+        PageKey::Notifications,
+        PageKey::Server,
         PageKey::About,
     ];
 
@@ -170,6 +174,8 @@ impl PageKey {
             PageKey::NewThreads => "New threads",
             PageKey::Permissions => "Permissions",
             PageKey::Behaviour => "Behaviour",
+            PageKey::Notifications => "Notifications",
+            PageKey::Server => "Server",
             PageKey::About => "About",
         }
     }
@@ -180,6 +186,8 @@ impl PageKey {
             PageKey::NewThreads => "settings-page-new-threads",
             PageKey::Permissions => "settings-page-permissions",
             PageKey::Behaviour => "settings-page-behaviour",
+            PageKey::Notifications => "settings-page-notifications",
+            PageKey::Server => "settings-page-server",
             PageKey::About => "settings-page-about",
         }
     }
@@ -196,6 +204,9 @@ impl PageKey {
 }
 
 type Control = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
+/// What a row's token does when pressed.
+pub type Act = Rc<dyn Fn(&mut App)>;
 
 /// One setting: its label, an optional one-line hint, the words search
 /// also finds it by (every option label), and its control.
@@ -387,6 +398,8 @@ pub fn body(
                     PageKey::NewThreads,
                     PageKey::Permissions,
                     PageKey::Behaviour,
+                    PageKey::Notifications,
+                    PageKey::Server,
                 ]
                 .map(|key| nav_row(key, cx)),
             ),
@@ -889,6 +902,100 @@ pub fn stepper(
     })
 }
 
+/// A file the operator may choose in place of a built-in (a sound): its
+/// name, or `built_in`'s words, as a fact reads, then a token per `acts`
+/// (`play`, `choose…`, `built-in`). Searchable by the name.
+pub fn file_choice(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    file: Option<&std::path::Path>,
+    built_in: &'static str,
+    acts: Vec<(&'static str, Act)>,
+) -> Row {
+    let value: SharedString = file
+        .and_then(|file| file.file_name())
+        .map(|name| name.to_string_lossy().into_owned().into())
+        .unwrap_or_else(|| built_in.into());
+    Row::new(title, detail, vec![value.clone()], move |_, cx| {
+        div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .gap(px(CH))
+            .child(fact_value(title, value.clone()))
+            .child(div().flex().items_center().flex_shrink_0().children(
+                acts.iter().enumerate().map(|(at, (label, act))| {
+                    let act = act.clone();
+                    chip((id, at), (*label).into(), false, cx).on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        act(cx);
+                    })
+                }),
+            ))
+            .into_any_element()
+    })
+}
+
+/// A row whose title and hint are the operator's own words (a machine's
+/// name and ssh target), offering a token per act. Searchable by both.
+pub fn named(
+    id: &'static str,
+    nth: usize,
+    title: SharedString,
+    detail: SharedString,
+    acts: Vec<(SharedString, Act)>,
+) -> Row {
+    let words = vec![title.clone(), detail.clone()];
+    Row::new(title, detail, words, move |_, cx| {
+        div()
+            .flex()
+            .items_center()
+            .flex_shrink_0()
+            .children(acts.iter().enumerate().map(|(at, (label, act))| {
+                let act = act.clone();
+                chip((id, nth * acts.len() + at), label.clone(), false, cx).on_click(
+                    move |_, _, cx| {
+                        cx.stop_propagation();
+                        act(cx);
+                    },
+                )
+            }))
+            .into_any_element()
+    })
+}
+
+/// A field, and the token that takes what is typed in it.
+pub fn entry(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    field: Entity<InputState>,
+    label: &'static str,
+    act: impl Fn(&mut Window, &mut App) + 'static,
+) -> Row {
+    let act = Rc::new(act);
+    Row::new(title, detail, Vec::new(), move |_, cx| {
+        let act = act.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(CH))
+            .child(
+                div()
+                    .w(px(SETTINGS_FIELD_W))
+                    .child(Input::new(&field).small()),
+            )
+            .child(
+                chip((id, 0), label.into(), false, cx).on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    act(window, cx);
+                }),
+            )
+            .into_any_element()
+    })
+}
+
 /// A read-only fact (About): its key at the left, its value at the right
 /// in `TEXT_MUTED` (versions are machine text), wrapping anywhere rather
 /// than cut. Searchable by both.
@@ -1011,7 +1118,7 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
     }
 }
 
-/// The nav chrome's gear: the door to this panel. Ground and glyph blend
+/// The bottom bar's gear: the door to this panel. Ground and glyph blend
 /// to their hover faces over the one 150ms blend (`TEXT_MUTED` → `TEXT`, as
 /// the collapse button does). `gear` hangs its tooltip, `Settings ⌘,`.
 pub fn gear_button(cx: &App) -> Button {
@@ -1028,7 +1135,7 @@ pub fn gear_button(cx: &App) -> Button {
     )
     .debug_selector(|| "settings-gear".into())
     .w(px(ICON_BUTTON))
-    .h(px(ICON_BUTTON))
+    .h_full()
     .p_0()
     .accessibility_label("Settings")
     .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
@@ -1040,6 +1147,7 @@ pub fn gear(button: Button, id: &'static str) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .flex_shrink_0()
+        .h_full()
         .tooltip(crate::menu::action_tooltip(
             "Settings",
             "cockpit::OpenSettings",
@@ -1118,10 +1226,11 @@ mod tests {
     #[test]
     fn pages_step_in_sidebar_order_and_hold_at_the_ends() {
         assert_eq!(PageKey::NewThreads.step(1), PageKey::Permissions);
-        assert_eq!(PageKey::Behaviour.step(1), PageKey::About);
+        assert_eq!(PageKey::Behaviour.step(1), PageKey::Notifications);
+        assert_eq!(PageKey::Notifications.step(1), PageKey::Server);
         assert_eq!(PageKey::About.step(1), PageKey::About);
         assert_eq!(PageKey::NewThreads.step(-1), PageKey::NewThreads);
-        assert_eq!(PageKey::About.step(-3), PageKey::NewThreads);
+        assert_eq!(PageKey::About.step(-5), PageKey::NewThreads);
         assert_eq!(PageKey::default(), PageKey::NewThreads);
     }
 

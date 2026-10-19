@@ -22,6 +22,13 @@
 # ~320 MB unpacked) is fetched once into $CEF_PATH (default
 # ~/.local/share/cef). FERRITE_NO_CEF=1 builds without visuals.
 #
+# Projects (ADR 0031): herdr-projects 1.0's program (package `herdr-projects`)
+# ships as `ferrite-projects` beside the app's binary, in `Contents/MacOS`,
+# where the Server and the board find it and hand it to agents and hooks
+# (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is.
+#
+#   MACOS_LOCAL_IDENTITY=<name>   sign local builds with this keychain
+#                    identity, so macOS's privacy grants outlive a rebuild
 #   --bundle-only    build the .app in the target dir, don't install it
 #   --dmg <path>     ...and package it as a disk image
 
@@ -76,6 +83,7 @@ if [ -z "${FERRITE_NO_CEF:-}" ]; then
 fi
 
 cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite "${FEATURES[@]+"${FEATURES[@]}"}"
+cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p herdr-projects --bin ferrite-projects
 
 metadata="$(cargo metadata --no-deps --format-version 1 --manifest-path "$ROOT/Cargo.toml")"
 TARGET="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
@@ -84,15 +92,19 @@ VERSION="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
   'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ferrite"))')"
 
 BIN="$TARGET/release/ferrite"
-if [ ! -x "$BIN" ]; then
-  echo "no release binary at $BIN" >&2
-  exit 1
-fi
+PROJECTS_BIN="$TARGET/release/ferrite-projects"
+for built in "$BIN" "$PROJECTS_BIN"; do
+  if [ ! -x "$built" ]; then
+    echo "no release binary at $built" >&2
+    exit 1
+  fi
+done
 
 BUILT="$TARGET/release/bundle/macos/$NAME.app"
 rm -rf "$BUILT"
 mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
 cp "$BIN" "$BUILT/Contents/MacOS/ferrite"
+cp "$PROJECTS_BIN" "$BUILT/Contents/MacOS/ferrite-projects"
 
 # iconutil expects this exact set of filenames. Generate the platform resource
 # from the checked-in 1254px source so the Dock gets sharp 1x and 2x variants.
@@ -211,15 +223,25 @@ if [ "$SIGNING_IDENTITY" = "-" ]; then
   # app rewrites only its own copy. A disk image leaves this machine, where
   # every nested bundle must carry its own seal: each helper is signed (and
   # becomes a copy).
+  #
+  # MACOS_LOCAL_IDENTITY names a code-signing certificate of this machine's
+  # keychain (a self-signed one will do) to sign with instead of ad hoc.
+  # macOS keeps privacy grants (the Desktop folder, and the like) against a
+  # signature's identity: an ad-hoc one is new with every build, so each
+  # rebuild — the app and its bare binary, which the Server runs — asks
+  # again. Signed by one identity, every build is the same app to macOS.
+  # Its helpers are signed too (and become copies), so they carry it.
+  LOCAL="${MACOS_LOCAL_IDENTITY:--}"
+  codesign --force --sign "$LOCAL" "$BUILT/Contents/MacOS/ferrite-projects"
   if [ -n "${FEATURES[*]:-}" ]; then
-    codesign --force --sign - "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
-    if [ -n "$DMG" ]; then
+    codesign --force --sign "$LOCAL" "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
+    if [ -n "$DMG" ] || [ "$LOCAL" != "-" ]; then
       for helper_app in "${HELPERS[@]}"; do
-        codesign --force --sign - "$helper_app"
+        codesign --force --sign "$LOCAL" "$helper_app"
       done
     fi
   fi
-  codesign --force --sign - "$BUILT"
+  codesign --force --sign "$LOCAL" "$BUILT"
 else
   if [ -n "${FEATURES[*]:-}" ]; then
     # Chromium's helpers JIT (V8) and load the framework: under the
@@ -248,6 +270,8 @@ PLIST
     done
     rm -f "$ENTITLEMENTS"
   fi
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+    "$BUILT/Contents/MacOS/ferrite-projects"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BUILT"
   codesign --verify --deep --strict --verbose=2 "$BUILT"
 fi

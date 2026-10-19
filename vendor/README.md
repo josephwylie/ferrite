@@ -27,6 +27,41 @@ selection calculation and copying of offscreen text remain unchanged.
   text run, including wrapped text. Remove this extension when upstream offers
   equivalent inline link rendering and selection support.
 
+- `TextView::find` (`text/find.rs`) marks a find bar's occurrences: every
+  `Inline` washes each occurrence of the needle under its glyphs, the active
+  one more strongly, and the active one reports where it painted so Ferrite
+  can scroll it into view. Occurrences are found in the whole source run (a
+  run split by wraps or inline cards keeps one count; an inline card whose
+  label holds one is washed whole) and numbered in paint order, which is
+  document order, so Ferrite names the active one by its ordinal in
+  `TextView::markdown_find_text` — the plain text with every run on a line
+  of its own (`BlockTextKind::Runs`). The paint reports where the active one
+  landed and the first one at or below the view's top (`FindReport`). A
+  fenced block `code_block_view` draws as something else still counts its
+  occurrences where it paints (`find::count_drawn`), so the runs after it
+  keep their ordinals; the active one among them reports the drawing.
+  `InputBaseState::set_find` (`input/editor/search.rs`) marks the same
+  needle over a read-only input (Ferrite's bounded output viewer) in the
+  same washes, scrolling the active occurrence into view and reporting
+  where it painted. Ferrite's `cockpit/tests/find.rs` covers it (gpui-base
+  is not a workspace member, so tests here would not run). Remove when
+  upstream offers search highlighting in `TextView` and an outside find
+  over an input.
+
+- `TextView::code_block_view` lets Ferrite draw a fenced code block as
+  something else (a ` ```mermaid ` fence as its diagram, ADR 0016): the
+  callback receives the block and its native element (code, padding and
+  actions) and returns what to draw in its place. The block stays in the
+  document, so selection and copy keep its source. Remove when upstream
+  offers custom code block rendering.
+
+- `ParsedUpdate` (`text/state.rs`) carries its parsed content boxed. The
+  style knobs grew `ParsedContent` to ~10 KB, and the unbounded result
+  channel builds a 31-slot block of updates on the stack in a debug build:
+  a ~670 KB frame that overflowed the 512 KB dispatch worker stack on the
+  first parse. A compile-time size assertion keeps it boxed. Keep while
+  the knobs stay inline in `TextViewStyle`.
+
 Markdown block spacing is centralized in `BlockNode::render_block`. The
 configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
 tables, rules and custom blocks, including nested siblings and virtualized

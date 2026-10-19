@@ -67,9 +67,18 @@ pub(crate) fn snapshots(output: String) {
     );
     cx.update(super::init);
     let pages = [
-        ("stats", include_str!("../cockpit/visual_reference/visuals/stats.html")),
-        ("mockups", include_str!("../cockpit/visual_reference/visuals/mockups.html")),
-        ("treemap", include_str!("../cockpit/visual_reference/visuals/treemap.html")),
+        (
+            "stats",
+            include_str!("../cockpit/visual_reference/visuals/stats.html"),
+        ),
+        (
+            "mockups",
+            include_str!("../cockpit/visual_reference/visuals/mockups.html"),
+        ),
+        (
+            "treemap",
+            include_str!("../cockpit/visual_reference/visuals/treemap.html"),
+        ),
     ];
     let started = Instant::now();
     let done = std::rc::Rc::new(std::cell::Cell::new(0usize));
@@ -87,7 +96,9 @@ pub(crate) fn snapshots(output: String) {
                             Availability::Ready(engine) => break Ok(engine),
                             Availability::Unavailable(why) => break Err(why.to_string()),
                             Availability::Starting => {
-                                cx.background_executor().timer(Duration::from_millis(16)).await
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(16))
+                                    .await
                             }
                         }
                     };
@@ -98,7 +109,13 @@ pub(crate) fn snapshots(output: String) {
                     match result {
                         Ok(shot) => {
                             std::fs::write(&path, &shot.png).expect("write snapshot");
-                            eprintln!("{}: {}x{} ({} bytes)", path.display(), shot.width, shot.height, shot.png.len());
+                            eprintln!(
+                                "{}: {}x{} ({} bytes)",
+                                path.display(),
+                                shot.width,
+                                shot.height,
+                                shot.png.len()
+                            );
                         }
                         Err(error) => eprintln!("{}: {error}", path.display()),
                     }

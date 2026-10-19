@@ -49,6 +49,7 @@ pub(crate) struct TestWindowState {
     appearance: WindowAppearance,
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
+    pub(crate) window_move_requests: usize,
 }
 
 #[derive(Clone)]
@@ -113,6 +114,7 @@ impl TestWindow {
             appearance: WindowAppearance::Light,
             external_drag_files: Vec::new(),
             start_external_drag_result: false,
+            window_move_requests: 0,
         })))
     }
     pub fn simulate_scheduled_frame(&self) -> bool {
@@ -456,7 +458,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn start_window_move(&self) {
-        unimplemented!()
+        self.0.lock().window_move_requests += 1;
     }
 
     fn can_start_external_drag(&self) -> bool {

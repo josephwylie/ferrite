@@ -1,4 +1,5 @@
 mod document;
+mod find;
 mod format;
 mod inline;
 mod inline_flow;
@@ -12,6 +13,7 @@ mod text_view;
 mod utils;
 
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
+pub use find::{FindReport, TextFind, find_matches};
 pub use markdown_ext::*;
 pub use node::{CodeBlock, TableData};
 pub use state::*;

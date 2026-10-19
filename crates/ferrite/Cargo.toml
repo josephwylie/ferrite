@@ -21,6 +21,13 @@ cef = ["dep:cef"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# System notifications: herdr-focus-notify, vendored (its README).
+ferrite-focus-notify = { path = "../ferrite-focus-notify" }
+# herdr-reviewr's review core, vendored: the Review slot's rows, comments and
+# their prompt text (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+toml = { workspace = true }
+unicode-segmentation = { workspace = true }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
@@ -45,6 +52,11 @@ image = { version = "0.25.1", default-features = false, features = ["png"] }
 # drains). Already in the tree via gpui.
 futures = "0.3"
 
+# Projects 1.0 uses Unix sockets, signals and flock (ADR 0031).
+# Keep its runtime out of Windows builds; the cockpit reports unavailability.
+[target.'cfg(unix)'.dependencies]
+sw-board = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Chromium Embedded Framework bindings (tauri-apps/cef-rs), the `cef`
 # feature's engine. Only the sandbox feature: the bundling helpers
@@ -55,7 +67,7 @@ cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], 
 # The same engine on Windows, without `sandbox`: CEF's Windows sandbox only
 # runs inside its bootstrap launcher (ADR 0013), which Ferrite doesn't use.
 cef = { version = "=154.5.0", default-features = false, optional = true }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1", default-features = false }
@@ -64,3 +76,5 @@ winresource = { version = "0.1", default-features = false }
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+# The in-process machine the window's tests attach to.
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }

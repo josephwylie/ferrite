@@ -74,11 +74,31 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
 /// the keyboard is in it — recognizable before the live editor holds any
 /// text.
 pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
+    field("Name".into(), editor, focused, "project-name-focused")
+}
+
+/// On a machine (ADR 0026), where no folder dialog can browse: the row a
+/// directory on the machine is typed into, in the name row's field.
+pub fn path_field(machine: &str, editor: impl IntoElement, focused: bool) -> Div {
+    field(
+        format!("Directory on {machine}").into(),
+        editor,
+        focused,
+        "project-path-focused",
+    )
+}
+
+fn field(
+    label: SharedString,
+    editor: impl IntoElement,
+    focused: bool,
+    focused_selector: &'static str,
+) -> Div {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .child(components::section_label("Name").pb(px(0.)))
+        .child(components::section_label(label).pb(px(0.)))
         .child(
             div()
                 .flex()
@@ -91,12 +111,37 @@ pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
                     if focused {
                         field
                             .border_color(rgb(ACCENT))
-                            .debug_selector(|| "project-name-focused".into())
+                            .debug_selector(|| focused_selector.into())
                     } else {
                         field.border_color(paint::LINE2)
                     }
                 })
                 .child(div().min_w_0().flex_1().child(editor)),
+        )
+}
+
+/// One directory the machine's Server listed under what the path field
+/// holds: its name and a `/`, `TEXT_MUTED`, `paint::HOVER` under the
+/// pointer, hung a cell outside the text's edge like a directory row.
+pub fn path_completion(index: usize, name: &str) -> gpui::Stateful<Div> {
+    let selector: SharedString = format!("project-path-completion:{name}").into();
+    div()
+        .id(("project-path-completion", index))
+        .debug_selector(move || selector.to_string())
+        .flex()
+        .items_center()
+        .flex_shrink_0()
+        .h(px(ROW))
+        .ml(px(-CH))
+        .px(px(CH))
+        .hover_raised(format!("project-path-completion-{index}"))
+        .cursor_default()
+        .child(
+            components::text_ui()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(format!("{name}/")),
         )
 }
 

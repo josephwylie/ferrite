@@ -333,6 +333,8 @@ pub struct Markdown {
     /// in this preview (`pane::prompt_chip`).
     chips: Option<crate::attachment_preview::Preview>,
     document: Option<gpui::base::TextSelectionDocument>,
+    /// A find's occurrences to mark (`crate::find`).
+    find: Option<gpui::base::text::TextFind>,
 }
 
 impl Markdown {
@@ -341,6 +343,11 @@ impl Markdown {
         document: Option<gpui::base::TextSelectionDocument>,
     ) -> Self {
         self.document = document;
+        self
+    }
+
+    pub fn find(mut self, find: Option<gpui::base::text::TextFind>) -> Self {
+        self.find = find;
         self
     }
 
@@ -371,6 +378,7 @@ impl Markdown {
             ink: None,
             chips: None,
             document: None,
+            find: None,
         }
     }
 }
@@ -424,6 +432,12 @@ impl gpui::RenderOnce for Markdown {
         let chips = self.chips.clone();
         let link_cwd = cwd.clone();
         let hang = theme::tx_cell(f32::from(base));
+        // A ```mermaid fence draws as its diagram (`visual::diagram`); the
+        // fence's Markdown (the source, moved in) says whether it has closed.
+        let diagrams = self
+            .source
+            .contains(crate::visual::diagram::LANGUAGE)
+            .then_some(self.source);
         let view = TextView::new(&state)
             .link_renderer(move |url, label, window, cx| {
                 // A prompt's file, as its band's chip.
@@ -455,6 +469,7 @@ impl gpui::RenderOnce for Markdown {
             .when_some(self.document, |view, document| {
                 view.selection_document(document, self.id)
             })
+            .find(self.find)
             .font_family(face)
             // A line's trailing space hangs past its edge, as CSS lets it:
             // GPUI counts it when wrapping, so a word that ends within a
@@ -491,6 +506,27 @@ impl gpui::RenderOnce for Markdown {
                 } else {
                     cx.open_url(url);
                 }
+            })
+            .when_some(diagrams, |view, source| {
+                view.code_block_view(move |block, element, window, cx| {
+                    let fence = block.span.and_then(|span| source.get(span.start..span.end));
+                    match fence {
+                        Some(fence)
+                            if block.lang().as_deref()
+                                == Some(crate::visual::diagram::LANGUAGE) =>
+                        {
+                            crate::visual::diagram::or_code(
+                                fence,
+                                block.code().to_string(),
+                                element,
+                                f32::from(base),
+                                window,
+                                cx,
+                            )
+                        }
+                        _ => element,
+                    }
+                })
             })
             .code_block_actions(move |block, window, cx| {
                 let id: SharedString =
@@ -607,35 +643,13 @@ impl gpui::Render for CodeActions {
                     use gpui::component::WindowExt as _;
                     let html = code.clone();
                     window.open_dialog(cx, move |dialog, window, _| {
-                        // The sheet recipe: raised, the strong edge (the
-                        // kit's border), the Pane radius, a mono title.
-                        dialog
-                            .title(
-                                gpui::div()
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_UI))
-                                    .line_height(px(theme::LH_UI))
-                                    .font_weight(theme::W_LABEL)
-                                    .text_color(rgb(theme::TEXT_STRONG))
-                                    .child("HTML preview"),
-                            )
-                            .width(px(theme::READING_MAX_W))
-                            .bg(theme::paint::FLOAT)
-                            .rounded(px(theme::R_PANE))
-                            .child(
-                                gpui::div()
-                                    .id("html-preview")
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_PROSE))
-                                    .line_height(px(theme::LH_PROSE))
-                                    .text_color(rgb(theme::TEXT))
-                                    .max_h(px(theme::HTML_PREVIEW_MAX_H))
-                                    .overflow_y_scroll()
-                                    .child(
-                                        TextView::html("html-preview-text", html.clone())
-                                            .style(style(window.rem_size())),
-                                    ),
-                            )
+                        reading_dialog(
+                            dialog,
+                            "html-preview",
+                            "HTML preview",
+                            TextView::html("html-preview-text", html.clone())
+                                .style(style(window.rem_size())),
+                        )
                     });
                 },
             ));
@@ -917,6 +931,8 @@ pub struct Literal {
     pub highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
     pub cache: TextCache,
     pub document: Option<gpui::base::TextSelectionDocument>,
+    /// A find's occurrences to mark (`crate::find`).
+    pub find: Option<gpui::base::text::TextFind>,
 }
 
 /// The same literal document feeds native rendering and offscreen copy.
@@ -956,6 +972,7 @@ impl gpui::RenderOnce for Literal {
             .when_some(self.document, |view, document| {
                 view.selection_document(document, self.id)
             })
+            .find(self.find)
             .w_full()
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
@@ -984,6 +1001,8 @@ pub struct Output {
     pub cache: TextCache,
     pub aria_label: SharedString,
     pub fill: bool,
+    /// A find's occurrences to mark (`crate::find`).
+    pub find: Option<gpui::base::text::TextFind>,
 }
 
 impl gpui::RenderOnce for Output {
@@ -994,6 +1013,7 @@ impl gpui::RenderOnce for Output {
         else {
             unreachable!("output has its own namespace")
         };
+        state.update(cx, |state, cx| state.set_find(self.find, cx));
         #[cfg(test)]
         testing::record_output(self.id, state.clone(), cx);
         Textarea::new(&state)
@@ -1011,11 +1031,48 @@ impl gpui::RenderOnce for Output {
     }
 }
 
+/// A dialog to read in (the HTML preview, What's New), on the sheet
+/// recipe: raised, the strong edge (the kit's border), the Pane radius, a
+/// mono title, over prose at reading width that scrolls past
+/// `READING_DIALOG_MAX_H`.
+pub fn reading_dialog(
+    dialog: gpui::component::dialog::Dialog,
+    id: &'static str,
+    title: impl Into<SharedString>,
+    body: impl IntoElement,
+) -> gpui::component::dialog::Dialog {
+    dialog
+        .title(
+            gpui::div()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::TEXT_STRONG))
+                .child(title.into()),
+        )
+        .width(px(theme::READING_MAX_W))
+        .bg(theme::paint::FLOAT)
+        .rounded(px(theme::R_PANE))
+        .child(
+            gpui::div()
+                .id(id)
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_PROSE))
+                .line_height(px(theme::LH_PROSE))
+                .text_color(rgb(theme::TEXT))
+                .max_h(px(theme::READING_DIALOG_MAX_H))
+                .overflow_y_scroll()
+                .child(body),
+        )
+}
+
 /// The reader's body for an open document: Markdown rendered, a file in a
 /// language the lexer knows coloured, anything else as plain text.
 pub fn document_body(
     document: crate::attachment_preview::Document,
     cache: TextCache,
+    find: Option<gpui::base::text::TextFind>,
 ) -> gpui::AnyElement {
     let id = SharedString::from(format!("file-{}", document.path.display()));
     if document.is_markdown() {
@@ -1024,6 +1081,7 @@ pub fn document_body(
             document.source,
             cache,
         )
+        .find(find)
         .into_any_element();
     }
     let aria_label = SharedString::from("File contents");
@@ -1042,6 +1100,7 @@ pub fn document_body(
             cache,
             aria_label,
             fill: true,
+            find: None,
         }
         .into_any_element(),
     }
@@ -1428,7 +1487,7 @@ mod file_link_tests {
             let document_body = self.preview.document().map(|document| {
                 self.document_cache
                     .file_context(document.path.parent(), &self.preview);
-                document_body(document, self.document_cache.clone())
+                document_body(document, self.document_cache.clone(), None)
             });
             use gpui::base::ElementExt;
             // The reader is a board slot of its own; beside the fixture's
@@ -1629,6 +1688,97 @@ mod file_link_tests {
             "revealing the actions leaves the block where it was"
         );
         assert_eq!(cx.debug_bounds("code-actions"), Some(actions));
+    }
+
+    const MERMAID: &str = "Before\n\n```mermaid\ngraph TD\n  a --> b\n```\n\nAfter";
+
+    /// A ```mermaid fence shows as code, asks for its diagram once that code
+    /// is on screen, and shows the diagram (cropped to what it drew, at its
+    /// own height) once drawn.
+    #[gpui::test]
+    fn a_mermaid_fence_draws_as_its_diagram(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(true, cx);
+        });
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("mermaid-diagram").is_none(),
+            "code until drawn"
+        );
+        assert_eq!(
+            engine.journal().len(),
+            1,
+            "one page opened: {:?}",
+            engine.journal()
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        let diagram = cx
+            .debug_bounds("mermaid-diagram")
+            .expect("the diagram replaces the fence");
+        let height = crate::visual::web::fake::CONTENT_HEIGHT as f32;
+        assert!(
+            (diagram.size.height - px(height)).abs() < px(1.),
+            "{diagram:?}"
+        );
+        assert_eq!(
+            engine.live_views(),
+            0,
+            "no page stays open for a drawn diagram"
+        );
+    }
+
+    /// A fence in a quote closes on a quoted line, and draws all the same.
+    #[gpui::test]
+    fn a_mermaid_fence_in_a_quote_draws(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(true, cx);
+        });
+        let (_, cx) = fixture(cx, "> ```mermaid\n> graph TD\n> ```\n\nAfter");
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mermaid-diagram").is_some());
+    }
+
+    /// Without an engine, or with visuals off, the fence stays code.
+    #[gpui::test]
+    fn a_mermaid_fence_stays_code_without_visuals(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::visual::diagram::init(true, cx));
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mermaid-diagram").is_none());
+        assert!(
+            cx.debug_bounds("code-actions").is_some(),
+            "the fence is drawn"
+        );
+    }
+
+    #[gpui::test]
+    fn a_mermaid_fence_stays_code_with_visuals_off(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(false, cx);
+        });
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        assert!(engine.journal().is_empty(), "nothing is drawn");
+        assert!(cx.debug_bounds("mermaid-diagram").is_none());
     }
 
     #[gpui::test]

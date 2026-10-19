@@ -2,18 +2,17 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Solo has no head (C2): the titlebar carries the Thread on one line —
-/// `project / title · state · branch` (F-10) — inside the band; the plan's
-/// meter and the PR/CI chip are palette commands now (F-11), not chrome.
+/// Solo has no head (C2), and the titlebar does not name the Thread either
+/// (ADR 0014): the nav's row does. The plan's meter and the PR/CI chip are
+/// palette commands (F-11), not chrome.
 #[gpui::test]
-fn the_solo_thread_rides_the_titlebar_in_one_row(cx: &mut TestAppContext) {
+fn the_solo_thread_wears_no_chrome(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("head-one-row", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     view.update(cx, |view, cx| {
-        view.facts
-            .set_branches(vec![(thread, Some(branch_status_with_checks()))]);
+        view.facts.pr_answered(thread, Some(pr_with_checks()));
         cx.notify();
     });
     for (id, status) in [
@@ -33,18 +32,9 @@ fn the_solo_thread_rides_the_titlebar_in_one_row(cx: &mut TestAppContext) {
     }
     tick(cx);
     assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
-    let band = cx
-        .debug_bounds("titlebar-location")
-        .expect("the titlebar's location");
-    let title = cx.debug_bounds("titlebar-title").expect("the title");
-    let window = cx.update(|window, _| window.viewport_size().width);
-    for (name, part) in [("location", band), ("title", title)] {
-        assert!(
-            part.top() >= px(0.) && part.bottom() <= px(crate::theme::WIN_CHROME_H),
-            "the {name} rides the titlebar row: {part:?}"
-        );
-        assert!(part.right() <= window, "the {name} stays inside the window");
-    }
+    assert!(cx.debug_bounds("titlebar-location").is_none());
+    let row: &'static str = format!("nav-thread-{}", thread.get()).leak();
+    assert!(cx.debug_bounds(row).is_some(), "the nav's row names it");
     assert!(
         cx.debug_bounds("tasks-meter-1").is_none(),
         "no meter in the chrome"
@@ -53,11 +43,6 @@ fn the_solo_thread_rides_the_titlebar_in_one_row(cx: &mut TestAppContext) {
         cx.debug_bounds("ci-mark-1").is_none(),
         "no PR/CI chip in the chrome"
     );
-    let location = view.read_with(cx, |view, _| view.titlebar_location(None));
-    let crate::titlebar::Location::Thread { branch, .. } = location else {
-        panic!("a Solo Thread's location");
-    };
-    assert_eq!(branch.as_deref(), Some("feat/thread-pane-header"));
 }
 
 /// Closing the last Pane leaves a board that says how to start, and the
@@ -295,11 +280,11 @@ fn a_dragged_tree_survives_a_resize_and_draws_one_level(cx: &mut TestAppContext)
     );
 }
 
-/// Stepping focus across a 3×3 board (FL-11): an unfocused Pane is flush —
-/// its body runs down to its band, which ends 7px over the Pane's foot —
-/// and only the focused Pane carries the status line, so its body alone is
-/// shorter, by exactly the status line and its gap. No body's top ever
-/// moves, and only the focused cell's line is live: one caret on the board.
+/// Stepping focus across a 3×3 board (FL-11): every Pane is flush — its
+/// body runs down to its band, which ends 7px over the Pane's foot — for
+/// the status line is the window's (ADR 0014), so focus resizes no body.
+/// No body's top ever moves, and only the focused cell's line is live: one
+/// caret on the board.
 #[gpui::test]
 fn stepping_focus_across_nine_cells_moves_no_body(cx: &mut TestAppContext) {
     let (view, _fake, cx, _group) = board("board-cmd-bracket", 9, cx);
@@ -324,7 +309,6 @@ fn stepping_focus_across_nine_cells_moves_no_body(cx: &mut TestAppContext) {
             })
             .count()
     };
-    let status = px(crate::theme::COMPOSER_STATUS_GAP + crate::theme::COMPOSER_STATUS_H);
     let tops: Vec<gpui::Pixels> = bodies(cx).iter().map(|(_, body)| body.top()).collect();
     for _ in 0..9 {
         let focused = view.read_with(cx, |view, _| view.focused_thread().unwrap().get());
@@ -334,24 +318,12 @@ fn stepping_focus_across_nine_cells_moves_no_body(cx: &mut TestAppContext) {
             tops,
             "focus moved a body's top"
         );
-        let rest: Vec<gpui::Pixels> = now
-            .iter()
-            .filter(|(key, _)| *key != focused)
-            .map(|(_, body)| body.size.height)
-            .collect();
-        let flush = rest[0];
+        let heights: Vec<gpui::Pixels> = now.iter().map(|(_, body)| body.size.height).collect();
         assert!(
-            rest.iter().all(|height| (*height - flush).abs() <= px(1.)),
-            "every unfocused body runs to its band: {rest:?}"
-        );
-        let mine = now
-            .iter()
-            .find(|(key, _)| *key == focused)
-            .map(|(_, body)| body.size.height)
-            .unwrap();
-        assert!(
-            ((flush - mine) - status).abs() <= px(1.),
-            "only the focused body is shorter, by the status line: {mine:?} vs {flush:?}"
+            heights
+                .iter()
+                .all(|height| (*height - heights[0]).abs() <= px(1.)),
+            "focus on {focused} resized a body: {heights:?}"
         );
         assert_eq!(live(cx), 1, "exactly one caret-bearing line");
         cx.simulate_keystrokes("cmd-]");
@@ -450,7 +422,7 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
         cx.notify();
     });
     tick(cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
@@ -473,6 +445,10 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
 fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let (view, fake, cx, _group) = board("board-unread", 3, cx);
+    // On the board, a finish is unread only while the window is away.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.deactivate_window();
     for stream in 1..3 {
         for event in [
             SessionEvent::TextDelta {
@@ -494,7 +470,10 @@ fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext
             .filter(|thread| view.cockpit.notifications().attention(*thread))
             .count()
     });
-    assert!(unread >= 2, "two Threads finished out of sight");
+    assert!(
+        unread >= 2,
+        "two Threads finished while the window was away"
+    );
     assert!(
         cx.debug_bounds("breathing-dot").is_none(),
         "unread never breathes"
@@ -771,7 +750,7 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
 }
 
 /// Fix 2: a Thread whose turn ended in an error reads `failed` in the nav,
-/// and its dot is `BLOCKED` there, in the rail and in the titlebar — never
+/// and its dot is `BLOCKED` there, in the rail and in the Group head — never
 /// the idle grey beside a red word.
 #[gpui::test]
 fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAppContext) {
@@ -795,74 +774,16 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
         let row = view.thread_row(thread);
         assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
         assert_eq!(
-            thread_status(row.status.wall(), row.unread).ink,
+            row.status.face().ink,
             crate::theme::BLOCKED,
-            "and the nav and rail dot say it too"
+            "and the nav and rail mark say it too"
         );
-        let (face, word) = pane::thread_face(view.cockpit.thread(thread).unwrap(), None, false);
-        assert_eq!(word, Some(pane::HeadSlot::Failed));
-        assert_eq!(face.ink, crate::theme::BLOCKED, "the titlebar's dot agrees");
+        assert_eq!(
+            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, false),
+            Some(pane::HeadSlot::Failed),
+            "the Pane's word agrees"
+        );
     });
-}
-
-/// F-10: the Solo titlebar says `needs you` once — the Thread's own state
-/// word — and counts nobody (the count is a board's); a board's titlebar
-/// counts who on it needs you: `1 needs you`, `2 need you`.
-#[gpui::test]
-fn the_solo_titlebar_says_needs_you_once(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("needs-you-once", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
-    fake.streams.borrow()[0].send(question("once")).unwrap();
-    tick(cx);
-    let words: Vec<String> = view.read_with(cx, |view, _| {
-        crate::titlebar::Title {
-            location: view.titlebar_location(None),
-        }
-        .words()
-        .into_iter()
-        .map(|(word, _)| word.to_string())
-        .collect()
-    });
-    assert!(
-        words.iter().any(|word| word.starts_with("needs you")),
-        "the Thread's state word says needs you: {words:?}"
-    );
-    assert!(
-        !words.iter().any(|word| word.ends_with("need you")),
-        "and no count says it again: {words:?}"
-    );
-}
-
-#[gpui::test]
-fn a_board_titlebar_keeps_its_need_you_count(cx: &mut TestAppContext) {
-    let (view, fake, cx, _group) = board("need-you-count", 2, cx);
-    fake.streams.borrow()[1].send(decision("count")).unwrap();
-    tick(cx);
-    let words = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| {
-            crate::titlebar::Title {
-                location: view.titlebar_location(None),
-            }
-            .words()
-            .into_iter()
-            .map(|(word, _)| word.to_string())
-            .collect::<Vec<_>>()
-        })
-    };
-    assert!(
-        words(&view, cx).contains(&"1 needs you".to_string()),
-        "one waiting reads singular: {:?}",
-        words(&view, cx)
-    );
-    fake.streams.borrow()[0].send(decision("count-2")).unwrap();
-    tick(cx);
-    assert!(
-        words(&view, cx).contains(&"2 need you".to_string()),
-        "two read plural: {:?}",
-        words(&view, cx)
-    );
 }
 
 /// F-2: one attention edge. On a board every waiting cell draws
@@ -975,7 +896,10 @@ fn an_unfocused_cell_counts_its_attachments_on_the_flat_line(cx: &mut TestAppCon
         "{facts:?} rides cell A's flat line {cell:?}"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).file_count()),
+        view.read_with(cx, |view, cx| view.panes[0]
+            .composer
+            .read(cx)
+            .attachment_count()),
         1,
         "focus moves never touch the draft"
     );

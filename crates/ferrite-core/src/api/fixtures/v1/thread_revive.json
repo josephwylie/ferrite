@@ -1,0 +1,1 @@
+{"id":"1","method":"thread.revive","params":{"thread":12,"args":["--model","opus"],"resume":"4f2a","env":{"HERDR_PROJECTS_DATA_DIR":"/data"},"ready":true,"timeout_ms":60000}}

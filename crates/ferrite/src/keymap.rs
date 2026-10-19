@@ -6,6 +6,15 @@
 //! 0.2.2 does offer a `secondary-` token with the same mapping, but a token
 //! resolved inside gpui's platform cfg cannot be checked for the other
 //! platform from one machine; explicit strings can.
+//!
+//! The operator's own keys (Settings `keys`) are laid over the defaults at
+//! launch (`with_user_keys`), and the result is the table this launch binds
+//! and draws (`install`, `active`).
+
+use std::collections::BTreeMap;
+use std::sync::RwLock;
+
+use gpui::Keystroke;
 
 /// Which convention the primary modifier follows. Linux, when it arrives,
 /// sits on the ctrl side.
@@ -29,10 +38,13 @@ pub const PLATFORM: Platform = Platform::Windows;
 /// a Composer nor a kit input is on the focus path.
 pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input";
 
-/// Every key the cockpit binds: (keystroke, action name, key context).
-/// Action names are the registered `namespace::Action` strings, so the
-/// table stays buildable without touching gpui.
-pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'static str>)> {
+/// One row of the table: (keystroke, action name, key context).
+pub type Binding = (String, &'static str, Option<&'static str>);
+
+/// Every key the cockpit binds by default: (keystroke, action name, key
+/// context). Action names are the registered `namespace::Action` strings,
+/// so the table stays buildable without touching gpui.
+pub fn bindings(platform: Platform) -> Vec<Binding> {
     let primary = match platform {
         Platform::Mac => "cmd",
         Platform::Windows => "ctrl",
@@ -55,17 +67,17 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
     };
     let with_edge = |key: &str| format!("{edge}-{key}");
     let with_primary = |key: &str| format!("{primary}-{key}");
-    vec![
-        ("backspace".into(), "composer::Backspace", None),
-        ("delete".into(), "composer::Delete", None),
-        ("left".into(), "composer::Left", None),
-        ("right".into(), "composer::Right", None),
-        ("home".into(), "composer::Home", None),
-        ("end".into(), "composer::End", None),
-        (with_primary("v"), "composer::Paste", None),
-        // ⌘V with the keyboard anywhere but a Composer still pastes into
-        // the focused Pane's Composer, and moves the keyboard there.
-        (with_primary("v"), "cockpit::Paste", None),
+    let mut table = vec![
+        ("backspace".into(), "composer::Backspace", Some("Composer")),
+        ("delete".into(), "composer::Delete", Some("Composer")),
+        ("left".into(), "composer::Left", Some("Composer")),
+        ("right".into(), "composer::Right", Some("Composer")),
+        ("home".into(), "composer::Home", Some("Composer")),
+        ("end".into(), "composer::End", Some("Composer")),
+        (with_primary("v"), "composer::Paste", Some("Composer")),
+        // Outside a text field, paste into the focused Pane's Composer.
+        // Kit inputs (including question answers) keep their native paste.
+        (with_primary("v"), "cockpit::Paste", Some(NO_TEXT_FIELD)),
         // Word-wise editing, the basic text-field grammar: one word at a
         // time backwards and forwards, the line halves, word steps, and
         // shift-selection — all scoped to the Composer so nothing else
@@ -214,12 +226,20 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // #20: browser-tab muscle memory — cmd-t is the same new Thread,
         // and cmd-n stays as an alias beside it.
         (with_primary("t"), "cockpit::NewThread", None),
-        // The focused Pane takes the whole cockpit at L1; cmd-f again
-        // restores the grid. Escape stays Interrupt (#20 design): stealing
-        // the panic key for "exit fullscreen" would make it ambiguous.
-        (with_primary("f"), "cockpit::ToggleFullscreen", None),
+        // The focused Pane takes the whole cockpit at L1; the same chord
+        // restores the grid (iTerm's maximize-pane). Escape stays Interrupt
+        // (#20 design): stealing the panic key for "exit fullscreen" would
+        // make it ambiguous.
+        (
+            with_primary("shift-enter"),
+            "cockpit::ToggleFullscreen",
+            None,
+        ),
+        // Find in the focused Pane's transcript (or its reader): the
+        // platform's find key, so fullscreen moved off it.
+        (with_primary("f"), "find::Open", None),
         // #21: fold the nav to its LED rail and back — the VS Code sidebar
-        // muscle memory (cmd-t/w/f are spoken for by #20).
+        // muscle memory (cmd-t/w are spoken for by #20, cmd-f by find).
         (with_primary("b"), "cockpit::ToggleNav", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
@@ -235,9 +255,11 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // ⌘K: the command palette — every Thread, then every command.
         (with_primary("k"), "palette::Toggle", None),
         // The palette's two keyed commands: the parked Threads, and the
-        // focused Thread's diff against main in a reader beside it.
+        // focused Thread's branch in the Review beside it.
         (with_primary("shift-p"), "palette::ShowParked", None),
-        (with_primary("shift-d"), "palette::CompareWithMain", None),
+        (with_primary("shift-d"), "palette::ReviewBranch", None),
+        // ⌘⇧A: the work board (ADR 0031), herdr-projects' prefix+a.
+        (with_primary("shift-a"), "projects::Toggle", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
         (with_primary("="), "cockpit::TextLarger", None),
@@ -352,6 +374,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
         ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
         ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
+        // Enter in the sheet's filter line submits nothing: the bare row
+        // would send the Pane's draft from under the sheet.
+        ("enter".into(), NO_ACTION, Some("Shortcuts")),
         // #23: the Composer's `/` and `@` popovers (and #29's band
         // popovers, which ride the same keys). These sit BELOW the bare
         // enter and escape rows, because gpui breaks a same-depth tie
@@ -372,13 +397,334 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             "cockpit::MenuDismiss",
             Some("ComposerMenu"),
         ),
-    ]
+        // The Review slot (ADR 0021), while it holds the keyboard and no
+        // field in it is open: ↑↓ walk the lines, ⇧↑↓ stretch the pick, c
+        // or ⏎ comment on it, ⌫ takes a comment back, ⇥ steps the scope,
+        // r rereads it, / searches the checkout, m renders Markdown, p
+        // shows the pull request, a lists every file, ⇧B picks the branch
+        // scope's base, esc goes back or closes the slot. In its comment
+        // field ⏎ adds and esc cancels; in its search field ↑↓ walk the
+        // results, ⏎ opens one and esc closes it; in its base field ↑↓ walk
+        // the bases, ⏎ picks one and esc closes it. Bound after the bare
+        // rows they shadow.
+        ("up".into(), "review::Previous", Some(REVIEW)),
+        ("down".into(), "review::Next", Some(REVIEW)),
+        ("shift-up".into(), "review::ExtendPrevious", Some(REVIEW)),
+        ("shift-down".into(), "review::ExtendNext", Some(REVIEW)),
+        ("c".into(), "review::Comment", Some(REVIEW)),
+        ("enter".into(), "review::Comment", Some(REVIEW)),
+        ("backspace".into(), "review::Uncomment", Some(REVIEW)),
+        ("tab".into(), "review::NextScope", Some(REVIEW)),
+        ("r".into(), "review::Reread", Some(REVIEW)),
+        ("/".into(), "review::Search", Some(REVIEW)),
+        ("m".into(), "review::ToggleMarkdown", Some(REVIEW)),
+        ("p".into(), "review::ShowPullRequest", Some(REVIEW)),
+        ("a".into(), "review::AllFiles", Some(REVIEW)),
+        ("shift-b".into(), "review::PickBase", Some(REVIEW)),
+        ("escape".into(), "review::Close", Some(REVIEW)),
+        ("enter".into(), "review::SaveComment", Some("ReviewComment")),
+        (
+            "escape".into(),
+            "review::CancelComment",
+            Some("ReviewComment"),
+        ),
+        ("up".into(), "review::Previous", Some("ReviewSearch")),
+        ("down".into(), "review::Next", Some("ReviewSearch")),
+        ("enter".into(), "review::OpenFound", Some("ReviewSearch")),
+        ("escape".into(), "review::CloseSearch", Some("ReviewSearch")),
+        ("up".into(), "review::Previous", Some("ReviewBase")),
+        ("down".into(), "review::Next", Some("ReviewBase")),
+        ("enter".into(), "review::ChooseBase", Some("ReviewBase")),
+        ("escape".into(), "review::CloseBases", Some("ReviewBase")),
+        // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
+        // closes it. Last, so its context wins every same-depth tie: send,
+        // the Composer's new line, Groups (⌘G, ⌘⇧G) and interrupt.
+        ("enter".into(), "find::Next", Some("Find")),
+        (with_primary("g"), "find::Next", Some("Find")),
+        ("shift-enter".into(), "find::Previous", Some("Find")),
+        (with_primary("shift-g"), "find::Previous", Some("Find")),
+        ("escape".into(), "find::Close", Some("Find")),
+    ];
+    board_reads_its_keys(&mut table, platform);
+    table
+}
+
+/// The work board's key context.
+const PROJECTS: &str = "Projects";
+
+/// The work board reads every key but the window's own, as herdr-projects'
+/// board reads its terminal's (`board::keys::press_of`): every keystroke
+/// the table binds anywhere is masked under it, so nothing bound around it
+/// (a wall's y/n/a and digits, Submit's enter, Windows' ctrl keys) acts
+/// before it. The window keeps ⌘ but its paste, which the board takes as
+/// one paste, and the key that opens and leaves the board
+/// (`projects::Toggle`). Its keys are its own, listed by its `?` menu.
+///
+/// Run again over a changed table, it masks the keys now bound and lifts
+/// the mask from a key the window now keeps.
+fn board_reads_its_keys(table: &mut Vec<Binding>, platform: Platform) {
+    let paste = match platform {
+        Platform::Mac => "cmd-v",
+        Platform::Windows => "ctrl-v",
+    };
+    let kept: Vec<String> = table
+        .iter()
+        .filter(|(keys, action, _)| {
+            *action == "projects::Toggle"
+                || (keys.as_str() != paste
+                    && parse(keys, platform).is_ok_and(|strokes| strokes[0].modifiers.platform))
+        })
+        .map(|(keys, _, _)| keys.clone())
+        .collect();
+    table
+        .retain(|(keys, action, context)| !is_board_mask(action, *context) || !kept.contains(keys));
+    let mut masked: Vec<String> = table
+        .iter()
+        .filter(|(_, action, context)| is_board_mask(action, *context))
+        .map(|(keys, _, _)| keys.clone())
+        .collect();
+    let mut rows = Vec::new();
+    for (keys, _, _) in table.iter() {
+        if !kept.contains(keys) && !masked.contains(keys) {
+            masked.push(keys.clone());
+            rows.push((keys.clone(), NO_ACTION, Some(PROJECTS)));
+        }
+    }
+    table.extend(rows);
+}
+
+/// Whether a row is the board's mask over a key (`board_reads_its_keys`).
+fn is_board_mask(action: &str, context: Option<&str>) -> bool {
+    action == NO_ACTION && context == Some(PROJECTS)
+}
+
+/// Actions with no default key, for the operator to bind (Settings
+/// `keys`): each name and the context its key acts in.
+pub const UNBOUND: [(&str, Option<&str>); 2] = [
+    ("cockpit::RefreshPrStatus", None),
+    ("cockpit::OpenPrInBrowser", None),
+];
+
+/// The Review slot holds the keyboard itself, not a field inside it.
+const REVIEW: &str = "Review && !Composer";
+
+/// The contexts where no text field takes typing (a Decision answers its
+/// own letters), so a plain key may act there.
+const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, "Decision", "Wall"];
+
+/// gpui's "no action": a row that keeps a key from the bindings under it.
+const NO_ACTION: &str = "zed::NoAction";
+
+/// The operator's keys (Settings `keys`) laid over the defaults, and a
+/// sentence for each one refused.
+///
+/// `None` unbinds an action; every unbinding applies first, so a key may
+/// take a keystroke from an action the operator unbinds. A key replaces
+/// every default spelling of its action, in each context the action is
+/// bound in, so the table's precedence order holds. The key is the
+/// operator's: a default of another action on the same keystroke in the
+/// same context gives it up. An action with no default (`UNBOUND`) is bound
+/// in its own context. Refused, the action keeping its defaults: an
+/// action Ferrite does not know, a keystroke gpui cannot parse, `cmd` on
+/// Windows, one keystroke given to two actions, a key that `types` for an
+/// action bound anywhere a text field may hold the keyboard, and a key
+/// another action holds where one of the two is bound with no context —
+/// the other would act there instead, or lose its key unsaid.
+pub fn with_user_keys(
+    platform: Platform,
+    keys: &BTreeMap<String, Option<String>>,
+) -> (Vec<Binding>, Vec<String>) {
+    let mut table = bindings(platform);
+    let mut refused = Vec::new();
+    let mut rebound = Vec::new();
+    for (name, keys) in keys {
+        let unbound = UNBOUND.iter().find(|(action, _)| action == name);
+        let Some(action) = table
+            .iter()
+            .map(|(_, action, _)| *action)
+            .chain(unbound.map(|(action, _)| *action))
+            .find(|action| action == name)
+        else {
+            refused.push(format!("`{name}` is not an action Ferrite binds"));
+            continue;
+        };
+        match keys {
+            Some(keys) => {
+                // Its one row, spelled as asked; dropped below if refused.
+                if let Some((_, context)) = unbound {
+                    table.push((keys.clone(), action, *context));
+                }
+                rebound.push((action, keys));
+            }
+            None => table.retain(|(_, bound, _)| *bound != action),
+        }
+    }
+    // Each user binding, parsed, by the contexts it holds.
+    let mut taken: Vec<(Vec<Keystroke>, Option<&'static str>, &'static str)> = Vec::new();
+    for (action, keys) in rebound {
+        let strokes = match parse(keys, platform) {
+            Ok(strokes) => strokes,
+            Err(why) => {
+                refused.push(format!("`{keys}` for {action}: {why}"));
+                continue;
+            }
+        };
+        let contexts: Vec<Option<&'static str>> = table
+            .iter()
+            .filter(|(_, bound, _)| *bound == action)
+            .map(|(_, _, context)| *context)
+            .collect();
+        let lettered = |context: &Option<&str>| {
+            context.is_some_and(|context| LETTER_CONTEXTS.contains(&context))
+        };
+        if types(&strokes[0]) && !contexts.iter().all(lettered) {
+            refused.push(format!(
+                "`{keys}` for {action} would take that key from typing; give it a modifier"
+            ));
+            continue;
+        }
+        if let Some((_, _, other)) = taken
+            .iter()
+            .find(|(held, context, _)| *held == strokes && contexts.contains(context))
+        {
+            refused.push(format!(
+                "`{keys}` is given to both {other} and {action}; {action} keeps its default"
+            ));
+            continue;
+        }
+        let clash = table.iter().find(|(spelled, bound, context)| {
+            *bound != action
+                && *bound != NO_ACTION
+                && !contexts.contains(context)
+                && (context.is_none() || contexts.contains(&None))
+                && parse(spelled, platform).ok().as_ref() == Some(&strokes)
+        });
+        if let Some((_, other, context)) = clash {
+            refused.push(format!(
+                "`{keys}` for {action} is {other}'s {}; pick another key, or unbind {other}",
+                context.map_or("everywhere".to_string(), |context| format!("in {context}"))
+            ));
+            continue;
+        }
+        let mut seen: Vec<Option<&'static str>> = Vec::new();
+        table.retain_mut(|(spelled, bound, context)| {
+            if *bound != action {
+                return true;
+            }
+            // Two default spellings in one context become one row.
+            if seen.contains(context) {
+                return false;
+            }
+            seen.push(*context);
+            *spelled = keys.clone();
+            true
+        });
+        taken.extend(
+            seen.into_iter()
+                .map(|context| (strokes.clone(), context, action)),
+        );
+    }
+    table.retain(|(spelled, bound, context)| {
+        let refused_unbound = UNBOUND.iter().any(|(action, _)| action == bound)
+            && !taken.iter().any(|(_, _, holder)| holder == bound);
+        let strokes = parse(spelled, platform).ok();
+        !refused_unbound
+            && !taken.iter().any(|(held, held_context, holder)| {
+                holder != bound && held_context == context && Some(held) == strokes.as_ref()
+            })
+    });
+    board_reads_its_keys(&mut table, platform);
+    (table, refused)
+}
+
+/// A table spelling as keystrokes (a chord is several, space-separated),
+/// or why it is not one.
+fn parse(keys: &str, platform: Platform) -> Result<Vec<Keystroke>, String> {
+    let strokes = keys
+        .split_whitespace()
+        .map(Keystroke::parse)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if strokes.is_empty() || strokes.iter().any(|stroke| stroke.key.is_empty()) {
+        return Err("no key".into());
+    }
+    if platform == Platform::Windows && strokes.iter().any(|stroke| stroke.modifiers.platform) {
+        return Err("Windows has no cmd key; use ctrl".into());
+    }
+    Ok(strokes)
+}
+
+/// Whether `stroke` types a character in a text field: a character or
+/// space, alone or with shift. Bound where a text field may hold the
+/// keyboard it would outrank the typing there.
+fn types(stroke: &Keystroke) -> bool {
+    let modifiers = stroke.modifiers;
+    let held = modifiers.control || modifiers.alt || modifiers.platform || modifiers.function;
+    !held && (stroke.key.chars().count() == 1 || stroke.key == "space")
+}
+
+/// The table this launch bound: the defaults until `install` says
+/// otherwise. The shortcuts sheet and every drawn chord read it, so they
+/// show the operator's keys.
+static ACTIVE: RwLock<Option<Vec<Binding>>> = RwLock::new(None);
+
+/// Make `table` the one `active` answers.
+pub fn install(table: Vec<Binding>) {
+    *ACTIVE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(table);
+}
+
+/// The bound table on this platform.
+pub fn active() -> Vec<Binding> {
+    ACTIVE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+        .unwrap_or_else(|| bindings(PLATFORM))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::Keystroke;
+
+    /// The work board reads every key the table binds but the window's ⌘
+    /// and the key that leaves it: each is masked under it, on both
+    /// platforms and with the operator's keys laid over the defaults.
+    #[test]
+    fn the_board_reads_every_key_but_the_windows_own() {
+        let masked = |table: &[Binding], keys: &str| {
+            table.contains(&(keys.into(), NO_ACTION, Some(PROJECTS)))
+        };
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for keys in ["y", "n", "a", "1", "2", "3", "enter", "escape", "?", "tab"] {
+                assert!(masked(&table, keys), "{platform:?}: {keys}");
+            }
+            let (primary, toggle) = match platform {
+                Platform::Mac => ("cmd", "cmd-shift-a"),
+                Platform::Windows => ("ctrl", "ctrl-shift-a"),
+            };
+            assert!(masked(&table, &format!("{primary}-v")), "the board pastes");
+            assert!(!masked(&table, toggle), "the key that leaves the board");
+            assert_eq!(
+                masked(&table, &format!("{primary}-k")),
+                platform == Platform::Windows,
+                "⌘ is the window's; Windows' ctrl keys are the board's"
+            );
+        }
+        let keys = BTreeMap::from([
+            ("projects::Toggle".to_string(), Some("ctrl-g".to_string())),
+            ("palette::Toggle".to_string(), Some("ctrl-p".to_string())),
+        ]);
+        let (table, refused) = with_user_keys(Platform::Mac, &keys);
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(
+            !masked(&table, "ctrl-g"),
+            "the operator's key leaves the board"
+        );
+        assert!(masked(&table, "ctrl-p"), "an operator's key is masked too");
+    }
 
     /// Windows has no cmd key: a binding spelled cmd-* is dead there.
     #[test]
@@ -404,7 +750,8 @@ mod tests {
             ("cockpit::NewThread", "n"),
             // #20: cmd-t is the browser-tab spelling of the same new Thread.
             ("cockpit::NewThread", "t"),
-            ("cockpit::ToggleFullscreen", "f"),
+            ("cockpit::ToggleFullscreen", "shift-enter"),
+            ("find::Open", "f"),
             // #21: the nav collapses to its rail on both platforms.
             ("cockpit::ToggleNav", "b"),
             ("cockpit::OpenSettings", ","),
@@ -414,7 +761,8 @@ mod tests {
             ("cockpit::NewGroup", "shift-g"),
             ("palette::Toggle", "k"),
             ("palette::ShowParked", "shift-p"),
-            ("palette::CompareWithMain", "shift-d"),
+            ("palette::ReviewBranch", "shift-d"),
+            ("projects::Toggle", "shift-a"),
             ("cockpit::TextLarger", "="),
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),
@@ -444,12 +792,15 @@ mod tests {
     }
 
     /// The two platforms differ in spelling only: same actions, same order,
-    /// same key contexts.
+    /// same key contexts. The board's masks are not compared: they follow
+    /// each platform's distinct keystrokes, fewer on Windows, where ⌘ and
+    /// ctrl keys share one spelling.
     #[test]
     fn both_platforms_bind_the_same_actions_in_the_same_contexts() {
         let shape = |platform: Platform| -> Vec<(&'static str, Option<&'static str>)> {
             bindings(platform)
                 .into_iter()
+                .filter(|(_, action, context)| !is_board_mask(action, *context))
                 .map(|(_, action, context)| (action, context))
                 .collect()
         };
@@ -598,6 +949,7 @@ mod tests {
                 ("up", "shortcuts::ScrollUp", "Shortcuts"),
                 ("down", "shortcuts::ScrollDown", "Shortcuts"),
                 ("escape", "shortcuts::Dismiss", "Shortcuts"),
+                ("enter", NO_ACTION, "Shortcuts"),
                 ("up", "empty_board::Previous", "EmptyBoard"),
                 ("down", "empty_board::Next", "EmptyBoard"),
                 ("enter", "empty_board::Run", "EmptyBoard"),
@@ -796,6 +1148,57 @@ mod tests {
         assert!(at("composer::Copy") < at("cockpit::CopySelection"));
     }
 
+    /// The Review slot's keys live in its own context — never while its
+    /// comment or search field takes text — and sit after the bare rows
+    /// they shadow.
+    #[test]
+    fn the_review_keys_are_scoped_to_the_slot_and_its_fields() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (key, action) in [
+                ("up", "review::Previous"),
+                ("shift-down", "review::ExtendNext"),
+                ("c", "review::Comment"),
+                ("backspace", "review::Uncomment"),
+                ("tab", "review::NextScope"),
+                ("r", "review::Reread"),
+                ("/", "review::Search"),
+                ("m", "review::ToggleMarkdown"),
+                ("p", "review::ShowPullRequest"),
+                ("a", "review::AllFiles"),
+                ("shift-b", "review::PickBase"),
+                ("escape", "review::Close"),
+            ] {
+                assert!(
+                    table.contains(&(key.into(), action, Some("Review && !Composer"))),
+                    "{platform:?} is missing {key} for {action}"
+                );
+            }
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::Comment")
+            );
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::SaveComment")
+            );
+            assert!(
+                at(&table, "escape", "cockpit::Interrupt")
+                    < at(&table, "escape", "review::CancelComment")
+            );
+            assert!(table.contains(&(
+                "escape".into(),
+                "review::CancelComment",
+                Some("ReviewComment")
+            )));
+            assert!(
+                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::OpenFound")
+            );
+            assert!(
+                at(&table, "escape", "cockpit::Interrupt")
+                    < at(&table, "escape", "review::CloseSearch")
+            );
+        }
+    }
+
     /// A keystroke gpui cannot parse would panic at startup on one platform
     /// only; parse is pure, so both spellings are checked from here.
     #[test]
@@ -806,6 +1209,220 @@ mod tests {
                     panic!("{action} ({platform:?}): {e:?}");
                 }
             }
+        }
+    }
+
+    fn user_keys(pairs: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
+        pairs
+            .iter()
+            .map(|(action, keys)| (action.to_string(), keys.map(str::to_string)))
+            .collect()
+    }
+
+    /// A key replaces every default spelling of its action in place, in
+    /// each context it acts in; `null` unbinds; the rest stay as they were.
+    #[test]
+    fn the_operators_keys_replace_and_unbind_in_place() {
+        let defaults = bindings(Platform::Mac);
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("cockpit::NewThread", Some("cmd-shift-t")),
+                ("cockpit::Allow", Some("shift-y")),
+                ("cockpit::ToggleNav", None),
+            ]),
+        );
+        assert!(refused.is_empty(), "{refused:?}");
+        let rows = |action: &str| -> Vec<(String, Option<&'static str>)> {
+            table
+                .iter()
+                .filter(|(_, bound, _)| *bound == action)
+                .map(|(keys, _, context)| (keys.clone(), *context))
+                .collect()
+        };
+        assert_eq!(
+            rows("cockpit::NewThread"),
+            [("cmd-shift-t".to_string(), None)],
+            "cmd-n and cmd-t become the one key"
+        );
+        assert_eq!(
+            rows("cockpit::Allow"),
+            [
+                ("shift-y".to_string(), Some("Decision")),
+                ("shift-y".to_string(), Some("Wall"))
+            ]
+        );
+        assert!(rows("cockpit::ToggleNav").is_empty());
+        assert_eq!(
+            at(&table, "shift-y", "cockpit::Allow"),
+            at(&defaults, "y", "cockpit::Allow"),
+            "the row keeps its place"
+        );
+        let actions = |table: &[Binding]| {
+            table
+                .iter()
+                .filter(|(_, action, context)| !is_board_mask(action, *context))
+                .count()
+        };
+        assert_eq!(
+            actions(&table),
+            actions(&defaults) - 2,
+            "one NewThread row, no ToggleNav"
+        );
+    }
+
+    /// The operator's key is theirs: another action's default on the same
+    /// keystroke in the same context gives it up, however it is spelled.
+    #[test]
+    fn a_users_key_takes_it_from_a_default() {
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[("cockpit::ToggleNav", Some("shift-cmd-k"))]),
+        );
+        assert!(refused.is_empty());
+        assert!(table.contains(&("shift-cmd-k".into(), "cockpit::ToggleNav", None)));
+        let (table, _) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[("cockpit::ToggleNav", Some("cmd-k"))]),
+        );
+        assert!(table.contains(&("cmd-k".into(), "cockpit::ToggleNav", None)));
+        assert!(
+            !table
+                .iter()
+                .any(|(_, action, _)| *action == "palette::Toggle"),
+            "the palette gave cmd-k up"
+        );
+    }
+
+    /// A key another action holds where one of the two acts everywhere is
+    /// refused, naming that action: one would shadow the other. Unbinding
+    /// the other frees the key, whatever the order of the entries.
+    #[test]
+    fn a_key_held_in_another_context_is_refused_until_unbound() {
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("cockpit::ToggleNav", Some("cmd-a")),
+                ("palette::SelectNext", Some("cmd-]")),
+            ]),
+        );
+        assert_eq!(
+            refused,
+            [
+                "`cmd-a` for cockpit::ToggleNav is composer::SelectAll's in Composer; \
+                 pick another key, or unbind composer::SelectAll",
+                "`cmd-]` for palette::SelectNext is cockpit::NextPane's everywhere; \
+                 pick another key, or unbind cockpit::NextPane",
+            ]
+        );
+        assert!(table.contains(&("cmd-b".into(), "cockpit::ToggleNav", None)));
+        assert!(table.contains(&("cmd-a".into(), "composer::SelectAll", Some("Composer"))));
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("cockpit::ToggleNav", Some("cmd-a")),
+                ("composer::SelectAll", None),
+            ]),
+        );
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(table.contains(&("cmd-a".into(), "cockpit::ToggleNav", None)));
+    }
+
+    /// A plain key may go only to an action that acts where no text field
+    /// holds the keyboard; anywhere a field may, it would eat the letter.
+    #[test]
+    fn a_typing_key_goes_only_where_nothing_is_typed() {
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("composer::Home", Some("j")),
+                ("shortcuts::ScrollDown", Some("j")),
+                ("palette::SelectNext", Some("shift-j")),
+                ("cockpit::Allow", Some("o")),
+                ("review::Reread", Some("g")),
+            ]),
+        );
+        assert_eq!(refused.len(), 3, "{refused:?}");
+        for action in [
+            "composer::Home",
+            "shortcuts::ScrollDown",
+            "palette::SelectNext",
+        ] {
+            assert!(refused
+                .iter()
+                .any(|refusal| refusal.contains(&format!("for {action} would take that key"))));
+        }
+        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Decision"))));
+        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Wall"))));
+        assert!(table.contains(&("g".into(), "review::Reread", Some(REVIEW))));
+    }
+
+    /// Each refusal says which entry and why, and leaves that action on
+    /// its defaults.
+    #[test]
+    fn bad_keys_are_refused_with_a_reason() {
+        let (table, refused) = with_user_keys(
+            Platform::Windows,
+            &user_keys(&[
+                ("cockpit::Nothing", Some("ctrl-j")),
+                ("cockpit::NextPane", Some("ctrl-j-k")),
+                ("cockpit::PreviousPane", Some("cmd-j")),
+                ("cockpit::TextLarger", Some("ctrl-j")),
+                ("cockpit::TextSmaller", Some("ctrl-j")),
+                ("cockpit::ToggleNav", Some("j")),
+                ("cockpit::ToggleFullscreen", Some("shift-space")),
+            ]),
+        );
+        assert_eq!(refused.len(), 6, "{refused:?}");
+        let says = |words: &str| refused.iter().any(|refusal| refusal.contains(words));
+        assert!(says("`cockpit::Nothing` is not an action"));
+        assert!(says("`ctrl-j-k` for cockpit::NextPane"));
+        assert!(says(
+            "`cmd-j` for cockpit::PreviousPane: Windows has no cmd key"
+        ));
+        assert!(says("both cockpit::TextLarger and cockpit::TextSmaller"));
+        assert!(says(
+            "`j` for cockpit::ToggleNav would take that key from typing"
+        ));
+        assert!(says(
+            "`shift-space` for cockpit::ToggleFullscreen would take"
+        ));
+        assert!(table.contains(&("ctrl-]".into(), "cockpit::NextPane", None)));
+        assert!(table.contains(&("ctrl-[".into(), "cockpit::PreviousPane", None)));
+        assert!(table.contains(&("ctrl-j".into(), "cockpit::TextLarger", None)));
+        assert!(table.contains(&("ctrl--".into(), "cockpit::TextSmaller", None)));
+    }
+
+    /// With no keys of the operator's the table is the defaults.
+    /// The PR actions have no default key; the operator's key binds each
+    /// everywhere, and a refused one leaves no row behind.
+    #[test]
+    fn an_action_with_no_default_takes_the_operators_key() {
+        let (defaults, _) = with_user_keys(Platform::Mac, &BTreeMap::new());
+        for (action, _) in UNBOUND {
+            assert!(defaults.iter().all(|(_, bound, _)| *bound != action));
+        }
+        let (table, refused) = with_user_keys(
+            Platform::Mac,
+            &user_keys(&[
+                ("cockpit::RefreshPrStatus", Some("cmd-shift-r")),
+                ("cockpit::OpenPrInBrowser", Some("o")),
+            ]),
+        );
+        assert!(table.contains(&("cmd-shift-r".into(), "cockpit::RefreshPrStatus", None)));
+        assert!(table
+            .iter()
+            .all(|(_, action, _)| *action != "cockpit::OpenPrInBrowser"));
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains("would take that key from typing"));
+    }
+
+    #[test]
+    fn no_user_keys_is_the_defaults() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let (table, refused) = with_user_keys(platform, &BTreeMap::new());
+            assert_eq!(table, bindings(platform));
+            assert!(refused.is_empty());
         }
     }
 }

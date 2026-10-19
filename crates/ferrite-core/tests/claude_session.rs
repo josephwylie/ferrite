@@ -696,6 +696,29 @@ fn an_abnormal_exit_explains_itself_with_stderr() {
     }
 }
 
+/// A CLI that refuses its arguments exits before the start's effort is
+/// set: the start fails with what it said, not the broken pipe it left.
+#[test]
+fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
+    let program = stub(
+        "claude-refuses",
+        &format!("{VERSION_CASE}\necho 'Error: Session ID 4a76 is already in use.' >&2\nexit 1"),
+    );
+    let refused = ClaudeSession::spawn(ClaudeConfig {
+        effort: Some("medium".into()),
+        ..config(program)
+    });
+    let Err(error) = refused else {
+        panic!("expected the start to fail")
+    };
+    let said = error.to_string();
+    assert!(said.contains("exit status: 1"), "{said}");
+    assert!(
+        said.contains("Session ID 4a76 is already in use."),
+        "{said}"
+    );
+}
+
 /// What the CLI is asked to be, and what it is told — recorded so a change to
 /// either is deliberate.
 #[test]
@@ -722,6 +745,9 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         permission_mode: Some("default".into()),
         resume: None,
         visuals: None,
+        env: Vec::new(),
+        launcher: Vec::new(),
+        args: vec!["--dangerously-skip-permissions".into()],
     })
     .unwrap();
     session.send("hi").unwrap();
@@ -744,16 +770,18 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --model haiku --permission-mode default --name CI flake --add-dir /extra/project"
+         --model haiku --permission-mode default --name CI flake --add-dir /extra/project \
+         --dangerously-skip-permissions"
     );
     assert_eq!(sent.len(), 6);
-    // Feature detection comes first, before a word of the Thread.
+    // Feature detection comes first, before a word of the Thread. Declaring
+    // per-task stops keeps an interrupt from killing background agents.
     assert_eq!(
         sent[0],
         serde_json::json!({
             "type": "control_request",
             "request_id": "req_1",
-            "request": {"subtype": "initialize"},
+            "request": {"subtype": "initialize", "perTaskStopAffordance": true},
         })
     );
     assert_eq!(
@@ -804,6 +832,40 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false"
+    );
+}
+
+/// Projects' turn-end hooks (ADR 0031): herdr-projects hands its agent a
+/// `--settings` file of `Stop`/`StopFailure` hooks through `thread.start
+/// --args`; it reaches the CLI last, after Ferrite's own flags, with the
+/// environment those hooks run the program in.
+#[test]
+fn projects_settings_reach_the_cli_after_ferrites_flags() {
+    let log = log_path("argv-projects.log");
+    let program = stub(
+        "claude-echoes-projects",
+        &format!(
+            "{PRELUDE}\necho \"$@ | $HERDR_SOCKET_PATH $FERRITE_PROJECTS_BIN\" > '{}'\nexec cat > /dev/null",
+            log.display()
+        ),
+    );
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        program,
+        env: vec![
+            ("HERDR_SOCKET_PATH".into(), "/store/api.sock".into()),
+            ("FERRITE_PROJECTS_BIN".into(), "/f/ferrite-projects".into()),
+        ],
+        args: vec!["--settings".into(), "/d/tasks/app/1/claude.json".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    let recorded = read_lines(&log, 1);
+    drop(session);
+    assert_eq!(
+        recorded[0],
+        "-p --input-format stream-json --output-format stream-json \
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+         --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
     );
 }
 

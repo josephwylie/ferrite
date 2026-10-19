@@ -386,6 +386,11 @@ pub fn status_ring(ink: u32) -> Div {
     glyph("\u{25cb}", ink)
 }
 
+/// A status check (a finish not yet seen, `✓`), set as text.
+pub fn status_check(ink: u32) -> Div {
+    glyph("\u{2713}", ink)
+}
+
 // ------------------------------------------------------------------ loops
 //
 // The few loops the terminal grammar allows (theme rule 8). Each rides the
@@ -1063,7 +1068,7 @@ pub fn bound_chord(action: &str) -> Option<String> {
 /// context), spelled as `bound_chord` spells it — for a key that only acts
 /// somewhere (⌘⌫ parks from an empty line: `ComposerEmpty`).
 pub fn bound_chord_in(action: &str, context: Option<&str>) -> Option<String> {
-    let (keys, _, _) = crate::keymap::bindings(crate::keymap::PLATFORM)
+    let (keys, _, _) = crate::keymap::active()
         .into_iter()
         .find(|(_, bound, bound_context)| *bound == action && *bound_context == context)?;
     Some(spell_chord(&keys))
@@ -1608,9 +1613,10 @@ struct ChoiceMenuState {
 }
 
 /// The limits a summoned surface rests within (rule 2.4.3): `floor` is the
-/// Composer's top edge, which a surface opening upward rests `FLOAT_OFFSET`
-/// above so the Composer's edge stays whole; `limit_right` is the Pane's
-/// inner edge (`PANE_PAD_X` in from its right), which it never crosses.
+/// edge a surface opening upward rests `FLOAT_OFFSET` above so that edge
+/// stays whole — the bar's top for a status-line trigger, a Pane's Composer
+/// for its own; `limit_right` is the right edge it never crosses — the
+/// window's margin, or the Pane's inner edge (`PANE_PAD_X` in).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FloatPlace {
     pub floor: f32,
@@ -1622,7 +1628,7 @@ impl FloatPlace {
     /// pointer: opening up, its foot rests `FLOAT_OFFSET` above the floor;
     /// opening down, its head `FLOAT_OFFSET` under the trigger. It hangs by
     /// its right corner at the trigger's right edge, pulled left to stay
-    /// inside the Pane.
+    /// inside `limit_right`.
     pub fn card_corner(
         &self,
         trigger: gpui::Bounds<gpui::Pixels>,

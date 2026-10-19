@@ -1,0 +1,1 @@
+{"type":"input","thread":4,"seq":3,"at_ms":1253,"input":{"record":{"type":"activity","observation":{"kind":"content","key":"[\"claude\",\"root\",\"a1\"]","id":"m1","event":{"kind":"text_delta","text":"child text"}}}}}

@@ -1,687 +1,114 @@
-//! The Cockpit's headless state: what the operator is on the hook for, per
-//! Thread.
-//!
-//! The pump's beginnings: Threads, their pending Decisions, and prompts held
-//! back while a turn runs. No process and no window — a Thread's events are
-//! fed in, and what the operator must answer comes out.
+//! The Cockpit: one window's hold on the Engine (ADR 0025). What a window
+//! keeps for itself — its Roster's focus, View and fullscreen, its Drafts,
+//! whether it has the operator's focus — lives here; everything that must
+//! keep running without a window is the Engine's, and the Cockpit changes
+//! it only through the Engine's acts. The Engine runs in the Server, and
+//! the acts are commands over its socket (`remote`); in `--demo`, `--load`
+//! and every test it runs in this process, and an act is a direct call.
+//! Either way the window reads what the Engine's messages built: each open
+//! Thread's mirror, and the shared state's copies. The open Threads are
+//! shared: the Roster follows them (`sync_roster`).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-pub use crate::activity::ToolTiming;
-use crate::activity::{
-    Activity, ActivityEvent, ActivityInput, ActivityUpdate, ActivityView, AgentKey, DecisionHandle,
-    Subject,
+use crate::activity::{AgentKey, DecisionHandle, Subject};
+pub use crate::engine::{
+    title_from_prompt, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine,
+    HistoryDirection, LogReader, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart,
+    ReviveGroupError, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
-use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
-use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
-pub use crate::prompt_history::HistoryDirection;
-use crate::prompt_history::PromptHistory;
-use crate::providers::{Session, SettingAck};
+use crate::groups::{
+    Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
+};
+use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
+use crate::protocol::{Done, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError};
 use crate::roster::{DraftId, DraftScope, PaneIdentity, Roster, View};
-use crate::session::SessionLifecycle;
-use crate::store::{LoadError, Provider, Store, ThreadWriter};
-use crate::suggest::Suggestion;
-use crate::transcript::{BlockId, Input, Transcript, Update};
-use crate::workspace::follow::{self, Follow, Move};
-use crate::workspace::registry::{self, ProjectId, Registry};
-use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
-use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
+use crate::store::{LoadError, Provider, Store};
+use crate::transcript::Input;
+use crate::workspace::registry::{ProjectId, Registry};
+use crate::workspace::WorkspaceChoice;
+use crate::{Decision, DecisionAnswer, ModelInfo, ThreadId};
+pub use mirror::ThreadView;
+pub use remote::{Attach, Endpoint, ServerState};
+pub use status::{ServerStatus, StatusRow};
 
-mod history;
-mod queue;
-
-/// Everything one spawn needs, in one struct: every path that starts a
-/// Session (open, revive, send-respawn, sweep) reads the Thread's stored
-/// choice through it, so a new fact travels to all of them at once (#25).
-pub struct SpawnRequest<'a> {
-    pub provider: Provider,
-    /// The Thread's chosen model, verbatim as the provider announced it.
-    /// `None` is the provider's own default.
-    pub model: Option<&'a str>,
-    /// The Thread's chosen reasoning effort, in the provider's own word.
-    /// `None` is the operator's default for the provider (Settings), which
-    /// the spawner applies — or the provider's own when there is none.
-    pub effort: Option<&'a str>,
-    /// The provider-native id of a Thread being revived, which the provider
-    /// reloads its own history from.
-    pub resume: Option<&'a str>,
-    /// The Thread's title, for the provider's own session list. `None`
-    /// until the operator names the Thread.
-    pub name: Option<&'a str>,
-    /// The Thread's workspace binding resolved to the directory the Session
-    /// works in; `None` only for a Thread from before bindings were
-    /// recorded.
-    pub cwd: Option<&'a Path>,
-    /// Other roots in the same Project. Providers expose these alongside
-    /// `cwd`; they never change which directory the Session starts in.
-    pub additional_directories: Vec<PathBuf>,
-}
-
-fn project_additional_directories(
-    registry: &Registry,
-    project: Option<ProjectId>,
-    cwd: Option<&Path>,
-) -> Vec<PathBuf> {
-    let cwd = cwd.map(|cwd| std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
-    project
-        .and_then(|project| registry.project(project))
-        .into_iter()
-        .flat_map(|project| project.directories())
-        .filter(|directory| Some(*directory) != cwd.as_deref())
-        .map(Path::to_path_buf)
-        .collect()
-}
-
-/// How a Session is started. Injected so the cockpit can be driven with
-/// scripted Sessions in tests — nothing below this line spawns a process.
-pub trait Spawner {
-    fn discover_sessions(
-        &mut self,
-        _roots: Vec<(Provider, PathBuf)>,
-        _cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
-        None
-    }
-
-    /// Metadata only: discover the selected workspace's effective commands.
-    fn discover_commands(
-        &mut self,
-        _provider: Provider,
-        _cwd: &std::path::Path,
-    ) -> Option<crate::providers::commands::Discovery> {
-        None
-    }
-
-    /// Discover provider menus off-thread, without creating a Session or
-    /// sending a prompt. Unsupported adapters keep the fallback catalog.
-    fn discover_models(&mut self) -> Option<Receiver<(Provider, Vec<ModelInfo>)>> {
-        None
-    }
-
-    /// Optional background prediction. Scripted/demo adapters do nothing;
-    /// production delegates to the provider one-shot module.
-    fn suggest(&mut self, _request: crate::suggest::Request, _replies: Sender<Suggestion>) {}
-
-    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
-
-    /// A ready adapter completes synchronously; production overrides this
-    /// to start off-thread. Only readiness, never queue admission, is success.
-    fn start(&mut self, request: SpawnRequest) -> io::Result<SessionLifecycle> {
-        self.spawn(request).map(SessionLifecycle::ready)
-    }
-}
-
-/// Resident memory per Session, injected. The cockpit never shells out for
-/// this itself: a test drives the watchdog by saying what the number is.
-pub trait RssSampler {
-    /// Bytes resident for the Session serving `thread`, or None when it
-    /// cannot be measured. `pid` is the Session's process where it has one.
-    fn sample(&mut self, thread: ThreadId, pid: Option<u32>) -> Option<u64>;
-}
-
-/// A Session the watchdog replaced, for the operator and the app's log.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Restart {
-    pub thread: ThreadId,
-    /// What it had grown to when the watchdog acted.
-    pub rss: u64,
-}
-
-/// What one frame changed for one Pane. Threads that produced nothing are
-/// absent: a quiet Pane costs the renderer nothing.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaneUpdate {
-    pub thread: ThreadId,
-    /// Exactly the Blocks whose content moved.
-    pub dirty: Vec<BlockId>,
-    /// Blocks that fell off the far end and no longer exist.
-    pub evicted: Vec<BlockId>,
-    /// Child changes never enter the Main-only compatibility lists above.
-    pub subjects: Vec<SubjectUpdate>,
-    pub activity_changed: bool,
-    pub redirects: Vec<(AgentKey, AgentKey)>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SubjectUpdate {
-    pub subject: Subject,
-    pub dirty: Vec<BlockId>,
-    pub evicted: Vec<BlockId>,
-    pub content_changed: bool,
-}
-
-impl PaneUpdate {
-    fn new(thread: ThreadId) -> Self {
-        Self {
-            thread,
-            dirty: Vec::new(),
-            evicted: Vec::new(),
-            subjects: Vec::new(),
-            activity_changed: false,
-            redirects: Vec::new(),
-        }
-    }
-
-    fn absorb(&mut self, applied: ActivityUpdate, content_changed: bool) {
-        self.activity_changed |=
-            !applied.changed.is_empty() || applied.attention_changed || applied.order_changed;
-        self.redirects.extend(applied.redirects);
-        for subject in applied.changed {
-            if !self.subjects.iter().any(|change| change.subject == subject) {
-                self.subjects.push(SubjectUpdate {
-                    subject,
-                    dirty: Vec::new(),
-                    evicted: Vec::new(),
-                    content_changed: false,
-                });
-            }
-        }
-        for (subject, blocks) in applied.blocks {
-            if subject == Subject::Main {
-                self.dirty.extend(blocks.dirty.iter().copied());
-                self.evicted.extend(blocks.evicted.iter().copied());
-            }
-            let index = self
-                .subjects
-                .iter()
-                .position(|change| change.subject == subject)
-                .unwrap_or_else(|| {
-                    self.subjects.push(SubjectUpdate {
-                        subject,
-                        dirty: Vec::new(),
-                        evicted: Vec::new(),
-                        content_changed: false,
-                    });
-                    self.subjects.len() - 1
-                });
-            let change = &mut self.subjects[index];
-            change.content_changed |=
-                content_changed && (!blocks.dirty.is_empty() || !blocks.evicted.is_empty());
-            change.dirty.extend(blocks.dirty);
-            change.evicted.extend(blocks.evicted);
-        }
-    }
-}
-
-/// A provider and the model to serve it with — what the #25 picker picks,
-/// whole. `None` is the provider's own default, which is also what every
-/// Thread starts on.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderChoice {
-    pub provider: Provider,
-    pub model: Option<String>,
-}
-
-/// Re-aiming a Thread's provider, model or effort failed — and changed
-/// nothing: the old Session keeps serving and the header on disk is
-/// untouched.
-#[derive(Debug)]
-pub enum ProvisionError {
-    /// The first prompt has gone out and the Thread is parked: a switch
-    /// needs the live conversation to hand over, so it waits for a revive.
-    /// A live Thread is never locked — its provider switches with the
-    /// earlier conversation carried as context (#25, #29).
-    Locked,
-    /// A turn is running: changing the Session now would cut it short.
-    Busy,
-    /// The last model or effort change waits on the provider's answer.
-    Tuning,
-    /// The new provider's CLI would not spawn. The words are the
-    /// provider's own.
-    Spawn(io::Error),
-    /// The live Session refused an in-place setting change.
-    Tune(io::Error),
-    /// The durable header rewrite failed.
-    Store(LoadError),
-}
-
-impl std::fmt::Display for ProvisionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProvisionError::Locked => {
-                write!(
-                    f,
-                    "the first prompt was sent; reopen the thread to switch its provider"
-                )
-            }
-            ProvisionError::Busy => write!(f, "a turn is running; change the model when it ends"),
-            ProvisionError::Tuning => write!(f, "the last change is waiting on the provider"),
-            ProvisionError::Spawn(e) => write!(f, "{e}"),
-            ProvisionError::Tune(e) => write!(f, "{e}"),
-            ProvisionError::Store(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for ProvisionError {}
-
-/// Deleting a Thread failed — and destroyed nothing.
-#[derive(Debug)]
-pub enum DeleteError {
-    /// The Thread's worktree holds uncommitted work ("clean" exactly as
-    /// `git status` defines it). Deleting would destroy that work, so the
-    /// operator commits, stashes, or discards it first, then deletes.
-    DirtyWorktree {
-        path: std::path::PathBuf,
-    },
-    /// The Thread could not be loaded to learn its binding.
-    Load(LoadError),
-    /// A git operation failed.
-    Git(workspace::GitError),
-    Io(io::Error),
-}
-
-impl std::fmt::Display for DeleteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DeleteError::DirtyWorktree { path } => write!(
-                f,
-                "worktree at {} has uncommitted work; commit, stash or discard it first",
-                path.display()
-            ),
-            DeleteError::Load(e) => write!(f, "could not load the thread: {e}"),
-            DeleteError::Git(e) => write!(f, "{e}"),
-            DeleteError::Io(e) => write!(f, "io error deleting thread: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for DeleteError {}
-
-#[derive(Debug)]
-pub enum ReviveGroupError {
-    MissingGroup,
-    Member { thread: ThreadId, error: LoadError },
-    Rollback { thread: ThreadId, error: io::Error },
-}
-
-impl std::fmt::Display for ReviveGroupError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingGroup => write!(f, "group no longer exists"),
-            Self::Member { thread, error } => {
-                write!(f, "could not revive thread {thread}: {error}")
-            }
-            Self::Rollback { thread, error } => {
-                write!(f, "could not roll back revived thread {thread}: {error}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ReviveGroupError {}
-
-enum ReplacementKind {
-    Fresh,
-    Handover,
-    Retune,
-}
-
-struct Replacement {
-    session: SessionLifecycle,
-    provider: Provider,
-    model: Option<String>,
-    effort: Option<String>,
-    kind: ReplacementKind,
-    /// A handover's exchanges, once their read has started: the commit
-    /// waits for them, and the old Session's events wait with it.
-    exchanges: Option<crate::store::ExchangeRead>,
-}
-
-/// A model or effort change the live Session has asked its provider for.
-/// The Thread's choice and its header move only once the provider accepts
-/// it (`settle_tuning`).
-struct Tuning {
-    change: Tune,
-    ack: SettingAck,
-    asked: Instant,
-}
-
-enum Tune {
-    Model(Option<String>),
-    Effort(Option<String>),
-}
-
-impl Tune {
-    /// What the change is to, as the transcript names it.
-    fn noun(&self) -> &'static str {
-        match self {
-            Tune::Model(_) => "model",
-            Tune::Effort(_) => "effort",
-        }
-    }
-}
-
-/// How long a provider has to accept a setting change before it counts as
-/// refused.
-const TUNE_TIMEOUT: Duration = Duration::from_secs(5);
-
-struct PendingBootstrap {
-    prompt: String,
-    group: Option<GroupId>,
-    new_group_with: Option<ThreadId>,
-    draft: Option<DraftId>,
-}
-
-/// A deferred first send settled by `pump`. The draft and submitted text
-/// identify the original Pane even if the operator has since moved focus.
-pub struct BootstrapResult {
-    pub draft: Option<DraftId>,
-    pub prompt: String,
-    pub result: io::Result<Bootstrapped>,
-}
-
-struct Thread {
-    activity: Activity,
-    generation: u64,
-    store_error: Option<String>,
-    history: HashMap<AgentKey, history::Pending>,
-    history_errors: HashMap<AgentKey, String>,
-    /// The live Session, or None for a parked Thread.
-    session: Option<SessionLifecycle>,
-    replacement: Option<Replacement>,
-    writer: ThreadWriter,
-    provider: Provider,
-    /// The model this Thread chose before its first prompt (#25), verbatim
-    /// as the provider announced it. `None` — most Threads — is the
-    /// provider's default. Every respawn reads it, so the choice holds for
-    /// the Thread's whole life.
-    model: Option<String>,
-    /// The reasoning effort this Thread chose, in the provider's own word.
-    /// `None` is the operator's default for the provider. Read by every
-    /// respawn, like the model.
-    effort: Option<String>,
-    title: Option<String>,
-    /// A prompt the operator wrote while the turn was still running.
-    queued: Option<String>,
-    native_queue: queue::Queue,
-    /// An interrupt was sent while prompts were mirrored: when the turn
-    /// ends, everything held goes out as one prompt — Escape means "stop,
-    /// and do what I queued now". Claude's CLI does this itself; Codex
-    /// drops un-consumed steers on interrupt, so Ferrite resends them.
-    resend_held_on_turn_end: bool,
-    prompt_history: PromptHistory,
-    /// The provider-native id a replacement Session resumes from — the latest
-    /// the provider announced. Held here rather than read back from the log,
-    /// which has not necessarily flushed when the watchdog acts.
-    resume: Option<String>,
-    /// The checkout this Thread works in — what the Pane's chrome shows and
-    /// what every replacement Session spawns into. `None` only for a Thread
-    /// from before bindings were recorded.
-    workspace: Option<WorkspaceBinding>,
-    /// The git repo inside the binding where work should happen (#24).
-    /// `None` — today's behavior — means work in the binding itself. Never
-    /// changes under a live Session: the setter ends the Session first.
-    session_project_root: Option<PathBuf>,
-    /// What Main has been seen doing that bears on where it works: the
-    /// binding follows it (`workspace::follow`).
-    follow: Follow,
-    /// Armed whenever a Session is constructed or attached (open, revive,
-    /// send-respawn, sweep-respawn); taken by the first prompt that goes
-    /// out, which is the one that carries the hidden session-context
-    /// preface when a root is set.
-    preface_pending: bool,
-    /// The earlier conversation, digested, owed to a Provider this Thread
-    /// switched to after its first prompt: the next prompt out carries it
-    /// once, ahead of the operator's text. Set by the switch (and by a
-    /// revive that finds the switch's carry undelivered), taken by the
-    /// first prompt that goes out.
-    carry: Option<String>,
-    /// The live Session's command menu (#23) — what the Composer's `/`
-    /// popover lists. Announced by the Session itself at start; empty until
-    /// it speaks, and Session state only: a parked Thread keeps none.
-    commands: Vec<crate::SessionCommand>,
-    /// The models the live Session's install offers (#25) — the provider
-    /// picker's model rows. Announced like the command menu, empty until
-    /// the Session speaks, and Session state exactly like it: never a
-    /// static list, gone with the Session.
-    models: Vec<ModelInfo>,
-    /// The lock every pre-prompt control reads (#25, #29): armed by the
-    /// first operator prompt that goes out, and on revive when the replayed
-    /// history holds one. Never disarmed — nothing re-aims a Thread the
-    /// operator has spoken in.
-    first_prompt_sent: bool,
-    /// The follow-up predicted for this Thread's last response (`suggest`),
-    /// or None while nothing has been predicted — before the first turn ends,
-    /// for the ~seconds a prediction is in flight, and whenever the one that
-    /// came back was refused. Never persisted: it describes a response, and
-    /// a later completed turn requests a fresh prediction.
-    suggestion: Option<String>,
-    suggestion_revision: u64,
-    /// The live Session's permission mode (#23) — the meta row's mode chip,
-    /// in the provider's own word. Display-only, and Session state exactly
-    /// like the menu: None until announced, gone with the Session.
-    permission_mode: Option<String>,
-    /// A model or effort change waiting on the provider. Session state: a
-    /// replacement Session drops it, since its answer would be the old
-    /// Session's.
-    tuning: Option<Tuning>,
-}
-
-impl Thread {
-    /// A Thread ready to serve: its own Lexer, a fresh Transcript, a live
-    /// Session. Revival replays history into the Transcript afterwards.
-    fn fresh(
-        session: SessionLifecycle,
-        writer: ThreadWriter,
-        provider: Provider,
-        model: Option<String>,
-        effort: Option<String>,
-        resume: Option<String>,
-        workspace: Option<WorkspaceBinding>,
-        session_project_root: Option<PathBuf>,
-        queue_path: PathBuf,
-    ) -> Self {
-        let generation = next_generation();
-        let mut activity = Activity::default();
-        activity.apply(ActivityInput::Connect { generation });
-        let mut state = Self {
-            activity,
-            generation,
-            store_error: None,
-            history: HashMap::new(),
-            history_errors: HashMap::new(),
-            session: Some(session),
-            replacement: None,
-            writer,
-            provider,
-            model,
-            effort,
-            title: None,
-            queued: None,
-            native_queue: queue::Queue::open(queue_path),
-            resend_held_on_turn_end: false,
-            prompt_history: PromptHistory::new(Vec::new()),
-            resume,
-            workspace,
-            session_project_root,
-            follow: Follow::default(),
-            preface_pending: true,
-            carry: None,
-            commands: Vec::new(),
-            models: Vec::new(),
-            first_prompt_sent: false,
-            suggestion: None,
-            suggestion_revision: 0,
-            permission_mode: None,
-            tuning: None,
-        };
-        if let Some(notice) = state.native_queue.take_unreadable() {
-            state.apply(Input::Notice(notice));
-        }
-        state
-    }
-}
-
-// A park/revive creates a new Activity; generation must still distinguish old UI handles.
-static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
-fn next_generation() -> u64 {
-    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
-}
-
-impl Thread {
-    fn apply(&mut self, input: Input) -> Update {
-        let applied = self.activity.apply(ActivityInput::Main {
-            input,
-            at: crate::clock::instant(),
-        });
-        let mut update = Update::default();
-        for (subject, changed) in applied.blocks {
-            if subject == Subject::Main {
-                update.dirty.extend(changed.dirty);
-                update.evicted.extend(changed.evicted);
-                update.boundary = changed.boundary.or(update.boundary);
-            }
-        }
-        update
-    }
-
-    fn transcript(&self) -> &Transcript {
-        self.activity.view().main().transcript()
-    }
-    fn busy(&self) -> bool {
-        self.activity.view().main().busy()
-    }
-    /// Whether the model and effort can change now: not mid-turn, not
-    /// while the Session starts or is being replaced, and not while the
-    /// last change waits on the provider.
-    fn tunable(&self) -> Result<(), ProvisionError> {
-        if self.tuning.is_some() {
-            return Err(ProvisionError::Tuning);
-        }
-        if self.busy()
-            || self.replacement.is_some()
-            || self
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-        {
-            return Err(ProvisionError::Busy);
-        }
-        Ok(())
-    }
-    fn invalidate_suggestion(&mut self) {
-        self.suggestion = None;
-        self.suggestion_revision = self.suggestion_revision.wrapping_add(1);
-    }
-
-    fn replace_generation(&mut self) {
-        if let Some(notice) = self
-            .native_queue
-            .disconnect(self.provider == Provider::Codex)
-        {
-            self.apply(Input::Notice(notice));
-        }
-        if let Some(tuning) = self.tuning.take() {
-            self.apply(Input::Notice(format!(
-                "{} unchanged: the session restarted before accepting it",
-                tuning.change.noun()
-            )));
-        }
-        self.invalidate_suggestion();
-        self.history.clear();
-        self.history_errors.clear();
-        self.generation = next_generation();
-        self.activity.apply(ActivityInput::Connect {
-            generation: self.generation,
-        });
-    }
-
-    fn report_store_error(&mut self, error: io::Error) {
-        let message = error.to_string();
-        if self.store_error.as_ref() != Some(&message) {
-            self.apply(Input::Notice(format!(
-                "history could not be saved: {message}"
-            )));
-        }
-        self.store_error = Some(message);
-    }
-}
+pub(crate) mod mirror;
+mod parked;
+mod remote;
+mod shared;
+mod status;
 
 pub struct Cockpit {
-    threads: BTreeMap<ThreadId, Thread>,
-    store: Store,
-    /// The workspace registry (#29): registered projects and their
-    /// worktrees, living beside the Thread logs. The selector reads it; the
-    /// bootstrap places worktrees through it.
-    registry: Registry,
-    groups: Groups,
+    link: Link,
+    /// What a parked Thread says.
+    parked: parked::Parked,
     /// What is on screen (#28): the roster of Panes, focus, view, fullscreen
     /// and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
-    roster: Roster,
-    spawner: Box<dyn Spawner>,
-    model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
-    model_cache: crate::providers::models::ModelCache,
-    /// The last subscription windows each provider reported — an account
-    /// fact the transcript log deliberately does not replay.
-    limit_cache: crate::providers::limits::LimitCache,
-    models_changed: bool,
-    bootstraps: HashMap<ThreadId, PendingBootstrap>,
+    pub(crate) roster: Roster,
+    /// The open Threads as the Roster last followed them.
+    synced: Vec<ThreadId>,
+    /// Each open Thread as the Engine's messages built it: what `thread`
+    /// reads and `pump` reports.
+    mirrors: mirror::Mirrors,
+    /// What every window shares, as the Engine's messages left it.
+    shared: shared::Shared,
     bootstrap_results: Vec<BootstrapResult>,
-    history_loader: Option<history::Loader>,
-    /// What every Thread has to tell the operator once they look away:
-    /// the Notices, and the per-Thread deferrals behind them.
-    notifications: Notifications,
-    /// The Subject the window has actually selected in each open Thread.
-    /// Main is implicit until the renderer records a child selection.
-    visible_subjects: BTreeMap<ThreadId, Subject>,
-    sampler: Option<Box<dyn RssSampler>>,
-    /// Bytes one Session may hold before the watchdog replaces it.
-    limit: u64,
-    /// Where finished follow-up predictions come back. One channel for every
-    /// Thread: the reply names the Thread and the generation it was asked
-    /// for, so a Pane that has since been parked or re-aimed drops it.
-    suggestions: (Sender<Suggestion>, Receiver<Suggestion>),
-    /// Whether completed turns may ask for and show predicted follow-ups.
-    suggestions_enabled: bool,
-    /// Threads whose Session runs a CLI since replaced on disk. Each is
-    /// restarted on its own conversation at the first frame it is idle.
-    stale_sessions: BTreeSet<ThreadId>,
-    #[cfg(test)]
-    refuse_park: std::collections::HashSet<ThreadId>,
+    allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
+    /// What API callers asked of the windows, oldest first.
+    asked: Vec<Asked>,
+    /// The Subject each Pane shows, where it is not Main: what this window
+    /// reads when the operator looks at it.
+    visible_subjects: std::collections::BTreeMap<ThreadId, Subject>,
+    /// Whether the window has the operator's focus: what is on screen is
+    /// seen only while it does (`acknowledge_seen`), so a finish or a
+    /// request on screen stays unread until they come back (ADR 0017). True
+    /// until the window says otherwise, so a headless Cockpit reads what it
+    /// shows.
+    window_active: bool,
+    /// The Threads whose Composer in this window holds unsent text, as the
+    /// window says (`set_composing`).
+    composing: std::collections::BTreeSet<ThreadId>,
+    /// What the Engine was last told of this window (`tell_window`); `None`
+    /// until told, and again after every attach: a Server forgets a window
+    /// that left.
+    told: Option<Told>,
+    /// The self-hosted forges a review's pull request is read from here,
+    /// when this window runs its agents itself (`settings_changed`).
+    forge: ferrite_reviewr::config::PluginConfig,
 }
 
-/// How long quitting waits for the drive to take every log's final sync.
-/// The writes themselves are always waited for.
-const QUIT_SYNC_DEADLINE: Duration = Duration::from_millis(500);
+/// What only a window knows and the API reports (ADR 0030): the Thread it
+/// shows the operator, and its Composers holding unsent text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Told {
+    focused: Option<ThreadId>,
+    composing: std::collections::BTreeSet<ThreadId>,
+}
+
+/// The window number an Engine in this process knows its one window by.
+const IN_PROCESS_WINDOW: u64 = 0;
+
+/// Where the Engine this window drives runs.
+enum Link {
+    /// In this process, pumped by the window.
+    InProcess(Box<Engine>),
+    /// In the Server, over its socket.
+    Server(Box<remote::Remote>),
+}
 
 impl Cockpit {
-    pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
-        let registry = Registry::open(store.dir())?;
-        let groups = Groups::load(store.dir())?;
-        let model_discovery = spawner.discover_models();
-        let model_cache = crate::providers::models::ModelCache::load(store.dir());
-        let limit_cache = crate::providers::limits::LimitCache::load(store.dir());
-        Ok(Self {
-            threads: BTreeMap::new(),
-            store,
-            registry,
-            groups,
-            roster: Roster::default(),
-            spawner,
-            model_discovery,
-            model_cache,
-            limit_cache,
-            models_changed: false,
-            bootstraps: HashMap::new(),
-            bootstrap_results: Vec::new(),
-            history_loader: None,
-            notifications: Notifications::default(),
-            visible_subjects: BTreeMap::new(),
-            sampler: None,
-            limit: u64::MAX,
-            suggestions: channel(),
-            suggestions_enabled: true,
-            stale_sessions: BTreeSet::new(),
-            #[cfg(test)]
-            refuse_park: std::collections::HashSet::new(),
-        })
+    /// A window driving an Engine of its own, in this process.
+    pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
+        let reader = parked::Parked::Store(store.clone());
+        let dir = store.dir().to_path_buf();
+        let engine = Engine::try_new(store, spawner)?;
+        let mut cockpit = Self::with(Link::InProcess(Box::new(engine)), reader, &dir);
+        cockpit.receive();
+        Ok(cockpit)
     }
 
     /// Test and embedding convenience. The application uses `try_new` so a
@@ -690,15 +117,350 @@ impl Cockpit {
         Self::try_new(store, spawner).expect("the workspace registry opens")
     }
 
-    /// The workspace registry, for the selector's rows (#29). Read-only:
-    /// registration goes through `register_project`, and worktree entries
-    /// are the bootstrap's own bookkeeping.
-    pub fn registry(&self) -> &Registry {
-        &self.registry
+    /// A window attached to its Server: this computer's, starting one when
+    /// none answers, or a machine's, connected to in the background. Without
+    /// one it starts detached (`server`) and keeps trying; it never runs
+    /// the agents itself. A machine's parked Threads are what its Server
+    /// publishes: their logs stay there.
+    pub fn attach(attach: Attach) -> io::Result<Self> {
+        let local = matches!(attach.server, Endpoint::Local { .. });
+        let parked = if local {
+            parked::Parked::Store(Store::reader(&attach.store)?)
+        } else {
+            parked::Parked::published()
+        };
+        let dir = attach.store.clone();
+        let mut remote = remote::Remote::new(attach);
+        let arrived = if local { remote.attach_now() } else { None };
+        let mut cockpit = Self::with(Link::Server(Box::new(remote)), parked, &dir);
+        cockpit.arrive(arrived.into_iter().collect());
+        Ok(cockpit)
     }
 
-    pub fn groups(&self) -> &Groups {
-        &self.groups
+    fn with(link: Link, parked: parked::Parked, dir: &Path) -> Self {
+        let local = matches!(parked, parked::Parked::Store(_));
+        Self {
+            link,
+            shared: shared::Shared::new(dir, local),
+            parked,
+            roster: Roster::default(),
+            synced: Vec::new(),
+            mirrors: mirror::Mirrors::default(),
+            bootstrap_results: Vec::new(),
+            allowance_warnings: Vec::new(),
+            asked: Vec::new(),
+            visible_subjects: std::collections::BTreeMap::new(),
+            window_active: true,
+            composing: std::collections::BTreeSet::new(),
+            forge: Default::default(),
+            told: None,
+        }
+    }
+
+    /// The Server this window is attached to, or why it is not; `None` for
+    /// an Engine in this process.
+    pub fn server(&self) -> Option<ServerState> {
+        match &self.link {
+            Link::InProcess(_) => None,
+            Link::Server(server) => Some(server.state()),
+        }
+    }
+
+    /// The machine this window is on (ADR 0026); `None` for this computer.
+    pub fn machine(&self) -> Option<&std::sync::Arc<crate::machine::Bridge>> {
+        match &self.link {
+            Link::InProcess(_) => None,
+            Link::Server(server) => server.bridge(),
+        }
+    }
+
+    /// Attach again now, rather than at the next retry.
+    pub fn retry_server(&mut self) {
+        if let Link::Server(server) = &mut self.link {
+            server.retry();
+        }
+    }
+
+    /// Stop the Server — at once, or once every agent is idle.
+    pub fn stop_server(&mut self, when: When) -> io::Result<()> {
+        self.server_command(Op::Stop { when })
+    }
+
+    /// Stop the Server at once and wait, up to `within`, for it to be gone:
+    /// an installer is about to replace the executable it runs.
+    pub fn stop_server_and_wait(&mut self, within: Duration) -> io::Result<()> {
+        let deadline = Instant::now() + within;
+        let server = self.remote()?;
+        server
+            .execute(Op::Stop { when: When::Now })
+            .map_err(io::Error::from)?;
+        server.wait_gone(deadline)
+    }
+
+    /// Restart the Server into its executable as it is on disk now — at
+    /// once, or once every agent is idle — and resume every open Thread.
+    pub fn restart_server(&mut self, when: When) -> io::Result<()> {
+        self.server_command(Op::Restart { when })
+    }
+
+    fn server_command(&mut self, op: Op) -> io::Result<()> {
+        self.remote()?
+            .execute(op)
+            .map(drop)
+            .map_err(io::Error::from)
+    }
+
+    fn remote(&mut self) -> io::Result<&mut remote::Remote> {
+        match &mut self.link {
+            Link::Server(server) => Ok(server),
+            Link::InProcess(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this window runs its agents itself",
+            )),
+        }
+    }
+
+    /// One act where the Engine runs: a direct call in this process, a
+    /// command to the Server. Either way the window is up to date with
+    /// what it changed when it returns.
+    fn act<T>(
+        &mut self,
+        local: impl FnOnce(&mut Engine) -> T,
+        remote: impl FnOnce(&mut remote::Remote) -> T,
+    ) -> T {
+        let result = match &mut self.link {
+            Link::InProcess(engine) => local(engine),
+            Link::Server(server) => remote(server),
+        };
+        self.settle();
+        result
+    }
+
+    /// The Engine in this process: what only `--demo`, `--load` and the
+    /// tests drive — fixtures, injected inputs, the launch-time revival a
+    /// Server does for itself.
+    fn in_process(&mut self) -> &mut Engine {
+        match &mut self.link {
+            Link::InProcess(engine) => engine,
+            Link::Server(_) => panic!("only an Engine in this process takes this act"),
+        }
+    }
+
+    /// The Roster follows the open Threads: a Thread that opened gets a
+    /// Pane at the end, one that closed loses its own. A Thread a Draft is
+    /// starting takes the Draft's slot when it settles instead.
+    fn sync_roster(&mut self) {
+        let open = self.shared.open.clone();
+        for gone in self.synced.iter().filter(|thread| !open.contains(thread)) {
+            self.roster.remove_thread(*gone);
+        }
+        for thread in open.iter().filter(|thread| !self.synced.contains(thread)) {
+            if !self.mirrors.for_draft(*thread) {
+                self.roster.insert_thread(*thread);
+            }
+        }
+        self.synced = open;
+    }
+
+    /// Bring this window up to the Engine after one of its own acts. What
+    /// the act changed is the window's to show, as it always was: only the
+    /// pump reports Pane updates.
+    fn settle(&mut self) {
+        self.receive();
+        self.mirrors.take_updates();
+    }
+
+    /// Bring this window up to the Engine: its mirrors and copies from the
+    /// messages it published, then its Roster. In debug builds each
+    /// in-process message crosses as its encoded line, so nothing escapes
+    /// the contract.
+    fn receive(&mut self) {
+        let arrived: Vec<remote::Arrival> = match &mut self.link {
+            Link::InProcess(engine) => engine
+                .take_messages()
+                .into_iter()
+                .map(|message| {
+                    #[cfg(debug_assertions)]
+                    let message = {
+                        let line = crate::protocol::encode(&message);
+                        crate::protocol::decode(&line[..line.len() - 1])
+                            .expect("every message decodes as it encoded")
+                    };
+                    remote::Arrival::Message(message)
+                })
+                .chain(
+                    engine
+                        .take_bootstrap_results()
+                        .into_iter()
+                        .map(remote::Arrival::Started),
+                )
+                .collect(),
+            Link::Server(server) => server.poll(),
+        };
+        self.arrive(arrived);
+        #[cfg(test)]
+        self.assert_mirrors_match();
+    }
+
+    fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
+        let boot = match &self.link {
+            Link::InProcess(engine) => engine.boot(),
+            Link::Server(server) => server.boot(),
+        };
+        let mut settled = Vec::new();
+        for arrival in arrived {
+            match arrival {
+                remote::Arrival::Message(message) => self.message(message, boot),
+                remote::Arrival::Attached { snapshot, new_boot } => {
+                    self.told = None;
+                    if new_boot {
+                        self.mirrors = mirror::Mirrors::default();
+                    }
+                    self.shared.attached(&snapshot);
+                    self.parked.attached(&snapshot);
+                    self.mirrors.retain(&self.shared.open);
+                    self.mirrors.restore_decisions(&snapshot.decisions);
+                    for state in snapshot.threads {
+                        self.mirrors.receive(
+                            ServerMessage::Thread {
+                                revision: snapshot.revision,
+                                state,
+                            },
+                            boot,
+                        );
+                    }
+                }
+                remote::Arrival::Started(result) => settled.push(result),
+            }
+        }
+        // A settled first send completes its Draft in this window — its
+        // slot becomes the Thread and its deferred leave applies — once
+        // the window holds what the Engine said before it.
+        for mut result in settled {
+            if let (Some(draft), Ok(done)) = (result.draft, &result.result) {
+                let thread = done.thread;
+                result.result = Ok(self.complete_draft(draft, thread));
+            }
+            self.bootstrap_results.push(result);
+        }
+        self.sync_roster();
+        if let Link::Server(server) = &mut self.link {
+            let mirrors = &self.mirrors;
+            server.watch(&self.shared.open, |thread| mirrors.seq(thread));
+        }
+    }
+
+    fn message(&mut self, message: ServerMessage, boot: Instant) {
+        if let ServerMessage::AllowanceWarning {
+            provider,
+            window,
+            threshold,
+            used_fraction,
+        } = &message
+        {
+            if let Ok(window) = (*window).try_into() {
+                self.allowance_warnings
+                    .push(crate::providers::limits::AllowanceWarning {
+                        provider: *provider,
+                        window,
+                        threshold: *threshold,
+                        used_fraction: *used_fraction,
+                    });
+            }
+        }
+        match &message {
+            ServerMessage::Focus { thread } => self.asked.push(Asked::Focus(*thread)),
+            ServerMessage::Notification {
+                title,
+                body,
+                sound,
+                important,
+            } => self.asked.push(Asked::Notification {
+                title: title.clone(),
+                body: body.clone(),
+                sound: sound.sound(),
+                important: *important,
+            }),
+            _ => {}
+        }
+        self.shared.receive(&message);
+        self.parked.receive(&message);
+        self.mirrors.receive(message, boot);
+    }
+
+    /// One frame: the Engine's pump, then what changed for each Pane of
+    /// this window, as its mirrors saw it.
+    pub fn pump(&mut self) -> Vec<PaneUpdate> {
+        // Fold highlighter answers from the previous frame first, as the
+        // Engine does for its own.
+        self.mirrors.drain_highlights();
+        if let Link::InProcess(engine) = &mut self.link {
+            engine.pump();
+        }
+        self.receive();
+        // What is on screen while the window has focus is seen. Here
+        // rather than only at the focus doors, so a Thread that finishes in
+        // view, or a focus moved by a close or a Group entry, reads the same.
+        self.acknowledge_seen();
+        self.tell_window();
+        self.mirrors.take_updates()
+    }
+
+    /// Whether this window's Composer for `thread` holds text not yet sent:
+    /// the window says so as it changes, and the API reports it as the
+    /// Thread's `draft` (ADR 0030), so nothing types over the operator.
+    pub fn set_composing(&mut self, thread: ThreadId, unsent: bool) {
+        if unsent {
+            self.composing.insert(thread);
+        } else {
+            self.composing.remove(&thread);
+        }
+    }
+
+    /// Tell the Engine what changed of what only this window knows: the
+    /// Thread its focused Pane shows while it has the operator's focus, and
+    /// its Composers holding unsent text.
+    fn tell_window(&mut self) {
+        // A Pane that left took its Composer, and the unsent text with it:
+        // a Thread revived later starts with an empty one.
+        let roster = &self.roster;
+        self.composing
+            .retain(|thread| roster.pane_of(*thread).is_some());
+        let now = Told {
+            focused: self
+                .window_active
+                .then(|| self.roster.focused_thread())
+                .flatten(),
+            composing: self.composing.clone(),
+        };
+        let before = self.told.replace(now.clone());
+        let mut said = Vec::new();
+        if before.as_ref().map(|told| told.focused) != Some(now.focused) {
+            said.push(Op::Focused {
+                thread: now.focused,
+            });
+        }
+        let composed = before.map(|told| told.composing).unwrap_or_default();
+        for (threads, unsent) in [
+            (now.composing.difference(&composed), true),
+            (composed.difference(&now.composing), false),
+        ] {
+            said.extend(threads.map(|thread| Op::Composing {
+                thread: *thread,
+                unsent,
+            }));
+        }
+        for op in said {
+            match &mut self.link {
+                Link::InProcess(engine) => engine.window_says(IN_PROCESS_WINDOW, &op),
+                Link::Server(server) => server.tell(op),
+            }
+        }
+    }
+
+    /// An open Thread's facts, as this window's mirror holds them.
+    pub fn thread(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
+        self.mirrors.view(thread)
     }
 
     /// A Group change (#28), and what it does to the view: the Group the
@@ -706,7 +468,25 @@ impl Cockpit {
     /// survivor is the one Thread still on screen, so that is where they
     /// land — never the Thread that left, and never a blank Cockpit.
     pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        let applied = self.groups.apply(change)?;
+        let applied = self.act(
+            |engine| engine.apply_group(change.clone()),
+            |server| match server.execute(Op::Group {
+                change: (&change).into(),
+            }) {
+                Ok(Some(Done::Grouped { group, dissolved })) => Ok(Applied {
+                    group,
+                    dissolved: dissolved
+                        .into_iter()
+                        .map(|dissolved| Dissolved {
+                            group: dissolved.group,
+                            survivor: dissolved.survivor,
+                        })
+                        .collect(),
+                }),
+                Ok(_) => Ok(Applied::default()),
+                Err(error) => Err(ApplyError::Io(error.message)),
+            },
+        )?;
         if let View::Group(active) = self.roster.view() {
             if let Some(dissolved) = applied
                 .dissolved
@@ -717,22 +497,444 @@ impl Cockpit {
                 self.roster.focus(PaneIdentity::Thread(dissolved.survivor));
             }
         }
-        self.roster.heal_focus(&self.groups);
+        self.roster.heal_focus(&self.shared.groups);
         Ok(applied)
     }
 
-    pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
-        self.groups.preview_drop(drag, target)
+    /// Close a Pane: the Session ends, the log is flushed, and the Thread
+    /// keeps nothing in memory until it is opened again. A parked Group
+    /// member's tile (`enter_group`) has a Pane and no Session: parking it
+    /// again only takes the Pane away.
+    pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
+        let parked = self.act(
+            |engine| engine.park(thread),
+            |server| run(server, Op::Park { thread }),
+        );
+        if !self.shared.open.contains(&thread) {
+            self.roster.remove_thread(thread);
+        }
+        parked
     }
 
-    /// Register a project root (idempotent, canonicalized) — the selector's
-    /// type-a-path row and the launch seed both land here.
+    pub fn ensure_subject_history(
+        &mut self,
+        thread: ThreadId,
+        subject: &Subject,
+    ) -> io::Result<bool> {
+        self.load_subject(thread, subject, false)
+    }
+
+    pub fn subject_history_error(&self, thread: ThreadId, subject: &Subject) -> Option<&str> {
+        self.mirrors.history_error(thread, subject)
+    }
+
+    pub fn retry_subject_history(
+        &mut self,
+        thread: ThreadId,
+        subject: &Subject,
+    ) -> io::Result<bool> {
+        self.load_subject(thread, subject, true)
+    }
+
+    fn load_subject(
+        &mut self,
+        thread: ThreadId,
+        subject: &Subject,
+        retry: bool,
+    ) -> io::Result<bool> {
+        self.act(
+            |engine| {
+                if retry {
+                    engine.retry_subject_history(thread, subject)
+                } else {
+                    engine.ensure_subject_history(thread, subject)
+                }
+            },
+            |server| {
+                changed(server.execute(Op::LoadSubject {
+                    thread,
+                    subject: subject.into(),
+                    retry,
+                }))
+            },
+        )
+    }
+
+    /// CLI session files to adopt, found off the UI thread. Discovery reads
+    /// the operator's own files: a window does it, wherever its Engine runs.
+    pub fn discover_sessions(
+        &mut self,
+        roots: Vec<(Provider, PathBuf)>,
+        cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+        match &mut self.link {
+            Link::InProcess(engine) => engine.discover_sessions(roots, cap),
+            Link::Server(server) => server.discovery().discover_sessions(roots, cap),
+        }
+    }
+
+    /// The operator opened a Notice — from a toast or the bell: it is
+    /// read, and they land on its Thread's Pane in the view that shows
+    /// it, reviving a parked one. The Thread landed on, or None when it
+    /// is gone.
+    pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadId> {
+        let known = self
+            .shared
+            .notifications
+            .get(id)
+            .map(|notice| notice.thread);
+        let thread = self.act(
+            |engine| engine.open_notice(id),
+            |server| {
+                let thread = known?;
+                notice(server, NoticeAction::Open { notice: id.get() });
+                Some(thread)
+            },
+        )?;
+        self.land_on(thread)
+    }
+
+    /// Open one live Decision attention record: its Subject is shown, and
+    /// the operator lands on its Thread as `open_notice` does.
+    pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
+        let live = self.shared.notifications.decision(id).is_some();
+        let thread = self.act(
+            |engine| engine.open_decision_notice(id),
+            |server| {
+                live.then_some(())?;
+                notice(
+                    server,
+                    NoticeAction::OpenDecision {
+                        thread: id.thread,
+                        handle: (&id.handle).into(),
+                    },
+                );
+                Some(id.thread)
+            },
+        )?;
+        self.land_on(thread)
+    }
+
+    fn land_on(&mut self, thread: ThreadId) -> Option<ThreadId> {
+        if !self.focus_thread(thread) {
+            self.reopen(thread).ok()?;
+        }
+        self.acknowledge_seen();
+        Some(thread)
+    }
+
+    /// Whether the operator is looking: the window has the system's focus.
+    pub fn window_active(&self) -> bool {
+        self.window_active
+    }
+
+    /// The window gained or lost the operator's focus. Gaining it, what
+    /// is on screen is seen at once: true when that read anything.
+    pub fn set_window_active(&mut self, active: bool) -> bool {
+        if self.window_active == active {
+            return false;
+        }
+        self.window_active = active;
+        self.acknowledge_seen()
+    }
+
+    /// Everything on screen while the window has focus is seen: each
+    /// visible Thread's Notices are read, and so are the live Decisions of
+    /// the Subject its Pane shows. Fullscreen shows its one Pane. True when
+    /// anything was read.
+    fn acknowledge_seen(&mut self) -> bool {
+        if !self.window_active {
+            return false;
+        }
+        let shown: Vec<ThreadId> = match self.roster.fullscreen() {
+            Some(fullscreen) => vec![fullscreen],
+            None => self.visible(),
+        }
+        .into_iter()
+        .filter_map(PaneIdentity::thread)
+        .collect();
+        match &mut self.link {
+            Link::InProcess(engine) => {
+                let read = engine.acknowledge_seen(&shown);
+                // The Notices read come back as the Engine's messages.
+                self.receive();
+                read
+            }
+            Link::Server(_) => {
+                // Only what would read anything goes to the Server: this
+                // runs every frame.
+                let unread: Vec<ThreadId> = shown
+                    .into_iter()
+                    .filter(|thread| self.would_read(*thread))
+                    .collect();
+                if unread.is_empty() {
+                    return false;
+                }
+                self.act(
+                    |_| (),
+                    |server| {
+                        for thread in unread {
+                            notice(server, NoticeAction::Seen { thread });
+                        }
+                    },
+                );
+                true
+            }
+        }
+    }
+
+    /// Whether looking at `thread` reads anything: an unread Notice, or an
+    /// unread request of the Subject its Pane shows.
+    fn would_read(&self, thread: ThreadId) -> bool {
+        let notifications = &self.shared.notifications;
+        let shown = self
+            .visible_subjects
+            .get(&thread)
+            .and_then(|subject| {
+                let view = self.thread(thread)?.activity();
+                let subject = view.canonical_subject(subject);
+                view.subject(&subject).is_some().then_some(subject)
+            })
+            .unwrap_or(Subject::Main);
+        notifications
+            .notices()
+            .any(|notice| notice.thread == thread && !notice.read)
+            || notifications.decisions().any(|notice| {
+                notice.id.thread == thread
+                    && !notice.read
+                    && notice.subject.as_ref() == Some(&shown)
+            })
+    }
+}
+
+/// A git read on a thread of its own, answered as a Server's would be.
+fn read_here<T: Send + 'static>(
+    read: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Receiver<io::Result<T>> {
+    let (answer, answered) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = answer.send(read().map_err(io::Error::other));
+    });
+    answered
+}
+
+/// A command whose reply carries nothing the window needs.
+fn run(server: &mut remote::Remote, op: Op) -> io::Result<()> {
+    server.execute(op).map(drop).map_err(io::Error::from)
+}
+
+/// A command whose reply says whether it changed anything.
+fn changed(executed: Result<Option<Done>, WireError>) -> io::Result<bool> {
+    match executed.map_err(io::Error::from)? {
+        Some(Done::Changed { changed }) => Ok(changed),
+        _ => Ok(false),
+    }
+}
+
+/// A Notice act. Its reply carries nothing: what it changed is the next
+/// `notices` message.
+fn notice(server: &mut remote::Remote, action: NoticeAction) {
+    if let Err(error) = server.execute(Op::Notice { action }) {
+        crate::log!("a notice act did not reach the server: {}", error.message);
+    }
+}
+
+/// Mirror parity (ADR 0025): after every message, each open Thread's
+/// mirror reads exactly as the Engine's own Thread does. Every Cockpit
+/// test checks it as it runs.
+#[cfg(test)]
+impl Cockpit {
+    pub(crate) fn set_session_project_root(
+        &mut self,
+        thread: ThreadId,
+        root: Option<PathBuf>,
+    ) -> Result<(), LoadError> {
+        let set = self.in_process().set_session_project_root(thread, root);
+        self.settle();
+        set
+    }
+
+    /// The Engine in this process, for a test to reach into.
+    pub(crate) fn engine(&self) -> &Engine {
+        match &self.link {
+            Link::InProcess(engine) => engine,
+            Link::Server(_) => panic!("this window's Engine runs in its Server"),
+        }
+    }
+
+    pub(crate) fn engine_mut(&mut self) -> &mut Engine {
+        self.in_process()
+    }
+
+    fn assert_mirrors_match(&self) {
+        let Link::InProcess(engine) = &self.link else {
+            return;
+        };
+        let engine: &Engine = engine;
+        assert_eq!(self.shared.groups.to_wire(), engine.groups().to_wire());
+        assert_eq!(self.shared.registry.to_wire(), engine.registry().to_wire());
+        assert_eq!(
+            self.shared.notifications.to_wire(),
+            engine.notifications().to_wire()
+        );
+        for provider in [Provider::Claude, Provider::Codex] {
+            assert_eq!(
+                self.shared.announced_models(provider),
+                engine.announced_models(provider)
+            );
+            assert_eq!(
+                self.shared.live_sessions(provider),
+                engine.live_sessions(provider)
+            );
+            assert_eq!(
+                self.shared.account_limits(provider),
+                engine.account_limits(provider)
+            );
+        }
+        for &thread in engine.open_threads() {
+            let engine = engine.thread(thread).expect("open in the Engine");
+            let mirror = self
+                .mirrors
+                .view(thread)
+                .unwrap_or_else(|| panic!("thread {thread} has no mirror"));
+            assert_eq!(
+                parity::seen!(mirror),
+                parity::seen!(engine),
+                "thread {thread}: the mirror drifted from the Engine"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod parity {
+    use std::fmt::Write;
+
+    use crate::activity::ActivityView;
+
+    /// What a window could read of one Thread, as text.
+    macro_rules! seen {
+        ($view:expr) => {{
+            let view = $view;
+            format!(
+                "generation={} provider={:?} model={:?} effort={:?} title={:?} \
+                 suggestion={:?} pending={:?} queued={:?} starting={} busy={} working={} \
+                 background={} tuning={} needs_queue={} workspace={:?} root={:?} \
+                 first_prompt={} history={} commands={:?} models={:?} mode={:?} modes={:?} \
+                 store_error={:?}\n{}",
+                view.generation(),
+                view.provider(),
+                view.model(),
+                view.effort(),
+                view.title(),
+                view.suggestion(),
+                view.pending(),
+                view.queued_all(),
+                view.starting(),
+                view.busy(),
+                view.working(),
+                view.background_work(),
+                view.tuning(),
+                view.needs_queue(),
+                view.workspace(),
+                view.session_project_root(),
+                view.first_prompt_sent(),
+                view.has_prompt_history(),
+                view.commands(),
+                view.models(),
+                view.permission_mode(),
+                view.permission_modes(),
+                view.store_error(),
+                crate::cockpit::parity::activity(view.activity()),
+            )
+        }};
+    }
+    pub(super) use seen;
+
+    pub(super) fn activity(view: ActivityView<'_>) -> String {
+        let main = view.main();
+        let transcript = main.transcript();
+        let mut out = String::new();
+        let mut timings: Vec<String> = main
+            .tool_timings()
+            .iter()
+            .map(|(id, timing)| format!("{id}={timing:?}"))
+            .collect();
+        timings.sort();
+        writeln!(
+            out,
+            "main status={:?} transcript={:?} outcome={:?} model={:?} session={:?} \
+             usage={:?} limits={:?} timings={timings:?}",
+            main.status(),
+            transcript.status(),
+            transcript.turn_outcome(),
+            transcript.model(),
+            transcript.session_id(),
+            transcript.usage(),
+            transcript.rate_limits(),
+        )
+        .unwrap();
+        for block in transcript.blocks() {
+            writeln!(out, "  {:?} {:?}", block.id, block.body).unwrap();
+        }
+        writeln!(out, "decisions={:?}", view.decisions()).unwrap();
+        for child in view.children() {
+            writeln!(
+                out,
+                "child {} {:?} status={:?} coverage={:?} retained={}",
+                child.key().as_str(),
+                child.info(),
+                child.status(),
+                child.coverage(),
+                child.retained(),
+            )
+            .unwrap();
+            for block in child.transcript().blocks() {
+                writeln!(out, "    {:?} {:?}", block.id, block.body).unwrap();
+            }
+        }
+        out
+    }
+}
+
+/// What the Engine answers, as this window asks it.
+impl Cockpit {
+    pub fn registry(&self) -> &Registry {
+        &self.shared.registry
+    }
+
+    pub fn groups(&self) -> &Groups {
+        &self.shared.groups
+    }
+
+    pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
+        self.shared.groups.preview_drop(drag, target)
+    }
+
     pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
-        self.registry.register(root)
+        self.act(
+            |engine| engine.register_project(root),
+            |server| {
+                registered(server.execute(Op::Project {
+                    action: ProjectAction::Register {
+                        roots: vec![root.to_path_buf()],
+                    },
+                }))
+            },
+        )
     }
 
     pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
-        self.registry.register_directories(roots)
+        self.act(
+            |engine| engine.register_project_directories(roots),
+            |server| {
+                registered(server.execute(Op::Project {
+                    action: ProjectAction::Register {
+                        roots: roots.to_vec(),
+                    },
+                }))
+            },
+        )
     }
 
     pub fn add_project_directories(
@@ -740,7 +942,20 @@ impl Cockpit {
         project: ProjectId,
         roots: &[PathBuf],
     ) -> io::Result<()> {
-        self.registry.add_directories(project, roots)
+        self.act(
+            |engine| engine.add_project_directories(project, roots),
+            |server| {
+                run(
+                    server,
+                    Op::Project {
+                        action: ProjectAction::AddDirectories {
+                            project,
+                            roots: roots.to_vec(),
+                        },
+                    },
+                )
+            },
+        )
     }
 
     pub fn replace_project_directory(
@@ -749,361 +964,161 @@ impl Cockpit {
         index: usize,
         root: &Path,
     ) -> io::Result<()> {
-        self.registry.replace_directory(project, index, root)
+        self.act(
+            |engine| engine.replace_project_directory(project, index, root),
+            |server| {
+                run(
+                    server,
+                    Op::Project {
+                        action: ProjectAction::ReplaceDirectory {
+                            project,
+                            index,
+                            root: root.to_path_buf(),
+                        },
+                    },
+                )
+            },
+        )
     }
 
     pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
-        self.registry.remove_directory(project, index)
+        self.act(
+            |engine| engine.remove_project_directory(project, index),
+            |server| {
+                run(
+                    server,
+                    Op::Project {
+                        action: ProjectAction::RemoveDirectory { project, index },
+                    },
+                )
+            },
+        )
     }
 
-    /// A Group's Pane layout, reconciled to its members; None for a Group
-    /// that no longer exists.
     pub fn group_layout(
         &self,
         group: GroupId,
         bounds: crate::layout::Rect,
     ) -> Option<crate::layout::Tree> {
-        self.groups.layout(group, bounds)
+        self.shared.groups.layout(group, bounds)
     }
 
-    /// Put a Group back on the default grid, forgetting the arrangement the
-    /// operator dragged, swapped or split.
     pub fn reset_group_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
-        self.groups.reset_layout(group)
+        self.act(
+            |engine| engine.reset_group_layout(group),
+            |server| {
+                run(server, Op::Layout { group, tree: None })
+                    .map_err(|error| ApplyError::Io(error.to_string()))
+            },
+        )
     }
 
-    /// Persist a Group's Pane layout — a seam dragged, a Pane dropped.
     pub fn set_group_layout(
         &mut self,
         group: GroupId,
         tree: crate::layout::Tree,
     ) -> Result<(), ApplyError> {
-        self.groups.set_layout(group, tree)
-    }
-
-    /// Forget a registered Project. Refused while any Thread, open or
-    /// parked, records it — the Threads would lose their name and their
-    /// filter — so removal is for a root that nothing works in any more.
-    pub fn remove_project(&mut self, project: ProjectId) -> io::Result<()> {
-        let recorded = self
-            .store
-            .thread_ids()?
-            .into_iter()
-            .any(|thread| self.project_id(thread) == Some(project));
-        if recorded {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Threads still record this project",
-            ));
-        }
-        self.registry.remove_project(project)
-    }
-
-    /// Retitle a registered Project.
-    pub fn rename_project(&mut self, project: ProjectId, title: &str) -> io::Result<()> {
-        self.registry.rename_project(project, title)
-    }
-
-    /// Watch Session memory. Off until asked for: the operator's budget is
-    /// theirs to set, and a cockpit with no sampler never restarts anything.
-    pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
-        self.sampler = Some(sampler);
-        self.limit = limit;
-    }
-
-    /// Replace any Session that has grown past the limit. The Thread keeps its
-    /// transcript and its log; only the process is new, and the Pane says so.
-    pub fn sweep(&mut self) -> Vec<Restart> {
-        let Some(sampler) = &mut self.sampler else {
-            return Vec::new();
-        };
-        let over: Vec<(ThreadId, u64)> = self
-            .threads
-            .iter()
-            .filter_map(|(id, thread)| {
-                let session = thread.session.as_ref()?;
-                Some((*id, sampler.sample(*id, session.session()?.pid())?))
-            })
-            .filter(|(_, rss)| *rss > self.limit)
-            .collect();
-
-        let mut restarts = Vec::new();
-        for (id, rss) in over {
-            let note = match self.respawn(id) {
-                None => continue,
-                Some(Ok(())) => {
-                    format!("restarted — the Session had grown to {}", megabytes(rss))
-                }
-                Some(Err(e)) => format!("restart failed after {}: {e}", megabytes(rss)),
-            };
-            if let Some(thread) = self.threads.get_mut(&id) {
-                thread.apply(Input::Notice(note));
-            }
-            restarts.push(Restart { thread: id, rss });
-        }
-        restarts
-    }
-
-    /// Replace `id`'s Session with a fresh one on the same conversation.
-    /// `None` when there is no such Thread.
-    fn respawn(&mut self, id: ThreadId) -> Option<io::Result<()>> {
-        self.stale_sessions.remove(&id);
-        self.visible_subjects.remove(&id);
-        let project = self.project_id(id);
-        let thread = self.threads.get_mut(&id)?;
-        let resume = thread.resume.clone();
-        let cwd = workspace::effective_cwd(
-            thread.session_project_root.as_deref(),
-            thread.workspace.as_ref(),
-        )
-        .map(Path::to_path_buf);
-        // Drop the old Session before asking for a new one: the old
-        // process must not outlive its replacement.
-        thread.session = None;
-        thread.replacement = None;
-        thread.replace_generation();
-        let spawned = self.spawner.start(SpawnRequest {
-            provider: thread.provider,
-            model: thread.model.as_deref(),
-            effort: thread.effort.as_deref(),
-            resume: resume.as_deref(),
-            cwd: cwd.as_deref(),
-            name: thread.title.as_deref(),
-            additional_directories: project_additional_directories(
-                &self.registry,
-                project,
-                cwd.as_deref(),
-            ),
-        });
-        Some(spawned.map(|session| {
-            thread.session = Some(session);
-            // A fresh Session knows nothing: its first prompt must carry
-            // the session-context preface again.
-            thread.preface_pending = true;
-        }))
-    }
-
-    /// The provider's CLI was replaced on disk: restart every Session of
-    /// `provider` on its own conversation so it runs the new release (and
-    /// announces its menu). A Thread mid-turn, waiting on the operator, or
-    /// with work queued is left alone until it is idle — see `pump`.
-    pub fn restart_sessions(&mut self, provider: Provider) {
-        let live = self.threads.iter().filter(|(_, state)| {
-            state.provider == provider && (state.session.is_some() || state.replacement.is_some())
-        });
-        self.stale_sessions.extend(live.map(|(id, _)| *id));
-    }
-
-    /// Restart each stale Session that has nothing in flight. A Thread
-    /// parked or deleted meanwhile needs nothing: its next Session starts
-    /// on the new CLI anyway.
-    fn restart_idle_stale(&mut self) {
-        if self.stale_sessions.is_empty() {
-            return;
-        }
-        let mut idle = Vec::new();
-        self.stale_sessions.retain(|id| {
-            let Some(state) = self.threads.get(id) else {
-                return false;
-            };
-            let Some(session) = &state.session else {
-                return false;
-            };
-            let view = state.activity.view();
-            let settled = !session.is_starting()
-                && state.replacement.is_none()
-                && state.tuning.is_none()
-                && !state.busy()
-                && !view.main_operator_turn()
-                && view.working_descendants() == 0
-                && view.decisions().is_empty()
-                && !state.native_queue.pending();
-            if settled {
-                idle.push(*id);
-            }
-            true
-        });
-        for id in idle {
-            let note = match self.respawn(id) {
-                None => continue,
-                Some(Ok(())) => "restarted on the updated CLI".to_string(),
-                Some(Err(e)) => format!("restart on the updated CLI failed: {e}"),
-            };
-            if let Some(thread) = self.threads.get_mut(&id) {
-                thread.apply(Input::Notice(note));
-            }
-        }
-    }
-
-    /// Start a Thread: a durable log, a workspace to work in, and a Session
-    /// serving it. Called at first send (#29) — the draft Pane's bootstrap —
-    /// through `bootstrap_draft`, which rolls back any failed first send.
-    /// Direct callers receive a provisional id during startup; a later
-    /// failure leaves its open Thread showing the error for retry.
-    ///
-    /// The choice's repo registers as a project (idempotent — this is how
-    /// the registry grows as Threads bind roots); a new worktree is placed
-    /// by the registry's central layout on a branch it mints; an existing
-    /// worktree passes the adoption conflict check and skips creation.
-    pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
-        self.open_choice(
-            ProviderChoice {
-                provider,
-                model: None,
-            },
-            workspace,
-            None,
-        )
-    }
-
-    /// `effort` is the Thread's own reasoning level from its first breath
-    /// (a draft's chip); None is the operator's default for the provider.
-    fn open_choice(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        effort: Option<String>,
-    ) -> io::Result<ThreadId> {
-        let ProviderChoice { provider, model } = choice;
-        let root = match &workspace {
-            WorkspaceChoice::Main { checkout } => checkout,
-            WorkspaceChoice::Branch { checkout, .. } | WorkspaceChoice::NewBranch { checkout } => {
-                checkout
-            }
-            WorkspaceChoice::NewWorktree { repo } => repo,
-            WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
-        };
-        let project = self.registry.register(root)?;
-        match &workspace {
-            WorkspaceChoice::Branch { checkout, branch } => {
-                workspace::checkout_existing_branch(checkout, branch).map_err(io::Error::other)?;
-            }
-            WorkspaceChoice::NewBranch { checkout } => {
-                let branch = self.registry.reserve_branch(project)?;
-                workspace::checkout_new_branch(checkout, &branch).map_err(io::Error::other)?;
-            }
-            _ => {}
-        }
-        let (binding, fresh_branch) = match workspace {
-            WorkspaceChoice::Main { checkout } => (WorkspaceBinding::Main { checkout }, None),
-            WorkspaceChoice::Branch { checkout, .. } | WorkspaceChoice::NewBranch { checkout } => {
-                (WorkspaceBinding::Main { checkout }, None)
-            }
-            WorkspaceChoice::NewWorktree { repo } => {
-                let entry = self.registry.reserve_worktree(project)?;
-                (
-                    WorkspaceBinding::Worktree {
-                        repo,
-                        path: entry.path,
+        self.act(
+            |engine| engine.set_group_layout(group, tree.clone()),
+            |server| {
+                run(
+                    server,
+                    Op::Layout {
+                        group,
+                        tree: Some(tree.clone()),
                     },
-                    Some(entry.branch),
                 )
-            }
-            WorkspaceChoice::ExistingWorktree { repo, path } => {
-                (WorkspaceBinding::Worktree { repo, path }, None)
-            }
-        };
-        let created =
-            self.store
-                .create_with_model(provider, model.clone(), Some(project), binding.clone());
-        let (id, mut writer) = match created {
-            Ok(created) => created,
-            Err(error) => {
-                if fresh_branch.is_some() {
-                    self.registry.remove_worktree(binding.cwd())?;
-                }
-                return Err(error);
-            }
-        };
-        if let Err(error) = self.store.mark_open(id) {
-            let _ = self.store.delete(id);
-            return Err(error);
-        }
-        if let Err(e) = ensure_workspace(&self.registry, &binding, id) {
-            if fresh_branch.is_some() {
-                let _ = self.registry.remove_worktree(binding.cwd());
-            }
-            let _ = self.store.delete(id);
-            return Err(io::Error::other(e));
-        }
-        // The chosen effort goes into the header beside the model, so a
-        // revive spawns on it too.
-        if effort.is_some() {
-            if let Err(e) =
-                self.store
-                    .set_tuning(id, model.clone(), effort.clone(), Some(&mut writer))
-            {
-                let _ = self.store.delete(id);
-                return Err(io::Error::other(e.to_string()));
-            }
-        }
-        let session = match self.spawner.start(SpawnRequest {
-            provider,
-            model: model.as_deref(),
-            effort: effort.as_deref(),
-            resume: None,
-            cwd: workspace::effective_cwd(None, Some(&binding)),
-            name: None,
-            additional_directories: project_additional_directories(
-                &self.registry,
-                Some(project),
-                Some(binding.cwd()),
-            ),
-        }) {
-            Ok(session) => session,
-            // The bootstrap's failure contract: no Thread. The worktree, if
-            // one was just created, stays — real, registered, adoptable.
-            Err(e) => {
-                let _ = self.store.delete(id);
-                return Err(e);
-            }
-        };
-        self.threads.insert(
-            id,
-            Thread::fresh(
-                session,
-                writer,
-                provider,
-                model,
-                effort,
-                None,
-                Some(binding),
-                None,
-                self.store.dir().join(id.to_string()).join("queue.json"),
-            ),
-        );
-        self.roster.insert_thread(id);
-        Ok(id)
+                .map_err(|error| ApplyError::Io(error.to_string()))
+            },
+        )
     }
 
-    /// Start the first send. The returned id is provisional while startup
-    /// is pending; `take_bootstrap_results` reports its delivery or rollback.
-    /// Ready adapters complete before this returns.
-    ///
-    /// Turn one draft into a live, locked Thread. The Thread log and Session
-    /// are implementation details of this transaction: if the first prompt
-    /// cannot reach the Session, both are removed and the caller still owns
-    /// the exact prompt and draft choices.
+    pub fn remove_project(&mut self, project: ProjectId) -> io::Result<()> {
+        self.act(
+            |engine| engine.remove_project(project),
+            |server| {
+                run(
+                    server,
+                    Op::Project {
+                        action: ProjectAction::Remove { project },
+                    },
+                )
+            },
+        )
+    }
+
+    pub fn rename_project(&mut self, project: ProjectId, title: &str) -> io::Result<()> {
+        self.act(
+            |engine| engine.rename_project(project, title),
+            |server| {
+                run(
+                    server,
+                    Op::Project {
+                        action: ProjectAction::Rename {
+                            project,
+                            title: title.to_string(),
+                        },
+                    },
+                )
+            },
+        )
+    }
+
+    /// Watch Session memory in this process. A Server watches its own.
+    pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
+        self.in_process().watch_memory(sampler, limit);
+        self.settle();
+    }
+
+    /// Replace any Session grown past the memory limit. A Server sweeps on
+    /// its own, so a window attached to one has nothing to do.
+    pub fn sweep(&mut self) -> Vec<Restart> {
+        self.act(Engine::sweep, |_| Vec::new())
+    }
+
+    /// The provider's CLI was replaced on disk: its Sessions restart on the
+    /// new release as they idle, and its models are asked for again.
+    pub fn cli_replaced(&mut self, provider: Provider) {
+        self.act(
+            |engine| {
+                engine.restart_sessions(provider);
+                engine.rediscover_models();
+            },
+            |server| {
+                if let Err(error) = run(server, Op::CliReplaced { provider }) {
+                    crate::log!("the server did not hear of the new {provider} CLI: {error}");
+                }
+            },
+        );
+    }
+
+    pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
+        self.act(
+            |engine| engine.open(provider, workspace.clone()),
+            |server| {
+                started(server.execute(Op::Open {
+                    provider,
+                    workspace: (&workspace).into(),
+                }))
+            },
+        )
+    }
+
+    /// A first send that blocks until its Thread opens: the tests' own.
+    /// A window sends a Draft's first message with `bootstrap_draft`.
+    #[cfg(test)]
     pub fn bootstrap(
         &mut self,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         prompt: &str,
     ) -> io::Result<ThreadId> {
-        self.bootstrap_with(choice, workspace, prompt, None)
+        let started = self.in_process().bootstrap(choice, workspace, prompt);
+        self.settle();
+        started
     }
 
-    /// `bootstrap` with the Thread's own effort from the start.
-    fn bootstrap_with(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        effort: Option<String>,
-    ) -> io::Result<ThreadId> {
-        self.begin_bootstrap(choice, workspace, prompt, effort, None, None)
-    }
-
+    #[cfg(test)]
     pub fn bootstrap_in_group(
         &mut self,
         choice: ProviderChoice,
@@ -1111,380 +1126,28 @@ impl Cockpit {
         prompt: &str,
         group: GroupId,
     ) -> io::Result<ThreadId> {
-        self.bootstrap_in_group_with(choice, workspace, prompt, group, None)
+        let started = self
+            .in_process()
+            .bootstrap_in_group(choice, workspace, prompt, group);
+        self.settle();
+        started
     }
 
-    fn bootstrap_in_group_with(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        group: GroupId,
-        effort: Option<String>,
-    ) -> io::Result<ThreadId> {
-        self.groups.validate_join(group).map_err(io::Error::other)?;
-        self.begin_bootstrap(choice, workspace, prompt, effort, Some(group), None)
-    }
-
-    fn begin_bootstrap(
-        &mut self,
-        choice: ProviderChoice,
-        workspace: WorkspaceChoice,
-        prompt: &str,
-        effort: Option<String>,
-        group: Option<GroupId>,
-        new_group_with: Option<ThreadId>,
-    ) -> io::Result<ThreadId> {
-        let id = self.open_choice(choice, workspace, effort)?;
-        let pending = PendingBootstrap {
-            prompt: prompt.to_string(),
-            group,
-            new_group_with,
-            draft: None,
-        };
-        if self.threads[&id]
-            .session
-            .as_ref()
-            .is_some_and(SessionLifecycle::is_starting)
-        {
-            self.bootstraps.insert(id, pending);
-        } else if let Err(error) = self.finish_bootstrap(id, &pending) {
-            self.rollback_bootstrap(id)?;
-            return Err(error);
-        }
-        Ok(id)
-    }
-
-    /// Membership is durable before delivery; readiness precedes both.
-    fn finish_bootstrap(&mut self, id: ThreadId, pending: &PendingBootstrap) -> io::Result<()> {
-        if let Some(group) = pending.group {
-            self.groups
-                .apply(GroupChange::Join {
-                    thread: id,
-                    group,
-                    index: None,
-                })
-                .map_err(io::Error::other)?;
-        }
-        if let Some(first) = pending.new_group_with {
-            if self.groups.of(first).is_some() {
-                return Err(io::Error::other(
-                    "the original Thread joined a Group before the draft was sent",
-                ));
-            }
-            self.groups
-                .apply(GroupChange::Create { first, second: id })
-                .map_err(io::Error::other)?;
-        }
-        let state = self.threads.get_mut(&id).expect("pending Thread exists");
-        if let Some(binding) = &state.workspace {
-            state.apply(Input::Notice(format!(
-                "{}{}",
-                crate::transcript::OPENED_IN,
-                binding.cwd().display()
-            )));
-        }
-        deliver(state, pending.prompt.clone(), self.suggestions_enabled)?;
-        Ok(())
-    }
-
-    fn rollback_bootstrap(&mut self, id: ThreadId) -> io::Result<()> {
-        // Roll back membership before its durable Thread; if persistence
-        // refuses, preserve the Thread so the Group never points to nothing.
-        if self.groups.of(id).is_some() {
-            self.groups
-                .apply(GroupChange::Leave { thread: id })
-                .map_err(io::Error::other)?;
-        }
-        self.threads.remove(&id);
-        self.roster.remove_thread(id);
-        self.store.delete(id)
-    }
-
-    // Legacy #24 fixtures exercise persisted `session_project_root` loading.
-    // No production writer exists after the #29 lock.
-    #[cfg(test)]
-    fn set_session_project_root(
-        &mut self,
-        thread: ThreadId,
-        root: Option<PathBuf>,
-    ) -> Result<(), LoadError> {
-        self.visible_subjects.remove(&thread);
-        match self.threads.get_mut(&thread) {
-            Some(state) => {
-                state.session = None;
-                state.replacement = None;
-                state.replace_generation();
-                self.store.set_session_project_root(
-                    thread,
-                    root.clone(),
-                    Some(&mut state.writer),
-                )?;
-                state.session_project_root = root;
-            }
-            None => self.store.set_session_project_root(thread, root, None)?,
-        }
-        if let Some(held) = self
-            .threads
-            .get_mut(&thread)
-            .and_then(|state| state.queued.take())
-        {
-            self.send(thread, held);
-        }
-        Ok(())
-    }
-
-    /// Re-aim a Thread onto a provider (and optionally a model) (#25).
-    /// `Ok` accepts the request; `ThreadView::starting` reports a deferred
-    /// replacement. A later refusal is a Notice, leaving the prior choices
-    /// and Session intact. Ready adapters still settle before returning.
-    /// Spawn-new-first, swap second: a CLI that fails to spawn leaves the
-    /// old Session serving and the header untouched, and the error carries
-    /// the provider's words. Durable before anything in memory changes, so
-    /// a parked-never-prompted Thread revives onto its choice.
-    ///
-    /// Before the first prompt the swap is a fresh Transcript — nothing
-    /// operator-authored exists pre-lock, so the old Init and model must
-    /// not linger — and an eager respawn: the new Provider's commands and
-    /// models arrive while the operator is still choosing. Works on a
-    /// parked Thread too: only the store is touched.
-    ///
-    /// After the first prompt the Transcript and history stay: the new
-    /// Provider starts fresh (the old one's id means nothing to it) and the
-    /// next prompt carries the earlier conversation, digested, ahead of the
-    /// operator's text — once. The switch is a `handover` record in the
-    /// log, so a revive knows the last Init is nobody's to resume and
-    /// whether the carry still owes. Mid-turn the switch is refused rather
-    /// than cutting the turn; a parked Thread that has spoken waits for its
-    /// revive (`Locked`), because the carry needs the live conversation.
-    /// The effort resets to the new Provider's default: the old one's word
-    /// may mean nothing to it.
     pub fn set_provider(
         &mut self,
         thread: ThreadId,
         choice: ProviderChoice,
     ) -> Result<(), ProvisionError> {
-        let Some(state) = self.threads.get(&thread) else {
-            // Parked: the lock is whether a prompt was ever sent, which the
-            // log's tail says without a full load.
-            if self.store.prompted(thread).map_err(ProvisionError::Store)? {
-                return Err(ProvisionError::Locked);
-            }
-            return self
-                .store
-                .set_provider(thread, choice.provider, choice.model, None, None)
-                .map_err(ProvisionError::Store);
-        };
-        if state.provider == choice.provider && state.model == choice.model {
-            self.threads.get_mut(&thread).expect("checked").replacement = None;
-            return Ok(());
-        }
-        if state.first_prompt_sent {
-            return self.hand_over(thread, choice);
-        }
-        // The effort is a word of the provider's: it stays across a model
-        // change and resets across a provider change.
-        let effort = if state.provider == choice.provider {
-            state.effort.clone()
-        } else {
-            None
-        };
-        self.provision(thread, choice.provider, choice.model, effort)
-    }
-
-    fn provision(
-        &mut self,
-        thread: ThreadId,
-        provider: Provider,
-        model: Option<String>,
-        effort: Option<String>,
-    ) -> Result<(), ProvisionError> {
-        self.replace_session(thread, provider, model, effort, ReplacementKind::Fresh)
-    }
-
-    fn hand_over(
-        &mut self,
-        thread: ThreadId,
-        choice: ProviderChoice,
-    ) -> Result<(), ProvisionError> {
-        self.replace_session(
-            thread,
-            choice.provider,
-            choice.model,
-            None,
-            ReplacementKind::Handover,
-        )
-    }
-
-    /// The old Session and durable choices stay authoritative until startup
-    /// succeeds. All replacement paths share this transaction.
-    fn replace_session(
-        &mut self,
-        thread: ThreadId,
-        provider: Provider,
-        model: Option<String>,
-        effort: Option<String>,
-        kind: ReplacementKind,
-    ) -> Result<(), ProvisionError> {
-        let project = self.project_id(thread);
-        let state = self.threads.get(&thread).expect("checked by caller");
-        if state.tuning.is_some() {
-            return Err(ProvisionError::Tuning);
-        }
-        if state.native_queue.pending()
-            || (state.busy() && !matches!(kind, ReplacementKind::Fresh))
-            || state.replacement.is_some()
-            || self.bootstraps.contains_key(&thread)
-        {
-            return Err(ProvisionError::Busy);
-        }
-        let cwd = workspace::effective_cwd(
-            state.session_project_root.as_deref(),
-            state.workspace.as_ref(),
-        );
-        let resume = match kind {
-            ReplacementKind::Retune => Some(state.resume.as_deref().ok_or(ProvisionError::Locked)?),
-            _ => None,
-        };
-        let session = self
-            .spawner
-            .start(SpawnRequest {
-                provider,
-                model: model.as_deref(),
-                effort: effort.as_deref(),
-                resume,
-                cwd,
-                name: state.title.as_deref(),
-                additional_directories: project_additional_directories(
-                    &self.registry,
-                    project,
-                    cwd,
-                ),
-            })
-            .map_err(ProvisionError::Spawn)?;
-        let mut replacement = Replacement {
-            session,
-            provider,
-            model,
-            effort,
-            kind,
-            exchanges: None,
-        };
-        if replacement.session.is_starting() {
-            self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
-            return Ok(());
-        }
-        match self.carry_read(thread, &mut replacement)? {
-            Some(exchanges) => self.commit_replacement(thread, replacement, exchanges),
-            None => {
-                self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
-                Ok(())
-            }
-        }
-    }
-
-    /// A handover's exchanges, read whole from the log before it commits
-    /// (invariant 3): `Some` once read — at once for a small log — and
-    /// `None` while a large one is read off the UI thread. Other
-    /// replacements carry nothing and are ready now.
-    fn carry_read(
-        &mut self,
-        thread: ThreadId,
-        replacement: &mut Replacement,
-    ) -> Result<Option<Vec<(String, String)>>, ProvisionError> {
-        if !matches!(replacement.kind, ReplacementKind::Handover) {
-            return Ok(Some(Vec::new()));
-        }
-        if replacement.exchanges.is_none() {
-            // Everything the old Session said is in the log before it is read.
-            let state = self.threads.get_mut(&thread).expect("checked");
-            state
-                .writer
-                .flush()
-                .map_err(|error| ProvisionError::Store(LoadError::Io(error)))?;
-            replacement.exchanges = Some(self.store.read_exchanges(thread));
-        }
-        match replacement.exchanges.as_mut().expect("started").poll() {
-            Some(read) => read.map(Some).map_err(ProvisionError::Store),
-            None => Ok(None),
-        }
-    }
-
-    fn commit_replacement(
-        &mut self,
-        thread: ThreadId,
-        replacement: Replacement,
-        exchanges: Vec<(String, String)>,
-    ) -> Result<(), ProvisionError> {
-        self.visible_subjects.remove(&thread);
-        let Replacement {
-            session,
-            provider,
-            model,
-            effort,
-            kind,
-            ..
-        } = replacement;
-        let state = self.threads.get_mut(&thread).expect("checked");
-        let handover = if matches!(kind, ReplacementKind::Handover) {
-            Some(
-                self.store
-                    .commit_handover(provider, model.clone(), &mut state.writer, exchanges)
-                    .map_err(ProvisionError::Store)?,
-            )
-        } else {
-            self.store
-                .set_provider(
+        self.act(
+            |engine| engine.set_provider(thread, choice.clone()),
+            |server| {
+                provisioned(server.execute(Op::SetProvider {
                     thread,
-                    provider,
-                    model.clone(),
-                    effort.clone(),
-                    Some(&mut state.writer),
-                )
-                .map_err(ProvisionError::Store)?;
-            None
-        };
-        match kind {
-            ReplacementKind::Fresh => {
-                state.activity = Activity::default();
-                state.resume = None;
-                state.carry = None;
-            }
-            ReplacementKind::Handover => {
-                let handover = handover.expect("committed with header");
-                state.carry = Some(carry_digest(handover.from, &handover.exchanges));
-                state.resume = None;
-                state.apply(Input::Notice(crate::store::handover_notice(
-                    provider,
-                    model.as_deref(),
-                )));
-            }
-            ReplacementKind::Retune => {
-                if state.model != model {
-                    let label = crate::providers::models::label(
-                        model.as_deref().unwrap_or("default"),
-                        &state.models,
-                    );
-                    state.apply(Input::Notice(format!("model changed to {label}")));
-                }
-                if state.effort != effort {
-                    state.apply(Input::Notice(format!(
-                        "effort changed to {}",
-                        effort.as_deref().unwrap_or("default")
-                    )));
-                }
-            }
-        }
-        state.session = Some(session);
-        state.provider = provider;
-        state.model = model;
-        state.effort = effort;
-        state.replace_generation();
-        state.preface_pending = true;
-        state.commands.clear();
-        state.models.clear();
-        state.permission_mode = None;
-        Ok(())
+                    provider: choice.provider,
+                    model: choice.model.clone(),
+                }))
+            },
+        )
     }
 
     pub fn project_id(&self, thread: ThreadId) -> Option<ProjectId> {
@@ -1492,385 +1155,93 @@ impl Cockpit {
     }
 
     pub fn try_project_id(&self, thread: ThreadId) -> Result<Option<ProjectId>, LoadError> {
-        self.store.peek(thread).map(|meta| meta.project_id)
+        self.parked.peek(thread).map(|meta| meta.project_id)
     }
 
-    /// Delete a Thread for good: its log and directory. Registered project
-    /// worktrees survive as durable, adoptable workspace inventory. Only a
-    /// legacy unregistered worktree binding is removed, and then only when
-    /// clean (`git status` defines clean); its branch is never deleted.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
-        if self.bootstraps.contains_key(&thread) {
-            return self.park(thread).map_err(DeleteError::Io);
-        }
-        let meta = self.store.peek(thread).map_err(DeleteError::Load)?;
-        let groups_before = self.groups.clone();
-        let grouped = self.groups.of(thread).is_some();
-        if grouped {
-            self.groups
-                .apply(GroupChange::Leave { thread })
-                .map_err(|error| DeleteError::Io(io::Error::other(error)))?;
-        }
-
-        let deleted = (|| {
-            if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
-                (meta.project_id, meta.workspace)
-            {
-                // A worktree already gone by hand leaves nothing to check or
-                // remove; the log's deletion below is all that is left to do.
-                if path.exists() {
-                    if !workspace::is_clean(&path).map_err(DeleteError::Git)? {
-                        return Err(DeleteError::DirtyWorktree { path });
-                    }
-                    // The Session dies before its worktree goes: a live process
-                    // whose cwd is the directory being removed holds it open on
-                    // Windows, and the dirty check above already ruled out any
-                    // work that Session had in flight.
-                    self.threads.remove(&thread);
-                    self.roster.remove_thread(thread);
-                    workspace::remove_worktree(&repo, &path).map_err(DeleteError::Git)?;
-                }
-                // The menu forgets the removed tree; the branch stays git's.
-                self.registry
-                    .remove_worktree(&path)
-                    .map_err(DeleteError::Io)?;
-            }
-            self.threads.remove(&thread);
-            self.visible_subjects.remove(&thread);
-            self.roster.remove_thread(thread);
-            self.notifications.forget(thread);
-            self.store.delete(thread).map_err(DeleteError::Io)
-        })();
-
-        if let Err(error) = deleted {
-            if grouped {
-                self.groups
-                    .restore_snapshot(groups_before)
-                    .map_err(|restore| {
-                        DeleteError::Io(io::Error::other(format!(
-                            "{error}; restoring group membership also failed: {restore}"
-                        )))
-                    })?;
-            }
-            return Err(error);
-        }
-        Ok(())
+        self.act(
+            |engine| engine.delete(thread),
+            |server| run(server, Op::Delete { thread }).map_err(DeleteError::Io),
+        )
     }
 
-    /// Close a Pane: the Session ends, the log is flushed, and the Thread
-    /// keeps nothing in memory until it is opened again.
-    pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
-        if let Some(pending) = self.bootstraps.remove(&thread) {
-            self.rollback_bootstrap(thread)?;
-            self.bootstrap_results.push(BootstrapResult {
-                draft: pending.draft,
-                prompt: pending.prompt,
-                result: Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "Session startup cancelled",
-                )),
-            });
-            return Ok(());
-        }
-        let Some(state) = self.threads.get_mut(&thread) else {
-            // A parked Group member's tile (`enter_group`) has a Pane and no
-            // Session: parking it again only takes the Pane away.
-            self.roster.remove_thread(thread);
-            return Ok(());
-        };
-        // The parked row's subagent count, from the Activity that knows it.
-        state
-            .writer
-            .note_subagents(state.activity.view().children().len());
-        // A failed write keeps the live owner and its retry buffer reachable.
-        if let Err(error) = state.writer.flush() {
-            state.report_store_error(io::Error::new(error.kind(), error.to_string()));
-            return Err(error);
-        }
-        let mut state = self.threads.remove(&thread).expect("checked");
-        // The rest — the open marker, a final mark, a sync through the
-        // drive's cache — is the store's worker's; a revive waits for it.
-        state.writer.park();
-        self.notifications.disconnect(thread);
-        self.visible_subjects.remove(&thread);
-        self.roster.remove_thread(thread);
-        state.session = None;
-        state.replacement = None;
-        #[cfg(test)]
-        if self.refuse_park.contains(&thread) {
-            return Err(io::Error::other("stub refused to park"));
-        }
-        Ok(())
-    }
-
-    /// Reopen a parked Thread: its history is replayed from the log into a
-    /// fresh Transcript, and the new Session is told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        // Bounded: what Activity retains, not the whole log (ADR 0009).
-        let mut revival = self.store.revive(thread)?;
-        let snapshot = revival.snapshot();
-        let provider = snapshot.provider();
-        let mut workspace = snapshot.workspace();
-        let session_project_root = snapshot.session_project_root();
-        let model = snapshot.model();
-        let effort = snapshot.effort();
-        let title = snapshot.title().map(str::to_string);
-        let project_id = snapshot.project_id();
-        let resume = snapshot.resume_target().map(str::to_string);
-        // A worktree the agent made and the Thread followed into is the
-        // agent's, not Ferrite's: gone while parked, the Thread goes back
-        // to main rather than rebuilding somebody else's tree. Ferrite's
-        // own (registered, or pre-registry under the store) are recreated
-        // below as ever.
-        if let Some(WorkspaceBinding::Worktree { repo, path }) = &workspace {
-            if !path.exists()
-                && self.registry.branch_for(path).is_none()
-                && !path.starts_with(self.store.dir())
-            {
-                let main = WorkspaceBinding::Main {
-                    checkout: repo.clone(),
-                };
-                self.store
-                    .set_workspace(thread, &main, Some(revival.writer()))?;
-                workspace = Some(main);
-            }
-        }
-        // On demand also means back on demand: a worktree deleted while the
-        // Thread was parked is recreated on its own branch before anything
-        // spawns into it.
-        if let Some(binding) = &workspace {
-            ensure_workspace(&self.registry, binding, thread)
-                .map_err(|e| LoadError::Io(io::Error::other(e)))?;
-        }
-        let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
-            .map(Path::to_path_buf);
-        let additional_directories =
-            project_additional_directories(&self.registry, project_id, cwd.as_deref());
-        let session = self
-            .spawner
-            .start(SpawnRequest {
-                provider,
-                model: model.as_deref(),
-                effort: effort.as_deref(),
-                resume: resume.as_deref(),
-                cwd: cwd.as_deref(),
-                name: title.as_deref(),
-                additional_directories,
-            })
-            .map_err(LoadError::Io)?;
-        let writer = revival.take_writer();
-
-        let mut state = Thread::fresh(
-            session,
-            writer,
-            provider,
-            model,
-            effort,
-            resume,
-            workspace,
-            session_project_root,
-            self.store.dir().join(thread.to_string()).join("queue.json"),
-        );
-        state.title = title;
-        // A switch whose carry never went out (parked before the next
-        // prompt) still owes it: the new Provider has heard nothing yet.
-        if let Some(handover) = revival.owed_handover() {
-            state.carry = Some(carry_digest(handover.from, &handover.exchanges));
-        }
-        state.prompt_history = PromptHistory::new(revival.snapshot().prompt_texts());
-        state.first_prompt_sent = revival.prompted();
-        state.activity.apply(ActivityInput::Disconnect);
-        for input in revival.activity_inputs() {
-            state.activity.apply(input);
-        }
-        state.apply(Input::Revived);
-        for kept in self.store.pending_records(thread) {
-            state.apply(Input::Notice(format!(
-                "history from before Ferrite last quit could not be saved in the log; \
-                 it is kept in {}",
-                kept.display()
-            )));
-        }
-        if let Some(notice) = state.native_queue.disconnect(provider == Provider::Codex) {
-            state.apply(Input::Notice(notice));
-        }
-        state.activity.apply(ActivityInput::Connect {
-            generation: state.generation,
-        });
-
-        self.store.mark_open(thread)?;
-        self.threads.insert(thread, state);
-        self.roster.insert_thread(thread);
-        Ok(())
+        self.act(
+            |engine| engine.revive(thread),
+            |server| run(server, Op::Revive { thread }).map_err(LoadError::Io),
+        )
     }
 
-    /// Open every member of one persisted Group or leave the live set unchanged.
+    /// Revive a Thread `delay` from now: the launch's stagger (ADR 0018). A
+    /// Server revives its open Threads itself.
+    pub fn revive_after(&mut self, thread: ThreadId, delay: Duration) -> Result<(), LoadError> {
+        let revived = self.in_process().revive_after(thread, delay);
+        self.settle();
+        revived
+    }
+
+    /// The tests' own: no window revives a whole Group.
+    #[cfg(test)]
     pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
-        let members = self
-            .groups
-            .get(group)
-            .ok_or(ReviveGroupError::MissingGroup)?
-            .members
-            .clone();
-        let mut revived = Vec::new();
-        for thread in &members {
-            if self.threads.contains_key(thread) {
-                continue;
-            }
-            if let Err(error) = self.revive(*thread) {
-                let mut rollback_failure = None;
-                for opened in revived.into_iter().rev() {
-                    if let Err(error) = self.park(opened) {
-                        rollback_failure.get_or_insert((opened, error));
-                    }
-                }
-                if let Some((thread, error)) = rollback_failure {
-                    return Err(ReviveGroupError::Rollback { thread, error });
-                }
-                return Err(ReviveGroupError::Member {
-                    thread: *thread,
-                    error,
-                });
-            }
-            revived.push(*thread);
-        }
-        Ok(members)
+        let revived = self.in_process().revive_group(group);
+        self.settle();
+        revived
     }
 
-    /// Adopt a CLI session file as a Thread of this cockpit (#11) — the
-    /// import module's work, against this cockpit's own store. The Thread
-    /// is durable and parked when this returns; `revive` opens it like any
-    /// other, history replayed and the Session resuming the file's own
-    /// session id. A refusal is the import module's, unchanged: readable,
-    /// and no Thread was created.
     pub fn import(&mut self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
-        crate::import::import_registered(&self.store, &mut self.registry, path)
+        self.act(
+            |engine| engine.import(path),
+            |server| {
+                started(server.execute(Op::Import {
+                    path: path.to_path_buf(),
+                }))
+                .map_err(crate::import::ImportError::Io)
+            },
+        )
     }
 
-    /// Send a prompt now: on the wire, in the transcript, in the log. A
-    /// Thread whose Session was ended under it — a changed session project
-    /// root, a failed watchdog restart — respawns here through the same
-    /// resume path a revive uses, which re-arms the preface.
     pub fn send(&mut self, thread: ThreadId, text: String) {
-        if self.bootstraps.contains_key(&thread) {
-            return;
-        }
-        if self
-            .threads
-            .get(&thread)
-            .is_some_and(|state| state.session.is_none())
-        {
-            self.visible_subjects.remove(&thread);
-        }
-        let project = self.project_id(thread);
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return;
-        };
-        state.prompt_history.reset();
-        // Guarded before anything spawns: a refused send must not leave a
-        // fresh provider process behind. `deliver` guards again for the
-        // sends that never pass through here.
-        if let Some(refusal) = vanished_root_refusal(state) {
-            state.apply(Input::Notice(refusal));
-            return;
-        }
-        if state.session.is_none() {
-            state.replace_generation();
-            let resume = state.resume.clone();
-            let cwd = workspace::effective_cwd(
-                state.session_project_root.as_deref(),
-                state.workspace.as_ref(),
-            )
-            .map(Path::to_path_buf);
-            let additional_directories =
-                project_additional_directories(&self.registry, project, cwd.as_deref());
-            match self.spawner.start(SpawnRequest {
-                provider: state.provider,
-                model: state.model.as_deref(),
-                effort: state.effort.as_deref(),
-                resume: resume.as_deref(),
-                cwd: cwd.as_deref(),
-                name: state.title.as_deref(),
-                additional_directories,
-            }) {
-                Ok(session) => {
-                    state.session = Some(session);
-                    state.preface_pending = true;
-                }
-                Err(e) => {
-                    state.apply(Input::Notice(format!("send failed: {e}")));
-                    return;
-                }
-            }
-        }
-        if state.replacement.is_some()
-            || state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-        {
-            state.queued = Some(text);
-            return;
-        }
-        if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-            state.queued = Some(text);
-            state.apply(Input::Notice(format!("send failed: {error}")));
-        }
+        self.act(
+            |engine| engine.send(thread, text.clone()),
+            |server| {
+                said(
+                    server,
+                    Op::Send {
+                        thread,
+                        text: text.clone(),
+                    },
+                )
+            },
+        );
     }
 
-    /// Stop the running turn.
     pub fn interrupt(&mut self, thread: ThreadId) {
-        if self.bootstraps.contains_key(&thread) {
-            let _ = self.park(thread);
-            return;
-        }
-        if self.threads.get(&thread).is_some_and(|state| {
-            state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-        }) {
-            self.visible_subjects.remove(&thread);
-        }
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return;
-        };
-        if state
-            .session
-            .as_ref()
-            .is_some_and(SessionLifecycle::is_starting)
-        {
-            state.session = None;
-            state.replace_generation();
-        }
-        state.replacement = None;
-        if let Some(session) = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-        {
-            match session.interrupt() {
-                Ok(()) => {
-                    // Escape with prompts held means "stop, then do these":
-                    // Claude's CLI runs its surviving queue itself; Codex
-                    // discards un-consumed steers, so the resend is ours.
-                    state.resend_held_on_turn_end =
-                        state.provider == Provider::Codex && state.native_queue.pending();
-                }
-                Err(e) => {
-                    state.apply(Input::Notice(format!("interrupt failed: {e}")));
-                }
-            }
-        }
+        self.act(
+            |engine| engine.interrupt(thread),
+            |server| said(server, Op::Interrupt { thread }),
+        );
     }
 
-    /// Compatibility entry point. The app uses generation-scoped handles via
-    /// `respond_decision`; this accepts only a still-pending identical request.
+    /// Stop one Subagent of `thread`; Main's turn and the others run on.
+    pub fn stop_subagent(&mut self, thread: ThreadId, key: &AgentKey) {
+        self.act(
+            |engine| engine.stop_subagent(thread, key),
+            |server| {
+                said(
+                    server,
+                    Op::StopSubagent {
+                        thread,
+                        key: key.as_str().into(),
+                    },
+                )
+            },
+        );
+    }
+
+    /// Answer the pending Decision `decision` names, if it still waits.
     pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
-        let handle = self.threads.get(&thread).and_then(|state| {
-            state
-                .activity
-                .view()
+        let handle = self.thread(thread).and_then(|open| {
+            open.activity()
                 .decisions()
                 .iter()
                 .find(|pending| pending.decision == *decision)
@@ -1881,84 +1252,51 @@ impl Cockpit {
         }
     }
 
-    /// Answer exactly the request the operator saw. A tab change cannot
-    /// redirect it, and an old Session's handle cannot match its replacement.
-    /// A failed write retains the Decision so the operator can retry.
+    /// Answer exactly the request the operator saw. False when it no longer
+    /// waits — answered already, here or in another window. An answer is
+    /// never sent twice.
     pub fn respond_decision(
         &mut self,
         thread: ThreadId,
         handle: &DecisionHandle,
         answer: DecisionAnswer,
     ) -> io::Result<bool> {
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return Ok(false);
-        };
-        let Some(pending) = state
-            .activity
-            .view()
-            .decisions()
-            .iter()
-            .find(|pending| pending.handle == *handle)
-            .cloned()
-        else {
-            return Ok(false);
-        };
-        if handle.generation != state.generation {
-            return Ok(false);
-        }
-        if pending.submitting {
-            return Ok(false);
-        }
-        let allowed = !matches!(answer, DecisionAnswer::Deny { .. });
-        let Some(session) = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-        else {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Session is not available",
-            ));
-        };
-        if let Err(error) = session.respond_to_decision(&pending.decision.id, answer) {
-            state.apply(Input::Notice(format!("answer failed: {error}")));
-            return Err(error);
-        }
-        if !pending.decision.blocks_execution() {
-            state.activity.apply(ActivityInput::AnswerSubmitted {
-                handle: handle.clone(),
-            });
-            return Ok(true);
-        }
-        state.activity.apply(ActivityInput::Answered {
-            handle: handle.clone(),
-            allowed,
-            at: crate::clock::instant(),
-        });
-        Ok(true)
+        self.act(
+            |engine| engine.respond_decision(thread, handle, answer.clone()),
+            |server| match server.execute(Op::Answer {
+                thread,
+                handle: handle.into(),
+                answer: (&answer).into(),
+            }) {
+                Ok(_) => Ok(true),
+                Err(error) if error.code == crate::protocol::ErrorCode::AlreadyAnswered => {
+                    Ok(false)
+                }
+                Err(error) => Err(error.into()),
+            },
+        )
     }
 
-    /// Something Ferrite itself needs to say in a Pane.
+    /// Something only `--demo` and the tests put in a Pane directly.
     pub fn apply_input(&mut self, thread: ThreadId, input: Input) {
-        if let Some(state) = self.threads.get_mut(&thread) {
-            state.apply(input);
-        }
+        self.in_process().apply_input(thread, input);
+        self.settle();
     }
 
-    /// One open Thread, read through one handle: everything a Pane, a nav
-    /// row or a menu asks about a Thread this Cockpit holds live. `None` is
-    /// the one "is it open?" answer; every read after it is infallible and
-    /// borrows the Cockpit, not the handle.
-    pub fn thread(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
-        self.threads.get(&thread).map(|state| ThreadView { state })
-    }
-
-    pub fn discover_sessions(
-        &mut self,
-        roots: Vec<(Provider, PathBuf)>,
-        cap: usize,
-    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
-        self.spawner.discover_sessions(roots, cap)
+    /// Ferrite's own words in a Thread's Pane.
+    pub fn say(&mut self, thread: ThreadId, text: String) {
+        self.act(
+            |engine| engine.apply_input(thread, Input::Notice(text.clone())),
+            |server| {
+                said(
+                    server,
+                    Op::Say {
+                        thread,
+                        text: text.clone(),
+                    },
+                )
+            },
+        );
     }
 
     pub fn search_files(
@@ -1966,122 +1304,245 @@ impl Cockpit {
         thread: ThreadId,
         query: &str,
     ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
-        self.threads
-            .get_mut(&thread)
-            .and_then(|state| state.session.as_mut())
-            .and_then(SessionLifecycle::session_mut)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
-            })?
-            .search_files(query)
+        self.act(
+            |engine| engine.search_files(thread, query),
+            |server| server.search_files(thread, query),
+        )
     }
 
-    /// Route a provider-native control to the live Session for this Thread.
-    /// Controls never create or replace a Session and never alter Activity.
-    pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
-        let state = self
-            .threads
-            .get_mut(&thread)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?;
-        let session = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
-            })?;
-        let kind = control_kind(&action);
-        if !session.supports_control(kind) {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Session does not support that control",
-            ));
+    /// A directory's entries on the computer the Server runs on — on a
+    /// machine, the machine's (ADR 0026). Answered later: a machine is a
+    /// round trip away. Only a Server answers: a window that runs its
+    /// agents itself has this computer's folders at hand.
+    pub fn list_dir(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<crate::workspace::Listing>>> {
+        self.remote()?.list_dir(path)
+    }
+
+    /// What `project`'s repo holds for the workspace chip, read by git
+    /// where the Server runs (ADR 0026). Answered later, as `list_dir`.
+    pub fn list_repo(
+        &mut self,
+        project: ProjectId,
+    ) -> io::Result<Receiver<io::Result<crate::workspace::RepoListing>>> {
+        self.remote()?.list_repo(project)
+    }
+
+    /// A review's `read` of the checkout at `path`: its changed files with
+    /// both sides, read by the vendored review core where the Server runs —
+    /// on a machine, the machine's checkout (ADR 0021) — or here, off this
+    /// thread, when this window runs its agents itself.
+    pub fn review_diff(
+        &mut self,
+        path: &Path,
+        read: ferrite_reviewr::ferrite::Read,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::ferrite::FileSides>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_diff(path, &read),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::review(&path, &read)
+                }))
+            }
         }
-        session.control(action)
     }
 
-    /// Threads the store holds that no Pane is showing — what a restart finds,
-    /// and what "reopen" reopens.
+    /// The branch's commits for a review's commits scope, read where
+    /// `review_diff` reads.
+    pub fn review_commits(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::CommitRow>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_commits(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || ferrite_reviewr::ferrite::commits(&path)))
+            }
+        }
+    }
+
+    /// Files and lines matching `query` in the checkout at `path`, from
+    /// the search index where `review_diff` reads.
+    pub fn search_repo(
+        &mut self,
+        path: &Path,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<ferrite_reviewr::search::SearchResults>>> {
+        match &mut self.link {
+            Link::Server(server) => server.search_repo(path, query),
+            Link::InProcess(_) => {
+                let (path, query) = (path.to_path_buf(), query.to_string());
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::search(&path, &query)
+                }))
+            }
+        }
+    }
+
+    /// The worktree file `file` of the checkout at `path`, for a review's
+    /// file view, read where `review_diff` reads.
+    pub fn read_review_file(
+        &mut self,
+        path: &Path,
+        file: &str,
+    ) -> io::Result<Receiver<io::Result<String>>> {
+        match &mut self.link {
+            Link::Server(server) => server.read_review_file(path, file),
+            Link::InProcess(_) => {
+                let (path, file) = (path.to_path_buf(), file.to_string());
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::read_file(&path, &file)
+                        .map_err(|notice| notice.message().to_string())
+                }))
+            }
+        }
+    }
+
+    /// The pull request of the branch checked out at `path`, whole, read by
+    /// its forge's CLI for a review, where `review_diff` reads.
+    pub fn review_pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_pull_request(path),
+            Link::InProcess(_) => {
+                let (path, forge) = (path.to_path_buf(), self.forge.clone());
+                Ok(read_here(move || {
+                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path, &forge);
+                    Ok(crate::protocol::ReviewPullRequest::of(view, noun))
+                }))
+            }
+        }
+    }
+
+    /// Every file of the checkout at `path`, for a review's all-files
+    /// list, read where `review_diff` reads.
+    pub fn review_files(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_reviewr::git::WorktreeEntry>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_files(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::all_files(&path)
+                }))
+            }
+        }
+    }
+
+    /// The bases a review's branch scope can read against, read where
+    /// `review_diff` reads.
+    pub fn review_bases(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<ferrite_reviewr::ferrite::Bases>>> {
+        match &mut self.link {
+            Link::Server(server) => server.review_bases(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || ferrite_reviewr::ferrite::bases(&path)))
+            }
+        }
+    }
+
+    /// Make `base` the branch scope's base for the checkout at `path`,
+    /// written where `review_diff` reads.
+    pub fn pick_review_base(
+        &mut self,
+        path: &Path,
+        base: &str,
+    ) -> io::Result<Receiver<io::Result<()>>> {
+        match &mut self.link {
+            Link::Server(server) => server.pick_review_base(path, base),
+            Link::InProcess(_) => {
+                let (path, base) = (path.to_path_buf(), base.to_string());
+                Ok(read_here(move || {
+                    ferrite_reviewr::ferrite::pick_base(&path, &base)
+                }))
+            }
+        }
+    }
+
+    /// The PR of the branch checked out at `path`, read by `gh` where
+    /// `review_diff` reads git: on the Server that owns the checkout, or
+    /// here when this window runs its agents itself. `None` whenever `gh`
+    /// has nothing to say.
+    pub fn pull_request(
+        &mut self,
+        path: &Path,
+    ) -> io::Result<Receiver<io::Result<Option<crate::workspace::PullRequest>>>> {
+        match &mut self.link {
+            Link::Server(server) => server.pull_request(path),
+            Link::InProcess(_) => {
+                let path = path.to_path_buf();
+                Ok(read_here(move || Ok(crate::workspace::pull_request(&path))))
+            }
+        }
+    }
+
+    pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
+        self.act(
+            |engine| engine.control(thread, action.clone()),
+            |server| {
+                run(
+                    server,
+                    Op::Control {
+                        thread,
+                        control: (&action).into(),
+                    },
+                )
+            },
+        )
+    }
+
+    /// The Threads not open, in creation order.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
         Ok(self
-            .store
+            .parked
             .thread_ids()?
             .into_iter()
-            .filter(|id| !self.threads.contains_key(id))
+            .filter(|thread| self.thread(*thread).is_none())
             .collect())
     }
 
-    /// Threads whose Panes were open when the previous Ferrite process ended.
-    pub fn previously_open(&self) -> io::Result<Vec<ThreadId>> {
-        self.store.open_threads()
-    }
-
-    pub fn tracks_open_state(&self) -> bool {
-        self.store.tracks_open_state()
-    }
-
-    /// Why this Ferrite may only read its store — another one holds the
-    /// store's claim — or `None` when it may change it (ADR 0009).
-    pub fn store_read_only(&self) -> Option<&str> {
-        self.store.read_only()
-    }
-
-    /// Whether some Thread's Main just finished making a worktree and is
-    /// waiting on a fresh listing to name it — the driver's cue to list
-    /// now rather than on its next tick.
+    /// Whether some Thread's binding waits on a fresh worktree listing:
+    /// the driver's cue to list now rather than on its next tick.
     pub fn wants_worktree_listing(&self) -> bool {
-        self.threads
-            .values()
-            .any(|state| state.follow.wants_listing())
+        self.mirrors.wants_listing()
     }
 
-    /// Git's worktree list for a Thread's repo (`workspace::worktree_paths`
-    /// of the binding's `repo`), as the driver read it off the frame — the
-    /// cockpit never runs git in its pump — and `taken_at`, the driver's
-    /// clock from before it asked git, so a listing that was already being
-    /// read when a creation finished is not mistaken for one that could
-    /// name it. Answers whether the Thread's
-    /// binding moved: into a worktree its agent made or has been working
-    /// in, or back to main when a worktree the agent adopted is gone. A
-    /// worktree Ferrite minted is never abandoned for vanishing — revive
-    /// recreates those on their branch.
     pub fn worktrees_listed(
         &mut self,
         thread: ThreadId,
         listed: Vec<PathBuf>,
         taken_at: Instant,
     ) -> bool {
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return false;
-        };
-        let adopted = match &state.workspace {
-            Some(WorkspaceBinding::Worktree { path, .. })
-                if self.registry.branch_for(path).is_none() =>
-            {
-                Some(path.clone())
-            }
-            _ => None,
-        };
-        let Some(moved) = state
-            .follow
-            .observe_listing(listed, taken_at, adopted.as_deref())
-        else {
-            return false;
-        };
-        apply_move(&self.store, thread, state, moved)
+        self.act(
+            |engine| engine.worktrees_listed(thread, listed.clone(), taken_at),
+            |server| {
+                changed(server.execute(Op::WorktreesListed {
+                    thread,
+                    listed: listed.clone(),
+                    age_ms: taken_at.elapsed().as_millis() as u64,
+                }))
+                .unwrap_or(false)
+            },
+        )
     }
 
-    /// Header-only facts about a Thread the store holds — what a nav row
-    /// says about a parked Thread (#21). One header line off disk, never a
-    /// log replay; still I/O, so callers cache it rather than peek per
-    /// frame.
     pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
-        self.store.peek(thread)
+        self.parked.peek(thread)
     }
 
-    /// The subagents a Thread knows, live or parked. Parked Threads replay
-    /// their durable activity into a throwaway projection; callers should
-    /// cache this moment-level read rather than ask for it while rendering.
+    /// The subagents a Thread knows, live or parked. A parked Thread's are
+    /// read off its log: callers cache this rather than ask per frame.
     pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
         if let Some(open) = self.thread(thread) {
             return Ok(open.activity().children().len());
@@ -2092,20 +1553,19 @@ impl Cockpit {
     /// A read-only handle on the Thread logs, for the parked-Thread reads
     /// too slow for the UI thread: it can be moved to a background task.
     pub fn log_reader(&self) -> LogReader {
-        LogReader {
-            store: self.store.clone(),
-        }
+        self.parked.log_reader()
     }
 
     /// When a Thread was last used, live or parked — the nav's default
     /// order and its "3 days" line. One `stat`, so callers still cache it
     /// rather than ask per frame.
     pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
-        self.store.last_used(thread)
+        self.parked.last_used(thread)
     }
 
+    /// The open Threads.
     pub fn threads(&self) -> Vec<ThreadId> {
-        self.threads.keys().copied().collect()
+        self.mirrors.threads()
     }
 
     /// The Project the operator was last working in: the Project of the
@@ -2120,11 +1580,11 @@ impl Cockpit {
     /// callers keep the answer rather than ask it per frame.
     pub fn last_worked_project(&self) -> Option<ProjectId> {
         let mut threads: Vec<(Option<std::time::SystemTime>, ThreadId)> = self
-            .store
+            .parked
             .thread_ids()
             .unwrap_or_default()
             .into_iter()
-            .map(|thread| (self.store.last_used(thread), thread))
+            .map(|thread| (self.parked.last_used(thread), thread))
             .collect();
         // Newest first, and a Thread whose log cannot be stat'd sorts last
         // rather than counting as the epoch's most recent.
@@ -2132,33 +1592,25 @@ impl Cockpit {
             .sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
         threads.into_iter().find_map(|(_, thread)| {
             let project = self.project_id(thread)?;
-            self.registry.project(project).map(|_| project)
+            self.shared.registry.project(project).map(|_| project)
         })
     }
 
-    /// The process is quitting: end every Session now, replacements and
-    /// pending startups included, so no provider process outlives Ferrite.
-    /// A Codex app-server left running holds its thread's writer lock until
-    /// it notices its stdin is gone; the next launch's resume would meet it.
-    /// Threads stay as they are — their logs are durable — and the Cockpit
-    /// is not used again.
+    /// The window is going. Sessions in this process end with it, so no
+    /// provider process outlives Ferrite; a Server's keep running.
     pub fn halt_sessions(&mut self) {
-        self.bootstraps.clear();
-        for state in self.threads.values_mut() {
-            state.replacement = None;
-            state.session = None;
+        if let Link::InProcess(engine) = &mut self.link {
+            engine.halt_sessions();
+            self.settle();
         }
-        // Every record accepted is written before Ferrite goes (E1); only
-        // the final syncs are bounded.
-        self.store.quit(QUIT_SYNC_DEADLINE);
     }
 
     /// The durable operator title, whether this Thread is live or parked.
     pub fn thread_title(&self, thread: ThreadId) -> Result<Option<String>, LoadError> {
-        if let Some(state) = self.threads.get(&thread) {
-            return Ok(state.title.clone());
+        if let Some(open) = self.thread(thread) {
+            return Ok(open.title().map(str::to_string));
         }
-        self.store.peek(thread).map(|meta| meta.title)
+        self.parked.peek(thread).map(|meta| meta.title)
     }
 
     /// What a Thread is called on screen: the title the operator gave it;
@@ -2185,7 +1637,7 @@ impl Cockpit {
                 })
                 .unwrap_or_else(numbered);
         }
-        let Ok(meta) = self.store.peek(thread) else {
+        let Ok(meta) = self.parked.peek(thread) else {
             return numbered();
         };
         if let Some(title) = meta.title {
@@ -2194,660 +1646,97 @@ impl Cockpit {
         if !auto {
             return numbered();
         }
-        self.store
-            .peek_first_prompt(thread)
-            .ok()
-            .flatten()
-            .map(|text| title_from_prompt(&text))
-            .unwrap_or_else(numbered)
+        self.parked.prompt_title(thread).unwrap_or_else(numbered)
     }
 
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
-        let title = title.trim();
-        if title.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Thread title cannot be blank",
-            ));
-        }
-        let mut state = self.threads.get_mut(&thread);
-        if let Some(state) = state.as_mut() {
-            state.history.clear();
-        }
-        self.store
-            .set_title(
-                thread,
-                title.to_string(),
-                state.as_mut().map(|state| &mut state.writer),
-            )
-            .map_err(io::Error::other)?;
-        if let Some(state) = state {
-            state.title = Some(title.to_string());
-            // The live Session's own list follows, where its wire allows;
-            // a refusal is cosmetic and the next spawn carries the title
-            // anyway.
-            if let Some(session) = state
-                .session
-                .as_mut()
-                .and_then(SessionLifecycle::session_mut)
-            {
-                let _ = session.set_name(title);
-            }
-        }
-        Ok(())
-    }
-
-    /// Settle startup transactions before reading provider events. Background
-    /// workers only construct Sessions; all delivery and durable changes
-    /// happen here, under the same owner as synchronous adapters.
-    fn advance_startups(&mut self) -> Vec<PaneUpdate> {
-        let mut changed = Vec::new();
-        let ids: Vec<_> = self.threads.keys().copied().collect();
-        for id in ids {
-            let mut release = false;
-            let replacement = self
-                .threads
-                .get_mut(&id)
-                .and_then(|state| state.replacement.take());
-            if let Some(mut replacement) = replacement {
-                // A handover whose exchanges are being read was ready already.
-                let ready = if replacement.exchanges.is_some() {
-                    Ok(true)
-                } else {
-                    replacement.session.poll()
-                };
-                let result = match ready {
-                    Ok(false) => {
-                        self.threads.get_mut(&id).expect("exists").replacement = Some(replacement);
-                        continue;
-                    }
-                    Ok(true) => {
-                        if replacement.exchanges.is_none() {
-                            if let (Some(title), Some(session)) = (
-                                self.threads[&id].title.as_deref(),
-                                replacement.session.session_mut(),
-                            ) {
-                                let _ = session.set_name(title);
-                            }
-                        }
-                        match self.carry_read(id, &mut replacement) {
-                            Ok(Some(exchanges)) => {
-                                self.commit_replacement(id, replacement, exchanges)
-                            }
-                            Ok(None) => {
-                                self.threads.get_mut(&id).expect("exists").replacement =
-                                    Some(replacement);
-                                continue;
-                            }
-                            Err(error) => Err(error),
-                        }
-                    }
-                    Err(error) => Err(ProvisionError::Spawn(error)),
-                };
-                match result {
-                    Ok(()) => release = true,
-                    Err(error) => {
-                        self.threads
-                            .get_mut(&id)
-                            .expect("exists")
-                            .apply(Input::Notice(format!("Session change failed: {error}")));
-                    }
-                }
-                changed.push(id);
-            }
-            let state = self.threads.get_mut(&id).expect("exists");
-            let starting = state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting);
-            if starting {
-                let result = state.session.as_mut().expect("exists").poll();
-                if matches!(result, Ok(false)) {
-                    continue;
-                }
-                if let Some(pending) = self.bootstraps.remove(&id) {
-                    let delivered = result.and_then(|_| self.finish_bootstrap(id, &pending));
-                    let result = match delivered {
-                        Ok(()) => Ok(match pending.draft {
-                            Some(draft) => self.complete_draft(draft, id),
-                            None => Bootstrapped {
-                                thread: id,
-                                refused_leave: None,
-                                applied_leave: false,
-                            },
-                        }),
-                        Err(error) => match self.rollback_bootstrap(id) {
-                            Ok(()) => Err(error),
-                            Err(rollback) => Err(io::Error::other(format!(
-                                "{error}; rollback failed: {rollback}"
-                            ))),
-                        },
-                    };
-                    self.bootstrap_results.push(BootstrapResult {
-                        draft: pending.draft,
-                        prompt: pending.prompt,
-                        result,
-                    });
-                    changed.push(id);
-                    continue;
-                }
-                let state = self.threads.get_mut(&id).expect("exists");
-                match result {
-                    Ok(_) => {
-                        if let (Some(title), Some(session)) = (
-                            &state.title,
-                            state
-                                .session
-                                .as_mut()
-                                .and_then(SessionLifecycle::session_mut),
-                        ) {
-                            let _ = session.set_name(title);
-                        }
-                        release = true;
-                    }
-                    Err(error) => {
-                        state.session = None;
-                        state.replace_generation();
-                        state.apply(Input::Notice(format!("could not start: {error}")));
-                    }
-                }
-                changed.push(id);
-            }
-            if release {
-                let state = self.threads.get_mut(&id).expect("exists");
-                if let Some(text) = state.queued.take() {
-                    if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-                        state.queued = Some(text);
-                        state.apply(Input::Notice(format!("send failed: {error}")));
-                    }
-                }
-            }
-        }
-        changed.sort_unstable();
-        changed.dedup();
-        changed
-            .into_iter()
-            .map(|thread| PaneUpdate {
-                thread,
-                dirty: self
-                    .threads
-                    .get(&thread)
-                    .map(|state| {
-                        state
-                            .transcript()
-                            .blocks()
-                            .iter()
-                            .map(|block| block.id)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                evicted: Vec::new(),
-                subjects: Vec::new(),
-                activity_changed: true,
-                redirects: Vec::new(),
-            })
-            .collect()
-    }
-
-    /// One frame: drain every live Session, fold what arrived, and write it
-    /// down. What comes back is only the Panes that actually changed.
-    pub fn pump(&mut self) -> Vec<PaneUpdate> {
-        self.poll_model_discovery();
-        self.restart_idle_stale();
-        // Predictions that finished between frames. Collected before the
-        // Thread walk so a landing suggestion repaints in the same frame.
-        let landed = self.poll_suggestions();
-        let mut frame = self.advance_startups();
-        // Threads whose Main turn ended this frame, and which therefore owe
-        // themselves a fresh prediction. Gathered here and asked after the
-        // walk: the walk holds `threads` mutably.
-        let mut ended: Vec<ThreadId> = Vec::new();
-        frame.extend(self.advance_history());
-        let mut history_reloads = Vec::new();
-        for (id, thread) in &mut self.threads {
-            let mut update = PaneUpdate::new(*id);
-            // Fold answers from the previous frame before asking the Lexer
-            // for new work; highlighted Blocks remain an explicit next-frame wake.
-            let highlighted = thread.activity.apply(ActivityInput::DrainHighlights);
-            update.absorb(highlighted, false);
-            // A log the worker cannot sync holds the Session's events too:
-            // nothing more is accepted than the disk can keep.
-            if let Some(failure) = thread.writer.failure() {
-                thread.report_store_error(io::Error::other(failure));
-                update.activity_changed = true;
-                frame.push(update);
-                continue;
-            }
-            // Backpressure on failed persistence: retain the writer's buffer
-            // and let the bounded provider channel fill rather than lose history.
-            if thread.store_error.is_some() {
-                match thread.writer.flush() {
-                    Ok(()) => {
-                        thread.store_error = None;
-                        update.activity_changed = true;
-                    }
-                    Err(error) => {
-                        thread.report_store_error(error);
-                        update.activity_changed = true;
-                        frame.push(update);
-                        continue;
-                    }
-                }
-            }
-            if thread.history_backpressure() {
-                if update.activity_changed {
-                    frame.push(update);
-                }
-                continue;
-            }
-            // A handover reading its exchanges: the old Session's events wait,
-            // so none lands between what is read and the switch's line.
-            if thread
-                .replacement
-                .as_ref()
-                .is_some_and(|replacement| replacement.exchanges.is_some())
-            {
-                if update.activity_changed {
-                    frame.push(update);
-                }
-                continue;
-            }
-            let mut closed = false;
-            let mut settled = false;
-            let mut turn_ended = false;
-            for _ in 0..256 {
-                if thread.store_error.is_some() || thread.history_backpressure() {
-                    break;
-                }
-                let Some(event) = thread
-                    .session
-                    .as_ref()
-                    .and_then(SessionLifecycle::session)
-                    .and_then(|session| session.events().try_recv().ok())
-                else {
-                    break;
-                };
-                if let SessionEvent::Queue(event) = event {
-                    let change = thread.native_queue.observe(event);
-                    if let Some(text) = change.prompt {
-                        if let Err(error) = thread.writer.record_prompt(&text) {
-                            thread.report_store_error(error);
-                        }
-                        thread.prompt_history.append(text.clone());
-                        if change.historical {
-                            update.absorb(
-                                thread
-                                    .activity
-                                    .apply(ActivityInput::Replay(Input::Prompt(text))),
-                                true,
-                            );
-                        } else {
-                            thread.invalidate_suggestion();
-                            let sent_at = crate::clock::now_label();
-                            if let Err(error) = thread.writer.record_prompt_observation(&sent_at) {
-                                thread.report_store_error(error);
-                            }
-                            let applied = thread.apply(Input::Prompt(text));
-                            update.dirty.extend(applied.dirty);
-                            let stamped = thread.apply(Input::PromptObservation { sent_at });
-                            update.dirty.extend(stamped.dirty);
-                        }
-                    }
-                    if let Some(notice) = change.notice {
-                        update
-                            .dirty
-                            .extend(thread.apply(Input::Notice(notice)).dirty);
-                    }
-                    update.activity_changed = true;
-                    continue;
-                }
-                if let SessionEvent::RateLimits { five_hour, weekly } = &event {
-                    self.limit_cache.remember(
-                        thread.provider,
-                        crate::transcript::RateLimits {
-                            five_hour: *five_hour,
-                            weekly: *weekly,
-                        },
-                    );
-                }
-                if let SessionEvent::Models { models } = &event {
-                    self.model_cache.remember(thread.provider, models);
-                    // Refresh this Session's effort menu even when its catalog
-                    // matches the saved provider menu. Child Activity payloads
-                    // cannot announce models or alter Main's provider metadata.
-                    self.models_changed |= !models.is_empty();
-                }
-                let alias_needs_reload = match &event {
-                    SessionEvent::Activity(ActivityEvent::Alias { from, to }) => {
-                        let view = thread.activity.view();
-                        [from, to].iter().any(|key| {
-                            let subject = Subject::Subagent((*key).clone());
-                            view.subject(&subject)
-                                .is_some_and(|subject| !subject.retained())
-                                || thread.history.keys().any(|pending| {
-                                    view.canonical_subject(&Subject::Subagent(pending.clone()))
-                                        == view.canonical_subject(&subject)
-                                })
-                        })
-                    }
-                    _ => false,
-                };
-                let completion = completion_observation(thread, &event);
-                fold(thread, &event);
-                if let Some(moved) = follow_move(thread, &event) {
-                    if apply_move(&self.store, *id, thread, moved) {
-                        update.activity_changed = true;
-                    }
-                }
-                let content_changed = event_changes_content(&event);
-                let applied = match &event {
-                    SessionEvent::Activity(event) => {
-                        thread.activity.apply(ActivityInput::Observe {
-                            generation: thread.generation,
-                            event: event.clone(),
-                            at: crate::clock::instant(),
-                        })
-                    }
-                    _ => thread.activity.apply(ActivityInput::Main {
-                        input: Input::Event(event.clone()),
-                        at: crate::clock::instant(),
-                    }),
-                };
-                turn_ended |= applied.main_turn_ended;
-                settled |= applied.main_settled;
-                if matches!(&event, SessionEvent::Activity(_)) {
-                    for accepted in &applied.accepted {
-                        if !matches!(accepted, ActivityEvent::Status { .. })
-                            || !applied.blocks.is_empty()
-                        {
-                            thread.buffer_history(accepted, applied.completed_tool_duration);
-                        }
-                        let event = SessionEvent::Activity(accepted.clone());
-                        let duration = applied.completed_tool_duration;
-                        if let Err(error) = thread.writer.record_event(&event, duration) {
-                            thread.report_store_error(error);
-                        }
-                    }
-                } else {
-                    let duration = applied.completed_tool_duration;
-                    if let Err(error) = thread.writer.record_event(&event, duration) {
-                        thread.report_store_error(error);
-                    }
-                }
-                let completion_accepted = match &event {
-                    SessionEvent::Activity(event) => {
-                        applied.accepted.iter().any(|accepted| accepted == event)
-                    }
-                    _ => applied.main_turn_ended,
-                };
-                if completion_accepted {
-                    if let Some((subject, observed_facts)) = completion {
-                        let observation = ActivityEvent::CompletionObservation {
-                            subject: subject.clone(),
-                            elapsed_ms: observed_facts.elapsed_ms,
-                            completed_at: observed_facts.completed_at.clone(),
-                            input_tokens: observed_facts.input_tokens,
-                            output_tokens: observed_facts.output_tokens,
-                        };
-                        if matches!(&subject, Subject::Subagent(_)) {
-                            thread.buffer_history(&observation, None);
-                        }
-                        let observed = match subject {
-                            Subject::Main => thread.activity.apply(ActivityInput::Main {
-                                input: Input::CompletionObservation {
-                                    elapsed_ms: observed_facts.elapsed_ms,
-                                    completed_at: observed_facts.completed_at.clone(),
-                                    input_tokens: observed_facts.input_tokens,
-                                    output_tokens: observed_facts.output_tokens,
-                                },
-                                at: crate::clock::instant(),
-                            }),
-                            Subject::Subagent(_) => thread.activity.apply(ActivityInput::Observe {
-                                generation: thread.generation,
-                                event: observation,
-                                at: crate::clock::instant(),
-                            }),
-                        };
-                        if let Err(error) =
-                            thread.writer.record_completion(&subject, &observed_facts)
-                        {
-                            thread.report_store_error(error);
-                        }
-                        update.absorb(observed, true);
-                    }
-                }
-                if alias_needs_reload {
-                    for (_, canonical) in &applied.redirects {
-                        let subject = Subject::Subagent(canonical.clone());
-                        let view = thread.activity.view();
-                        thread.history.retain(|key, _| {
-                            view.canonical_subject(&Subject::Subagent(key.clone())) != subject
-                        });
-                        thread.history_errors.remove(canonical);
-                        update.absorb(
-                            thread.activity.apply(ActivityInput::Evict(subject.clone())),
-                            true,
-                        );
-                        history_reloads.push((*id, subject));
-                    }
-                }
-                closed |= matches!(&event, SessionEvent::Closed { .. });
-                update.absorb(applied, content_changed);
-            }
-            if turn_ended && std::mem::take(&mut thread.resend_held_on_turn_end) {
-                if let Some(applied) = resend_held(thread, self.suggestions_enabled) {
-                    update.dirty.extend(applied.dirty);
-                    update.activity_changed = true;
-                }
-            }
-            if closed {
-                thread.resend_held_on_turn_end = false;
-                if let Some(notice) = thread
-                    .native_queue
-                    .disconnect(thread.provider == Provider::Codex)
-                {
-                    update
-                        .dirty
-                        .extend(thread.apply(Input::Notice(notice)).dirty);
-                }
-                thread.session = None;
-                thread.history.clear();
-                thread.activity.apply(ActivityInput::Disconnect);
-                self.visible_subjects.remove(id);
-                update.activity_changed = true;
-            }
-            // Every frame, every Thread: the deferral's grace is a clock
-            // only the pump ticks.
-            let born = self.notifications.observe(
-                *id,
-                Frame {
-                    activity: thread.activity.view(),
-                    settled,
-                    resumed: thread.native_queue.pending(),
-                },
-                crate::clock::instant(),
-            );
-            update.activity_changed |= born.is_some();
-            if turn_ended && thread.provider == Provider::Claude {
-                thread.invalidate_suggestion();
-            }
-            if let Some(session) = thread
-                .session
-                .as_mut()
-                .and_then(SessionLifecycle::session_mut)
-            {
-                if let Some(text) = session.take_suggestion() {
-                    if self.suggestions_enabled
-                        && !thread.busy()
-                        && !thread.native_queue.pending()
-                        && !thread.activity.view().main_operator_turn()
-                        && thread.transcript().status() == crate::transcript::Status::Idle
-                    {
-                        thread.suggestion = Some(text);
-                        update.activity_changed = true;
-                    }
-                }
-            }
-            if turn_ended {
-                ended.push(*id);
-                thread
-                    .writer
-                    .note_subagents(thread.activity.view().children().len());
-            }
-            if update.activity_changed || !update.dirty.is_empty() || !update.subjects.is_empty() {
-                frame.push(update);
-            }
-        }
-        // After the walk: whatever the provider said before its answer to a
-        // setting change is in the transcript ahead of the change's line.
-        frame.extend(self.settle_tuning());
-        // A landed prediction changes only the Composer's idle line, so it
-        // owes its Pane a repaint and nothing else.
-        for id in landed {
-            if !frame.iter().any(|update| update.thread == id) {
-                let mut update = PaneUpdate::new(id);
-                update.activity_changed = true;
-                frame.push(update);
-            }
-        }
-        for id in ended {
-            self.request_suggestion(id);
-        }
-        // The operator is on the focused Pane; whatever it had to say is
-        // seen. Here rather than only at the focus doors, so a focus that
-        // moved by a close or a Group entry reads the same.
-        self.acknowledge_focus();
-        for (thread, subject) in history_reloads {
-            if let Err(error) = self.ensure_subject_history(thread, &subject) {
-                if let (Some(state), Subject::Subagent(key)) =
-                    (self.threads.get_mut(&thread), subject)
-                {
-                    state.history_errors.insert(key, error.to_string());
-                }
-            }
-        }
-        frame
-    }
-
-    /// Submit immediately; the provider owns admission and execution.
-    /// False leaves the caller's draft intact; no local fallback is installed.
-    pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return false;
-        };
-        state.prompt_history.reset();
-        let id = format!(
-            "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
-            std::process::id(),
-            state.generation & 0xffff,
-            (state.generation >> 16) & 0xfff,
-            next_generation() & 0xfff,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-                & 0xffffffffffff
-        );
-        if let Some(refusal) = vanished_root_refusal(state) {
-            state.apply(Input::Notice(refusal));
-            return false;
-        }
-        if let Err(error) = state.native_queue.prepare(&id, &text) {
-            state.native_queue.refused(&id);
-            state.apply(Input::Notice(format!(
-                "queue metadata could not be saved: {error}"
-            )));
-            return false;
-        }
-        let result = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "Session is still starting; retry when ready",
+        self.act(
+            |engine| engine.rename_thread(thread, title),
+            |server| {
+                run(
+                    server,
+                    Op::Rename {
+                        thread,
+                        title: title.to_string(),
+                    },
                 )
-            })
-            .and_then(|session| {
-                session.set_suggestions_enabled(self.suggestions_enabled)?;
-                session.enqueue(&id, &text)
-            });
-        if let Err(error) = result {
-            if matches!(
-                error.kind(),
-                io::ErrorKind::Unsupported | io::ErrorKind::NotConnected
-            ) {
-                state.native_queue.refused(&id);
-                state.apply(Input::Notice(format!("native queue failed: {error}")));
-                return false;
-            }
-            // A partial pipe write might have reached the provider. Keep its
-            // correlation metadata and never turn uncertainty into a resend.
-            state.apply(Input::Notice(format!(
-                "native queue delivery is uncertain; not retried: {error}\n{text}"
-            )));
-        }
-        state.invalidate_suggestion();
-        true
+            },
+        )
     }
 
-    /// Empty-Composer Enter requests cancellation; retrieval arrives via the pump.
+    pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
+        self.act(
+            |engine| engine.queue(thread, text.clone()),
+            |server| {
+                run(
+                    server,
+                    Op::Queue {
+                        thread,
+                        text: text.clone(),
+                    },
+                )
+                .is_ok()
+            },
+        )
+    }
+
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
-        if let Some(state) = self.threads.get_mut(&thread) {
-            if let Some(text) = state.queued.take() {
-                return Some(text);
-            }
-        }
-        self.cancel_queued(thread, true);
-        None
+        self.act(
+            |engine| engine.unqueue(thread),
+            |server| match server.execute(Op::Unqueue { thread }) {
+                Ok(Some(Done::Text { text })) => Some(text),
+                _ => None,
+            },
+        )
     }
 
     pub fn cancel_queued(&mut self, thread: ThreadId, restore: bool) {
-        self.cancel_queue(thread, restore, false);
+        self.act(
+            |engine| engine.cancel_queued(thread, restore),
+            |server| {
+                said(
+                    server,
+                    Op::CancelQueued {
+                        thread,
+                        restore,
+                        edit: false,
+                    },
+                )
+            },
+        );
     }
 
     /// Up edits the visible queued prompt ahead of the current draft.
     pub fn edit_queued(&mut self, thread: ThreadId) {
-        self.cancel_queue(thread, true, true);
+        self.act(
+            |engine| engine.edit_queued(thread),
+            |server| {
+                said(
+                    server,
+                    Op::CancelQueued {
+                        thread,
+                        restore: true,
+                        edit: true,
+                    },
+                )
+            },
+        );
     }
 
-    fn cancel_queue(&mut self, thread: ThreadId, restore: bool, prepend: bool) {
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return;
-        };
-        state.prompt_history.reset();
-        // Startup input has never reached a provider and can be taken back locally.
-        if let Some(text) = state.queued.take() {
-            if restore {
-                state.native_queue.recovered.push((text, prepend));
-            }
-            return;
-        }
-        let Some(id) = state.native_queue.cancellation(restore, prepend) else {
-            return;
-        };
-        let result = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-            .ok_or_else(|| io::Error::other("no live Session to cancel queued input"))
-            .and_then(|session| session.cancel_queued(&id));
-        if let Err(error) = result {
-            state.native_queue.cancel_failed();
-            state.apply(Input::Notice(format!(
-                "native cancellation failed: {error}"
-            )));
-        }
-    }
-
+    /// A prompt the provider handed back, for the Composer, and whether it
+    /// goes ahead of the draft.
     pub fn take_retrieved_prompt(&mut self, thread: ThreadId) -> Option<(String, bool)> {
-        let state = self.threads.get_mut(&thread)?;
-        if state.native_queue.recovered.is_empty() {
-            None
-        } else {
-            Some(state.native_queue.recovered.remove(0))
+        if let Link::Server(_) = self.link {
+            // Asked every frame: only a Thread holding one is asked.
+            self.thread(thread)?.recovered()?;
         }
+        self.act(
+            |engine| engine.take_retrieved_prompt(thread),
+            |server| match server.execute(Op::TakeRecovered { thread }) {
+                Ok(Some(Done::Recovered { text, prepend })) => Some((text, prepend)),
+                _ => None,
+            },
+        )
     }
 
     pub fn recall_prompt(
@@ -2856,188 +1745,86 @@ impl Cockpit {
         direction: HistoryDirection,
         current_draft: &str,
     ) -> Option<String> {
-        self.threads
-            .get_mut(&thread)?
-            .prompt_history
-            .recall(direction, current_draft)
-    }
-
-    /// Take the pending Decision, if `id` is really what this Thread is
-    /// waiting on. False means the answer is stale — the request was already
-    /// answered, or the turn ended under it — and must not reach the provider,
-    /// which would either ignore it or, worse, apply it to the next request.
-    pub fn answer(&mut self, thread: ThreadId, id: &str) -> bool {
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return false;
-        };
-        let Some(handle) = state
-            .activity
-            .view()
-            .decisions()
-            .iter()
-            .find(|pending| pending.decision.id == id)
-            .map(|pending| pending.handle.clone())
-        else {
-            return false;
-        };
-        state.activity.apply(ActivityInput::Observe {
-            generation: state.generation,
-            event: ActivityEvent::DecisionCancelled {
-                id: handle.request_id,
+        self.act(
+            |engine| engine.recall_prompt(thread, direction, current_draft),
+            |server| {
+                let direction = match direction {
+                    HistoryDirection::Older => crate::protocol::WireDirection::Older,
+                    HistoryDirection::Newer => crate::protocol::WireDirection::Newer,
+                };
+                match server.execute(Op::Recall {
+                    thread,
+                    direction,
+                    draft: current_draft.to_string(),
+                }) {
+                    Ok(Some(Done::Text { text })) => Some(text),
+                    _ => None,
+                }
             },
-            at: crate::clock::instant(),
-        });
-        true
+        )
     }
 
-    /// Fold in whatever predictions finished since the last frame.
-    ///
-    /// A reply is dropped unless it still names a live Thread at the
-    /// generation it was asked for: a park, revive or provider switch since
-    /// the ask means it is answering a conversation that is gone.
-    fn poll_suggestions(&mut self) -> Vec<ThreadId> {
-        let mut landed = Vec::new();
-        while let Ok(reply) = self.suggestions.1.try_recv() {
-            if !self.suggestions_enabled {
-                continue;
-            }
-            let Some(thread) = self.threads.get_mut(&reply.thread) else {
-                continue;
-            };
-            if thread.generation != reply.generation
-                || thread.suggestion_revision != reply.revision
-                || thread.native_queue.pending()
-            {
-                continue;
-            }
-            thread.suggestion = Some(reply.text);
-            landed.push(reply.thread);
-        }
-        landed
+    pub fn answer(&mut self, thread: ThreadId, id: &str) -> bool {
+        let answered = self.in_process().answer(thread, id);
+        self.settle();
+        answered
     }
 
-    /// Ask for the follow-up to this Thread's just-finished response.
-    ///
-    /// Called exactly once per finished turn. The old prediction is dropped
-    /// first: it described the previous response, and showing it beside a new
-    /// one would be worse than the generic line the Thread falls back to for
-    /// the seconds the ask takes.
-    fn request_suggestion(&mut self, id: ThreadId) {
-        let Some(thread) = self.threads.get_mut(&id) else {
-            return;
-        };
-        if thread.provider == Provider::Claude {
-            return;
-        }
-        thread.invalidate_suggestion();
-        if !self.suggestions_enabled || thread.native_queue.pending() {
-            return;
-        }
-        let Some(context) = crate::suggest::context(thread.transcript()) else {
-            return;
-        };
-        let request = crate::suggest::Request {
-            thread: id,
-            generation: thread.generation,
-            revision: thread.suggestion_revision,
-            provider: thread.provider,
-            context,
-        };
-        self.spawner.suggest(request, self.suggestions.0.clone());
-    }
-
-    /// Land a prediction as if the predictor had just answered, stamped with
-    /// the Thread's current generation.
-    ///
-    /// The renderer's seam for anything that produces a follow-up without
-    /// going through a provider run — today, the tests that cover the
-    /// Composer's accept key end to end.
-    pub fn deliver_suggestion(&self, thread: ThreadId, text: String) {
-        let Some(state) = self.threads.get(&thread) else {
-            return;
-        };
-        let _ = self.suggestions.0.send(Suggestion {
-            thread,
-            generation: state.generation,
-            revision: state.suggestion_revision,
-            text,
-        });
-    }
-
-    /// Enable or disable predicted Composer follow-ups. Disabling is
-    /// immediate: visible predictions are cleared and late replies are
-    /// discarded by `poll_suggestions`.
+    /// Whether completed turns predict a follow-up, in this process; a
+    /// window attached to a Server says `settings_changed`.
     pub fn set_suggestions_enabled(&mut self, enabled: bool) {
-        self.suggestions_enabled = enabled;
-        for thread in self.threads.values_mut() {
-            if !enabled {
-                thread.invalidate_suggestion();
-            }
-            if let Some(session) = thread
-                .session
-                .as_mut()
-                .and_then(SessionLifecycle::session_mut)
-            {
-                let _ = session.set_suggestions_enabled(enabled);
-            }
-        }
+        self.in_process().set_suggestions_enabled(enabled);
+        self.settle();
     }
 
-    fn poll_model_discovery(&mut self) {
-        loop {
-            let Some(receiver) = &self.model_discovery else {
-                return;
-            };
-            match receiver.try_recv() {
-                Ok((provider, models)) => {
-                    self.models_changed |= self.model_cache.remember(provider, &models);
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.model_discovery = None;
-                    return;
-                }
-            }
-        }
+    pub fn deliver_suggestion(&mut self, thread: ThreadId, text: String) {
+        self.in_process().deliver_suggestion(thread, text)
     }
 
-    /// A provider menu changed, including before there is a Pane Session
-    /// to repaint. The view also refreshes any already-open model picker.
-    pub fn take_models_changed(&mut self) -> bool {
-        std::mem::take(&mut self.models_changed)
+    /// Settings changed on disk: whether completed turns predict a
+    /// follow-up, where an allowance warns, and the self-hosted forges a
+    /// review reads, among them.
+    pub fn settings_changed(&mut self, settings: &crate::settings::Settings) {
+        self.forge = settings.forge_hosts.review_config();
+        self.act(
+            |engine| {
+                engine.set_suggestions_enabled(settings.placeholder_suggestions);
+                engine.set_allowance_thresholds(settings.allowance_warnings.clone());
+            },
+            |server| said(server, Op::SettingsChanged),
+        );
     }
 
-    /// Ask the provider menus again, as at startup — after a CLI upgrade,
-    /// whose new release may announce models the old one did not.
-    pub fn rediscover_models(&mut self) {
-        self.model_discovery = self.spawner.discover_models();
-    }
-
-    /// How many Threads on `provider` hold a Session, running, starting or
-    /// being replaced. A CLI upgrade waits for none, so it never swaps a
-    /// binary out from under a live Session (Windows refuses to, mid-run).
     pub fn live_sessions(&self, provider: Provider) -> usize {
-        self.threads
-            .values()
-            .filter(|state| {
-                state.provider == provider
-                    && (state.session.is_some() || state.replacement.is_some())
-            })
-            .count()
+        self.shared.live_sessions(provider)
     }
 
-    /// The last usable provider announcement, including one saved in an
-    /// earlier launch. Fresh discovery or Session announcements replace it.
     pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
-        self.model_cache.get(provider).to_vec()
+        self.shared.announced_models(provider)
     }
 
-    /// The subscription windows in force for `provider` — the live
-    /// Session's latest report, else the one a previous Session or launch
-    /// left behind, and unknown once a remembered window has rolled over.
-    /// Account-wide, so every Thread on the provider reads the same meter.
     pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
-        self.limit_cache.get(provider)
+        self.shared.account_limits(provider)
+    }
+
+    /// Whether a machine's parked Threads moved since the last ask: its
+    /// Server said so. This computer's are read at the window's moments.
+    pub fn take_parked_changed(&mut self) -> bool {
+        self.parked.take_changed()
+    }
+
+    pub fn take_models_changed(&mut self) -> bool {
+        self.shared.take_models_changed() | self.mirrors.take_models_changed()
+    }
+
+    /// The allowance warnings due since the last take, oldest first.
+    pub fn take_allowance_warnings(&mut self) -> Vec<crate::providers::limits::AllowanceWarning> {
+        std::mem::take(&mut self.allowance_warnings)
+    }
+
+    /// What API callers asked of the windows since the last take.
+    pub fn take_asked(&mut self) -> Vec<Asked> {
+        std::mem::take(&mut self.asked)
     }
 
     /// Request workspace commands without creating a Thread or Session.
@@ -3046,7 +1833,10 @@ impl Cockpit {
         provider: Provider,
         cwd: &std::path::Path,
     ) -> Option<crate::providers::commands::Discovery> {
-        self.spawner.discover_commands(provider, cwd)
+        match &mut self.link {
+            Link::InProcess(engine) => engine.discover_commands(provider, cwd),
+            Link::Server(server) => server.discovery().discover_commands(provider, cwd),
+        }
     }
 
     /// The provider's announced model rows, else the fallback catalog.
@@ -3054,240 +1844,38 @@ impl Cockpit {
         crate::providers::models::catalog(provider, &self.announced_models(provider))
     }
 
-    /// Change an idle Thread's model through its live native Session control.
-    /// Unsupported controls fall back to resuming the same conversation;
-    /// provider refusals preserve the current Session and durable choice.
-    /// A provider that answers later holds the change pending
-    /// (`settle_tuning`): nothing moves until it accepts.
     pub fn set_model(
         &mut self,
         thread: ThreadId,
         model: Option<String>,
     ) -> Result<(), ProvisionError> {
-        let effort = self.tuning(thread)?.1;
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return self
-                .store
-                .set_tuning(thread, model, effort, None)
-                .map_err(ProvisionError::Store);
-        };
-        state.tunable()?;
-        if state.model == model && model.is_some() {
-            return Ok(());
-        }
-        let native = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-            .map(|session| session.set_model(model.as_deref()));
-        match native {
-            Some(Ok(ack)) => self.await_tuning(thread, Tune::Model(model), ack),
-            Some(Err(error)) if error.kind() != io::ErrorKind::Unsupported => {
-                Err(ProvisionError::Tune(error))
-            }
-            None | Some(Err(_)) => self.retune(thread, model, effort),
-        }
+        self.act(
+            |engine| engine.set_model(thread, model.clone()),
+            |server| {
+                provisioned(server.execute(Op::SetModel {
+                    thread,
+                    model: model.clone(),
+                }))
+            },
+        )
     }
 
-    /// Change the next turn's effort on the existing Session. A turn or
-    /// Session startup/replacement must finish first; refusal preserves its
-    /// submitted choices and prompts. No Session is replaced by this action.
-    /// `None` is the operator's default for the provider.
     pub fn set_effort(
         &mut self,
         thread: ThreadId,
         effort: Option<String>,
     ) -> Result<(), ProvisionError> {
-        let Some(state) = self.threads.get_mut(&thread) else {
-            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
-            return self
-                .store
-                .set_tuning(thread, meta.model, effort, None)
-                .map_err(ProvisionError::Store);
-        };
-        state.tunable()?;
-        if state.effort == effort && effort.is_some() {
-            return Ok(());
-        }
-        match state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-        {
-            Some(session) => {
-                let ack = session
-                    .set_effort(effort.as_deref())
-                    .map_err(ProvisionError::Tune)?;
-                self.await_tuning(thread, Tune::Effort(effort), ack)
-            }
-            None => self.commit_tuning(thread, Tune::Effort(effort)),
-        }
+        self.act(
+            |engine| engine.set_effort(thread, effort.clone()),
+            |server| {
+                provisioned(server.execute(Op::SetEffort {
+                    thread,
+                    effort: effort.clone(),
+                }))
+            },
+        )
     }
 
-    /// Commit `change` once the provider accepts it: now, when it already
-    /// has, else on the pump that finds its answer.
-    fn await_tuning(
-        &mut self,
-        thread: ThreadId,
-        change: Tune,
-        ack: SettingAck,
-    ) -> Result<(), ProvisionError> {
-        match ack.try_recv() {
-            Ok(answer) => {
-                answer.map_err(ProvisionError::Tune)?;
-                self.commit_tuning(thread, change)
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                let state = self.threads.get_mut(&thread).expect("checked by caller");
-                state.tuning = Some(Tuning {
-                    change,
-                    ack,
-                    asked: crate::clock::instant(),
-                });
-                Ok(())
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(ProvisionError::Tune(
-                io::Error::other(format!("{} change was not acknowledged", change.noun())),
-            )),
-        }
-    }
-
-    /// The provider took `change`: the Thread's choice and header follow,
-    /// and the transcript says so. A header that cannot be written puts
-    /// the Session back as it was.
-    fn commit_tuning(&mut self, thread: ThreadId, change: Tune) -> Result<(), ProvisionError> {
-        let state = self.threads.get_mut(&thread).expect("checked by caller");
-        let (model, effort) = match &change {
-            Tune::Model(model) => (model.clone(), state.effort.clone()),
-            // Re-selecting Default reapplies the latest Settings even when
-            // the durable choice was already None; the header stays.
-            Tune::Effort(effort) if *effort == state.effort => return Ok(()),
-            Tune::Effort(effort) => (state.model.clone(), effort.clone()),
-        };
-        state.history.clear();
-        if let Err(error) = self.store.set_tuning(
-            thread,
-            model.clone(),
-            effort.clone(),
-            Some(&mut state.writer),
-        ) {
-            if let Some(session) = state
-                .session
-                .as_mut()
-                .and_then(SessionLifecycle::session_mut)
-            {
-                // Put back, unanswered: the header still names the old.
-                let _ = match change {
-                    Tune::Model(_) => session.set_model(state.model.as_deref()),
-                    Tune::Effort(_) => session.set_effort(state.effort.as_deref()),
-                };
-            }
-            return Err(ProvisionError::Store(error));
-        }
-        let notice = match change {
-            Tune::Model(_) => format!(
-                "model changed to {}",
-                crate::providers::models::label(
-                    model.as_deref().unwrap_or("default"),
-                    &state.models
-                )
-            ),
-            Tune::Effort(_) => format!(
-                "effort changed to {}",
-                effort.as_deref().unwrap_or("default")
-            ),
-        };
-        state.apply(Input::Notice(notice));
-        state.model = model;
-        state.effort = effort;
-        Ok(())
-    }
-
-    /// Settle the setting changes their providers have answered, or have
-    /// left unanswered too long: committed, or refused in the transcript.
-    fn settle_tuning(&mut self) -> Vec<PaneUpdate> {
-        let waiting: Vec<ThreadId> = self
-            .threads
-            .iter()
-            .filter(|(_, state)| state.tuning.is_some())
-            .map(|(id, _)| *id)
-            .collect();
-        let mut settled = Vec::new();
-        for id in waiting {
-            let state = self.threads.get_mut(&id).expect("listed above");
-            let tuning = state.tuning.as_ref().expect("listed above");
-            let answer = match tuning.ack.try_recv() {
-                Ok(answer) => answer,
-                Err(std::sync::mpsc::TryRecvError::Empty)
-                    if crate::clock::instant().duration_since(tuning.asked) < TUNE_TIMEOUT =>
-                {
-                    continue;
-                }
-                Err(_) => Err(io::Error::other(format!(
-                    "{} change was not acknowledged",
-                    tuning.change.noun()
-                ))),
-            };
-            let change = state.tuning.take().expect("listed above").change;
-            let noun = change.noun();
-            let result = answer
-                .map_err(ProvisionError::Tune)
-                .and_then(|()| self.commit_tuning(id, change));
-            let state = self.threads.get_mut(&id).expect("listed above");
-            if let Err(error) = result {
-                state.apply(Input::Notice(format!("{noun} unchanged: {error}")));
-            }
-            let mut update = PaneUpdate::new(id);
-            update.activity_changed = true;
-            settled.push(update);
-        }
-        settled
-    }
-
-    /// A Thread's current model and effort, live or off the header.
-    fn tuning(&self, thread: ThreadId) -> Result<(Option<String>, Option<String>), ProvisionError> {
-        match self.threads.get(&thread) {
-            Some(state) => Ok((state.model.clone(), state.effort.clone())),
-            None => {
-                let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
-                Ok((meta.model, meta.effort))
-            }
-        }
-    }
-
-    /// Model changes: the header always; pre-lock the
-    /// eager respawn; post-lock a respawn resuming the same conversation,
-    /// refused mid-turn (`Busy`) and when the Session never named itself
-    /// (`Locked` — nothing to resume). The transcript says what changed.
-    fn retune(
-        &mut self,
-        thread: ThreadId,
-        model: Option<String>,
-        effort: Option<String>,
-    ) -> Result<(), ProvisionError> {
-        let Some(state) = self.threads.get(&thread) else {
-            return self
-                .store
-                .set_tuning(thread, model, effort, None)
-                .map_err(ProvisionError::Store);
-        };
-        if state.model == model && state.effort == effort {
-            self.threads.get_mut(&thread).expect("checked").replacement = None;
-            return Ok(());
-        }
-        if !state.first_prompt_sent {
-            let provider = state.provider;
-            return self.provision(thread, provider, model, effort);
-        }
-        let provider = state.provider;
-        self.replace_session(thread, provider, model, effort, ReplacementKind::Retune)
-    }
-
-    /// The next Thread waiting on the operator, after `from` in the answer
-    /// order (`needs_you`), wrapping. One key held down walks every Decision
-    /// in the cockpit, in the order the nav's Needs-you strip lists them,
-    /// and stops nowhere else. From a Thread that waits on nothing it lands
-    /// on the strip's first row, the answer target.
     pub fn next_blocked(&self, from: Option<ThreadId>) -> Option<ThreadId> {
         let queue = self.needs_you();
         let next = from
@@ -3305,7 +1893,8 @@ impl Cockpit {
         let mut queue = self.blocked();
         queue.sort_by_key(|thread| {
             (
-                self.notifications
+                self.shared
+                    .notifications
                     .first_request(*thread)
                     .map_or(u64::MAX, |notice| notice.seq),
                 *thread,
@@ -3322,294 +1911,127 @@ impl Cockpit {
 
     /// Threads waiting on the operator — what the wall badges.
     pub fn blocked(&self) -> Vec<ThreadId> {
-        self.threads
-            .iter()
-            .filter(|(_, state)| !state.activity.view().decisions().is_empty())
-            .map(|(id, _)| *id)
+        self.threads()
+            .into_iter()
+            .filter(|thread| {
+                self.thread(*thread)
+                    .is_some_and(|open| !open.activity().decisions().is_empty())
+            })
             .collect()
     }
-}
 
-impl Cockpit {
-    /// Every Notice, and each Thread's deferral behind it — read-only.
     pub fn notifications(&self) -> &Notifications {
-        &self.notifications
+        &self.shared.notifications
     }
 
-    /// How long Main may sit idle after its last child settles before a
-    /// deferred finish is called: a provider that never resumes Main on
-    /// its own is given this much to prove it. Tests set it to zero.
     pub fn set_notification_grace(&mut self, grace: Duration) {
-        self.notifications = Notifications::with_grace(grace);
-    }
-
-    /// The operator opened a Notice — from a toast or the bell: it is
-    /// read, and they land on its Thread's Pane in the view that shows
-    /// it, reviving a parked one. The Thread landed on, or None when it
-    /// is gone.
-    pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadId> {
-        let thread = self.notifications.open(id)?;
-        if !self.focus_thread(thread) {
-            self.reopen(thread).ok()?;
-        }
-        self.acknowledge_focus();
-        Some(thread)
+        self.in_process().set_notification_grace(grace);
+        self.settle();
     }
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
-        self.notifications.dismiss(id)
-    }
-
-    /// Open one live Decision attention record. Its handle remains resolved
-    /// through Activity, so opening it cannot complete a turn or release a
-    /// queued prompt.
-    pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
-        let subject = self
-            .notifications
-            .decision(id)?
-            .subject
-            .clone()
-            .unwrap_or(Subject::Main);
-        let thread = self.notifications.open_decision(id)?;
-        self.set_visible_subject(thread, subject);
-        if !self.focus_thread(thread) {
-            self.reopen(thread).ok()?;
-        }
-        self.acknowledge_focus();
-        Some(thread)
+        let known = self.shared.notifications.get(id).is_some();
+        self.act(
+            |engine| engine.dismiss_notice(id),
+            |server| {
+                notice(server, NoticeAction::Dismiss { notice: id.get() });
+                known
+            },
+        )
     }
 
     pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
-        self.notifications.dismiss_decision(id)
+        let shown = self.shared.notifications.decision(id).is_some();
+        self.act(
+            |engine| engine.dismiss_decision_notice(id),
+            |server| {
+                notice(
+                    server,
+                    NoticeAction::DismissDecision {
+                        thread: id.thread,
+                        handle: (&id.handle).into(),
+                    },
+                );
+                shown
+            },
+        )
     }
 
     pub fn clear_notices(&mut self) {
-        self.notifications.clear();
+        self.act(Engine::clear_notices, |server| {
+            notice(server, NoticeAction::Clear)
+        });
     }
 
-    /// The bell's `mark all read`: every Notice and live request read,
-    /// none removed (`Notifications::mark_all_read`).
     pub fn mark_notices_read(&mut self) {
-        self.notifications.mark_all_read();
+        self.act(Engine::mark_notices_read, |server| {
+            notice(server, NoticeAction::Read)
+        });
     }
 
-    /// Fixtures only (the parity scenes): date a Thread's notification
-    /// records (`Notifications::fixture_backdate`).
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
-        self.notifications.fixture_backdate(thread, at);
+        self.in_process().fixture_backdate_notices(thread, at);
+        self.settle();
     }
 
-    /// Fixtures only (the parity scenes): a Notice for `thread`, born now
-    /// (`Notifications::fixture_push`).
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
-        self.notifications.fixture_push(thread, outcome);
+        self.in_process().fixture_notice(thread, outcome);
+        self.settle();
     }
 
-    fn acknowledge_focus(&mut self) {
-        if let Some(thread) = self.roster.focused_thread() {
-            let subject = self
-                .visible_subjects
-                .get(&thread)
-                .map(|subject| {
-                    self.threads
-                        .get(&thread)
-                        .map(|state| state.activity.view().canonical_subject(subject))
-                        .unwrap_or(Subject::Main)
-                })
-                .filter(|subject| {
-                    self.threads
-                        .get(&thread)
-                        .is_some_and(|state| state.activity.view().subject(subject).is_some())
-                })
-                .unwrap_or(Subject::Main);
-            if subject == Subject::Main {
-                self.visible_subjects.remove(&thread);
-            }
-            self.notifications.acknowledge_subject(thread, &subject);
+    pub fn draft_starting(&self, draft: DraftId) -> bool {
+        match &self.link {
+            Link::InProcess(engine) => engine.draft_starting(draft),
+            Link::Server(server) => server.draft_starting(draft),
         }
     }
 }
 
-/// An open Thread's facts, read through `Cockpit::thread`. Every accessor
-/// hands back a borrow of the Cockpit itself (`'a`), so a caller keeps the
-/// facts it read after the handle is gone.
-#[derive(Clone, Copy)]
-pub struct ThreadView<'a> {
-    state: &'a Thread,
+/// A command that changes something the window will hear about. A refusal
+/// is logged: the act's own effect (or its absence) is what the window
+/// shows.
+fn said(server: &mut remote::Remote, op: Op) {
+    if let Err(error) = server.execute(op) {
+        crate::log!("the server refused an act: {}", error.message);
+    }
 }
 
-impl<'a> ThreadView<'a> {
-    /// Changes whenever this Thread receives a replacement Session.
-    pub fn generation(&self) -> u64 {
-        self.state.generation
+/// A command that answers with a new or adopted Thread.
+fn started(executed: Result<Option<Done>, WireError>) -> io::Result<ThreadId> {
+    match executed.map_err(io::Error::from)? {
+        Some(Done::Thread { thread }) => Ok(thread),
+        _ => Err(io::Error::other("the server answered with no Thread")),
     }
+}
 
-    pub fn supports_control(&self, kind: crate::ControlKind) -> bool {
-        self.state
-            .session
-            .as_ref()
-            .and_then(SessionLifecycle::session)
-            .is_some_and(|session| session.supports_control(kind))
+/// A command that answers with a registered Project.
+fn registered(executed: Result<Option<Done>, WireError>) -> io::Result<ProjectId> {
+    match executed.map_err(io::Error::from)? {
+        Some(Done::Project { project }) => Ok(project),
+        _ => Err(io::Error::other("the server answered with no Project")),
     }
+}
 
-    pub fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
-        self.state
-            .session
-            .as_ref()
-            .and_then(SessionLifecycle::session)
-            .map_or_else(Vec::new, Session::permission_modes)
-    }
-    pub fn activity(&self) -> ActivityView<'a> {
-        self.state.activity.view()
-    }
+/// A provider, model or effort change: the Server's refusal in its words.
+fn provisioned(executed: Result<Option<Done>, WireError>) -> Result<(), ProvisionError> {
+    executed
+        .map(drop)
+        .map_err(|error| ProvisionError::Tune(error.into()))
+}
 
-    pub fn store_error(&self) -> Option<&'a str> {
-        self.state.store_error.as_deref()
-    }
-
-    pub fn transcript(&self) -> &'a Transcript {
-        self.state.transcript()
-    }
-
-    /// Which backend serves this Thread.
-    pub fn provider(&self) -> Provider {
-        self.state.provider
-    }
-
-    /// The model this Thread chose before its first prompt (#25) — the ✓ in
-    /// the provider picker. `None` is the provider's default.
-    pub fn model(&self) -> Option<&'a str> {
-        self.state.model.as_deref()
-    }
-
-    /// The reasoning effort this Thread chose, in the provider's own word.
-    /// `None` is the operator's default for the provider.
-    pub fn effort(&self) -> Option<&'a str> {
-        self.state.effort.as_deref()
-    }
-
-    /// The durable operator title, as this open Thread holds it.
-    pub fn title(&self) -> Option<&'a str> {
-        self.state.title.as_deref()
-    }
-
-    /// The follow-up predicted for this Thread's last response, if one has
-    /// landed and survived the filter. What the Composer's idle line offers
-    /// and what Tab accepts.
-    pub fn suggestion(&self) -> Option<&'a str> {
-        self.state.suggestion.as_deref()
-    }
-
-    /// What this Thread is blocked on, if anything.
-    pub fn pending(&self) -> Option<&'a Decision> {
-        self.state
-            .activity
-            .view()
-            .decisions()
-            .first()
-            .map(|pending| &pending.decision)
-    }
-
-    /// The prompt held back while the turn runs — the latest, which is
-    /// the one `⌫ unqueue` and Up act on.
-    pub fn queued(&self) -> Option<&'a str> {
-        self.state
-            .native_queue
-            .items
-            .last()
-            .map(|item| item.text.as_str())
-            .or(self.state.queued.as_deref())
-    }
-
-    /// Every prompt held back, newest first: the latest sits on top of the
-    /// pile and what was said before it reads underneath.
-    pub fn queued_all(&self) -> Vec<&'a str> {
-        self.state
-            .native_queue
-            .items
-            .iter()
-            .rev()
-            .map(|item| item.text.as_str())
-            .chain(self.state.queued.as_deref())
-            .collect()
-    }
-
-    /// Is a turn running? A prompt written now has to wait for it.
-    /// Startup/replacement is pending; its choices and first prompt have
-    /// not committed yet. Ready adapters never enter this state.
-    pub fn starting(&self) -> bool {
-        self.state.replacement.is_some()
-            || self
-                .state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-    }
-
-    pub fn busy(&self) -> bool {
-        self.state.busy() || self.starting()
-    }
-
-    /// Whether a model or effort change waits on the provider's answer:
-    /// the pickers hold until it lands.
-    pub fn tuning(&self) -> bool {
-        self.state.tuning.is_some()
-    }
-
-    pub fn needs_queue(&self) -> bool {
-        self.busy()
-            || self.state.activity.view().main_operator_turn()
-            || self.state.native_queue.pending()
-    }
-
-    /// The checkout this Thread works in — what the Pane's chrome shows.
-    pub fn workspace(&self) -> Option<&'a WorkspaceBinding> {
-        self.state.workspace.as_ref()
-    }
-
-    /// Where inside the binding its work happens (#24). `None` means the
-    /// binding itself — today's behavior, and every Thread's starting point.
-    pub fn session_project_root(&self) -> Option<&'a Path> {
-        self.state.session_project_root.as_deref()
-    }
-
-    /// Whether the first operator prompt has gone out — the one lock every
-    /// pre-prompt control reads (#25, #29). Armed by `send`, and on revive
-    /// or import when the replayed history contains an operator prompt.
-    pub fn first_prompt_sent(&self) -> bool {
-        self.state.first_prompt_sent
-    }
-
-    pub fn has_prompt_history(&self) -> bool {
-        self.state.prompt_history.has_entries()
-    }
-
-    /// The wall clocks of this Thread's tool calls, keyed by call id — the
-    /// calls the Cockpit ingested live, plus the ones its log recorded a
-    /// duration for. Never a guess: a call with no measured clock is absent.
-    pub fn tool_timings(&self) -> &'a HashMap<String, ToolTiming> {
-        self.state.activity.view().main().tool_timings()
-    }
-
-    /// The live Session's command menu (#23): what `/` offers in this
-    /// Thread's Composer. Empty until the Session announces one — never a
-    /// static list.
-    pub fn commands(&self) -> &'a [crate::SessionCommand] {
-        &self.state.commands
-    }
-
-    /// The models the live Session's install offers (#25): the provider
-    /// picker's model rows. Empty until the Session announces a list —
-    /// never a static one.
-    pub fn models(&self) -> &'a [ModelInfo] {
-        &self.state.models
-    }
-
-    /// The live Session's permission mode (#23): the meta row's mode chip.
-    /// None until the Session announces one — a chip is never invented.
-    pub fn permission_mode(&self) -> Option<&'a str> {
-        self.state.permission_mode.as_deref()
-    }
+/// What an API caller asked the windows to do (ADR 0027).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// Land on this Thread (`thread.focus`).
+    Focus(ThreadId),
+    /// Show a toast (`notification.show`), ringing its chime; an
+    /// important one stays up until dismissed.
+    Notification {
+        title: String,
+        body: Option<String>,
+        sound: Option<crate::sound::Sound>,
+        important: bool,
+    },
 }
 
 /// What `Cockpit::close` can refuse: the park that ends a Solo Thread's
@@ -3631,18 +2053,6 @@ impl std::fmt::Display for CloseError {
 }
 
 impl std::error::Error for CloseError {}
-
-/// A draft's first send, done: the Thread it became, and whether the
-/// leave the draft was holding open (see `close`) applied.
-#[derive(Debug)]
-pub struct Bootstrapped {
-    pub thread: ThreadId,
-    /// The deferred leave the Groups module refused, if it did — the Thread
-    /// is live and in its Group regardless.
-    pub refused_leave: Option<ApplyError>,
-    /// A deferred Group leave applied with this first send.
-    pub applied_leave: bool,
-}
 
 /// A session file adopted through `adopt_into` (#11): durable the moment
 /// this exists, and open unless `not_opened` says why not.
@@ -3669,7 +2079,7 @@ impl Cockpit {
 
     /// The Panes on screen, in order — see `Roster::visible`.
     pub fn visible(&self) -> Vec<PaneIdentity> {
-        self.roster.visible(&self.groups)
+        self.roster.visible(&self.shared.groups)
     }
 
     /// The one door to focus: every move — keys, clicks, nav rows — lands
@@ -3677,7 +2087,7 @@ impl Cockpit {
     /// open.
     pub fn focus(&mut self, identity: PaneIdentity) -> bool {
         let landed = self.roster.focus(identity);
-        self.acknowledge_focus();
+        self.acknowledge_seen();
         landed
     }
 
@@ -3690,7 +2100,7 @@ impl Cockpit {
         }
         self.roster.set_view(self.view_showing(thread));
         let landed = self.roster.focus(identity);
-        self.acknowledge_focus();
+        self.acknowledge_seen();
         landed
     }
 
@@ -3702,6 +2112,7 @@ impl Cockpit {
         match self.roster.view() {
             View::Group(group)
                 if self
+                    .shared
                     .groups
                     .get(group)
                     .is_some_and(|group| group.members.contains(&thread)) =>
@@ -3709,6 +2120,7 @@ impl Cockpit {
                 View::Group(group)
             }
             _ => self
+                .shared
                 .groups
                 .home(thread)
                 .map_or(View::Solo, |group| View::Group(group.id)),
@@ -3719,30 +2131,32 @@ impl Cockpit {
     /// children fall back to Main, so a replacement Session cannot suppress a
     /// later Main request with an old selection.
     pub fn set_visible_subject(&mut self, thread: ThreadId, subject: Subject) {
-        let subject = self
-            .threads
-            .get(&thread)
-            .map(|state| state.activity.view().canonical_subject(&subject))
-            .filter(|subject| {
-                self.threads
-                    .get(&thread)
-                    .is_some_and(|state| state.activity.view().subject(subject).is_some())
-            })
-            .unwrap_or(Subject::Main);
         if subject == Subject::Main {
             self.visible_subjects.remove(&thread);
         } else {
-            self.visible_subjects.insert(thread, subject);
+            self.visible_subjects.insert(thread, subject.clone());
         }
-        self.acknowledge_focus();
+        self.act(
+            |engine| engine.set_visible_subject(thread, subject.clone()),
+            |server| {
+                said(
+                    server,
+                    Op::ShowSubject {
+                        thread,
+                        subject: (&subject).into(),
+                    },
+                )
+            },
+        );
+        self.acknowledge_seen();
     }
 
     /// cmd-] / cmd-[: walk the visible Panes, wrapping.
     pub fn step_focus(&mut self, delta: isize) {
-        self.roster.step(delta, &self.groups);
+        self.roster.step(delta, &self.shared.groups);
     }
 
-    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// ⌘⇧⏎ (#20): the focused Pane takes the whole cockpit; ⌘⇧⏎ again
     /// restores the grid.
     pub fn toggle_fullscreen(&mut self) {
         self.roster.toggle_fullscreen();
@@ -3765,6 +2179,7 @@ impl Cockpit {
     /// rows does not jump them.
     pub fn enter_group(&mut self, group: GroupId) -> Result<(), ReviveGroupError> {
         let members = self
+            .shared
             .groups
             .get(group)
             .ok_or(ReviveGroupError::MissingGroup)?
@@ -3789,7 +2204,7 @@ impl Cockpit {
     /// place — its Pane keeps the slot the board gave it, takes focus, and
     /// the park order forgets it. An open Thread is left alone.
     pub fn wake(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        if self.threads.contains_key(&thread) {
+        if self.thread(thread).is_some() {
             return Ok(());
         }
         self.revive(thread)?;
@@ -3801,10 +2216,14 @@ impl Cockpit {
     /// Revive one parked Thread into the view that shows it (#21): a Pane,
     /// focus, and the park order forgetting it — cmd-o must not revive it a
     /// second time. The shared tail of cmd-o and a parked nav row's click.
+    /// An open Thread is only landed on: one a window has no Pane drawn for
+    /// yet (a `thread.focus` from Projects) is not started again.
     pub fn reopen(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        self.revive(thread)?;
+        if self.thread(thread).is_none() {
+            self.revive(thread)?;
+            self.roster.note_revived(thread);
+        }
         self.roster.set_view(self.view_showing(thread));
-        self.roster.note_revived(thread);
         self.roster.focus(PaneIdentity::Thread(thread));
         Ok(())
     }
@@ -3904,25 +2323,31 @@ impl Cockpit {
             .roster
             .draft_scope(draft)
             .ok_or_else(|| io::Error::other("no such draft"))?;
-        let thread = match scope.group {
-            Some(group) => {
-                self.bootstrap_in_group_with(choice, workspace, prompt, group, effort)?
-            }
-            None => self.begin_bootstrap(
-                choice,
-                workspace,
-                prompt,
-                effort,
-                None,
-                scope.new_group_with,
-            )?,
-        };
-        if let Some(pending) = self.bootstraps.get_mut(&thread) {
-            pending.draft = Some(draft);
-            self.roster.remove_thread(thread);
-            return Ok(None);
-        }
-        Ok(Some(self.complete_draft(draft, thread)))
+        let started = self.act(
+            |engine| {
+                engine.bootstrap_draft(
+                    draft,
+                    scope,
+                    choice.clone(),
+                    workspace.clone(),
+                    prompt,
+                    effort.clone(),
+                )
+            },
+            |server| {
+                let op = Op::Bootstrap {
+                    provider: choice.provider,
+                    model: choice.model.clone(),
+                    effort: effort.clone(),
+                    workspace: (&workspace).into(),
+                    prompt: prompt.to_string(),
+                    group: scope.group,
+                    new_group_with: scope.new_group_with,
+                };
+                server.bootstrap(draft, prompt, op).map(|()| None)
+            },
+        );
+        Ok(started?.map(|thread| self.complete_draft(draft, thread)))
     }
 
     fn complete_draft(&mut self, draft: DraftId, thread: ThreadId) -> Bootstrapped {
@@ -3932,7 +2357,7 @@ impl Cockpit {
             .expect("draft retained during startup");
         self.roster.draft_became(draft, thread);
         if scope.new_group_with.is_some() {
-            if let Some(group) = self.groups.home(thread).map(|group| group.id) {
+            if let Some(group) = self.shared.groups.home(thread).map(|group| group.id) {
                 self.roster.set_view(View::Group(group));
                 self.roster.focus(PaneIdentity::Thread(thread));
             }
@@ -3951,25 +2376,16 @@ impl Cockpit {
     /// Cancel a submitted startup before changing a draft's choices. The
     /// draft slot and Composer remain; cancellation emits no completion.
     pub fn cancel_draft_start(&mut self, draft: DraftId) -> io::Result<bool> {
-        let Some(thread) = self
-            .bootstraps
-            .iter()
-            .find_map(|(id, pending)| (pending.draft == Some(draft)).then_some(*id))
-        else {
-            return Ok(false);
-        };
-        self.bootstraps.remove(&thread);
-        self.rollback_bootstrap(thread)?;
-        Ok(true)
+        self.act(
+            |engine| engine.cancel_draft_start(draft),
+            |server| server.cancel_bootstrap(draft),
+        )
     }
 
-    pub fn draft_starting(&self, draft: DraftId) -> bool {
-        self.bootstraps
-            .values()
-            .any(|pending| pending.draft == Some(draft))
-    }
-
+    /// The first sends settled since the last take, each Draft's already
+    /// completed in this window.
     pub fn take_bootstrap_results(&mut self) -> Vec<BootstrapResult> {
+        self.receive();
         std::mem::take(&mut self.bootstrap_results)
     }
 
@@ -4017,13 +2433,14 @@ impl Cockpit {
     /// in a pair), then parks: it lands in the parked rows at once, never
     /// as a loose open Thread that needs a second park.
     pub fn park_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
-        if self.groups.of(thread).is_some() {
+        if self.shared.groups.of(thread).is_some() {
             // Leave takes the Thread out of every Group; when the Group on
             // screen held it, its ordinal survivor takes focus.
             let on_screen = matches!(
                 self.roster.view(),
                 View::Group(group) if self
-                    .groups
+                    .shared
+            .groups
                     .get(group)
                     .is_some_and(|group| group.members.contains(&thread))
             );
@@ -4043,6 +2460,7 @@ impl Cockpit {
     fn close_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
         if let View::Group(group) = self.roster.view() {
             let members = self
+                .shared
                 .groups
                 .get(group)
                 .map(|group| group.members.clone())
@@ -4064,7 +2482,7 @@ impl Cockpit {
                 .map_err(CloseError::Group)?;
             // A dissolved Group already landed on its survivor.
             if !applied.dissolved.iter().any(|item| item.group == group) {
-                if let Some(group) = self.groups.get(group) {
+                if let Some(group) = self.shared.groups.get(group) {
                     let next = group.members[ordinal.min(group.members.len() - 1)];
                     self.roster.focus(PaneIdentity::Thread(next));
                 }
@@ -4098,7 +2516,7 @@ impl Cockpit {
     /// ordinal-preserving focus. A refused or empty plan changes nothing.
     pub fn drop(&mut self, drag: Drag, origin: View, target: DropTarget) -> Result<(), ApplyError> {
         self.roster.set_view(origin);
-        let outcome = match self.groups.preview_drop(drag, target) {
+        let outcome = match self.shared.groups.preview_drop(drag, target) {
             Plan::Change(GroupChange::Leave { thread })
                 if matches!(drag, Drag::Thread { group: Some(_), .. }) =>
             {
@@ -4117,7 +2535,7 @@ impl Cockpit {
                 // it is parked on a draft. Either way the dragged Thread is
                 // no longer a member, so the operator follows it to Solo.
                 if self.roster.pending_leave(group) == Some(thread)
-                    || self.groups.of(thread).is_none()
+                    || self.shared.groups.of(thread).is_none()
                 {
                     self.roster.set_view(View::Solo);
                     self.roster.focus(PaneIdentity::Thread(thread));
@@ -4127,21 +2545,21 @@ impl Cockpit {
             Plan::Change(change) => self.apply_group(change).map(|_| ()),
             Plan::Refused(_) | Plan::Nothing => Ok(()),
         };
-        self.roster.heal_focus(&self.groups);
+        self.roster.heal_focus(&self.shared.groups);
         outcome
     }
 
-    /// Adopt a CLI session file (#11) in place of the Pane it was picked
-    /// from: a draft becomes the imported Thread; a still-blank Thread
-    /// yields its slot and is deleted — clean exactly while it is blank,
-    /// which the picker's own invariant guarantees and this re-checks.
-    /// Import creates the Thread; revive opens it — the same
-    /// replay-and-resume any parked Thread gets — and it takes focus. A
-    /// refusal is the import module's, unchanged, and no Thread was
-    /// created.
+    /// Adopt a CLI session file (#11), in place of the Pane it was picked
+    /// for or, with none, alongside the Panes shown: a draft becomes the
+    /// imported Thread; a still-blank Thread yields its slot and is deleted
+    /// — clean exactly while it is blank, which the picker's own invariant
+    /// guarantees and this re-checks. Import creates the Thread; revive
+    /// opens it — the same replay-and-resume any parked Thread gets — and
+    /// it takes focus. A refusal is the import module's, unchanged, and no
+    /// Thread was created.
     pub fn adopt_into(
         &mut self,
-        from: PaneIdentity,
+        into: Option<PaneIdentity>,
         path: &Path,
     ) -> Result<Adopted, crate::import::ImportError> {
         let thread = self.import(path)?;
@@ -4150,9 +2568,13 @@ impl Cockpit {
             not_opened: None,
             blank_kept: None,
         };
+        let Some(into) = into else {
+            adopted.not_opened = self.reopen(thread).err();
+            return Ok(adopted);
+        };
         match self.revive(thread) {
             Ok(()) => {
-                match from {
+                match into {
                     PaneIdentity::Draft(draft) => {
                         self.cancel_draft_start(draft)
                             .map_err(crate::import::ImportError::Io)?;
@@ -4194,5155 +2616,3 @@ impl Cockpit {
             .collect())
     }
 }
-
-fn megabytes(bytes: u64) -> String {
-    format!("{} MB", bytes / (1024 * 1024))
-}
-
-/// A Thread's name from its first prompt: the first non-blank line,
-/// whitespace collapsed, cut to `TITLE_CHARS` characters with an ellipsis.
-/// A prompt that is only whitespace names nothing.
-pub fn title_from_prompt(text: &str) -> String {
-    const TITLE_CHARS: usize = 48;
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("");
-    let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = collapsed.chars();
-    let cut: String = chars.by_ref().take(TITLE_CHARS).collect();
-    if chars.next().is_some() {
-        format!("{}…", cut.trim_end())
-    } else {
-        cut
-    }
-}
-
-
-/// The #24 guard: a session project root that no longer exists on disk
-/// refuses the send — readably, naming the path and the remedy — never a
-/// silent fallback to working in the binding.
-fn vanished_root_refusal(state: &Thread) -> Option<String> {
-    let root = state.session_project_root.as_ref()?;
-    if root.exists() {
-        return None;
-    }
-    Some(format!(
-        "send refused: session project root {} no longer exists — re-pick it",
-        root.display()
-    ))
-}
-
-/// One operator prompt onto the wire, into the log, onto the Pane. The
-/// Session's first prompt is prefaced — on the wire only — with the hidden
-/// session-context block when a root is set: the transcript and the log
-/// carry the operator's raw text, displayed ≠ sent. Answers what the
-/// transcript changed.
-fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::Result<Update> {
-    if let Some(refusal) = vanished_root_refusal(state) {
-        return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
-    }
-    let Some(session) = state
-        .session
-        .as_mut()
-        .and_then(SessionLifecycle::session_mut)
-    else {
-        return Err(io::Error::new(io::ErrorKind::NotConnected, "no Session"));
-    };
-    let prefaced = match (&state.session_project_root, &state.workspace) {
-        (Some(root), Some(binding)) if state.preface_pending => Some(format!(
-            "<ferrite-session-context>\n\
-             Agent workspace root: {}\n\
-             Session project root: {}\n\
-             Run edits, commands, tests, builds, and Git operations from the \
-             session project root. Use the agent workspace root only for \
-             broader workspace context.\n\
-             </ferrite-session-context>\n\
-             {}",
-            binding.cwd().display(),
-            root.display(),
-            text
-        )),
-        _ => None,
-    };
-    // A Provider switched to mid-Thread is owed the earlier conversation:
-    // it rides between the preface and the operator's text, this once.
-    let mut wire = prefaced.unwrap_or_else(|| text.clone());
-    if let Some(carry) = &state.carry {
-        let operator = wire.len() - text.len();
-        wire.insert_str(operator, &format!("{carry}\n\n"));
-    }
-    session.set_suggestions_enabled(suggestions_enabled)?;
-    session.send(&wire)?;
-    state.invalidate_suggestion();
-    state.carry = None;
-    // The Session's first prompt has gone out; every later one is bare.
-    state.preface_pending = false;
-    // And the Thread's first locks its provider for good (#25, #29).
-    state.first_prompt_sent = true;
-    // When it went out, kept beside it so replay draws the same `7:31 pm`.
-    let sent_at = crate::clock::now_label();
-    if let Err(error) = state.writer.record_prompt(&text) {
-        state.report_store_error(error);
-    }
-    if let Err(error) = state.writer.record_prompt_observation(&sent_at) {
-        state.report_store_error(error);
-    }
-    state.prompt_history.append(text.clone());
-    let mut update = state.apply(Input::Prompt(text));
-    update
-        .dirty
-        .extend(state.apply(Input::PromptObservation { sent_at }).dirty);
-    Ok(update)
-}
-
-/// Everything the mirror held goes back to the provider as one prompt,
-/// oldest first — what Escape promised. Each native id is cancelled first
-/// so the provider's own queue cannot run it a second time; a steer has no
-/// handle to cancel, and that refusal is not news.
-fn resend_held(state: &mut Thread, suggestions_enabled: bool) -> Option<Update> {
-    let held = state.native_queue.flush();
-    if held.is_empty() {
-        return None;
-    }
-    if let Some(session) = state
-        .session
-        .as_mut()
-        .and_then(SessionLifecycle::session_mut)
-    {
-        for item in &held {
-            let _ = session.cancel_queued(&item.id);
-        }
-    }
-    let text = held
-        .iter()
-        .map(|item| item.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    match deliver(state, text.clone(), suggestions_enabled) {
-        Ok(applied) => Some(applied),
-        Err(error) => {
-            state.queued = Some(text);
-            Some(state.apply(Input::Notice(format!("send failed: {error}"))))
-        }
-    }
-}
-
-/// How much of the earlier conversation a Provider switch hands over:
-/// the last `CARRY_PAIRS` prompt/answer pairs, within `CARRY_CHARS`
-/// characters — enough to continue, never the whole log.
-const CARRY_PAIRS: usize = 12;
-const CARRY_CHARS: usize = 6_000;
-
-/// The earlier conversation as the next Provider reads it: the newest
-/// pairs that fit the budget, oldest first, each `User:`/`Assistant:`
-/// pair as it was said (an answer that never came is left out). One pair
-/// too long for the whole budget keeps its head and says so.
-fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
-    let mut entries: Vec<String> = exchanges
-        .iter()
-        .rev()
-        .take(CARRY_PAIRS)
-        .map(|(prompt, answer)| {
-            let mut entry = format!("User: {}", prompt.trim());
-            let answer = answer.trim();
-            if !answer.is_empty() {
-                entry.push_str("\nAssistant: ");
-                entry.push_str(answer);
-            }
-            entry
-        })
-        .collect();
-    let mut total: usize = entries.iter().map(|entry| entry.len() + 2).sum();
-    while entries.len() > 1 && total > CARRY_CHARS {
-        let dropped = entries.pop().expect("more than one");
-        total -= dropped.len() + 2;
-    }
-    if let Some(only) = entries.first_mut() {
-        if only.len() > CARRY_CHARS {
-            let mut cut = CARRY_CHARS;
-            while !only.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            only.truncate(cut);
-            only.push_str("…");
-        }
-    }
-    entries.reverse();
-    format!(
-        "Earlier in this Thread (on {from}):\n\n{}",
-        entries.join("\n\n")
-    )
-}
-
-/// The workspace a binding names, made real; the main checkout is the
-/// operator's and is touched by nothing. A missing worktree is created —
-/// or recreated after a hand-deletion — on its registered branch (#29's
-/// central layout), falling back to the Thread-named branch for worktrees
-/// from before the registry. A tree already standing passes the adoption
-/// conflict check instead: git itself must call it a worktree of this
-/// repo, or a Session would spawn into a directory that only looks like
-/// one.
-fn ensure_workspace(
-    registry: &Registry,
-    binding: &WorkspaceBinding,
-    thread: ThreadId,
-) -> Result<(), workspace::GitError> {
-    let WorkspaceBinding::Worktree { repo, path } = binding else {
-        return Ok(());
-    };
-    // Anything already standing at the path must BE the worktree — a
-    // directory that merely exists there (squatting where one was, or was
-    // never) must not be silently rebuilt over or spawned into.
-    if path.exists() {
-        return registry::adoption_check(repo, path);
-    }
-    let branch = registry
-        .branch_for(path)
-        .map(str::to_string)
-        .unwrap_or_else(|| branch_name(thread));
-    workspace::ensure_worktree(repo, path, &branch)
-}
-
-/// The branch a Thread's worktree lives on. Named for the Thread so the
-/// operator can read `git branch` and know whose work each one is.
-fn branch_name(thread: ThreadId) -> String {
-    format!("ferrite/thread-{thread}")
-}
-
-fn event_changes_content(event: &SessionEvent) -> bool {
-    use crate::activity::ExecutionEvent;
-    match event {
-        SessionEvent::Activity(
-            ActivityEvent::Content { event, .. }
-            | ActivityEvent::HistoryContent { event, .. }
-            | ActivityEvent::MainContent { event, .. },
-        ) => !matches!(event, ExecutionEvent::TokenUsage { .. }),
-        SessionEvent::Activity(ActivityEvent::Status { .. }) => true,
-        SessionEvent::Activity(_)
-        | SessionEvent::TokenUsage { .. }
-        | SessionEvent::Commands { .. }
-        | SessionEvent::Models { .. }
-        | SessionEvent::PermissionMode { .. }
-        | SessionEvent::ContextDetails { .. }
-        | SessionEvent::McpServers { .. }
-        | SessionEvent::McpAuthorization { .. } => false,
-        _ => true,
-    }
-}
-
-fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
-    match action {
-        crate::SessionControl::RefreshContext => crate::ControlKind::RefreshContext,
-        crate::SessionControl::RefreshMcp => crate::ControlKind::RefreshMcp,
-        crate::SessionControl::ReconnectMcp { .. } => crate::ControlKind::ReconnectMcp,
-        crate::SessionControl::LoginMcp { .. } => crate::ControlKind::LoginMcp,
-        crate::SessionControl::ReloadMcp => crate::ControlKind::ReloadMcp,
-        crate::SessionControl::StopTask { .. } => crate::ControlKind::StopTask,
-        crate::SessionControl::BackgroundTasks => crate::ControlKind::BackgroundTasks,
-        crate::SessionControl::SetPermissionMode { .. } => crate::ControlKind::SetPermissionMode,
-    }
-}
-
-fn completion_observation(
-    thread: &Thread,
-    event: &SessionEvent,
-) -> Option<(Subject, crate::store::CompletionFacts)> {
-    use crate::activity::ExecutionEvent;
-    // Every outcome is timed: a completed turn's stamp, and the elapsed an
-    // interrupted or failed turn's row reports.
-    let subject = match event {
-        SessionEvent::TurnEnded { .. } => Subject::Main,
-        SessionEvent::Activity(ActivityEvent::Content {
-            key,
-            event: ExecutionEvent::TurnEnded { .. },
-            ..
-        }) => Subject::Subagent(key.clone()),
-        SessionEvent::Activity(ActivityEvent::MainContent {
-            event: ExecutionEvent::TurnEnded { .. },
-            ..
-        }) => Subject::Main,
-        SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { .. }) => Subject::Main,
-        _ => return None,
-    };
-    let view = thread.activity.view();
-    let transcript = view.subject(&subject)?.transcript();
-    let elapsed = transcript.turn_elapsed()?;
-    // The turn's token counts, as its usage reports summed them; a turn
-    // that reported none keeps none rather than a guessed zero.
-    let (input, output) = (
-        transcript.turn_input_tokens(),
-        transcript.turn_output_tokens(),
-    );
-    let reported = input > 0 || output > 0;
-    Some((
-        subject,
-        crate::store::CompletionFacts {
-            elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
-            completed_at: crate::clock::now_label(),
-            input_tokens: reported.then_some(input),
-            output_tokens: reported.then_some(output),
-        },
-    ))
-}
-
-/// Main's tool calls, as `follow` wants to see them: a start with its
-/// input, or a finish with its verdict. Subagents never move the Thread —
-/// they may well be working somewhere else on purpose.
-fn follow_move(state: &mut Thread, event: &SessionEvent) -> Option<Move> {
-    use crate::activity::ExecutionEvent;
-    let binding = state.workspace.as_ref()?;
-    let current = workspace::effective_cwd(state.session_project_root.as_deref(), Some(binding))?
-        .to_path_buf();
-    match event {
-        SessionEvent::ToolStarted { id, name, input }
-        | SessionEvent::Activity(ActivityEvent::MainContent {
-            event: ExecutionEvent::ToolStarted { id, name, input },
-            ..
-        }) => state.follow.observe_started(id, name, input, &current),
-        SessionEvent::ToolCompleted { id, is_error, .. }
-        | SessionEvent::Activity(ActivityEvent::MainContent {
-            event: ExecutionEvent::ToolCompleted { id, is_error, .. },
-            ..
-        }) => state.follow.observe_completed(id, *is_error),
-        _ => None,
-    }
-}
-
-/// Rebind a live Thread where `follow` says its agent went. The header is
-/// rewritten first, so a Thread parked a moment later revives there too;
-/// a refused rewrite leaves the binding as it was — the log and the live
-/// state never disagree. The live Session is not restarted: the agent
-/// already works there by its own paths, and the next spawn (revive,
-/// watchdog restart) lands in the new cwd through the one cwd chain.
-fn apply_move(store: &Store, id: ThreadId, state: &mut Thread, moved: Move) -> bool {
-    let Some(binding) = state.workspace.clone() else {
-        return false;
-    };
-    let repo = binding.repo().to_path_buf();
-    let next = match moved {
-        Move::ToMain => WorkspaceBinding::Main { checkout: repo },
-        Move::Into(path) if follow::canonical(&path) == follow::canonical(&repo) => {
-            WorkspaceBinding::Main { checkout: repo }
-        }
-        Move::Into(path) => WorkspaceBinding::Worktree { repo, path },
-    };
-    if next == binding {
-        return false;
-    }
-    // The header rewrite moves every byte after it: a child-history read
-    // in flight holds a checkpoint into the old log and would land short
-    // (ADR 0002 — header changes invalidate obsolete loads).
-    state.history.clear();
-    if let Err(error) = store.set_workspace(id, &next, Some(&mut state.writer)) {
-        state.report_store_error(match error {
-            LoadError::Io(error) => error,
-            other => io::Error::other(other.to_string()),
-        });
-        return false;
-    }
-    state.workspace = Some(next);
-    state.follow.reset();
-    true
-}
-
-/// Only Session-level metadata belongs here; execution state lives in Activity.
-fn fold(state: &mut Thread, event: &SessionEvent) {
-    match event {
-        SessionEvent::Commands { commands } => state.commands = commands.clone(),
-        SessionEvent::Models { models } => state.models = models.clone(),
-        SessionEvent::PermissionMode { mode } => state.permission_mode = Some(mode.clone()),
-        SessionEvent::Init { session_id, .. } => state.resume = Some(session_id.clone()),
-        SessionEvent::ConversationReset { session_id } => {
-            state.resume = Some(session_id.clone());
-            state.history.clear();
-            state.history_errors.clear();
-            state.carry = None;
-            state.prompt_history = PromptHistory::new(Vec::new());
-            state.invalidate_suggestion();
-        }
-        _ => {}
-    }
-}
-
-/// Reads a Thread's log without the Cockpit: `Cockpit::log_reader`. It
-/// never writes, so a copy may replay parked logs off the UI thread.
-#[derive(Clone)]
-pub struct LogReader {
-    store: Store,
-}
-
-impl LogReader {
-    /// The subagents a parked Thread's durable activity knows — a replay of
-    /// its whole log, so never on the UI thread for more than one Thread.
-    /// Read off the log's tail for a schema-13 log; a log from before is
-    /// replayed once and remembered (`Store::summary`).
-    pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        Ok(self
-            .store
-            .summary(thread, replayed_subagents)?
-            .subagents
-            .unwrap_or_default())
-    }
-
-    /// How many turns a parked Thread's log holds — its prompts since the
-    /// last conversation reset: the wall's parked tile reads `11 turns`.
-    /// Off the log's tail, or remembered like `subagent_count`.
-    pub fn turn_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        Ok(self.store.summary(thread, replayed_subagents)?.turns)
-    }
-}
-
-/// The subagents a full replay of a snapshot knows: what a pre-13 log's
-/// parked row is counted from, once.
-fn replayed_subagents(snapshot: &crate::store::ThreadSnapshot) -> usize {
-    let mut activity = Activity::default();
-    for input in snapshot.activity_inputs() {
-        activity.apply(input);
-    }
-    activity.view().children().len()
-}
-
-#[cfg(test)]
-mod tests {
-    mod context;
-    use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    use std::sync::mpsc::{self, Sender};
-
-    use crate::store::{Provider, Store};
-    use crate::transcript::{Body, Class};
-    use crate::TurnOutcome;
-
-    /// A fresh per-test scratch directory.
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ferrite-cockpit-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
-    /// A Session with no process behind it: the test pushes the events a
-    /// provider would have streamed, and reads back what Ferrite sent.
-    struct Scripted {
-        tx: Sender<SessionEvent>,
-        native: Rc<RefCell<Vec<(String, String)>>>,
-        rx: Receiver<SessionEvent>,
-        sent: Rc<RefCell<Vec<String>>>,
-        fail_send: Rc<RefCell<bool>>,
-        named: Rc<RefCell<Vec<String>>>,
-        tuned_efforts: Rc<RefCell<Vec<Option<String>>>>,
-        fail_effort: Rc<RefCell<bool>>,
-        answer_later: Rc<RefCell<bool>>,
-        answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
-        native_suggestion: Rc<RefCell<Option<String>>>,
-    }
-
-    impl crate::providers::Session for Scripted {
-        fn enqueue(&mut self, id: &str, text: &str) -> io::Result<()> {
-            self.native.borrow_mut().push((id.into(), text.into()));
-            self.tx
-                .send(SessionEvent::Queue(crate::QueueEvent::Accepted(
-                    crate::QueuedPrompt {
-                        id: id.into(),
-                        client_id: id.into(),
-                        text: text.into(),
-                    },
-                )))
-                .unwrap();
-            Ok(())
-        }
-        fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
-            self.tx
-                .send(SessionEvent::Queue(crate::QueueEvent::Cancelled {
-                    id: id.into(),
-                    cancelled: true,
-                    error: None,
-                }))
-                .unwrap();
-            Ok(())
-        }
-
-        fn take_suggestion(&mut self) -> Option<String> {
-            self.native_suggestion.borrow_mut().take()
-        }
-
-        fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
-            if *self.fail_effort.borrow() {
-                return Err(io::Error::other("stub refused effort"));
-            }
-            self.tuned_efforts
-                .borrow_mut()
-                .push(effort.map(str::to_string));
-            if *self.answer_later.borrow() {
-                let (answer, ack) = mpsc::sync_channel(1);
-                self.answers.borrow_mut().push(answer);
-                return Ok(ack);
-            }
-            Ok(crate::providers::applied())
-        }
-        fn events(&self) -> &Receiver<SessionEvent> {
-            &self.rx
-        }
-
-        fn send(&mut self, text: &str) -> std::io::Result<()> {
-            if *self.fail_send.borrow() {
-                return Err(io::Error::other("stub refused first prompt"));
-            }
-            self.sent.borrow_mut().push(text.to_string());
-            Ok(())
-        }
-
-        fn interrupt(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-
-        fn respond_to_decision(
-            &mut self,
-            _id: &str,
-            _answer: crate::DecisionAnswer,
-        ) -> std::io::Result<()> {
-            Ok(())
-        }
-
-        fn set_name(&mut self, name: &str) -> std::io::Result<()> {
-            self.named.borrow_mut().push(name.to_string());
-            Ok(())
-        }
-    }
-
-    /// Hands out Scripted Sessions and keeps the handles the test drives them
-    /// with. Nothing here spawns a process.
-    #[derive(Clone, Default)]
-    struct Fake {
-        native: Rc<RefCell<Vec<(String, String)>>>,
-        streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
-        sent: Rc<RefCell<Vec<String>>>,
-        providers: Rc<RefCell<Vec<Provider>>>,
-        models: Rc<RefCell<Vec<Option<String>>>>,
-        efforts: Rc<RefCell<Vec<Option<String>>>>,
-        tuned_efforts: Rc<RefCell<Vec<Option<String>>>>,
-        fail_effort: Rc<RefCell<bool>>,
-        /// While set, the provider answers effort changes when the test
-        /// sends on `answers`, not at once.
-        answer_later: Rc<RefCell<bool>>,
-        answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
-        resumed: Rc<RefCell<Vec<Option<String>>>>,
-        cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
-        additional_directories: Rc<RefCell<Vec<Vec<std::path::PathBuf>>>>,
-        /// The title each spawn was handed.
-        names: Rc<RefCell<Vec<Option<String>>>>,
-        /// Every rename a live Session was told.
-        named: Rc<RefCell<Vec<String>>>,
-        /// Every spawn call, successes and refusals alike.
-        attempts: Rc<RefCell<usize>>,
-        /// While set, spawn refuses — how a test makes a restart fail.
-        fail: Rc<RefCell<bool>>,
-        fail_at: Rc<RefCell<Option<usize>>>,
-        fail_send: Rc<RefCell<bool>>,
-        suggestions: Rc<RefCell<Vec<crate::suggest::Request>>>,
-        native_suggestion: Rc<RefCell<Option<String>>>,
-    }
-
-    impl Fake {
-        fn suggest_calls(&self) -> Vec<crate::suggest::Request> {
-            self.suggestions.borrow().clone()
-        }
-        /// Every spawn's choice, in call order.
-        fn spawn_pairs(&self) -> Vec<ProviderChoice> {
-            self.providers
-                .borrow()
-                .iter()
-                .zip(self.models.borrow().iter())
-                .map(|(provider, model)| ProviderChoice {
-                    provider: *provider,
-                    model: model.clone(),
-                })
-                .collect()
-        }
-    }
-
-    impl Spawner for Fake {
-        fn suggest(&mut self, request: crate::suggest::Request, _: Sender<Suggestion>) {
-            self.suggestions.borrow_mut().push(request);
-        }
-        fn spawn(
-            &mut self,
-            request: SpawnRequest,
-        ) -> std::io::Result<Box<dyn crate::providers::Session>> {
-            *self.attempts.borrow_mut() += 1;
-            let attempt = *self.attempts.borrow();
-            if *self.fail.borrow() || *self.fail_at.borrow() == Some(attempt) {
-                return Err(std::io::Error::other("stub refused to spawn"));
-            }
-            let (tx, rx) = mpsc::channel();
-            self.streams.borrow_mut().push(tx.clone());
-            self.providers.borrow_mut().push(request.provider);
-            self.models
-                .borrow_mut()
-                .push(request.model.map(|model| model.to_string()));
-            self.efforts
-                .borrow_mut()
-                .push(request.effort.map(|effort| effort.to_string()));
-            self.resumed
-                .borrow_mut()
-                .push(request.resume.map(|target| target.to_string()));
-            self.cwds
-                .borrow_mut()
-                .push(request.cwd.map(|path| path.to_path_buf()));
-            self.additional_directories
-                .borrow_mut()
-                .push(request.additional_directories);
-            self.names
-                .borrow_mut()
-                .push(request.name.map(|name| name.to_string()));
-            Ok(Box::new(Scripted {
-                tx,
-                native: self.native.clone(),
-                rx,
-                sent: self.sent.clone(),
-                fail_send: self.fail_send.clone(),
-                named: self.named.clone(),
-                tuned_efforts: self.tuned_efforts.clone(),
-                fail_effort: self.fail_effort.clone(),
-                answer_later: self.answer_later.clone(),
-                answers: self.answers.clone(),
-                native_suggestion: self.native_suggestion.clone(),
-            }))
-        }
-    }
-
-    /// The binding for tests that are not about bindings.
-    fn main_choice() -> WorkspaceChoice {
-        WorkspaceChoice::Main {
-            checkout: std::env::temp_dir(),
-        }
-    }
-
-    fn cockpit(name: &str) -> (Cockpit, Fake) {
-        let fake = Fake::default();
-        let store = Store::open(scratch(name)).unwrap();
-        (Cockpit::new(store, Box::new(fake.clone())), fake)
-    }
-
-    /// An empty store was never worked in; otherwise the answer is the
-    /// most recently used Thread's Project. A registry lost by hand
-    /// orphans nothing, so the Threads keep their headers — but a Project
-    /// the menu no longer offers is not somewhere to send a draft, and the
-    /// answer is nothing rather than an id nothing can resolve.
-    #[test]
-    fn the_last_worked_project_is_a_registered_one_or_nothing() {
-        let (mut core, fake) = cockpit("last-worked-project");
-        assert_eq!(core.last_worked_project(), None);
-        let other = scratch("last-worked-project-other");
-        std::fs::create_dir_all(&other).unwrap();
-
-        let thread = core.open(Provider::Claude, main_choice()).unwrap();
-        let project = core.project_id(thread).expect("the open Thread is bound");
-        assert_eq!(core.last_worked_project(), Some(project));
-
-        // A newer Thread in another Project outranks the older one.
-        let newer = core
-            .open(Provider::Claude, WorkspaceChoice::Main { checkout: other })
-            .unwrap();
-        let newest = core.project_id(newer).expect("the open Thread is bound");
-        assert_ne!(newest, project);
-        assert_eq!(core.last_worked_project(), Some(newest));
-
-        // The same store with its registry file gone: every Thread still
-        // names a Project, and the menu offers none of them.
-        // `scratch` clears what it names, so the store's own path is spelled
-        // out rather than asked for a second time.
-        let dir = std::env::temp_dir().join(format!(
-            "ferrite-cockpit-{}-last-worked-project",
-            std::process::id()
-        ));
-        std::fs::remove_file(dir.join("registry.json")).unwrap();
-        let reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
-        assert!(reopened.registry().projects().is_empty());
-        assert_eq!(reopened.project_id(newer), Some(newest));
-        assert_eq!(reopened.last_worked_project(), None);
-    }
-
-    /// An initialised repo with one committed file, for binding tests.
-    /// Always under a scratch directory — never near a real checkout.
-    fn init_repo(root: &Path) -> std::path::PathBuf {
-        let repo = root.join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
-        git(&["init", "-q", "-b", "main"]);
-        git(&["config", "core.autocrlf", "false"]);
-        std::fs::write(repo.join("file.txt"), "base\n").unwrap();
-        git(&["add", "file.txt"]);
-        git(&[
-            "-c",
-            "user.email=test@example.invalid",
-            "-c",
-            "user.name=test",
-            "commit",
-            "-qm",
-            "base",
-        ]);
-        repo
-    }
-
-    /// Drive a Thread's Main through making `worktree` — the command it
-    /// runs, the tree git really adds, the finish — and the listing that
-    /// names what it made. Answers the worktree's path as git prints it.
-    fn follow_into(
-        cockpit: &mut Cockpit,
-        fake: &Fake,
-        thread: ThreadId,
-        repo: &Path,
-        worktree: &Path,
-    ) -> PathBuf {
-        // Git's list as it stood before the command — what a sweep hands in.
-        cockpit.worktrees_listed(
-            thread,
-            crate::workspace::worktree_paths(repo).unwrap(),
-            Instant::now(),
-        );
-        let stream = fake.streams.borrow().last().unwrap().clone();
-        let leaf = worktree.file_name().unwrap().to_str().unwrap();
-        stream
-            .send(SessionEvent::ToolStarted {
-                id: "wt".into(),
-                name: "Bash".into(),
-                input: serde_json::json!({
-                    "command": format!("git worktree add -b {leaf} {}", worktree.display())
-                }),
-            })
-            .unwrap();
-        cockpit.pump();
-        crate::workspace::git_for_tests(
-            repo,
-            &["worktree", "add", "-b", leaf, worktree.to_str().unwrap()],
-        );
-        stream
-            .send(SessionEvent::ToolCompleted {
-                id: "wt".into(),
-                output: String::new(),
-                is_error: false,
-                result: crate::ToolResult::Opaque,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert!(
-            cockpit.wants_worktree_listing(),
-            "a finished creation asks for a listing now, not next tick"
-        );
-        assert!(cockpit.worktrees_listed(
-            thread,
-            crate::workspace::worktree_paths(repo).unwrap(),
-            Instant::now()
-        ));
-        assert!(!cockpit.wants_worktree_listing());
-        crate::workspace::follow::canonical(worktree)
-    }
-
-    /// The whole follow flow at the cockpit's seam (`workspace::follow`):
-    /// Main runs `git worktree add`, git's next listing names what it
-    /// made, and the binding moves there — persisted in the header, so a
-    /// park and revive spawns the next Session inside the worktree the
-    /// agent chose for itself.
-    #[test]
-    fn a_thread_follows_the_worktree_its_main_creates() {
-        let root = scratch("follow-create");
-        let (mut cockpit, fake) = cockpit("follow-create-store");
-        let repo = init_repo(&root);
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-
-        let path = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-a"));
-
-        let bound = cockpit.thread(thread).unwrap().workspace().cloned();
-        assert_eq!(
-            bound,
-            Some(WorkspaceBinding::Worktree {
-                repo: repo.clone(),
-                path: path.clone(),
-            })
-        );
-        assert_eq!(
-            cockpit.peek(thread).unwrap().workspace,
-            bound,
-            "the header says so without the live Thread"
-        );
-
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-        assert_eq!(fake.cwds.borrow().last().cloned().flatten(), Some(path));
-    }
-
-    /// Claude's `ExitWorktree` finishing puts Main back in the main
-    /// checkout, and the binding goes with it.
-    #[test]
-    fn exiting_a_worktree_returns_the_thread_to_main() {
-        let root = scratch("follow-exit");
-        let (mut cockpit, fake) = cockpit("follow-exit-store");
-        let repo = init_repo(&root);
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-exit"));
-
-        let stream = fake.streams.borrow()[0].clone();
-        stream
-            .send(SessionEvent::ToolStarted {
-                id: "x".into(),
-                name: "ExitWorktree".into(),
-                input: serde_json::json!({}),
-            })
-            .unwrap();
-        stream
-            .send(SessionEvent::ToolCompleted {
-                id: "x".into(),
-                output: "Exited worktree".into(),
-                is_error: false,
-                result: crate::ToolResult::Opaque,
-            })
-            .unwrap();
-        cockpit.pump();
-
-        let main = Some(WorkspaceBinding::Main {
-            checkout: repo.clone(),
-        });
-        assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
-        assert_eq!(cockpit.peek(thread).unwrap().workspace, main);
-    }
-
-    /// A worktree the agent made is the agent's, not Ferrite's: removed
-    /// while the Thread is live, the next listing sends the Thread back to
-    /// main; removed while it is parked, revive does the same rather than
-    /// rebuilding somebody else's tree. Only registered worktrees self-heal.
-    #[test]
-    fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
-        let root = scratch("follow-vanish");
-        let (mut cockpit, fake) = cockpit("follow-vanish-store");
-        let repo = init_repo(&root);
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        let main = Some(WorkspaceBinding::Main {
-            checkout: repo.clone(),
-        });
-        let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
-
-        // Live: gone from git's list, gone from the binding.
-        let live = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-live"));
-        git(&["worktree", "remove", "--force", live.to_str().unwrap()]);
-        assert!(cockpit.worktrees_listed(
-            thread,
-            crate::workspace::worktree_paths(&repo).unwrap(),
-            Instant::now()
-        ));
-        assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
-
-        // Parked: revive finds it missing and spawns in the main checkout.
-        let parked = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-parked"));
-        cockpit.park(thread).unwrap();
-        git(&["worktree", "remove", "--force", parked.to_str().unwrap()]);
-        cockpit.revive(thread).unwrap();
-        assert_eq!(
-            fake.cwds.borrow().last().cloned().flatten(),
-            Some(repo.clone())
-        );
-        assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
-        assert_eq!(cockpit.peek(thread).unwrap().workspace, main);
-        assert!(
-            !parked.exists(),
-            "an adopted worktree is never rebuilt on revive"
-        );
-    }
-
-    /// The move rewrites the header, and a longer header shifts every
-    /// byte after it: a child-history read already in flight holds a
-    /// checkpoint into the old log and would land short. It is dropped
-    /// before the rewrite (ADR 0002), like the model and effort setters do.
-    #[test]
-    fn a_move_drops_child_history_reads_in_flight() {
-        use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
-        let root = scratch("follow-history");
-        let (mut cockpit, fake) = cockpit("follow-history-store");
-        let repo = init_repo(&root);
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        let key = AgentKey::new(Provider::Claude, "root", "child");
-        let subject = Subject::Subagent(key.clone());
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Activity(ActivityEvent::Content {
-                key,
-                id: Some("start".into()),
-                event: ExecutionEvent::Text {
-                    text: "Working".into(),
-                },
-            }))
-            .unwrap();
-        cockpit.pump();
-        cockpit
-            .threads
-            .get_mut(&thread)
-            .unwrap()
-            .activity
-            .apply(ActivityInput::Evict(subject.clone()));
-        let (loader, _finish) = history::gated_loader();
-        cockpit.history_loader = Some(loader);
-        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-        assert!(
-            !cockpit.threads[&thread].history.is_empty(),
-            "a read is pending against the old log"
-        );
-
-        follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-history"));
-
-        assert!(
-            cockpit.threads[&thread].history.is_empty(),
-            "the pending read was invalidated before the header rewrite"
-        );
-    }
-
-    /// A run of Main's edits inside a worktree that already stood moves
-    /// the Thread there — but a Subagent's never do, however many: it may
-    /// well be working somewhere else on purpose.
-    #[test]
-    fn only_mains_own_work_moves_the_thread() {
-        use crate::activity::{ActivityEvent, AgentKey, ExecutionEvent};
-        let root = scratch("follow-evidence");
-        let (mut cockpit, fake) = cockpit("follow-evidence-store");
-        let repo = init_repo(&root);
-        let worktree = root.join("wt-standing");
-        crate::workspace::git_for_tests(
-            &repo,
-            &[
-                "worktree",
-                "add",
-                "-b",
-                "standing",
-                worktree.to_str().unwrap(),
-            ],
-        );
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        cockpit.worktrees_listed(
-            thread,
-            crate::workspace::worktree_paths(&repo).unwrap(),
-            Instant::now(),
-        );
-        let stream = fake.streams.borrow()[0].clone();
-        let edit = |n: usize| ExecutionEvent::ToolStarted {
-            id: format!("e{n}"),
-            name: "Edit".into(),
-            input: serde_json::json!({ "file_path": worktree.join("file.txt") }),
-        };
-
-        let child = AgentKey::new(Provider::Claude, "root", "child");
-        for n in 0..crate::workspace::follow::EVIDENCE_CALLS as usize + 2 {
-            stream
-                .send(SessionEvent::Activity(ActivityEvent::Content {
-                    key: child.clone(),
-                    id: Some(format!("c{n}")),
-                    event: edit(n),
-                }))
-                .unwrap();
-        }
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().workspace().cloned(),
-            Some(WorkspaceBinding::Main {
-                checkout: repo.clone(),
-            }),
-            "a Subagent's work never moves the Thread"
-        );
-
-        for n in 0..crate::workspace::follow::EVIDENCE_CALLS as usize {
-            stream
-                .send(SessionEvent::Activity(ActivityEvent::MainContent {
-                    id: Some(format!("m{n}")),
-                    event: edit(n),
-                }))
-                .unwrap();
-        }
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().workspace().cloned(),
-            Some(WorkspaceBinding::Worktree {
-                repo: repo.clone(),
-                path: crate::workspace::follow::canonical(&worktree),
-            })
-        );
-    }
-
-    /// Choosing an existing branch moves the project checkout itself onto
-    /// it before the Session spawns — one checkout, one branch, and the
-    /// Thread's cwd is the repo the operator is already looking at.
-    #[test]
-    fn opening_on_an_existing_branch_switches_the_project_checkout() {
-        let root = scratch("branch-open");
-        let (mut cockpit, _fake) = cockpit("branch-open-store");
-        let repo = init_repo(&root);
-        crate::workspace::git_for_tests(&repo, &["switch", "-q", "-c", "feature/side"]);
-
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Branch {
-                    checkout: repo.clone(),
-                    branch: "main".into(),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            crate::workspace::checkout_branch(&repo).as_deref(),
-            Some("main")
-        );
-        assert_eq!(
-            cockpit.thread(thread).unwrap().workspace().unwrap().cwd(),
-            repo
-        );
-    }
-
-    /// A fresh branch is minted, created and checked out in the project's
-    /// own checkout — the no-worktree half of the composer's two ways to
-    /// start something new.
-    #[test]
-    fn opening_on_a_new_branch_creates_it_in_the_project_checkout() {
-        let root = scratch("new-branch-open");
-        let (mut cockpit, _fake) = cockpit("new-branch-open-store");
-        let repo = init_repo(&root);
-
-        cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::NewBranch {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-
-        let branch = crate::workspace::checkout_branch(&repo).expect("a branch");
-        assert!(branch.starts_with("ferrite/branch-"), "branch: {branch}");
-    }
-
-    /// The whole binding flow at the cockpit's own seam: the choice becomes
-    /// a worktree on disk, the Session spawns inside it, and the Pane's
-    /// chrome can say so.
-    #[test]
-    fn opening_with_a_worktree_choice_creates_it_and_spawns_the_session_inside() {
-        let root = scratch("worktree-open");
-        let (mut cockpit, fake) = cockpit("worktree-open-store");
-        let repo = init_repo(&root);
-
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
-            .unwrap();
-
-        let Some(WorkspaceBinding::Worktree { path, repo: bound }) = cockpit
-            .thread(thread)
-            .and_then(|open| open.workspace())
-            .cloned()
-        else {
-            panic!(
-                "the Pane must know its binding: {:?}",
-                cockpit.thread(thread).and_then(|open| open.workspace())
-            );
-        };
-        assert_eq!(bound, repo);
-        assert!(path.join(".git").exists(), "no worktree at {path:?}");
-        assert_eq!(
-            fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(path.as_path()),
-            "the Session must spawn inside the worktree"
-        );
-    }
-
-    #[test]
-    fn opening_a_project_exposes_its_additional_directories_without_changing_cwd() {
-        let root = scratch("project-extra-roots");
-        let primary = root.join("primary");
-        let extra = root.join("extra");
-        std::fs::create_dir_all(&primary).unwrap();
-        std::fs::create_dir_all(&extra).unwrap();
-        let (mut cockpit, fake) = cockpit("project-extra-roots-store");
-        let project = cockpit.register_project(&primary).unwrap();
-        cockpit
-            .add_project_directories(project, std::slice::from_ref(&extra))
-            .unwrap();
-
-        cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: primary.clone(),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(primary.as_path())
-        );
-        assert_eq!(
-            fake.additional_directories.borrow().last().unwrap(),
-            &[extra.canonicalize().unwrap()]
-        );
-    }
-
-    /// #29: opening registers the choice's repo as a project (the registry
-    /// grows as Threads bind roots), a new worktree lands in the central
-    /// layout on a registry-minted branch, and the Thread header carries
-    /// the project id.
-    #[test]
-    fn opening_registers_the_project_and_places_the_worktree_centrally() {
-        let root = scratch("central-open");
-        let dir = scratch("central-open-store");
-        let repo = init_repo(&root);
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
-
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
-            .unwrap();
-
-        let projects = cockpit.registry().projects();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].title, "repo");
-        let project = projects[0].id;
-        assert_eq!(cockpit.peek(thread).unwrap().project_id, Some(project));
-
-        let entries = cockpit.registry().worktrees(project);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].branch, "ferrite/wt-1");
-        let path = cockpit
-            .thread(thread)
-            .and_then(|open| open.workspace())
-            .unwrap()
-            .cwd()
-            .to_path_buf();
-        assert_eq!(entries[0].path, path);
-        // The central layout: under the store's worktrees/, never inside
-        // the repo or a per-Thread store directory.
-        assert!(
-            path.starts_with(dir.join("worktrees")),
-            "central layout: {path:?}"
-        );
-        assert_eq!(path.file_name().unwrap(), "ferrite-wt-1");
-    }
-
-    /// #29: choosing an existing worktree adopts the standing tree — no
-    /// creation, no new branch — and the Session spawns into it.
-    #[test]
-    fn opening_with_an_existing_worktree_adopts_the_standing_tree() {
-        let root = scratch("adopt-open");
-        let (mut cockpit, fake) = cockpit("adopt-open-store");
-        let repo = init_repo(&root);
-        let first = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
-            .unwrap();
-        let path = cockpit
-            .thread(first)
-            .and_then(|open| open.workspace())
-            .unwrap()
-            .cwd()
-            .to_path_buf();
-        // The first Thread is gone; its worktree outlives it as the
-        // adoptable row. Deleting would remove the tree, so park instead.
-        cockpit.park(first).unwrap();
-
-        let second = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::ExistingWorktree {
-                    repo: repo.clone(),
-                    path: path.clone(),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            cockpit.thread(second).and_then(|open| open.workspace()),
-            Some(&WorkspaceBinding::Worktree {
-                repo: repo.clone(),
-                path: path.clone(),
-            })
-        );
-        assert_eq!(
-            fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(path.as_path())
-        );
-        // Adoption minted nothing: one worktree entry, one branch.
-        let project = cockpit.registry().projects()[0].id;
-        assert_eq!(cockpit.registry().worktrees(project).len(), 1);
-        let branches = crate::workspace::git_for_tests(&repo, &["branch", "--list", "ferrite/*"]);
-        assert_eq!(branches.matches("ferrite/").count(), 1, "{branches:?}");
-    }
-
-    /// #29: the adoption conflict check — a directory that git does not
-    /// call a worktree of the repo refuses the whole open, and no Thread
-    /// is left behind.
-    #[test]
-    fn adopting_a_directory_that_is_not_a_worktree_refuses_and_leaves_no_thread() {
-        let root = scratch("adopt-refused");
-        let (mut cockpit, _fake) = cockpit("adopt-refused-store");
-        let repo = init_repo(&root);
-        let squatter = root.join("squatter");
-        std::fs::create_dir_all(&squatter).unwrap();
-
-        let refused = cockpit.open(
-            Provider::Claude,
-            WorkspaceChoice::ExistingWorktree {
-                repo: repo.clone(),
-                path: squatter.clone(),
-            },
-        );
-
-        assert!(refused.is_err(), "a squatting directory must refuse");
-        assert!(cockpit.threads().is_empty());
-        assert_eq!(cockpit.parked().unwrap(), vec![], "no half-born Thread");
-    }
-
-    /// A worktree the operator made by hand — one git lists, the registry
-    /// never minted — adopts the same way: the Thread binds to its path,
-    /// the Session spawns there, and nothing is created or registered.
-    #[test]
-    fn a_hand_made_worktree_is_adopted_without_minting_or_registering() {
-        let root = scratch("adopt-hand-made");
-        let (mut cockpit, fake) = cockpit("adopt-hand-made-store");
-        let repo = init_repo(&root);
-        let hand_made = root.join("hand-made");
-        crate::workspace::ensure_worktree(&repo, &hand_made, "feature/hand-made").unwrap();
-
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::ExistingWorktree {
-                    repo: repo.clone(),
-                    path: hand_made.clone(),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.workspace()),
-            Some(&WorkspaceBinding::Worktree {
-                repo: repo.clone(),
-                path: hand_made.clone(),
-            })
-        );
-        assert_eq!(
-            fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(hand_made.as_path())
-        );
-        let project = cockpit.registry().projects()[0].id;
-        assert!(
-            cockpit.registry().worktrees(project).is_empty(),
-            "adoption registers nothing"
-        );
-        assert_eq!(
-            crate::workspace::worktree_paths(&repo).unwrap().len(),
-            2,
-            "adoption creates nothing"
-        );
-    }
-
-    /// #29's bootstrap failure contract: a Session that will not spawn
-    /// takes the half-born Thread with it — the draft Pane stays draft and
-    /// nothing claims to exist. The worktree just created stays, real and
-    /// registered: it is adoptable, not half-born.
-    #[test]
-    fn a_failed_spawn_at_bootstrap_leaves_no_thread_behind() {
-        let root = scratch("bootstrap-fails");
-        let (mut cockpit, fake) = cockpit("bootstrap-fails-store");
-        let repo = init_repo(&root);
-        *fake.fail.borrow_mut() = true;
-
-        let refused = cockpit.open(
-            Provider::Claude,
-            WorkspaceChoice::NewWorktree { repo: repo.clone() },
-        );
-
-        assert!(refused.is_err());
-        assert!(cockpit.threads().is_empty());
-        assert_eq!(cockpit.parked().unwrap(), vec![], "no half-born Thread");
-        let project = cockpit.registry().projects()[0].id;
-        assert_eq!(
-            cockpit.registry().worktrees(project).len(),
-            1,
-            "the created worktree survives as an adoptable entry"
-        );
-    }
-
-    #[test]
-    fn a_failed_thread_create_removes_the_reserved_worktree() {
-        let root = scratch("create-fails-after-reserve");
-        let repo = init_repo(&root);
-        let store = Store::open(scratch("create-fails-after-reserve-store"))
-            .unwrap()
-            .refuse_create();
-        let mut cockpit = Cockpit::new(store, Box::new(Fake::default()));
-
-        let refused = cockpit.open(Provider::Claude, WorkspaceChoice::NewWorktree { repo });
-
-        assert!(refused.is_err());
-        assert!(cockpit.threads().is_empty());
-        let project = cockpit.registry().projects()[0].id;
-        assert!(cockpit.registry().worktrees(project).is_empty());
-    }
-
-    #[test]
-    fn a_failed_first_send_leaves_no_thread_or_log() {
-        let root = scratch("first-send-fails");
-        let (mut cockpit, fake) = cockpit("first-send-fails-store");
-        let repo = init_repo(&root);
-        *fake.fail_send.borrow_mut() = true;
-
-        let refused = cockpit.bootstrap(
-            ProviderChoice {
-                provider: Provider::Codex,
-                model: Some("announced-model".into()),
-            },
-            WorkspaceChoice::Main { checkout: repo },
-            "exact drafted prompt",
-        );
-
-        assert!(refused.is_err());
-        assert!(cockpit.threads().is_empty());
-        assert!(cockpit.parked().unwrap().is_empty(), "the log was removed");
-        assert!(fake.sent.borrow().is_empty());
-    }
-
-    #[test]
-    fn grouped_bootstrap_persists_membership_before_sending() {
-        let root = scratch("group-bootstrap-persist");
-        let repo = init_repo(&root);
-        let store_dir = scratch("group-bootstrap-persist-store");
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&store_dir).unwrap(), Box::new(fake.clone()));
-        let seed = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        let second = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        let group = cockpit
-            .apply_group(GroupChange::Create {
-                first: seed,
-                second,
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        let groups_path = store_dir.join("groups.json");
-        std::fs::remove_file(&groups_path).unwrap();
-        std::fs::create_dir(&groups_path).unwrap();
-
-        let refused = cockpit.bootstrap_in_group(
-            ProviderChoice {
-                provider: Provider::Claude,
-                model: None,
-            },
-            WorkspaceChoice::Main { checkout: repo },
-            "must not be sent",
-            group,
-        );
-
-        assert!(refused.is_err());
-        assert_eq!(fake.sent.borrow().as_slice(), &[] as &[String]);
-        assert_eq!(cockpit.threads(), vec![seed, second]);
-        assert_eq!(
-            cockpit.groups().get(group).unwrap().members,
-            vec![seed, second]
-        );
-        assert!(cockpit.parked().unwrap().is_empty());
-    }
-
-    #[test]
-    fn opening_on_the_main_checkout_spawns_the_session_there() {
-        let root = scratch("main-open");
-        let (mut cockpit, fake) = cockpit("main-open-store");
-        let repo = init_repo(&root);
-
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.workspace()),
-            Some(&WorkspaceBinding::Main {
-                checkout: repo.clone(),
-            })
-        );
-        assert_eq!(
-            fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(repo.as_path())
-        );
-    }
-
-    /// AC: the binding is restored on relaunch — and the worktree comes back
-    /// on demand even when someone deleted it by hand while Ferrite was off.
-    #[test]
-    fn a_relaunch_restores_the_binding_and_spawns_where_it_points() {
-        let root = scratch("relaunch-binding");
-        let dir = scratch("relaunch-binding-store");
-        let repo = init_repo(&root);
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
-            .unwrap();
-        let binding = cockpit
-            .thread(thread)
-            .and_then(|open| open.workspace())
-            .cloned()
-            .unwrap();
-        cockpit.park(thread).unwrap();
-        drop(cockpit);
-        // While Ferrite is off, the worktree vanishes by hand.
-        std::fs::remove_dir_all(binding.cwd()).unwrap();
-
-        // A new run of Ferrite over the same store.
-        let relaunched_fake = Fake::default();
-        let mut relaunched = Cockpit::new(
-            Store::open(&dir).unwrap(),
-            Box::new(relaunched_fake.clone()),
-        );
-        relaunched.revive(thread).unwrap();
-
-        assert_eq!(
-            relaunched.thread(thread).and_then(|open| open.workspace()),
-            Some(&binding)
-        );
-        assert!(
-            binding.cwd().join(".git").exists(),
-            "the worktree must come back on demand"
-        );
-        assert_eq!(
-            relaunched_fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(binding.cwd())
-        );
-    }
-
-    /// Registered central worktrees outlive every individual Thread. Two
-    /// Threads may share one adoption, so deleting either cannot inspect or
-    /// remove the checkout beneath the other.
-    #[test]
-    fn deleting_a_thread_preserves_a_shared_registered_worktree() {
-        let root = scratch("delete-worktree");
-        let (mut cockpit, _fake) = cockpit("delete-worktree-store");
-        let repo = init_repo(&root);
-        let first = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
-            .unwrap();
-        let path = cockpit
-            .thread(first)
-            .and_then(|open| open.workspace())
-            .unwrap()
-            .cwd()
-            .to_path_buf();
-        let second = cockpit
-            .open(
-                Provider::Codex,
-                WorkspaceChoice::ExistingWorktree {
-                    repo: repo.clone(),
-                    path: path.clone(),
-                },
-            )
-            .unwrap();
-        std::fs::write(path.join("wip.txt"), "uncommitted\n").unwrap();
-        cockpit.delete(first).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(path.join("wip.txt")).unwrap(),
-            "uncommitted\n",
-            "the registered checkout survives"
-        );
-        assert!(
-            cockpit
-                .thread(second)
-                .and_then(|open| open.workspace())
-                .is_some(),
-            "the other Thread still uses the checkout"
-        );
-        assert_eq!(
-            cockpit
-                .registry()
-                .worktrees(cockpit.registry().projects()[0].id)
-                .len(),
-            1
-        );
-    }
-
-    /// Deleting a main-bound Thread deletes the Thread — the operator's
-    /// checkout is not Ferrite's to touch.
-    #[test]
-    fn deleting_a_main_bound_thread_leaves_the_checkout_alone() {
-        let root = scratch("delete-main");
-        let (mut cockpit, _fake) = cockpit("delete-main-store");
-        let repo = init_repo(&root);
-        let thread = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        // The checkout is even dirty — irrelevant: it is not a worktree
-        // Ferrite owns.
-        std::fs::write(repo.join("operator.txt"), "the operator's own\n").unwrap();
-
-        cockpit.delete(thread).unwrap();
-
-        assert!(cockpit.threads().is_empty());
-        assert_eq!(cockpit.parked().unwrap(), vec![]);
-        assert_eq!(
-            std::fs::read_to_string(repo.join("operator.txt")).unwrap(),
-            "the operator's own\n"
-        );
-    }
-
-    #[test]
-    fn deleting_a_grouped_thread_removes_membership_before_the_log() {
-        let root = scratch("delete-grouped");
-        let repo = init_repo(&root);
-        let (mut cockpit, _fake) = cockpit("delete-grouped-store");
-        let one = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: repo.clone(),
-                },
-            )
-            .unwrap();
-        let two = cockpit
-            .open(Provider::Claude, WorkspaceChoice::Main { checkout: repo })
-            .unwrap();
-        let group = cockpit
-            .apply_group(GroupChange::Create {
-                first: one,
-                second: two,
-            })
-            .unwrap()
-            .group
-            .unwrap();
-
-        cockpit.delete(one).unwrap();
-
-        assert!(cockpit.groups().get(group).is_none());
-        assert_eq!(cockpit.threads(), vec![two]);
-        assert_eq!(cockpit.store.thread_ids().unwrap(), vec![two]);
-    }
-
-    #[test]
-    fn failed_delete_restores_the_exact_group_snapshot() {
-        let store = Store::open(scratch("delete-group-rollback"))
-            .unwrap()
-            .refuse_delete();
-        let mut cockpit = Cockpit::new(store, Box::new(Fake::default()));
-        let threads: Vec<_> = (0..4)
-            .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
-            .collect();
-        let first = cockpit
-            .apply_group(GroupChange::Create {
-                first: threads[0],
-                second: threads[1],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        let second = cockpit
-            .apply_group(GroupChange::Create {
-                first: threads[2],
-                second: threads[3],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        cockpit
-            .apply_group(GroupChange::Rename {
-                group: first,
-                title: "exact title".into(),
-            })
-            .unwrap();
-        cockpit
-            .apply_group(GroupChange::MoveGroup {
-                group: second,
-                index: 0,
-            })
-            .unwrap();
-        let before: Vec<_> = cockpit.groups().iter().cloned().collect();
-
-        assert!(cockpit.delete(threads[0]).is_err());
-        assert_eq!(cockpit.groups().iter().cloned().collect::<Vec<_>>(), before);
-    }
-
-    #[test]
-    fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
-        let (mut cockpit, fake) = cockpit("revive-group-atomic");
-        let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let third = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let group = cockpit
-            .apply_group(GroupChange::Create { first, second })
-            .unwrap()
-            .group
-            .unwrap();
-        cockpit
-            .apply_group(GroupChange::Join {
-                thread: third,
-                group,
-                index: None,
-            })
-            .unwrap();
-        cockpit.park(first).unwrap();
-        cockpit.park(second).unwrap();
-        cockpit.park(third).unwrap();
-        cockpit.refuse_park.insert(first);
-        *fake.fail_at.borrow_mut() = Some(*fake.attempts.borrow() + 3);
-
-        assert!(matches!(
-            cockpit.revive_group(group),
-            Err(ReviveGroupError::Rollback { thread, .. }) if thread == first
-        ));
-        assert!(
-            cockpit.threads().is_empty(),
-            "the first revival rolled back"
-        );
-        assert_eq!(
-            cockpit.groups().get(group).unwrap().members,
-            [first, second, third]
-        );
-
-        cockpit.refuse_park.clear();
-        *fake.fail_at.borrow_mut() = None;
-        assert_eq!(cockpit.revive_group(group).unwrap(), [first, second, third]);
-        assert_eq!(cockpit.threads(), [first, second, third]);
-    }
-
-    #[test]
-    fn thread_title_is_durable_and_blank_rename_is_refused() {
-        let dir = scratch("thread-title");
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-
-        cockpit.rename_thread(thread, "  Parser work  ").unwrap();
-        assert_eq!(
-            cockpit.thread_title(thread).unwrap().as_deref(),
-            Some("Parser work")
-        );
-        assert!(cockpit.rename_thread(thread, "   ").is_err());
-        cockpit.park(thread).unwrap();
-        assert_eq!(
-            cockpit.thread_title(thread).unwrap().as_deref(),
-            Some("Parser work"),
-            "the one title seam reads parked Threads too"
-        );
-        drop(cockpit);
-
-        let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
-        relaunched.revive(thread).unwrap();
-        assert_eq!(
-            relaunched.thread_title(thread).unwrap().as_deref(),
-            Some("Parser work")
-        );
-    }
-
-    /// AC: two Threads on the same repo in separate worktrees cannot touch
-    /// each other's tree — through the cockpit's own seam, in the cwds it
-    /// hands the Sessions.
-    #[test]
-    fn two_threads_on_one_repo_work_in_isolated_worktrees() {
-        let root = scratch("two-threads");
-        let (mut cockpit, fake) = cockpit("two-threads-store");
-        let repo = init_repo(&root);
-
-        let one = cockpit
-            .open(
-                Provider::Claude,
-                WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
-            .unwrap();
-        let two = cockpit
-            .open(
-                Provider::Codex,
-                WorkspaceChoice::NewWorktree { repo: repo.clone() },
-            )
-            .unwrap();
-
-        let cwds = fake.cwds.borrow();
-        let cwd_one = cwds[0].clone().expect("thread one has a cwd");
-        let cwd_two = cwds[1].clone().expect("thread two has a cwd");
-        drop(cwds);
-        assert_ne!(cwd_one, cwd_two, "two Threads must not share a tree");
-        assert_ne!(one, two);
-
-        // Each "agent" writes in its own workspace; neither sees the other.
-        std::fs::write(cwd_one.join("only-one.txt"), "one\n").unwrap();
-        std::fs::write(cwd_two.join("file.txt"), "two edited\n").unwrap();
-        let status_one = crate::workspace::git_for_tests(&cwd_one, &["status", "--porcelain"]);
-        let status_two = crate::workspace::git_for_tests(&cwd_two, &["status", "--porcelain"]);
-        assert!(status_one.contains("only-one.txt"), "one: {status_one}");
-        assert!(!status_one.contains("file.txt"), "one: {status_one}");
-        assert!(status_two.contains("file.txt"), "two: {status_two}");
-        assert!(!status_two.contains("only-one.txt"), "two: {status_two}");
-        assert!(!cwd_two.join("only-one.txt").exists());
-        assert_eq!(
-            std::fs::read_to_string(cwd_one.join("file.txt")).unwrap(),
-            "base\n"
-        );
-    }
-
-    fn text(s: &str) -> SessionEvent {
-        SessionEvent::TextDelta { text: s.into() }
-    }
-
-    /// A finished Main turn buys exactly one prediction, carrying both sides
-    /// of the exchange. Recorded rather than spawned: the suite must never
-    /// shell out to a real CLI, let alone pay one.
-    /// The completion observation now times every outcome, so an
-    /// interrupted turn's row reads `interrupted · 4.1s`. Timing it must not
-    /// make it a completion: no completed stamp, no "finished" notice, no
-    /// follow-up prediction, and the transcript still reads not-completed.
-    #[test]
-    fn a_timed_interruption_is_never_read_as_a_completion() {
-        let (mut cockpit, fake) = cockpit("timed-interruption");
-        cockpit.set_notification_grace(Duration::ZERO);
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "work".into());
-        fake.streams.borrow()[0].send(text("partial")).unwrap();
-        cockpit.pump();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: crate::TurnOutcome::Interrupted,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        cockpit.pump();
-        let transcript = cockpit.thread(thread).unwrap().transcript();
-        let ends: Vec<_> = transcript
-            .blocks()
-            .iter()
-            .filter_map(|block| match &block.body {
-                Body::TurnEnd(end) => Some(end.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(ends.len(), 1, "the observation times the row, adds none");
-        assert_eq!(ends[0].outcome, crate::TurnOutcome::Interrupted);
-        assert!(ends[0].elapsed_ms.is_some(), "the interruption is timed");
-        assert!(ends[0].text().starts_with("interrupted · "));
-        assert!(!transcript.turn_completed());
-        assert!(
-            cockpit
-                .notifications()
-                .notices()
-                .all(|notice| notice.thread != thread),
-            "an interruption raises no finished notice"
-        );
-        assert!(
-            fake.suggest_calls().is_empty(),
-            "an interruption buys no follow-up prediction"
-        );
-    }
-
-    #[test]
-    fn a_finished_turn_asks_for_one_follow_up_prediction() {
-        let (mut cockpit, fake) = cockpit("suggest-trigger");
-        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-        cockpit.send(thread, "fix the decoder".into());
-
-        fake.streams.borrow()[0]
-            .send(text("Fixed it. Want me to run the tests?"))
-            .unwrap();
-        cockpit.pump();
-        assert!(
-            fake.suggest_calls().is_empty(),
-            "a turn still streaming has nothing settled to predict from"
-        );
-
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-
-        let calls = fake.suggest_calls();
-        assert_eq!(calls.len(), 1, "one turn, one ask");
-        assert_eq!(calls[0].thread, thread);
-        assert!(
-            calls[0].context.contains("fix the decoder"),
-            "{:?}",
-            calls[0]
-        );
-        assert!(
-            calls[0].context.contains("Want me to run the tests?"),
-            "{:?}",
-            calls[0]
-        );
-
-        // A frame with no new turn end must not ask again — this is the
-        // difference between one Haiku call per turn and one per repaint.
-        cockpit.pump();
-        cockpit.pump();
-        assert_eq!(fake.suggest_calls().len(), 1, "one turn, still one ask");
-    }
-
-    /// Codex requests never depend on discovering or running Claude.
-    #[test]
-    fn a_codex_thread_requests_a_codex_prediction() {
-        let (mut cockpit, fake) = cockpit("suggest-no-cli");
-        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-        cockpit.send(thread, "go".into());
-
-        fake.streams.borrow()[0].send(text("Done.")).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-
-        assert_eq!(fake.suggest_calls()[0].provider, Provider::Codex);
-        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
-    }
-
-    #[test]
-    fn disabled_suggestions_neither_run_nor_land() {
-        let (mut cockpit, fake) = cockpit("suggest-disabled");
-        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-        cockpit.set_suggestions_enabled(false);
-        cockpit.send(thread, "go".into());
-
-        fake.streams.borrow()[0].send(text("Done.")).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert!(fake.suggest_calls().is_empty());
-
-        cockpit.deliver_suggestion(thread, "Run the tests".into());
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
-
-        cockpit.set_suggestions_enabled(true);
-        cockpit.send(thread, "again".into());
-        fake.streams.borrow()[0].send(text("Done again.")).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(fake.suggest_calls().len(), 1, "re-enabling restores asks");
-    }
-
-    #[test]
-    fn disabling_suggestions_clears_an_existing_prediction() {
-        let (mut cockpit, _fake) = cockpit("suggest-disable-clears");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.deliver_suggestion(thread, "Run the tests".into());
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().suggestion(),
-            Some("Run the tests")
-        );
-
-        cockpit.set_suggestions_enabled(false);
-
-        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
-    }
-
-    /// A prediction that comes back for a generation the Thread has moved
-    /// past is answering a conversation that no longer exists.
-    #[test]
-    fn a_stale_prediction_is_dropped() {
-        let (mut cockpit, _fake) = cockpit("suggest-stale");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let generation = cockpit.threads[&thread].generation;
-
-        cockpit
-            .suggestions
-            .0
-            .send(Suggestion {
-                thread,
-                generation: generation.wrapping_add(1),
-                revision: cockpit.threads[&thread].suggestion_revision,
-                text: "Run the tests".into(),
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().suggestion(),
-            None,
-            "a reply from a previous generation must not land"
-        );
-
-        cockpit
-            .suggestions
-            .0
-            .send(Suggestion {
-                thread,
-                generation,
-                revision: cockpit.threads[&thread].suggestion_revision,
-                text: "Run the tests".into(),
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().suggestion(),
-            Some("Run the tests")
-        );
-    }
-
-    /// The next turn's ask clears the last turn's answer: ghost text that
-    /// describes a superseded response is worse than the generic line.
-    #[test]
-    fn a_new_turn_drops_the_previous_prediction() {
-        let (mut cockpit, fake) = cockpit("suggest-supersede");
-        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-        cockpit.send(thread, "go".into());
-
-        let generation = cockpit.threads[&thread].generation;
-        fake.streams.borrow()[0].send(text("Done.")).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        cockpit
-            .suggestions
-            .0
-            .send(Suggestion {
-                thread,
-                generation,
-                revision: cockpit.threads[&thread].suggestion_revision,
-                text: "Run the tests".into(),
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().suggestion(),
-            Some("Run the tests")
-        );
-
-        fake.streams.borrow()[0].send(text("Ran them.")).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().suggestion(),
-            None,
-            "the new turn's ask must drop the old turn's answer"
-        );
-    }
-
-    #[test]
-    fn older_turn_predictions_cannot_replace_the_latest_or_survive_disabling() {
-        let (mut cockpit, fake) = cockpit("suggest-turn-revision");
-        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-        let finish = || {
-            fake.streams.borrow()[0].send(text("Done.")).unwrap();
-            fake.streams.borrow()[0]
-                .send(SessionEvent::TurnEnded {
-                    outcome: TurnOutcome::Completed,
-                    cost_usd: None,
-                })
-                .unwrap();
-        };
-        cockpit.send(thread, "first".into());
-        finish();
-        cockpit.pump();
-        let first = fake.suggest_calls()[0].clone();
-        cockpit.send(thread, "second".into());
-        let old = Suggestion {
-            thread,
-            generation: first.generation,
-            revision: first.revision,
-            text: "Run the tests".into(),
-        };
-        // Sending invalidates an outstanding prediction immediately.
-        cockpit.suggestions.0.send(old.clone()).unwrap();
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
-        finish();
-        cockpit.pump();
-        cockpit.deliver_suggestion(thread, "Commit the fix".into());
-        cockpit.pump();
-        cockpit.suggestions.0.send(old).unwrap();
-        cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().suggestion(),
-            Some("Commit the fix")
-        );
-        // Off then on must also discard replies from before the setting change.
-        cockpit.deliver_suggestion(thread, "Late reply".into());
-        cockpit.set_suggestions_enabled(false);
-        cockpit.set_suggestions_enabled(true);
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
-    }
-
-    #[test]
-    fn claude_uses_native_suggestions_without_a_second_model_request() {
-        let (mut cockpit, fake) = cockpit("native-suggestion");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "show code".into());
-        fake.streams.borrow()[0]
-            .send(text("Here is the code."))
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        *fake.native_suggestion.borrow_mut() = Some("write the tests".into());
-        let updates = cockpit.pump();
-        assert_eq!(
-            cockpit.thread(thread).unwrap().suggestion(),
-            Some("write the tests")
-        );
-        assert!(updates.iter().any(|update| update.thread == thread));
-        assert!(
-            fake.suggest_calls().is_empty(),
-            "Claude must not spawn a fallback model"
-        );
-        // An autonomous next turn also supersedes the old native hint,
-        // even when Claude deliberately emits no new suggestion.
-        fake.streams.borrow()[0]
-            .send(text("Another result."))
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
-        cockpit.set_suggestions_enabled(false);
-        *fake.native_suggestion.borrow_mut() = Some("late reply".into());
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
-    }
-
-    #[test]
-    fn each_thread_folds_only_its_own_events() {
-        let (mut cockpit, fake) = cockpit("own-events");
-        let one = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let two = cockpit.open(Provider::Claude, main_choice()).unwrap();
-
-        fake.streams.borrow()[0].send(text("only for one")).unwrap();
-
-        let updates = cockpit.pump();
-
-        // Coalesced: a Thread that produced nothing is not in the frame.
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].thread, one);
-        assert_eq!(updates[0].dirty.len(), 1);
-        assert_eq!(cockpit.thread(one).unwrap().transcript().blocks().len(), 1);
-        assert!(cockpit
-            .thread(two)
-            .unwrap()
-            .transcript()
-            .blocks()
-            .is_empty());
-    }
-
-    #[test]
-    fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
-        let dir = scratch("completion-reference");
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "work".into());
-        fake.streams.borrow()[0].send(text("answer")).unwrap();
-        cockpit.pump();
-        let before = cockpit
-            .thread(thread)
-            .unwrap()
-            .transcript()
-            .turn_elapsed()
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: crate::TurnOutcome::Completed,
-                cost_usd: Some(0.038),
-            })
-            .unwrap();
-        cockpit.pump();
-        let completion = |cockpit: &Cockpit| {
-            let rows: Vec<_> = cockpit
-                .thread(thread)
-                .unwrap()
-                .transcript()
-                .blocks()
-                .iter()
-                .filter_map(|block| match &block.body {
-                    Body::TurnEnd(end) if end.completed() => Some(end.text()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(rows.len(), 1, "one quiet historical completion row");
-            rows[0].clone()
-        };
-        let first = completion(&cockpit);
-        let fields: Vec<_> = first.split(" · ").collect();
-        assert_eq!(
-            fields.len(),
-            2,
-            "the observed elapsed and the local completion time"
-        );
-        let elapsed = fields[0]
-            .strip_prefix("Worked for ")
-            .and_then(|elapsed| elapsed.strip_suffix('s'))
-            .expect("the stamp says how long the turn worked, not process runtime");
-        // Whole seconds, floored, or `<1` under one second.
-        let seconds: f64 = match elapsed.strip_prefix('<') {
-            Some(under) => {
-                assert_eq!(under, "1", "only a sub-second turn reads `<1s`");
-                assert!(before.as_secs_f64() < 1.);
-                0.
-            }
-            None => elapsed.parse().unwrap(),
-        };
-        assert!(seconds + 1. > before.as_secs_f64());
-        assert!(fields[1].contains(':'), "human-readable completion time");
-        assert!(
-            !first.contains('$') && !first.contains("0.038"),
-            "provider cost stays private"
-        );
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-        assert_eq!(
-            completion(&cockpit),
-            first,
-            "repeated end must not invent another completion"
-        );
-        cockpit.park(thread).unwrap();
-        drop(cockpit);
-        let mut reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
-        reopened.revive(thread).unwrap();
-        assert_eq!(
-            completion(&reopened),
-            first,
-            "replay uses the original observation, never now"
-        );
-        reopened.send(thread, "next turn".into());
-        assert_eq!(
-            completion(&reopened),
-            first,
-            "new work retains historical completion"
-        );
-    }
-
-    #[test]
-    fn completion_observations_follow_only_accepted_live_turn_ends() {
-        use crate::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
-        let (mut cockpit, fake) = cockpit("completion-attribution-reference");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let key = AgentKey::new(Provider::Claude, "root", "child");
-        let emit = |event| {
-            fake.streams.borrow()[0]
-                .send(SessionEvent::Activity(event))
-                .unwrap()
-        };
-        let count = |cockpit: &Cockpit, subject: &Subject| {
-            cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .subject(subject)
-                .unwrap()
-                .transcript()
-                .blocks()
-                .iter()
-                .filter(|block| matches!(&block.body, Body::TurnEnd(end) if end.completed()))
-                .count()
-        };
-        emit(ActivityEvent::Content {
-            key: key.clone(),
-            id: Some("live-text".into()),
-            event: ExecutionEvent::Text {
-                text: "Working".into(),
-            },
-        });
-        cockpit.pump();
-        emit(ActivityEvent::HistoryContent {
-            key: key.clone(),
-            id: Some("historical-end".into()),
-            event: ExecutionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            },
-        });
-        cockpit.pump();
-        let subject = Subject::Subagent(key.clone());
-        assert_eq!(
-            count(&cockpit, &subject),
-            0,
-            "historical content has no newly observed completion time"
-        );
-        let end = ActivityEvent::Content {
-            key: key.clone(),
-            id: Some("live-end".into()),
-            event: ExecutionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            },
-        };
-        emit(end.clone());
-        cockpit.pump();
-        assert_eq!(count(&cockpit, &subject), 1);
-        emit(ActivityEvent::Content {
-            key: key.clone(),
-            id: Some("next-text".into()),
-            event: ExecutionEvent::Text {
-                text: "New work".into(),
-            },
-        });
-        cockpit.pump();
-        emit(end);
-        cockpit.pump();
-        assert_eq!(
-            count(&cockpit, &subject),
-            1,
-            "a deduplicated old end cannot stamp the new turn"
-        );
-        fake.streams.borrow()[0]
-            .send(text("Background main work"))
-            .unwrap();
-        cockpit.pump();
-        emit(ActivityEvent::BackgroundTurnEnded {
-            outcome: TurnOutcome::Completed,
-            cost_usd: None,
-        });
-        cockpit.pump();
-        assert_eq!(
-            count(&cockpit, &Subject::Main),
-            1,
-            "observed autonomous work gets the same completion presentation"
-        );
-    }
-
-    #[test]
-    fn child_completion_survives_a_history_read_already_in_flight() {
-        use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
-        let (mut cockpit, fake) = cockpit("completion-history-race");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let key = AgentKey::new(Provider::Claude, "root", "child");
-        let subject = Subject::Subagent(key.clone());
-        let emit = |event| {
-            fake.streams.borrow()[0]
-                .send(SessionEvent::Activity(event))
-                .unwrap()
-        };
-        emit(ActivityEvent::Content {
-            key: key.clone(),
-            id: Some("start".into()),
-            event: ExecutionEvent::Text {
-                text: "Working".into(),
-            },
-        });
-        cockpit.pump();
-        // Arrange the normal evicted-child state, and gate the disk boundary.
-        cockpit
-            .threads
-            .get_mut(&thread)
-            .unwrap()
-            .activity
-            .apply(ActivityInput::Evict(subject.clone()));
-        let (loader, finish) = history::gated_loader();
-        cockpit.history_loader = Some(loader);
-        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-        emit(ActivityEvent::Content {
-            key,
-            id: Some("end".into()),
-            event: ExecutionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            },
-        });
-        cockpit.pump();
-        finish(&cockpit.store);
-        cockpit.pump();
-        let view = cockpit.thread(thread).unwrap().activity();
-        let child = view.subject(&subject).unwrap();
-        assert!(child.retained());
-        assert_eq!(
-            child
-                .transcript()
-                .blocks()
-                .iter()
-                .filter(|block| matches!(&block.body, Body::TurnEnd(end) if end.completed()))
-                .count(),
-            1,
-            "a prefix reload must merge the completion observed after its checkpoint"
-        );
-        let completion = |cockpit: &Cockpit| {
-            cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .subject(&subject)
-                .unwrap()
-                .transcript()
-                .blocks()
-                .iter()
-                .filter_map(|block| match &block.body {
-                    Body::TurnEnd(end) if end.completed() => Some(end.text()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        };
-        let observed = completion(&cockpit);
-        // A later ordinary reload must use the same persisted observation,
-        // after the in-flight buffer that supplied it above has been consumed.
-        cockpit
-            .threads
-            .get_mut(&thread)
-            .unwrap()
-            .activity
-            .apply(ActivityInput::Evict(subject.clone()));
-        let (loader, finish) = history::gated_loader();
-        cockpit.history_loader = Some(loader);
-        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-        finish(&cockpit.store);
-        cockpit.pump();
-        assert_eq!(
-            completion(&cockpit),
-            observed,
-            "ordinary disk reload must preserve the exact child completion observation"
-        );
-    }
-
-    #[test]
-    fn child_tool_duration_survives_a_history_read_already_in_flight() {
-        use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
-        for native_duration in [None, Some(42)] {
-            let (mut cockpit, fake) = cockpit("tool-duration-history-race");
-            let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-            let key = AgentKey::new(Provider::Claude, "root", "child");
-            let subject = Subject::Subagent(key.clone());
-            let emit = |id: &str, event| {
-                fake.streams.borrow()[0]
-                    .send(SessionEvent::Activity(ActivityEvent::Content {
-                        key: key.clone(),
-                        id: Some(id.into()),
-                        event,
-                    }))
-                    .unwrap()
-            };
-            let completed = |duration_ms| ExecutionEvent::ToolCompleted {
-                id: "tool".into(),
-                output: String::new(),
-                is_error: false,
-                result: crate::ToolResult::Command {
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: Some(0),
-                    duration_ms,
-                },
-            };
-            emit(
-                "start",
-                ExecutionEvent::ToolStarted {
-                    id: "tool".into(),
-                    name: "Bash".into(),
-                    input: serde_json::json!({}),
-                },
-            );
-            if native_duration.is_some() {
-                // A newer native completion must also outrank a duration
-                // already present in the frozen disk prefix.
-                emit("old-completion", completed(Some(7)));
-            }
-            cockpit.pump();
-            cockpit
-                .threads
-                .get_mut(&thread)
-                .unwrap()
-                .activity
-                .apply(ActivityInput::Evict(subject.clone()));
-            let (loader, finish) = history::gated_loader();
-            cockpit.history_loader = Some(loader);
-            assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-            emit("completion", completed(native_duration));
-            cockpit.pump();
-            assert!(cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .subject(&subject)
-                .unwrap()
-                .timings()
-                .is_empty());
-            finish(&cockpit.store);
-            cockpit.pump();
-            let timing = |cockpit: &Cockpit| match cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .subject(&subject)
-                .unwrap()
-                .timings()
-                .get("tool")
-            {
-                Some(ToolTiming::Done(duration)) => *duration,
-                timing => {
-                    panic!("the completed duration must survive the history read: {timing:?}")
-                }
-            };
-            let observed = timing(&cockpit);
-            if let Some(ms) = native_duration {
-                assert_eq!(observed, Duration::from_millis(ms));
-            }
-            // Reload from disk without the live-tail buffer: both paths must
-            // agree, allowing the log's millisecond precision.
-            cockpit
-                .threads
-                .get_mut(&thread)
-                .unwrap()
-                .activity
-                .apply(ActivityInput::Evict(subject.clone()));
-            let (loader, finish) = history::gated_loader();
-            cockpit.history_loader = Some(loader);
-            assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
-            finish(&cockpit.store);
-            cockpit.pump();
-            assert_eq!(timing(&cockpit).as_millis(), observed.as_millis());
-        }
-    }
-
-    #[test]
-    fn tool_calls_are_clocked_at_ingestion() {
-        let (mut cockpit, fake) = cockpit("timings");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolStarted {
-                id: "t1".into(),
-                name: "Bash".into(),
-                input: serde_json::json!({ "command": "cargo check" }),
-            })
-            .unwrap();
-        cockpit.pump();
-        let running = cockpit
-            .thread(thread)
-            .map(|open| open.tool_timings())
-            .unwrap()["t1"];
-        assert!(matches!(running, ToolTiming::Running(_)));
-        let first = running.elapsed();
-        assert!(
-            running.elapsed() >= first,
-            "a running call's clock never runs backwards"
-        );
-
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolCompleted {
-                id: "t1".into(),
-                output: String::new(),
-                is_error: false,
-                result: crate::ToolResult::Opaque,
-            })
-            .unwrap();
-        cockpit.pump();
-        let done = cockpit
-            .thread(thread)
-            .map(|open| open.tool_timings())
-            .unwrap()["t1"];
-        let ToolTiming::Done(total) = done else {
-            panic!("a settled call fixes its total: {done:?}");
-        };
-        assert!(
-            total >= first,
-            "the total covers at least what had already elapsed"
-        );
-        assert_eq!(done.elapsed(), done.elapsed(), "a settled call is fixed");
-
-        // A completion the cockpit never saw start has no clock to read.
-        fake.streams.borrow()[0]
-            .send(SessionEvent::ToolCompleted {
-                id: "ghost".into(),
-                output: String::new(),
-                is_error: false,
-                result: crate::ToolResult::Opaque,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert!(!cockpit
-            .thread(thread)
-            .map(|open| open.tool_timings())
-            .unwrap()
-            .contains_key("ghost"));
-    }
-
-    fn decision(id: &str, tool: &str) -> SessionEvent {
-        SessionEvent::DecisionRequested {
-            decision: Decision {
-                delivery: Default::default(),
-                kind: Default::default(),
-                policy: Default::default(),
-                id: id.into(),
-                tool_use_id: format!("toolu_{id}"),
-                tool_name: tool.into(),
-                description: "ferrite-perm.txt".into(),
-                input: serde_json::json!({ "file_path": "ferrite-perm.txt" }),
-                suggestions: vec![],
-            },
-        }
-    }
-
-    fn ended() -> SessionEvent {
-        SessionEvent::TurnEnded {
-            outcome: crate::TurnOutcome::Completed,
-            cost_usd: None,
-        }
-    }
-
-    /// Reports whatever the test tells it to.
-    struct Meter(Rc<RefCell<u64>>);
-
-    impl RssSampler for Meter {
-        fn sample(&mut self, _thread: ThreadId, _pid: Option<u32>) -> Option<u64> {
-            Some(*self.0.borrow())
-        }
-    }
-
-    #[test]
-    fn a_sent_prompt_reaches_the_provider_the_transcript_and_the_log() {
-        let (mut cockpit, fake) = cockpit("send");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-
-        cockpit.send(thread, "run the tests".into());
-
-        assert_eq!(fake.sent.borrow().as_slice(), ["run the tests"]);
-        let echoed = cockpit
-            .thread(thread)
-            .unwrap()
-            .transcript()
-            .blocks()
-            .last()
-            .cloned();
-        assert!(
-            matches!(echoed.map(|b| b.body), Some(Body::Prompt(line)) if line == "run the tests")
-        );
-        // And durably: a restart must not lose what the operator asked for.
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-        assert!(cockpit
-            .thread(thread)
-            .map(|open| open.transcript())
-            .unwrap()
-            .blocks()
-            .iter()
-            .any(|block| matches!(&block.body, Body::Prompt(line) if line == "run the tests")));
-    }
-
-    #[test]
-    fn prompt_history_is_per_thread_and_rebuilt_from_the_log() {
-        let (mut cockpit, _) = cockpit("prompt-history-core");
-        let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(first, "one".into());
-        cockpit.send(first, "two".into());
-        cockpit.send(second, "other".into());
-
-        assert_eq!(
-            cockpit.recall_prompt(first, HistoryDirection::Older, "draft"),
-            Some("two".into())
-        );
-        assert_eq!(
-            cockpit.recall_prompt(second, HistoryDirection::Older, "second draft"),
-            Some("other".into())
-        );
-
-        cockpit.park(first).unwrap();
-        cockpit.revive(first).unwrap();
-        assert_eq!(
-            cockpit.recall_prompt(first, HistoryDirection::Older, "revived draft"),
-            Some("two".into())
-        );
-        assert_eq!(
-            cockpit.recall_prompt(first, HistoryDirection::Older, "ignored edit"),
-            Some("one".into())
-        );
-    }
-
-    #[test]
-    fn native_queue_history_records_consumption_once() {
-        let (mut cockpit, fake) = cockpit("native-history");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "sent".into());
-        assert!(cockpit.queue(thread, "held".into()));
-        assert_eq!(
-            cockpit.thread(thread).unwrap().queued(),
-            None,
-            "pipe write is not admission"
-        );
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("held"));
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-        assert_eq!(
-            fake.sent.borrow().as_slice(),
-            ["sent"],
-            "turn end never dispatches"
-        );
-        assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
-            Some("sent".into())
-        );
-        let id = fake.native.borrow()[0].0.clone();
-        for _ in 0..2 {
-            fake.streams.borrow()[0]
-                .send(SessionEvent::Queue(crate::QueueEvent::Started {
-                    historical: false,
-                    client_id: id.clone(),
-                    text: None,
-                }))
-                .unwrap();
-        }
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
-        assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
-            Some("held".into())
-        );
-        let prompts = cockpit
-            .thread(thread)
-            .unwrap()
-            .transcript()
-            .blocks()
-            .iter()
-            .filter(|block| matches!(&block.body, Body::Prompt(text) if text == "held"))
-            .count();
-        assert_eq!(prompts, 1);
-        cockpit.park(thread).unwrap();
-        assert_eq!(
-            cockpit.store.load(thread).unwrap().prompt_texts(),
-            ["sent", "held"]
-        );
-    }
-
-    #[test]
-    fn a_new_cockpit_recovers_prompt_history_from_the_store() {
-        let dir = scratch("prompt-history-relaunch");
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "before relaunch".into());
-        cockpit.park(thread).unwrap();
-        drop(cockpit);
-
-        let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
-        relaunched.revive(thread).unwrap();
-        assert_eq!(
-            relaunched.recall_prompt(thread, HistoryDirection::Older, "draft"),
-            Some("before relaunch".into())
-        );
-    }
-
-    #[test]
-    fn bootstrap_delivery_is_immediately_recallable() {
-        let (mut cockpit, _) = cockpit("prompt-history-bootstrap");
-        let thread = cockpit
-            .bootstrap(
-                ProviderChoice {
-                    provider: Provider::Claude,
-                    model: None,
-                },
-                main_choice(),
-                "first prompt",
-            )
-            .unwrap();
-
-        assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
-            Some("first prompt".into())
-        );
-    }
-
-    /// The exact wire preface for one binding + root pair (#24) — what the
-    /// provider sees and nothing the operator ever does.
-    fn preface(binding: &Path, root: &Path) -> String {
-        format!(
-            "<ferrite-session-context>\n\
-             Agent workspace root: {}\n\
-             Session project root: {}\n\
-             Run edits, commands, tests, builds, and Git operations from the \
-             session project root. Use the agent workspace root only for \
-             broader workspace context.\n\
-             </ferrite-session-context>\n",
-            binding.display(),
-            root.display()
-        )
-    }
-
-    /// A directory that exists, for tests that pick it as the root.
-    fn existing_root(name: &str) -> std::path::PathBuf {
-        let root = scratch(name);
-        std::fs::create_dir_all(&root).unwrap();
-        root
-    }
-
-    /// AC (#24): the first prompt after a Session start goes to the provider
-    /// wearing the hidden session-context block; the second carries nothing
-    /// extra. The transcript and the log keep the operator's raw text only —
-    /// displayed ≠ sent.
-    #[test]
-    fn the_first_prompt_of_a_session_carries_the_hidden_context_and_the_second_does_not() {
-        let dir = scratch("preface-store");
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert_eq!(
-            cockpit
-                .thread(thread)
-                .and_then(|open| open.session_project_root()),
-            None
-        );
-        let root = existing_root("preface-root");
-        cockpit
-            .set_session_project_root(thread, Some(root.clone()))
-            .unwrap();
-        assert_eq!(
-            cockpit
-                .thread(thread)
-                .and_then(|open| open.session_project_root()),
-            Some(root.as_path())
-        );
-
-        cockpit.send(thread, "run the tests".into());
-        cockpit.send(thread, "and the lints".into());
-
-        let binding = std::env::temp_dir(); // main_choice()'s checkout
-        assert_eq!(
-            fake.sent.borrow().as_slice(),
-            [
-                format!("{}run the tests", preface(&binding, &root)),
-                "and the lints".to_string(),
-            ]
-        );
-        // Displayed ≠ sent: the Pane echoes the raw prompt...
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(blocks
-            .iter()
-            .any(|b| matches!(&b.body, Body::Prompt(line) if line == "run the tests")));
-        assert!(
-            !format!("{blocks:?}").contains("ferrite-session-context"),
-            "the preface must never reach the transcript"
-        );
-        // ...and the log stores it raw: the preface exists only on the wire.
-        cockpit.park(thread).unwrap();
-        let inputs = Store::open(&dir).unwrap().load(thread).unwrap().inputs();
-        assert!(inputs.contains(&Input::Prompt("run the tests".into())));
-        assert!(
-            !format!("{inputs:?}").contains("ferrite-session-context"),
-            "the preface must never reach the log"
-        );
-    }
-
-    /// AC (#24): changing the selection on a live Thread ends its Session —
-    /// no mid-session mutation of the root — and the next prompt respawns
-    /// through the resume path with the preface re-armed, naming the new
-    /// root. The respawn's cwd is the chain's head (#29): the picked root.
-    #[test]
-    fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_preface() {
-        let (mut cockpit, fake) = cockpit("root-change");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let first_root = existing_root("root-change-first");
-        let second_root = existing_root("root-change-second");
-        cockpit
-            .set_session_project_root(thread, Some(first_root.clone()))
-            .unwrap();
-        cockpit.send(thread, "one".into());
-        // The provider names the session; a later respawn must resume it.
-        fake.streams
-            .borrow()
-            .last()
-            .unwrap()
-            .send(SessionEvent::Init {
-                session_id: "sess-1".into(),
-                model: "claude-haiku-4-5".into(),
-            })
-            .unwrap();
-        cockpit.pump();
-        cockpit.send(thread, "two".into());
-        let spawns = fake.streams.borrow().len();
-
-        cockpit
-            .set_session_project_root(thread, Some(second_root.clone()))
-            .unwrap();
-        // The Session ended; nothing respawns until the operator speaks.
-        assert_eq!(fake.streams.borrow().len(), spawns);
-        cockpit.send(thread, "three".into());
-
-        assert_eq!(fake.streams.borrow().len(), spawns + 1);
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap().as_deref(),
-            Some("sess-1"),
-            "the respawn goes through the resume path"
-        );
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(second_root.as_path()),
-            "the respawn's cwd is the chain's head (#29): the picked root"
-        );
-        assert_eq!(
-            fake.sent.borrow().as_slice(),
-            [
-                format!("{}one", preface(&binding, &first_root)),
-                "two".to_string(),
-                format!("{}three", preface(&binding, &second_root)),
-            ]
-        );
-    }
-
-    /// AC (#24): the root survives restart, and a revive is a Session start
-    /// like any other — its first prompt carries the preface again.
-    #[test]
-    fn a_revived_thread_keeps_its_root_and_prefaces_its_first_prompt_again() {
-        let (mut cockpit, fake) = cockpit("root-revive");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let root = existing_root("root-revive-root");
-        cockpit
-            .set_session_project_root(thread, Some(root.clone()))
-            .unwrap();
-        cockpit.send(thread, "before the park".into());
-
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-
-        assert_eq!(
-            cockpit
-                .thread(thread)
-                .and_then(|open| open.session_project_root()),
-            Some(root.as_path())
-        );
-        cockpit.send(thread, "after the revive".into());
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            &format!("{}after the revive", preface(&binding, &root))
-        );
-    }
-
-    /// AC (#24): a watchdog respawn is a Session start too — the
-    /// replacement's first prompt carries the preface again.
-    #[test]
-    fn a_sweep_respawned_session_prefaces_its_next_prompt() {
-        let (mut cockpit, fake) = cockpit("root-sweep");
-        let rss = Rc::new(RefCell::new(4 * 1024 * 1024 * 1024));
-        cockpit.watch_memory(Box::new(Meter(rss)), 1024 * 1024 * 1024);
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let root = existing_root("root-sweep-root");
-        cockpit
-            .set_session_project_root(thread, Some(root.clone()))
-            .unwrap();
-        cockpit.send(thread, "one".into()); // consumes the first preface
-
-        assert_eq!(cockpit.sweep().len(), 1, "the leak replaces the Session");
-        cockpit.send(thread, "two".into());
-
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            &format!("{}two", preface(&binding, &root))
-        );
-    }
-
-    /// AC (#24): a root gone from disk refuses the send, naming the path and
-    /// the remedy — never a silent fallback to working in the binding.
-    /// Nothing reaches the wire, the transcript's history, or the log.
-    #[test]
-    fn a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy() {
-        let (mut cockpit, fake) = cockpit("root-vanished");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let root = existing_root("root-vanished-root");
-        cockpit
-            .set_session_project_root(thread, Some(root.clone()))
-            .unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
-
-        cockpit.send(thread, "into the void".into());
-
-        assert!(
-            fake.sent.borrow().is_empty(),
-            "nothing may reach the provider"
-        );
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        let last = blocks.last().unwrap();
-        let Body::Notice(line) = &last.body else {
-            panic!("the refusal must be a readable notice: {:?}", last.body);
-        };
-        assert!(
-            line.contains(&root.display().to_string()),
-            "the path is named: {line}"
-        );
-        assert!(line.contains("re-pick"), "the remedy is named: {line}");
-        assert!(
-            !blocks.iter().any(|b| matches!(&b.body, Body::Prompt(_))),
-            "a refused prompt is not history"
-        );
-    }
-
-    #[test]
-    fn replacing_a_claude_session_does_not_resubmit_native_pending_work() {
-        let (mut cockpit, fake) = cockpit("native-replacement");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(cockpit.queue(thread, "pending text".into()));
-        cockpit.pump();
-        cockpit
-            .set_session_project_root(thread, Some(existing_root("native-replacement-root")))
-            .unwrap();
-        cockpit.send(thread, "new input".into());
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Queue(crate::QueueEvent::Started {
-                historical: false,
-                client_id: fake.native.borrow()[0].0.clone(),
-                text: None,
-            }))
-            .ok();
-        cockpit.pump();
-        assert_eq!(fake.native.borrow().len(), 1);
-        assert!(!fake
-            .sent
-            .borrow()
-            .iter()
-            .any(|text| text.ends_with("pending text")));
-        assert!(cockpit.thread(thread).unwrap().transcript().blocks().iter().any(|block| matches!(&block.body, Body::Notice(text) if text.contains("delivery is uncertain"))));
-    }
-
-    /// After a failed watchdog restart the Thread sits in the cockpit with
-    /// no Session. The next prompt makes exactly one spawn attempt; a
-    /// failure is one readable Notice on the send-failure surface — not a
-    /// loop, and not a prompt in the history that never went anywhere.
-    #[test]
-    fn a_send_after_a_failed_restart_attempts_one_spawn_and_reports_the_failure() {
-        let (mut cockpit, fake) = cockpit("respawn-fails");
-        let rss = Rc::new(RefCell::new(u64::MAX));
-        cockpit.watch_memory(Box::new(Meter(rss)), 1024);
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        *fake.fail.borrow_mut() = true;
-        assert_eq!(cockpit.sweep().len(), 1, "the restart fails; no Session");
-        let attempts = *fake.attempts.borrow();
-
-        cockpit.send(thread, "hello".into());
-
-        assert_eq!(
-            *fake.attempts.borrow(),
-            attempts + 1,
-            "exactly one spawn attempt per send"
-        );
-        assert!(fake.sent.borrow().is_empty());
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        let Body::Notice(line) = &blocks.last().unwrap().body else {
-            panic!("the failure must be a Notice: {:?}", blocks.last());
-        };
-        assert!(line.starts_with("send failed:"), "{line}");
-        assert!(
-            !blocks.iter().any(|b| matches!(&b.body, Body::Prompt(_))),
-            "an unsent prompt is not history"
-        );
-    }
-
-    #[test]
-    fn answering_through_the_cockpit_clears_the_card_and_records_who_did_it() {
-        let (mut cockpit, fake) = cockpit("respond");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0]
-            .send(decision("perm_01", "Write"))
-            .unwrap();
-        cockpit.pump();
-        let pending = cockpit
-            .thread(thread)
-            .and_then(|open| open.pending())
-            .cloned()
-            .unwrap();
-
-        cockpit.respond(
-            thread,
-            &pending,
-            crate::DecisionAnswer::Allow {
-                input: pending.input.clone(),
-            },
-        );
-
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.pending()), None);
-        let last = cockpit
-            .thread(thread)
-            .unwrap()
-            .transcript()
-            .blocks()
-            .last()
-            .cloned();
-        assert!(matches!(last.map(|b| b.body), Some(Body::Meta(line)) if line == "allowed Write"));
-
-        // A second press answers nothing twice.
-        cockpit.respond(
-            thread,
-            &pending,
-            crate::DecisionAnswer::Allow {
-                input: pending.input.clone(),
-            },
-        );
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert_eq!(
-            blocks
-                .iter()
-                .filter(|b| matches!(&b.body, Body::Meta(line) if line == "allowed Write"))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn a_code_fence_comes_back_highlighted_without_the_app_routing_anything() {
-        let (mut cockpit, fake) = cockpit("highlight");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-
-        fake.streams.borrow()[0]
-            .send(text("```rust\nfn main() {}\n```\n\n"))
-            .unwrap();
-        cockpit.pump();
-        // The lexer answers on its own channel; the next frame picks it up.
-        let update = cockpit.pump();
-
-        let code = cockpit
-            .thread(thread)
-            .map(|open| open.transcript())
-            .unwrap()
-            .blocks()
-            .iter()
-            .find(|block| matches!(block.body, Body::Code { .. }))
-            .cloned()
-            .expect("a code block");
-        assert!(update.iter().any(|pane| pane.dirty.contains(&code.id)));
-        let Body::Code { tokens, .. } = &code.body else {
-            unreachable!()
-        };
-        assert!(
-            tokens
-                .as_deref()
-                .is_some_and(|tokens| tokens.iter().any(|t| t.class == Class::Keyword)),
-            "the cockpit owns highlighting: {tokens:?}"
-        );
-    }
-
-    #[test]
-    fn jumping_to_the_next_decision_wraps_around_the_cockpit() {
-        let (mut cockpit, fake) = cockpit("next-decision");
-        let one = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let two = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let three = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert_eq!(cockpit.next_blocked(None), None);
-
-        fake.streams.borrow()[0]
-            .send(decision("perm_01", "Write"))
-            .unwrap();
-        fake.streams.borrow()[2]
-            .send(decision("perm_03", "Bash"))
-            .unwrap();
-        cockpit.pump();
-
-        // From nowhere, the first blocked Thread; from one, the next one on.
-        assert_eq!(cockpit.next_blocked(None), Some(one));
-        assert_eq!(cockpit.next_blocked(Some(one)), Some(three));
-        // Past the last, back to the first — the operator keeps pressing one
-        // key until the cockpit is quiet.
-        assert_eq!(cockpit.next_blocked(Some(three)), Some(one));
-        // A Thread with nothing pending is still a valid place to jump
-        // from: it lands on the head of the queue, the answer target.
-        assert_eq!(cockpit.next_blocked(Some(two)), Some(one));
-        assert_eq!(cockpit.answer_target(), Some(one));
-    }
-
-    /// The answer order is the order requests arrived, not ThreadId order:
-    /// the strip's first row is the answer target, and ⌘D walks the strip.
-    #[test]
-    fn the_answer_target_is_the_oldest_request_not_the_lowest_thread() {
-        let (mut cockpit, fake) = cockpit("answer-order");
-        let one = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let two = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let three = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert_eq!(cockpit.answer_target(), None);
-        assert!(cockpit.needs_you().is_empty());
-
-        fake.streams.borrow()[2]
-            .send(decision("perm_03", "Bash"))
-            .unwrap();
-        cockpit.pump();
-        fake.streams.borrow()[0]
-            .send(decision("perm_01", "Write"))
-            .unwrap();
-        cockpit.pump();
-
-        assert_eq!(cockpit.needs_you(), vec![three, one]);
-        assert_eq!(cockpit.answer_target(), Some(three));
-        assert_eq!(cockpit.next_blocked(None), Some(three));
-        assert_eq!(cockpit.next_blocked(Some(three)), Some(one));
-        assert_eq!(cockpit.next_blocked(Some(one)), Some(three));
-        assert_eq!(cockpit.next_blocked(Some(two)), Some(three));
-    }
-
-    #[test]
-    fn a_leaking_session_is_restarted_where_the_operator_can_see_it() {
-        let (mut cockpit, fake) = cockpit("watchdog");
-        let rss = Rc::new(RefCell::new(200 * 1024 * 1024));
-        cockpit.watch_memory(Box::new(Meter(rss.clone())), 1024 * 1024 * 1024);
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Init {
-                session_id: "sess-1".into(),
-                model: "claude-haiku-4-5".into(),
-            })
-            .unwrap();
-        fake.streams.borrow()[0].send(text("work so far")).unwrap();
-        cockpit.pump();
-
-        // Comfortably under: nothing happens.
-        assert!(cockpit.sweep().is_empty());
-
-        *rss.borrow_mut() = 4 * 1024 * 1024 * 1024;
-        let restarted = cockpit.sweep();
-
-        assert_eq!(restarted.len(), 1);
-        assert_eq!(restarted[0].thread, thread);
-        assert_eq!(restarted[0].rss, 4 * 1024 * 1024 * 1024);
-        // A second Session, told where to pick up — and where to work: the
-        // replacement spawns into the same binding the first Session had.
-        assert_eq!(fake.resumed.borrow().len(), 2);
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap().as_deref(),
-            Some("sess-1")
-        );
-        let cwds = fake.cwds.borrow();
-        assert_eq!(cwds.last().unwrap(), &cwds[0]);
-
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        let last = blocks.last().unwrap();
-        assert!(
-            matches!(&last.body, Body::Notice(line) if line.contains("restarted")),
-            "the Pane must say it happened: {:?}",
-            last.body
-        );
-        // The scrollback is not collateral damage.
-        assert!(blocks.iter().any(|block| matches!(
-            &block.body,
-            Body::Paragraph { spans } if spans.iter().any(|s| s.text == "work so far")
-        )));
-    }
-
-    #[test]
-    fn a_restart_finds_the_threads_it_left_behind() {
-        let dir = scratch("restart");
-        let fake = Fake::default();
-        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
-        let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.park(first).unwrap();
-        cockpit.park(second).unwrap();
-        drop(cockpit);
-
-        // A new run of Ferrite over the same store.
-        let mut restarted = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
-
-        assert_eq!(restarted.parked().unwrap(), vec![first, second]);
-        restarted.revive(second).unwrap();
-        assert_eq!(restarted.threads(), vec![second]);
-        // What is open is no longer parked.
-        assert_eq!(restarted.parked().unwrap(), vec![first]);
-    }
-
-    #[test]
-    fn a_parked_thread_revives_with_its_history_and_says_so() {
-        let (mut cockpit, fake) = cockpit("revive");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Init {
-                session_id: "sess-1".into(),
-                model: "claude-haiku-4-5".into(),
-            })
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(text("an answer from before"))
-            .unwrap();
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-
-        cockpit.park(thread).unwrap();
-        // A parked Thread costs memory nothing: no Session, no transcript.
-        assert!(cockpit.thread(thread).is_none());
-        assert!(cockpit.threads().is_empty());
-
-        cockpit.revive(thread).unwrap();
-
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        let text_of = |body: &Body| match body {
-            Body::Paragraph { spans } => spans.iter().map(|s| s.text.clone()).collect::<String>(),
-            Body::Meta(line) => line.clone(),
-            _ => String::new(),
-        };
-        assert!(
-            blocks
-                .iter()
-                .any(|b| text_of(&b.body) == "an answer from before"),
-            "history should come back: {blocks:?}"
-        );
-        // Honest about what it is: a new Session wearing an old Thread.
-        assert_eq!(
-            text_of(&blocks.last().unwrap().body),
-            "revived — new Session, history from the log"
-        );
-        // And the provider is told where to pick up.
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap().as_deref(),
-            Some("sess-1")
-        );
-    }
-
-    /// #11: the running cockpit's own import door. The session file is
-    /// adopted into this cockpit's store — durable and parked when the call
-    /// returns — and `revive` opens it like any parked Thread, history
-    /// replayed and the new Session told where to resume.
-    #[test]
-    fn a_session_file_imports_through_the_cockpits_own_door() {
-        let (mut cockpit, fake) = cockpit("import-door");
-        let dir = scratch("import-door-file");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("adopted.jsonl");
-        std::fs::write(
-            &path,
-            concat!(
-                r#"{"type":"user","sessionId":"door-9c1d","cwd":"/workspace","message":{"role":"user","content":"first question"}}"#,
-                "\n",
-                r#"{"type":"assistant","sessionId":"door-9c1d","message":{"model":"claude-haiku-4-5","content":[{"type":"text","text":"first answer"}]}}"#,
-                "\n",
-            ),
-        )
-        .unwrap();
-
-        let thread = cockpit.import(&path).unwrap();
-
-        assert!(
-            cockpit.parked().unwrap().contains(&thread),
-            "the imported Thread is durable and parked, ready to revive"
-        );
-        cockpit.revive(thread).unwrap();
-        assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
-            Some("first question".into()),
-            "imported prompt records participate in recall"
-        );
-        let transcript = cockpit.thread(thread).unwrap().transcript();
-        assert_eq!(transcript.session_id(), Some("door-9c1d"));
-        assert!(
-            transcript
-                .blocks()
-                .iter()
-                .any(|block| matches!(&block.body, Body::Prompt(text) if text == "first question")),
-            "the conversation replays: {:?}",
-            transcript.blocks()
-        );
-        // The whole point of adoption: the new Session resumes the file's
-        // own session id.
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap().as_deref(),
-            Some("door-9c1d")
-        );
-    }
-
-    /// A file that is not a session file is refused by the import module —
-    /// through this door, with the same readable error and no Thread.
-    #[test]
-    fn the_import_door_passes_a_refusal_through_unchanged() {
-        let (mut cockpit, _fake) = cockpit("import-door-refused");
-        let dir = scratch("import-door-refused-file");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("junk.jsonl");
-        std::fs::write(&path, "not a session file\n").unwrap();
-
-        let refused = cockpit.import(&path);
-        assert!(
-            matches!(
-                refused,
-                Err(crate::import::ImportError::Unrecognized { .. })
-            ),
-            "got {refused:?}"
-        );
-        assert!(cockpit.parked().unwrap().is_empty(), "no Thread was left");
-    }
-
-    #[test]
-    fn a_decision_is_pending_against_the_thread_that_raised_it() {
-        let (mut cockpit, fake) = cockpit("pending");
-        let one = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let two = cockpit.open(Provider::Claude, main_choice()).unwrap();
-
-        fake.streams.borrow()[0]
-            .send(decision("perm_01", "Write"))
-            .unwrap();
-        cockpit.pump();
-
-        assert_eq!(
-            cockpit
-                .thread(one)
-                .and_then(|open| open.pending())
-                .unwrap()
-                .tool_name,
-            "Write"
-        );
-        assert_eq!(cockpit.thread(two).and_then(|open| open.pending()), None);
-        assert_eq!(cockpit.blocked(), vec![one]);
-    }
-
-    #[test]
-    fn answering_a_decision_that_is_no_longer_pending_is_refused_not_forwarded() {
-        let (mut cockpit, fake) = cockpit("stale");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0]
-            .send(decision("perm_01", "Write"))
-            .unwrap();
-        cockpit.pump();
-
-        assert!(cockpit.answer(thread, "perm_01"));
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.pending()), None);
-
-        // A second keystroke on a card already answered, and an answer to a
-        // request this Thread never had: neither may reach the provider.
-        assert!(!cockpit.answer(thread, "perm_01"));
-        assert!(!cockpit.answer(thread, "perm_99"));
-    }
-
-    #[test]
-    fn a_turn_that_ends_takes_its_unanswered_decision_with_it() {
-        let (mut cockpit, fake) = cockpit("moot");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0]
-            .send(decision("perm_01", "Write"))
-            .unwrap();
-        cockpit.pump();
-
-        // The turn was interrupted, or the provider gave up waiting: the
-        // request is gone, so the card must not linger over the Composer.
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.pending()), None);
-        assert!(cockpit.blocked().is_empty());
-        assert!(!cockpit.answer(thread, "perm_01"));
-    }
-
-    #[test]
-    fn native_pending_prompts_survive_turn_end_without_client_dispatch() {
-        let (mut cockpit, fake) = cockpit("native-queued");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0].send(text("working")).unwrap();
-        cockpit.pump();
-        assert!(cockpit.queue(thread, "and then run the tests".into()));
-        cockpit.pump();
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-        assert!(fake.sent.borrow().is_empty());
-        assert_eq!(fake.native.borrow().len(), 1);
-        assert_eq!(
-            cockpit.thread(thread).unwrap().queued(),
-            Some("and then run the tests")
-        );
-    }
-
-    /// Two prompts held at once both show, the latest on top; Escape on a
-    /// Codex turn stops it and sends everything held as one prompt, oldest
-    /// first — a late start notice for a resent id inserts nothing twice.
-    #[test]
-    fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
-        let (mut cockpit, fake) = cockpit("codex-escape-resend");
-        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-        cockpit.send(thread, "start".into());
-        fake.streams.borrow()[0].send(text("working")).unwrap();
-        cockpit.pump();
-        assert!(cockpit.queue(thread, "first".into()));
-        assert!(cockpit.queue(thread, "second".into()));
-        cockpit.pump();
-        let open = cockpit.thread(thread).unwrap();
-        assert_eq!(open.queued_all(), ["second", "first"], "newest on top");
-        assert_eq!(open.queued(), Some("second"));
-
-        cockpit.interrupt(thread);
-        cockpit.pump();
-        assert_eq!(
-            fake.sent.borrow().as_slice(),
-            ["start"],
-            "nothing goes out until the turn has actually stopped"
-        );
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: crate::TurnOutcome::Interrupted,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(
-            fake.sent.borrow().as_slice(),
-            ["start", "first\n\nsecond"],
-            "the pile goes out as one prompt, oldest first"
-        );
-        assert!(cockpit.thread(thread).unwrap().queued_all().is_empty());
-
-        // A resent id that the provider still reports as started is not a
-        // second prompt; nor does its cancellation receipt say anything.
-        let id = fake.native.borrow()[0].0.clone();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Queue(crate::QueueEvent::Started {
-                historical: false,
-                client_id: id,
-                text: Some("first".into()),
-            }))
-            .unwrap();
-        cockpit.pump();
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        let firsts = blocks
-            .iter()
-            .filter(|block| matches!(&block.body, Body::Prompt(text) if text == "first"))
-            .count();
-        assert_eq!(
-            firsts, 0,
-            "the resend carries it; a late start adds nothing"
-        );
-        assert!(
-            !blocks
-                .iter()
-                .any(|block| matches!(&block.body, Body::Notice(_))),
-            "Ferrite's own cancellations are not the operator's news"
-        );
-        assert_eq!(cockpit.take_retrieved_prompt(thread), None);
-    }
-
-    /// Claude's CLI keeps and runs its own queue across an interrupt, so
-    /// Escape there sends nothing from Ferrite.
-    #[test]
-    fn escape_on_claude_leaves_the_native_queue_to_the_provider() {
-        let (mut cockpit, fake) = cockpit("claude-escape-native");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "start".into());
-        fake.streams.borrow()[0].send(text("working")).unwrap();
-        cockpit.pump();
-        assert!(cockpit.queue(thread, "held".into()));
-        cockpit.pump();
-        cockpit.interrupt(thread);
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: crate::TurnOutcome::Interrupted,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(fake.sent.borrow().as_slice(), ["start"]);
-        assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("held"));
-    }
-
-    #[test]
-    fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
-        let (mut cockpit, fake) = cockpit("native-unqueue");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(cockpit.queue(thread, "run the tets".into()));
-        cockpit.pump();
-        assert_eq!(cockpit.unqueue(thread), None);
-        assert_eq!(cockpit.take_retrieved_prompt(thread), None);
-        assert_eq!(
-            cockpit.thread(thread).unwrap().queued(),
-            Some("run the tets")
-        );
-        cockpit.pump();
-        assert_eq!(
-            cockpit
-                .take_retrieved_prompt(thread)
-                .map(|(text, _)| text)
-                .as_deref(),
-            Some("run the tets")
-        );
-        assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
-        assert!(fake.sent.borrow().is_empty());
-    }
-
-    #[test]
-    fn a_turn_ending_with_nothing_held_sends_nothing() {
-        let (mut cockpit, fake) = cockpit("nothing-held");
-        cockpit.open(Provider::Claude, main_choice()).unwrap();
-
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-
-        assert!(fake.sent.borrow().is_empty());
-    }
-
-    /// #23: the Session's announced command menu becomes the Thread's — the
-    /// `/` popover's source — without touching the transcript or the log; a
-    /// revived Thread starts with none until its own Session speaks.
-    #[test]
-    fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
-        let (mut cockpit, fake) = cockpit("commands");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(
-            cockpit
-                .thread(thread)
-                .map(|open| open.commands())
-                .unwrap_or_default()
-                .is_empty(),
-            "nothing is static"
-        );
-
-        let menu = vec![crate::SessionCommand {
-            name: "compact".into(),
-            description: "summarize context".into(),
-            path: None,
-        }];
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Commands {
-                commands: menu.clone(),
-            })
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::PermissionMode {
-                mode: "acceptEdits".into(),
-            })
-            .unwrap();
-        cockpit.pump();
-
-        assert_eq!(
-            cockpit
-                .thread(thread)
-                .map(|open| open.commands())
-                .unwrap_or_default(),
-            menu.as_slice()
-        );
-        assert_eq!(
-            cockpit
-                .thread(thread)
-                .and_then(|open| open.permission_mode()),
-            Some("acceptEdits")
-        );
-        assert!(
-            cockpit
-                .thread(thread)
-                .unwrap()
-                .transcript()
-                .blocks()
-                .is_empty(),
-            "a menu is not conversation"
-        );
-
-        // Session state only: the log replays nothing, so a revived Thread
-        // waits for its own Session's announcement.
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-        assert!(cockpit
-            .thread(thread)
-            .map(|open| open.commands())
-            .unwrap_or_default()
-            .is_empty());
-        assert_eq!(
-            cockpit
-                .thread(thread)
-                .and_then(|open| open.permission_mode()),
-            None
-        );
-    }
-
-    /// #25: the Session's announced model list becomes the Thread's — the
-    /// provider picker's rows — on the same lane as the command menu:
-    /// never the history, never the log, gone with the Session.
-    #[test]
-    fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
-        let (mut cockpit, fake) = cockpit("models");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(
-            cockpit
-                .thread(thread)
-                .map(|open| open.models())
-                .unwrap_or_default()
-                .is_empty(),
-            "nothing is static"
-        );
-
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Models {
-                models: vec!["sonnet".into(), "opus".into(), "haiku".into()],
-            })
-            .unwrap();
-        cockpit.pump();
-
-        let values: Vec<&str> = cockpit
-            .thread(thread)
-            .map(|open| open.models())
-            .unwrap_or_default()
-            .iter()
-            .map(|model| model.value.as_str())
-            .collect();
-        assert_eq!(values, ["sonnet", "opus", "haiku"]);
-        assert!(
-            cockpit
-                .thread(thread)
-                .unwrap()
-                .transcript()
-                .blocks()
-                .is_empty(),
-            "a model list is not conversation"
-        );
-
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-        assert!(cockpit
-            .thread(thread)
-            .map(|open| open.models())
-            .unwrap_or_default()
-            .is_empty());
-    }
-
-    #[test]
-    fn learned_provider_models_survive_parking_and_a_restart() {
-        let (mut cockpit, fake) = cockpit("learned-models");
-        let dir = cockpit.store.dir().to_path_buf();
-        let mut expected = Vec::new();
-        for (index, provider) in [Provider::Claude, Provider::Codex].into_iter().enumerate() {
-            let thread = cockpit.open(provider, main_choice()).unwrap();
-            let models = vec![ModelInfo {
-                value: format!("future-{provider:?}"),
-                display: format!("Future {provider:?}"),
-                detail: "Discovered by the provider".into(),
-                resolved: Some(format!("resolved-{provider:?}")),
-                efforts: vec!["medium".into(), "max".into()],
-                default_effort: Some("medium".into()),
-            }];
-            fake.streams.borrow()[index]
-                .send(SessionEvent::Models {
-                    models: models.clone(),
-                })
-                .unwrap();
-            cockpit.pump();
-            assert_eq!(cockpit.model_catalog(provider), models);
-            cockpit.park(thread).unwrap();
-            assert_eq!(
-                cockpit.model_catalog(provider),
-                models,
-                "parking keeps the learned fallback"
-            );
-            expected.push((provider, models));
-        }
-        drop(cockpit);
-        let reopened = Cockpit::new(Store::open(dir).unwrap(), Box::new(Fake::default()));
-        assert!(
-            reopened.threads().is_empty(),
-            "loading menus creates no Sessions"
-        );
-        for (provider, models) in expected {
-            assert_eq!(
-                reopened.model_catalog(provider),
-                models,
-                "all metadata survives a restart"
-            );
-        }
-    }
-
-    #[test]
-    fn a_new_provider_menu_replaces_the_learned_menu_in_full() {
-        let (mut cockpit, fake) = cockpit("replace-learned-models");
-        cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Models {
-                models: vec!["retired-model".into()],
-            })
-            .unwrap();
-        cockpit.pump();
-        let models = vec![ModelInfo::bare("future-model")];
-        fake.streams.borrow()[1]
-            .send(SessionEvent::Models {
-                models: models.clone(),
-            })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(
-            cockpit.model_catalog(Provider::Claude),
-            models,
-            "an older live Session must not reintroduce retired models"
-        );
-        fake.streams.borrow()[1]
-            .send(SessionEvent::Models { models: Vec::new() })
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(
-            cockpit.model_catalog(Provider::Claude),
-            models,
-            "an empty announcement preserves the last usable menu"
-        );
-    }
-
-    /// AC (#25): choosing a provider before the first prompt replaces the
-    /// Session on the spot — eager, so the new provider's menus arrive
-    /// while the operator is still choosing — on a fresh Transcript, with
-    /// the choice durable in the header. The first send goes to that live
-    /// Session; nothing respawns for it.
-    #[test]
-    fn choosing_a_provider_pre_lock_respawns_eagerly_and_the_first_send_uses_it() {
-        let (mut cockpit, fake) = cockpit("provider-pick");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        // The old Session had already spoken; none of it may linger.
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Init {
-                session_id: "sess-old".into(),
-                model: "claude-haiku-4-5".into(),
-            })
-            .unwrap();
-        fake.streams.borrow()[0].send(text("old provider")).unwrap();
-        cockpit.pump();
-
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: Some("gpt-5.4-mini".into()),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(fake.streams.borrow().len(), 2, "the respawn is eager");
-        assert_eq!(
-            fake.spawn_pairs().last().unwrap(),
-            &ProviderChoice {
-                provider: Provider::Codex,
-                model: Some("gpt-5.4-mini".into()),
-            }
-        );
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap(),
-            &None,
-            "the old provider's id means nothing to the new one"
-        );
-        assert_eq!(
-            cockpit.thread(thread).map(|open| open.provider()),
-            Some(Provider::Codex)
-        );
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.model()),
-            Some("gpt-5.4-mini")
-        );
-        assert!(
-            cockpit
-                .thread(thread)
-                .unwrap()
-                .transcript()
-                .blocks()
-                .is_empty(),
-            "the old Init and prose must not linger"
-        );
-        // Durable: a crash right now still revives onto the choice.
-        let meta = cockpit.peek(thread).unwrap();
-        assert_eq!(meta.provider, Provider::Codex);
-        assert_eq!(meta.model, Some("gpt-5.4-mini".into()));
-
-        cockpit.send(thread, "first prompt".into());
-        assert_eq!(fake.streams.borrow().len(), 2, "no respawn for the send");
-        assert_eq!(fake.sent.borrow().as_slice(), ["first prompt"]);
-    }
-
-    /// After the first prompt a provider switch is a handover: the new
-    /// Provider spawns fresh (the old id means nothing to it), the
-    /// Transcript and history stay, the header changes, the lock stays
-    /// armed, and the next prompt — exactly the next one — carries the
-    /// earlier conversation digested ahead of the operator's text. Mid-turn
-    /// it is refused.
-    #[test]
-    fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
-        let (mut cockpit, fake) = cockpit("provider-handover");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "hello".into());
-        let stream = fake.streams.borrow()[0].clone();
-        stream
-            .send(SessionEvent::Init {
-                session_id: "sess-1".into(),
-                model: "claude-opus-5".into(),
-            })
-            .unwrap();
-        stream.send(text("hi ")).unwrap();
-        stream.send(text("there")).unwrap();
-        stream.send(ended()).unwrap();
-        cockpit.pump();
-        cockpit.send(thread, "second".into());
-        stream.send(text("again")).unwrap();
-        stream.send(ended()).unwrap();
-        cockpit.pump();
-        let blocks_before = cockpit.thread(thread).unwrap().transcript().blocks().len();
-
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: Some("gpt-5.6-sol".into()),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(fake.streams.borrow().len(), 2, "the new Provider spawned");
-        assert_eq!(
-            fake.spawn_pairs().last().unwrap(),
-            &ProviderChoice {
-                provider: Provider::Codex,
-                model: Some("gpt-5.6-sol".into()),
-            }
-        );
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap(),
-            &None,
-            "fresh, no resume"
-        );
-        assert_eq!(
-            fake.efforts.borrow().last().unwrap(),
-            &None,
-            "the effort resets"
-        );
-        let open = cockpit.thread(thread).unwrap();
-        assert_eq!(open.provider(), Provider::Codex);
-        assert_eq!(open.model(), Some("gpt-5.6-sol"));
-        assert!(open.first_prompt_sent(), "the lock stays armed");
-        let blocks = open.transcript().blocks();
-        assert_eq!(blocks.len(), blocks_before + 1, "the conversation stays");
-        assert!(matches!(
-            &blocks.last().unwrap().body,
-            Body::Notice(line)
-                if line == "continued on Codex · GPT-5.6 Sol — the earlier conversation is handed over as context"
-        ));
-        let meta = cockpit.peek(thread).unwrap();
-        assert_eq!(meta.provider, Provider::Codex);
-        assert_eq!(meta.model, Some("gpt-5.6-sol".into()));
-
-        cockpit.send(thread, "third".into());
-        cockpit.send(thread, "fourth".into());
-        assert_eq!(
-            &fake.sent.borrow()[2..],
-            [
-                "Earlier in this Thread (on Claude):\n\n\
-                 User: hello\nAssistant: hi there\n\n\
-                 User: second\nAssistant: again\n\n\
-                 third"
-                    .to_string(),
-                "fourth".to_string(),
-            ],
-            "the carry goes out once, ahead of the next prompt only"
-        );
-        // The log has the operator's raw prompt, not the carry.
-        assert!(cockpit
-            .thread(thread)
-            .unwrap()
-            .transcript()
-            .blocks()
-            .iter()
-            .any(|b| matches!(&b.body, Body::Prompt(line) if line == "third")));
-
-        // Mid-turn: refused, nothing spawned.
-        fake.streams.borrow()[1].send(text("working")).unwrap();
-        cockpit.pump();
-        let attempts = *fake.attempts.borrow();
-        assert!(matches!(
-            cockpit.set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Claude,
-                    model: None,
-                },
-            ),
-            Err(ProvisionError::Busy)
-        ));
-        assert_eq!(*fake.attempts.borrow(), attempts);
-        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
-    }
-
-    /// The displayed history is bounded and trims its oldest turns; the
-    /// agent's context is not. However much the Transcript trims, the log
-    /// keeps every event in order, the resume id persists, and a provider
-    /// switch hands over every exchange, read from disk.
-    #[test]
-    fn trimming_the_displayed_history_never_loses_agent_context() {
-        let (mut cockpit, fake) = cockpit("retention-context");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let mut streamed = Vec::new();
-        // Six turns of 1 MiB answers: past the 4 MiB the display keeps.
-        for turn in 0..6 {
-            cockpit.send(thread, format!("prompt {turn}"));
-            let stream = fake.streams.borrow()[0].clone();
-            if turn == 0 {
-                stream
-                    .send(SessionEvent::Init {
-                        session_id: "sess-1".into(),
-                        model: "claude-opus-5".into(),
-                    })
-                    .unwrap();
-            }
-            let mut answer = String::new();
-            for delta in 0..64 {
-                let delta = format!("turn {turn} delta {delta} {}\n\n", "w".repeat(16 * 1024));
-                answer.push_str(&delta);
-                stream.send(text(&delta)).unwrap();
-            }
-            stream.send(ended()).unwrap();
-            for _ in 0..4 {
-                cockpit.pump();
-            }
-            streamed.push((format!("prompt {turn}"), answer));
-        }
-        let shown = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(
-            !shown
-                .iter()
-                .any(|block| matches!(&block.body, Body::Prompt(line) if line == "prompt 0")),
-            "the display trimmed its oldest turns"
-        );
-
-        // (1) Every event is in the log, in order.
-        let log = cockpit.store.load(thread).unwrap();
-        let mut prompts = Vec::new();
-        let mut answers = String::new();
-        for input in log.inputs() {
-            match input {
-                Input::Prompt(line) => prompts.push(line),
-                Input::Event(SessionEvent::TextDelta { text }) => answers.push_str(&text),
-                _ => {}
-            }
-        }
-        let expected: String = streamed.iter().map(|(_, answer)| answer.as_str()).collect();
-        assert_eq!(
-            prompts,
-            (0..6)
-                .map(|turn| format!("prompt {turn}"))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            answers == expected,
-            "the log holds every streamed delta, in order"
-        );
-        // (2) The resume id persists.
-        assert_eq!(log.resume_target(), Some("sess-1"));
-
-        // (3) A provider switch hands over every exchange, from disk.
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: Some("gpt-5.6-sol".into()),
-                },
-            )
-            .unwrap();
-        // Past 2 MiB the exchanges are read off the UI thread, and the
-        // switch commits on the pump that finds them read.
-        let mut handover = None;
-        for _ in 0..500 {
-            cockpit.pump();
-            handover = cockpit.store.load(thread).unwrap().last_handover();
-            if handover.is_some() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let handover = handover.expect("the switch commits once its exchanges are read");
-        assert_eq!(handover.exchanges.len(), streamed.len());
-        assert!(
-            handover.exchanges == streamed,
-            "every exchange, the trimmed ones too, reaches the handover"
-        );
-    }
-
-    #[test]
-    fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
-        let (mut cockpit, fake) = cockpit("handover-live-effort");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "hello".into());
-        fake.streams.borrow()[0].send(text("hi")).unwrap();
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: Some("gpt-5.6-sol".into()),
-                },
-            )
-            .unwrap();
-        // A choice before Init must not require a resume target either.
-        cockpit.set_effort(thread, Some("high".into())).unwrap();
-        fake.streams.borrow()[1]
-            .send(SessionEvent::Init {
-                session_id: "empty-codex-thread".into(),
-                model: "gpt-5.6-sol".into(),
-            })
-            .unwrap();
-        cockpit.pump();
-
-        cockpit.set_effort(thread, Some("max".into())).unwrap();
-        cockpit.send(thread, "next".into());
-
-        assert_eq!(*fake.attempts.borrow(), 2, "effort must not replace Codex");
-        assert_eq!(
-            *fake.tuned_efforts.borrow(),
-            [Some("high".into()), Some("max".into())]
-        );
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            "Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext"
-        );
-        assert_eq!(
-            cockpit.thread(thread).unwrap().transcript().session_id(),
-            Some("empty-codex-thread")
-        );
-        assert_eq!(cockpit.peek(thread).unwrap().effort.as_deref(), Some("max"));
-    }
-
-    /// The carry rides between the session-context preface and the
-    /// operator's text, so the new Provider reads where it works before
-    /// what was said.
-    #[test]
-    fn the_carry_rides_between_the_preface_and_the_prompt() {
-        let (mut cockpit, fake) = cockpit("handover-preface");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let root = existing_root("handover-preface-root");
-        cockpit
-            .set_session_project_root(thread, Some(root.clone()))
-            .unwrap();
-        cockpit.send(thread, "hello".into());
-        let stream = fake.streams.borrow().last().unwrap().clone();
-        stream.send(text("hi")).unwrap();
-        stream.send(ended()).unwrap();
-        cockpit.pump();
-
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: None,
-                },
-            )
-            .unwrap();
-        cockpit.send(thread, "next".into());
-
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            &format!(
-                "{}Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext",
-                preface(&binding, &root)
-            )
-        );
-    }
-
-    /// The digest is bounded: the newest dozen pairs, within the character
-    /// budget, oldest first; an answer that never came is left out; one
-    /// pair too long for the whole budget keeps its head.
-    #[test]
-    fn the_carry_digest_keeps_the_newest_pairs_within_budget() {
-        let exchanges: Vec<(String, String)> = (1..=14)
-            .map(|n| (format!("q{n}"), format!("a{n}")))
-            .collect();
-        let digest = carry_digest(Provider::Codex, &exchanges);
-        assert!(
-            digest.starts_with("Earlier in this Thread (on Codex):\n\nUser: q3\nAssistant: a3\n\n")
-        );
-        assert!(digest.ends_with("User: q14\nAssistant: a14"));
-        assert!(!digest.contains("q2\n"), "only the newest twelve");
-
-        let unanswered = vec![("just asked".to_string(), String::new())];
-        assert_eq!(
-            carry_digest(Provider::Claude, &unanswered),
-            "Earlier in this Thread (on Claude):\n\nUser: just asked"
-        );
-
-        let long = "x".repeat(4_000);
-        let heavy = vec![
-            ("old".to_string(), long.clone()),
-            ("mid".to_string(), long.clone()),
-            ("new".to_string(), "short".to_string()),
-        ];
-        let digest = carry_digest(Provider::Claude, &heavy);
-        assert!(digest.len() <= CARRY_CHARS + 64, "{}", digest.len());
-        assert!(!digest.contains("User: old"), "the oldest goes first");
-        assert!(digest.contains("User: mid"));
-        assert!(digest.ends_with("User: new\nAssistant: short"));
-
-        let huge = vec![("one".to_string(), "y".repeat(20_000))];
-        let digest = carry_digest(Provider::Claude, &huge);
-        assert!(digest.len() < 7_000);
-        assert!(digest.ends_with('…'));
-    }
-
-    /// The model, unlike the provider, is never locked: after the first
-    /// prompt a change replaces the Session with one resuming the same
-    /// conversation under the new model — the transcript stays, the header
-    /// on disk follows, and a running turn refuses rather than being cut.
-    #[test]
-    fn the_model_can_change_after_the_first_prompt_by_resuming() {
-        let (mut cockpit, fake) = cockpit("model-after-prompt");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "hello".into());
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Init {
-                session_id: "sess-1".into(),
-                model: "claude-opus-5".into(),
-            })
-            .unwrap();
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TextDelta { text: "hi".into() })
-            .unwrap();
-        cockpit.pump();
-        // Mid-turn: refused, nothing spawned.
-        assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
-        let attempts = *fake.attempts.borrow();
-        assert!(matches!(
-            cockpit.set_model(thread, Some("claude-fable-5-1".into())),
-            Err(ProvisionError::Busy)
-        ));
-        assert_eq!(*fake.attempts.borrow(), attempts);
-
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TurnEnded {
-                outcome: crate::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        cockpit.pump();
-        let blocks_before = cockpit.thread(thread).unwrap().transcript().blocks().len();
-
-        cockpit
-            .set_model(thread, Some("claude-fable-5-1".into()))
-            .unwrap();
-
-        // A new Session, resuming the conversation, under the new model.
-        let pairs = fake.spawn_pairs();
-        assert_eq!(
-            pairs.last().unwrap().model.as_deref(),
-            Some("claude-fable-5-1")
-        );
-        assert_eq!(pairs.last().unwrap().provider, Provider::Claude);
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap().as_deref(),
-            Some("sess-1")
-        );
-        let open = cockpit.thread(thread).unwrap();
-        assert_eq!(open.model(), Some("claude-fable-5-1"));
-        assert!(open.first_prompt_sent(), "the lock is untouched");
-        assert!(
-            open.transcript().blocks().len() > blocks_before,
-            "the conversation stays, and says the model changed"
-        );
-        assert_eq!(
-            cockpit.peek(thread).unwrap().model.as_deref(),
-            Some("claude-fable-5-1")
-        );
-        // The same choice again is a no-op.
-        let attempts = *fake.attempts.borrow();
-        cockpit
-            .set_model(thread, Some("claude-fable-5-1".into()))
-            .unwrap();
-        assert_eq!(*fake.attempts.borrow(), attempts);
-
-        // Parked: the header alone changes.
-        cockpit.park(thread).unwrap();
-        cockpit.set_model(thread, None).unwrap();
-        assert_eq!(cockpit.peek(thread).unwrap().model, None);
-    }
-
-    /// A Thread is named by the operator, else by its first prompt (open
-    /// or parked, off the first records alone), else by its number.
-    #[test]
-    fn a_thread_is_named_by_its_title_then_its_first_prompt_then_its_number() {
-        let (mut cockpit, _fake) = cockpit("display-title");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert_eq!(cockpit.display_title(thread, true), "thread-1");
-        cockpit.send(thread, "  Fix the   flaky\ntest in ci  ".into());
-        assert_eq!(cockpit.display_title(thread, true), "Fix the flaky");
-        assert_eq!(
-            cockpit.display_title(thread, false),
-            "thread-1",
-            "auto-titling can be off"
-        );
-        cockpit.park(thread).unwrap();
-        assert_eq!(
-            cockpit.display_title(thread, true),
-            "Fix the flaky",
-            "parked: read off the log"
-        );
-        cockpit.rename_thread(thread, "CI flake").unwrap();
-        assert_eq!(cockpit.display_title(thread, true), "CI flake");
-        cockpit.revive(thread).unwrap();
-        assert_eq!(
-            cockpit.display_title(thread, false),
-            "CI flake",
-            "a given title always wins"
-        );
-
-        assert_eq!(
-            title_from_prompt("a".repeat(60).as_str()).chars().count(),
-            49
-        );
-        assert!(title_from_prompt(&"word ".repeat(20)).ends_with('…'));
-        assert_eq!(title_from_prompt("   \n\n  "), "");
-    }
-
-    /// A parked Thread that has spoken cannot switch off its log alone —
-    /// the handover needs the live conversation — but revived it can, and
-    /// a switch parked before its next prompt still owes the carry on
-    /// revive: the new Provider spawns without the old Init, the Notice is
-    /// replayed, and the digest goes out with the first prompt.
-    #[test]
-    fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
-        let (mut cockpit, fake) = cockpit("provider-handover-parked");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "hello".into());
-        let stream = fake.streams.borrow()[0].clone();
-        stream
-            .send(SessionEvent::Init {
-                session_id: "sess-1".into(),
-                model: "claude-opus-5".into(),
-            })
-            .unwrap();
-        stream.send(text("hi")).unwrap();
-        stream.send(ended()).unwrap();
-        cockpit.pump();
-        cockpit.park(thread).unwrap();
-
-        // Parked: the store-only path refuses.
-        assert!(matches!(
-            cockpit.set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: None,
-                },
-            ),
-            Err(ProvisionError::Locked)
-        ));
-        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
-
-        cockpit.revive(thread).unwrap();
-        assert!(cockpit
-            .thread(thread)
-            .is_some_and(|open| open.first_prompt_sent()));
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: None,
-                },
-            )
-            .unwrap();
-        // Codex can name a thread before a first prompt creates its rollout.
-        // Old Ferrite versions then tried to resume it when effort changed.
-        let codex = fake.streams.borrow().last().unwrap().clone();
-        codex
-            .send(SessionEvent::Init {
-                session_id: "empty-codex-thread".into(),
-                model: "gpt-5.6-sol".into(),
-            })
-            .unwrap();
-        codex
-            .send(SessionEvent::Closed {
-                reason: "could not start: no rollout found for thread id empty-codex-thread".into(),
-            })
-            .unwrap();
-        cockpit.pump();
-        // Parked again before any prompt reached Codex.
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-
-        assert_eq!(fake.providers.borrow().last().unwrap(), &Provider::Codex);
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap(),
-            &None,
-            "the undelivered handover needs a fresh Session, not the empty Codex id"
-        );
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(
-            blocks.iter().any(|b| matches!(
-                &b.body,
-                Body::Notice(line) if line.starts_with("continued on Codex · default")
-            )),
-            "the handover replays: {blocks:?}"
-        );
-        cockpit.send(thread, "next".into());
-        cockpit.send(thread, "after".into());
-        let sent = fake.sent.borrow();
-        assert_eq!(
-            sent[sent.len() - 2],
-            "Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext"
-        );
-        assert_eq!(sent[sent.len() - 1], "after");
-    }
-
-    #[test]
-    fn a_refused_effort_keeps_the_choice_and_pending_handover() {
-        let (mut cockpit, fake) = cockpit("refused-effort");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.send(thread, "hello".into());
-        fake.streams.borrow()[0].send(text("hi")).unwrap();
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: None,
-                },
-            )
-            .unwrap();
-        *fake.fail_effort.borrow_mut() = true;
-        assert!(matches!(
-            cockpit.set_effort(thread, Some("max".into())),
-            Err(ProvisionError::Tune(_))
-        ));
-        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
-        assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
-        assert_eq!(*fake.attempts.borrow(), 2);
-        cockpit.send(thread, "next".into());
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            "Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext"
-        );
-    }
-
-    /// Effort changes in place before and after the first prompt, refused
-    /// mid-turn, with the header following and a model change keeping it. A provider
-    /// change resets it — the old provider's word may mean nothing.
-    #[test]
-    fn effort_changes_in_place_and_persists() {
-        let (mut cockpit, fake) = cockpit("effort");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.effort()), None);
-        assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
-
-        cockpit.set_effort(thread, Some("high".into())).unwrap();
-        assert_eq!(fake.streams.borrow().len(), 1, "no respawn pre-lock");
-        assert_eq!(
-            fake.tuned_efforts.borrow().last().unwrap().as_deref(),
-            Some("high")
-        );
-        assert_eq!(fake.resumed.borrow().last().unwrap(), &None);
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.effort()),
-            Some("high")
-        );
-        assert_eq!(
-            cockpit.peek(thread).unwrap().effort.as_deref(),
-            Some("high")
-        );
-
-        cockpit.send(thread, "hello".into());
-        let stream = fake.streams.borrow()[0].clone();
-        stream
-            .send(SessionEvent::Init {
-                session_id: "sess-1".into(),
-                model: "claude-opus-5".into(),
-            })
-            .unwrap();
-        stream.send(text("working")).unwrap();
-        cockpit.pump();
-        let attempts = *fake.attempts.borrow();
-        assert!(matches!(
-            cockpit.set_effort(thread, Some("max".into())),
-            Err(ProvisionError::Busy)
-        ));
-        assert_eq!(*fake.attempts.borrow(), attempts);
-        stream.send(ended()).unwrap();
-        cockpit.pump();
-
-        cockpit.set_effort(thread, Some("max".into())).unwrap();
-        assert_eq!(
-            fake.tuned_efforts.borrow().last().unwrap().as_deref(),
-            Some("max")
-        );
-        assert_eq!(*fake.attempts.borrow(), 1, "no respawn post-lock");
-        assert_eq!(cockpit.peek(thread).unwrap().effort.as_deref(), Some("max"));
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(matches!(
-            &blocks.last().unwrap().body,
-            Body::Notice(line) if line == "effort changed to max"
-        ));
-        // The same choice again is a no-op.
-        let attempts = *fake.attempts.borrow();
-        cockpit.set_effort(thread, Some("max".into())).unwrap();
-        assert_eq!(*fake.attempts.borrow(), attempts);
-        assert_eq!(fake.tuned_efforts.borrow().len(), 2);
-
-        // A model change keeps the effort.
-        cockpit
-            .set_model(thread, Some("claude-fable-5-1".into()))
-            .unwrap();
-        assert_eq!(
-            fake.efforts.borrow().last().unwrap().as_deref(),
-            Some("max")
-        );
-        assert_eq!(
-            fake.models.borrow().last().unwrap().as_deref(),
-            Some("claude-fable-5-1")
-        );
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(matches!(
-            &blocks.last().unwrap().body,
-            Body::Notice(line) if line == "model changed to Fable 5.1"
-        ));
-
-        // Parked: the header alone changes, and a revive reads it.
-        cockpit.park(thread).unwrap();
-        cockpit.set_effort(thread, None).unwrap();
-        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
-        assert_eq!(
-            cockpit.peek(thread).unwrap().model.as_deref(),
-            Some("claude-fable-5-1")
-        );
-        cockpit.revive(thread).unwrap();
-        assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.effort()), None);
-
-        // A provider change pre-lock resets the effort.
-        let fresh = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.set_effort(fresh, Some("xhigh".into())).unwrap();
-        cockpit
-            .set_provider(
-                fresh,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: None,
-                },
-            )
-            .unwrap();
-        assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
-        assert_eq!(cockpit.peek(fresh).unwrap().effort, None);
-        assert_eq!(cockpit.thread(fresh).and_then(|open| open.effort()), None);
-    }
-
-    /// The last Notice in a Thread's transcript.
-    fn last_notice(cockpit: &Cockpit, thread: ThreadId) -> String {
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        match &blocks.last().unwrap().body {
-            Body::Notice(line) => line.clone(),
-            body => panic!("the last block is not a Notice: {body:?}"),
-        }
-    }
-
-    /// A provider that answers a setting change later holds it pending:
-    /// the Thread's effort and its header move on the pump that finds the
-    /// answer, and another change waits for it.
-    #[test]
-    fn an_effort_change_commits_when_the_provider_accepts_it() {
-        let (mut cockpit, fake) = cockpit("effort-answered-later");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        *fake.answer_later.borrow_mut() = true;
-
-        cockpit.set_effort(thread, Some("high".into())).unwrap();
-        let open = cockpit.thread(thread).unwrap();
-        assert!(open.tuning());
-        assert_eq!(open.effort(), None, "not before the provider accepts it");
-        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
-        assert!(matches!(
-            cockpit.set_effort(thread, Some("max".into())),
-            Err(ProvisionError::Tuning)
-        ));
-        cockpit.pump();
-        assert!(cockpit.thread(thread).unwrap().tuning(), "still unanswered");
-
-        fake.answers.borrow_mut().remove(0).send(Ok(())).unwrap();
-        let frame = cockpit.pump();
-        assert!(frame.iter().any(|update| update.thread == thread));
-        let open = cockpit.thread(thread).unwrap();
-        assert!(!open.tuning());
-        assert_eq!(open.effort(), Some("high"));
-        assert_eq!(
-            cockpit.peek(thread).unwrap().effort.as_deref(),
-            Some("high")
-        );
-        assert_eq!(last_notice(&cockpit, thread), "effort changed to high");
-    }
-
-    /// A change the provider refuses, or never answers, changes nothing,
-    /// and the transcript says why.
-    #[test]
-    fn an_effort_change_refused_after_the_fact_changes_nothing() {
-        let (mut cockpit, fake) = cockpit("effort-refused-later");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        *fake.answer_later.borrow_mut() = true;
-
-        cockpit.set_effort(thread, Some("max".into())).unwrap();
-        fake.answers
-            .borrow_mut()
-            .remove(0)
-            .send(Err(io::Error::other("unsupported effort")))
-            .unwrap();
-        cockpit.pump();
-        assert!(!cockpit.thread(thread).unwrap().tuning());
-        assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
-        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
-        assert_eq!(
-            last_notice(&cockpit, thread),
-            "effort unchanged: unsupported effort"
-        );
-
-        cockpit.set_effort(thread, Some("max".into())).unwrap();
-        // The provider went away without answering.
-        fake.answers.borrow_mut().clear();
-        cockpit.pump();
-        assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
-        assert_eq!(
-            last_notice(&cockpit, thread),
-            "effort unchanged: effort change was not acknowledged"
-        );
-    }
-
-    /// The Thread's title reaches its Session: a rename is told to the live
-    /// one, and every later spawn — revive, retune — is handed it.
-    #[test]
-    fn a_thread_s_title_reaches_its_session_and_every_respawn() {
-        let (mut cockpit, fake) = cockpit("thread-name");
-        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-        assert_eq!(fake.names.borrow().last().unwrap(), &None);
-
-        cockpit.rename_thread(thread, "CI flake").unwrap();
-        assert_eq!(fake.named.borrow().as_slice(), ["CI flake"]);
-
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-        assert_eq!(
-            fake.names.borrow().last().unwrap().as_deref(),
-            Some("CI flake")
-        );
-
-        cockpit
-            .set_model(thread, Some("gpt-5.6-sol".into()))
-            .unwrap();
-        assert_eq!(
-            fake.names.borrow().last().unwrap().as_deref(),
-            Some("CI flake")
-        );
-        // A parked Thread's rename has no Session to tell; the next spawn
-        // carries it.
-        cockpit.park(thread).unwrap();
-        cockpit.rename_thread(thread, "CI flake, again").unwrap();
-        assert_eq!(fake.named.borrow().len(), 1);
-        cockpit.revive(thread).unwrap();
-        assert_eq!(
-            fake.names.borrow().last().unwrap().as_deref(),
-            Some("CI flake, again")
-        );
-    }
-
-    /// AC (#25): a parked-never-prompted Thread revives onto its chosen
-    /// provider and model — the durable header is what every later spawn
-    /// reads.
-    #[test]
-    fn a_park_then_revive_keeps_the_chosen_provider_and_model() {
-        let (mut cockpit, fake) = cockpit("provider-revive");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Codex,
-                    model: Some("gpt-5.4-mini".into()),
-                },
-            )
-            .unwrap();
-
-        cockpit.park(thread).unwrap();
-        cockpit.revive(thread).unwrap();
-
-        assert_eq!(
-            fake.spawn_pairs().last().unwrap(),
-            &ProviderChoice {
-                provider: Provider::Codex,
-                model: Some("gpt-5.4-mini".into()),
-            }
-        );
-        assert_eq!(
-            cockpit.thread(thread).map(|open| open.provider()),
-            Some(Provider::Codex)
-        );
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.model()),
-            Some("gpt-5.4-mini")
-        );
-        assert!(
-            !cockpit
-                .thread(thread)
-                .is_some_and(|open| open.first_prompt_sent()),
-            "still unlocked"
-        );
-    }
-
-    /// AC (#25): a CLI that fails to spawn refuses the whole switch — the
-    /// old Session keeps serving, the header is untouched, and the error
-    /// carries the provider's words.
-    #[test]
-    fn a_failed_provider_spawn_leaves_the_old_session_serving() {
-        let (mut cockpit, fake) = cockpit("provider-spawn-fails");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        *fake.fail.borrow_mut() = true;
-
-        let refused = cockpit.set_provider(
-            thread,
-            ProviderChoice {
-                provider: Provider::Codex,
-                model: None,
-            },
-        );
-
-        let Err(ProvisionError::Spawn(e)) = refused else {
-            panic!("expected the spawn refusal: {refused:?}");
-        };
-        assert!(e.to_string().contains("stub refused to spawn"));
-        assert_eq!(
-            cockpit.thread(thread).map(|open| open.provider()),
-            Some(Provider::Claude)
-        );
-        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
-        // The old Session still serves: the next send spawns nothing new.
-        *fake.fail.borrow_mut() = false;
-        cockpit.send(thread, "still here".into());
-        assert_eq!(fake.sent.borrow().as_slice(), ["still here"]);
-        assert_eq!(fake.streams.borrow().len(), 1);
-    }
-
-    /// Re-picking what the Thread already is changes nothing: no teardown,
-    /// no respawn, no rewrite — the common path must stay friction-free.
-    #[test]
-    fn re_picking_the_current_provider_and_model_is_a_no_op() {
-        let (mut cockpit, fake) = cockpit("provider-noop");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0]
-            .send(text("still serving"))
-            .unwrap();
-        cockpit.pump();
-
-        cockpit
-            .set_provider(
-                thread,
-                ProviderChoice {
-                    provider: Provider::Claude,
-                    model: None,
-                },
-            )
-            .unwrap();
-
-        assert_eq!(fake.streams.borrow().len(), 1, "nothing respawned");
-        assert!(
-            !cockpit
-                .thread(thread)
-                .unwrap()
-                .transcript()
-                .blocks()
-                .is_empty(),
-            "and nothing was torn down"
-        );
-    }
-
-    // ------------------------------------------- what is on screen (#28)
-
-    /// `n` open Threads on the main checkout, in open order.
-    fn opened(cockpit: &mut Cockpit, n: usize) -> Vec<ThreadId> {
-        (0..n)
-            .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
-            .collect()
-    }
-
-    fn pair(cockpit: &mut Cockpit, first: ThreadId, second: ThreadId) -> GroupId {
-        cockpit
-            .apply_group(GroupChange::Create { first, second })
-            .unwrap()
-            .group
-            .unwrap()
-    }
-
-    #[test]
-    fn open_threads_are_the_roster_and_solo_shows_the_focused_one() {
-        let (mut cockpit, _) = cockpit("roster-solo");
-        let threads = opened(&mut cockpit, 3);
-        let panes: Vec<ThreadId> = cockpit
-            .roster()
-            .panes()
-            .iter()
-            .filter_map(|pane| pane.thread())
-            .collect();
-        assert_eq!(
-            panes, threads,
-            "every open Thread has a Pane, in open order"
-        );
-        assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[0])]);
-        assert!(cockpit.focus(PaneIdentity::Thread(threads[2])));
-        assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[2])]);
-        assert_eq!(
-            crate::layout::grid_shape(
-                cockpit.visible().len(),
-                crate::layout::Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: 1134.0,
-                    h: 838.0
-                }
-            )
-            .0,
-            1
-        );
-        cockpit.park(threads[2]).unwrap();
-        assert_eq!(
-            cockpit.roster().panes().len(),
-            2,
-            "a parked Thread has no Pane"
-        );
-        assert_eq!(
-            cockpit.roster().focused_thread(),
-            Some(threads[1]),
-            "focus clamps onto a survivor"
-        );
-    }
-
-    #[test]
-    fn closing_parks_in_one_act_and_a_group_member_leaves_onto_the_ordinal_survivor() {
-        let (mut cockpit, _) = cockpit("roster-close");
-        let threads = opened(&mut cockpit, 3);
-        let group = pair(&mut cockpit, threads[0], threads[1]);
-        cockpit
-            .apply_group(GroupChange::Join {
-                thread: threads[2],
-                group,
-                index: None,
-            })
-            .unwrap();
-        cockpit.enter_group(group).unwrap();
-        cockpit.focus(PaneIdentity::Thread(threads[1]));
-
-        // cmd-w on a member: out of the Group and parked, in one press.
-        cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
-        assert!(
-            cockpit.parked().unwrap().contains(&threads[1]),
-            "one park parks a Group member"
-        );
-        assert!(cockpit.groups().of(threads[1]).is_none(), "and it left");
-        assert_eq!(cockpit.threads().len(), 2);
-        assert_eq!(cockpit.roster().view(), View::Group(group));
-        assert_eq!(
-            cockpit.roster().focused_thread(),
-            Some(threads[2]),
-            "the Thread that took the parked one's ordinal"
-        );
-
-        cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
-        assert!(cockpit.parked().unwrap().contains(&threads[2]));
-        assert_eq!(
-            cockpit.roster().view(),
-            View::Solo,
-            "a pair losing a member dissolves"
-        );
-        assert_eq!(
-            cockpit.roster().focused_thread(),
-            Some(threads[0]),
-            "onto the survivor"
-        );
-        assert!(cockpit.groups().get(group).is_none());
-
-        cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
-        assert!(
-            cockpit.parked().unwrap().contains(&threads[0]),
-            "a Solo close parks"
-        );
-        assert_eq!(
-            cockpit.roster().park_order(),
-            [threads[1], threads[2], threads[0]]
-        );
-        assert!(cockpit.roster().panes().is_empty());
-    }
-
-    #[test]
-    fn parking_a_member_whose_group_is_not_on_screen_leaves_and_parks() {
-        let (mut cockpit, _) = cockpit("roster-park-offscreen");
-        let threads = opened(&mut cockpit, 3);
-        let group = pair(&mut cockpit, threads[0], threads[1]);
-        cockpit
-            .apply_group(GroupChange::Join {
-                thread: threads[2],
-                group,
-                index: None,
-            })
-            .unwrap();
-        assert_eq!(cockpit.roster().view(), View::Solo);
-
-        cockpit.park_thread(threads[1]).unwrap();
-        assert!(cockpit.parked().unwrap().contains(&threads[1]));
-        assert_eq!(
-            cockpit.groups().get(group).unwrap().members,
-            [threads[0], threads[2]]
-        );
-        assert_eq!(cockpit.roster().park_order(), [threads[1]]);
-    }
-
-    #[test]
-    fn a_new_thread_started_from_a_group_remains_outside_the_group() {
-        let (mut cockpit, _) = cockpit("roster-loose-draft");
-        let threads = opened(&mut cockpit, 2);
-        let group = pair(&mut cockpit, threads[0], threads[1]);
-        cockpit.enter_group(group).unwrap();
-        let draft = cockpit.open_draft();
-        assert_eq!(cockpit.roster().view(), View::Solo);
-        assert_eq!(
-            cockpit.visible(),
-            [PaneIdentity::Draft(draft)],
-            "the new draft Pane opens outside the Group"
-        );
-        assert_eq!(cockpit.roster().draft_scope(draft).unwrap().group, None);
-
-        let done = cockpit
-            .bootstrap_draft(
-                draft,
-                ProviderChoice {
-                    provider: Provider::Claude,
-                    model: None,
-                },
-                main_choice(),
-                "new card",
-                None,
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            cockpit.groups().get(group).unwrap().members,
-            threads,
-            "sending the draft does not add the Thread to the Group"
-        );
-        assert!(cockpit.groups().of(done.thread).is_none());
-        assert_eq!(
-            cockpit.roster().focused_thread(),
-            Some(done.thread),
-            "the Thread took the draft's own slot"
-        );
-        assert_eq!(cockpit.roster().draft_scope(draft), None);
-    }
-
-    #[test]
-    fn a_draft_beside_a_loose_thread_creates_and_opens_a_group_on_send() {
-        let (mut cockpit, _) = cockpit("roster-new-group-draft");
-        let first = opened(&mut cockpit, 1)[0];
-        cockpit.focus(PaneIdentity::Thread(first));
-        let draft = cockpit.open_draft_for_new_group(first);
-
-        assert_eq!(
-            cockpit.roster().draft_scope(draft).unwrap().new_group_with,
-            Some(first)
-        );
-        assert_eq!(
-            cockpit.visible(),
-            [PaneIdentity::Thread(first), PaneIdentity::Draft(draft)],
-            "the pending pair is visible before the Draft becomes durable"
-        );
-        assert_eq!(cockpit.roster().focused(), Some(PaneIdentity::Draft(draft)));
-        assert_eq!(
-            crate::layout::grid_shape(
-                cockpit.visible().len(),
-                crate::layout::Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: 1134.0,
-                    h: 838.0
-                }
-            )
-            .0,
-            2
-        );
-        assert!(cockpit.groups().of(first).is_none());
-        let done = cockpit
-            .bootstrap_draft(
-                draft,
-                ProviderChoice {
-                    provider: Provider::Claude,
-                    model: None,
-                },
-                main_choice(),
-                "work beside the first thread",
-                None,
-            )
-            .unwrap()
-            .unwrap();
-
-        let group = cockpit.groups().of(done.thread).unwrap();
-        assert_eq!(group.members, [first, done.thread]);
-        assert_eq!(cockpit.roster().view(), View::Group(group.id));
-        assert_eq!(cockpit.roster().focused_thread(), Some(done.thread));
-        assert_eq!(
-            cockpit.visible(),
-            [
-                PaneIdentity::Thread(first),
-                PaneIdentity::Thread(done.thread)
-            ]
-        );
-    }
-
-    #[test]
-    fn entering_a_group_shows_parked_members_parked_and_keeps_focus_on_a_member() {
-        let (mut cockpit, _) = cockpit("roster-enter");
-        let threads = opened(&mut cockpit, 3);
-        let group = pair(&mut cockpit, threads[1], threads[2]);
-        // A member parked without leaving: cmd-w would take it out of the
-        // Group, so this is the raw park a relaunch leaves behind.
-        cockpit.park(threads[2]).unwrap();
-        cockpit.roster.note_parked(threads[2]);
-        assert!(cockpit.parked().unwrap().contains(&threads[2]));
-        assert_eq!(cockpit.groups().of(threads[2]).map(|g| g.id), Some(group));
-        cockpit.focus(PaneIdentity::Thread(threads[1]));
-
-        cockpit.enter_group(group).unwrap();
-        assert_eq!(cockpit.roster().view(), View::Group(group));
-        assert_eq!(
-            cockpit.roster().focused_thread(),
-            Some(threads[1]),
-            "focus stays on the member the operator was on"
-        );
-        assert!(
-            cockpit.thread(threads[2]).is_none(),
-            "entering spends no Session on the parked member"
-        );
-        assert!(
-            cockpit
-                .visible()
-                .contains(&PaneIdentity::Thread(threads[2])),
-            "but it keeps its slot on the board, as its parked tile"
-        );
-        assert_eq!(cockpit.roster().park_order(), [threads[2]]);
-
-        // ⏎ on the tile wakes it in place, and cmd-o forgets it.
-        cockpit.wake(threads[2]).unwrap();
-        assert!(cockpit.thread(threads[2]).is_some(), "woken");
-        assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
-        assert_eq!(cockpit.roster().view(), View::Group(group));
-        assert!(
-            cockpit.roster().park_order().is_empty(),
-            "and cmd-o forgets it"
-        );
-        cockpit.focus(PaneIdentity::Thread(threads[1]));
-
-        assert!(cockpit.focus_thread(threads[0]));
-        assert_eq!(
-            cockpit.roster().view(),
-            View::Solo,
-            "a loose Thread shows Solo"
-        );
-        cockpit.enter_group(group).unwrap();
-        assert_eq!(
-            cockpit.roster().focused_thread(),
-            Some(threads[1]),
-            "entering from outside lands on the first member"
-        );
-    }
-
-    #[test]
-    fn reopen_walks_this_launches_park_order_then_creation_order() {
-        let (mut cockpit, _) = cockpit("roster-reopen");
-        let threads = opened(&mut cockpit, 3);
-        // Parked before this launch, as far as the roster can know.
-        cockpit.park(threads[2]).unwrap();
-        cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
-        cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
-        assert!(cockpit.roster().panes().is_empty());
-
-        let (first, opened) = cockpit.reopen_last().unwrap();
-        opened.unwrap();
-        assert_eq!(first, threads[1], "the last park comes back first");
-        assert_eq!(cockpit.reopen_last().unwrap().0, threads[0]);
-        assert_eq!(
-            cockpit.reopen_last().unwrap().0,
-            threads[2],
-            "the order drained: creation order"
-        );
-        assert!(cockpit.reopen_last().is_none());
-        assert_eq!(
-            cockpit.roster().focused_thread(),
-            Some(threads[2]),
-            "reopen focuses"
-        );
-    }
-
-    #[test]
-    fn fullscreen_follows_focus_and_survives_a_close_but_not_an_external_park() {
-        let (mut cockpit, _) = cockpit("roster-fullscreen");
-        let threads = opened(&mut cockpit, 3);
-        cockpit.toggle_fullscreen();
-        assert_eq!(
-            cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(threads[0]))
-        );
-        cockpit.step_focus(1);
-        assert_eq!(
-            cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(threads[0])),
-            "Solo has one visible Pane to step through"
-        );
-        cockpit.focus(PaneIdentity::Thread(threads[1]));
-        assert_eq!(
-            cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(threads[1]))
-        );
-        cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
-        assert_eq!(
-            cockpit.roster().fullscreen(),
-            Some(PaneIdentity::Thread(threads[2])),
-            "the survivor fills the screen, like the next tab"
-        );
-        cockpit.park(threads[2]).unwrap();
-        assert_eq!(
-            cockpit.roster().fullscreen(),
-            None,
-            "parked under the roster: back to the grid"
-        );
-    }
-
-    #[test]
-    fn a_drop_out_of_a_pair_tracks_its_origin_and_lands_on_the_survivor() {
-        let (mut cockpit, _) = cockpit("roster-drop");
-        let threads = opened(&mut cockpit, 3);
-        let group = pair(&mut cockpit, threads[0], threads[1]);
-        cockpit.enter_group(group).unwrap();
-        cockpit
-            .drop(
-                Drag::Thread {
-                    thread: threads[0],
-                    group: Some(group),
-                },
-                View::Group(group),
-                DropTarget::ThreadRow {
-                    thread: threads[2],
-                    group: None,
-                    index: 0,
-                },
-            )
-            .unwrap();
-        assert_eq!(cockpit.roster().view(), View::Solo);
-        assert_eq!(cockpit.roster().focused_thread(), Some(threads[1]));
-        assert!(cockpit.groups().get(group).is_none());
-    }
-
-    #[test]
-    fn the_next_decision_lands_in_the_view_that_shows_the_waiting_thread() {
-        let (mut cockpit, fake) = cockpit("roster-decision");
-        let threads = opened(&mut cockpit, 3);
-        let group = pair(&mut cockpit, threads[1], threads[2]);
-        fake.streams.borrow()[2]
-            .send(decision("perm", "Write"))
-            .unwrap();
-        cockpit.pump();
-        assert_eq!(cockpit.next_decision(), Some(threads[2]));
-        assert_eq!(cockpit.roster().view(), View::Group(group));
-        assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
-    }
-
-    #[test]
-    #[ignore = "local performance probe"]
-    fn local_thread_revival_probe() {
-        let store_dir = std::path::PathBuf::from("/tmp/ferrite-perf.7xYdTK");
-        for id in [1_u64, 5_u64] {
-            let store = Store::open(&store_dir).unwrap();
-            let fake = Fake::default();
-            let mut cockpit = Cockpit::new(store, Box::new(fake));
-            let started = std::time::Instant::now();
-            cockpit.revive(ThreadId::new(id)).unwrap();
-            let elapsed = started.elapsed();
-            let open = cockpit.thread(ThreadId::new(id)).unwrap();
-            let subject = open
-                .activity()
-                .subject(&crate::activity::Subject::Main)
-                .unwrap();
-            eprintln!(
-                "PERF thread={id} revive_ms={:.3} blocks={}",
-                elapsed.as_secs_f64() * 1000.0,
-                subject.transcript().blocks().len(),
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "cockpit/lifecycle_tests.rs"]
-mod lifecycle_tests;

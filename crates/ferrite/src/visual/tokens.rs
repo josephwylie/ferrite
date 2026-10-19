@@ -143,7 +143,10 @@ pub(crate) fn value(name: &str, scheme: Scheme, reading: ReadingSize) -> Option<
             Scheme::Light => "rgba(0,0,0,.12)".into(),
         },
         "font-mono" => {
-            format!("\"{}\",ui-monospace,\"SF Mono\",Menlo,monospace", theme::FONT_UI)
+            format!(
+                "\"{}\",ui-monospace,\"SF Mono\",Menlo,monospace",
+                theme::FONT_UI
+            )
         }
         "font-size" => format!("{}px", theme::answer_text_size(reading)),
         "line" => format!("{}px", theme::answer_line_height(reading)),
@@ -201,8 +204,14 @@ mod tests {
     fn the_dark_palette_is_the_app_theme() {
         let reading = ReadingSize::default();
         assert_eq!(value("bg", Scheme::Dark, reading).unwrap(), "#1b1b1c");
-        assert_eq!(value("accent", Scheme::Dark, reading).unwrap(), hex(theme::ACCENT));
-        assert_eq!(value("fg", Scheme::Dark, reading).unwrap(), hex(theme::TEXT));
+        assert_eq!(
+            value("accent", Scheme::Dark, reading).unwrap(),
+            hex(theme::ACCENT)
+        );
+        assert_eq!(
+            value("fg", Scheme::Dark, reading).unwrap(),
+            hex(theme::TEXT)
+        );
         assert_eq!(
             value("font-size", Scheme::Dark, reading).unwrap(),
             format!("{}px", theme::answer_text_size(reading))
@@ -225,10 +234,18 @@ mod tests {
     fn reading_size_restyles_the_text_tokens_only() {
         let small = theme_css(Scheme::Dark, ReadingSize::SMALLEST);
         let large = theme_css(Scheme::Dark, ReadingSize::LARGEST);
-        assert!(small.contains("--ferrite-font-size:12px;--ferrite-line:18px;"), "{small}");
-        assert!(large.contains("--ferrite-font-size:24px;--ferrite-line:36px;"), "{large}");
+        assert!(
+            small.contains("--ferrite-font-size:12px;--ferrite-line:18px;"),
+            "{small}"
+        );
+        assert!(
+            large.contains("--ferrite-font-size:24px;--ferrite-line:36px;"),
+            "{large}"
+        );
         fn strip(css: &str) -> Vec<&str> {
-            css.split(';').filter(|d| !d.contains("font-size") && !d.contains("-line:")).collect()
+            css.split(';')
+                .filter(|d| !d.contains("font-size") && !d.contains("-line:"))
+                .collect()
         }
         assert_eq!(strip(&small), strip(&large));
     }

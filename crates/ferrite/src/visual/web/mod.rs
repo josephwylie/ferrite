@@ -21,10 +21,10 @@
 
 // The second adapter: tests and captures drive it; the app runs Chromium or
 // nothing.
-#[cfg_attr(not(test), allow(dead_code))]
-pub mod fake;
 #[cfg(feature = "cef")]
 pub mod cef;
+#[cfg_attr(not(test), allow(dead_code))]
+pub mod fake;
 #[cfg(all(feature = "cef", not(any(target_os = "macos", windows))))]
 compile_error!("the `cef` feature (visuals) is built for macOS and Windows only");
 
@@ -66,16 +66,43 @@ pub struct Modifiers {
 /// top-left corner; the host converts from window coordinates.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
-    Move { x: f32, y: f32, modifiers: Modifiers },
+    Move {
+        x: f32,
+        y: f32,
+        modifiers: Modifiers,
+    },
     /// The pointer left the view (hover states end).
     Leave,
-    Down { x: f32, y: f32, button: MouseButton, clicks: u32, modifiers: Modifiers },
-    Up { x: f32, y: f32, button: MouseButton, clicks: u32, modifiers: Modifiers },
+    Down {
+        x: f32,
+        y: f32,
+        button: MouseButton,
+        clicks: u32,
+        modifiers: Modifiers,
+    },
+    Up {
+        x: f32,
+        y: f32,
+        button: MouseButton,
+        clicks: u32,
+        modifiers: Modifiers,
+    },
     /// Only forwarded when the page should scroll or zoom itself; by default the
     /// host keeps the wheel for its own scrolling.
-    Wheel { x: f32, y: f32, dx: f32, dy: f32, modifiers: Modifiers },
+    Wheel {
+        x: f32,
+        y: f32,
+        dx: f32,
+        dy: f32,
+        modifiers: Modifiers,
+    },
     /// A key while the view has focus. `text` is what it types, if anything.
-    Key { key: String, text: Option<String>, down: bool, modifiers: Modifiers },
+    Key {
+        key: String,
+        text: Option<String>,
+        down: bool,
+        modifiers: Modifiers,
+    },
 }
 
 /// One rendered frame: tightly packed BGRA, `width * height * 4` bytes, in

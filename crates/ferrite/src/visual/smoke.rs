@@ -62,41 +62,78 @@ fn smoke() -> Result<Duration, String> {
     let wakes = Rc::new(Cell::new(0u32));
     let opened = Instant::now();
     let view = engine.open(
-        Page { html: PAGE.into(), theme_css: ":root { --ferrite-accent: rgb(0, 255, 0) }".into() },
-        Viewport { width: 400, scale: SCALE as f32 },
+        Page {
+            html: PAGE.into(),
+            theme_css: ":root { --ferrite-accent: rgb(0, 255, 0) }".into(),
+        },
+        Viewport {
+            width: 400,
+            scale: SCALE as f32,
+        },
         Box::new({
             let wakes = wakes.clone();
             move || wakes.set(wakes.get() + 1)
         }),
     );
-    let mut probe = Probe { engine: engine.as_ref(), view: view.as_ref(), frame: None, height: None, cursor: None };
+    let mut probe = Probe {
+        engine: engine.as_ref(),
+        view: view.as_ref(),
+        frame: None,
+        height: None,
+        cursor: None,
+    };
 
     probe.until("content height 600", |p| p.height == Some(600))?;
-    probe.until("a frame at 800x1200", |p| p.frame_size() == Some((800, 1200)))?;
+    probe.until("a frame at 800x1200", |p| {
+        p.frame_size() == Some((800, 1200))
+    })?;
     println!("laid-out frame: {:?} after open", opened.elapsed());
     probe.until("red/blue/green at y=10/350/550", |p| {
-        p.pixel(10, 10) == Some(RED) && p.pixel(10, 350) == Some(BLUE) && p.pixel(10, 550) == Some(GREEN)
+        p.pixel(10, 10) == Some(RED)
+            && p.pixel(10, 350) == Some(BLUE)
+            && p.pixel(10, 550) == Some(GREEN)
     })?;
     if wakes.get() == 0 {
         return Err("frames arrived but the view never woke its host".into());
     }
 
     let hover = Instant::now();
-    view.input(Input::Move { x: 10.0, y: 10.0, modifiers: Modifiers::default() });
-    probe.until("hover turning the first block magenta", |p| p.pixel(10, 10) == Some(MAGENTA))?;
+    view.input(Input::Move {
+        x: 10.0,
+        y: 10.0,
+        modifiers: Modifiers::default(),
+    });
+    probe.until("hover turning the first block magenta", |p| {
+        p.pixel(10, 10) == Some(MAGENTA)
+    })?;
     println!("hover -> pixel: {:?}", hover.elapsed());
     view.input(Input::Leave);
-    probe.until("leave turning it red again", |p| p.pixel(10, 10) == Some(RED))?;
+    probe.until("leave turning it red again", |p| {
+        p.pixel(10, 10) == Some(RED)
+    })?;
 
-    view.input(Input::Move { x: 10.0, y: 350.0, modifiers: Modifiers::default() });
-    probe.until("a pointer cursor over the second block", |p| p.cursor == Some(Cursor::Pointer))?;
+    view.input(Input::Move {
+        x: 10.0,
+        y: 350.0,
+        modifiers: Modifiers::default(),
+    });
+    probe.until("a pointer cursor over the second block", |p| {
+        p.cursor == Some(Cursor::Pointer)
+    })?;
     view.input(Input::Leave);
 
     view.set_theme(":root { --ferrite-accent: rgb(255, 255, 0) }");
-    probe.until("the new theme's yellow", |p| p.pixel(10, 550) == Some(YELLOW))?;
+    probe.until("the new theme's yellow", |p| {
+        p.pixel(10, 550) == Some(YELLOW)
+    })?;
 
-    view.resize(Viewport { width: 300, scale: SCALE as f32 });
-    probe.until("a frame at 600x1200 after the resize", |p| p.frame_size() == Some((600, 1200)))?;
+    view.resize(Viewport {
+        width: 300,
+        scale: SCALE as f32,
+    });
+    probe.until("a frame at 600x1200 after the resize", |p| {
+        p.frame_size() == Some((600, 1200))
+    })?;
 
     let mut idle_frames = 0;
     let idle_until = Instant::now() + Duration::from_secs(1);

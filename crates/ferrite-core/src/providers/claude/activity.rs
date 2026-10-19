@@ -128,6 +128,15 @@ impl Usage {
 }
 
 impl Decoder {
+    /// The CLI's task id for `key`, which `stop_task` takes: a Subagent is
+    /// known by several aliases, and only its task one can stop it.
+    pub(super) fn task_of(&self, key: &AgentKey) -> Option<String> {
+        self.aliases.iter().find_map(|(alias, target)| match alias {
+            Alias::Task(id) if target == key => Some(id.clone()),
+            _ => None,
+        })
+    }
+
     /// The host successfully answered this request. Actual execution state
     /// still comes from the provider; a sent answer is not proof of progress.
     pub(super) fn decision_resolved(&mut self, id: &str) {

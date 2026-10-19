@@ -214,7 +214,10 @@ impl TranscriptRows {
     /// for answers at `reading` px.
     pub(crate) fn new(blocks: &[Block], shape: &RowShape, reading: f32) -> Self {
         let rows = project(blocks, shape, reading);
-        Self { visuals: visual_indices(&rows), rows: rows.into() }
+        Self {
+            visuals: visual_indices(&rows),
+            rows: rows.into(),
+        }
     }
 
     /// The indices of the rows that are visuals.
@@ -810,10 +813,6 @@ mod tests {
             is_error,
             result: ferrite_core::ToolResult::Opaque,
         }));
-    }
-
-    fn ids(rows: &TranscriptRows) -> Vec<RowId> {
-        rows.rows().iter().map(|row| row.id().clone()).collect()
     }
 
     /// Adjacent routine calls fold into one group row, named by its first

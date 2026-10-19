@@ -700,10 +700,7 @@ pub(super) fn tool_result_text(content: Option<&Value>) -> String {
         {
             blocks
                 .iter()
-                .map(|block| match block["text"].as_str() {
-                    Some(text) => text,
-                    None => "[image]",
-                })
+                .map(|block| block["text"].as_str().unwrap_or("[image]"))
                 .collect::<Vec<_>>()
                 .join("\n")
         }

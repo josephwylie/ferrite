@@ -1,0 +1,192 @@
+---
+status: superseded by 0030
+date: 2026-10-15
+---
+
+# Coordinator Threads
+
+> Superseded by ADR 0030: herdr-projects is vendored as Ferrite's
+> coordinator, and what this ADR built is removed. Withdrawn with
+> herdr-projects 0.2 (ADR 0031): it never shipped, and nothing reads
+> `coordinators.json` any more, not even to migrate it; an old file is
+> left where it is.
+
+Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`,
+"Features taken from plugins" → Coordinator Threads), on the API of ADR
+0027. The pattern is herdr-projects' (MIT): ideas only, no code.
+
+## Context
+
+Running a larger piece of work across agents means briefing each one,
+keeping track of who does what, and carrying what one learned to the
+next. herdr-projects does it with one coordinator agent that never does
+the work itself: it proposes tasks, starts an agent per task on its own
+branch with the same goal, instructions and memory, and Herdr's sidebar
+shows which need the operator. Ferrite has the pieces — the API and the
+skill, worktree Threads, Groups, the `gh` reading behind the Pane
+header — but not the bookkeeping that ties them together.
+
+## Decision
+
+### One coordinator per Project, kept by the Server
+
+A **Coordinator** is a Thread in its Project's main checkout, briefed by
+its first prompt to plan with the operator and delegate everything. The
+Server keeps the book in `coordinators.json` beside the Store, one entry
+per Project: the coordinator, the Project's goal and standing
+instructions, whether its PRs are followed, and its workers (each with its
+task and the PR feedback already sent to it). The Project's **memory** is
+a Markdown file of its own under `memory/` beside the Store, so the
+operator can read and edit it; never inside a repo.
+
+Starting a coordinator for a Project that has one answers that one
+(reopened when parked): a Project has one goal and one memory, and two
+coordinators would brief workers from the same memory at cross purposes.
+A start names its Project by a directory: the registered Project holding
+it, or holding its repository's main checkout (a start from a worktree),
+and only when none does is that main checkout registered, so a start from
+a subdirectory never makes a second Project. A goal, instructions or
+`follow_prs` given with the start are recorded either way, as
+`coordinator.update` records them, never dropped; a running coordinator
+whose goal or instructions a start changed is sent its new brief, by
+`agent.prompt`'s rules (one a Decision blocks is logged, and reads it with
+`coordinator get`). `coordinator.update` tells it nothing: the coordinator
+is the one that calls it. When the Project's coordinator Thread was
+deleted, a start opens its successor, which takes over the entry: the
+brief, the workers and what each was sent stay, so the old workers' lessons and PR feedback keep flowing.
+
+### Driven through the API, so the coordinator agent drives it
+
+Four operations join the API's table, append-only:
+
+| Operation | Does |
+|---|---|
+| `coordinator.start` | the Project of `cwd`'s coordinator, started and briefed, or the one it has; the brief given is recorded |
+| `coordinator.get` | its brief, memory and workers, open ones in need order |
+| `coordinator.update` | goal, standing instructions, PR follow-up |
+| `worker.start` | a Thread in a new worktree of the Project, seated in the coordinator's Group, briefed with the Project's brief and its task |
+
+`worker.start` refuses `not_a_coordinator` for a Thread that leads no
+Project, and `invalid_request` for a blank task or title, before any
+worker exists. A worker that has started is the coordinator's whatever
+fails after (its Group seat, its title, both logged): the coordinator is
+told only of a failure it could act on, so it never starts the same task
+twice.
+
+The skill teaches the commands; the coordinator's brief tells it how to
+work. The **go-ahead** is the coordinator's own Decision: it proposes the
+tasks with its question tool (a Question the operator answers), or ends
+its turn with the proposal where its Provider has none. The Server does
+not gate `worker.start` on a synthetic Decision of its own: a Decision is
+a Provider's request, and inventing a second kind for this one act would
+be a new concept for little — the operator sees every worker start in
+the nav, and the API is owner-only anyway.
+
+### The Group, read by what needs the operator
+
+A coordinator's first worker makes a Group with the coordinator first,
+titled as the coordinator is; later workers join it. The Group remembers
+its coordinator (`coordinator` in `groups.json`, optional, so older
+windows read the file unchanged and older files load). The nav lists such a
+Group's coordinator first and its workers by need — **needs you**
+(blocked), **ready for review** (done or idle: a worker that finished,
+seen or not, waits for review until it works again), **working** —
+creation order among equals, whatever the sort, and holds still under the
+pointer like every other ranked row (C8). Members are not reordered in
+the file: the Group's Panes keep their places on the board.
+
+A window starts a coordinator from the palette, `coordinate <project>`,
+through a new gen-1 command `coordinate {project, provider}` answered
+with the Thread, and lands on it. A window running its Engine in-process
+(`--demo`, tests) does not offer it, and is refused if asked: only a
+Server coordinates.
+
+A worker's need is not labelled in words in the nav: `Need` is a fold of
+Attention, and each row already wears its status mark (needs you,
+working, done unseen), so the order plus the mark is the label; a worker
+already read and idle sits among the ready-for-review rows unmarked. A worker that could
+not be seated in the Group (logged) is still an open Thread, listed
+loose, and `coordinator get` lists it among the workers.
+
+### Lessons flow back through `## Remember`
+
+A worker's brief asks it to commit on its branch and, where the Project
+follows PRs, to push it and open a pull request, so the feedback below has
+a PR to come from. It ends its report with a `## Remember` section,
+one lesson per bullet. The Server keeps, per worker, the last transcript
+Block it read. Whenever the worker is at rest (done or idle) and has
+written past that Block, everything since is read as the API's
+`agent.read` reads it, and the lessons the memory does not hold yet are
+appended. Reading by Block rather than by watching Attention change
+catches every turn: one shorter than a pump pass, one blocked on a
+Decision on the way, and one that ran straight into a queued prompt. A
+worker first seen at rest (a Server restart) has nothing new; one first
+seen mid-turn is read from that turn's prompt. Lessons the memory file
+could not take are read again on the next pass, not dropped. Later briefs
+carry the memory as it is then.
+
+### PR feedback, opt-in
+
+With `follow_prs` on, the Server reads each open worker's PR every minute
+(the Pane header's pace for `gh`), off the pump thread: `gh pr view` with
+the check rollup, the reviews and the conversation comments, then, for an
+open PR, `gh api repos/{owner}/{repo}/pulls/<number>/comments --paginate`
+for the line comments on the diff, which `gh pr view` does not carry. Each
+line comment leads with the `path:line` it is on. A failure of that second
+call costs only its line comments, which the next reading asks for again.
+Each failing check (named by its run, so a rerun's failure is new) and
+each review or comment with words in it is sent to the worker once,
+together, through `agent.prompt`'s own rules: queued behind a working
+turn, never sent to a blocked one. What could not be sent is tried at the
+next reading. A merged or closed PR asks nothing; neither does an
+approving review, nor anything the PR's own author wrote. A worker's `gh`
+is the operator's, so its replies on the PR carry the PR author's name,
+and following them would start the worker again on its own words, a paid
+turn each, possibly in a loop. The cost is that the operator's own
+comments on a worker's PR are not followed either; the operator tells a
+worker directly in its Thread. Turning `follow_prs` off stops a reading
+already under way from being sent.
+
+### A merged PR resolves its worker
+
+herdr-projects' rule: a merged pull request resolves the thread and
+removes its worktree and branch once its agent has finished. Where the
+Project follows PRs, the reading that finds a worker's PR merged, with
+the worker at rest (done or idle, no Decision, nothing queued) and its
+checkout clean (nothing modified, nothing untracked: `git status`, asked
+in the same pass off the pump thread), parks the worker and records the
+merge (the PR and its head commit) in `coordinators.json`. The next pass,
+at once and still off the pump thread, removes the worktree with a plain
+`git worktree remove`, never forced, and deletes the branch Ferrite made
+for it only while that branch's tip is the PR's head commit as `gh`
+reports it (`headRefOid`): a squash or rebase merge leaves a branch
+`git branch -d` calls unmerged, and a branch with a commit past the PR
+would lose it. A kept branch is logged and named to the coordinator.
+
+The worker is then resolved: bound to its repo's main checkout (a parked
+Thread bound to a worktree that is gone would have it rebuilt on demand
+by a revive) and forgotten by the worktree menu, recorded as resolved,
+taken out of the coordinator's Group, and the coordinator is told, by
+`agent.prompt`'s rules, so it can plan the next task; one a Decision
+blocks is logged, and `coordinator get` lists the worker among the
+closed, with its merge. A revived resolved worker works in the main
+checkout and is no longer followed.
+
+Nothing destructive is retried blindly, and every step can be repeated:
+a dirty checkout is left open, logged, and asked again at the next
+reading; a worktree git still refuses once parked (written to in
+between) stays, logged, and is tried again at the next pass; a worktree
+already gone is gone, and so is a branch. A worker opened again before
+it was resolved is left to its next reading. A closed, unmerged PR does
+nothing.
+
+## Consequences
+
+- Every act a coordinator takes is an API request: a script can do what
+  a coordinator does, and the operator's palette does what a script can.
+- A worker's worktree, and its branch when nothing on it would be lost,
+  are removed once its PR merges, for coordinator Projects that follow
+  PRs only. Every other worktree is left in place: general worktree
+  cleanup stays out of scope.
+- An unreadable `coordinators.json` is logged and started afresh, as
+  unreadable settings are.

@@ -103,7 +103,7 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     }
     let first = view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
-        transcript_text(view.cockpit.thread(thread).unwrap().transcript().blocks())
+        plain_text(view.cockpit.thread(thread).unwrap().transcript().blocks())
     });
     assert!(
         !first.starts_with("turn 0 "),

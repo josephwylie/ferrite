@@ -1,5 +1,64 @@
 use super::*;
 
+/// A background task can park a Thread without going through this window's
+/// close action. The surviving Pane must keep the keyboard and the same draft
+/// even when that removal changes its index in the core roster.
+#[gpui::test]
+fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("composer-background-close", 3);
+    let threads = core.threads().to_vec();
+    core.focus_thread(threads[2]);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    tick(cx);
+    cx.simulate_input("keep this draft");
+    tick(cx);
+
+    // Exercise the core mutation seen from the Server, without the UI close
+    // action (which already synchronizes its mirror).
+    view.update(cx, |view, _| {
+        view.cockpit.park_thread(threads[0]).unwrap();
+        assert_eq!(
+            view.panes[view.focused()].thread(),
+            Some(threads[2]),
+            "focus follows identity even before the next UI pump"
+        );
+    });
+    tick(cx);
+    let editor = cx
+        .debug_bounds("focused-prompt-editor")
+        .expect("the visible editor still owns focus after another Thread parks");
+    cx.simulate_click(editor.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("end");
+    cx.simulate_input(" typed");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let pane = &view.panes[view.pane_for(threads[2]).unwrap()];
+        assert_eq!(pane.composer.read(cx).text(), "keep this draft typed");
+        assert_eq!(view.panes[view.focused()].thread(), Some(threads[2]));
+    });
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(" pasted".into())));
+    cx.dispatch_action(Paste);
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(
+            view.panes[view.focused()].composer.read(cx).text(),
+            "keep this draft typed pasted"
+        );
+    });
+    assert!(
+        cx.debug_bounds("prompt-placeholder").is_none(),
+        "pasted text must be visible in the editor"
+    );
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        fake.sent.borrow().as_slice(),
+        ["keep this draft typed pasted"]
+    );
+}
+
 #[gpui::test]
 fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-followup-width", 1);
@@ -160,7 +219,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
     core.set_effort(thread, Some("high".into())).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.update(cx, |view, cx| {
+    view.update_in(cx, |view, window, cx| {
         view.open_provider_picker(thread, cx);
         let pick = view
             .popover
@@ -178,7 +237,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
                 state: ferrite_core::RunState::Running,
             }),
         );
-        view.pick(pick, cx);
+        view.pick(pick, window, cx);
         let menu = view.popover.as_ref().expect("explanation stays open");
         assert_eq!(menu.rows[0].name, TUNING_BUSY_HINT);
         assert!(menu.rows.iter().all(|row| row.inert));

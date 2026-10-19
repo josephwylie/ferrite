@@ -14,13 +14,10 @@
 //! so Ferrite's own paths self-heal). Documented, not built for.
 
 use crate::spawn::NoConsoleWindow;
-use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 pub mod follow;
 pub mod registry;
@@ -64,11 +61,30 @@ impl WorkspaceBinding {
 /// choice into a `WorkspaceBinding`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceChoice {
-    Main { checkout: PathBuf },
-    Branch { checkout: PathBuf, branch: String },
-    NewBranch { checkout: PathBuf },
-    NewWorktree { repo: PathBuf },
-    ExistingWorktree { repo: PathBuf, path: PathBuf },
+    Main {
+        checkout: PathBuf,
+    },
+    Branch {
+        checkout: PathBuf,
+        branch: String,
+    },
+    NewBranch {
+        checkout: PathBuf,
+    },
+    NewWorktree {
+        repo: PathBuf,
+    },
+    /// A fresh worktree on a new branch the caller names, made from `base`
+    /// (the repo's HEAD when none): the API's `thread.start --branch`.
+    NamedWorktree {
+        repo: PathBuf,
+        branch: String,
+        base: Option<String>,
+    },
+    ExistingWorktree {
+        repo: PathBuf,
+        path: PathBuf,
+    },
 }
 
 impl WorkspaceChoice {
@@ -78,7 +94,7 @@ impl WorkspaceChoice {
         match self {
             Self::Main { checkout } => checkout,
             Self::Branch { checkout, .. } | Self::NewBranch { checkout } => checkout,
-            Self::NewWorktree { repo } => repo,
+            Self::NewWorktree { repo } | Self::NamedWorktree { repo, .. } => repo,
             Self::ExistingWorktree { path, .. } => path,
         }
     }
@@ -155,6 +171,54 @@ fn scan(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
         }
         scan(&entry.path(), depth + 1, found);
     }
+}
+
+/// `~` and `~/…` spelled out against this computer's home directory, so a
+/// path typed for a machine is read where it is meant; any other path as
+/// it is.
+pub fn expand_home(path: &Path) -> PathBuf {
+    let Ok(rest) = path.strip_prefix("~") else {
+        return path.to_path_buf();
+    };
+    // Windows spells the home directory USERPROFILE, not HOME.
+    match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        Some(home) => PathBuf::from(home).join(rest),
+        None => path.to_path_buf(),
+    }
+}
+
+/// One entry `list_dir` read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    /// A directory, or a link to one.
+    pub directory: bool,
+}
+
+/// A directory's entries, in name order, and the path they were read at
+/// with `~` spelled out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub path: PathBuf,
+    pub entries: Vec<DirEntry>,
+}
+
+/// Read a directory on this computer: how a window on a machine browses
+/// the machine's folders through its Server (ADR 0026). A name that is not
+/// UTF-8 is left out: it could not be typed back.
+pub fn list_dir(path: &Path) -> io::Result<Listing> {
+    let path = expand_home(path);
+    let mut entries: Vec<DirEntry> = fs::read_dir(&path)?
+        .flatten()
+        .filter_map(|entry| {
+            Some(DirEntry {
+                directory: entry.path().is_dir(),
+                name: entry.file_name().into_string().ok()?,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Listing { path, entries })
 }
 
 /// The files and directories under `root` the Composer's `@` menu
@@ -259,6 +323,11 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
     if path.join(".git").exists() {
         return Ok(());
     }
+    // Revivals place their worktrees on spawning threads at once (ADR
+    // 0018). One at a time: a prune can remove another add's admin
+    // directory in the instant before git marks it "initializing".
+    static PLACING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _placing = PLACING.lock().unwrap_or_else(|e| e.into_inner());
     // A worktree deleted by hand leaves a stale registration that keeps its
     // branch "checked out" (probed: re-adding the branch fails until a
     // prune). Pruning first makes recreation just work.
@@ -274,6 +343,68 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
         git(repo, &["worktree", "add", path, branch])?;
     }
     Ok(())
+}
+
+/// Add a worktree at `path` on a new branch `branch`, made from `base` (the
+/// repo's HEAD when none). Git refuses a branch that already exists: a new
+/// worktree never takes over another's work.
+pub fn add_worktree(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<(), GitError> {
+    git(repo, &["worktree", "prune"])?;
+    let mut args = vec!["worktree", "add", "-b", branch, path_str(path)?];
+    args.extend(base);
+    git(repo, &args).map(|_| ())
+}
+
+/// Which repository the checkout at `root` belongs to, read from its `.git`
+/// without running git: a main checkout's is a directory; a linked
+/// worktree's is a file naming its admin directory, which holds the
+/// `commondir` it shares with the main checkout. `None` outside git. A
+/// submodule's `.git` file has no `commondir`: it is a checkout of its own.
+pub fn checkout_of(root: &Path) -> Option<Checkout> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Some(Checkout {
+            repo: root.to_path_buf(),
+            linked: false,
+        });
+    }
+    let pointer = fs::read_to_string(&dot_git).ok()?;
+    let admin = root.join(pointer.trim().strip_prefix("gitdir:")?.trim());
+    let Ok(common) = fs::read_to_string(admin.join("commondir")) else {
+        return Some(Checkout {
+            repo: root.to_path_buf(),
+            linked: false,
+        });
+    };
+    let common = fs::canonicalize(admin.join(common.trim())).ok()?;
+    Some(Checkout {
+        repo: common.parent()?.to_path_buf(),
+        linked: true,
+    })
+}
+
+/// Whether `a` and `b` are one directory, however spelled (a symlink, a
+/// trailing `.`); paths not on disk are compared as written.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (fs::canonicalize(a), fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// A checkout, as `checkout_of` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkout {
+    /// The repository's main checkout.
+    pub repo: PathBuf,
+    /// A linked worktree of `repo`, not the main checkout itself.
+    pub linked: bool,
 }
 
 /// Command arguments are strings; a path that is not UTF-8 cannot be handed
@@ -343,10 +474,10 @@ pub fn pick_default_branch(origin_head: Option<&str>, has_branch: impl Fn(&str) 
         .to_string()
 }
 
-/// How far a checkout has drifted, and what the forge says about it — the
-/// Pane header's second line (#29). Every field is `Option`-ish in spirit:
-/// a tree with no upstream reports no ahead/behind, and a repo with no
-/// `gh` (or no PR) reports no PR. Nothing here is invented.
+/// How far a checkout has drifted — the Pane header's second line (#29)
+/// and the nav row's details. Every field is `Option`-ish in spirit: a tree
+/// with no upstream reports no ahead/behind. Nothing here is invented. Its
+/// PR is read apart, on its own cadence (`pull_request`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BranchStatus {
     /// The branch by name, or a short commit id on a detached HEAD.
@@ -359,9 +490,6 @@ pub struct BranchStatus {
     /// Working-tree entries `git status --porcelain` lists — modified,
     /// staged and untracked alike. Zero is a clean tree.
     pub dirty: u32,
-    /// What `gh` says about the branch's pull request, when `gh` is
-    /// installed, authenticated, and the branch has one.
-    pub pr: Option<PullRequest>,
 }
 
 /// The branch's pull request, as the forge reports it.
@@ -370,18 +498,19 @@ pub struct PullRequest {
     pub number: u64,
     pub state: PrState,
     pub draft: bool,
+    /// Where the PR lives on the forge; `None` when `gh` did not say.
+    pub url: Option<String>,
     /// The rollup of the PR's checks. `None` when the PR has no checks at
     /// all — an honest silence, not a pass.
     pub checks: Option<CheckState>,
     /// Every check behind that rollup, in the order the forge lists them:
-    /// what the header's `ci` mark opens onto. Empty exactly when `checks`
+    /// what the checks card lists. Empty exactly when `checks`
     /// is `None` — the rollup *is* this list, folded.
     pub runs: Vec<Check>,
 }
 
 impl PullRequest {
-    /// How the runs divide. The header's mark is a count, and this is what
-    /// it counts.
+    /// How the runs divide: the checks card's counts.
     pub fn tally(&self) -> Tally {
         let mut tally = Tally::default();
         for run in &self.runs {
@@ -454,11 +583,9 @@ pub enum CheckState {
     Skipped,
 }
 
-/// Read the checkout's drift and its PR in one place, off the UI thread.
-/// One `git status --porcelain=v2 --branch` answers branch, upstream,
-/// ahead/behind and dirt together; `gh` is asked separately and its
-/// absence costs only the failed spawn. `None` where `cwd` is not a
-/// checkout at all.
+/// Read the checkout's drift, off the UI thread. One `git status
+/// --porcelain=v2 --branch` answers branch, upstream, ahead/behind and dirt
+/// together. `None` where `cwd` is not a checkout at all.
 pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
     let listed = git(cwd, &["status", "--porcelain=v2", "--branch"]).ok()?;
     let mut status = BranchStatus::default();
@@ -485,7 +612,6 @@ pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
             .map(|head| head.trim().to_string())
             .filter(|head| !head.is_empty());
     }
-    status.pr = cached_pull_request(cwd);
     Some(status)
 }
 
@@ -494,57 +620,43 @@ fn parse_signed(token: &str) -> Option<u32> {
     token.trim_start_matches(['+', '-']).parse::<u32>().ok()
 }
 
-/// How long a PR reading is reused before `gh` is asked again. The branch
-/// half of the status is local git and rides the caller's own cadence; the
-/// PR half crosses the network, so it gets its own, far slower one. A
-/// header that is a minute stale about CI is right; one that spawns `gh`
-/// every couple of seconds per Thread is not.
-const PR_TTL: Duration = Duration::from_secs(60);
-
-/// The last PR reading per checkout, with when it was taken. Keyed by cwd
-/// because that is what the caller has; a worktree and its repo are
-/// different branches and so different answers.
-static PR_CACHE: Mutex<Option<HashMap<PathBuf, (Instant, Option<PullRequest>)>>> = Mutex::new(None);
-
-/// The branch's PR, from cache while it is fresh and from `gh` when it is
-/// not.
-fn cached_pull_request(cwd: &Path) -> Option<PullRequest> {
-    let mut guard = PR_CACHE.lock().ok()?;
-    let cache = guard.get_or_insert_with(HashMap::new);
-    if let Some((taken, pr)) = cache.get(cwd) {
-        if taken.elapsed() < PR_TTL {
-            return pr.clone();
-        }
-    }
-    // Held across the call on purpose: several Threads in one worktree ask
-    // together on the tick, and one `gh` for them is the whole point.
-    let pr = pull_request(cwd);
-    cache.insert(cwd.to_path_buf(), (Instant::now(), pr.clone()));
-    pr
+/// The branch's PR through `gh`, as `pr_view` reads it.
+pub fn pull_request(cwd: &Path) -> Option<PullRequest> {
+    parse_pr_json(&pr_view(cwd)?)
 }
 
-/// The branch's PR through `gh`. Every failure — no `gh`, not logged
-/// in, not a GitHub remote, no PR for this branch — is the same
-/// answer: the header says nothing about a PR. `gh` reads the checkout
-/// through `git`, so it is held to the same no-optional-locks rule.
-fn pull_request(cwd: &Path) -> Option<PullRequest> {
-    let output = Command::new("gh")
-        .args([
+/// `gh pr view`'s JSON for the branch checked out at `cwd`: what a Server
+/// answers a window with (`pull_request` on the wire), for the window to
+/// read with `parse_pr_json`. Every failure — no `gh`, not logged in, not
+/// a GitHub remote, no PR for this branch — is the same answer: nothing to
+/// say about a PR. `gh` reads the checkout through `git`, so it is held to
+/// the same no-optional-locks rule.
+pub fn pr_view(cwd: &Path) -> Option<String> {
+    gh(
+        cwd,
+        &[
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,statusCheckRollup",
-        ])
+            "number,state,isDraft,url,statusCheckRollup",
+        ],
+    )
+}
+
+/// Run one `gh` command in `cwd`, answering its stdout; `None` on every
+/// failure.
+fn gh(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("gh")
+        .args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .no_console_window()
         .output()
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let body = String::from_utf8_lossy(&output.stdout);
-    parse_pr_json(&body)
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —
@@ -552,7 +664,7 @@ fn pull_request(cwd: &Path) -> Option<PullRequest> {
 /// side by side, with different keys for the same three facts — so
 /// each element is read for whichever pair it carries. An element with no
 /// name at all is dropped rather than listed as a blank row.
-fn parse_pr_json(body: &str) -> Option<PullRequest> {
+pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     let number = value.get("number")?.as_u64()?;
     let state = match value.get("state").and_then(serde_json::Value::as_str)? {
@@ -564,6 +676,10 @@ fn parse_pr_json(body: &str) -> Option<PullRequest> {
         .get("isDraft")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let url = value
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     let runs: Vec<Check> = value
         .get("statusCheckRollup")
         .and_then(serde_json::Value::as_array)
@@ -576,6 +692,7 @@ fn parse_pr_json(body: &str) -> Option<PullRequest> {
         number,
         state,
         draft,
+        url,
         checks,
         runs,
     })
@@ -701,6 +818,38 @@ pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
         .collect())
 }
 
+/// What a repo holds for the workspace chip: the branch its main checkout
+/// is on, its other worktrees, and its local branches — each in git's own
+/// order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoListing {
+    /// None when the checkout's HEAD is detached.
+    pub checked_out: Option<String>,
+    pub worktrees: Vec<ListedWorktree>,
+    pub branches: Vec<String>,
+}
+
+/// Read `root`'s repo for the workspace chip — two git calls, never on a
+/// UI or pump thread; on a machine its Server reads it (`list_repo`, ADR
+/// 0026). The main checkout is left out of the worktrees (it is the
+/// `checked out` row already), as is any worktree whose directory is
+/// gone: git still lists a prunable one, but it is no place to work. A
+/// root git cannot answer for lists nothing, and the chip offers the
+/// fresh starts alone.
+pub fn repo_listing(root: &Path) -> RepoListing {
+    let checkout = follow::canonical(root);
+    let (main, worktrees): (Vec<_>, Vec<_>) = worktrees(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|worktree| worktree.path.is_dir())
+        .partition(|worktree| follow::canonical(&worktree.path) == checkout);
+    RepoListing {
+        checked_out: main.into_iter().find_map(|main| main.branch),
+        worktrees,
+        branches: branches(root).unwrap_or_default(),
+    }
+}
+
 /// Whether the tree at `cwd` is clean exactly as `git status` defines it:
 /// nothing modified, nothing untracked — an empty porcelain listing.
 pub fn is_clean(cwd: &Path) -> Result<bool, GitError> {
@@ -767,10 +916,10 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
 mod tests {
 
     /// `gh`'s JSON is read for the PR's own facts, and a failing check
-    /// anywhere in the rollup is what the header must say.
+    /// anywhere in the rollup is what the label must say.
     #[test]
     fn a_pr_reading_takes_the_worst_check_in_the_rollup() {
-        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","statusCheckRollup":[
+        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","url":"https://github.com/o/r/pull/47","statusCheckRollup":[
             {"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},
             {"name":"test","status":"COMPLETED","conclusion":"FAILURE"}
         ]}"#;
@@ -778,6 +927,7 @@ mod tests {
         assert_eq!(pr.number, 47);
         assert_eq!(pr.state, PrState::Open);
         assert!(!pr.draft);
+        assert_eq!(pr.url.as_deref(), Some("https://github.com/o/r/pull/47"));
         assert_eq!(pr.checks, Some(CheckState::Failing));
     }
 
@@ -1229,6 +1379,23 @@ mod tests {
         );
     }
 
+    /// A path typed for a machine leads with `~` only as a whole component;
+    /// it is spelled out against the home of the computer that reads it.
+    #[test]
+    fn expand_home_spells_out_a_leading_tilde_only() {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .expect("a home");
+        assert_eq!(expand_home(Path::new("~")), home);
+        assert_eq!(expand_home(Path::new("~/src")), home.join("src"));
+        assert_eq!(
+            expand_home(Path::new("~other/src")),
+            Path::new("~other/src")
+        );
+        assert_eq!(expand_home(Path::new("/src/~")), Path::new("/src/~"));
+    }
+
     /// The Composer's `@` menu source (#23): files relative with `/`, the
     /// scan's skip list honoured, deterministic order, and the cap holding.
     #[test]
@@ -1376,7 +1543,7 @@ mod tests {
         let repo = init_repo(&root);
         let index = repo.join(".git").join("index");
         let before = fs::read(&index).unwrap();
-        let touched = std::time::SystemTime::now() + Duration::from_secs(60);
+        let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         fs::File::options()
             .write(true)
             .open(repo.join("file.txt"))
@@ -1391,5 +1558,63 @@ mod tests {
             fs::read(&index).unwrap() == before,
             "reading the checkout rewrote its index"
         );
+    }
+
+    /// A named worktree starts from the base it was given, on its own new
+    /// branch; a branch that already exists is git's refusal, not a reuse.
+    #[test]
+    fn a_named_worktree_is_a_new_branch_from_its_base() {
+        let root = scratch("named");
+        let repo = init_repo(&root);
+        let base = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(repo.join("file.txt"), "moved on\n").unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qam",
+                "later",
+            ],
+        )
+        .unwrap();
+        let tree = root.join("tree");
+
+        add_worktree(&repo, &tree, "feature/named", Some(base.trim())).unwrap();
+
+        assert_eq!(branch_of(&tree), "feature/named");
+        assert_eq!(fs::read_to_string(tree.join("file.txt")).unwrap(), "base\n");
+        let again = add_worktree(&repo, &root.join("again"), "feature/named", None);
+        assert!(again.is_err(), "an existing branch is never taken over");
+    }
+
+    /// A checkout's repository is read from its `.git` alone: the main
+    /// checkout is its own, a linked worktree names the main checkout, and
+    /// a plain directory is no checkout.
+    #[test]
+    fn a_checkout_names_its_repository_without_running_git() {
+        let root = scratch("checkout-of");
+        let repo = init_repo(&root);
+        let tree = root.join("linked");
+        ensure_worktree(&repo, &tree, "ferrite/linked").unwrap();
+
+        assert_eq!(
+            checkout_of(&repo),
+            Some(Checkout {
+                repo: repo.clone(),
+                linked: false,
+            })
+        );
+        assert_eq!(
+            checkout_of(&tree),
+            Some(Checkout {
+                repo: fs::canonicalize(&repo).unwrap(),
+                linked: true,
+            })
+        );
+        assert_eq!(checkout_of(&root), None);
     }
 }

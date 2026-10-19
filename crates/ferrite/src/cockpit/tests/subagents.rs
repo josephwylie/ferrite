@@ -87,7 +87,7 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
             .activity()
             .subject(&view.panes[0].selected)
             .unwrap();
-        assert!(transcript_text(subject.transcript().blocks()).contains("Atlas transcript"));
+        assert!(plain_text(subject.transcript().blocks()).contains("Atlas transcript"));
     });
     assert!(cx.debug_bounds("return-main-1").is_some());
     emit(
@@ -514,7 +514,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
         "all five native tabs fit a wide pane"
     );
     click_child(cx, "Rowan");
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     cx.run_until_parked();
     cx.simulate_resize(gpui::size(px(640.), px(800.)));
     cx.run_until_parked();
@@ -592,7 +592,7 @@ fn native_tab_press_cannot_jump_to_an_overflow_slot_after_resize(cx: &mut TestAp
         child(&fake, name, AgentStatus::Idle);
     }
     tick(cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     cx.run_until_parked();
     let pressed = tab(cx, "Rowan");
     cx.simulate_mouse_down(pressed, MouseButton::Left, gpui::Modifiers::none());
@@ -717,7 +717,7 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(640.), px(800.)));
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     cx.run_until_parked();
     for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
         child(&fake, name, AgentStatus::Idle);

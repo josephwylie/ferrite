@@ -279,6 +279,10 @@ struct PersistedGroup {
 #[derive(Clone)]
 pub struct Groups {
     dir: PathBuf,
+    /// Whether the Store at `dir` is on this computer, so a change is
+    /// checked against its Threads here: not in a copy of a machine's,
+    /// whose Server checks it when it applies the change (ADR 0026).
+    local: bool,
     groups: Vec<Group>,
     next_id: u64,
 }
@@ -365,6 +369,7 @@ impl Groups {
         let next_id = groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1;
         let this = Self {
             dir: dir.to_path_buf(),
+            local: true,
             groups,
             next_id,
         };
@@ -510,6 +515,9 @@ impl Groups {
     }
 
     fn validate_change(&self, change: &GroupChange) -> Result<(), ApplyError> {
+        if !self.local {
+            return Ok(());
+        }
         self.validate_all()?;
         match &change {
             GroupChange::Create { first, second } => {
@@ -707,8 +715,10 @@ impl Groups {
         }
     }
 
+    // Validation only reads the Store: a window's copy validates a drop
+    // without ever taking the Store's claim.
     fn thread_project(&self, thread: ThreadId) -> Result<Option<ProjectId>, ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         store
             .peek(thread)
             .map(|meta| meta.project_id)
@@ -721,7 +731,7 @@ impl Groups {
     }
 
     fn validate_all(&self) -> Result<(), ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         let known: BTreeSet<_> = store.thread_ids()?.into_iter().collect();
         for thread in self.groups.iter().flat_map(|group| &group.members) {
             if !known.contains(thread) {
@@ -734,8 +744,54 @@ impl Groups {
         Ok(())
     }
 
+    /// The Groups as their file spells them: what a window's copy is
+    /// built from (ADR 0025).
+    pub fn to_wire(&self) -> serde_json::Value {
+        serde_json::to_value(self.persisted()).expect("the groups serialize")
+    }
+
+    /// No Groups: a window's copy of the Store in `dir` before the Server's
+    /// lands; `local` when that Store is on this computer.
+    pub(crate) fn empty(dir: &Path, local: bool) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            local,
+            groups: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// A window's read-only copy of the Server's Groups for the Store in
+    /// `dir`, taken as the Server healed them; `local` when that Store is on
+    /// this computer. It is never written: every change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path, local: bool) -> io::Result<Self> {
+        let persisted = serde_json::from_value::<PersistedGroups>(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let groups: Vec<Group> = persisted
+            .groups
+            .into_iter()
+            .map(|stored| Group {
+                id: stored.id,
+                title: stored.title,
+                members: stored.members.into_iter().map(ThreadId::new).collect(),
+                guests: stored.guests.into_iter().map(ThreadId::new).collect(),
+                layout: stored.layout,
+            })
+            .collect();
+        Ok(Self {
+            next_id: groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1,
+            groups,
+            ..Self::empty(dir, local)
+        })
+    }
+
     fn persist(&self) -> io::Result<()> {
-        let value = PersistedGroups {
+        let bytes = serde_json::to_vec_pretty(&self.persisted()).map_err(io::Error::other)?;
+        crate::store::replace_file(&self.dir.join(FILE_NAME), &bytes)
+    }
+
+    fn persisted(&self) -> PersistedGroups {
+        PersistedGroups {
             version: SCHEMA_VERSION,
             groups: self
                 .groups
@@ -748,11 +804,7 @@ impl Groups {
                     layout: group.layout.clone(),
                 })
                 .collect(),
-        };
-        let bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
-        let temporary = self.dir.join(format!(".{FILE_NAME}.tmp"));
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, self.dir.join(FILE_NAME))
+        }
     }
 }
 

@@ -88,12 +88,14 @@ fn centre(rect: &layout::Rect) -> gpui::Point<Pixels> {
     gpui::point(px(rect.x + rect.w / 2.), px(rect.y + rect.h / 2.))
 }
 
-/// Attention: a Thread out of sight finishes; its Pane and its nav row say
-/// so at once.
+/// Seen: a Thread on the board finishes while the window is away; its
+/// Pane's head and its nav row say done at once, and both redraw it read
+/// the moment the window comes back.
 #[gpui::test]
-fn a_finished_thread_out_of_sight_wears_attention(cx: &mut TestAppContext) {
+fn a_finish_while_the_window_is_away_is_drawn_done_until_it_returns(cx: &mut TestAppContext) {
     let b = board("stale-attention", &[1], cx);
-    assert!(!b.pane(1).attention);
+    assert!(!b.pane(1).unread);
+    b.cx.deactivate_window();
     b.send(
         1,
         SessionEvent::TextDelta {
@@ -109,13 +111,21 @@ fn a_finished_thread_out_of_sight_wears_attention(cx: &mut TestAppContext) {
     );
     tick(b.cx);
     frames(b.cx, 300);
-    assert!(b.pane(1).attention, "the Pane draws its attention");
+    assert!(b.pane(1).unread, "the Pane draws it done");
     assert!(
-        drawn::row(b.threads[1]).contains("unread=true"),
+        drawn::row(b.threads[1]).starts_with("Done "),
         "and its nav row: {}",
         drawn::row(b.threads[1])
     );
-    assert!(!b.pane(0).attention, "the focused Pane never does");
+    b.cx.update(|window, _| window.activate_window());
+    tick(b.cx);
+    frames(b.cx, 300);
+    assert!(!b.pane(1).unread, "seen: the Pane redraws it read");
+    assert!(
+        drawn::row(b.threads[1]).starts_with("Idle "),
+        "and so does its nav row: {}",
+        drawn::row(b.threads[1])
+    );
 }
 
 /// Focus: a click moves the keyboard to another Pane; both Panes redraw
@@ -181,12 +191,12 @@ fn the_panes_ride_the_nav_fold(cx: &mut TestAppContext) {
     );
 }
 
-/// Usage meters: an account window reported by one Thread is the account's
-/// — every Pane of that provider draws it.
+/// An account window lands in the bar's status line, whichever Thread
+/// reported it.
 #[gpui::test]
-fn an_account_window_reaches_every_panes_meter(cx: &mut TestAppContext) {
+fn an_account_window_reaches_the_bars_meter(cx: &mut TestAppContext) {
     let b = board("stale-usage", &[1], cx);
-    let before = b.pane(2).usage.clone();
+    let before = drawn::status_usage();
     b.send(
         1,
         SessionEvent::RateLimits {
@@ -199,9 +209,68 @@ fn an_account_window_reaches_every_panes_meter(cx: &mut TestAppContext) {
     );
     tick(b.cx);
     frames(b.cx, 200);
-    let after = b.pane(2).usage.clone();
-    assert_ne!(after, before, "another Pane's meter draws the new window");
+    let after = drawn::status_usage();
+    assert_ne!(after, before, "the bar's meter draws the new window");
     assert!(after.unwrap_or_default().contains("0.61"));
+}
+
+/// The bar's status line is a part of its own (ADR 0014): context spent by
+/// the focused Thread reaches its meter as it streams.
+#[gpui::test]
+fn the_focused_threads_context_reaches_the_bar(cx: &mut TestAppContext) {
+    let b = board("stale-status", &[0], cx);
+    b.send(
+        0,
+        SessionEvent::TokenUsage {
+            total_tokens: 124_000,
+            input_tokens: 124_000,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            context_window: Some(200_000),
+        },
+    );
+    tick(b.cx);
+    frames(b.cx, 200);
+    assert!(
+        drawn::status_usage().is_some_and(|usage| usage.starts_with("Some(124000)")),
+        "{:?}",
+        drawn::status_usage()
+    );
+}
+
+/// The bar's status line is the focused Pane's (ADR 0014): moving focus
+/// on a board (cmd-]) redraws it from the newly focused Thread.
+#[gpui::test]
+fn the_bars_status_line_follows_focus(cx: &mut TestAppContext) {
+    let b = board("stale-status-focus", &[], cx);
+    bind_production_keys(b.cx);
+    b.send(
+        1,
+        SessionEvent::TokenUsage {
+            total_tokens: 99_000,
+            input_tokens: 99_000,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            context_window: Some(200_000),
+        },
+    );
+    tick(b.cx);
+    frames(b.cx, 200);
+    let unfocused = drawn::status_usage().unwrap_or_default();
+    assert!(
+        !unfocused.starts_with("Some(99000)"),
+        "an unfocused Thread's usage is not the bar's: {unfocused}"
+    );
+    b.cx.simulate_keystrokes("cmd-]");
+    tick(b.cx);
+    frames(b.cx, 200);
+    assert!(
+        drawn::status_usage().is_some_and(|usage| usage.starts_with("Some(99000)")),
+        "{:?}",
+        drawn::status_usage()
+    );
 }
 
 /// The rename editor: opening it on a Pane's head draws it there; the name

@@ -1739,11 +1739,24 @@ impl Transcript {
                 self.mcp_authorizations.clear();
                 self.progress.disconnected();
                 self.mcp_servers.clear();
-                if matches!(self.status, Status::Streaming | Status::Blocked) {
-                    self.status = Status::Idle;
-                }
                 self.turn_started = None;
                 let mut dirty = self.retire_tools();
+                // The log ended inside a turn (a crash, a kill, a restart):
+                // that turn will never end, so it reads as interrupted
+                // rather than idle with no outcome. Nothing is logged.
+                if matches!(self.status, Status::Streaming | Status::Blocked) {
+                    self.status = Status::Idle;
+                    self.progress.end_turn();
+                    self.latest_reasoning_part = None;
+                    self.turn_outcome = Some(TurnOutcome::Interrupted);
+                    dirty.push(self.push(Body::TurnEnd(TurnEnd {
+                        outcome: TurnOutcome::Interrupted,
+                        elapsed_ms: None,
+                        completed_at: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                    })));
+                }
                 dirty.push(self.push(Body::Meta(
                     "revived — new Session, history from the log".into(),
                 )));
@@ -2722,6 +2735,52 @@ fn bold_at(rest: &str) -> Option<(&str, usize)> {
     (end > 0).then_some((&body[..end], end + 4))
 }
 
+/// A transcript as plain text, the way the operator would paste it
+/// somewhere else and the API's `agent.read` hands it to an agent: prompts
+/// quoted, prose flat, code fenced, tool rows as their one line plus the
+/// result line indented under it. Thinking stays out — it is not the
+/// conversation.
+pub fn plain_text(blocks: &[Block]) -> String {
+    let flat = |spans: &[Span]| -> String { spans.iter().map(|span| span.text.as_str()).collect() };
+    let mut out = String::new();
+    for block in blocks {
+        let piece = match &block.body {
+            Body::Prompt(text) => format!("> {text}"),
+            Body::Paragraph { spans } => flat(spans),
+            Body::Heading { spans, .. } => format!("## {}", flat(spans)),
+            Body::Bullet { spans } => format!("• {}", flat(spans)),
+            Body::Code {
+                language, source, ..
+            } => format!(
+                "```{}\n{source}\n```",
+                language.as_deref().unwrap_or_default()
+            ),
+            Body::Tool(tool) => {
+                let mut line = format!("● {}", tool.name);
+                if !tool.summary.is_empty() {
+                    line.push_str(&format!(" ({})", tool.summary));
+                }
+                // The elbow is painted, never text: the result hangs at
+                // its column, as a sweep across the row copies it.
+                if let Some(result) = &tool.result_line {
+                    line.push_str(&format!("\n    {result}"));
+                }
+                line
+            }
+            Body::Thinking(_) => continue,
+            Body::Notice(text) | Body::Meta(text) => text.clone(),
+            Body::TurnEnd(end) => end.text(),
+            // The page is a picture; its words are its title and caption.
+            Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
+        };
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&piece);
+    }
+    out
+}
+
 /// `[text](url) …` → ("text", bytes consumed). Only the text survives.
 fn link_at(rest: &str) -> Option<(&str, usize)> {
     let body = rest.strip_prefix('[')?;
@@ -3698,6 +3757,10 @@ mod tests {
     fn a_revived_thread_says_it_was_revived() {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Prompt("from before the restart".into()));
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        }));
 
         let update = transcript.apply(Input::Revived);
 
@@ -3710,6 +3773,56 @@ mod tests {
             body_text(last),
             "revived — new Session, history from the log"
         );
+    }
+
+    #[test]
+    fn a_turn_the_log_left_open_revives_as_interrupted() {
+        for blocked in [false, true] {
+            let mut transcript = Transcript::default();
+            transcript.apply(Input::Prompt("cut off mid-turn".into()));
+            transcript.apply(text("half a thou"));
+            if blocked {
+                transcript.apply(Input::Event(SessionEvent::RunState {
+                    state: crate::RunState::RequiresAction,
+                }));
+            }
+
+            let update = transcript.apply(Input::Revived);
+
+            assert_eq!(transcript.status(), Status::Idle);
+            assert_eq!(
+                transcript.turn_outcome(),
+                Some(&crate::TurnOutcome::Interrupted)
+            );
+            let rows: Vec<_> = transcript.blocks().iter().rev().take(2).collect();
+            assert_eq!(body_text(rows[1]), "interrupted");
+            assert_eq!(
+                body_text(rows[0]),
+                "revived — new Session, history from the log"
+            );
+            assert_eq!(update.dirty, vec![rows[1].id, rows[0].id]);
+        }
+    }
+
+    #[test]
+    fn a_settled_thread_revives_without_an_interruption() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("done before the restart".into()));
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+
+        transcript.apply(Input::Revived);
+
+        assert_eq!(
+            transcript.turn_outcome(),
+            Some(&crate::TurnOutcome::Completed)
+        );
+        assert!(transcript
+            .blocks()
+            .iter()
+            .all(|block| !matches!(block.body, Body::TurnEnd(_))));
     }
 
     #[test]

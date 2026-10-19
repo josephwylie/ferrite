@@ -106,12 +106,13 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     assert_eq!(*fake.interrupts.borrow(), 0);
 }
 
-/// FL-3 / FL-4: `par` keeps exactly `park thread`, `show parked` and
-/// `compare with main` among the commands, in the table's order, and the
-/// parked Thread among the Threads, its name lit from the start.
+/// FL-3 / FL-4: `par` keeps exactly `park thread` and `show parked` among
+/// the commands, in the table's order, and the parked Thread among the
+/// Threads, its name lit from the start. (`compare with main`, once a
+/// third survivor, is `review branch` since ADR 0021.)
 #[gpui::test]
 #[allow(clippy::single_range_in_vec_init)]
-fn par_keeps_three_commands_and_the_parked_thread(cx: &mut TestAppContext) {
+fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("palette-par", 3);
     let threads = core.threads();
     core.rename_thread(threads[2], "Release notes").unwrap();
@@ -132,10 +133,7 @@ fn par_keeps_three_commands_and_the_parked_thread(cx: &mut TestAppContext) {
             .filter(|row| row.section == Section::Commands)
             .map(|row| row.name.as_ref())
             .collect();
-        assert_eq!(
-            commands,
-            ["park thread", "show parked", "compare with main"]
-        );
+        assert_eq!(commands, ["park thread", "show parked"]);
         let threads: Vec<&str> = survivors
             .iter()
             .filter(|row| row.section == Section::Threads)
@@ -279,7 +277,7 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
         .find(|row| row.act == Act::Thread(threads[0]))
         .unwrap();
     assert_eq!(working.context.as_ref(), "perf sweep \u{b7} working");
-    assert_eq!(working.dot, Some(crate::palette::Dot::Working));
+    assert_eq!(working.status, Some(nav::RowStatus::Working));
 }
 
 /// FL-5: ⌘G opens the palette on the Groups alone; ⏎ enters the Group. ⌘⇧G
@@ -400,6 +398,58 @@ fn question_mark_opens_the_shortcuts_sheet_on_an_empty_line(cx: &mut TestAppCont
     assert_eq!(resolves("?", cx), None, "a typed `?` is just a character");
 }
 
+/// The sheet's filter line holds the keyboard: typing keeps the rows that
+/// match (a `?` included, as text), ↑↓ still scroll, ⏎ sends nothing, esc
+/// still closes.
+#[gpui::test]
+fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("shortcuts-filter", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    cx.simulate_keystrokes("?");
+    tick(cx);
+    assert!(cx.debug_bounds("shortcuts-input").is_some());
+    cx.simulate_input("park");
+    tick(cx);
+    let labels = |cx: &mut gpui::VisualTestContext| -> Vec<&'static str> {
+        view.read_with(cx, |view, cx| {
+            let sheet = view.floats.shortcuts.as_ref().expect("open").read(cx);
+            sheet.shown(cx).into_iter().map(|row| row.label).collect()
+        })
+    };
+    let shown = labels(cx);
+    assert_eq!(shown.first(), Some(&"park thread"), "{shown:?}");
+    assert!(shown.contains(&"show parked"));
+    assert!(!shown.contains(&"new thread"));
+    assert_eq!(resolves("down", cx), Some("shortcuts::ScrollDown"));
+    // Through key dispatch: no binding claims `?` in the filter, so it is
+    // text there.
+    assert_eq!(resolves("?", cx), None);
+    cx.simulate_keystrokes("?");
+    tick(cx);
+    assert!(labels(cx).is_empty(), "`?` is typed, not a toggle");
+    assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_some()));
+    // ⏎ in the filter sends nothing: not the Pane's draft from under it.
+    view.update(cx, |view, cx| {
+        let composer = view.panes[view.focused()].composer.clone();
+        composer.update(cx, |composer, cx| composer.set("draft".into(), cx));
+    });
+    assert_eq!(resolves("enter", cx), None);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(fake.sent.borrow().is_empty());
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[view.focused()].composer.read(cx).text(), "draft");
+        assert!(view.floats.shortcuts.is_some());
+    });
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.floats.shortcuts.is_none()));
+    assert_eq!(*fake.interrupts.borrow(), 0);
+}
+
 /// FL-9: ⇧⇥ steps the Session's permission modes through its own control.
 #[gpui::test]
 fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {
@@ -474,16 +524,16 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     let door = cx.debug_bounds("notifications-bell").unwrap();
     let panel = cx
         .debug_bounds("notifications-panel")
-        .expect("the list is down");
+        .expect("the list is up");
     assert!(
-        (panel.top() - (door.bottom() + px(crate::theme::NOTICE_PANEL_GAP))).abs() <= px(1.),
-        "4px under the bell: {panel:?} / {door:?}"
+        (panel.bottom() - (door.top() - px(crate::theme::NOTICE_PANEL_GAP))).abs() <= px(1.),
+        "4px over the bell: {panel:?} / {door:?}"
     );
     assert!(
         (panel.left() - door.left()).abs() <= px(1.),
         "on the bell's left"
     );
-    let rows = view.read_with(cx, |view, _| view.bell_rows());
+    let rows = view.read_with(cx, |view, cx| view.bell_rows(cx));
     assert_eq!(rows.len(), 5);
     assert!(rows[0].request() && rows[1].request(), "requests first");
     assert_eq!(
@@ -500,7 +550,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     cx.simulate_keystrokes("backspace");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.bell_rows().len()),
+        view.read_with(cx, |view, cx| view.bell_rows(cx).len()),
         4,
         "⌫ dismisses"
     );
@@ -515,11 +565,11 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         .expect("`mark all read` always shows");
     cx.simulate_click(mark.center(), gpui::Modifiers::none());
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let notifications = view.cockpit.notifications();
         assert_eq!(notifications.unread(), 0);
         assert_eq!(notifications.unread_requests(), 0);
-        assert_eq!(view.bell_rows().len(), 4, "nothing is removed");
+        assert_eq!(view.bell_rows(cx).len(), 4, "nothing is removed");
     });
     assert!(
         cx.debug_bounds("notifications-badge").is_none(),
@@ -548,7 +598,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .send(bash("one", "gh issue close 212 --reason x"))
         .unwrap();
     tick(cx);
-    tick(cx);
+    ring(cx);
     let allow: &'static str = format!("toast-allow-{}", off.get()).leak();
     let button = cx.debug_bounds(allow).expect("`1 allow`");
     cx.simulate_click(button.center(), gpui::Modifiers::none());
@@ -564,7 +614,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .send(bash("two", "rm -rf target"))
         .unwrap();
     tick(cx);
-    tick(cx);
+    ring(cx);
     let deny: &'static str = format!("toast-deny-{}", off.get()).leak();
     let button = cx.debug_bounds(deny).expect("`3 deny`");
     cx.simulate_click(button.center(), gpui::Modifiers::none());
@@ -675,4 +725,138 @@ fn the_effort_ladder_always_has_a_chosen_step(cx: &mut TestAppContext) {
             None => assert!(model.efforts.is_empty(), "{} has no ladder", model.value),
         }
     }
+}
+
+/// Three Threads in one registered Project, the first focused: the third
+/// waits on a Bash approval, the second finished out of sight.
+fn palette_states<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<CockpitView>,
+    ProjectId,
+    Vec<ThreadId>,
+    &'a mut gpui::VisualTestContext,
+) {
+    let (mut core, fake) = cockpit(name, 0);
+    let project = core.register_project(&here()).unwrap();
+    for _ in 0..3 {
+        core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .unwrap();
+    }
+    let mut threads = core.threads();
+    threads.sort();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
+    tick(cx);
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    fake.streams.borrow()[2]
+        .send(bash("perm_3", "cargo test"))
+        .unwrap();
+    tick(cx);
+    (view, project, threads, cx)
+}
+
+/// The Threads the open palette shows, in order.
+fn palette_threads(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
+    view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        palette
+            .survivors()
+            .iter()
+            .filter_map(|row| match row.act {
+                Act::Thread(thread) => Some(thread),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// ⌘K's status filters: a line of one letter — `b` `w` `i` `d` — keeps
+/// one of the four states' Threads and says which at the input's right,
+/// `a` keeps every state, and commands stay throughout. Every key types:
+/// the next letter makes the line a search, the filter gone.
+#[gpui::test]
+fn a_one_letter_palette_line_filters_by_status(cx: &mut TestAppContext) {
+    let (view, _project, threads, cx) = palette_states("palette-filters", cx);
+    cx.simulate_keystrokes("cmd-k");
+    tick(cx);
+    assert_eq!(palette_threads(&view, cx), threads);
+    for (key, kept) in [
+        ("b", vec![threads[2]]),
+        ("d", vec![threads[1]]),
+        ("i", vec![threads[0]]),
+        ("w", vec![]),
+    ] {
+        cx.simulate_keystrokes(key);
+        tick(cx);
+        assert_eq!(palette_threads(&view, cx), kept, "{key}");
+        assert!(cx.debug_bounds("palette-filter").is_some(), "{key} says so");
+        view.read_with(cx, |view, cx| {
+            let palette = view.floats.palette.as_ref().unwrap().read(cx);
+            assert_eq!(palette.query(cx), key, "{key} types");
+            assert!(
+                palette
+                    .survivors()
+                    .iter()
+                    .any(|row| row.section == Section::Commands),
+                "{key}: commands have no state and stay"
+            );
+        });
+        cx.simulate_keystrokes("backspace");
+        tick(cx);
+    }
+    cx.simulate_keystrokes("a");
+    tick(cx);
+    assert_eq!(palette_threads(&view, cx), threads, "a: every state");
+    assert!(cx.debug_bounds("palette-filter").is_none());
+    cx.simulate_keystrokes("backspace d e");
+    tick(cx);
+    assert!(cx.debug_bounds("palette-filter").is_none(), "a search");
+    view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        assert_eq!(palette.query(cx), "de", "no key is lost to a filter");
+    });
+}
+
+/// ⌘K jumps to a Project — its Thread that most needs the operator — and
+/// the cursor's Thread names its working directory in the footer.
+#[gpui::test]
+fn the_palette_jumps_to_a_project_and_names_a_threads_directory(cx: &mut TestAppContext) {
+    let (view, project, threads, cx) = palette_states("palette-jumps", cx);
+    cx.simulate_keystrokes("cmd-k");
+    tick(cx);
+    let (row, detail) = view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        let row = palette
+            .survivors()
+            .into_iter()
+            .find(|row| row.act == Act::Project(project))
+            .cloned()
+            .expect("a row per Project with an open Thread");
+        (row, palette.selected().and_then(|row| row.detail.clone()))
+    });
+    assert_eq!(row.section, Section::Projects);
+    assert_eq!(row.status, Some(nav::RowStatus::NeedsYou), "its roll-up");
+    assert_eq!(row.context.as_ref(), "3 threads");
+    let shown = home_relative(&here());
+    assert_eq!(detail.as_deref(), Some(shown.as_str()), "the cursor's cwd");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.run_palette_act(row.act, false, window, cx)
+        })
+    });
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+        Some(threads[2]),
+        "the Project's Thread that waits"
+    );
 }

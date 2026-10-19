@@ -7,6 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver};
 
+use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 mod claude;
@@ -57,6 +58,20 @@ pub(crate) fn spawnable_program(program: &str) -> String {
         }
     }
     program.to_string()
+}
+
+/// The command that runs `program` through `launcher` (`bwrap … --`,
+/// `thread.start --launcher`): the launcher's words, then the program;
+/// the program itself without one. Its arguments follow.
+pub(crate) fn launched(launcher: &[String], program: &str) -> std::process::Command {
+    match launcher.split_first() {
+        Some((first, rest)) => {
+            let mut command = std::process::Command::new(first);
+            command.args(rest).arg(program);
+            command
+        }
+        None => std::process::Command::new(program),
+    }
 }
 
 /// The shim a bare `program` resolves to on this PATH: directories in
@@ -165,7 +180,17 @@ pub trait Session {
     fn take_suggestion(&mut self) -> Option<String> {
         None
     }
+    /// Interrupt Main's turn, and only that: Subagents, background tasks and
+    /// workflows keep running (stopping one is `stop_subagent` or
+    /// `SessionControl::StopTask`).
     fn interrupt(&mut self) -> io::Result<()>;
+    /// Stop one Subagent, leaving Main and every other Subagent running.
+    fn stop_subagent(&mut self, _key: &AgentKey) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this Session cannot stop a subagent",
+        ))
+    }
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
     /// Tell the provider what the Thread is now called, so its own session
@@ -244,6 +269,10 @@ impl Session for ClaudeSession {
         ClaudeSession::interrupt(self)
     }
 
+    fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        ClaudeSession::stop_subagent(self, key)
+    }
+
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
         ClaudeSession::respond_to_decision(self, id, answer)
     }
@@ -295,6 +324,10 @@ impl Session for CodexSession {
         CodexSession::interrupt(self)
     }
 
+    fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        CodexSession::stop_subagent(self, key)
+    }
+
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
         CodexSession::respond_to_decision(self, id, answer)
     }
@@ -318,6 +351,7 @@ pub use claude::{
 pub use codex::catalog::list as codex_models;
 pub use codex::discovery::list as codex_sessions;
 pub(crate) use codex::file_change_diffs;
+pub(crate) use codex::launch as codex_launch;
 pub use codex::title as codex_title;
 pub use codex::{
     CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError, CODEX_CLI_MIN_VERSION,

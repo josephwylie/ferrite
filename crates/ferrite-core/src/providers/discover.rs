@@ -7,7 +7,7 @@
 //! and the app disagree about "the" version. Ferrite instead looks at every
 //! copy it can find, asks each its version once, and runs the newest.
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -120,6 +120,7 @@ fn probe(path: &Path, parse: fn(&str) -> Option<(String, [u64; 3])>) -> Option<(
     let output = Command::new(path)
         .arg("--version")
         .no_console_window()
+        .agent_environment()
         .output()
         .ok()?;
     if !output.status.success() {

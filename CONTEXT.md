@@ -10,7 +10,8 @@ glossary only, no implementation.
 **Thread**
 One durable agent conversation: its history, its provider choice, and its
 workspace binding (a dedicated worktree or the main checkout). Threads outlive
-any running process.
+any running process. A Thread's id is never given to another, even after the
+Thread is deleted.
 _Avoid_: chat, conversation, task.
 
 **Session**
@@ -29,12 +30,13 @@ Subagent. Switching Subject changes the view, not the Thread or its Title.
 
 **Main**
 The Thread's primary agent context, addressed by its Composer and interrupt
-control. Main can be idle while a Subagent is working.
+control. Main can be idle while a Subagent is working; interrupting Main
+stops its turn alone, never a Subagent or background task.
 
 **Subagent**
 A provider-managed agent delegated within Main's ancestry, observed through
 the owning Session. It may delegate further or work again after completion;
-its transcript and Decisions remain its own.
+its transcript and Decisions remain its own. Escape on its tab stops it alone.
 _Avoid_: Thread, Session, worker Pane.
 
 **Provider**
@@ -142,13 +144,37 @@ screenshot so it can check its work. Offered at the operator's level —
 Off, When asked, or Automatic — and never a Decision.
 _Avoid_: artifact, widget, web view (that is how it is drawn).
 
+**Diagram**
+A ` ```mermaid ` fence in an answer or the reader, drawn as the picture it
+describes once it is on screen; until then, or when it can't be drawn, it
+reads as code. Not a Visual: nobody asked for it, and it is not live.
+
+**Review**
+A diff of a Thread's changes beside its Pane — uncommitted, the branch
+against its base, the last turn, or one of the branch's commits — whose
+lines take comments; it also searches the checkout and shows the branch's
+pull request. herdr-reviewr's, vendored. The comments wait on the Composer
+and go to the Thread with its next prompt.
+_Avoid_: compare (the read-only view it replaced), code review (a PR's).
+
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread
-until they land on the Thread; shown by the bell, a toast, and the Pane's
-pulsing ring. A Subagent finishing, an interrupt, or a held prompt going
-out is never a Notice.
+until it is **seen** — its Thread on screen while the window has focus —
+or opened from the bell; shown by the bell, a toast, a chime, the Pane's
+pulsing ring, the Thread's done mark, and a system notification
+(herdr-focus-notify's) unless it is seen first or its Thread is on the
+board while the window has focus. A Subagent finishing, an interrupt, or a held
+prompt going out is never a Notice.
 _Avoid_: alert, ping, notification (the bell's whole surface is that).
+
+**Attention**
+Which of four states a Thread is in, most urgent first: **blocked** (a
+Decision waits), **done** (a Notice not yet seen), **working** (Main, or
+only its Subagents or background tasks), **idle**. What the nav sorts and
+rolls up by and the palette filters by; Ferrite's finer states (failing,
+background, failed, parked) are faces within these.
+_Avoid_: status (too broad), unread (that is the Notice's).
 
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its
@@ -157,6 +183,68 @@ first prompt creates a Thread. It has no durable history or Session.
 **Remote**
 Following and answering Decisions away from the desktop. Wanted soon;
 scope under discussion.
+
+**Server**
+The headless Ferrite process (`ferrite server`) that owns every Session,
+the Threads' history and the pending Decisions, so agents keep running
+when no window is open. Windows are its clients; several may attach.
+_Avoid_: daemon, backend (that is a Provider), host.
+
+**Machine**
+Another computer whose Server a window reaches over ssh (`ferrite --remote
+<target>`, or saved in Settings). The window is on one machine at a time —
+this computer, `local`, or another — and watches only that one's Threads;
+the others stream status to the nav. A machine runs `ferrited`, the Server
+without a window.
+_Avoid_: host, remote (as a noun), node.
+
+**API**
+The Server's automation surface: requests and answers as JSON lines on a
+socket of its own, spoken by the `ferrite` CLI, so a script or an agent in
+one Thread can start, prompt, wait on and read other Threads. Only the
+operator answers a Decision; an agent passes the operator's answer on.
+_Avoid_: MCP, RPC, plugin API.
+
+**Board**
+Projects' one list of tasks (ADR 0031, herdr-projects 1.0 vendored), every
+repository's on this machine, each task tagged with its repository and
+grouped by what it waits for: needs you, ready to approve, working, to do,
+done. Its data is herdr-projects' home folder, `~/.herdr-projects`;
+its command line is herdr-projects 1.0's program, shipped in the app as
+`ferrite-projects`.
+_Avoid_: kanban, queue, project (a Ferrite Project is a registered
+repository root).
+
+**Task**
+One piece of work on the board: yours, or delegated to an ordinary agent
+that works it in a worktree and branch of its own, as a Ferrite Thread.
+Finished work goes down the finish line (committed, main merged in, the
+repository's check, a draft pull request, a second agent's review) and
+merges only on the operator's yes unless its settings say otherwise.
+_Avoid_: ticket, job, project thread.
+
+**Coordinator**
+The board's own agent, one long-lived chat at the bottom of the board:
+what the operator types becomes tasks, added or delegated. It plans and
+delegates; the tasks' agents do the work.
+_Avoid_: manager, orchestrator, lead agent.
+
+**Keeper**
+The small background process (`ferrite-projects keeper`) that carries the
+board's tasks through the finish line and landing while no board is open.
+_Avoid_: ticker, daemon.
+
+**Automation**
+A rule that adds a task, and puts an agent on it, on a schedule or when
+something happens on the board (a merge, say).
+_Avoid_: routine, cron job.
+
+**Work board**
+herdr-projects 1.0's board (ADR 0031): the list of tasks by need — needs
+you, ready to approve, working, to do, done — each delegated to an agent,
+with the chat to the Coordinator under it. Opened by the projects key in
+the board's place (`board.open: tab`) or as a sheet over it (`popup`).
+_Avoid_: dashboard, kanban; "the board" alone is the Cockpit's Panes.
 
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each

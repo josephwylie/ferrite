@@ -25,9 +25,9 @@ use activity::{Execution as PersistedExecution, PersistedActivity};
 mod base;
 use base::{Base, Tracker};
 mod worker;
-use worker::Worker;
 #[cfg(test)]
 pub(crate) use worker::lock as worker_lock;
+use worker::Worker;
 #[cfg(test)]
 mod activity_tests;
 #[cfg(test)]
@@ -103,6 +103,10 @@ const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 const OPEN_MARKER: &str = ".open";
 const OPEN_STATE_MARKER: &str = ".open-state-v1";
 
+/// The store's high-water mark: the id the next Thread takes. It only
+/// rises, so a deleted Thread's id is never handed out again (ADR 0029).
+const NEXT_ID: &str = "next-id";
+
 /// The store's single-writer claim (ADR 0009): the process holding an
 /// exclusive lock on this file is the only one that changes any log.
 const CLAIM: &str = ".lock";
@@ -111,9 +115,12 @@ const CLAIM: &str = ".lock";
 const READ_ONLY: &str = "another Ferrite has this store open, so this window can read \
      its Threads but not open, create or change them";
 
+/// Why a window's handle may not write: its Server does (ADR 0025).
+const READER: &str = "this window reads its Threads; the Ferrite server writes them";
+
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Claude,
@@ -356,7 +363,7 @@ impl PersistedBinding {
 /// event vocabulary may grow any day, and this one changes only with a
 /// schema bump. Text deltas are coalesced into one record per run: the log
 /// stores what was said, not how the wire chopped it.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Record {
     SummaryPart {
@@ -488,7 +495,9 @@ enum Record {
         facts: Option<Facts>,
     },
     /// Schema 13: the header facts after a change, restated whole.
-    Facts { facts: Facts },
+    Facts {
+        facts: Facts,
+    },
     /// Schema 13: a bookmark the store writes for itself. It restates the
     /// facts at this point, so a peek or a reopen reads back from the end
     /// to the newest one instead of the whole log, and certifies that every
@@ -525,6 +534,57 @@ impl Record {
     }
 }
 
+/// One log line as the client protocol carries it (ADR 0025): everything
+/// durable crosses the wire in the log's own schema, so the Server never
+/// re-encodes history and a client reads exactly what a reopen would.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LogRecord(Record);
+
+impl LogRecord {
+    /// The line a live transcript input is logged as, or `None` for what
+    /// the log never keeps. `duration` is as `ThreadWriter::record_event`'s.
+    pub fn of(input: &Input, duration: Option<std::time::Duration>) -> Option<Self> {
+        Some(Self(match input {
+            Input::Event(event) => Record::from_event(event, duration)?,
+            Input::Prompt(text) => Record::Prompt { text: text.clone() },
+            Input::PromptObservation { sent_at } => Record::PromptObservation {
+                sent_at: sent_at.clone(),
+            },
+            Input::CompletionObservation {
+                elapsed_ms,
+                completed_at,
+                input_tokens,
+                output_tokens,
+            } => Record::CompletionObservation {
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
+            },
+            Input::Notice(_)
+            | Input::Answered { .. }
+            | Input::Revived
+            | Input::Highlighted { .. } => return None,
+        }))
+    }
+
+    /// Extend this line with the next when the log would keep the two as
+    /// one (a run of deltas): what lets a waiting client take one line.
+    pub fn coalesce(&mut self, next: &LogRecord) -> bool {
+        self.0.coalesce(&next.0)
+    }
+
+    /// What this line replays as; `None` for the store's own bookkeeping
+    /// (facts and marks), which a reader skips.
+    pub fn input(&self) -> Option<Input> {
+        match &self.0 {
+            Record::Facts { .. } | Record::Mark { .. } => None,
+            record => Some(record.input()),
+        }
+    }
+}
+
 /// The Notice a provider switch leaves in the transcript, live and on
 /// replay alike.
 pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
@@ -534,7 +594,7 @@ pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
 
 /// How a persisted turn ended: `"completed"`, `"interrupted"`, or
 /// `{"error":"…"}`.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Outcome {
     Completed,
@@ -569,7 +629,7 @@ impl StoredRunState {
 /// The structured half of a persisted tool result, mirroring
 /// `crate::ToolResult` shape for shape — but its own type, so the live model
 /// can change without rewriting anyone's history.
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PersistedToolResult {
     #[default]
@@ -594,13 +654,13 @@ enum PersistedToolResult {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct PersistedFileEdit {
     path: String,
     hunks: Vec<PersistedHunk>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct PersistedHunk {
     old_start: u32,
     old_lines: u32,
@@ -1510,6 +1570,9 @@ struct Shared {
     read_only: Option<String>,
     /// The derived summary cache (`Store::summary`), loaded on first use.
     summaries: std::sync::Mutex<Option<BTreeMap<u64, CachedSummary>>>,
+    /// Held while a Thread's id is minted, so two creators never read the
+    /// same high-water mark.
+    minting: std::sync::Mutex<()>,
     /// The store's worker, started with its first writer.
     worker: std::sync::OnceLock<std::sync::Arc<Worker>>,
     /// What the worker synced and marked, in order, for tests.
@@ -1627,7 +1690,7 @@ fn claim(dir: &Path, key: &DirKey) -> io::Result<Option<String>> {
         .open(dir.join(CLAIM))?;
     match lock.try_lock() {
         Ok(()) => {
-            claimed.insert(key.clone(), lock);
+            claimed.insert(key.to_owned(), lock);
             Ok(None)
         }
         Err(fs::TryLockError::WouldBlock) => Ok(Some(READ_ONLY.to_string())),
@@ -1645,6 +1708,7 @@ impl Shared {
         Self {
             read_only,
             summaries: std::sync::Mutex::new(None),
+            minting: std::sync::Mutex::new(()),
             worker: std::sync::OnceLock::new(),
             #[cfg(test)]
             journal: Default::default(),
@@ -1758,6 +1822,43 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
     Some((meta.len(), modified))
 }
 
+/// Put `bytes` in place of a small whole-file document (the settings, the
+/// registry, the Groups) so that a crash or power cut at any moment leaves
+/// the old file or the new one, never a torn one: written beside, synced
+/// behind a barrier so the contents reach the drive before the rename can
+/// (ADR 0009), renamed over, the rename made durable by syncing the
+/// directory. A symlinked file is written through to its target, so the
+/// link the operator made survives.
+///
+/// Each document has one writer (the UI thread), so its temp file has one
+/// fixed name: one a crash left behind is simply written over next time.
+/// Once the rename is done the new file is the answer; a directory that
+/// will not sync is logged, not returned, so a caller never rolls back to
+/// a state the disk no longer holds.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        fs::canonicalize(path)?
+    } else {
+        path.to_path_buf()
+    };
+    let mut tmp = path.clone().into_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    (|| {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        sync_ordered(&file)?;
+        rename_over(&tmp, &path)
+    })()
+    .inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })?;
+    if let Err(error) = sync_dir(path.parent().unwrap_or(Path::new("."))) {
+        crate::log!("{} replaced but not synced: {error}", path.display());
+    }
+    Ok(())
+}
+
 /// A name for a file written beside a log and renamed over it. Never a
 /// shared name: two writers must not truncate each other's temp file.
 fn temp_beside(path: &Path) -> PathBuf {
@@ -1770,8 +1871,8 @@ fn temp_beside(path: &Path) -> PathBuf {
     path.with_file_name(format!("{name}.tmp-{}-{n}", std::process::id()))
 }
 
-/// Rename `from` over `to` and make the rename itself survive a crash: the
-/// directory is synced after it.
+/// Rename `from` over `to`. The rename survives a crash once its
+/// directory is synced (`sync_dir`).
 #[cfg(not(windows))]
 fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
@@ -1827,6 +1928,23 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
 #[cfg(not(unix))]
 fn sync_dir(_: &Path) -> io::Result<()> {
     Ok(())
+}
+
+/// A Thread's log up to a checkpoint, opened and not yet read
+/// (`Store::log_at`).
+pub struct LogAt {
+    thread: ThreadId,
+    file: File,
+    through: u64,
+}
+
+impl LogAt {
+    /// What a reopen would load, from the log's first `through` bytes.
+    pub fn load(self) -> Result<ThreadSnapshot, LoadError> {
+        let mut bytes = Vec::new();
+        self.file.take(self.through).read_to_end(&mut bytes)?;
+        Ok(parse(self.thread, &bytes)?.snapshot)
+    }
 }
 
 /// A log opened for reading. Every read of a log goes through one, so
@@ -1916,18 +2034,37 @@ impl Store {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         let shared = Shared::of(&dir)?;
-        Ok(Self {
+        Ok(Self::with_shared(dir, flush_interval, shared))
+    }
+
+    /// A window's handle on the Store its Server writes (ADR 0025): it
+    /// reads the Threads, and never takes the claim — a Server that starts
+    /// after the window must find it free.
+    pub fn reader(dir: impl AsRef<Path>) -> io::Result<Self> {
+        let dir = dir.as_ref().to_path_buf();
+        fs::create_dir_all(&dir)?;
+        let shared = std::sync::Arc::new(Shared::new(Some(READER.to_string())));
+        Ok(Self::with_shared(dir, DEFAULT_FLUSH_INTERVAL, shared))
+    }
+
+    fn with_shared(
+        dir: PathBuf,
+        flush_interval: std::time::Duration,
+        shared: std::sync::Arc<Shared>,
+    ) -> Self {
+        Self {
             dir,
             flush_interval,
             full_sync_interval: FULL_SYNC_INTERVAL,
             mark_spacing: MARK_SPACING,
-            base_cost: 2 * crate::activity::ActivityLimits::default().content_bytes_per_subject as u64,
+            base_cost: 2 * crate::activity::ActivityLimits::default().content_bytes_per_subject
+                as u64,
             shared,
             #[cfg(test)]
             fail_create: false,
             #[cfg(test)]
             fail_delete: false,
-        })
+        }
     }
 
     /// Why this process may only read the store — another Ferrite holds its
@@ -1972,7 +2109,11 @@ impl Store {
     /// Marks this far apart at least, and replay bases sized for an
     /// Activity with these limits: a small world for a test.
     #[cfg(test)]
-    pub(crate) fn scaled(mut self, mark_spacing: u64, limits: crate::activity::ActivityLimits) -> Self {
+    pub(crate) fn scaled(
+        mut self,
+        mark_spacing: u64,
+        limits: crate::activity::ActivityLimits,
+    ) -> Self {
         self.mark_spacing = mark_spacing;
         self.base_cost = 2 * limits.content_bytes_per_subject as u64;
         self
@@ -2135,7 +2276,10 @@ impl Store {
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while std::time::Instant::now() < deadline {
-            let held_done = worker.held().iter().all(|writer| worker::lock(writer).finished());
+            let held_done = worker
+                .held()
+                .iter()
+                .all(|writer| worker::lock(writer).finished());
             let live = worker.queue().live_writers();
             let live_done = live.iter().all(|writer| {
                 let state = worker::lock(writer);
@@ -2209,15 +2353,7 @@ impl Store {
             return Err(io::Error::other("stub refused Thread creation"));
         }
         self.writable()?;
-        let mut next = self.thread_ids()?.last().map_or(1, |id| id.get() + 1);
-        loop {
-            match fs::create_dir(self.dir.join(next.to_string())) {
-                Ok(()) => break,
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => next += 1,
-                Err(e) => return Err(e),
-            }
-        }
-        let id = ThreadId::new(next);
+        let id = self.mint()?;
 
         let mut file = OpenOptions::new()
             .create_new(true)
@@ -2249,6 +2385,33 @@ impl Store {
             base: None,
         };
         Ok((id, self.writer_on(id, file, tail)))
+    }
+
+    /// Take the next Thread id and its directory. Ids are never reused: the
+    /// high-water mark is raised durably before the directory exists, so a
+    /// crash can skip an id but never hand one out twice, and a store from
+    /// before the mark is seeded from the Threads it holds.
+    fn mint(&self) -> io::Result<ThreadId> {
+        let _minting = self
+            .shared
+            .minting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = self.dir.join(NEXT_ID);
+        let marked = match fs::read_to_string(&path) {
+            Ok(text) => text.trim().parse::<u64>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: {error}", path.display()),
+                )
+            })?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => 1,
+            Err(error) => return Err(error),
+        };
+        let next = marked.max(self.thread_ids()?.last().map_or(1, |id| id.get() + 1));
+        replace_file(&path, (next + 1).to_string().as_bytes())?;
+        fs::create_dir(self.dir.join(next.to_string()))?;
+        Ok(ThreadId::new(next))
     }
 
     /// Where the store keeps its files — what the registry binds to, so the
@@ -2412,7 +2575,11 @@ impl Store {
             None => Some(after),
             Some(None) => None,
             Some(Some(mark)) => Some(Summary {
-                turns: if reset { after.turns } else { mark.turns + after.turns },
+                turns: if reset {
+                    after.turns
+                } else {
+                    mark.turns + after.turns
+                },
                 prompted: mark.prompted || after.prompted,
                 subagents: mark.subagents,
             }),
@@ -2892,20 +3059,27 @@ impl Store {
 
     /// Upgrade an older log to the current schema before anything is
     /// appended (`rewrite_from`), ending it with a mark.
-    fn upgrade(&self, id: ThreadId, bytes: &[u8], parsed: Parsed) -> Result<ThreadWriter, LoadError> {
+    fn upgrade(
+        &self,
+        id: ThreadId,
+        bytes: &[u8],
+        parsed: Parsed,
+    ) -> Result<ThreadWriter, LoadError> {
         let facts = parsed.snapshot.facts();
         let mut summary = Summary::default();
         for record in &parsed.snapshot.records {
             summary.observe(record);
         }
         // A parked row counted this log's subagents once already: keep it.
-        summary.subagents = self
-            .cached_summary(id)
-            .and_then(|cached| cached.subagents);
+        summary.subagents = self.cached_summary(id).and_then(|cached| cached.subagents);
         // Follow every record where it will sit in the upgraded log — the
         // same bytes after a new header line — so the upgrade's mark names
         // a base, and a long Thread's first revive is already bounded.
-        let old_header = parsed.offsets.first().copied().unwrap_or(parsed.readable as u64);
+        let old_header = parsed
+            .offsets
+            .first()
+            .copied()
+            .unwrap_or(parsed.readable as u64);
         let new_header = line(&Header::of(facts.clone()))?.len() as u64;
         let mut tracker = Tracker::new(self.base_cost);
         for (at, record) in parsed.offsets.iter().zip(&parsed.snapshot.records) {
@@ -3046,7 +3220,10 @@ impl Store {
             Some(handover) if !handover.delivered => self.load(id)?.last_handover(),
             _ => None,
         };
-        let prompted = writer.summary.as_ref().is_some_and(|summary| summary.prompted)
+        let prompted = writer
+            .summary
+            .as_ref()
+            .is_some_and(|summary| summary.prompted)
             || snapshot
                 .records
                 .iter()
@@ -3170,6 +3347,17 @@ impl Store {
             through,
             crate::activity::ActivityLimits::default(),
         )
+    }
+
+    /// One Thread's log as it stands at `through` (`ThreadWriter::checkpoint`),
+    /// to be read on another thread. The file is opened now, so a header
+    /// rewrite in between replaces the path but not what this reads.
+    pub fn log_at(&self, thread: ThreadId, through: u64) -> io::Result<LogAt> {
+        Ok(LogAt {
+            thread,
+            file: File::open(self.log_path(thread))?,
+            through,
+        })
     }
 
     /// Replace a Thread's log: a header at the current schema saying what
@@ -4135,9 +4323,7 @@ impl WriterState {
 
     /// Bytes written since the newest mark (or the header).
     fn since_mark(&self) -> u64 {
-        let marked = self
-            .last_mark
-            .map_or(0, |at| at + self.mark_len as u64);
+        let marked = self.last_mark.map_or(0, |at| at + self.mark_len as u64);
         self.len.saturating_sub(marked)
     }
 
@@ -4437,6 +4623,36 @@ mod tests {
         assert_eq!(store.thread_ids().unwrap(), vec![second]);
         assert!(store.load(first).is_err(), "a deleted Thread must not load");
         assert!(store.load(second).is_ok());
+    }
+
+    /// A deleted Thread's id is never handed out again, not even by a store
+    /// opened afresh on the same directory; one from before the high-water
+    /// mark is seeded from the Threads it holds.
+    #[test]
+    fn a_deleted_threads_id_is_never_reused() {
+        let dir = scratch("never-reuse");
+        let create = |store: &Store| {
+            store
+                .create(Provider::Claude, None, main_choice())
+                .unwrap()
+                .0
+        };
+        let store = Store::open(&dir).unwrap();
+        let first = create(&store);
+        assert_eq!(first, ThreadId::new(1));
+        store.delete(first).unwrap();
+        let second = create(&store);
+        assert_eq!(second, ThreadId::new(2));
+
+        store.delete(second).unwrap();
+        drop(store);
+        let store = Store::open(&dir).unwrap();
+        let third = create(&store);
+        assert_eq!(third, ThreadId::new(3));
+
+        fs::remove_file(dir.join(NEXT_ID)).unwrap();
+        let fourth = create(&store);
+        assert_eq!(fourth, ThreadId::new(4), "seeded from the Threads held");
     }
 
     /// #21: the nav's parked rows come from `peek`, which must answer from
@@ -5664,7 +5880,7 @@ mod tests {
                 writer.flush().unwrap();
                 let mut active = restore(&reopened.load(id).unwrap());
                 active.apply(Input::Revived);
-                assert_eq!(active.turn_outcome(), None);
+                assert_eq!(active.turn_outcome(), Some(&TurnOutcome::Interrupted));
                 assert!(!active.turn_completed());
                 assert_eq!(active.status(), crate::transcript::Status::Idle);
                 assert!(

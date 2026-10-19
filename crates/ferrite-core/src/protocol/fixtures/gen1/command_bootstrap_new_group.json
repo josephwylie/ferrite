@@ -1,0 +1,1 @@
+{"type":"command","id":27,"op":"bootstrap","provider":"claude","workspace":{"kind":"main","checkout":"/src/ferrite"},"prompt":"pair with this","new_group_with":4}

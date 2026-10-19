@@ -301,7 +301,7 @@ impl CockpitView {
             .items_start();
         for thread in recent.iter().copied() {
             let row = self.thread_row(thread);
-            let face = thread_status(row.status.wall(), false);
+            let face = row.status.face();
             let open = self.pane_for(thread).is_some();
             let age = self
                 .facts

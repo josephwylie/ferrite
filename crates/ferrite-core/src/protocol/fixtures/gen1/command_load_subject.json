@@ -1,0 +1,1 @@
+{"type":"command","id":35,"op":"load_subject","thread":4,"subject":{"kind":"subagent","key":"claude:root:agent-1"},"retry":true}

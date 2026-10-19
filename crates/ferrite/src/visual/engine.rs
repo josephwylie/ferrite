@@ -80,7 +80,7 @@ fn boot_state() -> State {
         Err(error) => {
             // Expected under `cargo run` on macOS; worth one line, never a
             // failure.
-            eprintln!("ferrite: visuals off: {error}");
+            ferrite_core::log!("visuals off: {error}");
             State::Unavailable(CHROMIUM_MISSING.into())
         }
     }
@@ -120,7 +120,9 @@ impl Visuals {
     #[allow(dead_code)]
     pub(crate) fn install(engine: Rc<dyn Engine>, cx: &mut App) {
         super::element::pump(engine.clone(), cx);
-        cx.set_global(Visuals { state: State::Ready(engine) });
+        cx.set_global(Visuals {
+            state: State::Ready(engine),
+        });
     }
 
     /// The engine, starting it on the first ask. Never blocks.
@@ -140,7 +142,8 @@ impl Visuals {
         #[cfg(feature = "cef")]
         {
             let visuals = cx.global_mut::<Visuals>();
-            let State::Dormant(dormant) = std::mem::replace(&mut visuals.state, State::Starting) else {
+            let State::Dormant(dormant) = std::mem::replace(&mut visuals.state, State::Starting)
+            else {
                 unreachable!("matched above")
             };
             // Outside this update: cef_initialize may run the native loop.
@@ -149,12 +152,15 @@ impl Visuals {
                 let state = match dormant.start() {
                     Ok(engine) => State::Ready(Rc::new(engine)),
                     Err(error) => {
-                        eprintln!("ferrite: Chromium failed to start: {error}");
+                        ferrite_core::log!("Chromium failed to start: {error}");
                         State::Unavailable(format!("Visuals failed to start: {error}").into())
                     }
                 };
                 if std::env::var_os("FERRITE_CEF_TRACE").is_some() {
-                    eprintln!("ferrite visuals: Chromium started in {:?}", started.elapsed());
+                    eprintln!(
+                        "ferrite visuals: Chromium started in {:?}",
+                        started.elapsed()
+                    );
                 }
                 let _ = cx.update(|cx| {
                     if let State::Ready(engine) = &state {

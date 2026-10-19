@@ -5,12 +5,31 @@ edition.workspace = true
 license.workspace = true
 description = "Ferrite headless core: providers, transcript, store, workspace. No UI."
 
+[features]
+# What other crates' tests drive core with: `server::fixture_machine`.
+test-support = []
+
 [dependencies]
+# herdr-reviewr's review core, vendored: the Review slot's git reads, search
+# and PR reads, answered where the checkout is (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+# A review's sides as the unified diff a `review_diff` answers (ADR 0021).
+similar = { version = "3.2.0", features = ["text"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
 chrono = "0.4.45"
 ureq = "3"
+# Ferrite's own update is checked against the SHA-256 GitHub publishes
+# for the installer (`self_update`). Already in the tree via gpui.
+sha2 = "0.10"
+# The API's JSON Schema, generated from its one declaration of each
+# operation (`api::schema`). Already in the tree via gpui-component.
+schemars = "1"
+
+# Stopping an operator's command ends its process group (`user_commands`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # An npm-installed provider CLI on Windows is a `.cmd` shim: the Session's
 # child is cmd.exe with the real CLI beneath it, and only a Job Object can
@@ -19,11 +38,24 @@ ureq = "3"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_System_Console",
+    "Win32_System_ProcessStatus",
     "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+# herdr-projects' herdr client, answered by the real Server (ADR 0031).
+[target.'cfg(unix)'.dev-dependencies]
+sw-core = { workspace = true }
