@@ -640,7 +640,9 @@ fn a_pull_request_is_read_by_gh_where_the_server_runs() {
     let mut window = cockpit(&harness);
     let answer = window.pull_request(&repo).unwrap();
     let landed = std::cell::RefCell::new(None);
-    pump_until(&mut window, |_| {
+    // This request starts the runner's installed gh (and its git subprocesses),
+    // unlike in-process fixture replies. Allow cold CLI startup under CI load.
+    pump_until_within(&mut window, Duration::from_secs(30), |_| {
         if let Ok(read) = answer.try_recv() {
             *landed.borrow_mut() = Some(read);
         }
@@ -1024,7 +1026,15 @@ fn pump_until(
     window: &mut crate::cockpit::Cockpit,
     done: impl Fn(&crate::cockpit::Cockpit) -> bool,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    pump_until_within(window, Duration::from_secs(5), done);
+}
+
+fn pump_until_within(
+    window: &mut crate::cockpit::Cockpit,
+    limit: Duration,
+    done: impl Fn(&crate::cockpit::Cockpit) -> bool,
+) {
+    let deadline = Instant::now() + limit;
     while !done(window) {
         assert!(Instant::now() < deadline, "timed out");
         window.pump();
