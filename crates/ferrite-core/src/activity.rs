@@ -397,6 +397,9 @@ struct SubjectState {
     /// transcript and timing presentation revisions.
     revision: u64,
     retained: bool,
+    // A per-subject disk replay receives new in-memory sequence numbers. They cannot order this prefix
+    // against another subject's live records when the identities join; reload their combined stored stream.
+    rehydrated: bool,
     truncated: bool,
 }
 
@@ -423,6 +426,7 @@ impl SubjectState {
             timings_revision: 0,
             revision: 0,
             retained: true,
+            rehydrated: false,
             truncated: false,
         }
     }
@@ -1149,6 +1153,7 @@ impl Activity {
         }
         let agent = self.agents.get_mut(&key).expect("retained child exists");
         agent.state.retained = true;
+        agent.state.rehydrated = true;
         agent.state.truncated = false;
         agent.state.seen.clear();
         agent.state.seen_order.clear();
@@ -1964,6 +1969,7 @@ impl Activity {
                 let runtime = source_is_newer.then(|| RuntimeState::capture(&source.state));
                 target.last_live = target.last_live.max(source.last_live);
                 target.state.retained |= source.state.retained;
+                target.state.rehydrated |= source.state.rehydrated;
                 target.state.truncated |= source.state.truncated;
                 if target.state.coverage == TranscriptCoverage::Unavailable {
                     target.state.coverage = source.state.coverage;
@@ -2163,6 +2169,9 @@ impl<'a> SubjectView<'a> {
             self.state.transcript.revision(),
             self.state.timings_revision,
         )
+    }
+    pub(crate) fn alias_needs_history(self) -> bool {
+        !self.state.retained || self.state.rehydrated
     }
     pub fn retained(self) -> bool {
         self.state.retained

@@ -2998,7 +2998,7 @@ impl Engine {
                         [from, to].iter().any(|key| {
                             let subject = Subject::Subagent((*key).clone());
                             view.subject(&subject)
-                                .is_some_and(|subject| !subject.retained())
+                                .is_some_and(|subject| subject.alias_needs_history())
                                 || thread.history.keys().any(|pending| {
                                     view.canonical_subject(&Subject::Subagent(pending.clone()))
                                         == view.canonical_subject(&subject)
