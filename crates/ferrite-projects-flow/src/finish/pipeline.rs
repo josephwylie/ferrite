@@ -14,7 +14,7 @@ use crate::json::*;
 use crate::runner::{claim, is_aborted, release, sh, Guard};
 use crate::store::failures::{bound_detail, failure_patch, is_auth_failure};
 use crate::store::keys::{repo_keys, task_ref};
-use crate::store::repos::{branch_of, cwd_of, folder_of, git_out, git_slow};
+use crate::store::repos::{branch_of, cwd_of, folder_of, git_out};
 use crate::store::reviews::{current_review, passed_review};
 use crate::store::settings::lookup::work;
 use crate::store::settings::values::{command_of, ms};
@@ -28,7 +28,9 @@ pub fn pipeline_job(id: &str) {
     if t.s("stage") != "checking" { release(id, false); return; }
     let mut g = Guard::new(id);
     g.expect(&t, &[]);
-    let text = [t.s("said"), t.s("screen"), t.s("msg")].into_iter().find(|s| !s.is_empty()).unwrap_or("").to_string();
+    // Ferrite: delivery recovery carries the completed summary, not the timeout status text.
+    let saved = if t.at("deliveryRetry").is_object() { t.s("summary") } else { "" };
+    let text = [saved, t.s("said"), t.s("screen"), t.s("msg")].into_iter().find(|s| !s.is_empty()).unwrap_or("").to_string();
     if let Err(e) = pipeline(id, &mut g, &text, false, "", None) {
         if !is_aborted(&e) { let _ = fail(&mut g, failure("workflow", "The finish line failed", &e.msg, "Investigate the error, then finish again."), FailHow::default()); } else { super::review::close_reviewer(id); }
     }
@@ -174,10 +176,12 @@ pub fn pipeline(id: &str, g: &mut Guard, text: &str, keep_intent: bool, reason: 
             t = g.set(|t| { t.put("stage", "pushing"); t.put("msg", "Pushing the branch"); })?;
             // The branch is the board's own and an agent may have rebuilt it: overwrite what was pushed before, but only
             // while the remote still holds what was last seen here.
-            git_slow(tp, &["push", "-u", "--force-with-lease", "origin", t.s("branch")], 120000)?;
-            let ph = git_out(tp, &["rev-parse", &format!("refs/remotes/origin/{}", t.s("branch"))])?;
-            g.set(|t| t.put("prHead", ph.clone()))?;
+            // Ferrite: a timeout may have lost only the response; reconcile before sending another push.
+            if !super::delivery::push(g, tp, t.s("branch"))? { return Ok(None); }
             let mut url = t.t("pr");
+            // Ferrite: reconcile an earlier create whose response may have been lost too.
+            if url.is_empty() { url = already::open_pr(t.s("branch"), tp).unwrap_or_default(); }
+            if !url.is_empty() && !t.b("pr") { g.set(|t| t.put("pr", url.clone()))?; }
             if url.is_empty() {
                 let body = format!("{}\n\nTask: {}", if text.is_empty() { t.t("title") } else { text.to_string() }, task_ref(id, &repo_keys()));
                 let r = flow::git::gh(&["pr", "create", "--draft", "--head", t.s("branch"), "--title", if t.b("title") { t.s("title") } else { id }, "--body", &body], tp, 120000);
@@ -195,8 +199,10 @@ pub fn pipeline(id: &str, g: &mut Guard, text: &str, keep_intent: bool, reason: 
             Err(e) if is_aborted(&e) => return Err(e),
             Err(_) if already::archived(Path::new(&tree)) => { fail(g, already::archived_failure(t.s("branch"), &tree), FailHow::default())?; return Ok(()); }
             Err(e) if e.msg.starts_with("pr:") => { fail(g, failure("pr", "Could not open the pull request", &format!("Branch: {}\nFolder: {tree}\n\ngh pr create:\n{}", t.s("branch"), &e.msg[3..]), "Inspect the GitHub error, fix what you safely can, then finish again. The board retries opening the pull request; do not push or ship manually."), FailHow::default())?; return Ok(()); }
-            Err(e) => { fail(g, failure("push", "Could not push the branch", &format!("Branch: {}\nFolder: {tree}\n\n{}", t.s("branch"), e.msg), "Inspect the Git error and fix what you safely can without altering the human's checkout. Finish again so the board retries the push."), FailHow::default())?; return Ok(()); }
+            Err(e) => { fail(g, failure("push", "Could not push the branch", &format!("Branch: {}\nFolder: {tree}\n\n{}", t.s("branch"), e.msg), "Inspect the Git error and fix what you safely can without altering the human's checkout. Finish again so the board retries the push."), FailHow { keep_intent: true, ..Default::default() })?; return Ok(()); }
         }
     }
+    let current = g.check()?;
+    if current.at("deliveryRetry").b("until") && current.s("stage") == "pushing" { return Ok(()); }
     after_review(Ctx { id, text, keep_intent, reason, sync: sync_r, research, tree: &tree, folder: &folder, root: &root, check: &check, note, kept, kept_how }, g)
 }

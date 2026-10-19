@@ -25,6 +25,19 @@ fn finished(text: &str) -> String { let f = first_line(text); if f.is_empty() { 
 /// A pull-request blocker found by polling survives a passing local check: remote CI must confirm.
 fn hold_pr_failure(g: &mut Guard, t: &Task) -> Res<bool> {
     if !t.b("prFailure") { return Ok(false); }
+    // Ferrite: checks on an older head are history, not a veto on the reviewed replacement. Landing reads fresh
+    // remote state and waits for pending checks; a current-head failure or remote review request still holds.
+    let f = t.at("prFailure");
+    if f.s("remoteKind") == "checks" && f.b("head") && t.b("reviewedHead") &&
+        t.s("prHead") == t.s("reviewedHead") && f.s("head") != t.s("reviewedHead") {
+        let fresh = crate::land::readable::pr_view(&crate::store::repos::folder_of(t.s("id")), t.s("pr"), "headRefOid,reviewDecision");
+        let current = fresh.as_ref().is_ok_and(|r| r.fault.is_empty() && r.view.s("headRefOid") == t.s("reviewedHead") &&
+            r.view.s("reviewDecision") != "CHANGES_REQUESTED" && !r.listed().iter().any(|c| flow::git::CHECK_BAD.contains(&crate::land::checks::word(c).as_str())));
+        if current {
+            g.set(|t| { let old = t.at("prFailure").clone(); t.put("previousPrFailure", old); t.put("prFailure", Value::Null); t.put("prState", "waiting"); })?;
+            return Ok(false);
+        }
+    }
     let h = g.set(|t| { t.put("stage", "approval"); t.put("failure", Value::Null); let m = format!("Local checks passed; pull request still blocked: {}. Wait for remote confirmation or send the details to the agent", t.at("prFailure").s("title")); t.put("msg", m); })?;
     flow::sidebar::tell_sidebar(&h);
     Ok(true)

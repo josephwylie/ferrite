@@ -160,13 +160,22 @@ fn poll_one(id: &str, pr: &str, j: &Value, via: &str) {
             }
             if t.s("stage") == "approval" && !t.b("failure") { let m = format!("{}: {why} Send details to the agent, or wait for remote confirmation", t.at("prFailure").s("title")); t.put("msg", m); }
         } else if t.b("prFailure") {
-            let confirmed = if t.at("prFailure").s("remoteKind") == "review" { decision == "APPROVED" } else { t.s("prState") == "passing" };
+            // Ferrite: a check failure belongs to its head. Fresh pending checks on the reviewed replacement
+            // retire that historical blocker, but do not count as a pass; land enters the normal CI wait.
+            let historical = t.at("prFailure").s("remoteKind") == "checks" && t.at("prFailure").b("head") &&
+                t.at("prFailure").s("head") != head && head == t.s("reviewedHead");
+            let confirmed = if historical { true } else if t.at("prFailure").s("remoteKind") == "review" { decision == "APPROVED" } else { t.s("prState") == "passing" };
             if confirmed {
+                let previous = t.at("prFailure").clone(); t.put("previousPrFailure", previous);
                 t.put("prFailure", Value::Null);
                 if t.s("stage") == "approval" && !t.b("failure") {
-                    if t.at("mergeIntent").b("verifiedHead") { t.put("stage", "merging"); t.put("msg", "Merging"); then = Then::Land; } else { let m = approval_message(t); t.put("msg", m); }
+                    if !new_feedback && crate::finish::auto_merge::continues(t, &head) { t.put("stage", "merging"); t.put("msg", "Merging"); then = Then::Land; } else { let m = approval_message(t); t.put("msg", m); }
                 }
             }
+        }
+        // Ferrite: the blocker may have been cleared on an earlier poll while a runner was finishing.
+        if !blocking && !new_feedback && crate::finish::auto_merge::continues(t, &head) {
+            t.put("stage", "merging"); t.put("msg", "Merging"); then = Then::Land;
         }
         // A new commit failing again is news too: the agent hears of it, within its rounds.
         let seen = if blocking { format!("{head}|{}|{decision}", failed.join(",")) } else { String::new() };

@@ -4,6 +4,7 @@
 pub mod already;
 pub mod auto_merge;
 pub mod chat;
+pub mod delivery; // Ferrite: timeout reconciliation
 pub mod check_again;
 pub mod check_run;
 pub mod hand_over;

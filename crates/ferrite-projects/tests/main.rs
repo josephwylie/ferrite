@@ -115,6 +115,7 @@ mod coordinator_restart;
 mod coordinator_rules;
 mod coordinator_sessions;
 mod coordinator_stop;
+mod delivery_recovery;
 mod endings;
 mod fallback;
 mod fallback_more;
