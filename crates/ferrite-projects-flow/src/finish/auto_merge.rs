@@ -24,7 +24,21 @@ pub fn green(t: &Obj) -> bool {
     if t.s("stage") != "approval" || t.b("archivedAt") || !flow::task::is_agent_task(t) || !t.b("reviewedHead") || is_research(t) { return false; }
     if ["failure", "prFailure", "syncBlocked", "mergeFailed", "requireApproval", "mergeIntent", "autoMerge", "chat"].iter().any(|k| t.b(k)) { return false; }
     if over_now(t).is_some() { return false; } // at its token limit nothing merges by itself
-    if t.at("review").is_object() { gate::passes(t.at("review")) } else { !reviewed(t) }
+    exact_review(t)
+}
+// Ferrite: a retained approval can resume only on the same, still-passing review. Landing rechecks the worktree,
+// remote head, base and CI; a saved verdict alone never authorizes a different commit.
+pub fn exact_review(t: &Task) -> bool {
+    let r = t.at("review");
+    !t.s("reviewedHead").is_empty() && if r.is_object() {
+        !r.b("stale") && r.s("head") == t.s("reviewedHead") && gate::passes(r)
+    } else { !reviewed(t) }
+}
+pub fn continues(t: &Task, head: &str) -> bool {
+    t.s("stage") == "approval" && !head.is_empty() && head == t.s("reviewedHead") &&
+        t.at("mergeIntent").s("verifiedHead") == head && exact_review(t) &&
+        (!t.at("mergeIntent").b("auto") || by_itself(t)) && over_now(t).is_none() &&
+        !["archivedAt", "failure", "prFailure", "syncBlocked", "mergeFailed", "requireApproval", "chat", "turnOpen"].iter().any(|k| t.b(k))
 }
 /// Will this task merge with nobody's yes?
 pub fn merges_itself(t: &Obj) -> bool { if t.at("mergeIntent").is_object() { t.at("mergeIntent").b("auto") } else { by_itself(t) && !t.b("requireApproval") } }

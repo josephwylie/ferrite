@@ -63,10 +63,12 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 /// memory for the life of a Session.
 const STDERR_TAIL_LINES: usize = 20;
 
-/// How long spawn waits for each of its two handshake responses. Measured
-/// against `codex` 0.149.1, which answers both well under a second from a
-/// cold start; the budget is generous because overrunning it fails the spawn.
+/// Local protocol initialization and skill discovery should answer promptly.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Creating or resuming a thread also waits for model discovery and MCP
+/// startup. Their network timeouts can outlast the local handshake budget;
+/// allow the same process to finish rather than killing a recoverable start.
+const THREAD_START_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a resume keeps retrying past the thread's previous writer, and
 /// how often. A quitting Ferrite's app-server exits within a fraction of a
 /// second of losing its stdin; the budget covers a slow one.
@@ -448,7 +450,7 @@ impl CodexSession {
             "params": {"capabilities":{"experimentalApi":true}, "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
         }))
         .map_err(|e| format!("could not write initialize: {e}"))?;
-        match await_step(steps, "initialize")? {
+        match await_step(steps, "initialize", HANDSHAKE_TIMEOUT)? {
             HandshakeStep::Initialized => {}
             HandshakeStep::Thread(_) => return Err("thread answered before initialize".into()),
         }
@@ -512,7 +514,7 @@ impl CodexSession {
             "params": params,
         }))
         .map_err(|e| format!("could not write {method}: {e}"))?;
-        match await_step(steps, method)? {
+        match await_step(steps, method, THREAD_START_TIMEOUT)? {
             HandshakeStep::Thread(thread) => {
                 self.thread_id = thread.thread_id;
                 self.model = thread.model;
@@ -888,12 +890,13 @@ enum HandshakeStep {
 fn await_step(
     steps: &Receiver<Result<HandshakeStep, String>>,
     waiting_on: &str,
+    timeout: Duration,
 ) -> Result<HandshakeStep, String> {
-    match steps.recv_timeout(HANDSHAKE_TIMEOUT) {
+    match steps.recv_timeout(timeout) {
         Ok(step) => step,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
-            "no {waiting_on} response within {HANDSHAKE_TIMEOUT:?}"
-        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err(format!("no {waiting_on} response within {timeout:?}"))
+        }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
             Err(format!("server closed before answering {waiting_on}"))
         }
@@ -1514,6 +1517,30 @@ pub(super) mod followup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_handshake_wait_expires_but_provider_errors_return_immediately() {
+        let (sender, receiver) = sync_channel(1);
+        let budget = Duration::from_millis(20);
+        let started = Instant::now();
+        let error = await_step(&receiver, "thread/start", budget).err().unwrap();
+        assert_eq!(error, "no thread/start response within 20ms");
+        assert!(started.elapsed() >= budget);
+
+        sender.send(Err("no such model".into())).unwrap();
+        let started = Instant::now();
+        let error = await_step(&receiver, "thread/start", THREAD_START_TIMEOUT)
+            .err()
+            .unwrap();
+        assert_eq!(error, "no such model");
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        drop(sender);
+        let error = await_step(&receiver, "thread/resume", THREAD_START_TIMEOUT)
+            .err()
+            .unwrap();
+        assert_eq!(error, "server closed before answering thread/resume");
+    }
 
     #[test]
     fn the_displayed_window_matches_the_pins() {

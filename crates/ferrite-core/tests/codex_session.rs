@@ -828,6 +828,32 @@ fn a_silent_server_fails_the_spawn_within_the_budget() {
     }
 }
 
+/// A live app-server can finish model discovery after five seconds. Both
+/// starting and resuming must let it finish without replacing the process.
+#[test]
+fn slow_thread_start_and_resume_survive_model_discovery() {
+    for resume in [None, Some("existing-thread".to_string())] {
+        let name = if resume.is_some() { "resume" } else { "start" };
+        let program = stub(
+            &format!("codex-slow-{name}"),
+            &format!(
+                "{VERSION_CASE}\n{}\nwhile read -r line; do case \"$line\" in *thread/{name}*) break;; esac; done\necho 'failed to refresh available models: request timed out' >&2\nsleep 6\n{}\nexec cat > /dev/null",
+                r#"echo '{"id":1,"result":{"userAgent":"stub"}}'"#,
+                r#"echo '{"id":2,"result":{"thread":{"id":"existing-thread"},"model":"stub-model","modelProvider":"stub","approvalPolicy":"on-request","sandbox":{"type":"readOnly"}}}'"#,
+            ),
+        );
+        let result = CodexSession::spawn(CodexConfig {
+            resume,
+            ..config(program)
+        });
+        assert!(
+            result.is_ok(),
+            "slow thread/{name} must finish: {:?}",
+            result.err()
+        );
+    }
+}
+
 /// The server's own refusal reaches the operator in the server's own words.
 #[test]
 fn a_refused_thread_start_fails_the_spawn_with_the_server_s_reason() {
