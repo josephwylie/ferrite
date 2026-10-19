@@ -149,6 +149,7 @@ mod limits_tokens;
 mod machine_order;
 mod merge;
 mod merge_rest;
+mod merged_reconciliation;
 mod notify;
 mod old_suggestions;
 mod plan;

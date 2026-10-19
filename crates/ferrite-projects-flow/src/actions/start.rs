@@ -28,6 +28,9 @@ const FRESH: &[&str] = &[
     "baseSha",
     "pr",
     "prMerged",
+    "mergeCommit",
+    "mergedAt",
+    "reconciled",
     "prState",
     "prHead",
     "prSeen",
@@ -91,6 +94,7 @@ pub fn delegate_with(id: &str, asked: Vec<(String, Value)>, w: Wait) -> Res<Task
         if !values.is_empty() { let s = t.obj_mut("settings"); for (k, v) in &values { s.insert(k.clone(), v.clone()); } }
         if values.get("merge.by") == Some(&json!("itself")) { t.put("requireApproval", false); }
         let owns = |t: &Task| (t.at("link").b("workspace") && t.at("link").b("ownsWorkspace")).then(|| (t.at("link").t("socket"), t.at("link").t("workspace")));
+        super::talk::keep_delivery(t); // Ferrite: retain the prior delivery before resetting a genuine follow-up.
         // Work that already landed and was cleaned up starts a new round in a fresh worktree, never in your checkout.
         if flow::git::cleaned_up(t) { old = owns(t); for k in FRESH { t.del(k); } t.put("link", json!({})); }
         t.put("on", Value::Null);

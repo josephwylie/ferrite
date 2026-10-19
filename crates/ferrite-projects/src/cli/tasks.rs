@@ -98,7 +98,7 @@ pub fn command(cmd: &str, a: &Args) -> Res<(Value, String)> {
             let (t, msg) = crate::after::change::change(&need(1, "an id")?, refs)?;
             (shown_of(t.s("id")), msg)
         }
-        "tell" => { let id = need(1, "an id")?; need(2, "the text")?; said(talk::reply(&id, &rest(2), talk::asker())?) }
+        "tell" => { let id = need(1, "an id")?; need(2, "the text")?; said(talk::reply_with_follow_up(&id, &rest(2), talk::asker(), flags.at("follow-up") == &json!(true))?) }
         "stop" => { let t = talk::stop(&need(1, "an id")?)?; (shown_of(t.s("id")), format!("{}: stopped", t.s("id"))) }
         "start" => { let t = filing::start_human(&need(1, "an id")?)?; (shown_of(t.s("id")), format!("{}: in progress", t.s("id"))) }
         "pick" => said(crate::attempts::settle::pick(&need(1, "an id")?, &pos.get(2).cloned().unwrap_or_default())?),
@@ -106,6 +106,11 @@ pub fn command(cmd: &str, a: &Args) -> Res<(Value, String)> {
         "review" => said(finish_line::send_review(&need(1, "an id")?)?),
         "retry" => said(finish_line::send_error(&need(1, "an id")?)?),
         "fix" => said(finish_line::send_failure(&need(1, "an id")?)?),
+        "reconcile-merged" => {
+            let result = crate::actions::reconcile_merged::reconcile(&need(1, "an id")?, &flag("pr").unwrap_or_default(), &flag("review-head").unwrap_or_default(), flags.b("check"))?;
+            let msg = format!("{}: {} {}", result.s("id"), if flags.b("check") { "verified merged delivery; no task changes:" } else { "restored original merged delivery:" }, result.s("pr"));
+            (result, msg)
+        }
         "finish" => said(finish_line::finish_anyway(&need(1, "an id")?)?),
         "details" => { let d = tidy(finish_line::details(&need(1, "an id")?)?); let s = serde_json::to_string_pretty(&d).unwrap_or_default(); (d, s) }
         "pin" => { let t = filing::pin(&need(1, "an id")?)?; (shown_of(t.s("id")), format!("{}: {}", t.s("id"), if t.b("pinned") { "pinned" } else { "unpinned" })) }
