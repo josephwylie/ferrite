@@ -56,6 +56,10 @@ fn a_second_process_reads_the_store_but_never_writes_it() {
     assert_eq!(fs::read(&log).unwrap(), before, "a read-only store wrote");
     assert_eq!(store.thread_ids().unwrap(), vec![id]);
 
+    // Other tests can fork while this descriptor is open. Closing our copy
+    // alone need not release the lock until that child has exec'd; explicitly
+    // release the simulated second process's claim before asserting it is free.
+    other.unlock().unwrap();
     drop((other, store));
     let store = Store::open(&dir).unwrap();
     assert_eq!(store.read_only(), None, "the claim is free again");
