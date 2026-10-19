@@ -80,7 +80,8 @@ fn auto_merge_turned_on_under_way_a_green_task_merges_at_the_reviewed_commit_one
             t.put("transcript", if has { json!(file.display().to_string()) } else { Value::Null });
             t.put("link", json!({ "socket": w.socket, "pane": "gone" })); t.put("reviewedHead", "x");
             t.put("reviews", json!([{ "round": 1, "at": at + 10000, "meets": true, "findings": [finding], "gate": "major", "pass": true, "text": "Fine.", "head": "x" }]));
-            t.put("review", json!({ "meets": true, "findings": [], "pass": true, "text": "Fine.", "keptAt": sw::clock::now() }));
+            // Ferrite: a kept review carries its exact head, as pipeline_end::after_review records it.
+            t.put("review", json!({ "meets": true, "findings": [], "pass": true, "text": "Fine.", "head": "x", "keptAt": sw::clock::now() }));
             Ok(Change::Write)
         }).unwrap();
         id
@@ -99,10 +100,18 @@ fn auto_merge_turned_on_under_way_a_green_task_merges_at_the_reviewed_commit_one
     let again = left_holding("Delegated again", Some(&|id| vec![brief(id), review.clone()]));
     update(&again, |t| { let a = t.at("reviews")[0].i("at") - 30000; t.get_mut("reviews").unwrap()[0]["at"] = json!(a); Ok(Change::Write) }).unwrap(); // reviewed before this conversation began
     let unread = left_holding("Unreadable", None);
+    // Lifting an obsolete human hold cannot supply missing review evidence or reuse a stale verdict.
+    let no_head = left_holding("No review head", Some(&|id| vec![brief(id), review.clone()]));
+    update(&no_head, |t| { t.obj_mut("review").del("head"); Ok(Change::Write) }).unwrap();
+    let other_head = left_holding("Other review head", Some(&|id| vec![brief(id), review.clone()]));
+    update(&other_head, |t| { t.obj_mut("review").put("head", "older"); Ok(Change::Write) }).unwrap();
+    let stale = left_holding("Stale review", Some(&|id| vec![brief(id), review.clone()]));
+    update(&stale, |t| { t.obj_mut("review").put("stale", true); Ok(Change::Write) }).unwrap();
     sw::runner::JOBS.with(|j| j.borrow_mut().clear());
     pass(&w); pass(&w);
-    let got: Vec<(String, bool)> = [&sent_back, &replied, &began, &added, &shaped, &failed, &later, &again, &unread].iter().map(|id| (task(id).t("stage"), task(id).b("requireApproval"))).collect();
+    let got: Vec<(String, bool)> = [&sent_back, &replied, &began, &added, &shaped, &failed, &later, &again, &unread, &no_head, &other_head, &stale].iter().map(|id| (task(id).t("stage"), task(id).b("requireApproval"))).collect();
     let mut want = vec![("merging".to_string(), false)]; want.extend((0..8).map(|_| ("approval".to_string(), true)));
+    want.extend((0..3).map(|_| ("approval".to_string(), false)));
     assert_eq!(got, want);
     assert_eq!(queued("land"), vec![sent_back.clone()]);
     sw::runner::JOBS.with(|j| j.borrow_mut().clear());
