@@ -1,0 +1,1 @@
+{"type":"command","id":2,"op":"bootstrap","provider":"codex","model":"gpt-5.6","effort":"high","workspace":{"kind":"new_worktree","repo":"/src/ferrite"},"prompt":"fix the parser","group":1}

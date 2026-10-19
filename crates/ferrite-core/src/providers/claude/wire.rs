@@ -509,7 +509,9 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
                     .and_then(|context| context.get("total_tokens"))
                     .and_then(Value::as_u64)
                     .unwrap_or(input + cached + created + output),
-                input_tokens: input,
+                // Every token the model read (`claude_input`), as Codex
+                // counts it: the cached reads are a share of it.
+                input_tokens: input + cached + created,
                 cached_input_tokens: cached,
                 output_tokens: output,
                 reasoning_output_tokens: 0,
@@ -535,7 +537,7 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
                     + count(last, "cache_creation_input_tokens")
                     + count(last, "output_tokens")
             });
-            let input = count(usage, "input_tokens");
+            let input = claude_input(usage);
             let cached = count(usage, "cache_read_input_tokens");
             let active_model = value
                 .get("model")
@@ -571,6 +573,22 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     }
 }
 
+/// The input a Claude usage block reports, whole: the API's `input_tokens`
+/// are only what missed the prompt cache, so the cache's reads and writes
+/// join them. The shared counters are Codex's shape — cached input is a
+/// share of the input, never beside it — so a turn's `↑ 3.2k` reads the
+/// same on both providers.
+fn claude_input(usage: &Value) -> u64 {
+    [
+        "input_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ]
+    .iter()
+    .map(|key| usage.get(*key).and_then(Value::as_u64).unwrap_or(0))
+    .sum()
+}
+
 pub(super) fn parse_usage_details_value(value: &Value) -> Option<SessionEvent> {
     let usage = match value.get("type")?.as_str()? {
         "assistant" => value["message"].get("usage")?,
@@ -588,7 +606,7 @@ pub(super) fn parse_usage_details_value(value: &Value) -> Option<SessionEvent> {
             } else {
                 UsageScope::Turn
             },
-            input_tokens: count("input_tokens"),
+            input_tokens: claude_input(usage),
             cached_input_tokens: count("cache_read_input_tokens"),
             output_tokens: count("output_tokens"),
             reasoning_output_tokens: usage["output_tokens_details"]
@@ -658,11 +676,7 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
     let block = content_block(value, "tool_result")?;
     Some(SessionEvent::ToolCompleted {
         id: block.get("tool_use_id")?.as_str()?.to_string(),
-        output: match block.get("content") {
-            Some(Value::String(text)) => text.clone(),
-            Some(other) => other.to_string(),
-            None => String::new(),
-        },
+        output: tool_result_text(block.get("content")),
         // Absent on a successful result; only failures say so.
         is_error: block
             .get("is_error")
@@ -670,6 +684,29 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
             .unwrap_or(false),
         result: parse_tool_result(value.get("tool_use_result")),
     })
+}
+
+/// What a `tool_result` block fed back to the model, as text: a string as
+/// it is; a list of content blocks as their text, an image standing as
+/// `[image]` (an MCP tool's screenshot is base64 the transcript and the log
+/// have no use for); anything else as its compact JSON.
+pub(super) fn tool_result_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks))
+            if blocks
+                .iter()
+                .all(|block| matches!(block["type"].as_str(), Some("text" | "image"))) =>
+        {
+            blocks
+                .iter()
+                .map(|block| block["text"].as_str().unwrap_or("[image]"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
 }
 
 /// The CLI hangs its structured result off the same line as the prose one.
@@ -746,21 +783,28 @@ fn creation_hunk(value: &Value) -> Option<Hunk> {
         new_start: 1,
         new_lines: lines.len() as u32,
         lines,
+        section: None,
     })
 }
 
+/// A `structuredPatch` hunk. It carries no header text, so its section is
+/// derived by git's default funcname rule from its own leading context
+/// (`transcript::hunk_section`); the app looks further up the post-edit file
+/// when the context holds none.
 fn parse_hunk(value: &Value) -> Option<Hunk> {
+    let lines: Vec<String> = value
+        .get("lines")?
+        .as_array()?
+        .iter()
+        .filter_map(|line| Some(line.as_str()?.to_string()))
+        .collect();
     Some(Hunk {
         old_start: value.get("oldStart")?.as_u64()? as u32,
         old_lines: value.get("oldLines")?.as_u64()? as u32,
         new_start: value.get("newStart")?.as_u64()? as u32,
         new_lines: value.get("newLines")?.as_u64()? as u32,
-        lines: value
-            .get("lines")?
-            .as_array()?
-            .iter()
-            .filter_map(|line| Some(line.as_str()?.to_string()))
-            .collect(),
+        section: crate::transcript::hunk_section(&lines),
+        lines,
     })
 }
 
@@ -1523,6 +1567,9 @@ mod tests {
             SessionEvent::TokenUsage { .. } => return None,
             // Parsed alongside the ordinary event path by the reader.
             SessionEvent::RateLimits { .. } => return None,
+            // A stateful stream read by the activity decoder (`drafts`),
+            // proved by the show-visual capture in tests/claude_session.rs.
+            SessionEvent::ToolDraft { .. } => return None,
         })
     }
 

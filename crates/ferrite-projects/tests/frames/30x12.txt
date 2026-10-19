@@ -1,0 +1,65 @@
+== the list
+ herdr-projects  proj · 5 nee…
+▌◐ #5     Max length for task
+▌         titles
+▌         Found the cause; now
+▌         checking every call…
+▌           60% 11m left    1m
+
+ + New task  added word for w…
+──────────────────────────────
+❯ Add a task
+──────────────────────────────
+  enter open this task's agent
+== the task beside it
+ herdr-projects  proj · 5 nee…
+▌◐ #5     Max length for task
+▌         titles
+▌         Found the cause; now
+▌         checking every call…
+ + New task  added word for w…
+──────────────────────────────
+❯ Add a task
+──────────────────────────────
+  Side panel on. alt+p hides
+  it.
+  enter open this task's agent
+== the whole task
+ Task details  #5 "Max…  line…
+──────────────────────────────
+
+ #5 Max length for task
+ titles
+
+ Status ─────────────────────
+ + New task  added word for w…
+──────────────────────────────
+❯ Add a task
+──────────────────────────────
+  ↑↓ scroll the task
+== the ? menu
+ Menu  for #5 "Max length fo…
+ plain keys
+   ↑ ↓          move between
+                tasks and
+                headings
+   pgup pgdn    a page of
+ ↓ 137 more
+ + New task  added word for w…
+──────────────────────────────
+❯ Add a task
+──────────────────────────────
+  ↑↓ pick a key
+== a draft
+ herdr-projects  proj · 5 nee…
+▌◐ #5     Max length for task
+▌         titles
+▌         Found the cause; now
+▌         checking every call…
+▌           60% 11m left    1m
+
+ + New task  added word for w…
+──────────────────────────────
+❯ Hello 日本 🚀
+──────────────────────────────
+  enter add it as a task

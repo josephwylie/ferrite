@@ -5,8 +5,9 @@
 use std::ffi::OsStr;
 use std::io;
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{sync_channel, Receiver};
 
+use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 mod claude;
@@ -17,11 +18,29 @@ mod elicitation;
 pub mod limits;
 pub mod models;
 pub(crate) mod oneshot;
+pub mod shell;
 pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `cmd_shim` below.
 #[cfg(any(windows, test))]
 mod job;
+
+/// Read a provider's next stdout line into `line`, replacing what it held.
+/// Answers the bytes read; 0 at the end of the stream. A buffer a rare
+/// huge line (a large tool result) grew past `LINE_KEEP` is released to a
+/// working size first, so it is not held for the rest of the Session.
+pub(crate) fn read_line(reader: &mut impl io::BufRead, line: &mut Vec<u8>) -> io::Result<usize> {
+    line.clear();
+    if line.capacity() > LINE_KEEP {
+        line.shrink_to(LINE_START);
+    }
+    reader.read_until(b'\n', line)
+}
+
+/// The most a provider's line buffer keeps between lines, and the size it
+/// returns to once a line has grown it past that.
+const LINE_KEEP: usize = 1024 * 1024;
+const LINE_START: usize = 64 * 1024;
 
 /// The program `Command::new` should exec for a configured CLI name.
 ///
@@ -39,6 +58,20 @@ pub(crate) fn spawnable_program(program: &str) -> String {
         }
     }
     program.to_string()
+}
+
+/// The command that runs `program` through `launcher` (`bwrap … --`,
+/// `thread.start --launcher`): the launcher's words, then the program;
+/// the program itself without one. Its arguments follow.
+pub(crate) fn launched(launcher: &[String], program: &str) -> std::process::Command {
+    match launcher.split_first() {
+        Some((first, rest)) => {
+            let mut command = std::process::Command::new(first);
+            command.args(rest).arg(program);
+            command
+        }
+        None => std::process::Command::new(program),
+    }
 }
 
 /// The shim a bare `program` resolves to on this PATH: directories in
@@ -63,6 +96,19 @@ fn cmd_shim(program: &str, path: Option<&OsStr>) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// A setting change's answer: `Ok` once the change holds for the next
+/// turn. A Session that keeps the setting itself has answered by the time
+/// it hands this back; one whose provider must accept it answers when the
+/// provider does, and nobody waits on it.
+pub type SettingAck = Receiver<io::Result<()>>;
+
+/// The answer to a change the Session applied itself.
+pub fn applied() -> SettingAck {
+    let (answer, ack) = sync_channel(1);
+    let _ = answer.send(Ok(()));
+    ack
 }
 
 /// A live provider Session, whatever backend serves it. Each provider
@@ -110,14 +156,14 @@ pub trait Session {
     }
     /// Change effort for the next turn without replacing this Session or
     /// its conversation. `None` restores the provider's configured default.
-    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
+    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<SettingAck> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "this Session cannot change effort",
         ))
     }
     /// Select the model for subsequent turns on this Session.
-    fn set_model(&mut self, _model: Option<&str>) -> io::Result<()> {
+    fn set_model(&mut self, _model: Option<&str>) -> io::Result<SettingAck> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "this Session cannot change model",
@@ -134,7 +180,17 @@ pub trait Session {
     fn take_suggestion(&mut self) -> Option<String> {
         None
     }
+    /// Interrupt Main's turn, and only that: Subagents, background tasks and
+    /// workflows keep running (stopping one is `stop_subagent` or
+    /// `SessionControl::StopTask`).
     fn interrupt(&mut self) -> io::Result<()>;
+    /// Stop one Subagent, leaving Main and every other Subagent running.
+    fn stop_subagent(&mut self, _key: &AgentKey) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this Session cannot stop a subagent",
+        ))
+    }
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
     /// Tell the provider what the Thread is now called, so its own session
@@ -189,10 +245,10 @@ impl Session for ClaudeSession {
         ClaudeSession::take_suggestion(self)
     }
 
-    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
         ClaudeSession::set_effort(self, effort)
     }
-    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
         ClaudeSession::set_model(self, model)
     }
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
@@ -211,6 +267,10 @@ impl Session for ClaudeSession {
 
     fn interrupt(&mut self) -> io::Result<()> {
         ClaudeSession::interrupt(self)
+    }
+
+    fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        ClaudeSession::stop_subagent(self, key)
     }
 
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
@@ -246,11 +306,11 @@ impl Session for CodexSession {
     fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
         CodexSession::cancel_queued(self, id)
     }
-    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
-        CodexSession::set_effort(self, effort)
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
+        CodexSession::set_effort(self, effort).map(|()| applied())
     }
-    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
-        CodexSession::set_model(self, model)
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
+        CodexSession::set_model(self, model).map(|()| applied())
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         CodexSession::events(self)
@@ -262,6 +322,10 @@ impl Session for CodexSession {
 
     fn interrupt(&mut self) -> io::Result<()> {
         CodexSession::interrupt(self)
+    }
+
+    fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        CodexSession::stop_subagent(self, key)
     }
 
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
@@ -286,6 +350,8 @@ pub use claude::{
 };
 pub use codex::catalog::list as codex_models;
 pub use codex::discovery::list as codex_sessions;
+pub(crate) use codex::file_change_diffs;
+pub(crate) use codex::launch as codex_launch;
 pub use codex::title as codex_title;
 pub use codex::{
     CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError, CODEX_CLI_MIN_VERSION,
@@ -307,6 +373,26 @@ mod tests {
 
     fn path_of(dirs: &[&Path]) -> std::ffi::OsString {
         std::env::join_paths(dirs.iter().copied()).unwrap()
+    }
+
+    /// One huge line (a large tool result) must not keep its buffer for
+    /// the rest of the Session's life.
+    #[test]
+    fn a_huge_line_does_not_keep_its_buffer_for_the_lines_after_it() {
+        let huge = "x".repeat(5 * 1024 * 1024);
+        let stream = format!("{huge}\nsmall\nsmaller\n");
+        let mut reader = io::BufReader::new(stream.as_bytes());
+        let mut line = Vec::new();
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), huge.len() + 1);
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), 6);
+        assert_eq!(line, b"small\n");
+        assert!(
+            line.capacity() <= 1024 * 1024,
+            "a {} byte buffer kept after the huge line",
+            line.capacity()
+        );
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), 8);
+        assert_eq!(read_line(&mut reader, &mut line).unwrap(), 0);
     }
 
     #[test]

@@ -1,0 +1,1550 @@
+//! The motion kit: Zeron's animation catalog as helpers over gpui's
+//! [`Animation`], plus the two clocks gpui does not give us — a throttled,
+//! shared pulse for loops and a hover blend for colour. Ported from Zeron
+//! (MIT, (c) 2026 Wing). The numbers are tokens in `theme.rs` (the motion
+//! section), which also holds the rules; this module is the machinery.
+//!
+//! # Catalog
+//!
+//! Each Zeron animation and the Ferrite surface it applies to.
+//!
+//! | Zeron | Spec | Ferrite surface |
+//! | --- | --- | --- |
+//! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
+//! | selection move | none | the nav's one selection ground (`paint::SELECTION`) moves at once: selection is keyboard-rate, a high-frequency interaction |
+//! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
+//! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
+//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
+//! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
+//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
+//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
+//! | seam accent | [`SEAM_FADE`] 120ms | a board seam's accent line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
+//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
+//! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
+//! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
+//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
+//!
+//! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
+//! `PopupMenu`) keep the kit's own behaviour. A tool group's disclosure in
+//! the transcript opens without a height tween: its rows are one item of a
+//! virtualized list inside a kit `Collapsible`, and an item mid-reveal would
+//! clip rows the pointer can already reach.
+//!
+//! # What gpui here cannot do, and what stands in
+//!
+//! Zeron runs a gpui fork; Ferrite runs gpui-kit 0.6 on gpui-pre. Dropped or
+//! approximated:
+//!
+//! - **`div` scale.** Only `svg` has a transform. `menu-in` and `dialog-in`
+//!   carry their 0.96 → 1 scale as a 2px shift plus the fade, as Zeron does.
+//! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
+//!   dropped; opacity and scale carry it.
+//! - **Frost and edge fades.** Fork-only paint effects; not ported.
+//! - **Toast enter and exit.** Ferrite sets the stack's timing
+//!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
+//!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px
+//!   and 200ms exit on the card itself, so the card's 4px / 0.3-opacity
+//!   entrance waits on that crate.
+//!
+//! # Reduced motion
+//!
+//! gpui's `App::reduce_motion` flag snaps every `with_animation` element (a
+//! one-shot to its end state, a loop to its start) and every kit spring. The
+//! clocks here follow the same rule: [`loop_phase`] returns 0 and declares
+//! nothing, a [`Tween`] reads its target, and a hover snaps. [`init`] sets
+//! the flag from the system setting at launch.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use ferrite_core::cadence;
+use gpui::{
+    px, Animation, AnimationElement, AnimationExt, App, ElementId, EntityId, Global, Hsla,
+    IntoElement, Rgba, SharedString, Styled, Window,
+};
+
+use crate::theme;
+
+// ---------------------------------------------------------------------------
+// Cubic bezier
+// ---------------------------------------------------------------------------
+
+/// A CSS `cubic-bezier(x1, y1, x2, y2)` timing function, endpoints fixed at
+/// (0,0) and (1,1). Solves x(t) = input by Newton iteration with a bisection
+/// fallback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CubicBezier {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
+
+impl CubicBezier {
+    pub const fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        Self { x1, y1, x2, y2 }
+    }
+
+    /// A curve from its `theme.rs` token, `[x1, y1, x2, y2]`.
+    pub const fn from_points(points: [f32; 4]) -> Self {
+        Self::new(points[0], points[1], points[2], points[3])
+    }
+
+    fn coefficients(a: f32, b: f32) -> (f32, f32, f32) {
+        let c = 3.0 * a;
+        let bb = 3.0 * (b - a) - c;
+        let aa = 1.0 - c - bb;
+        (aa, bb, c)
+    }
+
+    fn sample_x(&self, t: f32) -> f32 {
+        let (a, b, c) = Self::coefficients(self.x1, self.x2);
+        ((a * t + b) * t + c) * t
+    }
+
+    fn sample_y(&self, t: f32) -> f32 {
+        let (a, b, c) = Self::coefficients(self.y1, self.y2);
+        ((a * t + b) * t + c) * t
+    }
+
+    fn sample_x_derivative(&self, t: f32) -> f32 {
+        let (a, b, c) = Self::coefficients(self.x1, self.x2);
+        (3.0 * a * t + 2.0 * b) * t + c
+    }
+
+    fn solve_t_for_x(&self, x: f32) -> f32 {
+        let mut t = x;
+        for _ in 0..8 {
+            let err = self.sample_x(t) - x;
+            if err.abs() < 1e-6 {
+                return t;
+            }
+            let d = self.sample_x_derivative(t);
+            if d.abs() < 1e-6 {
+                break;
+            }
+            t -= err / d;
+        }
+        // x(t) is monotonic for every valid CSS bezier.
+        let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+        for _ in 0..32 {
+            let mid = (lo + hi) / 2.0;
+            if self.sample_x(mid) < x {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        (lo + hi) / 2.0
+    }
+
+    /// Eased output for input progress `x`, clamped to `[0, 1]` at both
+    /// ends: f32 rounding can land a hair past 1.0 near the tail, and gpui
+    /// asserts on an animation delta outside the unit interval.
+    pub fn eval(&self, x: f32) -> f32 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if x >= 1.0 {
+            return 1.0;
+        }
+        self.sample_y(self.solve_t_for_x(x)).clamp(0.0, 1.0)
+    }
+}
+
+pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
+pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
+pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
+pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
+
+// ---------------------------------------------------------------------------
+// The catalog
+// ---------------------------------------------------------------------------
+
+/// One catalog entry: a duration and its curve.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionSpec {
+    pub duration_ms: u64,
+    pub curve: CubicBezier,
+}
+
+impl MotionSpec {
+    pub const fn new(duration_ms: u64, curve: CubicBezier) -> Self {
+        Self { duration_ms, curve }
+    }
+
+    pub fn duration(&self) -> Duration {
+        Duration::from_millis(self.duration_ms)
+    }
+
+    /// Eased progress for a raw timeline fraction. Pure.
+    pub fn progress(&self, raw: f32) -> f32 {
+        if self.duration_ms == 0 {
+            return 1.0;
+        }
+        self.curve.eval(raw)
+    }
+
+    /// Eased progress `elapsed` into the timeline.
+    pub fn progress_at(&self, elapsed: Duration) -> f32 {
+        if self.duration_ms == 0 {
+            return 1.0;
+        }
+        self.progress(elapsed.as_secs_f32() / self.duration().as_secs_f32())
+    }
+
+    /// This entry as a one-shot gpui [`Animation`]. gpui snaps it to its end
+    /// state under reduced motion.
+    pub fn animation(&self) -> Animation {
+        let spec = *self;
+        if !live() {
+            // Resting (see `live`): lands on its end state at once.
+            return Animation::new(Duration::from_nanos(1)).with_easing(|_| 1.0);
+        }
+        Animation::new(spec.duration()).with_easing(move |raw| spec.progress(raw))
+    }
+}
+
+pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
+pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_OUT_EXPO);
+/// The sidebar's ride (cmd-B) and the board riding with it: the
+/// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
+/// (`cubic-bezier(.25,.1,.25,1)`), not `ease-out`.
+pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
+/// A board seam's accent line fading in under the pointer: the prototype's
+/// `.seam::before{transition: opacity .12s}`.
+pub const SEAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_SEAM_FADE_MS, EASE);
+pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
+pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
+pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
+pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
+pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
+pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
+/// A two-state control the pointer flipped (the Parked chevron, a switch
+/// thumb): 150ms on the standard curve. A keyboard flip lands at once.
+pub const TURN: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
+
+/// Linear interpolation.
+pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
+}
+
+// ---------------------------------------------------------------------------
+// Element helpers
+// ---------------------------------------------------------------------------
+//
+// A rise or drop is a relative `top` inset: taffy applies relative insets
+// after layout, so, like a CSS transform, siblings never move. The entrances
+// play once when their element id first mounts, so a caller mounts one only
+// for a change the operator watched. There are no exits: a menu or sheet
+// that closes is gone at once (an exit costs the operator a wait on every
+// dismissal and says nothing the closed state does not).
+//
+// gpui paints a surface's shadow under it and has no group compositing, so
+// a surface still fading in would show its own shadow through it as a dark
+// slab. The float entrances ramp the shadow's ink by the square of the
+// fade, which the element's own opacity takes to the cube (the kit's
+// toasts do the same).
+
+/// Which way a floating surface opens from its opener: it starts
+/// `MOTION_MENU_SHIFT` back toward the opener and settles away from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opens {
+    /// Below its opener (the nav's menus, the context menu, the bell).
+    Down,
+    /// Above its opener (the Composer's menus, the footer cards).
+    Up,
+}
+
+impl Opens {
+    fn shift(self, t: f32) -> f32 {
+        let toward = match self {
+            Opens::Down => -1.0,
+            Opens::Up => 1.0,
+        };
+        toward * theme::MOTION_MENU_SHIFT * (1.0 - t)
+    }
+}
+
+fn float_face<E: Styled>(el: E, opacity: f32) -> E {
+    el.opacity(opacity)
+        .shadow(crate::components::float_shadow_faded(opacity * opacity))
+}
+
+/// `menu-in` for a floating surface in flow (inside `anchored` or a
+/// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` while settling
+/// `MOTION_MENU_SHIFT` away from its opener.
+pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, MENU_IN.animation(), move |el, t| {
+        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+            .relative()
+            .top(px(opens.shift(t)))
+    })
+}
+
+/// `dialog-in` for a sheet: opacity 0 → 1 rising `MOTION_DIALOG_RISE`.
+pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
+        float_face(el, t)
+            .relative()
+            .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
+    })
+}
+
+/// `slot-in` for a board slot that opens beside its owner (the reader
+/// beside its Pane): no surface of its own to lift, so no shadow — it fades
+/// up from `MOTION_MENU_FROM_OPACITY` while settling `MOTION_SLOT_SHIFT`
+/// in from the owner's side, over `DIALOG_IN`.
+pub fn slot_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
+        el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+            .relative()
+            .left(px(-theme::MOTION_SLOT_SHIFT * (1.0 - t)))
+    })
+}
+
+/// `fade-in` over `spec`: opacity 0 → `to`, nothing moves — a mark or a
+/// chip arriving in a line that is already drawn.
+pub fn fade_in<E>(
+    id: impl Into<ElementId>,
+    element: E,
+    spec: MotionSpec,
+    to: f32,
+) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, spec.animation(), move |el, t| {
+        el.opacity(lerp(0.0, to, t))
+    })
+}
+
+/// A sheet's veil darkening in over `FADE_QUICK`: only its ground fades, so
+/// the sheet on it keeps its own entrance.
+pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, FADE_QUICK.animation(), |el, t| {
+        el.bg(mix(
+            gpui::transparent_black(),
+            gpui::rgba(theme::VEIL).into(),
+            t,
+        ))
+    })
+}
+
+/// `fade-in` at progress `t`: opacity with a `MOTION_FADE_IN_RISE` rise,
+/// for a caller that drives `t` itself (a live-appended transcript row).
+/// The rise is a relative inset, so the rows around it never move.
+pub fn fade_in_at<E: Styled>(element: E, t: f32) -> E {
+    element
+        .opacity(t)
+        .relative()
+        .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
+}
+
+// ---------------------------------------------------------------------------
+// Tweens: interruptible value transitions
+// ---------------------------------------------------------------------------
+
+/// A value moving `from → to` along a spec, sampled at render time. Unlike a
+/// `with_animation` keyed on the state, it is interruptible: a flip mid-flight
+/// starts a new tween from the value on screen ([`Tween::retarget`]). The
+/// owner reads [`Tween::running`] after rendering to keep frames coming.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tween {
+    pub from: f32,
+    pub to: f32,
+    pub spec: MotionSpec,
+    started: Instant,
+}
+
+impl Tween {
+    pub fn new(from: f32, to: f32, spec: MotionSpec, now: Instant) -> Self {
+        Self {
+            from,
+            to,
+            spec,
+            started: now,
+        }
+    }
+
+    /// A tween toward `to` from wherever `previous` has the value now, or
+    /// from `at_rest` when nothing was moving.
+    pub fn retarget(
+        previous: Option<Tween>,
+        at_rest: f32,
+        to: f32,
+        spec: MotionSpec,
+        now: Instant,
+        reduced: bool,
+    ) -> Self {
+        let from = previous.map_or(at_rest, |tween| tween.value(now, reduced));
+        Self::new(from, to, spec, now)
+    }
+
+    /// The value at `now`; exactly `to` once finished or under reduced motion.
+    pub fn value(&self, now: Instant, reduced: bool) -> f32 {
+        if !self.running(now, reduced) {
+            return self.to;
+        }
+        let elapsed = now.saturating_duration_since(self.started);
+        lerp(self.from, self.to, self.spec.progress_at(elapsed))
+    }
+
+    /// Mid-flight: the owner must ask for another frame.
+    pub fn running(&self, now: Instant, reduced: bool) -> bool {
+        !reduced
+            && self.from != self.to
+            && now.saturating_duration_since(self.started) < self.spec.duration()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settled: a state change that eases, held in element state
+// ---------------------------------------------------------------------------
+//
+// A two-state control (a disclosure's turn, send ⇄ stop, a fold) animates
+// between its states only when the state *changes under it*: the element
+// remembers the target it last drew, and on its first mount — first paint,
+// a row scrolled back into view — it lands on the state it is given, with
+// no entrance. A flip mid-flight turns around from where it is.
+
+#[derive(Debug, Clone, Copy)]
+struct SettleState {
+    target: f32,
+    tween: Option<Tween>,
+}
+
+/// `settle`, where `reveal_only` snaps any move toward 0 (a fold that
+/// closes goes at once) and eases only the opening.
+fn settle_with(
+    id: impl Into<ElementId>,
+    target: f32,
+    spec: MotionSpec,
+    reveal_only: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    let now = cx.background_executor().now();
+    let reduced = reduced_motion(cx);
+    let (value, running) = window.with_global_id(id.into(), |id, window| {
+        window.with_element_state(id, |state: Option<SettleState>, _| {
+            let mut state = state.unwrap_or(SettleState {
+                target,
+                tween: None,
+            });
+            if state.target != target {
+                let snap = reveal_only && target < state.target;
+                state.tween = (!snap).then(|| {
+                    Tween::retarget(state.tween, state.target, target, spec, now, reduced)
+                });
+                state.target = target;
+            }
+            let value = state
+                .tween
+                .map_or(target, |tween| tween.value(now, reduced));
+            let running = state.tween.is_some_and(|tween| tween.running(now, reduced));
+            ((value, running), state)
+        })
+    });
+    if running {
+        window.request_animation_frame();
+    }
+    value
+}
+
+/// An element drawn at [`settle`]'s value: `build` receives it (0..1 between
+/// the two states) and returns what to paint.
+pub struct Settled<F> {
+    id: ElementId,
+    target: f32,
+    spec: MotionSpec,
+    reveal_only: bool,
+    build: F,
+}
+
+impl<F> Settled<F> {
+    /// Only the opening eases; a close lands at once.
+    pub fn reveal_only(mut self) -> Self {
+        self.reveal_only = true;
+        self
+    }
+}
+
+/// Ease `build`'s element between two states (`on` is the target).
+pub fn settled<F, E>(id: impl Into<ElementId>, on: bool, spec: MotionSpec, build: F) -> Settled<F>
+where
+    F: FnOnce(f32) -> E + 'static,
+    E: IntoElement,
+{
+    Settled {
+        id: id.into(),
+        target: if on { 1.0 } else { 0.0 },
+        spec,
+        reveal_only: false,
+        build,
+    }
+}
+
+impl<F, E> gpui::RenderOnce for Settled<F>
+where
+    F: FnOnce(f32) -> E + 'static,
+    E: IntoElement,
+{
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let value = settle_with(
+            self.id,
+            self.target,
+            self.spec,
+            self.reveal_only,
+            window,
+            cx,
+        );
+        (self.build)(value)
+    }
+}
+
+impl<F, E> IntoElement for Settled<F>
+where
+    F: FnOnce(f32) -> E + 'static,
+    E: IntoElement,
+{
+    type Element = gpui::ViewElement<Self>;
+
+    #[track_caller]
+    fn into_element(self) -> Self::Element {
+        gpui::ViewElement::new(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pulse clock: one throttled drive for every loop
+// ---------------------------------------------------------------------------
+//
+// A `with_animation(...repeat())` loop asks for a frame on every display
+// frame for as long as it is mounted: one working Thread held the whole
+// cockpit at the display's refresh rate. The clock replaces that with one
+// timer on a ~30fps grid. A loop reads its phase from [`loop_phase`] (or
+// [`pulse_phase`], [`css_phase`], [`script_phase`]), which also declares
+// when the loop's picture next changes (`ferrite_core::cadence`): the
+// caret's fades and not its plateaus, a spinner's steps and not the
+// instants between them. The timer wakes at the earliest declared change,
+// snapped to the grid from the clock's epoch, and notifies only the views
+// due then. A view that stops painting a loop declares nothing more and
+// lapses after its last wake; with nothing declared the clock parks: no
+// timer, no frame. All loops share one epoch, so two marks on screen stay
+// phase-locked, and every frame drawn is the one the fixed rate drew at
+// that instant.
+
+fn pulse_tick() -> Duration {
+    Duration::from_millis(theme::MOTION_PULSE_TICK_MS)
+}
+
+#[derive(Default)]
+struct PulseClock {
+    epoch: Option<Instant>,
+    schedule: cadence::Schedule<EntityId>,
+    /// The armed wake and its timer; `None` when parked.
+    timer: Option<(Instant, gpui::Task<()>)>,
+}
+
+impl Global for PulseClock {}
+
+impl PulseClock {
+    fn grid(&mut self, now: Instant) -> cadence::Grid {
+        cadence::Grid {
+            epoch: *self.epoch.get_or_insert(now),
+            tick: pulse_tick(),
+        }
+    }
+}
+
+/// How a loop's picture moves through its turn (`cadence::Motion`).
+pub use ferrite_core::cadence::Motion;
+
+/// The phase `[0, 1)` of a loop with this `period` and `motion`, on the
+/// shared epoch, declaring `view`'s next draw for the instant its picture
+/// next changes. Call it only while painting the loop. Reduced motion
+/// returns the loop's start (0) and declares nothing.
+pub fn loop_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
+    run_loop(None, period, motion, view, cx)
+}
+
+/// [`loop_phase`] from the loop's own `origin` rather than the shared
+/// epoch: the caret's blink restarts solid on every focus and edit.
+pub fn loop_phase_from(
+    origin: Instant,
+    period: Duration,
+    motion: Motion,
+    view: EntityId,
+    cx: &mut App,
+) -> f32 {
+    run_loop(Some(origin), period, motion, view, cx)
+}
+
+/// A loop whose picture moves at every instant ([`loop_phase`] with
+/// `Motion::Continuous`): `view` is drawn on every tick of the grid. (The
+/// app's loops name their motion; the clock's own tests drive this one.)
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
+    loop_phase(period, Motion::Continuous, view, cx)
+}
+
+fn run_loop(
+    origin: Option<Instant>,
+    period: Duration,
+    motion: Motion,
+    view: EntityId,
+    cx: &mut App,
+) -> f32 {
+    if reduced_motion(cx) || period.is_zero() {
+        return 0.0;
+    }
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    let grid = clock.grid(now);
+    let looped = cadence::Loop {
+        origin: origin.unwrap_or(grid.epoch),
+        period,
+        motion,
+    };
+    if let Some(change) = looped.next_change(now).filter(|_| !quiet()) {
+        clock.schedule.declare(view, grid.wake(change, now), now);
+        arm(now, cx);
+    }
+    looped.phase(now)
+}
+
+thread_local! {
+    static QUIET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Lay `f`'s loops out at their phase now without declaring them on the
+/// clock: their view is not drawn again for them, because something else
+/// draws them (the loops overlay, `loops_overlay::hosted`).
+pub fn quietly<R>(f: impl FnOnce() -> R) -> R {
+    QUIET.with(|quiet| quiet.set(quiet.get() + 1));
+    let result = f();
+    QUIET.with(|quiet| quiet.set(quiet.get() - 1));
+    result
+}
+
+fn quiet() -> bool {
+    QUIET.with(|quiet| quiet.get() > 0)
+}
+
+/// Text in `view` that changes with time but is no loop (a working clock's
+/// `12s`, a nav row's `2m`) next changes at `at`: while a loop keeps the
+/// clock running, `view` is drawn on the grid then, as the fixed rate drew
+/// it; otherwise it waits for whatever next draws `view`. Nothing rides
+/// under reduced motion or a held capture.
+pub fn ride(view: EntityId, at: Instant, cx: &mut App) {
+    if reduced_motion(cx) || held_loops().is_some() {
+        return;
+    }
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    let wake = clock.grid(now).wake(at, now);
+    clock.schedule.ride(view, wake, now);
+    arm(now, cx);
+}
+
+/// Text in `view` that must move on its own at `at` whatever else runs
+/// (a live tool call's `3s` → `4s`): `view` is drawn on the grid then,
+/// under reduced motion too — a clock is no motion.
+pub fn wake_at(view: EntityId, at: Instant, cx: &mut App) {
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    let wake = clock.grid(now).wake(at, now);
+    clock.schedule.declare(view, wake, now);
+    arm(now, cx);
+}
+
+/// Arm the one timer for the schedule's earliest wake, unless it is armed
+/// for that or sooner. Nothing declared: it stays parked.
+fn arm(now: Instant, cx: &mut App) {
+    let clock = cx.default_global::<PulseClock>();
+    let Some(wake) = clock.schedule.next_wake() else {
+        return;
+    };
+    if clock
+        .timer
+        .as_ref()
+        .is_some_and(|(armed, _)| *armed <= wake)
+    {
+        return;
+    }
+    let delay = wake.saturating_duration_since(now);
+    let timer = cx.spawn(async move |cx| {
+        cx.background_executor().timer(delay).await;
+        cx.update(fire);
+    });
+    cx.default_global::<PulseClock>().timer = Some((wake, timer));
+}
+
+/// The timer's wake: notify each view due, then arm for the next.
+fn fire(cx: &mut App) {
+    let now = cx.background_executor().now();
+    let clock = cx.default_global::<PulseClock>();
+    clock.timer = None;
+    let due = clock.schedule.take_due(now);
+    if !due.is_empty() {
+        #[cfg(test)]
+        testing::PULSE_TICKS.with(|ticks| ticks.set(ticks.get() + 1));
+        for view in due {
+            cx.notify(view);
+        }
+    }
+    arm(now, cx);
+}
+
+/// The two clocks a browser runs its loops on, held at a fixed time: a
+/// capture reproducing one instant of the prototype holds every loop where
+/// the prototype's shot caught it. Its CSS animations (the caret's blink,
+/// the working caption's shimmer) and its scripted ones (the spinners'
+/// frames, stepped by timers) start a few milliseconds apart, so each runs
+/// on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldLoops {
+    /// Elapsed on the CSS loops' clock: the caret's blink, the shimmer.
+    pub css: Duration,
+    /// Elapsed on the scripted loops' clock: the spinners.
+    pub script: Duration,
+}
+
+thread_local! {
+    static HELD_LOOPS: std::cell::Cell<Option<HeldLoops>> = const { std::cell::Cell::new(None) };
+}
+
+/// Hold every loop at `held` (a capture), or let them run (`None`).
+#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
+pub fn hold_loops(held: Option<HeldLoops>) {
+    HELD_LOOPS.with(|cell| cell.set(held));
+}
+
+/// The loops' held time, if a capture holds them.
+pub fn held_loops() -> Option<HeldLoops> {
+    HELD_LOOPS.with(std::cell::Cell::get)
+}
+
+fn phase_at(elapsed: Duration, period: Duration) -> f32 {
+    cadence::phase_after(elapsed, period)
+}
+
+/// A CSS loop's phase (the caret's blink, the shimmer): the held capture
+/// time's, else the pulse clock's (`loop_phase`).
+pub fn css_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
+    match held_loops() {
+        Some(held) if !reduced_motion(cx) => phase_at(held.css, period),
+        _ => loop_phase(period, motion, view, cx),
+    }
+}
+
+/// A scripted loop's phase (the spinners' frames): the held capture time's,
+/// else the pulse clock's (`loop_phase`).
+pub fn script_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut App) -> f32 {
+    match held_loops() {
+        Some(held) if !reduced_motion(cx) => phase_at(held.script, period),
+        _ => loop_phase(period, motion, view, cx),
+    }
+}
+
+/// The clock is parked: nothing is declared and no timer is armed.
+#[cfg(test)]
+pub fn pulse_parked(cx: &App) -> bool {
+    cx.try_global::<PulseClock>()
+        .is_none_or(|clock| clock.timer.is_none())
+}
+
+// ---------------------------------------------------------------------------
+// Hover blend: `transition-colors` for gpui's snapping hover
+// ---------------------------------------------------------------------------
+//
+// gpui's `.hover()` style applies the frame the pointer enters. The blend
+// fades it over `HOVER_FADE` instead: a per-key progress, advanced from wall
+// time wherever it is read, flipped by an `on_hover` listener, re-anchored at
+// its current value when the pointer reverses mid-flight. The pressed face
+// stays a gpui `.active()` refinement, which overrides the blended ground
+// at once: a press never waits on the fade.
+//
+// The store is a main-thread `thread_local`, so row builders without a `cx`
+// can blend; the root view stamps each frame's time on it first
+// ([`hover_frame_start`]). The pointer's flip notifies only the view that
+// painted the listener (`Window::hover_listener_view`), so a hover in the
+// nav leaves every cached transcript as it is; while a blend is mid-flight
+// that view is drawn again each frame ([`hover_fades_active`]).
+//
+// A blend read by a cached view goes unread for as long as that view is
+// reused, so frames say nothing about whether its element is still
+// mounted: an entry is forgotten once it is unread for `HOVER_FORGET` (an
+// element that unmounted mid-hover never hears its leave), or once it has
+// faded back to rest.
+
+/// How long a blend nobody draws is kept: past any cached view's quiet
+/// spell while it streams, short of a hover anyone would see come back.
+const HOVER_FORGET: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy)]
+struct FadeEntry {
+    origin: f32,
+    target: f32,
+    started: Instant,
+    /// When a draw last read it, or the pointer set it.
+    read: Instant,
+    /// The blend's timing: `HOVER_FADE`, unless the surface names its own
+    /// ([`hover_listener_with`]).
+    spec: MotionSpec,
+    /// The view whose listener set it: drawn again while it fades.
+    view: Option<EntityId>,
+}
+
+impl FadeEntry {
+    fn value(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.started);
+        if elapsed >= self.spec.duration() {
+            return self.target;
+        }
+        lerp(self.origin, self.target, self.spec.progress_at(elapsed))
+    }
+
+    fn settled(&self, now: Instant) -> bool {
+        self.origin == self.target
+            || now.saturating_duration_since(self.started) >= self.spec.duration()
+    }
+}
+
+/// Per-key hover progress. Pure over an explicit `now`.
+#[derive(Default)]
+pub struct HoverFades {
+    entries: HashMap<SharedString, FadeEntry>,
+    /// The views painting a blend still mid-flight, as of the last tick.
+    fading: Vec<EntityId>,
+}
+
+impl HoverFades {
+    /// `set_with` on the one 150ms blend, from no view.
+    #[cfg(test)]
+    pub fn set_at(&mut self, key: &SharedString, hovered: bool, reduced: bool, now: Instant) {
+        self.set_with(key, hovered, reduced, now, HOVER_FADE, None);
+    }
+
+    /// The pointer entered (`hovered`) or left the element behind `key`,
+    /// painted by `view`, blending on `spec` (`HOVER_FADE`, or a surface's
+    /// own timing). Reduced motion snaps to the endpoint.
+    pub fn set_with(
+        &mut self,
+        key: &SharedString,
+        hovered: bool,
+        reduced: bool,
+        now: Instant,
+        spec: MotionSpec,
+        view: Option<EntityId>,
+    ) {
+        let target = if hovered { 1.0 } else { 0.0 };
+        let Some(current) = self.entries.get(key).map(|entry| entry.value(now)) else {
+            if hovered {
+                let origin = if reduced { target } else { 0.0 };
+                self.insert(key, origin, target, now, spec, view);
+            }
+            // A leave for a key never entered: nothing to fade.
+            return;
+        };
+        let origin = if reduced { target } else { current };
+        self.insert(key, origin, target, now, spec, view);
+    }
+
+    fn insert(
+        &mut self,
+        key: &SharedString,
+        origin: f32,
+        target: f32,
+        now: Instant,
+        spec: MotionSpec,
+        view: Option<EntityId>,
+    ) {
+        let entry = FadeEntry {
+            origin,
+            target,
+            started: now,
+            read: now,
+            spec,
+            view,
+        };
+        self.entries.insert(key.clone(), entry);
+    }
+
+    /// Hover progress (0..1) for `key` at `now`; stamps it as drawn.
+    pub fn value_at(&mut self, key: &str, now: Instant) -> f32 {
+        self.entries.get_mut(key).map_or(0.0, |entry| {
+            entry.read = now;
+            entry.value(now)
+        })
+    }
+
+    /// Once per frame: drop entries back at rest or unread for
+    /// `HOVER_FORGET`, note the views whose blend is mid-flight, and say
+    /// whether any is.
+    pub fn tick_at(&mut self, now: Instant) -> bool {
+        let mut active = false;
+        let fading = &mut self.fading;
+        fading.clear();
+        self.entries.retain(|_, entry| {
+            if now.saturating_duration_since(entry.read) > HOVER_FORGET {
+                return false;
+            }
+            let settled = entry.settled(now);
+            if !settled {
+                active = true;
+                fading.extend(entry.view);
+            }
+            !(settled && entry.target == 0.0)
+        });
+        fading.sort_unstable();
+        fading.dedup();
+        active
+    }
+}
+
+thread_local! {
+    static HOVER_FADES: RefCell<HoverFades> = RefCell::new(HoverFades::default());
+    /// The frame's clock, stamped by [`hover_frame_start`]: every blend in a
+    /// frame reads one time, the executor's, so tests can step it.
+    static HOVER_NOW: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+fn hover_now() -> Instant {
+    HOVER_NOW.with(|now| now.get()).unwrap_or_else(Instant::now)
+}
+
+/// The frame hook's first half: call once per window frame, at the top of
+/// the root view's render, before any blend is read.
+pub fn hover_frame_start(cx: &App) {
+    let now = cx.background_executor().now();
+    HOVER_NOW.with(|cell| cell.set(Some(now)));
+}
+
+/// Hover progress (0..1) for `key` this frame.
+pub fn hover_t(key: &str) -> f32 {
+    let now = hover_now();
+    HOVER_FADES.with(|fades| fades.borrow_mut().value_at(key, now))
+}
+
+/// An `on_hover` listener driving the blend for `key`: pair it with a
+/// [`hover_blend`] read of the same key on the same element.
+pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    hover_listener_with(key, HOVER_FADE)
+}
+
+/// [`hover_listener`] on a surface's own timing: the nav's 80ms row wash,
+/// its sidebar toggle's 100ms (the prototype's own transitions).
+pub fn hover_listener_with(
+    key: SharedString,
+    spec: MotionSpec,
+) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    move |hovered, window, cx| {
+        let reduced = reduced_motion(cx);
+        let now = cx.background_executor().now();
+        let view = window.hover_listener_view();
+        HOVER_FADES.with(|fades| {
+            fades
+                .borrow_mut()
+                .set_with(&key, *hovered, reduced, now, spec, view)
+        });
+        // Only the view that painted the blend draws it: notifying that
+        // view redraws it and its ancestors, and reuses every other cached
+        // view (the transcripts). Called from outside a painted listener,
+        // refresh, as a gpui `.hover()` style does on the same event.
+        match view {
+            Some(view) => cx.notify(view),
+            None => window.refresh(),
+        }
+    }
+}
+
+/// The frame hook's second half: call once per window frame, at the root
+/// view's render tail. True while a blend is mid-flight and frames must keep
+/// coming; the views painting one are [`hover_fading_views`].
+pub fn hover_fades_active() -> bool {
+    let now = hover_now();
+    HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(now))
+}
+
+/// The views painting a blend still mid-flight, as of the last
+/// [`hover_fades_active`]: the root draws them again with its next frame (a
+/// cached view would otherwise be reused, its blend frozen).
+pub fn hover_fading_views() -> Vec<EntityId> {
+    HOVER_FADES.with(|fades| fades.borrow().fading.clone())
+}
+
+/// Blend two colours the way a browser transitions them: sRGB components
+/// with premultiplied alpha, so a wash fading in from transparent brightens
+/// without passing through grey.
+pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
+    let t = t.clamp(0.0, 1.0);
+    if t <= 0.0 {
+        return from;
+    }
+    if t >= 1.0 {
+        return to;
+    }
+    let (f, g) = (Rgba::from(from), Rgba::from(to));
+    let a = lerp(f.a, g.a, t);
+    if a <= f32::EPSILON {
+        return Hsla::from(Rgba { a: 0.0, ..g });
+    }
+    Hsla::from(Rgba {
+        r: lerp(f.r * f.a, g.r * g.a, t) / a,
+        g: lerp(f.g * f.a, g.g * g.a, t) / a,
+        b: lerp(f.b * f.a, g.b * g.a, t) / a,
+        a,
+    })
+}
+
+/// The rest → hover colour at `key`'s current progress.
+pub fn hover_blend(key: &str, rest: Hsla, hover: Hsla) -> Hsla {
+    mix(rest, hover, hover_t(key))
+}
+
+// ---------------------------------------------------------------------------
+// Reduced motion
+// ---------------------------------------------------------------------------
+
+/// The one reduced-motion switch: gpui's flag, which every `with_animation`
+/// and kit spring already honours — and, in unit tests, the kit itself
+/// unless a test drives it ([`live`]).
+pub fn reduced_motion(cx: &App) -> bool {
+    cx.reduce_motion() || !live()
+}
+
+/// Whether the kit animates at all. Always, except in unit tests, where it
+/// rests unless a test asks for it (`testing::drive`). The suite asserts
+/// layout and hit targets straight after a state change, on a clock it
+/// steps by hand, and gpui's `with_animation` runs on the wall clock: live
+/// entrances would make those readings depend on when they were taken. A
+/// pulse tick nobody asked for would also blank the transcripts' test
+/// selectors (gpui's test window keeps no `debug_bounds` for a cached view
+/// it reuses). Resting, the kit behaves as it does under reduced motion.
+pub(crate) fn live() -> bool {
+    #[cfg(test)]
+    return testing::DRIVE.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    true
+}
+
+#[cfg(test)]
+pub mod testing {
+    thread_local! {
+        pub(super) static DRIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        pub(super) static PULSE_TICKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// How many times the pulse clock has ticked views on this thread: the
+    /// budget a window of loops is measured against.
+    pub fn pulse_ticks() -> usize {
+        PULSE_TICKS.with(std::cell::Cell::get)
+    }
+
+    /// This test (its thread) runs the motion kit live.
+    pub fn drive() {
+        DRIVE.with(|drive| drive.set(true));
+    }
+
+    /// Every hover blend held now, and its value this frame (read without
+    /// stamping it as drawn).
+    pub fn hover_values() -> Vec<(gpui::SharedString, f32)> {
+        let now = super::hover_now();
+        super::HOVER_FADES.with(|fades| {
+            fades
+                .borrow()
+                .entries
+                .iter()
+                .map(|(key, entry)| (key.clone(), entry.value(now)))
+                .collect()
+        })
+    }
+
+    /// The pulse clock's grid: its epoch and tick, once anything declared.
+    pub fn grid(cx: &gpui::App) -> Option<(std::time::Instant, std::time::Duration)> {
+        let epoch = cx.try_global::<super::PulseClock>()?.epoch?;
+        Some((epoch, super::pulse_tick()))
+    }
+}
+
+/// Launch: adopt the system's Reduce Motion setting. gpui reads no platform
+/// setting itself, so without this the flag is never set. Read off the main
+/// thread; `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it.
+pub fn init(cx: &mut App) {
+    if let Some(forced) = std::env::var("FERRITE_REDUCE_MOTION")
+        .ok()
+        .map(|value| value.trim() == "1")
+    {
+        cx.set_reduce_motion(forced);
+        return;
+    }
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let read = cx.background_executor().spawn(async {
+        std::process::Command::new("defaults")
+            .args(["read", "com.apple.universalaccess", "reduceMotion"])
+            .output()
+            .is_ok_and(|out| out.status.success() && out.stdout.trim_ascii() == b"1")
+    });
+    cx.spawn(async move |cx| {
+        if read.await {
+            cx.update(|cx| cx.set_reduce_motion(true));
+        }
+    })
+    .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{div, prelude::*, Context, TestAppContext};
+
+    fn close(actual: f32, expected: f32, tol: f32, what: &str) {
+        assert!(
+            (actual - expected).abs() <= tol,
+            "{what}: got {actual}, expected {expected} ±{tol}"
+        );
+    }
+
+    const CURVES: [CubicBezier; 4] = [
+        EASE_OUT_EXPO,
+        CubicBezier::new(0.0, 0.0, 0.58, 1.0),
+        EASE,
+        EASE_STANDARD,
+    ];
+
+    #[test]
+    fn a_linear_bezier_is_the_identity() {
+        let linear = CubicBezier::new(0.0, 0.0, 1.0, 1.0);
+        for x in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+            close(linear.eval(x), x, 1e-4, "linear");
+        }
+    }
+
+    /// Reference values computed independently with 80-step bisection
+    /// (Zeron's table).
+    #[test]
+    fn the_catalog_curves_hit_their_css_values() {
+        let cases: [(&str, CubicBezier, [f32; 5]); 3] = [
+            (
+                "expo",
+                EASE_OUT_EXPO,
+                [0.494391, 0.825622, 0.971779, 0.997677, 0.999878],
+            ),
+            (
+                // CSS `ease-out`: no catalog entry rides it any more, but the
+                // solver still answers its reference values.
+                "ease-out",
+                CubicBezier::new(0.0, 0.0, 0.58, 1.0),
+                [0.160572, 0.378138, 0.684643, 0.906535, 0.982973],
+            ),
+            (
+                "ease",
+                EASE,
+                [0.094796, 0.408511, 0.802403, 0.960459, 0.994316],
+            ),
+        ];
+        for (name, curve, expected) in cases {
+            for (x, want) in [0.1, 0.25, 0.5, 0.75, 0.9].into_iter().zip(expected) {
+                close(curve.eval(x), want, 1e-3, name);
+            }
+        }
+    }
+
+    #[test]
+    fn every_curve_is_monotonic_and_never_leaves_the_unit_interval() {
+        for curve in CURVES {
+            assert_eq!(curve.eval(0.0), 0.0);
+            assert_eq!(curve.eval(1.0), 1.0);
+            assert_eq!(curve.eval(-0.5), 0.0);
+            assert_eq!(curve.eval(1.5), 1.0);
+            let mut last = 0.0;
+            for i in 0..=20_000u32 {
+                let y = curve.eval(i as f32 / 20_000.0);
+                assert!((0.0..=1.0).contains(&y), "{curve:?} escaped at {i}: {y}");
+                assert!(y >= last - 1e-4, "{curve:?} not monotonic at {i}");
+                last = y;
+            }
+            for x in [0.999_999f32, 0.999_999_9, 1.0 - f32::EPSILON] {
+                assert!((0.0..=1.0).contains(&curve.eval(x)));
+            }
+        }
+    }
+
+    #[test]
+    fn the_catalog_keeps_zerons_numbers() {
+        assert_eq!(ROW_IN.duration_ms, 180);
+        assert_eq!(ROW_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
+        assert_eq!(FADE_IN.duration_ms, 500);
+        assert_eq!(FADE_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
+        assert_eq!(theme::MOTION_FADE_IN_RISE, 4.0);
+        assert_eq!(RESIZE.duration_ms, 200);
+        assert_eq!(RESIZE.curve, CubicBezier::new(0.25, 0.1, 0.25, 1.0));
+        assert_eq!(SEAM_FADE.duration_ms, 120);
+        assert_eq!(COLLAPSE.duration_ms, 180);
+        assert_eq!(FADE_QUICK.duration_ms, 150);
+        assert_eq!(MENU_IN.duration_ms, 140);
+        assert_eq!(DIALOG_IN.duration_ms, 180);
+        assert_eq!(theme::MOTION_TOAST_IN_MS, 180);
+        assert_eq!(theme::MOTION_TOAST_OUT_MS, 100);
+        assert_eq!(theme::MOTION_SCROLLBAR_LINGER_MS, 1_400);
+        assert_eq!(HOVER_FADE.duration_ms, 150);
+        assert_eq!(HOVER_FADE.curve, CubicBezier::new(0.4, 0.0, 0.2, 1.0));
+    }
+
+    #[test]
+    fn a_tween_eases_to_its_target_and_retargets_from_where_it_is() {
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let open = Tween::new(52.0, 286.0, DIALOG_IN, t0);
+        assert_eq!(open.value(t0, false), 52.0);
+        assert!(open.running(ms(100), false));
+        let mid = open.value(ms(100), false);
+        assert!(mid > 52.0 && mid < 286.0, "mid-flight {mid}");
+        assert_eq!(open.value(ms(200), false), 286.0);
+        assert!(!open.running(ms(200), false), "done at the spec's end");
+
+        // Flipped back mid-flight: the new tween starts on screen, not at
+        // the far end.
+        let back = Tween::retarget(Some(open), 286.0, 52.0, DIALOG_IN, ms(100), false);
+        close(back.from, mid, 1e-3, "continuity");
+        assert_eq!(back.value(ms(300), false), 52.0);
+
+        // Nothing moving: from the resting value.
+        let rest = Tween::retarget(None, 286.0, 52.0, DIALOG_IN, t0, false);
+        assert_eq!(rest.from, 286.0);
+    }
+
+    #[test]
+    fn reduced_motion_snaps_a_tween_to_its_end_state() {
+        let t0 = Instant::now();
+        let tween = Tween::new(52.0, 286.0, DIALOG_IN, t0);
+        assert_eq!(tween.value(t0, true), 286.0);
+        assert!(!tween.running(t0, true), "no frame is asked for");
+    }
+
+    #[test]
+    fn the_hover_blend_ramps_and_reverses_without_a_jump() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("row");
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+
+        fades.set_at(&key, true, false, t0);
+        assert_eq!(fades.value_at("row", t0), 0.0);
+        let rising = fades.value_at("row", ms(75));
+        assert!(rising > 0.0 && rising < 1.0, "mid-flight {rising}");
+        assert_eq!(fades.value_at("row", ms(150)), 1.0);
+
+        fades.set_at(&key, true, false, t0);
+        let at_flip = fades.value_at("row", ms(75));
+        fades.set_at(&key, false, false, ms(75));
+        close(fades.value_at("row", ms(75)), at_flip, 1e-4, "continuity");
+        assert!(fades.value_at("row", ms(140)) < at_flip, "falls back");
+        assert_eq!(fades.value_at("row", ms(225)), 0.0, "lands at rest");
+    }
+
+    /// F-12: the sidebar ride is CSS `ease` — at half its time it is 80% of
+    /// the way, not ease-out's 68%.
+    #[test]
+    fn the_sidebar_ride_is_css_ease() {
+        close(RESIZE.progress(0.5), 0.80, 0.01, "ease at half time");
+        let t0 = Instant::now();
+        let ride = Tween::new(280.8, 0.0, RESIZE, t0);
+        let half = t0 + Duration::from_millis(100);
+        close(ride.value(half, false), 280.8 * 0.1976, 0.5, "mid-ride");
+    }
+
+    /// A seam's accent line fades over its own 120ms, not the hover 150ms.
+    #[test]
+    fn a_seam_blend_runs_on_its_own_timeline() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("seam");
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        fades.set_with(&key, true, false, t0, SEAM_FADE, None);
+        assert!(fades.value_at("seam", ms(60)) < 1.0);
+        assert_eq!(fades.value_at("seam", ms(120)), 1.0);
+    }
+
+    #[test]
+    fn reduced_motion_snaps_the_hover_blend() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("row");
+        let t0 = Instant::now();
+        fades.set_at(&key, true, true, t0);
+        assert_eq!(fades.value_at("row", t0), 1.0, "enter snaps");
+        assert!(!fades.tick_at(t0), "and asks for no frame");
+        fades.set_at(&key, false, true, t0);
+        assert_eq!(fades.value_at("row", t0), 0.0, "leave snaps");
+    }
+
+    #[test]
+    fn the_hover_tick_reports_flight_and_prunes_what_is_gone() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("a");
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+
+        fades.set_at(&SharedString::from("ghost"), false, false, t0);
+        assert!(
+            fades.entries.is_empty(),
+            "a leave without an enter is inert"
+        );
+
+        fades.set_at(&key, true, false, t0);
+        fades.value_at("a", ms(50));
+        assert!(fades.tick_at(ms(50)), "mid-flight keeps frames coming");
+        fades.value_at("a", ms(200));
+        assert!(!fades.tick_at(ms(200)), "settled hovered: no frame");
+        assert_eq!(fades.entries.len(), 1, "a hovered entry is kept");
+
+        fades.set_at(&key, false, false, ms(250));
+        fades.value_at("a", ms(450));
+        assert!(!fades.tick_at(ms(450)));
+        assert!(fades.entries.is_empty(), "rest entries are pruned");
+
+        // Unmounted mid-hover: its leave never comes; unread past
+        // `HOVER_FORGET`, it is forgotten.
+        fades.set_at(&key, true, false, ms(500));
+        fades.tick_at(ms(516));
+        assert_eq!(fades.entries.len(), 1, "a frame unread is no unmount");
+        fades.tick_at(ms(500) + HOVER_FORGET + Duration::from_millis(16));
+        assert!(fades.entries.is_empty(), "unread entry evicted");
+    }
+
+    /// A hovered link in a cached transcript goes unread while the rest of
+    /// the window draws: frames pass without it, and when the transcript
+    /// draws again (the next streamed line) it still reads hovered.
+    #[test]
+    fn a_hovered_blend_survives_frames_its_cached_view_skips() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("link");
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        fades.set_with(&key, true, false, t0, HOVER_FADE, None);
+        assert_eq!(fades.value_at("link", ms(150)), 1.0);
+        for frame in 1..=30 {
+            fades.tick_at(ms(150 + frame * 33));
+        }
+        assert_eq!(
+            fades.value_at("link", ms(1_200)),
+            1.0,
+            "still under the pointer, still underlined"
+        );
+    }
+
+    /// The views that painted a blend still mid-flight are named, once each,
+    /// so the root can draw them again with its next frame.
+    #[test]
+    fn the_hover_tick_names_the_views_mid_flight() {
+        let mut fades = HoverFades::default();
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let (a, b) = (EntityId::from(1u64), EntityId::from(2u64));
+        fades.set_with(&"one".into(), true, false, t0, HOVER_FADE, Some(a));
+        fades.set_with(&"two".into(), true, false, t0, HOVER_FADE, Some(a));
+        fades.set_with(&"three".into(), true, false, ms(100), HOVER_FADE, Some(b));
+        assert!(fades.tick_at(ms(50)));
+        assert_eq!(fades.fading, [a, b]);
+        assert!(fades.tick_at(ms(200)), "b is still fading");
+        assert_eq!(fades.fading, [b]);
+        assert!(!fades.tick_at(ms(300)));
+        assert!(fades.fading.is_empty());
+    }
+
+    #[test]
+    fn mix_blends_in_premultiplied_srgb() {
+        let rest: Hsla = gpui::rgb(theme::CHROME).into();
+        let hover: Hsla = gpui::rgb(theme::HOVER).into();
+        assert_eq!(mix(rest, hover, 0.0), rest);
+        assert_eq!(mix(rest, hover, 1.0), hover);
+        let wash = gpui::transparent_black();
+        let half = mix(wash, hover, 0.5);
+        close(half.a, 0.5, 1e-4, "alpha ramps");
+        let (h, half) = (Rgba::from(hover), Rgba::from(half));
+        close(half.r, h.r, 1e-3, "the wash keeps its colour");
+    }
+
+    struct Loop {
+        painting: bool,
+        renders: usize,
+        phase: f32,
+    }
+
+    impl Render for Loop {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.renders += 1;
+            if self.painting {
+                self.phase = pulse_phase(Duration::from_millis(1_000), cx.entity_id(), cx);
+            }
+            div().size_4()
+        }
+    }
+
+    /// A mounted loop re-renders its view at the clock's ~30fps, not the
+    /// display's rate; unmounted, its lease lapses, the clock parks, and
+    /// the window is left with no timer and no frame.
+    #[gpui::test]
+    fn the_pulse_clock_ticks_while_leased_and_parks_when_unmounted(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, cx) = cx.add_window_view(|_, _| Loop {
+            painting: true,
+            renders: 0,
+            phase: 0.0,
+        });
+        cx.run_until_parked();
+        assert!(
+            !cx.update(|_, cx| pulse_parked(cx)),
+            "a lease starts the clock"
+        );
+        let before = view.read_with(cx, |view, _| view.renders);
+        for _ in 0..10 {
+            cx.executor().advance_clock(pulse_tick());
+            cx.run_until_parked();
+        }
+        let after = view.read_with(cx, |view, _| view.renders);
+        assert_eq!(after - before, 10, "one render per tick");
+        let phase = view.read_with(cx, |view, _| view.phase);
+        assert!(phase > 0.0 && phase < 1.0, "the phase advances: {phase}");
+        assert_eq!(
+            cx.update(|window, cx| window.simulate_next_frame(cx)),
+            0,
+            "the clock asks for no display frame of its own"
+        );
+
+        view.update(cx, |view, cx| {
+            view.painting = false;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        // Its last declared wake (the next tick) passes undeclared.
+        cx.executor().advance_clock(pulse_tick() * 2);
+        cx.run_until_parked();
+        assert!(
+            cx.update(|_, cx| pulse_parked(cx)),
+            "the lapsed clock parks"
+        );
+        let parked = view.read_with(cx, |view, _| view.renders);
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |view, _| view.renders),
+            parked,
+            "and stays quiet"
+        );
+    }
+
+    struct Switch {
+        on: bool,
+        drawn: std::rc::Rc<std::cell::Cell<f32>>,
+    }
+
+    impl Render for Switch {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let drawn = self.drawn.clone();
+            let fold = settled("switch", self.on, CHEVRON, move |value| {
+                drawn.set(value);
+                div().size_4()
+            });
+            div().child(fold)
+        }
+    }
+
+    fn switch(
+        cx: &mut TestAppContext,
+        on: bool,
+    ) -> (
+        gpui::Entity<Switch>,
+        std::rc::Rc<std::cell::Cell<f32>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let drawn = std::rc::Rc::new(std::cell::Cell::new(-1.0));
+        let seen = drawn.clone();
+        let (view, cx) = cx.add_window_view(move |_, _| Switch { on, drawn: seen });
+        cx.run_until_parked();
+        (view, drawn, cx)
+    }
+
+    fn flip(view: &gpui::Entity<Switch>, on: bool, cx: &mut gpui::VisualTestContext) {
+        view.update(cx, |view, cx| {
+            view.on = on;
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    fn next_frame(cx: &mut gpui::VisualTestContext) -> usize {
+        let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        frames
+    }
+
+    /// A settled element lands on the state it is first drawn in; a flip
+    /// eases over its spec with frames only while it moves, and a flip back
+    /// mid-flight turns around from where it is.
+    #[gpui::test]
+    fn a_settled_element_lands_on_first_paint_and_eases_a_flip(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, drawn, cx) = switch(cx, true);
+        assert_eq!(drawn.get(), 1.0, "first paint lands open");
+        assert_eq!(next_frame(cx), 0, "and asks for nothing");
+
+        flip(&view, false, cx);
+        cx.executor().advance_clock(Duration::from_millis(75));
+        assert!(next_frame(cx) > 0, "mid-flight asks for frames");
+        let mid = drawn.get();
+        assert!(mid > 0.0 && mid < 1.0, "mid-flight {mid}");
+
+        flip(&view, true, cx);
+        close(drawn.get(), mid, 1e-3, "turns around from where it is");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_CHEVRON_MS));
+        next_frame(cx);
+        assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0, "settled: no frames");
+    }
+
+    /// Reduced motion lands every flip.
+    #[gpui::test]
+    fn reduced_motion_lands_a_settled_flip(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (view, drawn, cx) = switch(cx, false);
+        flip(&view, true, cx);
+        assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0);
+    }
+
+    /// Reduced motion holds a loop at its start and leases nothing.
+    #[gpui::test]
+    fn reduced_motion_holds_a_loop_at_its_start(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (view, cx) = cx.add_window_view(|_, _| Loop {
+            painting: true,
+            renders: 0,
+            phase: 0.5,
+        });
+        cx.run_until_parked();
+        assert_eq!(view.read_with(cx, |view, _| view.phase), 0.0);
+        assert!(cx.update(|_, cx| pulse_parked(cx)), "nothing is scheduled");
+    }
+}

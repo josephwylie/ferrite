@@ -16,6 +16,9 @@ pub(crate) struct TranscriptScroll {
     list: ListState,
     // A fully visible row's inset, sampled from native layout for width reflow.
     resize_anchor: Rc<Cell<Option<(Pixels, usize, Pixels)>>>,
+    // How much of the viewport's top the pinned band and the cut line under
+    // it hide (`band_mask`), sampled after layout and painted next frame.
+    top_mask: Rc<Cell<Pixels>>,
 }
 
 impl TranscriptScroll {
@@ -27,6 +30,7 @@ impl TranscriptScroll {
         Self {
             list,
             resize_anchor: Default::default(),
+            top_mask: Rc::new(Cell::new(px(0.))),
         }
     }
 
@@ -55,6 +59,16 @@ impl TranscriptScroll {
     pub(crate) fn scroll_to_bottom(&self) {
         self.list.set_follow_mode(FollowMode::Tail);
         self.list.scroll_to_end();
+    }
+
+    /// Hold the list at `item_ix`, `offset` into it (a scene's turn band, a
+    /// minimap jump): tail following pauses until the reader returns to the
+    /// end.
+    pub(crate) fn scroll_to(&self, item_ix: usize, offset: Pixels) {
+        self.list.scroll_to(gpui::ListOffset {
+            item_ix,
+            offset_in_item: offset,
+        });
     }
 
     pub(crate) fn is_following_tail(&self) -> bool {
@@ -106,6 +120,54 @@ impl TranscriptScroll {
         adjusted
     }
 
+    /// The pinned band hides the viewport's top down to its foot, `band`
+    /// below the viewport's top (`None` when no band is pinned). Whatever
+    /// row passes under that foot is hidden down to its next whole line
+    /// (`band_mask`), so no partly cut glyph line shows beneath the band and
+    /// no void taller than one line opens. `content_top` is where a row's
+    /// lines start, from its top (its gap, and a prompt band's half line);
+    /// `line` the transcript's line. Whether the mask changed, so the caller
+    /// repaints once; an unchanged frame schedules nothing.
+    pub(crate) fn settle_top(
+        &self,
+        band: Option<Pixels>,
+        content_top: impl Fn(usize) -> f32,
+        line: f32,
+    ) -> bool {
+        let mask = band.map_or(px(0.), |band| {
+            let viewport = self.list.viewport_bounds();
+            let edge = viewport.top() + band.max(px(0.));
+            let mut index = self.list.logical_scroll_top().item_ix;
+            // The row the foot falls in: under a pinned band that is a row
+            // or two below the list's own first.
+            while self
+                .list
+                .bounds_for_item(index)
+                .is_some_and(|row| row.bottom() <= edge)
+            {
+                index += 1;
+            }
+            let cut = self.list.bounds_for_item(index).map_or(px(0.), |row| {
+                band_mask(
+                    edge,
+                    row.top(),
+                    row.bottom(),
+                    row.top() + px(content_top(index)),
+                    px(line),
+                )
+            });
+            edge - viewport.top() + cut
+        });
+        let changed = (self.top_mask.get() - mask).abs() > px(0.5);
+        self.top_mask.set(mask);
+        changed
+    }
+
+    /// The mask over the viewport's top (`settle_top`).
+    pub(crate) fn top_mask(&self) -> Pixels {
+        self.top_mask.get()
+    }
+
     /// Freeze tail following while retaining its automatic re-engagement rule.
     #[cfg(test)]
     pub(crate) fn pause_following_tail(&self) {
@@ -132,17 +194,88 @@ impl TranscriptScroll {
                 self.list.remeasure_items(index..index + 1);
             }
         }
-        if !delta.splices.is_empty() {
-            // The renderer puts the inter-row gap on every row except the
-            // final one. Structural edits can therefore change the measured
-            // height of the final survivor and its neighbour without changing
-            // either row's own content.
-            if let Some(last) = self.list.item_count().checked_sub(1) {
-                self.list.remeasure_items(last..last + 1);
-                if last > 0 {
-                    self.list.remeasure_items(last - 1..last);
+        // Nothing else moves: a row's gap is part of the row (see
+        // `rows::gap_before`), so a neighbour's arrival or eviction reaches
+        // the list as that row's own change in `remeasure`.
+    }
+}
+
+/// How far below the pinned band's foot (`edge`) to hide the row passing
+/// under it, whatever its height: down to the row's next whole line
+/// boundary, the lines sitting on the grid from `content_top` every `line`.
+/// A foot in the row's gap, or exactly on a line boundary, hides nothing;
+/// the mask never reaches past the row's bottom, and is always shorter than
+/// one line.
+pub(crate) fn band_mask(
+    edge: Pixels,
+    row_top: Pixels,
+    row_bottom: Pixels,
+    content_top: Pixels,
+    line: Pixels,
+) -> Pixels {
+    if edge <= row_top || edge >= row_bottom || edge <= content_top || line <= px(0.) {
+        return px(0.);
+    }
+    let into = f32::from(edge - content_top);
+    let line = f32::from(line);
+    let lines = (into / line).ceil();
+    let boundary = content_top + px(lines * line);
+    let mask = boundary.min(row_bottom) - edge;
+    if mask < px(0.5) {
+        px(0.)
+    } else {
+        mask
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CT-7: scrolling a row of any height under the band's foot one pixel
+    /// at a time never leaves part of a glyph line showing below the foot,
+    /// and never hides more than one line.
+    #[test]
+    fn the_band_hides_down_to_the_next_whole_line_at_every_offset() {
+        let line = 20.;
+        // A code block of 30 lines, a 9-row table on a 20px pitch, a long
+        // paragraph of 40 lines: rows that sit on the line grid from their
+        // content top, a gap above.
+        for (lines, gap) in [(30usize, 20.), (9, 20.), (40, 0.), (1, 20.)] {
+            let height = gap + lines as f32 * line;
+            for offset in 0..(height as i32 + 40) {
+                let row_top = px(100. - offset as f32);
+                let row_bottom = row_top + px(height);
+                let content_top = row_top + px(gap);
+                let edge = px(100.);
+                let mask = band_mask(edge, row_top, row_bottom, content_top, px(line));
+                assert!(mask < px(line), "{lines}x{offset}: a void of {mask:?}");
+                assert!(mask >= px(0.));
+                let reveal = edge + mask;
+                if reveal < row_bottom && reveal > content_top {
+                    // What shows first below the mask starts on a line.
+                    let into = f32::from(reveal - content_top);
+                    let rem = into % line;
+                    assert!(
+                        rem < 0.5 || line - rem < 0.5,
+                        "{lines} lines at {offset}: a cut line shows ({rem}px into one)"
+                    );
                 }
             }
         }
+        // A foot in the gap, or over nothing, hides nothing.
+        assert_eq!(
+            band_mask(px(105.), px(100.), px(160.), px(120.), px(20.)),
+            px(0.)
+        );
+        assert_eq!(
+            band_mask(px(50.), px(100.), px(160.), px(120.), px(20.)),
+            px(0.)
+        );
+        // Six pixels into a line: the other fourteen go.
+        assert_eq!(
+            band_mask(px(126.), px(100.), px(160.), px(120.), px(20.)),
+            px(14.)
+        );
     }
 }

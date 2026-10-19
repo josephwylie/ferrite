@@ -3,7 +3,7 @@ use std::io;
 use std::sync::{mpsc, Arc, Mutex};
 
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
-use ferrite_core::providers::Session;
+use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, SessionEvent, TurnOutcome};
@@ -44,13 +44,13 @@ impl Session for Live {
         self.calls.0.lock().unwrap().controls.push(control);
         Ok(())
     }
-    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
         let mut calls = self.calls.0.lock().unwrap();
         if calls.reject {
             return Err(io::Error::other("native model unavailable"));
         }
         calls.models.push(model.map(str::to_owned));
-        Ok(())
+        Ok(applied())
     }
 }
 

@@ -1,0 +1,1 @@
+{"type":"input","thread":4,"seq":17,"at_ms":1267,"input":{"live":{"kind":"models","models":[{"value":"opus","display":"OPUS","detail":"","resolved":null,"efforts":["low","high"],"default_effort":"high"}]}}}

@@ -60,6 +60,14 @@ impl Default for ToastMotion {
     }
 }
 
+/// Ferrite: the app's motion for toast stacks whose builder never chose one
+/// — a host whose stack is built by a dependency (the kit's notification
+/// list) sets it once as a global. A stack given `.motion(..)` keeps its own.
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultToastMotion(pub ToastMotion);
+
+impl gpui::Global for DefaultToastMotion {}
+
 /// Persistent private layout state used by [`ToastStack`].
 #[derive(Clone, Debug, Default)]
 pub struct ToastStackState {
@@ -284,6 +292,7 @@ pub struct ToastStack {
     style: StyleRefinement,
     state: ToastStackState,
     motion: ToastMotion,
+    motion_set: bool,
     placement: Anchor,
     focus_handle: Option<FocusHandle>,
     children: Vec<(ElementId, AnyElement)>,
@@ -299,6 +308,7 @@ impl ToastStack {
             style: StyleRefinement::default(),
             state,
             motion: ToastMotion::sonner(),
+            motion_set: false,
             placement: Anchor::TopRight,
             focus_handle: None,
             children: Vec::new(),
@@ -314,6 +324,7 @@ impl ToastStack {
     /// Set the stack motion tokens.
     pub fn motion(mut self, motion: ToastMotion) -> Self {
         self.motion = motion;
+        self.motion_set = true;
         self
     }
 
@@ -428,10 +439,16 @@ impl RenderOnce for ToastStack {
             .map(|id| measured_by_id.get(id).copied().unwrap_or(px(0.)))
             .collect::<Vec<_>>();
         let measured = self.state.heights.clone();
-        let peek = self.motion.collapsed_peek;
-        let gap = self.motion.expanded_gap;
-        let scale_step = self.motion.collapsed_scale_step;
-        let collapsed_visible = self.motion.collapsed_visible.max(1);
+        let motion = if self.motion_set {
+            self.motion
+        } else {
+            cx.try_global::<DefaultToastMotion>()
+                .map_or(self.motion, |default| default.0)
+        };
+        let peek = motion.collapsed_peek;
+        let gap = motion.expanded_gap;
+        let scale_step = motion.collapsed_scale_step;
+        let collapsed_visible = motion.collapsed_visible.max(1);
         let stack_width = self.state.width.get();
         let count = self.children.len();
         let anchored_bottom = matches!(
@@ -458,8 +475,8 @@ impl RenderOnce for ToastStack {
         // start, so that one frame of skew lets the composed position pass its
         // settled value by a fraction of a pixel before arriving. Both springs
         // snap on settling, so it is a transient, not a resting error.
-        let geometry = Spring::new(self.motion.duration).with_epsilon(0.1);
-        let fade = Spring::new(self.motion.duration);
+        let geometry = Spring::new(motion.duration).with_epsilon(0.1);
+        let fade = Spring::new(motion.duration);
         let stack_height = spring(
             (self.id.clone(), "height"),
             if expanded {

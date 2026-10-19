@@ -1,0 +1,1 @@
+{"id":"1","method":"worktree.create","params":{"cwd":"/work/app","branch":"hp/billing/t-0001","base":"origin/main"}}

@@ -15,6 +15,8 @@ use super::{Class, HighlightRequest, Highlighter, Input, Token};
 /// how comments open, and which quotes open strings.
 struct Syntax {
     keywords: &'static [&'static str],
+    /// Built-in type names that read as types though lowercase (`u32`).
+    types: &'static [&'static str],
     line_comments: &'static [&'static str],
     block_comment: Option<(&'static str, &'static str)>,
     quotes: &'static [char],
@@ -22,6 +24,8 @@ struct Syntax {
     /// else it is a lifetime or a label, and colouring it would paint the
     /// rest of the line as a string.
     char_literals: bool,
+    /// `name!` is a macro call (Rust).
+    bang_calls: bool,
 }
 
 /// Rust's keywords, plus the few contextual ones a Pane reads as keywords.
@@ -32,11 +36,20 @@ const RUST: &[&str] = &[
     "unsafe", "use", "where", "while",
 ];
 
+/// Rust's primitive types: lowercase, but types (`pub const X: u32`).
+#[rustfmt::skip]
+const RUST_TYPES: &[&str] = &[
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32",
+    "i64", "i128", "isize", "f32", "f64",
+];
+
+/// Python's keywords, soft keywords included.
+#[rustfmt::skip]
 const PYTHON: &[&str] = &[
-    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
-    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
-    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "self", "try",
-    "while", "with", "yield",
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "case", "class",
+    "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if",
+    "import", "in", "is", "lambda", "match", "nonlocal", "not", "or", "pass", "raise", "return",
+    "self", "try", "while", "with", "yield",
 ];
 
 /// JavaScript and TypeScript share one list; the TypeScript-only words are
@@ -97,10 +110,12 @@ fn syntax(language: &str) -> Option<Syntax> {
             "rust" | "rs" => {
                 return Some(Syntax {
                     keywords: RUST,
+                    types: RUST_TYPES,
                     line_comments: SLASHES,
                     block_comment: C_BLOCK,
                     quotes: &['"', '\''],
                     char_literals: true,
+                    bang_calls: true,
                 })
             }
             "python" | "py" => (PYTHON, HASH, None, &['"', '\''][..]),
@@ -120,10 +135,12 @@ fn syntax(language: &str) -> Option<Syntax> {
         };
     Some(Syntax {
         keywords,
+        types: &[],
         line_comments,
         block_comment,
         quotes,
         char_literals: false,
+        bang_calls: false,
     })
 }
 
@@ -187,32 +204,22 @@ pub fn tokens(language: Option<&str>, source: &str) -> Vec<Token> {
     let mut tokens: Vec<Token> = Vec::new();
     let chars: Vec<char> = source.chars().collect();
     let mut at = 0;
-    let mut plain = String::new();
 
     while at < chars.len() {
         let (class, len) = scan(&chars, at, &syntax);
-        if class == Class::Plain {
-            plain.extend(&chars[at..at + len]);
-            at += len;
-            continue;
+        let text = chars[at..at + len].iter();
+        // Plain and punctuation runs coalesce, so a line of prose-like code
+        // stays one token rather than one per character.
+        match tokens.last_mut() {
+            Some(last) if last.class == class && matches!(class, Class::Plain | Class::Punct) => {
+                last.text.extend(text)
+            }
+            _ => tokens.push(Token {
+                text: text.collect(),
+                class,
+            }),
         }
-        if !plain.is_empty() {
-            tokens.push(Token {
-                text: std::mem::take(&mut plain),
-                class: Class::Plain,
-            });
-        }
-        tokens.push(Token {
-            text: chars[at..at + len].iter().collect(),
-            class,
-        });
         at += len;
-    }
-    if !plain.is_empty() {
-        tokens.push(Token {
-            text: plain,
-            class: Class::Plain,
-        });
     }
     tokens
 }
@@ -246,13 +253,32 @@ fn scan(chars: &[char], at: usize, syntax: &Syntax) -> (Class, usize) {
         [c, ..] if c.is_alphabetic() || *c == '_' => {
             let len = run(rest, |c| c.is_alphanumeric() || c == '_');
             let word: String = rest[..len].iter().collect();
-            let class = if syntax.keywords.contains(&word.as_str()) {
-                Class::Keyword
-            } else {
-                Class::Plain
-            };
-            (class, len)
+            if syntax.keywords.contains(&word.as_str()) {
+                return (Class::Keyword, len);
+            }
+            if syntax.types.contains(&word.as_str()) {
+                return (Class::Type, len);
+            }
+            // `ROW_LIVE_H`: a constant wears the numbers' ink.
+            let screaming = len > 1
+                && word.chars().any(|c| c.is_ascii_uppercase())
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+            if screaming {
+                return (Class::Number, len);
+            }
+            match rest.get(len) {
+                // `Some(summary)`: a capitalised name is a type, called or not.
+                _ if rest[0].is_ascii_uppercase() => (Class::Type, len),
+                Some('(') => (Class::Function, len),
+                Some('!') if syntax.bang_calls => (Class::Function, len + 1),
+                // `theme::ROW_H`: a path's module reads as a type.
+                Some(':') if rest.get(len + 1) == Some(&':') => (Class::Type, len),
+                _ => (Class::Plain, len),
+            }
         }
+        [c, ..] if c.is_ascii_punctuation() => (Class::Punct, 1),
         _ => (Class::Plain, 1),
     }
 }
@@ -315,17 +341,65 @@ mod tests {
             classed("let x = \"hi\"; // note\n"),
             [
                 (Class::Keyword, "let".into()),
-                (Class::Plain, " x = ".into()),
+                (Class::Plain, " x ".into()),
+                (Class::Punct, "=".into()),
+                (Class::Plain, " ".into()),
                 (Class::Str, "\"hi\"".into()),
-                (Class::Plain, "; ".into()),
+                (Class::Punct, ";".into()),
+                (Class::Plain, " ".into()),
                 (Class::Comment, "// note".into()),
                 (Class::Plain, "\n".into()),
             ]
         );
         assert_eq!(
             classed("y = 42"),
-            [(Class::Plain, "y = ".into()), (Class::Number, "42".into()),]
+            [
+                (Class::Plain, "y ".into()),
+                (Class::Punct, "=".into()),
+                (Class::Plain, " ".into()),
+                (Class::Number, "42".into()),
+            ]
         );
+    }
+
+    #[test]
+    fn rust_primitives_read_as_types() {
+        assert_eq!(
+            classed("x: u32"),
+            [
+                (Class::Plain, "x".into()),
+                (Class::Punct, ":".into()),
+                (Class::Plain, " ".into()),
+                (Class::Type, "u32".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn calls_types_and_punctuation_get_their_own_classes() {
+        assert_eq!(
+            classed("Vec::new(); println!(\"x\")"),
+            [
+                (Class::Type, "Vec".into()),
+                (Class::Punct, "::".into()),
+                (Class::Function, "new".into()),
+                (Class::Punct, "();".into()),
+                (Class::Plain, " ".into()),
+                (Class::Function, "println!".into()),
+                (Class::Punct, "(".into()),
+                (Class::Str, "\"x\"".into()),
+                (Class::Punct, ")".into()),
+            ]
+        );
+        let python: Vec<(Class, String)> = tokens(Some("python"), "def f(x): return None # c")
+            .into_iter()
+            .map(|token| (token.class, token.text))
+            .collect();
+        assert_eq!(python[0], (Class::Keyword, "def".into()));
+        assert_eq!(python[2], (Class::Function, "f".into()));
+        assert!(python.contains(&(Class::Keyword, "return".into())));
+        assert!(python.contains(&(Class::Keyword, "None".into())));
+        assert_eq!(python.last(), Some(&(Class::Comment, "# c".into())));
     }
 
     #[test]

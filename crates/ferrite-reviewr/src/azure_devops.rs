@@ -1,0 +1,996 @@
+//! The read-only Azure DevOps provider behind `src/forge.rs`, through `az` and its `azure-devops` extension.
+
+use std::path::Path;
+use std::sync::atomic::AtomicBool;
+
+use serde_json::Value;
+
+use crate::forge::{
+    AssocPr, Association, Check, CheckStatus, Comment, CommentKind, Merge, PrFetchInput,
+    PrSnapshot, PrState, PrView, Reply, Sync, finish_comments, prose_row, push_unique,
+    upsert_latest,
+};
+
+/// Read Azure DevOps for one already-derived input. Degradation stays in-band for the PR tab.
+pub(crate) fn fetch(
+    repo: &Path,
+    input: &PrFetchInput,
+    target: &crate::git::RepoTarget,
+    cancelled: &AtomicBool,
+) -> PrView {
+    match fetch_inner(repo, input, target, cancelled) {
+        Ok(view) => view,
+        Err(error) => error.into_view(target.host()),
+    }
+}
+
+/// A classified `az` failure, mapped to a [`PrView`] degraded state.
+#[derive(Debug)]
+enum AzError {
+    NoAz,
+    /// `az` runs but the `azure-devops` extension is absent, so no DevOps command exists.
+    NoExtension,
+    NotAuthed,
+    /// The endpoint answered 403 or 404 — the addressed object is unknown or unreadable.
+    Unavailable(String),
+    LocalGit(String),
+    Other(String),
+}
+
+impl AzError {
+    fn into_view(self, host: &str) -> PrView {
+        match self {
+            Self::NoAz => PrView::NoCli(crate::git::Forge::AzureDevOps),
+            Self::NoExtension => PrView::NoExtension(crate::git::Forge::AzureDevOps),
+            Self::NotAuthed => PrView::NotAuthed(crate::git::Forge::AzureDevOps, host.to_owned()),
+            Self::LocalGit(message) => PrView::GitError(message),
+            Self::Unavailable(message) | Self::Other(message) => {
+                PrView::Error(crate::git::Forge::AzureDevOps, message)
+            }
+        }
+    }
+}
+
+/// The retryable error a panicked reader degrades into (`crate::forge::join_read`).
+fn died(surface: &str) -> AzError {
+    AzError::Other(format!("{surface} read panicked"))
+}
+
+/// An unreadable optional surface reads as empty instead of failing the fetch.
+fn optional_surface(result: Result<Value, AzError>) -> Result<Value, AzError> {
+    match result {
+        Err(AzError::Unavailable(_)) => Ok(Value::Null),
+        other => other,
+    }
+}
+
+/// The `--organization` every `az` call pins, so no inherited `AZURE_DEVOPS_*` default redirects it.
+fn organization_url(target: &crate::git::RepoTarget) -> String {
+    let host = target.host();
+    if host.ends_with(".visualstudio.com") {
+        format!("https://{host}")
+    } else {
+        format!("https://{host}/{}", target.owner())
+    }
+}
+
+/// Run one `az` subcommand, pinned to the organization, and parse its JSON.
+fn az_json(
+    repo: &Path,
+    org_url: &str,
+    args: &[&str],
+    cancelled: &AtomicBool,
+) -> Result<Value, AzError> {
+    let mut cmd = crate::proc::command("az");
+    cmd.current_dir(repo).args(args).args(["--organization", org_url, "--output", "json"]);
+    let stdout = crate::forge::run_provider(
+        cmd,
+        cancelled,
+        AzError::NoAz,
+        classify_failure,
+        AzError::Other,
+    )?;
+    serde_json::from_str(stdout.trim()).map_err(|error| AzError::Other(error.to_string()))
+}
+
+/// A failed `az`'s state by stderr wording; the missing-extension test must lead.
+fn classify_failure(stderr: &str) -> AzError {
+    let s = stderr.to_lowercase();
+    if s.contains("requires the extension azure-devops")
+        || s.contains("extension azure-devops")
+        || s.contains("is not in the 'az' command group")
+    {
+        AzError::NoExtension
+    } else if crate::forge::reports_status(&s, 401)
+        || s.contains("you need to run the login command")
+        || s.contains("requires user authentication")
+        || s.contains("az login")
+        || s.contains("az devops login")
+        // TF400813: unauthorized, anonymous or wrong account alike.
+        || s.contains("tf400813")
+    {
+        AzError::NotAuthed
+    } else if crate::forge::reports_status(&s, 403)
+        || crate::forge::reports_status(&s, 404)
+        // Pull request, repository, project not found; each call site decides if that is fatal.
+        || s.contains("tf401180")
+        || s.contains("tf401019")
+        || s.contains("tf200016")
+    {
+        AzError::Unavailable(stderr.trim().to_string())
+    } else {
+        AzError::Other(stderr.trim().to_string())
+    }
+}
+
+fn fetch_inner(
+    repo: &Path,
+    input: &PrFetchInput,
+    target: &crate::git::RepoTarget,
+    cancelled: &AtomicBool,
+) -> Result<PrView, AzError> {
+    let org_url = organization_url(target);
+    let project = target.project();
+    let repo_name = target.name();
+
+    let head = input.local.head_oid.as_deref();
+    let (mut assoc, project_guid) = associate_by_branch(repo, &org_url, target, input, cancelled)?;
+    let Some(id) = crate::forge::resolve_pick(repo, &assoc, head)
+        .map_err(|error| AzError::LocalGit(error.0))?
+    else {
+        return Ok(PrView::NoPr);
+    };
+    // An enumerated pick is the complete pull request, so no detail read follows.
+    let picked = [&mut assoc.open, &mut assoc.history]
+        .into_iter()
+        .flat_map(|bucket| bucket.iter_mut())
+        .find(|pr| pr.number == id);
+    let picked_tip = picked.as_ref().map(|pr| pr.head_oid.clone()).unwrap_or_default();
+    let pr = picked.and_then(|pr| pr.raw.take()).unwrap_or(Value::Null);
+
+    // One concurrent wave: each `az` pays its own startup, so waves are the latency.
+    let (threads, evaluations, statuses) = std::thread::scope(|scope| {
+        let threads = scope.spawn(|| {
+            az_json(
+                repo,
+                &org_url,
+                &[
+                    "devops",
+                    "invoke",
+                    "--area",
+                    "git",
+                    "--resource",
+                    "pullRequestThreads",
+                    "--route-parameters",
+                    &format!("project={project}"),
+                    &format!("repositoryId={repo_name}"),
+                    &format!("pullRequestId={id}"),
+                    "--api-version",
+                    "7.1",
+                ],
+                cancelled,
+            )
+        });
+        let evaluations = scope.spawn(|| {
+            // No project id means a malformed payload: no checks, no blocker, no failure.
+            match &project_guid {
+                Some(guid) => fetch_evaluations(repo, &org_url, project, guid, id, cancelled),
+                None => Ok(Value::Null),
+            }
+        });
+        let statuses = scope.spawn(|| {
+            if picked_tip.is_empty() {
+                return Ok(Value::Null);
+            }
+            optional_surface(az_json(
+                repo,
+                &org_url,
+                &[
+                    "devops",
+                    "invoke",
+                    "--area",
+                    "git",
+                    "--resource",
+                    "statuses",
+                    "--route-parameters",
+                    &format!("project={project}"),
+                    &format!("repositoryId={repo_name}"),
+                    &format!("commitId={picked_tip}"),
+                    // `latestOnly` collapses re-runs server-side.
+                    "--query-parameters",
+                    "latestOnly=true",
+                    "top=100",
+                    "--api-version",
+                    "7.1",
+                ],
+                cancelled,
+            ))
+        });
+        (
+            crate::forge::join_read(threads, || died("threads")),
+            crate::forge::join_read(evaluations, || died("evaluations")),
+            crate::forge::join_read(statuses, || died("statuses")),
+        )
+    });
+    let threads = threads?;
+    let evaluations = evaluations?;
+    let statuses = statuses?;
+    if pr["pullRequestId"].as_u64().is_none() {
+        return Ok(PrView::NoPr);
+    }
+    // Against the pinned HEAD, so a mid-fetch checkout never mixes two branches.
+    let sync = crate::forge::local_sync(repo, input.local.head_oid.as_deref(), &picked_tip)
+        .map_err(|error| AzError::LocalGit(error.0))?;
+
+    let (rows, threads_capped) = newest_comment_threads(&threads);
+    // A full page can hide older rows.
+    let checks_capped = one_page_capped(&evaluations) || one_page_capped(&statuses);
+    let checks = build_checks(&evaluations, &statuses);
+    Ok(PrView::Pr(Box::new(build_snapshot(
+        &pr,
+        target,
+        &org_url,
+        sync,
+        checks,
+        &rows,
+        &evaluations,
+        threads_capped,
+        checks_capped,
+    ))))
+}
+
+/// The pull request's policy evaluations, addressed by the project GUID.
+fn fetch_evaluations(
+    repo: &Path,
+    org_url: &str,
+    project: &str,
+    project_guid: &str,
+    id: u64,
+    cancelled: &AtomicBool,
+) -> Result<Value, AzError> {
+    let artifact = format!("artifactId=vstfs:///CodeReview/CodeReviewId/{project_guid}/{id}");
+    optional_surface(az_json(
+        repo,
+        org_url,
+        &[
+            "devops",
+            "invoke",
+            "--area",
+            "policy",
+            "--resource",
+            "evaluations",
+            "--route-parameters",
+            &format!("project={project}"),
+            // The surface's one page (each surface reads its newest 100 rows); `one_page_capped` reports the overflow.
+            "--query-parameters",
+            &artifact,
+            "$top=100",
+            // `az devops invoke` rejects the dotted `7.1-preview.1`.
+            "--api-version",
+            "7.1-preview",
+        ],
+        cancelled,
+    ))
+}
+
+/// The branch's pull requests among the newest 100 active and 100 completed, and the project GUID.
+fn associate_by_branch(
+    repo: &Path,
+    org_url: &str,
+    target: &crate::git::RepoTarget,
+    input: &PrFetchInput,
+    cancelled: &AtomicBool,
+) -> Result<(Association, Option<String>), AzError> {
+    let (project, repo_name) = (target.project(), target.name());
+    let heads = &input.local.heads;
+    let mut assoc = Association::default();
+    if heads.is_empty() {
+        return Ok((assoc, None));
+    }
+
+    let enumerate = |status: &'static str| {
+        az_json(
+            repo,
+            org_url,
+            &[
+                "repos",
+                "pr",
+                "list",
+                "--project",
+                project,
+                "--repository",
+                repo_name,
+                "--status",
+                status,
+                "--top",
+                "100",
+            ],
+            cancelled,
+        )
+    };
+    let (active, completed) = std::thread::scope(|scope| {
+        let active = scope.spawn(|| enumerate("active"));
+        let completed = scope.spawn(|| enumerate("completed"));
+        (
+            crate::forge::join_read(active, || died("active")),
+            crate::forge::join_read(completed, || died("completed")),
+        )
+    });
+    let active = active?;
+    let completed = completed?;
+
+    let mut project_guid: Option<String> = None;
+    let mut note_guid = |node: &Value| {
+        if project_guid.is_none() {
+            project_guid = project_guid_of(node);
+        }
+    };
+    for node in active.as_array().into_iter().flatten() {
+        note_guid(node);
+        if let Some(pr) = branch_admitted(node, heads, target) {
+            push_unique(&mut assoc.open, pr);
+        }
+    }
+    for node in completed.as_array().into_iter().flatten() {
+        note_guid(node);
+        if let Some(pr) = branch_admitted(node, heads, target) {
+            push_unique(&mut assoc.history, pr);
+        }
+    }
+    Ok((assoc, project_guid))
+}
+
+/// The node as a pick when its source repository and branch are one of the branch's heads.
+fn branch_admitted(
+    node: &Value,
+    heads: &[crate::git::Head],
+    target: &crate::git::RepoTarget,
+) -> Option<AssocPr> {
+    let mut pr = assoc_pr(node)?;
+    let fork = &node["forkSource"]["repository"];
+    // A fork shares the target's organization and host; the node names its project and name.
+    let fork_repo = match (fork["project"]["name"].as_str(), fork["name"].as_str()) {
+        (Some(project), Some(name)) => crate::git::RepoTarget::with_path(
+            crate::git::Forge::AzureDevOps,
+            target.host(),
+            &[target.owner(), project, name],
+        ),
+        _ => None,
+    };
+    let head_repo = if node["forkSource"].is_null() {
+        crate::forge::HeadRepo::Queried
+    } else {
+        crate::forge::HeadRepo::Other(fork_repo.iter().collect())
+    };
+    if !crate::forge::admits(heads, target, &pr.head_ref, &head_repo) {
+        return None;
+    }
+    // The node is the complete pull request, so it travels with the pick.
+    pr.raw = Some(node.clone());
+    Some(pr)
+}
+
+/// The project GUID one enumeration node reports on its repository's project.
+fn project_guid_of(node: &Value) -> Option<String> {
+    node["repository"]["project"]["id"].as_str().map(str::to_string)
+}
+
+/// One association node reduced to the pick-relevant fields shared with the other providers.
+fn assoc_pr(node: &Value) -> Option<AssocPr> {
+    Some(AssocPr {
+        number: node["pullRequestId"].as_u64()?,
+        head_oid: source_tip(node).to_string(),
+        head_ref: head_ref_of(node),
+        created_at: node["creationDate"].as_str().unwrap_or_default().to_string(),
+        closed_at: match node["status"].as_str() {
+            Some("completed") => node["closedDate"].as_str().unwrap_or_default().to_string(),
+            _ => String::new(),
+        },
+        raw: None,
+    })
+}
+
+/// The pull request's reported source tip.
+fn source_tip(node: &Value) -> &str {
+    node["lastMergeSourceCommit"]["commitId"].as_str().unwrap_or_default()
+}
+
+/// A `refs/heads/…` name reduced to its bare branch name.
+fn bare_ref(name: &str) -> String {
+    name.strip_prefix("refs/heads/").unwrap_or(name).to_string()
+}
+
+/// The head branch name; a fork keeps it on `forkSource.name`, not `sourceRefName`.
+fn head_ref_of(node: &Value) -> String {
+    let name = node["forkSource"]["name"]
+        .as_str()
+        .unwrap_or_else(|| node["sourceRefName"].as_str().unwrap_or_default());
+    bare_ref(name)
+}
+
+// ---- Pure normalization (unit-tested) --------------------------------------------------
+
+/// Assemble the snapshot from the picked pull request node, thread rows, and evaluations.
+#[allow(clippy::too_many_arguments)]
+fn build_snapshot(
+    pr: &Value,
+    target: &crate::git::RepoTarget,
+    org_url: &str,
+    sync: Sync,
+    checks: Vec<Check>,
+    rows: &[&Value],
+    evaluations: &Value,
+    comments_truncated: bool,
+    checks_truncated: bool,
+) -> PrSnapshot {
+    let id = pr["pullRequestId"].as_u64().unwrap_or_default();
+    PrSnapshot {
+        number: id,
+        title: pr["title"].as_str().unwrap_or_default().to_string(),
+        url: format!(
+            "{org_url}/{}/_git/{}/pullrequest/{id}",
+            crate::forge::urlencode(target.project()),
+            crate::forge::urlencode(target.name())
+        ),
+        body: pr["description"].as_str().unwrap_or_default().to_string(),
+        // A missing status reads as closed, never reviewable.
+        state: parse_state(pr["status"].as_str().unwrap_or_default()),
+        is_draft: pr["isDraft"].as_bool().unwrap_or(false),
+        head_ref: head_ref_of(pr),
+        head_is_fork: pr["forkSource"].is_object(),
+        head_oid: source_tip(pr).to_string(),
+        base_ref: bare_ref(pr["targetRefName"].as_str().unwrap_or_default()),
+        merge: derive_merge(pr, evaluations),
+        sync,
+        checks,
+        comments: merge_comments(rows, pr),
+        comments_truncated,
+        checks_truncated,
+    }
+}
+
+/// Any status but `active` and `completed`, a missing one included, reads as closed.
+fn parse_state(status: &str) -> PrState {
+    match status {
+        "active" => PrState::Open,
+        "completed" => PrState::Merged,
+        _ => PrState::Closed,
+    }
+}
+
+/// The merge blocker: a conflict, a rejected required policy, else clean.
+fn derive_merge(pr: &Value, evaluations: &Value) -> Merge {
+    if pr["mergeStatus"].as_str() == Some("conflicts") {
+        return Merge::Conflicting;
+    }
+    let rejected_required = evaluations["value"].as_array().is_some_and(|rows| {
+        rows.iter().any(|row| {
+            row["configuration"]["isBlocking"].as_bool().unwrap_or(false)
+                && row["status"].as_str() == Some("rejected")
+        })
+    });
+    if rejected_required {
+        return Merge::Blocked;
+    }
+    Merge::Clean
+}
+
+/// Policy evaluations and commit statuses as one checks list.
+fn build_checks(evaluations: &Value, statuses: &Value) -> Vec<Check> {
+    let mut checks: Vec<Check> = Vec::new();
+    for row in evaluations["value"].as_array().into_iter().flatten() {
+        let name = row["configuration"]["type"]["displayName"].as_str().unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let blocking = row["configuration"]["isBlocking"].as_bool().unwrap_or(false);
+        let status = policy_status(row["status"].as_str().unwrap_or_default(), blocking);
+        upsert_latest(&mut checks, Check { name: name.to_string(), status });
+    }
+    // Statuses arrive newest-first; iterate oldest-first so a re-run replaces its earlier run.
+    let rows = statuses["value"].as_array().map(Vec::as_slice).unwrap_or_default();
+    for row in rows.iter().rev() {
+        let name = row["context"]["name"].as_str().unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let status = commit_status(row["state"].as_str().unwrap_or_default());
+        upsert_latest(&mut checks, Check { name: name.to_string(), status });
+    }
+    checks
+}
+
+/// A policy evaluation's status; a non-blocking policy never fails.
+fn policy_status(status: &str, blocking: bool) -> CheckStatus {
+    match status {
+        "approved" => CheckStatus::Success,
+        "rejected" | "broken" => {
+            if blocking {
+                CheckStatus::Failure
+            } else {
+                CheckStatus::Skipped
+            }
+        }
+        "running" => CheckStatus::Running,
+        "notApplicable" => CheckStatus::Skipped,
+        // queued — evaluation not started.
+        _ => CheckStatus::Pending,
+    }
+}
+
+/// Normalise one commit status state to a [`CheckStatus`].
+fn commit_status(state: &str) -> CheckStatus {
+    match state {
+        "succeeded" => CheckStatus::Success,
+        "failed" | "error" => CheckStatus::Failure,
+        "notApplicable" => CheckStatus::Skipped,
+        // pending / notSet — work not concluded.
+        _ => CheckStatus::Pending,
+    }
+}
+
+/// Whether a one-page read may hide rows: a continuation token, or a full page.
+fn one_page_capped(response: &Value) -> bool {
+    !response["continuation_token"].is_null()
+        || response["value"].as_array().is_some_and(|rows| rows.len() >= crate::forge::SURFACE_CAP)
+}
+
+/// The newest 100 comment threads, oldest first, and whether any were dropped.
+fn newest_comment_threads(threads: &Value) -> (Vec<&Value>, bool) {
+    let rows: Vec<&Value> = threads["value"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|thread| comment_root(thread).is_some())
+        .collect();
+    let truncated = rows.len() > crate::forge::SURFACE_CAP;
+    (crate::forge::newest_capped(rows), truncated)
+}
+
+/// The thread's root: its first comment that renders, or `None` when none does.
+fn comment_root(thread: &Value) -> Option<&Value> {
+    thread["comments"].as_array()?.iter().find(|comment| is_comment(comment))
+}
+
+/// Whether a comment renders: human-authored, not deleted, with content.
+fn is_comment(comment: &Value) -> bool {
+    comment["commentType"].as_str() != Some("system")
+        && !comment["isDeleted"].as_bool().unwrap_or(false)
+        && !comment["content"].as_str().unwrap_or("").trim().is_empty()
+}
+
+/// Replies beyond the root: every later rendering comment.
+fn replies_from_thread(thread: &Value) -> Vec<Reply> {
+    let Some(comments) = thread["comments"].as_array() else {
+        return Vec::new();
+    };
+    let Some(root_i) = comments.iter().position(is_comment) else {
+        return Vec::new();
+    };
+    comments[root_i + 1..]
+        .iter()
+        .filter(|comment| is_comment(comment))
+        .map(|comment| {
+            let author = comment["author"]["displayName"].as_str().unwrap_or("").to_string();
+            Reply {
+                author_is_bot: is_azure_bot(&comment["author"]),
+                author,
+                body: comment["content"].as_str().unwrap_or("").trim().to_string(),
+                created_at: comment["publishedDate"].as_str().unwrap_or("").to_string(),
+            }
+        })
+        .collect()
+}
+
+fn thread_line_range(context: &Value) -> (Option<u64>, Option<u64>) {
+    let right_s = context["rightFileStart"]["line"].as_u64();
+    let right_e = context["rightFileEnd"]["line"].as_u64();
+    if right_s.is_some() || right_e.is_some() {
+        return (right_s.or(right_e), right_e.or(right_s));
+    }
+    let left_s = context["leftFileStart"]["line"].as_u64();
+    let left_e = context["leftFileEnd"]["line"].as_u64();
+    (left_s.or(left_e), left_e.or(left_s))
+}
+
+/// Threads and reviewer votes as one newest-first list; findings carry no snippet.
+fn merge_comments(threads: &[&Value], pr: &Value) -> Vec<Comment> {
+    let mut out: Vec<Comment> = Vec::new();
+    for thread in threads {
+        let Some(root) = comment_root(thread) else { continue };
+        let author = root["author"]["displayName"].as_str().unwrap_or("").to_string();
+        let context = &thread["threadContext"];
+        // A file-position thread is a finding; anything else is a plain comment.
+        let (kind, anchor, place, is_resolved) = match context["filePath"].as_str() {
+            Some(path) => {
+                let path = path.trim_start_matches('/');
+                let (start, end) = thread_line_range(context);
+                let on_new = context["rightFileStart"]["line"].as_u64().is_some()
+                    || context["rightFileEnd"]["line"].as_u64().is_some();
+                let on_old = context["leftFileStart"]["line"].as_u64().is_some()
+                    || context["leftFileEnd"]["line"].as_u64().is_some();
+                let place = crate::forge::FindingPlace::from_lines(
+                    path,
+                    start,
+                    end,
+                    crate::forge::finding_side(on_new, on_old),
+                );
+                let resolved = matches!(
+                    thread["status"].as_str(),
+                    Some("closed" | "fixed" | "byDesign" | "wontFix")
+                );
+                (CommentKind::Finding, place.anchor(), Some(place), resolved)
+            }
+            None => (CommentKind::Comment, "comment".to_string(), None, false),
+        };
+        out.push(Comment {
+            kind,
+            author_is_bot: is_azure_bot(&root["author"]),
+            author,
+            anchor,
+            place,
+            body: root["content"].as_str().unwrap_or("").trim().to_string(),
+            snippet: None,
+            created_at: root["publishedDate"].as_str().unwrap_or("").to_string(),
+            is_resolved,
+            is_outdated: false,
+            replies: replies_from_thread(thread),
+        });
+    }
+    for reviewer in pr["reviewers"].as_array().into_iter().flatten() {
+        // A container is a required-reviewer group; its rollup vote repeats a member's.
+        if reviewer["isContainer"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let author = reviewer["displayName"].as_str().unwrap_or("").to_string();
+        let Some(body) = vote_body(reviewer["vote"].as_i64().unwrap_or(0)) else { continue };
+        if author.is_empty() {
+            continue;
+        }
+        let bot = is_azure_bot(reviewer);
+        // Votes have no timestamp, so they sort after the dated rows.
+        out.push(prose_row(CommentKind::Review, author, bot, body.to_string(), String::new()));
+    }
+    finish_comments(&mut out);
+    out
+}
+
+/// The prose one reviewer vote renders as; a zero vote renders nothing.
+fn vote_body(vote: i64) -> Option<&'static str> {
+    match vote {
+        10 => Some("Approved this pull request."),
+        5 => Some("Approved this pull request with suggestions."),
+        -5 => Some("Is waiting for the author."),
+        -10 => Some("Rejected this pull request."),
+        _ => None,
+    }
+}
+
+/// Whether an identity is a service account, judged by name: Azure DevOps has no bot flag.
+fn is_azure_bot(identity: &Value) -> bool {
+    let display = identity["displayName"].as_str().unwrap_or("");
+    let unique = identity["uniqueName"].as_str().unwrap_or("").to_ascii_lowercase();
+    crate::forge::is_named_bot(display)
+        || display == "Microsoft.VisualStudio.Services.TFS"
+        || display.to_ascii_lowercase().contains("build service")
+        || unique.contains("build service")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_empty_leading_comment_neither_hides_the_thread_nor_counts_as_a_reply() {
+        let thread = json!({"comments": [
+            {"commentType": "text", "isDeleted": false, "content": "  ",
+             "author": {"displayName": "Editor"}},
+            {"commentType": "text", "isDeleted": false, "content": "The real comment.",
+             "author": {"displayName": "Author"}}
+        ]});
+        assert_eq!(comment_root(&thread).unwrap()["content"], "The real comment.");
+        assert!(replies_from_thread(&thread).is_empty());
+    }
+
+    #[test]
+    fn state_maps_active_and_completed_with_a_closed_fallback() {
+        assert_eq!(parse_state("active"), PrState::Open);
+        assert_eq!(parse_state("completed"), PrState::Merged);
+        // A missing status must not read as reviewable.
+        assert_eq!(parse_state(""), PrState::Closed);
+    }
+
+    #[test]
+    fn merge_folds_conflicts_and_rejected_required_policies_only() {
+        let none = json!(null);
+        assert_eq!(derive_merge(&json!({"mergeStatus": "conflicts"}), &none), Merge::Conflicting);
+        // A rejected blocking policy blocks; a rejected optional one does not.
+        let rejected = |blocking: bool| {
+            json!({"value": [
+                {"status": "rejected", "configuration": {"isBlocking": blocking}}
+            ]})
+        };
+        let pr = json!({"mergeStatus": "succeeded"});
+        assert_eq!(derive_merge(&pr, &rejected(true)), Merge::Blocked);
+        assert_eq!(derive_merge(&pr, &rejected(false)), Merge::Clean);
+        // A still-queued merge check folds to clean.
+        assert_eq!(derive_merge(&json!({"mergeStatus": "queued"}), &none), Merge::Clean);
+    }
+
+    #[test]
+    fn checks_merge_policies_and_statuses_with_rerun_replacement() {
+        let evaluations = json!({"value": [
+            {"status": "approved", "configuration":
+                {"isBlocking": true, "type": {"displayName": "Build"}}},
+            {"status": "rejected", "configuration":
+                {"isBlocking": false, "type": {"displayName": "Optional lint"}}},
+            {"status": "rejected", "configuration":
+                {"isBlocking": true, "type": {"displayName": "Required reviewers"}}},
+            {"status": "queued", "configuration":
+                {"isBlocking": true, "type": {"displayName": "Comments"}}},
+        ]});
+        // Statuses arrive newest-first; the re-run of `ci/tests` must win over its failure.
+        let statuses = json!({"value": [
+            {"state": "succeeded", "context": {"name": "ci/tests"}},
+            {"state": "failed", "context": {"name": "ci/tests"}},
+            {"state": "pending", "context": {"name": "ci/docs"}},
+        ]});
+        let checks = build_checks(&evaluations, &statuses);
+        let by_name: Vec<(&str, CheckStatus)> =
+            checks.iter().map(|c| (c.name.as_str(), c.status)).collect();
+        assert_eq!(
+            by_name,
+            vec![
+                ("Build", CheckStatus::Success),
+                ("Optional lint", CheckStatus::Skipped),
+                ("Required reviewers", CheckStatus::Failure),
+                ("Comments", CheckStatus::Pending),
+                ("ci/docs", CheckStatus::Pending),
+                ("ci/tests", CheckStatus::Success),
+            ]
+        );
+    }
+
+    #[test]
+    fn association_reduces_a_pull_request_to_its_pick_fields() {
+        let node = json!({
+            "pullRequestId": 5,
+            "status": "completed",
+            "sourceRefName": "refs/heads/invBootstrap",
+            "lastMergeSourceCommit": {"commitId": "3aae318f"},
+            "creationDate": "2026-02-18T04:35:01Z",
+            "closedDate": "2026-02-18T04:35:05Z",
+        });
+        let pr = assoc_pr(&node).unwrap();
+        assert_eq!(pr.number, 5);
+        assert_eq!(pr.head_oid, "3aae318f");
+        assert_eq!(pr.head_ref, "invBootstrap");
+        assert_eq!(pr.closed_at, "2026-02-18T04:35:05Z");
+        assert_eq!(pr.created_at, "2026-02-18T04:35:01Z");
+        // A fork's real branch lives on forkSource.
+        let node = json!({
+            "pullRequestId": 7,
+            "status": "active",
+            "sourceRefName": "refs/pull/7/source",
+            "forkSource": {"name": "refs/heads/fork-feature", "repository": {"id": "b0bf"}},
+        });
+        let fork = assoc_pr(&node).unwrap();
+        assert_eq!(fork.head_ref, "fork-feature");
+        assert_eq!(fork.closed_at, "");
+    }
+
+    #[test]
+    fn threads_map_to_comments_findings_and_votes() {
+        let threads_value = json!({"value": [
+            // A system thread renders nothing and spends no slot.
+            {"comments": [{"commentType": "system", "content": "MerlinBot added 3 reviewers",
+                "author": {"displayName": "Microsoft.VisualStudio.Services.TFS"}}]},
+            // A PR-level thread is a comment row with its replies counted.
+            {"status": "active", "comments": [
+                {"commentType": "text", "content": "Looks good overall.",
+                 "publishedDate": "2026-02-18T05:00:00Z",
+                 "author": {"displayName": "Mark Wilkie"}},
+                {"commentType": "text", "content": "Agreed.",
+                 "author": {"displayName": "Michael Stuckey"}},
+            ]},
+            // A file-position thread is a finding with the thread's resolved status.
+            {"status": "fixed",
+             "threadContext": {"filePath": "/src/main.rs",
+                "rightFileStart": {"line": 12}, "rightFileEnd": {"line": 14}},
+             "comments": [
+                {"commentType": "text", "content": "Off by one.",
+                 "publishedDate": "2026-02-18T06:00:00Z",
+                 "author": {"displayName": "Project Collection Build Service (org)"}},
+            ]},
+        ]});
+        let (rows, truncated) = newest_comment_threads(&threads_value);
+        assert!(!truncated);
+        assert_eq!(rows.len(), 2, "the system thread drops");
+        let pr = json!({"reviewers": [
+            {"displayName": "Mark Wilkie", "vote": 10},
+            {"displayName": "Waiting Reviewer", "vote": -5},
+            {"displayName": "Quiet Reviewer", "vote": 0},
+            {"displayName": "Leads", "vote": 10, "isContainer": true},
+        ]});
+        let comments = merge_comments(&rows, &pr);
+        let finding = comments.iter().find(|c| c.kind == CommentKind::Finding).unwrap();
+        assert_eq!(finding.anchor, "src/main.rs:12-14");
+        assert!(finding.is_resolved);
+        assert!(finding.author_is_bot, "a build-service identity is a bot");
+        assert!(finding.snippet.is_none(), "a thread carries no code context");
+        let comment = comments.iter().find(|c| c.kind == CommentKind::Comment).unwrap();
+        assert_eq!(comment.author, "Mark Wilkie");
+        assert_eq!(comment.replies.len(), 1);
+        assert_eq!(comment.replies[0].body, "Agreed.");
+        let votes: Vec<&Comment> =
+            comments.iter().filter(|c| c.kind == CommentKind::Review).collect();
+        assert_eq!(votes.len(), 2, "a zero vote and a container render nothing");
+        assert_eq!(votes[0].body, "Approved this pull request.");
+        assert_eq!(votes[1].body, "Is waiting for the author.");
+    }
+
+    #[test]
+    fn an_enumeration_node_admits_only_when_its_source_is_one_of_the_branchs_heads() {
+        let ado = |project: &str, name: &str| {
+            crate::git::RepoTarget::with_path(
+                crate::git::Forge::AzureDevOps,
+                "dev.azure.com",
+                &["org", project, name],
+            )
+            .unwrap()
+        };
+        let target = ado("Proj", "app");
+        let fork = ado("Proj", "app-fork");
+        let head = |repo: &crate::git::RepoTarget, name: &str| crate::git::Head {
+            repo: repo.clone(),
+            name: name.to_string(),
+        };
+        let own = |branch: &str| {
+            json!({"pullRequestId": 5, "status": "completed",
+                "sourceRefName": format!("refs/heads/{branch}"),
+                "lastMergeSourceCommit": {"commitId": "3aae318f"}})
+        };
+        let forked = |branch: &str, project: &str, name: &str| {
+            json!({"pullRequestId": 7, "status": "completed",
+                "sourceRefName": "refs/pull/7/source",
+                "lastMergeSourceCommit": {"commitId": "3aae318f"},
+                "forkSource": {"name": format!("refs/heads/{branch}"),
+                    "repository": {"id": "b0bf", "name": name, "project": {"name": project}}}})
+        };
+        let on_main = [head(&target, "main")];
+        let checkout = [head(&fork, "fix")];
+        let cases: &[(&str, &[crate::git::Head], Value, bool)] = &[
+            ("own same-repo main", &on_main, own("main"), true),
+            ("another branch", &on_main, own("other"), false),
+            // The hole Azure had: a completed fork PR from a fork's `main` on upstream `main`.
+            ("stranger fork main on main", &on_main, forked("main", "Proj", "stranger"), false),
+            ("checked-out fork PR", &checkout, forked("fix", "proj", "APP-FORK"), true),
+            ("same name, another fork", &checkout, forked("fix", "Proj", "stranger"), false),
+            // A fork clone's head: the target's own same-named branch is a stranger's.
+            ("target's own fix, fork head", &checkout, own("fix"), false),
+            (
+                "fork missing its identity",
+                &checkout,
+                json!({"pullRequestId": 7, "forkSource": {"name": "refs/heads/fix",
+                    "repository": {"id": "b0bf"}}}),
+                false,
+            ),
+        ];
+        for (label, heads, node, expected) in cases {
+            assert_eq!(branch_admitted(node, heads, &target).is_some(), *expected, "{label}");
+        }
+        // The fork lives in the target's organization; a same-named fork elsewhere is another.
+        let elsewhere = crate::git::RepoTarget::with_path(
+            crate::git::Forge::AzureDevOps,
+            "dev.azure.com",
+            &["org2", "Proj", "app-fork"],
+        )
+        .unwrap();
+        let heads = [head(&elsewhere, "fix")];
+        assert!(branch_admitted(&forked("fix", "Proj", "app-fork"), &heads, &target).is_none());
+        // A same-path fork on a server host is another namespace; the legacy cloud host is not.
+        let host = |host: &str| {
+            crate::git::RepoTarget::with_path(
+                crate::git::Forge::AzureDevOps,
+                host,
+                &["org", "Proj", "app-fork"],
+            )
+            .unwrap()
+        };
+        let server = [head(&host("ado.corp.test"), "fix")];
+        assert!(branch_admitted(&forked("fix", "Proj", "app-fork"), &server, &target).is_none());
+        let legacy = [head(&host("org.visualstudio.com"), "fix")];
+        assert!(branch_admitted(&forked("fix", "Proj", "app-fork"), &legacy, &target).is_some());
+    }
+
+    #[test]
+    fn thread_cap_keeps_the_newest_hundred_and_reports_the_drop() {
+        let mut rows = Vec::new();
+        for i in 0..120 {
+            rows.push(json!({"comments": [{
+                "commentType": "text", "content": format!("comment {i}"),
+                "author": {"displayName": "A"}}]}));
+        }
+        let threads_value = json!({"value": rows});
+        let (kept, truncated) = newest_comment_threads(&threads_value);
+        assert!(truncated);
+        assert_eq!(kept.len(), 100);
+        let first = comment_root(kept[0]).unwrap();
+        assert_eq!(first["content"], "comment 20", "the oldest rows drop first");
+    }
+
+    #[test]
+    fn a_full_checks_page_or_a_continuation_token_reports_the_surface_capped() {
+        assert!(!one_page_capped(&json!({"count": 2, "value": [1, 2]})));
+        assert!(one_page_capped(&json!({"continuation_token": "abc", "value": []})));
+        let full: Vec<u64> = (0..100).collect();
+        assert!(one_page_capped(&json!({"value": full})));
+        assert!(!one_page_capped(&Value::Null));
+    }
+
+    #[test]
+    fn project_guid_reads_from_the_enumeration_nodes_project() {
+        let enumerated = json!({"repository": {"project": {"id": "37b9070b"}}});
+        assert_eq!(project_guid_of(&enumerated).as_deref(), Some("37b9070b"));
+        assert_eq!(project_guid_of(&json!({})), None);
+    }
+
+    #[test]
+    fn failures_classify_from_the_cli_wording() {
+        // Captured live from `az` 2.88.0 / azure-devops 1.0.6.
+        assert!(matches!(
+            classify_failure(
+                "ERROR: The command requires the extension azure-devops. It will be installed first."
+            ),
+            AzError::NoExtension
+        ));
+        assert!(matches!(
+            classify_failure(
+                "ERROR: Before you can run Azure DevOps commands, you need to run the login command(az login if using AAD/MSA identity else az devops login if using PAT token) to setup credentials."
+            ),
+            AzError::NotAuthed
+        ));
+        assert!(matches!(
+            classify_failure(
+                "ERROR: TF400813: The user 'aaaa' is not authorized to access this resource."
+            ),
+            AzError::NotAuthed
+        ));
+        assert!(matches!(
+            classify_failure(
+                "ERROR: The requested resource requires user authentication: https://dev.azure.com/x/_apis/git/pullRequests/5"
+            ),
+            AzError::NotAuthed
+        ));
+        assert!(matches!(
+            classify_failure("ERROR: TF401180: The requested pull request was not found."),
+            AzError::Unavailable(_)
+        ));
+        assert!(matches!(
+            classify_failure(
+                "ERROR: TF401019: The Git repository with name or identifier x does not exist."
+            ),
+            AzError::Unavailable(_)
+        ));
+        assert!(matches!(classify_failure("something exploded"), AzError::Other(_)));
+    }
+
+    #[test]
+    fn organization_url_derives_from_the_target_host_form() {
+        let target = |host: &str| {
+            crate::git::RepoTarget::with_path(
+                crate::git::Forge::AzureDevOps,
+                host,
+                &["org", "project", "repo"],
+            )
+            .unwrap()
+        };
+        assert_eq!(organization_url(&target("dev.azure.com")), "https://dev.azure.com/org");
+        assert_eq!(
+            organization_url(&target("org.visualstudio.com")),
+            "https://org.visualstudio.com"
+        );
+        assert_eq!(organization_url(&target("tfs.corp.example")), "https://tfs.corp.example/org");
+    }
+}

@@ -1,0 +1,1 @@
+{"type":"reply","id":39,"ok":{"kind":"repo_listing","checked_out":"main","worktrees":[{"path":"/home/me/src/ferrite/.worktrees/fix","branch":"fix"},{"path":"/home/me/src/ferrite/.worktrees/bisect"}],"branches":["main","fix"]}}

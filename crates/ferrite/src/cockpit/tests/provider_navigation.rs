@@ -137,10 +137,11 @@ fn contract_native_session_picker_shows_titles_without_spawning(cx: &mut TestApp
     }]))
     .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().unwrap();
-        assert_eq!(menu.rows[0].name.as_ref(), "Fix startup latency");
-        assert!(menu.rows[0].detail.contains("ferrite"));
+    view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        let rows = palette.survivors();
+        assert_eq!(rows[0].name.as_ref(), "Fix startup latency");
+        assert!(rows[0].context.contains("ferrite"));
     });
     assert_eq!(fake.spawned.borrow().len(), count);
     assert!(fake.sent.borrow().is_empty());
@@ -161,60 +162,63 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     cx.run_until_parked();
     let _ = tx.send(Ok(vec![]));
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+    view.read_with(cx, |view, _| {
+        assert!(view.popover.is_none() && view.floats.palette.is_none())
+    });
 }
 
+/// Folded (cmd-B), the column draws nothing and the board takes the width;
+/// the bottom bar keeps the sidebar toggle, the bell and (off macOS, whose
+/// app menu lists it) Settings at its left in that order, each the bar's
+/// full height, and the toggle opens the column again (ADR 0014).
 #[gpui::test]
-fn a_short_collapsed_rail_scrolls_to_every_thread_without_moving_its_utilities(
-    cx: &mut TestAppContext,
-) {
-    let (core, _fake) = cockpit("short-collapsed-rail", 14);
+fn a_folded_nav_keeps_its_doors_in_the_bottom_bar(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("folded-nav-doors", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(640.), px(500.)));
+    cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
 
-    let last = view.read_with(cx, |view, _| {
-        view.nav_state().ordered_rows().last().unwrap().thread
-    });
-    let selector = format!("nav-rail-item-{}", last.get());
-    let viewport = cx.debug_bounds("nav-rail-items").unwrap();
-    let before = bounds(cx, selector.clone());
-    let new_thread = cx.debug_bounds("rail-add-thread").unwrap();
+    let first = view.read_with(cx, |view, _| view.nav_state().ordered_rows()[0].thread);
+    let row: &'static str = format!("nav-thread-{}", first.get()).leak();
+    assert!(
+        cx.debug_bounds(row).is_none(),
+        "folded, the column draws no tree rows: it is the rail"
+    );
+    assert!(
+        (cx.debug_bounds("nav-column").unwrap().size.width - px(nav::FOLDED_WIDTH)).abs() < px(0.5)
+    );
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    let toggle = bounds(cx, "nav-collapse".to_string());
     let bell = cx.debug_bounds("notifications-bell").unwrap();
-    let settings = cx.debug_bounds("settings-gear").unwrap();
+    assert_eq!(toggle.left(), bar.left(), "the bar's first door");
     assert!(
-        before.top() >= viewport.bottom(),
-        "the last Thread needs scrolling"
+        toggle.right() <= bell.left() + px(0.5),
+        "toggle, bell: {toggle:?} {bell:?}"
     );
-    assert!(new_thread.bottom() <= viewport.top());
-    assert!(viewport.bottom() <= bell.top());
-    assert!(settings.bottom() <= px(500.));
+    assert_eq!(toggle.size.width, px(crate::theme::ICON_BUTTON));
+    let mut doors = vec![toggle, bell];
+    if cfg!(target_os = "macos") {
+        assert!(cx.debug_bounds("settings-gear").is_none());
+    } else {
+        let settings = cx.debug_bounds("settings-gear").unwrap();
+        assert!(
+            bell.right() <= settings.left() + px(0.5),
+            "bell, Settings: {bell:?} {settings:?}"
+        );
+        doors.push(settings);
+    }
+    let session = cx.debug_bounds("bottom-bar-session").unwrap();
+    for door in doors {
+        assert!(door.top() >= bar.top() && door.bottom() <= bar.bottom());
+        assert!(door.right() <= session.left() + px(0.5), "before `ferrite`");
+    }
 
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: viewport.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
-        modifiers: gpui::Modifiers::none(),
-        touch_phase: gpui::TouchPhase::default(),
-    });
-    cx.run_until_parked();
-
-    let after = bounds(cx, selector);
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(!view.read_with(cx, |view, _| view.nav_railed()));
     assert!(
-        after.top() >= viewport.top() && after.bottom() <= viewport.bottom(),
-        "the last Thread's entire target is reachable: {after:?} in {viewport:?}"
+        cx.debug_bounds(row).is_some(),
+        "open again, the rows are back"
     );
-    assert_eq!(
-        after.size, before.size,
-        "scrolling never compresses an avatar"
-    );
-    assert_eq!(cx.debug_bounds("rail-add-thread").unwrap(), new_thread);
-    assert_eq!(cx.debug_bounds("notifications-bell").unwrap(), bell);
-    assert_eq!(cx.debug_bounds("settings-gear").unwrap(), settings);
-
-    cx.simulate_click(after.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().focused_thread(), Some(last));
-    });
 }

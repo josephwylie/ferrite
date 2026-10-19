@@ -1,38 +1,26 @@
 //! Background work the Session is running — a shell command sent to the
 //! background, a background agent, a watch — as chips docked at the
-//! Composer's right edge. They ride the same bottom shelf as the pending
-//! attachment island, on the same ground, so the two read as one surface:
-//! files going *in* at the left, work going *on* at the right. A chip names
-//! its task and, where the Session can stop it, ends it with one click. A
-//! task the provider reports finished leaves the shelf on its own; the
-//! shelf itself leaves when nothing is running.
+//! Composer's right edge. They ride the same shelf above the Composer as
+//! the pending files, on the same chip recipe, so the two read as one
+//! surface: files going *in* at the left, work going *on* at the right. A
+//! chip names its task and, where the Session can stop it, ends it with one
+//! click. A task the provider reports finished leaves the shelf on its own;
+//! the shelf itself leaves when nothing is running.
 //!
 //! The cockpit builds the shelf (its stop wiring needs the view's own
 //! `Context`) and the Pane only places it, exactly as with attachments.
 
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
 
 use ferrite_core::progress::{BackgroundTask, TaskStatus};
 use gpui::{
-    div, prelude::*, px, rgb, rgba, Animation, AnimationExt, App, ClickEvent, ElementId,
-    IntoElement, SharedString, Window,
+    div, prelude::*, px, rgb, App, ClickEvent, ElementId, IntoElement, SharedString, Window,
 };
 
-use crate::icons::{self, icon};
 use crate::pointer::Pointer;
 use crate::theme;
 
 type Stop = Rc<dyn Fn(&str, &mut Window, &mut App)>;
-
-/// A chip's widest reading before its label is cut with an ellipsis. Wide
-/// enough for a command line's head; narrow enough that three chips still
-/// leave the attachment island its room.
-const CHIP_MAX_W: f32 = 240.0;
-/// The running LED at the chip's head.
-const CHIP_LED: f32 = 6.0;
-/// The `×` hit area inside a chip, and its glyph.
-const CHIP_STOP_HIT: f32 = 14.0;
-const CHIP_STOP_GLYPH: f32 = 8.0;
 
 /// The shelf of running background tasks.
 #[derive(IntoElement)]
@@ -70,9 +58,7 @@ impl BackgroundChips {
 }
 
 impl RenderOnce for BackgroundChips {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let (ground, radius) = crate::attachments::island_surface(cx);
-        let animated = !cx.reduce_motion();
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let mut shelf = div()
             .id(self.id)
             .debug_selector(|| "background-chips".into())
@@ -80,30 +66,21 @@ impl RenderOnce for BackgroundChips {
             .flex_wrap()
             .justify_end()
             .items_center()
-            .gap(px(theme::KEYS_GAP))
+            .gap(px(theme::CH))
             .min_w_0()
-            .max_w_full()
-            .bg(ground)
-            .rounded(radius)
-            .border_1()
-            .border_color(rgba(theme::COMPOSER_EDGE))
-            .p_1p5();
+            .max_w_full();
         for (index, task) in self.tasks.into_iter().enumerate() {
-            shelf = shelf.child(chip(index, task, animated, self.on_stop.clone()));
+            shelf = shelf.child(chip(index, task, self.on_stop.clone()));
         }
         shelf
     }
 }
 
-/// One chip: the running LED, the task's own description cut to the chip's
-/// width, and the `×` where stopping is wired. The whole description and
-/// the task's kind wait in the tooltip.
-fn chip(
-    index: usize,
-    task: BackgroundTask,
-    animated: bool,
-    on_stop: Option<Stop>,
-) -> impl IntoElement {
+/// One chip (theme WP-D): one row on `paint::BAND2`, a cell of padding each
+/// side — a still `RUNNING` dot, the task's own description cut to the
+/// chip's width, and a quiet `×` where stopping is wired. The whole
+/// description and the task's kind wait in the tooltip.
+fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoElement {
     let kind = kind_label(&task.detail);
     let label: SharedString = if task.label.trim().is_empty() {
         kind.into()
@@ -115,42 +92,26 @@ fn chip(
     } else {
         format!("{kind} · {}", task.label).into()
     };
-    let led = div()
-        .flex_shrink_0()
-        .size(px(CHIP_LED))
-        .rounded_full()
-        .bg(rgb(theme::RUNNING));
-    let led = if animated {
-        led.with_animation(
-            ("background-chip-pulse", index),
-            Animation::new(Duration::from_millis(1400)).repeat(),
-            |led, progress| {
-                let phase = (progress * std::f32::consts::TAU).sin();
-                led.opacity(0.55 + 0.45 * phase * phase)
-            },
-        )
-        .into_any_element()
-    } else {
-        led.into_any_element()
-    };
     let mut chip = div()
         .id(("background-chip", index))
         .debug_selector(move || format!("background-chip-{index}"))
         .flex()
         .items_center()
-        .gap(px(theme::KEYS_GAP))
+        .gap(px(theme::CH))
         .min_w_0()
-        .max_w(px(CHIP_MAX_W))
-        .h(px(theme::CHIP_H))
-        .px(px(theme::MODE_CHIP_PAD_X))
-        .rounded(px(theme::R_CHIP))
-        .bg(rgb(theme::HOVER))
-        .text_size(px(theme::FS_MONO))
-        .text_color(rgb(theme::TEXT_2))
-        .tooltip(move |window, cx| {
-            gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-        })
-        .child(led)
+        .max_w(px(theme::BG_CHIP_MAX_W))
+        .h(px(theme::ROW))
+        .px(px(theme::CH))
+        .bg(theme::paint::BAND2)
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .whitespace_nowrap()
+        .text_color(rgb(theme::TEXT))
+        .tooltip(crate::menu::tooltip(tooltip))
+        // Working is the normal state: a still dot (theme rule 8 — one
+        // thing moves, and it is the working line).
+        .child(crate::components::status_dot(theme::RUNNING))
         .child(div().min_w_0().truncate().child(label));
     if let Some(stop) = on_stop {
         let id = task.id.clone();
@@ -162,10 +123,11 @@ fn chip(
                 .flex_shrink_0()
                 .items_center()
                 .justify_center()
-                .size(px(CHIP_STOP_HIT))
-                .rounded(px(theme::R_CHIP - 1.))
-                .hover_raised()
-                .child(icon(icons::CLOSE, CHIP_STOP_GLYPH, theme::TEXT_MUTED))
+                .h(px(theme::ROW))
+                .px(px(theme::SPACE_0_5))
+                .text_color(rgb(theme::TEXT_MUTED))
+                .hover_carried(format!("background-chip-stop-{index}"))
+                .child("\u{d7}")
                 .on_click(move |_: &ClickEvent, window, cx| {
                     cx.stop_propagation();
                     stop(&id, window, cx);

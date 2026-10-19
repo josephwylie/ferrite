@@ -1,212 +1,187 @@
-//! Explicit Project editing modal.
+//! Explicit Project editing modal, on the sheet recipe (`prefs::sheet`), in
+//! the float grammar (theme WP-E): one face on the grid, section labels in
+//! `TEXT_MUTED`, a field as a 1px box, words for buttons.
 
-use gpui::component::{
-    button::Button,
-    scroll::{Scrollable, ScrollableElement},
-    Disableable,
-};
+use gpui::component::{button::Button, Disableable};
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, App, BoxShadow, Div, FontWeight, SharedString};
+use gpui::{div, px, rgb, App, Div, SharedString};
+
+use crate::pointer::Pointer;
 
 use crate::components;
-use crate::icons::{self, icon};
-use crate::theme::{
-    BLOCKED, FILL, FONT_MONO, FONT_UI, FORM_CONTROL_H, FS_LG, FS_MD, FS_MONO, GROUND, ICON_BUTTON,
-    ICON_BUTTON_GLYPH, MENU, MODAL_GAP, MODAL_HEAD_H, MODAL_PAD, MODAL_VIEWPORT_FRACTION, PANE,
-    RAISED, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
-    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
-};
+use crate::prefs;
+use crate::theme::*;
 
 const WIDTH: f32 = 600.;
-/// The first directory has room for its labels and the Name field. Each
-/// additional directory adds one complete row until the body needs to scroll.
-const BASE_HEIGHT: f32 = 320.;
-const DIRECTORY_H: f32 = 52.;
+/// The sheet sizes to its content up to here; past it the body scrolls.
 const MAX_HEIGHT: f32 = 520.;
 
 pub fn veil() -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .cursor_default()
-        .occlude()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgba(0x0000008c))
+    prefs::veil()
 }
 
-pub fn card(directory_count: usize) -> Div {
-    let height = (BASE_HEIGHT + directory_count.saturating_sub(1) as f32 * (DIRECTORY_H + 8.))
-        .min(MAX_HEIGHT);
-    div()
-        .flex()
-        .flex_col()
-        .w(px(WIDTH))
-        .max_w(gpui::relative(MODAL_VIEWPORT_FRACTION))
-        .h(px(height))
-        .max_h(gpui::relative(MODAL_VIEWPORT_FRACTION))
-        .overflow_hidden()
-        .rounded(px(R_MENU))
-        .bg(rgb(MENU))
-        .font_family(FONT_UI)
-        .text_size(px(FS_MD))
-        .text_color(rgb(TEXT))
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_FAR).into(),
-                offset: point(px(0.), px(SHADOW_FAR_Y)),
-                blur_radius: px(SHADOW_FAR_BLUR),
-                spread_radius: px(SHADOW_FAR_SPREAD),
-            },
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_NEAR).into(),
-                offset: point(px(0.), px(SHADOW_NEAR_Y)),
-                blur_radius: px(SHADOW_NEAR_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+/// The sheet, as tall as its content up to `MAX_HEIGHT` (and the viewport
+/// share every sheet keeps, of a window `viewport_h` tall), past which the
+/// body scrolls between the fixed head and footer.
+pub fn card(viewport_h: f32) -> Div {
+    prefs::sheet_fit(WIDTH, MAX_HEIGHT.min(viewport_h * MODAL_VIEWPORT_FRACTION))
 }
 
 pub fn head(title: SharedString, close: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .h(px(MODAL_HEAD_H))
-        .px(px(MODAL_PAD))
-        .gap(px(MODAL_GAP))
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .truncate()
-                .text_size(px(FS_LG))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_STRONG))
-                .child(title),
-        )
-        .child(
-            div()
-                .font_family(FONT_MONO)
-                .text_size(px(FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child("esc close"),
-        )
-        .child(close)
+    prefs::sheet_head(title, close)
 }
 
 pub fn close_button(cx: &App) -> Button {
-    components::form_button("project-editor-close", cx)
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
-        .p_0()
-        .tooltip("Close project editor")
-        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_MUTED))
+    prefs::sheet_close("project-editor-close", "Close project editor", cx)
 }
 
 /// The card's form fields scroll between its fixed head and action footer.
-/// `flex_1` against the card's definite height is what gives the scroll
-/// container something to scroll inside — without it the body claims no
-/// height at all and the card draws as a bare title bar.
-pub fn body() -> Scrollable<Div> {
+/// The body takes its content's height and gives way (`flex_shrink`,
+/// `min_h_0`) only when the sheet reaches its cap, so a short list draws a
+/// short sheet and a long one scrolls. A row of air under the last field.
+pub fn body() -> gpui::Stateful<Div> {
     div()
+        .id("project-editor-body")
         .flex()
         .flex_col()
-        .flex_1()
+        .flex_shrink(1.)
         .min_h_0()
-        .overflow_y_scrollbar()
+        .overflow_y_scroll()
         .px(px(MODAL_PAD))
-        .pb(px(MODAL_PAD))
-        .gap(px(8.))
+        .pt(px(HALF_ROW))
+        .pb(px(ROW))
+        .gap(px(HALF_ROW))
 }
 
+/// A section header: its title as a `TEXT_MUTED` row, its hint under it in
+/// the same ink.
 pub fn section_label(title: &'static str, hint: &'static str) -> Div {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .gap(px(3.))
-        .pt(px(4.))
-        .pb(px(2.))
+        .pt(px(HALF_ROW))
+        .child(components::section_label(title).pb(px(0.)))
         .child(
-            div()
-                .text_size(px(FS_MD))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_STRONG))
-                .child(title),
-        )
-        .child(
-            div()
-                .text_size(px(FS_MONO))
+            components::text_ui()
                 .text_color(rgb(TEXT_MUTED))
                 .child(hint),
         )
 }
 
-/// The Project name row: a label above a bounded input that remains
-/// recognizable before the live editor contains any text.
-pub fn name_field(editor: impl IntoElement) -> Div {
+/// The Project name row: its label as a `TEXT_MUTED` row over a field — a
+/// 1px `paint::LINE2` box a cell in, one row high, the accent edge while
+/// the keyboard is in it — recognizable before the live editor holds any
+/// text.
+pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
+    field("Name".into(), editor, focused, "project-name-focused")
+}
+
+/// On a machine (ADR 0026), where no folder dialog can browse: the row a
+/// directory on the machine is typed into, in the name row's field.
+pub fn path_field(machine: &str, editor: impl IntoElement, focused: bool) -> Div {
+    field(
+        format!("Directory on {machine}").into(),
+        editor,
+        focused,
+        "project-path-focused",
+    )
+}
+
+fn field(
+    label: SharedString,
+    editor: impl IntoElement,
+    focused: bool,
+    focused_selector: &'static str,
+) -> Div {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .gap(px(6.))
-        .pt(px(4.))
-        .child(
-            div()
-                .text_size(px(FS_MD))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_STRONG))
-                .child("Name"),
-        )
+        .child(components::section_label(label).pb(px(0.)))
         .child(
             div()
                 .flex()
                 .items_center()
                 .h(px(FORM_CONTROL_H))
                 .flex_shrink_0()
-                .px(px(10.))
-                .rounded(px(R_CONTROL))
+                .px(px(FORM_FIELD_PAD_X))
                 .border_1()
-                .border_color(rgb(FILL))
-                .bg(rgb(PANE))
+                .map(|field| {
+                    if focused {
+                        field
+                            .border_color(rgb(ACCENT))
+                            .debug_selector(|| focused_selector.into())
+                    } else {
+                        field.border_color(paint::LINE2)
+                    }
+                })
                 .child(div().min_w_0().flex_1().child(editor)),
         )
 }
 
-/// A refusal from the registry, shown on the card that caused it rather
-/// than on the nav behind it.
-pub fn error_line(message: SharedString) -> Div {
+/// One directory the machine's Server listed under what the path field
+/// holds: its name and a `/`, `TEXT_MUTED`, `paint::HOVER` under the
+/// pointer, hung a cell outside the text's edge like a directory row.
+pub fn path_completion(index: usize, name: &str) -> gpui::Stateful<Div> {
+    let selector: SharedString = format!("project-path-completion:{name}").into();
     div()
+        .id(("project-path-completion", index))
+        .debug_selector(move || selector.to_string())
+        .flex()
+        .items_center()
         .flex_shrink_0()
-        .pt(px(4.))
-        .font_family(FONT_MONO)
-        .text_size(px(FS_MONO))
+        .h(px(ROW))
+        .ml(px(-CH))
+        .px(px(CH))
+        .hover_raised(format!("project-path-completion-{index}"))
+        .cursor_default()
+        .child(
+            components::text_ui()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(format!("{name}/")),
+        )
+}
+
+/// A refusal from the registry, shown on the card that caused it rather
+/// than on the nav behind it: the one blocked line.
+pub fn error_line(message: SharedString) -> Div {
+    components::text_ui()
+        .flex_shrink_0()
         .text_color(rgb(BLOCKED))
         .child(message)
 }
 
-/// The create card's empty state: no directory has been picked yet, so
-/// there is nothing to be primary.
-pub fn empty_directories() -> Div {
-    div()
-        .flex()
-        .items_center()
-        .min_h(px(DIRECTORY_H))
-        .flex_shrink_0()
-        .px(px(12.))
-        .rounded(px(R_CONTROL))
-        .bg(rgb(RAISED))
-        .font_family(FONT_MONO)
-        .text_size(px(FS_MONO))
-        .text_color(rgb(TEXT_MUTED))
-        .child("No directory yet — add the main directory to begin.")
+/// The directory list: no frame, the rows flush on the grid.
+pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
+    div().flex_shrink_0().flex().flex_col().children(rows)
 }
 
-/// The confirming button: the one filled control on the card.
+/// The quiet text control under the list that adds a directory (`+ Add
+/// directory`, or `+ Add main directory` while there is none): `TEXT_MUTED`,
+/// `TEXT` on `paint::HOVER` under the pointer, on the text's own edge.
+pub fn add_directory(label: &'static str, cx: &App) -> Button {
+    components::form_button("add-project-directory", cx)
+        .debug_selector(|| "project-add-directory".into())
+        .group(ADD_GROUP)
+        .h(px(ROW))
+        .ml(px(-CH))
+        .px(px(CH))
+        .child(
+            components::text_ui()
+                .text_color(rgb(TEXT_MUTED))
+                .group_hover(ADD_GROUP, |style| style.text_color(rgb(TEXT)))
+                .child(label),
+        )
+}
+
+const ADD_GROUP: &str = "project-add-directory";
+const DESTRUCTIVE_GROUP: &str = "project-destructive";
+
+/// The confirming button: the one filled control on the card, the accent
+/// with dark ink.
 pub fn primary_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
@@ -216,14 +191,24 @@ pub fn primary_button(
     components::primary_button(id, disabled, cx)
         .debug_selector(|| "project-confirm".into())
         .h(px(FORM_CONTROL_H))
-        .px(px(11.))
+        .px(px(FORM_BUTTON_PAD_X))
         .child(components::form_label(
             label,
-            if disabled { TEXT_MUTED } else { GROUND },
+            if disabled { TEXT_MUTED } else { ON_ACCENT },
         ))
 }
 
-pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoElement) -> Div {
+/// One directory: its name, `main` beside the first, and its full path
+/// under it in `TEXT_MUTED`, wrapping anywhere rather than cut — a path is
+/// machine text. The row's height is its content's. Under the pointer it
+/// takes `paint::HOVER`, hung a cell outside the text's edge, so the text
+/// stays on the sheet's column.
+pub fn directory_row(
+    index: usize,
+    path: SharedString,
+    main: bool,
+    actions: impl IntoElement,
+) -> gpui::Stateful<Div> {
     // The final directory component distinguishes neighboring project roots;
     // a shared parent prefix does not. Native Path semantics also preserve
     // Windows drive/UNC roots, which have no file name, through the fallback.
@@ -234,18 +219,18 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
         .unwrap_or(path.as_ref())
         .to_string()
         .into();
-    let tooltip = path.clone();
     let selector: SharedString = format!("project-directory:{path}").into();
     div()
+        .id(("project-directory-row", index))
         .flex()
         .items_center()
-        .min_h(px(DIRECTORY_H))
         .flex_shrink_0()
-        .px(px(12.))
-        .gap(px(12.))
-        .rounded(px(R_CONTROL))
-        .bg(rgb(RAISED))
-        .child(icon(icons::FOLDER, 14., TEXT_MUTED))
+        .ml(px(-CH))
+        .px(px(CH))
+        .py(px(SPACE_1))
+        .gap(px(2.0 * CH))
+        .hover_raised(format!("project-directory-row-{index}"))
+        .cursor_default()
         .child(
             div()
                 .id(selector.clone())
@@ -254,80 +239,75 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .gap(px(2.))
-                .tooltip(move |window, cx| {
-                    gpui::component::tooltip::Tooltip::new(tooltip.clone())
-                        .max_w(px(crate::theme::FORM_FIELD_W))
-                        .build(window, cx)
-                })
                 .child(
                     div()
                         .flex()
                         .items_baseline()
-                        .gap(px(8.))
+                        .gap(px(2.0 * CH))
                         .child(
-                            div()
+                            components::text_ui()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(FS_MD))
                                 .text_color(rgb(TEXT))
                                 .child(name),
                         )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(FS_MONO))
-                                .text_color(rgb(TEXT_MUTED))
-                                .child(role),
-                        ),
+                        .when(main, |line| {
+                            line.child(
+                                components::text_ui()
+                                    .flex_shrink_0()
+                                    .text_color(rgb(TEXT_MUTED))
+                                    .debug_selector(|| "project-directory-main".into())
+                                    .child("main"),
+                            )
+                        }),
                 )
                 .child(
-                    div()
-                        .font_family(FONT_MONO)
-                        .text_size(px(FS_MONO))
-                        .text_color(rgb(TEXT_MUTED))
-                        .truncate()
+                    components::text_ui()
+                        .text_color(rgb(PATH_INK))
+                        .whitespace_normal()
                         .child(path),
                 ),
         )
         .child(div().flex_shrink_0().child(actions))
 }
 
-pub fn action_button(id: impl Into<gpui::ElementId>, label: &'static str, cx: &App) -> Button {
-    components::form_button(id, cx)
-        .debug_selector(move || format!("project-{label}"))
-        .h(px(FORM_CONTROL_H))
-        .px(px(9.))
-        .child(components::form_label(label, TEXT_2))
-}
-
+/// A destructive action: a word in a 1px `paint::LINE2` box (the
+/// prototype's quick buttons) — `TEXT_MUTED` at rest, `TEXT` on
+/// `paint::HOVER` under the pointer. No red and no wash: colour is state,
+/// and a verb is not one. Disabled, it stays `TEXT_MUTED` and takes no face.
 pub fn destructive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     disabled: bool,
     cx: &App,
 ) -> Button {
-    components::form_button(id, cx)
+    let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
+    let (hover, press): (gpui::Hsla, gpui::Hsla) = if disabled {
+        (none, none)
+    } else {
+        (paint::HOVER.into(), paint::PRESS.into())
+    };
+    components::faded_button(id, none, hover, press, rgb(TEXT_MUTED).into(), cx)
+        .tab_stop(true)
+        .group(DESTRUCTIVE_GROUP)
         .disabled(disabled)
         .when(disabled, |button| button.cursor_default())
         .h(px(FORM_CONTROL_H))
-        .px(px(9.))
-        .child(components::form_label(
-            label,
-            if disabled { TEXT_MUTED } else { BLOCKED },
-        ))
+        .px(px(FORM_BUTTON_PAD_X))
+        .border_1()
+        .border_color(paint::LINE2)
+        .child(
+            components::text_ui()
+                .font_weight(W_BODY)
+                .text_color(rgb(TEXT_MUTED))
+                .when(!disabled, |text| {
+                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(TEXT)))
+                })
+                .child(label),
+        )
 }
 
 /// Completion actions remain visible while the directory list scrolls.
 pub fn footer(left: impl IntoElement, right: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .flex_shrink_0()
-        .gap(px(MODAL_GAP))
-        .px(px(MODAL_PAD))
-        .py(px(MODAL_GAP))
-        .child(left)
-        .child(right)
+    prefs::sheet_footer(left, right)
 }

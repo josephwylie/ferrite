@@ -85,15 +85,29 @@ fn contract_session_controls_use_shared_native_handles(cx: &mut TestAppContext) 
         })
         .unwrap();
     tick(cx);
-    let controls = cx
-        .debug_bounds("session-controls-1")
-        .expect("capable Sessions expose a shared controls menu");
-    cx.simulate_click(controls.center(), gpui::Modifiers::none());
+    // The session controls are the palette's (FL-4): `refresh MCP` runs the
+    // native refresh, `background tasks` opens the card.
+    assert!(
+        cx.debug_bounds("session-controls-1").is_none(),
+        "the status line has no `•••`"
+    );
+    cx.simulate_keystrokes("cmd-k");
+    cx.run_until_parked();
+    cx.simulate_input("refresh");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(fake
         .controls
         .borrow()
         .contains(&ferrite_core::SessionControl::RefreshMcp));
+    cx.simulate_keystrokes("cmd-k");
+    cx.run_until_parked();
+    // `background` alone also finds the Thread whose word it is now.
+    cx.simulate_input("background tasks");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    tick(cx);
     let reconnect = cx.debug_bounds("mcp-reconnect-0").unwrap();
     cx.simulate_click(reconnect.center(), gpui::Modifiers::none());
     cx.run_until_parked();
@@ -146,9 +160,13 @@ fn contract_permission_and_mcp_auth_controls_are_native(cx: &mut TestAppContext)
         })
         .unwrap();
     tick(cx);
-    let controls = cx.debug_bounds("session-controls-1").unwrap();
-    cx.simulate_click(controls.center(), gpui::Modifiers::none());
+    // The card opens from the palette's `background tasks` (FL-4).
+    cx.simulate_keystrokes("cmd-k");
     cx.run_until_parked();
+    cx.simulate_input("background");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    tick(cx);
     let mode = cx
         .debug_bounds("permission-mode-0")
         .expect("provider-supplied permission mode exposed");
@@ -246,31 +264,25 @@ fn contract_native_accounting_and_cost_are_visible(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn contract_native_turn_diff_is_disclosed_without_a_fake_tool(cx: &mut TestAppContext) {
+fn contract_native_turn_diff_is_kept_without_a_fake_tool(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("native-turn-diff-ui", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1100.), px(900.)));
     fake.streams.borrow()[0].send(SessionEvent::TurnDiff{turn_id:"native-turn".into(),diff:"diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old-native\n+new-native\n".into()}).unwrap();
     tick(cx);
-    let show = view
-        .read_with(cx, |view, _| {
-            view.panes[0].tool_bounds(pane::DisclosureId::TurnDiff("native-turn".into()))
-        })
-        .expect("aggregate changes have their own shared disclosure");
-    cx.simulate_click(show.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
     view.read_with(cx, |v, _| {
         let thread = v.panes[0].thread().unwrap();
-        let runs = v.selection.registered(thread);
-        assert!(
-            runs.iter()
-                .any(|(_, _, _, text)| text.contains("+new-native")),
-            "native diff must be visible and copyable"
+        let open = v.cockpit.thread(thread).unwrap();
+        // The transcript keeps the turn's change set and draws no summary
+        // row for it.
+        assert_eq!(
+            open.transcript()
+                .turn_diff()
+                .map(|diff| diff.turn_id.as_str()),
+            Some("native-turn")
         );
         assert!(
-            !v.cockpit
-                .thread(thread)
-                .unwrap()
+            !open
                 .transcript()
                 .blocks()
                 .iter()
@@ -305,10 +317,14 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     view.read_with(cx, |view, _| {
         assert!(view.mode_picker.is_some(), "the menu survives a redraw");
     });
-    // Anchored BottomLeft, the menu hangs above the chip; its one item sits
-    // just above the chip's top edge.
-    let above = gpui::point(chip.origin.x + px(30.), chip.origin.y - px(18.));
-    cx.simulate_click(above, gpui::Modifiers::none());
+    // Anchored BottomLeft, the menu rests above the bar, clear of the
+    // chip; its one item is the pick.
+    let item = cx
+        .debug_bounds("choice-row-0")
+        .expect("the mode menu's item is drawn");
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    assert!(item.bottom() <= bar.top(), "{item:?} over {bar:?}");
+    cx.simulate_click(item.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(
         fake.controls
@@ -325,7 +341,6 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
 fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
     use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
     let (core, fake) = cockpit("native-background-chips", 1);
-    let thread = core.threads()[0];
     *fake.native_controls.borrow_mut() = true;
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1100.), px(800.)));
@@ -369,13 +384,14 @@ fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
         chip.center().x > editor.center().x,
         "chips hang at the right edge of the prompt box, not the left"
     );
-    // Send closes the prompt row on the right, beside the editor.
-    let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
+    // Terminal-native (WP-D): the shelf ends where the band's text does,
+    // `COMPOSER_PAD_R` in from its right edge.
+    let band = cx.debug_bounds("composer-block").unwrap();
     assert!(
-        (shelf.right() - send.right()).abs() <= px(2.),
-        "the shelf's right edge is the prompt box's right edge: shelf {:?} vs send {:?}",
+        (shelf.right() - (band.right() - px(crate::theme::COMPOSER_PAD_R))).abs() <= px(2.),
+        "the shelf's right edge is the band's text edge: shelf {:?} vs band {:?}",
         shelf.right(),
-        send.right()
+        band.right()
     );
     let stop = cx.debug_bounds("background-chip-stop-0").unwrap();
     cx.simulate_click(stop.center(), gpui::Modifiers::none());

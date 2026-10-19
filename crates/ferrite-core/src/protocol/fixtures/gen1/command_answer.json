@@ -1,0 +1,1 @@
+{"type":"command","id":8,"op":"answer","thread":4,"handle":{"generation":3,"serial":1,"request_id":"perm_01"},"answer":{"kind":"allow","input":{"file_path":"ferrite-perm.txt"}}}

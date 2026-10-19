@@ -687,7 +687,9 @@ impl Router {
             // The metadata step. A server that hydrated anyway (an older
             // CLI, or a capture of one) has already said everything.
             let thread = frame["result"]["thread"].clone();
-            let hydrated = thread["turns"].as_array().is_some_and(|turns| !turns.is_empty());
+            let hydrated = thread["turns"]
+                .as_array()
+                .is_some_and(|turns| !turns.is_empty());
             if failed || hydrated {
                 self.read_result(read, &thread, failed, false, update);
                 return;
@@ -1796,7 +1798,9 @@ mod tests {
         let discovered = router.observe(spawn("main", "child"));
         assert_eq!(discovered.requests.len(), 1);
         assert_eq!(discovered.requests[0]["method"], "thread/read");
-        assert!(discovered.requests[0]["params"].get("includeTurns").is_none());
+        assert!(discovered.requests[0]["params"]
+            .get("includeTurns")
+            .is_none());
 
         let paged = router.observe(metadata(read_id(&router, "child"), "child", "main"));
         assert_eq!(paged.requests.len(), 1);
@@ -1843,10 +1847,7 @@ mod tests {
             router.children["child"].info.coverage,
             TranscriptCoverage::Complete
         );
-        assert_eq!(
-            router.children["child"].info.name.as_deref(),
-            Some("Plato")
-        );
+        assert_eq!(router.children["child"].info.name.as_deref(), Some("Plato"));
     }
 
     /// A read that outruns its page budget stops asking and stays Partial,
@@ -1900,8 +1901,10 @@ mod tests {
         let spawned = spawn("main", "child")["params"]["item"].clone();
         let done = router.observe(page(
             read_id(&router, "main"),
-            vec![json!({"id":"main-turn-2","status":"completed","itemsView":"full",
-                "items":[spawned]})],
+            vec![
+                json!({"id":"main-turn-2","status":"completed","itemsView":"full",
+                "items":[spawned]}),
+            ],
             None,
         ));
         assert!(router.children.contains_key("child"));

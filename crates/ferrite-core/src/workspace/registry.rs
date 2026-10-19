@@ -26,6 +26,12 @@ use super::GitError;
 #[serde(transparent)]
 pub struct ProjectId(u64);
 
+impl ProjectId {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// One registered project: a root the operator (or a Thread binding) named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
@@ -103,19 +109,44 @@ impl Registry {
     /// returned: silently treating protected, damaged, or newer data as an
     /// empty registry would let the next mutation overwrite it.
     pub fn open(dir: &Path) -> io::Result<Registry> {
-        let mut registry = Registry {
-            dir: dir.to_path_buf(),
-            projects: Vec::new(),
-            worktrees: BTreeMap::new(),
-            next_project: 1,
-        };
         let bytes = match fs::read(dir.join(FILE_NAME)) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(registry),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Registry::empty(dir))
+            }
             Err(error) => return Err(error),
         };
         let persisted = serde_json::from_slice::<PersistedRegistry>(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Registry::from_persisted(dir, persisted)
+    }
+
+    /// The registry as its file spells it: what a window's copy is built
+    /// from (ADR 0025).
+    pub fn to_wire(&self) -> serde_json::Value {
+        serde_json::to_value(self.persisted()).expect("the registry serializes")
+    }
+
+    /// A window's read-only copy of the Server's registry for the Store in
+    /// `dir`. It is never written: every change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path) -> io::Result<Registry> {
+        let persisted = serde_json::from_value::<PersistedRegistry>(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Registry::from_persisted(dir, persisted)
+    }
+
+    /// No projects: also a window's copy before the Server's lands.
+    pub(crate) fn empty(dir: &Path) -> Registry {
+        Registry {
+            dir: dir.to_path_buf(),
+            projects: Vec::new(),
+            worktrees: BTreeMap::new(),
+            next_project: 1,
+        }
+    }
+
+    fn from_persisted(dir: &Path, persisted: PersistedRegistry) -> io::Result<Registry> {
+        let mut registry = Registry::empty(dir);
         if !(1..=SCHEMA_VERSION).contains(&persisted.schema) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -210,7 +241,7 @@ impl Registry {
     pub fn register_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
         let mut resolved = Vec::new();
         for root in roots {
-            let root = fs::canonicalize(root)?;
+            let root = canonical_root(root)?;
             if !resolved.contains(&root) {
                 resolved.push(root);
             }
@@ -218,7 +249,7 @@ impl Registry {
         let Some(primary) = resolved.first().cloned() else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "a Project needs at least one directory",
+                "a project needs at least one directory",
             ));
         };
         let owners: BTreeSet<_> = self
@@ -234,7 +265,7 @@ impl Registry {
         if owners.len() > 1 {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "the selected directories belong to different Projects",
+                "the selected directories belong to different projects",
             ));
         }
         if let Some(project) = owners.first().copied() {
@@ -297,13 +328,24 @@ impl Registry {
         self.projects.iter().find(|project| project.id == id)
     }
 
+    /// The Project with a directory holding `path` (canonical), the nearest
+    /// one where directories nest.
+    pub fn containing(&self, path: &Path) -> Option<ProjectId> {
+        self.projects
+            .iter()
+            .flat_map(|project| project.directories().map(move |root| (project.id, root)))
+            .filter(|(_, root)| path.starts_with(root))
+            .max_by_key(|(_, root)| root.components().count())
+            .map(|(id, _)| id)
+    }
+
     /// Add roots to one Project atomically. Paths are canonicalized and no
     /// directory may belong to two Projects; repeats already on this Project
     /// are harmless.
     pub fn add_directories(&mut self, id: ProjectId, roots: &[PathBuf]) -> io::Result<()> {
         let roots = roots
             .iter()
-            .map(fs::canonicalize)
+            .map(|root| canonical_root(root))
             .collect::<io::Result<Vec<_>>>()?;
         let mut next = self.clone();
         for root in roots {
@@ -317,7 +359,7 @@ impl Registry {
                 }
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
-                    format!("{} already belongs to another Project", root.display()),
+                    format!("{} already belongs to another project", root.display()),
                 ));
             }
             let project = next.project_mut(id)?;
@@ -337,7 +379,7 @@ impl Registry {
         index: usize,
         root: &Path,
     ) -> io::Result<()> {
-        let root = fs::canonicalize(root)?;
+        let root = canonical_root(root)?;
         let current = self
             .project(id)
             .and_then(|project| project.directories().nth(index))
@@ -354,7 +396,7 @@ impl Registry {
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                format!("{} already belongs to a Project", root.display()),
+                format!("{} already belongs to a project", root.display()),
             ));
         }
         let mut next = self.clone();
@@ -592,7 +634,14 @@ impl Registry {
     /// file whole — the store's own rewrite discipline.
     fn persist(&self) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
-        let persisted = PersistedRegistry {
+        crate::store::replace_file(
+            &self.dir.join(FILE_NAME),
+            &serde_json::to_vec(&self.persisted()).map_err(io::Error::other)?,
+        )
+    }
+
+    fn persisted(&self) -> PersistedRegistry {
+        PersistedRegistry {
             schema: SCHEMA_VERSION,
             next_project: self.next_project,
             projects: self
@@ -617,14 +666,7 @@ impl Registry {
                     path: entry.path.clone(),
                 })
                 .collect(),
-        };
-        let path = self.dir.join(FILE_NAME);
-        let tmp = path.with_extension("json.tmp");
-        fs::write(
-            &tmp,
-            serde_json::to_vec(&persisted).map_err(io::Error::other)?,
-        )?;
-        fs::rename(&tmp, &path)
+        }
     }
 }
 
@@ -659,6 +701,13 @@ pub fn adoption_check(repo: &Path, path: &Path) -> Result<(), GitError> {
             repo.display()
         ),
     })
+}
+
+/// A directory the operator named, as the registry keeps it: `~` spelled
+/// out for this computer — a window on a machine sends the path as typed
+/// (ADR 0026) — then canonicalized.
+fn canonical_root(root: &Path) -> io::Result<PathBuf> {
+    fs::canonicalize(super::expand_home(root))
 }
 
 /// A root's leaf name, for selector rows.

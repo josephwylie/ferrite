@@ -212,9 +212,8 @@ pub fn selected_values(question: &Question, answer: &Answer) -> Result<Vec<Strin
 
 /// One line for a cell too small to show the questions: the count and the
 /// headers ("2 questions · Approach, Library"). A question without a header
-/// is named by the start of its text.
+/// is named by its text, whole: the row that shows it cuts by width.
 pub fn summary(questions: &[Question]) -> String {
-    const HEADLESS_CHARS: usize = 24;
     let noun = if questions.len() == 1 {
         "question"
     } else {
@@ -224,23 +223,13 @@ pub fn summary(questions: &[Question]) -> String {
         .iter()
         .map(|question| {
             if question.header.is_empty() {
-                truncate(&question.question, HEADLESS_CHARS)
+                crate::progress::one_line(&question.question, crate::progress::ROW_CHARS)
             } else {
                 question.header.clone()
             }
         })
         .collect();
     format!("{} {noun} · {}", questions.len(), names.join(", "))
-}
-
-fn truncate(text: &str, chars: usize) -> String {
-    let mut iter = text.chars();
-    let cut: String = iter.by_ref().take(chars).collect();
-    if iter.next().is_some() {
-        format!("{}…", cut.trim_end())
-    } else {
-        cut
-    }
 }
 
 #[cfg(test)]
@@ -433,7 +422,7 @@ mod tests {
         let questions = parse(&input).unwrap();
         assert_eq!(
             summary(&questions),
-            "1 question · Should the cache be inva…"
+            "1 question · Should the cache be invalidated on every write or only on schema change?"
         );
     }
 }

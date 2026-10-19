@@ -1,0 +1,26 @@
+a Rgb(205, 214, 244)
+b Rgb(126, 131, 155)
+c Rgb(249, 226, 175)
+d Rgb(166, 173, 200)
+e Rgb(137, 180, 250) on Rgb(49, 50, 68)
+f Rgb(249, 226, 175) on Rgb(49, 50, 68)
+g Rgb(205, 214, 244) on Rgb(49, 50, 68)
+h Rgb(126, 131, 155) on Rgb(49, 50, 68)
+i Rgb(166, 173, 200) on Rgb(49, 50, 68)
+--
+aaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbb
+acabbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaddddddddaaaaaaaaaaaaaaaaaaaabb
+efghhggggggggggggggggggggggggggggggggggg
+egggggggggiiiiiiiiiiiiiiiiiiiiiiiiiiiiig
+egggggggggiiiiiiiiiiiiiiiiiiiiiiiiiigiii
+egggggggggffffffffffggfffgffffffffgggghh
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+abbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+abaaaaaaaaaaabbbbbbbbbbbbbbbbbbbaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaabbbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aadddddbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaa

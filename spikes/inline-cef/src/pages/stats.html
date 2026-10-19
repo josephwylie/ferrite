@@ -1,0 +1,310 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--ferrite-bg);color:var(--ferrite-fg);font:var(--ferrite-font-size)/var(--ferrite-line) var(--ferrite-font-mono);overflow:hidden;color-scheme:var(--ferrite-scheme);-webkit-font-smoothing:antialiased;user-select:none;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+#app{position:relative;padding:0 0 12px}
+.bar{display:flex;align-items:center;gap:16px;height:30px;padding:0 12px;border-bottom:1px solid var(--ferrite-border);background:var(--ferrite-band)}
+.title{color:var(--ferrite-strong);font-weight:500;white-space:nowrap}
+.title b{color:var(--ferrite-accent);font-weight:600;margin-right:8px}
+.sub{color:var(--ferrite-muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tabs{display:flex;height:100%}
+.tab{display:flex;align-items:center;padding:0 12px;color:var(--ferrite-muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--ferrite-fg);background:var(--ferrite-band2)}
+.tab.on{color:var(--ferrite-strong);border-bottom-color:var(--ferrite-accent)}
+
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:12px 12px 0}
+.kpi{position:relative;border:1px solid var(--ferrite-border);background:var(--ferrite-band);padding:8px 10px 6px;min-height:84px;overflow:hidden}
+.kpi .lb{color:var(--ferrite-muted);white-space:nowrap}
+.kpi .v{color:var(--ferrite-strong);font-size:20px;line-height:28px;font-weight:500;letter-spacing:-.01em}
+.kpi .v small{font-size:12px;color:var(--ferrite-muted);font-weight:400;margin-left:2px}
+.kpi .d{font-size:11px;white-space:nowrap;color:var(--ferrite-muted)}
+.kpi .d b{font-weight:500}
+.kpi .d .up-bad,.kpi .d .down-bad{color:var(--ferrite-danger)}
+.kpi .d .up-good,.kpi .d .down-good{color:var(--ferrite-ok)}
+.kpi svg{position:absolute;right:10px;bottom:10px}
+
+.panel{border:1px solid var(--ferrite-border);margin:10px 12px 0;position:relative}
+.ph{white-space:nowrap;display:flex;align-items:center;gap:14px;height:28px;padding:0 10px;border-bottom:1px solid var(--ferrite-border);color:var(--ferrite-muted)}
+.ph .t{color:var(--ferrite-strong)}
+.ph .r{margin-left:auto;display:flex;gap:14px;align-items:center}
+.key{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.key i{display:inline-block;width:10px;height:10px}
+.key i.line{height:2px;width:14px}
+.key i.dash{height:0;width:14px;border-top:2px dashed var(--ferrite-muted)}
+.row2{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:10px;margin:10px 12px 0}
+.row2 .panel{margin:0}
+svg text{font:11px var(--ferrite-font-mono);fill:var(--ferrite-faint)}
+svg .gl{stroke:var(--ferrite-grid);stroke-width:1}
+svg .axis{stroke:var(--ferrite-border2);stroke-width:1}
+
+#tip{position:absolute;pointer-events:none;z-index:10;min-width:190px;padding:6px 10px;background:var(--ferrite-float);border:1px solid var(--ferrite-border2);box-shadow:0 4px 14px var(--ferrite-shadow);display:none}
+#tip.on{display:block}
+#tip .h{color:var(--ferrite-strong);font-weight:500;margin-bottom:2px}
+#tip .r{display:flex;align-items:center;gap:8px;color:var(--ferrite-muted)}
+#tip .r i{display:inline-block;width:8px;height:8px}
+#tip .r b{margin-left:auto;padding-left:16px;color:var(--ferrite-fg);font-weight:400}
+#tip .r.tot{border-top:1px solid var(--ferrite-border);margin-top:3px;padding-top:2px}
+#tip .r.tot b{color:var(--ferrite-strong)}
+
+table{width:100%;border-collapse:collapse}
+th{font-weight:400;text-align:right;color:var(--ferrite-muted);height:26px;padding:0 10px;border-bottom:1px solid var(--ferrite-border);cursor:pointer;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th:hover{color:var(--ferrite-strong);background:var(--ferrite-band)}
+th.on{color:var(--ferrite-strong)}
+th .ar{display:inline-block;width:10px;color:var(--ferrite-accent)}
+td{text-align:right;height:25px;padding:0 10px;border-bottom:1px solid var(--ferrite-grid);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--ferrite-band)}
+td.p{color:var(--ferrite-strong)}
+td .share{display:inline-block;width:60px;height:6px;background:var(--ferrite-band2);vertical-align:1px;margin-left:8px;position:relative}
+td .share i{position:absolute;left:0;top:0;bottom:0;background:var(--ferrite-accent)}
+td.up{color:var(--ferrite-danger)}
+td.down{color:var(--ferrite-ok)}
+td.muted{color:var(--ferrite-muted)}
+</style></head>
+<body><div id="app">
+  <div class="bar">
+    <span class="title"><b>&#x276F;</b>usage</span>
+    <span class="sub">tokens &amp; cost across all threads · fake data</span>
+    <span class="tabs" id="range"><span class="tab" data-d="7">7d</span><span class="tab on" data-d="30">30d</span><span class="tab" data-d="90">90d</span></span>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="panel">
+    <div class="ph"><span class="t">Daily cost</span><span id="lineSub"></span>
+      <span class="r"><span class="key"><i class="line" style="background:var(--ferrite-accent)"></i>cost / day</span><span class="key"><i class="dash"></i>7-day average</span></span></div>
+    <svg id="line" height="200" style="display:block;width:100%"></svg>
+  </div>
+  <div class="row2">
+    <div class="panel">
+      <div class="ph"><span class="t">By model</span><span id="barsSub">cost / day</span>
+        <span class="r" id="modelKey"></span></div>
+      <svg id="bars" height="226" style="display:block;width:100%"></svg>
+    </div>
+    <div class="panel">
+      <div class="ph"><span class="t">By project</span><span>click a header to sort</span></div>
+      <table id="tbl"><thead><tr></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+  <div id="tip"></div>
+</div>
+<script>
+"use strict";
+// ---- fake but plausible data: 180 days (90 shown + 90 for "previous period" deltas)
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const MODELS = [
+  { id: "opus-5.5", c: "var(--ferrite-chart-1)", in: 15, out: 75, share: 0.30 },
+  { id: "sonnet-5", c: "var(--ferrite-chart-2)", in: 3, out: 15, share: 0.48 },
+  { id: "haiku-4.5", c: "var(--ferrite-chart-3)", in: 1, out: 5, share: 0.40 },
+];
+const END = new Date(Date.UTC(2026, 9, 7));
+const DAYS = [];
+for (let i = 179; i >= 0; i--) {
+  const date = new Date(END - i * 864e5);
+  const dow = date.getUTCDay(), weekend = dow === 0 || dow === 6;
+  const trend = 1 + (179 - i) / 260;                       // usage grows
+  const spike = (i === 12 || i === 13) ? 1.9 : 1;          // a big refactor
+  const base = (weekend ? 0.35 : 1) * trend * spike * (0.75 + rnd() * 0.5);
+  const day = { date, models: {}, cost: 0, tokens: 0, cached: 0, turns: 0 };
+  for (const m of MODELS) {
+    const tokIn = base * m.share * 3.2e6 * (0.8 + rnd() * 0.4);
+    const tokOut = tokIn * 0.06;
+    const cost = (tokIn * m.in * 0.42 + tokOut * m.out) / 1e6;  // ~58% of input tokens are cache reads
+    day.models[m.id] = cost; day.cost += cost; day.tokens += tokIn + tokOut;
+  }
+  day.cached = 0.52 + rnd() * 0.1 + (179 - i) / 1500;
+  day.turns = Math.round(base * 160 * (0.85 + rnd() * 0.3));
+  DAYS.push(day);
+}
+const PROJECTS = [
+  ["ferrite", 0.41, 0.18], ["workmate", 0.22, -0.07], ["swarmdeck", 0.14, 0.42],
+  ["flavorlab-site", 0.09, -0.21], ["inline-cef spike", 0.07, 1.6], ["dotfiles", 0.04, 0.05], ["ops-scripts", 0.03, -0.38],
+];
+
+const $ = (id) => document.getElementById(id);
+const tip = $("tip"), app = $("app");
+const NS = "http://www.w3.org/2000/svg";
+let range = 30;
+const usd = (v, d = 2) => "$" + v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const big = (v) => v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "k" : String(Math.round(v));
+const dfmt = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+
+function windowed() { return { cur: DAYS.slice(-range), prev: DAYS.slice(-2 * range, -range) }; }
+
+// ---- KPI tiles
+function kpis() {
+  const { cur, prev } = windowed();
+  const tiles = [
+    { lb: "Total cost", v: usd(sum(cur, (d) => d.cost), 0), a: sum(cur, (d) => d.cost), b: sum(prev, (d) => d.cost), good: "down", s: cur.map((d) => d.cost) },
+    { lb: "Tokens", v: big(sum(cur, (d) => d.tokens)), a: sum(cur, (d) => d.tokens), b: sum(prev, (d) => d.tokens), good: "none", s: cur.map((d) => d.tokens) },
+    { lb: "Cache hit rate", v: (100 * sum(cur, (d) => d.cached) / cur.length).toFixed(1) + "<small>%</small>", a: sum(cur, (d) => d.cached), b: sum(prev, (d) => d.cached), good: "up", s: cur.map((d) => d.cached) },
+    { lb: "Cost per turn", v: usd(sum(cur, (d) => d.cost) / sum(cur, (d) => d.turns), 3), a: sum(cur, (d) => d.cost) / sum(cur, (d) => d.turns), b: sum(prev, (d) => d.cost) / sum(prev, (d) => d.turns), good: "down", s: cur.map((d) => d.cost / Math.max(1, d.turns)) },
+  ];
+  const k = $("kpis"); k.textContent = "";
+  for (const t of tiles) {
+    const pct = (100 * (t.a - t.b)) / t.b, up = pct >= 0;
+    const cls = t.good === "none" ? "" : (up ? "up" : "down") + "-" + ((up && t.good === "up") || (!up && t.good === "down") ? "good" : "bad");
+    const div = document.createElement("div");
+    div.className = "kpi";
+    div.innerHTML = `<div class="lb">${t.lb}</div><div class="v">${t.v}</div><div class="d"><b class="${cls}">${up ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%</b> vs prev ${range}d</div>`;
+    const w = 92, h = 30, svg = el("svg", { width: w, height: h });
+    const lo = Math.min(...t.s), hi = Math.max(...t.s);
+    const pts = t.s.map((v, i) => [(i / (t.s.length - 1)) * (w - 4) + 2, h - 3 - ((v - lo) / (hi - lo || 1)) * (h - 6)]);
+    el("polyline", { points: pts.map((p) => p.join(",")).join(" "), fill: "none", stroke: "var(--ferrite-muted)", "stroke-width": 1.5, "stroke-linejoin": "round" }, svg);
+    const last = pts[pts.length - 1];
+    el("circle", { cx: last[0], cy: last[1], r: 2.5, fill: "var(--ferrite-accent)" }, svg);
+    div.appendChild(svg);
+    k.appendChild(div);
+  }
+}
+
+// ---- line chart with crosshair
+function line() {
+  const svg = $("line"); svg.textContent = "";
+  const { cur } = windowed();
+  const W = svg.clientWidth, H = 200, L = 52, R = 14, T = 14, B = 26;
+  const max = niceMax(Math.max(...cur.map((d) => d.cost)) * 1.05);
+  const x = (i) => L + (i / (cur.length - 1)) * (W - L - R), y = (v) => T + (1 - v / max) * (H - T - B);
+  for (let i = 0; i <= 4; i++) {
+    const v = (max * i) / 4;
+    el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: i ? "gl" : "axis" }, svg);
+    el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, svg).textContent = usd(v, 0);
+  }
+  const every = range <= 7 ? 1 : range <= 30 ? 5 : 14;
+  cur.forEach((d, i) => { if ((cur.length - 1 - i) % every === 0) el("text", { x: x(i), y: H - 8, "text-anchor": i === cur.length - 1 ? "end" : "middle" }, svg).textContent = dfmt(d.date); });
+  const avg = cur.map((_, i) => { const s = DAYS.slice(DAYS.length - range + i - 6, DAYS.length - range + i + 1); return sum(s, (d) => d.cost) / s.length; });
+  const path = (vals) => vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  el("path", { d: path(cur.map((d) => d.cost)) + `L${x(cur.length - 1)},${y(0)}L${x(0)},${y(0)}Z`, fill: "color-mix(in oklab, var(--ferrite-accent) 14%, transparent)" }, svg);
+  el("path", { d: path(avg), fill: "none", stroke: "var(--ferrite-muted)", "stroke-width": 1.5, "stroke-dasharray": "4 3" }, svg);
+  el("path", { d: path(cur.map((d) => d.cost)), fill: "none", stroke: "var(--ferrite-accent)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+  // annotate the peak
+  const peak = cur.reduce((b, d, i) => (d.cost > cur[b].cost ? i : b), 0);
+  el("circle", { cx: x(peak), cy: y(cur[peak].cost), r: 3, fill: "var(--ferrite-bg)", stroke: "var(--ferrite-accent)", "stroke-width": 1.5 }, svg);
+  const lbl = el("text", { x: x(peak) + (x(peak) > W - 160 ? -8 : 8), y: y(cur[peak].cost) + 4, "text-anchor": x(peak) > W - 160 ? "end" : "start", style: "fill:var(--ferrite-fg)" }, svg);
+  lbl.textContent = `peak ${usd(cur[peak].cost, 0)} · ${dfmt(cur[peak].date)}`;
+  $("lineSub").textContent = `avg ${usd(sum(cur, (d) => d.cost) / cur.length, 0)} / day`;
+  // crosshair
+  const cross = el("line", { y1: T, y2: H - B, stroke: "var(--ferrite-faint)", "stroke-width": 1, visibility: "hidden" }, svg);
+  const dot = el("circle", { r: 4, fill: "var(--ferrite-accent)", stroke: "var(--ferrite-bg)", "stroke-width": 2, visibility: "hidden" }, svg);
+  const hit = el("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent", style: "cursor:crosshair" }, svg);
+  hit.onmousemove = (e) => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(cur.length - 1, Math.round(((e.clientX - r.left - L) / (W - L - R)) * (cur.length - 1))));
+    const d = cur[i];
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(d.cost)); dot.setAttribute("visibility", "visible");
+    tip.innerHTML = `<div class="h">${d.date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}</div>` +
+      MODELS.map((m) => `<div class="r"><i style="background:${m.c}"></i>${m.id}<b>${usd(d.models[m.id])}</b></div>`).join("") +
+      `<div class="r tot">total<b>${usd(d.cost)}</b></div><div class="r">7-day avg<b>${usd(avg[i])}</b></div><div class="r">turns<b>${d.turns}</b></div>`;
+    place(r.left + x(i), r.top + y(d.cost));
+  };
+  hit.onmouseleave = () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); hideTip(); };
+}
+
+// ---- stacked weekly bars by model
+function bars() {
+  const svg = $("bars"); svg.textContent = "";
+  const shown = DAYS.slice(-range);
+  const weeks = [];
+  // A bar per day up to 30 days, a bar per week (ending today) beyond.
+  const per = range > 30 ? 7 : 1;
+  $("barsSub").textContent = per === 7 ? "cost / week" : "cost / day";
+  for (let i = shown.length % per; i < shown.length; i += per) {
+    const ds = shown.slice(i, i + per);
+    const w = { from: ds[0].date, to: ds[ds.length - 1].date, days: ds.length, m: {} };
+    for (const m of MODELS) w.m[m.id] = sum(ds, (d) => d.models[m.id]);
+    w.total = sum(MODELS, (m) => w.m[m.id]);
+    weeks.push(w);
+  }
+  const W = svg.clientWidth, H = 226, L = 52, R = 12, T = 14, B = 26;
+  const max = niceMax(Math.max(...weeks.map((w) => w.total)) * 1.05);
+  const y = (v) => T + (1 - v / max) * (H - T - B);
+  for (let i = 0; i <= 4; i++) {
+    const v = (max * i) / 4;
+    el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: i ? "gl" : "axis" }, svg);
+    el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, svg).textContent = usd(v, 0);
+  }
+  const slot = (W - L - R) / weeks.length, bw = Math.min(46, Math.max(4, slot - 4));
+  weeks.forEach((w, i) => {
+    const cx = L + slot * (i + 0.5);
+    let acc = 0;
+    MODELS.forEach((m, j) => {
+      const v = w.m[m.id], y0 = y(acc), y1 = y(acc + v);
+      acc += v;
+      const top = j === MODELS.length - 1;
+      const h = Math.max(0, y0 - y1 - (j ? 2 : 0));      // 2px surface gap between segments
+      const r = el("rect", { x: cx - bw / 2, y: y1, width: bw, height: h, fill: m.c, rx: top ? 2 : 0, class: "seg" }, svg);
+      r.style.transition = "opacity .08s";
+      r.onmousemove = (e) => {
+        svg.querySelectorAll(".seg").forEach((s) => s.style.opacity = s === r ? 1 : 0.45);
+        tip.innerHTML = `<div class="h">${per === 1 ? w.from.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }) : dfmt(w.from) + " – " + dfmt(w.to)}</div>` +
+          MODELS.slice().reverse().map((mm) => `<div class="r" style="${mm === m ? "color:var(--ferrite-strong)" : ""}"><i style="background:${mm.c}"></i>${mm.id}<b>${usd(w.m[mm.id], 0)} · ${Math.round((100 * w.m[mm.id]) / w.total)}%</b></div>`).join("") +
+          `<div class="r tot">${per === 1 ? "day" : "week"}<b>${usd(w.total, 0)}</b></div>`;
+        place(e.clientX, e.clientY);
+      };
+      r.onmouseleave = () => { svg.querySelectorAll(".seg").forEach((s) => s.style.opacity = 1); hideTip(); };
+    });
+    const labelEvery = weeks.length <= 7 ? 1 : weeks.length <= 14 ? 2 : 7;
+    if ((weeks.length - 1 - i) % labelEvery === 0)
+      el("text", { x: cx, y: H - 8, "text-anchor": i === weeks.length - 1 && slot < 40 ? "end" : "middle" }, svg).textContent = dfmt(w.from);
+  });
+  $("modelKey").innerHTML = MODELS.map((m) => `<span class="key"><i style="background:${m.c}"></i>${m.id}</span>`).join("");
+}
+
+// ---- sortable table
+const COLS = [
+  { k: "name", t: "project" }, { k: "turns", t: "turns" }, { k: "tokens", t: "tokens" }, { k: "cost", t: "cost" }, { k: "delta", t: "Δ prev" },
+];
+let sortKey = "cost", sortDir = -1;
+function table() {
+  const { cur } = windowed();
+  const total = sum(cur, (d) => d.cost), turns = sum(cur, (d) => d.turns), tokens = sum(cur, (d) => d.tokens);
+  const rows = PROJECTS.map(([name, share, delta], i) => {
+    const wobble = 1 + ((i * 37) % 11 - 5) / 60;
+    return { name, share, delta, cost: total * share, turns: Math.round(turns * share * wobble), tokens: tokens * share / wobble };
+  });
+  rows.sort((a, b) => (typeof a[sortKey] === "string" ? a[sortKey].localeCompare(b[sortKey]) : a[sortKey] - b[sortKey]) * sortDir);
+  const head = $("tbl").tHead.rows[0];
+  head.innerHTML = COLS.map((c) => `<th data-k="${c.k}" class="${c.k === sortKey ? "on" : ""}">${c.k === sortKey && c.k !== "name" ? `<span class="ar">${sortDir < 0 ? "▼" : "▲"}</span>` : ""}${c.t}${c.k === sortKey && c.k === "name" ? ` <span class="ar">${sortDir < 0 ? "▼" : "▲"}</span>` : ""}</th>`).join("");
+  head.querySelectorAll("th").forEach((th) => th.onclick = () => {
+    const k = th.dataset.k;
+    if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === "name" ? 1 : -1; }
+    table();
+  });
+  const maxShare = Math.max(...PROJECTS.map((p) => p[1]));
+  $("tbl").tBodies[0].innerHTML = rows.map((r) => `<tr>
+    <td class="p">${r.name}</td>
+    <td class="muted">${r.turns.toLocaleString("en-US")}</td>
+    <td class="muted">${big(r.tokens)}</td>
+    <td>${usd(r.cost, 0)}<span class="share"><i style="width:${(100 * r.share) / maxShare}%"></i></span></td>
+    <td class="${r.delta >= 0 ? "up" : "down"}">${r.delta >= 0 ? "▲" : "▼"} ${Math.abs(100 * r.delta).toFixed(0)}%</td></tr>`).join("");
+}
+
+function place(cx, cy) {
+  const box = app.getBoundingClientRect();
+  tip.classList.add("on");
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = cx - box.left + 14, y = cy - box.top + 14;
+  if (x + tw > box.width - 6) x = cx - box.left - tw - 14;
+  if (y + th > box.height - 6) y = cy - box.top - th - 14;
+  tip.style.left = Math.max(6, x) + "px"; tip.style.top = Math.max(6, y) + "px";
+}
+function hideTip() { tip.classList.remove("on"); }
+
+function draw() { kpis(); line(); bars(); table(); }
+document.querySelectorAll("#range .tab").forEach((t) => t.onclick = () => {
+  range = +t.dataset.d;
+  document.querySelectorAll("#range .tab").forEach((x) => x.classList.toggle("on", x === t));
+  hideTip(); draw();
+});
+let lastWidth = innerWidth;
+addEventListener("resize", () => { if (innerWidth !== lastWidth) { lastWidth = innerWidth; draw(); } });
+document.addEventListener("mouseleave", hideTip);
+draw();
+</script></body></html>

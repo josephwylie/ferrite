@@ -9,7 +9,7 @@ use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use crate::{store::Provider, ModelInfo, SessionCommand};
 use serde_json::{json, Value};
 
@@ -70,6 +70,7 @@ fn probe<T: Send + 'static>(
     }
     let mut child = command
         .no_console_window()
+        .agent_environment()
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

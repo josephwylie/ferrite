@@ -1,34 +1,24 @@
-//! The same kit attachment cards in the draft and delivered prompt. This
-//! module owns presentation and image preview; callers only supply paths
-//! and, for a draft, a removal callback. The prompt codec owns persistence.
+//! The files a prompt carries, drawn the same way in the draft and in the
+//! delivered prompt: the prototype's `.att` chip (theme WP-D) — one row on
+//! `paint::BAND2`, a cell of padding each side, the image mark (or the file
+//! mark) and the name in `PATH_INK`. This module owns presentation and
+//! image preview; callers only supply paths and, for a draft, a removal
+//! callback. The prompt codec owns persistence. A draft's review comments
+//! (ADR 0021) ride the same shelf as one more chip.
 
-use std::{path::PathBuf, rc::Rc, time::Duration};
+use std::{path::PathBuf, rc::Rc};
 
-use gpui::base::motion::{animate_keyframes, Easing, Keyframe, Keyframes, Timing};
-use gpui::component::{
-    attachment::{
-        Attachment, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup,
-        AttachmentMedia, AttachmentTitle,
-    },
-    button::{Button, ButtonVariants},
-    group_box::{GroupBox, GroupBoxVariants},
-    Icon, IconName, Sizable, Theme,
-};
-use gpui::{prelude::*, px, App, Axis, ElementId, Global, IntoElement, Window};
+use gpui::{prelude::*, px, App, ElementId, IntoElement, Window};
 
 use crate::attachment_preview::Preview;
 
-// Keep the actual kit defaults before Ferrite makes its global borders
-// transparent. Restoring these tokens on the kit slots preserves the
-// documented attachment surface without changing the rest of the app.
-struct Appearance(Theme);
-impl Global for Appearance {}
-
-pub fn init(cx: &mut App) {
-    cx.set_global(Appearance(Theme::global(cx).clone()));
-}
+/// Nothing to install now: delivered files draw in the float grammar rather
+/// than on the kit's stock attachment cards, so the kit's own tokens are no
+/// longer captured. Kept for the theme's init order (`init_components`).
+pub fn init(_cx: &mut App) {}
 
 type Remove = Rc<dyn Fn(&PathBuf, &mut Window, &mut App)>;
+type DropReview = Rc<dyn Fn(&mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct Attachments {
@@ -36,7 +26,9 @@ pub struct Attachments {
     files: Vec<PathBuf>,
     preview: Preview,
     on_remove: Option<Remove>,
-    island: Option<usize>,
+    review: usize,
+    on_drop_review: Option<DropReview>,
+    island: bool,
 }
 
 impl Attachments {
@@ -46,13 +38,15 @@ impl Attachments {
             files,
             preview: preview.clone(),
             on_remove: None,
-            island: None,
+            review: 0,
+            on_drop_review: None,
+            island: false,
         }
     }
 
-    /// Compact pending attachments in a kit surface above the prompt.
-    pub fn in_island(mut self, generation: usize) -> Self {
-        self.island = Some(generation);
+    /// Pending attachments as chips on the shelf above the prompt.
+    pub fn in_island(mut self) -> Self {
+        self.island = true;
         self
     }
 
@@ -63,217 +57,250 @@ impl Attachments {
         self.on_remove = Some(Rc::new(callback));
         self
     }
-}
 
-/// The island's ground and radius — shared with the background shelf that
-/// docks beside it above the prompt, so the two read as one surface.
-pub fn island_surface(cx: &App) -> (gpui::Hsla, gpui::Pixels) {
-    let theme = Theme::global(cx);
-    (theme.muted, theme.radius_2xl())
-}
+    /// `comments` review comments wait with the files: one chip for all.
+    pub fn review(mut self, comments: usize) -> Self {
+        self.review = comments;
+        self
+    }
 
-impl RenderOnce for Attachments {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        // The kit retains playback by generation and honors reduced motion.
-        // Typing and image-loading repaints continue the same entrance.
-        let entrance = self.island.map(|generation| {
-            animate_keyframes(
-                ElementId::from(("attachment-island-enter", generation)),
-                &Keyframes::try_new([Keyframe::new(0., 0_f32), Keyframe::new(1., 1.)])
-                    .expect("two ordered entrance keyframes"),
-                Timing::new(Duration::from_millis(140)).ease(Easing::EaseOut),
-                window,
-                cx,
-            )
-            .value
-        });
-        let stock = &cx.global::<Appearance>().0;
-        let tokens = stock.semantic_tokens();
-        let composer_edge = gpui::rgba(crate::theme::COMPOSER_EDGE);
-        let cards = AttachmentGroup::new(self.id)
-            .when(self.island.is_some(), |group| {
-                group.w_auto().max_w_full().gap_1p5().py_0()
-            })
-            .font_family(stock.font_family.clone())
-            .children(self.files.into_iter().enumerate().map(|(index, path)| {
-                let island = self.island.is_some();
-                let name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let image = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str())
-                    });
-                let preview = path.clone();
-                let title = name.clone();
-                let button_preview = path.clone();
-                let button_title = name.clone();
-                let card_host = self.preview.clone();
-                let button_host = self.preview.clone();
-                let media = AttachmentMedia::new()
-                    .bg(tokens.colors.muted)
-                    .text_color(tokens.colors.foreground)
-                    .rounded(if self.island.is_some() {
-                        tokens.radius.sm
-                    } else {
-                        tokens.radius.md
-                    });
-                let card = Attachment::new()
-                    .id(("attachment", index))
-                    .when(self.island.is_some(), |attachment| {
-                        attachment.xsmall().min_w_0().w_32()
-                    })
-                    .bg(tokens.colors.background)
-                    .text_color(tokens.colors.foreground)
-                    .border_color(tokens.colors.border)
-                    .rounded(if self.island.is_some() {
-                        tokens.radius.xl
-                    } else {
-                        stock.radius_2xl()
-                    })
-                    .axis(if image && self.island.is_none() {
-                        Axis::Vertical
-                    } else {
-                        Axis::Horizontal
-                    })
-                    .media(if image {
-                        media.src(path.clone()).overlay(
-                            Button::new(("preview-attachment", index))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Maximize)
-                                .key_context("PromptAttachment")
-                                .accessibility_label(format!("Preview {name}"))
-                                .tooltip("Preview image")
-                                .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    button_host.open(
-                                        button_preview.clone(),
-                                        button_title.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                        )
-                    } else {
-                        media.child(Icon::new(IconName::File))
-                    })
-                    .content(
-                        AttachmentContent::new()
-                            .title(AttachmentTitle::new(name.clone()))
-                            .description(
-                                AttachmentDescription::new("Attached")
-                                    .text_color(tokens.colors.muted_foreground),
-                            ),
-                    )
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        if image {
-                            card_host.open(preview.clone(), title.clone(), window, cx);
-                        } else {
-                            crate::file_links::FileLink {
-                                path: preview.clone(),
-                                location: None,
-                            }
-                            .open(window, cx);
-                        }
-                    })
-                    .when_some(self.on_remove.clone(), |attachment, remove| {
-                        attachment.actions(
-                            AttachmentActions::new().child(
-                                Button::new(("remove-attachment", index))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Close)
-                                    .key_context("PromptAttachment")
-                                    .accessibility_label(format!("Remove {name}"))
-                                    .tooltip(format!("Remove {}", path.display()))
-                                    .on_click(move |_, window, cx| {
-                                        cx.stop_propagation();
-                                        remove(&path, window, cx);
-                                    }),
-                            ),
-                        )
-                    });
-                // The kit's own hover tints the card with `muted`, which is
-                // the island's ground here, so a hovered card dissolves into
-                // it. A ring outside the card is immune to that tint and
-                // answers for every card, clickable or not.
-                if island {
-                    gpui::div()
-                        .flex_none()
-                        .min_w_0()
-                        .rounded(tokens.radius.xl + px(1.))
-                        .border_1()
-                        .border_color(gpui::rgba(crate::theme::TRANSPARENT))
-                        .hover(|style| style.border_color(gpui::rgb(crate::theme::FILL_HOVER)))
-                        .child(card)
-                        .into_any_element()
-                } else {
-                    card.into_any_element()
-                }
-            }));
-        KitScale {
-            child: if let Some(entrance) = entrance {
-                let background = Theme::global(cx).muted;
-                let radius = Theme::global(cx).radius_2xl();
-                let surface = gpui::div()
-                    .bg(background)
-                    .rounded(radius)
-                    .border_1()
-                    .border_color(composer_edge)
-                    .p_1p5()
-                    .min_w_0()
-                    .style()
-                    .clone();
-                gpui::div()
-                    .flex()
-                    .justify_center()
-                    .min_w_0()
-                    .px(radius)
-                    .child(
-                        gpui::div()
-                            .debug_selector(|| "attachment-island-content".into())
-                            .min_w_0()
-                            .max_w_full()
-                            .relative()
-                            .top(px(8. * (1. - entrance)))
-                            .opacity(0.6 + 0.4 * entrance)
-                            .child(
-                                GroupBox::new()
-                                    .id("attachment-island")
-                                    .fill()
-                                    .w_auto()
-                                    .max_w_full()
-                                    .content_style(surface)
-                                    .child(cards),
-                            ),
-                    )
-                    .into_any_element()
-            } else {
-                cards.into_any_element()
-            },
-            rem_size: stock.font_size,
-        }
+    /// The review chip's ×: every gathered comment goes.
+    pub fn on_drop_review(mut self, callback: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_drop_review = Some(Rc::new(callback));
+        self
     }
 }
 
-/// The existing Attachment family, reduced to a single transcript-height row.
-/// The native Markdown flow reserves this size and wraps the card atomically.
+/// The files as `.att` chips, wrapping: one row on `paint::BAND2`, a cell of
+/// padding each side, a mark — an image's is a real button (a tab stop,
+/// Enter/Space) that opens the preview; any other file's the `FILE` mark —
+/// then the name in `PATH_INK` cut at `ATTACH_CHIP_MAX_W` (a file name is
+/// machine text), and, on a draft, a quiet `×` that removes it (a button
+/// too). The buttons sit in the `PromptAttachment` key context, so their
+/// Enter never sends. A click anywhere else on a chip opens the image
+/// preview or the file.
+fn chips(attachments: Attachments) -> gpui::AnyElement {
+    use crate::pointer::Pointer as _;
+    use crate::theme;
+    use gpui::{div, rgb, SharedString};
+    let Attachments {
+        id,
+        files,
+        preview,
+        on_remove,
+        review,
+        on_drop_review,
+        island,
+    } = attachments;
+    let chips = files.into_iter().enumerate().map(|(index, path)| {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let image = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str())
+            });
+        let mark = if image {
+            let host = preview.clone();
+            let open = path.clone();
+            let title = name.clone();
+            crate::components::button(("preview-attachment", index))
+                .tab_stop(true)
+                .p_0()
+                .size(px(theme::ATTACH_THUMB))
+                .rounded(px(theme::R_TIGHT))
+                .key_context("PromptAttachment")
+                .accessibility_label(format!("Preview {name}"))
+                .tooltip("Preview image")
+                .child(crate::icons::icon(
+                    crate::icons::IMAGE,
+                    theme::ATTACH_THUMB,
+                    theme::PATH_INK,
+                ))
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    host.open(open.clone(), title.clone(), window, cx);
+                })
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .size(px(theme::ATTACH_THUMB))
+                .child(crate::icons::icon(
+                    crate::icons::FILE,
+                    theme::ATTACH_THUMB,
+                    theme::PATH_INK,
+                ))
+                .into_any_element()
+        };
+        let host = preview.clone();
+        let open = path.clone();
+        let title = name.clone();
+        div()
+            .id(("attachment", index))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::CH))
+            .h(px(theme::ATTACH_CHIP_H))
+            .max_w(px(theme::ATTACH_CHIP_MAX_W))
+            .min_w_0()
+            .px(px(theme::CH))
+            .bg(theme::paint::BAND2)
+            .cursor_pointer()
+            .hover_carried(format!("attachment-{index}-{}", open.display()))
+            .font_family(theme::FONT_CODE)
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
+            .font_weight(theme::W_BODY)
+            .text_color(rgb(theme::PATH_INK))
+            .whitespace_nowrap()
+            .child(mark)
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(name.clone())),
+            )
+            .when_some(on_remove.clone(), |chip, remove| {
+                let removed = path.clone();
+                chip.child(
+                    crate::components::button(("remove-attachment", index))
+                        .tab_stop(true)
+                        .p_0()
+                        .flex_shrink_0()
+                        .h(px(theme::ATTACH_CHIP_H))
+                        .px(px(theme::SPACE_0_5))
+                        .rounded(px(theme::R_TIGHT))
+                        .key_context("PromptAttachment")
+                        .accessibility_label(format!("Remove {name}"))
+                        .tooltip(format!("Remove {}", path.display()))
+                        .child(div().text_color(rgb(theme::TEXT_MUTED)).child("\u{d7}"))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            remove(&removed, window, cx);
+                        }),
+                )
+            })
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                if image {
+                    host.open(open.clone(), title.clone(), window, cx);
+                } else {
+                    crate::file_links::FileLink {
+                        path: open.clone(),
+                        location: None,
+                    }
+                    .open(window, cx);
+                }
+            })
+    });
+    let review = (review > 0).then(|| review_chip(review, on_drop_review));
+    div()
+        .id(id)
+        .when(island, |shelf| {
+            shelf.debug_selector(|| "attachment-island-content".into())
+        })
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(theme::CH))
+        .min_w_0()
+        .max_w_full()
+        .children(chips)
+        .children(review)
+        .into_any_element()
+}
+
+/// The draft's review comments as one `.att` chip: the pencil, `N review
+/// comments` in `PATH_INK`, and a quiet `×` that drops them all.
+fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
+    use crate::theme;
+    use gpui::{div, rgb, SharedString};
+    let label = format!(
+        "{comments} review comment{}",
+        if comments == 1 { "" } else { "s" }
+    );
+    div()
+        .debug_selector(|| "review-attachment".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::CH))
+        .h(px(theme::ATTACH_CHIP_H))
+        .px(px(theme::CH))
+        .bg(theme::paint::BAND2)
+        .font_family(theme::FONT_CODE)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .font_weight(theme::W_BODY)
+        .text_color(rgb(theme::PATH_INK))
+        .whitespace_nowrap()
+        .child(crate::icons::icon(
+            crate::icons::PENCIL,
+            theme::ATTACH_THUMB,
+            theme::PATH_INK,
+        ))
+        .child(SharedString::from(label))
+        .when_some(on_drop, |chip, on_drop| {
+            chip.child(
+                crate::components::button("drop-review-comments")
+                    .debug_selector(|| "drop-review-comments".into())
+                    .tab_stop(true)
+                    .p_0()
+                    .flex_shrink_0()
+                    .h(px(theme::ATTACH_CHIP_H))
+                    .px(px(theme::SPACE_0_5))
+                    .rounded(px(theme::R_TIGHT))
+                    .key_context("PromptAttachment")
+                    .accessibility_label("Remove the review comments")
+                    .tooltip("Remove the review comments")
+                    .child(div().text_color(rgb(theme::TEXT_MUTED)).child("\u{d7}"))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        on_drop(window, cx);
+                    }),
+            )
+        })
+}
+
+impl RenderOnce for Attachments {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        // The draft's shelf and the delivered prompt's files are one recipe;
+        // only the draft can remove.
+        chips(self)
+    }
+}
+
+/// A file link in prose (the prototype's `.path`): the path as the prose
+/// wrote it in `PATH_INK` with no chip, a `:line` suffix in `TEXT_MUTED`. It
+/// is a path target (`file_links::wire_inline`): a `PATH_INK` underline only
+/// under the pointer, the hover card while it is there (hosted by `scope`,
+/// the transcript it sits in), ⌘-click to a reader beside the Thread; a
+/// plain click opens it in the Pane's preview. The native Markdown flow
+/// reserves the returned size and wraps the link atomically, so the width is
+/// measured in the face and size it is drawn in (the prose's own): the path
+/// and the location each shaped whole.
 pub fn inline_file(
     file: crate::file_links::FileLink,
     label: &str,
     preview: Option<&Preview>,
+    scope: Option<gpui::SharedString>,
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
-    let stock = &cx.global::<Appearance>().0;
-    let tokens = stock.semantic_tokens();
-    let name = file
+    use crate::theme;
+    use gpui::component::button::ButtonVariants as _;
+    use gpui::rgb;
+
+    let base = file
         .path
         .file_name()
         .unwrap_or_default()
@@ -284,190 +311,201 @@ pub fn inline_file(
         .extension()
         .unwrap_or_default()
         .to_string_lossy()
-        .to_ascii_uppercase();
-    let kind = if extension.is_empty() || extension.len() > 8 {
-        "FILE".to_string()
-    } else {
-        extension
-    };
+        .to_ascii_lowercase();
     let location = file
         .location
         .as_ref()
         .map(|line| format!(":{line}"))
         .unwrap_or_default();
-    let title = format!("{name}{location}");
-    let image = gpui::Img::extensions().contains(&kind.to_ascii_lowercase().as_str());
-    let font_size = px(crate::theme::FS_MD);
-    let run = window.text_style().to_run(title.len() + kind.len());
-    let width = window
-        .text_system()
-        .shape_line(format!("{title}{kind}").into(), font_size, &[run], None)
-        .width()
-        + px(46.);
-    let size = gpui::size(width.clamp(px(88.), px(240.)), px(26.));
+    // The path as the prose wrote it, its `:line` drawn apart.
+    let label = label.trim();
+    let label = label.strip_suffix(location.as_str()).unwrap_or(label);
+    let name = if label.is_empty() {
+        base.clone()
+    } else {
+        label.to_string()
+    };
+    let image = gpui::Img::extensions().contains(&extension.as_str());
+    let size_px = window.text_style().font_size.to_pixels(window.rem_size());
+    let link_w = inline_file_width(&name, &location, image, size_px, window);
+    let line_h = window.line_height();
+    // The line reserves the path's exact advance, as the prototype's inline
+    // span takes it; the link's own box keeps its pixel to spare and hangs
+    // past it, so the words after it stand where the browser sets them.
+    let size = gpui::size(
+        inline_file_advance(&name, &location, link_w, size_px, window),
+        line_h,
+    );
     let host = preview.cloned();
-    let name_for_open = name.clone();
-    let tooltip = format!("{label}\n{}", file.path.display());
     let selector = format!("file-attachment-{}", file.path.display());
     let accessibility = format!("Open {name}");
-    let thumbnail = file.path.clone();
-    let open = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+    let mut target = crate::file_links::PathTarget::new(file.path.clone())
+        .at_line(
+            file.location
+                .as_deref()
+                .and_then(crate::file_links::location_line),
+        )
+        .shown(gpui::SharedString::from(name.clone()));
+    if let Some(scope) = scope {
+        target = target.in_scope(scope);
+    }
+    let reader = target.clone();
+    let open = move |event: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
         gpui::base::TextSelection::end(window, cx);
         cx.stop_propagation();
+        if event.modifiers().secondary() {
+            crate::file_links::open_target(&reader, window, cx);
+            return;
+        }
         if image && file.path.exists() {
             if let Some(host) = &host {
-                host.open(file.path.clone(), name_for_open.clone(), window, cx);
+                host.open(file.path.clone(), base.clone(), window, cx);
                 return;
             }
         }
         if !image && file.path.exists() {
             if let Some(host) = &host {
-                if host.open_text_document(file.path.clone(), name_for_open.clone(), window, cx) {
+                if host.open_text_document(file.path.clone(), base.clone(), window, cx) {
                     return;
                 }
             }
         }
         file.open(window, cx);
     };
-    let card = Attachment::new()
-        .id("inline-file-open")
-        .xsmall()
-        .axis(Axis::Horizontal)
-        .w_full()
+    let link = gpui::div()
+        .id("inline-file-chip")
+        .flex()
+        .items_center()
+        .w(link_w)
+        .h_full()
         .min_w_0()
-        .h(size.height)
-        .py_0()
-        .px(px(4.))
-        .bg(tokens.colors.background)
-        .text_color(tokens.colors.foreground)
-        .border_color(tokens.colors.border)
-        .rounded(tokens.radius.sm)
-        .font_family(crate::theme::FONT_UI)
-        .text_size(font_size)
-        .media(
-            AttachmentMedia::new()
-                .size(px(16.))
-                .rounded(tokens.radius.sm)
-                .bg(tokens.colors.muted)
-                .text_color(tokens.colors.foreground)
-                .map(|media| {
-                    if image {
-                        media.src(thumbnail.clone())
-                    } else {
-                        media.child(Icon::new(IconName::FileText).size(px(13.)))
-                    }
-                }),
-        )
-        .content(
-            AttachmentContent::new()
+        .font_family(theme::FONT_CODE)
+        .font_weight(theme::W_BODY)
+        .not_italic()
+        .child(
+            // The path gives way to an ellipsis; the `:line` never does.
+            gpui::div()
+                .flex()
                 .min_w_0()
-                .title(AttachmentTitle::new(title).text_size(font_size)),
-        )
-        .actions(
-            AttachmentActions::new().child(
-                gpui::div()
-                    .text_size(px(9.))
-                    .text_color(tokens.colors.muted_foreground)
-                    .child(kind),
-            ),
+                .child(
+                    gpui::div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(theme::PATH_INK))
+                        .child(name),
+                )
+                .when(!location.is_empty(), |title| {
+                    title.child(
+                        gpui::div()
+                            .flex_none()
+                            .text_color(rgb(theme::TEXT_MUTED))
+                            .child(location),
+                    )
+                }),
         );
-    let rem_size = stock.font_size;
+    // The click and keyboard target lies over the link and draws nothing but
+    // the focus ring.
+    let clear: gpui::Hsla = gpui::transparent_black();
+    let button = crate::components::button("inline-file-action")
+        .custom(crate::pointer::button_variant(
+            clear,
+            rgb(theme::PATH_INK).into(),
+            clear,
+            cx,
+        ))
+        .tab_stop(true)
+        .key_context("PromptAttachment")
+        .accessibility_label(accessibility)
+        .absolute()
+        .inset_0()
+        .size_full()
+        .min_w_0()
+        .p_0()
+        .rounded(px(theme::R_CHIP))
+        .on_click(open);
+    let element = gpui::div()
+        .id("inline-file")
+        .debug_selector(move || selector.clone())
+        .relative()
+        .w(link_w)
+        .h(size.height)
+        .child(link)
+        .child(button);
     (
         size,
-        KitScale {
-            child: gpui::div()
-                .id("inline-file")
-                .debug_selector(move || selector.clone())
-                .relative()
-                .w_full()
-                .h(size.height)
-                .cursor_pointer()
-                .tooltip(move |window, cx| {
-                    gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-                })
-                .child(card)
-                .child(
-                    Button::new("inline-file-action")
-                        .ghost()
-                        .absolute()
-                        .inset_0()
-                        .size_full()
-                        .min_w_0()
-                        .p_0()
-                        .key_context("PromptAttachment")
-                        .accessibility_label(accessibility)
-                        .on_click(open),
-                )
-                .into_any_element(),
-            rem_size,
-        }
-        .into_any_element(),
+        crate::file_links::wire_inline(element, target, f32::from(size_px), f32::from(line_h))
+            .into_any_element(),
     )
 }
 
-/// Concave shoulders turn the kit container's sides into the prompt's top
-/// edge. Only the join is drawn here; cards and their surface remain kit UI.
-/// Root sets a smaller rem for Ferrite's compact controls. Scope the kit's
-/// original rem to this subtree in every drawing phase, including image and
-/// button layout. No attachment dimensions are duplicated here.
-struct KitScale {
-    child: gpui::AnyElement,
-    rem_size: gpui::Pixels,
-}
-
-impl IntoElement for KitScale {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
+/// What an inline file link reserves on its line: the name and `:line`
+/// shaped in the code face at the prose's size, unrounded — the box's own
+/// width (`link_w`) when the clamp decided it.
+fn inline_file_advance(
+    name: &str,
+    location: &str,
+    link_w: gpui::Pixels,
+    size: gpui::Pixels,
+    window: &mut Window,
+) -> gpui::Pixels {
+    use crate::theme;
+    let mut face = window.text_style();
+    face.font_family = theme::FONT_CODE.into();
+    face.font_weight = theme::W_BODY;
+    face.font_style = gpui::FontStyle::Normal;
+    let shaped = |text: &str| {
+        if text.is_empty() {
+            return px(0.);
+        }
+        window
+            .text_system()
+            .shape_line(
+                gpui::SharedString::from(text.to_owned()),
+                size,
+                &[face.to_run(text.len())],
+                None,
+            )
+            .width()
+    };
+    let exact = shaped(name) + shaped(location);
+    if link_w <= px(theme::INLINE_FILE_MIN_W) || link_w >= px(theme::INLINE_FILE_MAX_W) {
+        link_w
+    } else {
+        exact.min(link_w)
     }
 }
 
-impl gpui::Element for KitScale {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-    fn request_layout(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (gpui::LayoutId, ()) {
-        (
-            window.with_rem_size(Some(self.rem_size), |window| {
-                self.child.request_layout(window, cx)
-            }),
-            (),
-        )
-    }
-    fn prepaint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        window.with_rem_size(Some(self.rem_size), |window| {
-            self.child.prepaint(window, cx);
-        });
-    }
-    fn paint(
-        &mut self,
-        _: Option<&gpui::GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        _: gpui::Bounds<gpui::Pixels>,
-        _: &mut (),
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        window.with_rem_size(Some(self.rem_size), |window| self.child.paint(window, cx));
-    }
+/// An inline file link's width: the name and `:line` each shaped whole in
+/// the code face at the prose's own size, rounded up to whole pixels with
+/// 1px to spare, so a name that fits is never ellipsized. Clamped to
+/// `INLINE_FILE_MIN_W`…`INLINE_FILE_MAX_W`.
+pub(crate) fn inline_file_width(
+    name: &str,
+    location: &str,
+    _image: bool,
+    size: gpui::Pixels,
+    window: &mut Window,
+) -> gpui::Pixels {
+    use crate::theme;
+    let mut face = window.text_style();
+    face.font_family = theme::FONT_CODE.into();
+    face.font_weight = theme::W_BODY;
+    face.font_style = gpui::FontStyle::Normal;
+    let width = |text: &str| {
+        if text.is_empty() {
+            return px(0.);
+        }
+        window
+            .text_system()
+            .shape_line(
+                gpui::SharedString::from(text.to_owned()),
+                size,
+                &[face.to_run(text.len())],
+                None,
+            )
+            .width()
+            .ceil()
+    };
+    let text_w = width(name) + width(location) + px(1.);
+    text_w.clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W))
 }
