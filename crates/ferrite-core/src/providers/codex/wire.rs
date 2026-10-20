@@ -182,6 +182,11 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
             super::questions::decode_permissions(params, rpc_id_string(value.get("id")?)?)
                 .map(|decision| SessionEvent::DecisionRequested { decision })
         }
+        // Codex pursues an active goal on its own, unasked (ADR 0032).
+        "thread/goal/updated" => Some(SessionEvent::ScheduledWork {
+            pending: params["goal"]["status"] == "active",
+        }),
+        "thread/goal/cleared" => Some(SessionEvent::ScheduledWork { pending: false }),
         "thread/tokenUsage/updated" => parse_token_usage(params),
         "account/rateLimits/updated" => parse_rate_limits(params),
         "model/rerouted" => {
@@ -1331,6 +1336,8 @@ mod tests {
             SessionEvent::ContextDetails { .. } => return None,
             SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            // The resume capture clears its goal.
+            SessionEvent::ScheduledWork { .. } => "ScheduledWork",
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             // Raw reasoning is scoped by the activity router; these legacy
             // captures only contain reasoning summaries.
@@ -1478,6 +1485,7 @@ mod tests {
                 "Init",
                 "RateLimits",
                 "ReasoningSummaryDelta",
+                "ScheduledWork",
                 "TextDelta",
                 "TokenUsage",
                 "ToolCompleted",
@@ -1519,7 +1527,8 @@ mod tests {
                 // The same gate for a patch instead of a command.
                 ("approval-patch", 52, 25),
                 ("interrupt", 25, 4),
-                ("resume", 32, 10),
+                // ... and the goal a resumed thread no longer pursues.
+                ("resume", 32, 11),
                 // Ten retry errors and a warning, all ignored: only the failed
                 // turn itself is an event.
                 ("error", 22, 1),

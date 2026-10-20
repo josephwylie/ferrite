@@ -1710,6 +1710,185 @@ fn a_restored_thread_starts_its_agent_on_send_without_a_trace() {
     assert_eq!(rows(&next), expected);
 }
 
+/// Whether the Engine still holds the Session `agent` plays.
+fn running(agent: &Sender<SessionEvent>) -> bool {
+    agent
+        .send(SessionEvent::ModelChanged {
+            model: "claude-model".into(),
+        })
+        .is_ok()
+}
+
+/// Ten minutes on the clock, as the ADR says an idle agent may last.
+const TEN_MINUTES: Duration = Duration::from_secs(10 * 60);
+
+/// A Thread whose agent named its conversation `claude-1` and has nothing
+/// to do, on a clock frozen for the test: the Engine, the Thread, the
+/// agent and the clock.
+fn at_rest(
+    name: &str,
+    spawner: Box<dyn Spawner>,
+    providers: &Receiver<Sender<SessionEvent>>,
+) -> (
+    Engine,
+    ThreadId,
+    Sender<SessionEvent>,
+    crate::clock::ThreadFixture,
+) {
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let dir = scratch(name);
+    let mut engine = engine(&dir.join("threads"), spawner);
+    let thread = open_in(&mut engine, &dir);
+    let agent = providers.recv().unwrap();
+    agent
+        .send(SessionEvent::Init {
+            session_id: "claude-1".into(),
+            model: "claude-model".into(),
+        })
+        .unwrap();
+    pump_engine_until(&mut engine, "the Init never landed", |engine| {
+        engine.thread(thread).unwrap().provider_session() == Some("claude-1")
+    });
+    (engine, thread, agent, clock)
+}
+
+/// An agent with nothing to do for ten minutes stops, and nothing shows
+/// it: the transcript, status and generation stand, and the next prompt
+/// starts one on the same conversation.
+#[test]
+fn an_agent_settled_ten_minutes_stops_without_a_trace() {
+    let (spawner, started, providers) = recorded();
+    let (mut engine, thread, agent, clock) = at_rest("settled-stops", spawner, &providers);
+    let seen = |engine: &Engine| {
+        let view = engine.thread(thread).unwrap();
+        let rows: Vec<Body> = view
+            .transcript()
+            .blocks()
+            .iter()
+            .map(|block| block.body.clone())
+            .collect();
+        (rows, view.generation(), view.starting(), view.busy())
+    };
+    let before = seen(&engine);
+
+    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    engine.pump();
+    assert!(running(&agent), "not yet ten minutes");
+    engine.pump();
+    clock.advance(Duration::from_secs(1));
+    engine.pump();
+    assert!(!running(&agent), "the agent stopped");
+    assert_eq!(seen(&engine), before);
+
+    started.lock().unwrap().clear();
+    engine.send(thread, "carry on".into());
+    engine.pump();
+    assert_eq!(
+        *started.lock().unwrap(),
+        vec![Start {
+            resume: Some("claude-1".into()),
+            ..Start::bare(Provider::Claude)
+        }]
+    );
+}
+
+/// A provider's CLI replaced on disk ends its settled agents at once, as
+/// unseen as ten minutes would, so the next start runs the new release.
+#[test]
+fn an_updated_cli_ends_a_settled_agent_without_a_trace() {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, _clock) = at_rest("updated-cli", spawner, &providers);
+    let rows = |engine: &Engine| engine.thread(thread).unwrap().transcript().blocks().len();
+    let before = rows(&engine);
+    engine.end_stale_sessions(Provider::Claude);
+    engine.pump();
+    assert!(!running(&agent), "the agent stopped");
+    assert_eq!(rows(&engine), before, "nothing shows it");
+}
+
+/// Work in flight holds the agent however long it runs, and its ten
+/// minutes count from when the work settled, not from before it.
+#[test]
+fn work_in_flight_keeps_the_agent_and_restarts_its_ten_minutes() {
+    let (spawner, providers) = spawn();
+    let (mut engine, _thread, agent, clock) = at_rest("in-flight", spawner, &providers);
+    let background = |tasks: Vec<crate::progress::BackgroundTask>| SessionEvent::Progress {
+        event: crate::progress::ProgressEvent::BackgroundSnapshot { tasks },
+    };
+    clock.advance(TEN_MINUTES / 2);
+    engine.pump();
+    agent
+        .send(background(vec![crate::progress::BackgroundTask {
+            id: "build".into(),
+            label: "cargo build".into(),
+            status: crate::progress::TaskStatus::Working,
+            detail: String::new(),
+        }]))
+        .unwrap();
+    engine.pump();
+    clock.advance(TEN_MINUTES);
+    engine.pump();
+    assert!(running(&agent), "a background task holds it");
+
+    agent.send(background(Vec::new())).unwrap();
+    engine.pump();
+    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    engine.pump();
+    assert!(running(&agent), "ten minutes count from the settle");
+    clock.advance(Duration::from_secs(1));
+    engine.pump();
+    assert!(!running(&agent), "the agent stopped");
+}
+
+/// Asking an agent something it answers in its own time (a control, a
+/// file search) is using it: its ten minutes count from the ask.
+#[test]
+fn an_ask_restarts_the_agents_ten_minutes() {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, clock) = at_rest("asked", spawner, &providers);
+    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    engine.pump();
+    engine
+        .control(thread, crate::SessionControl::RefreshMcp)
+        .unwrap();
+    clock.advance(Duration::from_secs(1));
+    engine.pump();
+    assert!(running(&agent), "a control was just asked of it");
+
+    clock.advance(TEN_MINUTES - Duration::from_secs(2));
+    engine.pump();
+    let _answer = engine.search_files(thread, "main.rs").unwrap();
+    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    engine.pump();
+    assert!(running(&agent), "a file search was just asked of it");
+    clock.advance(Duration::from_secs(1));
+    engine.pump();
+    assert!(!running(&agent), "the agent stopped");
+}
+
+/// An agent holding work it will start itself, out of Ferrite's sight,
+/// stays however long it is settled, until that work is gone.
+#[test]
+fn scheduled_work_keeps_the_agent() {
+    let (spawner, providers) = spawn();
+    let (mut engine, _thread, agent, clock) = at_rest("scheduled", spawner, &providers);
+    agent
+        .send(SessionEvent::ScheduledWork { pending: true })
+        .unwrap();
+    engine.pump();
+    clock.advance(TEN_MINUTES * 3);
+    engine.pump();
+    assert!(running(&agent), "scheduled work holds it");
+
+    agent
+        .send(SessionEvent::ScheduledWork { pending: false })
+        .unwrap();
+    engine.pump();
+    clock.advance(TEN_MINUTES);
+    engine.pump();
+    assert!(!running(&agent), "the agent stopped");
+}
+
 /// A model, effort or Provider chosen for a Thread whose agent is not
 /// running starts none: the choice is kept, and the next agent starts with
 /// it, in the permission mode the last one ran in.

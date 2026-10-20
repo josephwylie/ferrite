@@ -236,6 +236,33 @@ pub(super) fn parse_value(value: &Value) -> Option<SessionEvent> {
     }
 }
 
+/// The tools by which an agent schedules work it starts itself.
+const SCHEDULERS: [&str; 3] = ["ScheduleWakeup", "CronCreate", "Monitor"];
+
+/// Whether `value` shows the agent taking on work it will start itself,
+/// out of Ferrite's sight (ADR 0032): a scheduling tool called, or an
+/// ambient task begun. Any call counts, a Subagent's or one later refused:
+/// Ferrite cannot tell what the CLI kept, so it keeps the Session.
+pub(super) fn schedules_work(value: &Value) -> bool {
+    let scheduler = || {
+        value["message"]["content"]
+            .as_array()
+            .is_some_and(|blocks| {
+                blocks.iter().any(|block| {
+                    block["type"] == "tool_use"
+                        && block["name"]
+                            .as_str()
+                            .is_some_and(|name| SCHEDULERS.contains(&name))
+                })
+            })
+    };
+    match value["type"].as_str() {
+        Some("assistant") => scheduler(),
+        Some("system") => value["subtype"] == "task_started" && value["ambient"] == true,
+        _ => false,
+    }
+}
+
 /// Decode every fact in a native SDK message. A single assistant/user
 /// snapshot can contain several tools; progress messages contain no prose delta.
 pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
@@ -1558,6 +1585,9 @@ mod tests {
             SessionEvent::ContextDetails { .. } => return None,
             SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            // Added by the decoder beside a line's own events; proved by
+            // `scheduling_tools_and_ambient_tasks_are_scheduled_work`.
+            SessionEvent::ScheduledWork { .. } => return None,
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             SessionEvent::Queue(_) => return None,
             // Codex's own concept (#9); the Claude CLI never emits one.

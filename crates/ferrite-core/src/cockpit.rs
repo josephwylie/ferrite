@@ -1076,12 +1076,13 @@ impl Cockpit {
         self.act(Engine::sweep, |_| Vec::new())
     }
 
-    /// The provider's CLI was replaced on disk: its Sessions restart on the
-    /// new release as they idle, and its models are asked for again.
+    /// The provider's CLI was replaced on disk: its Sessions end as they
+    /// settle, so the next start runs the new release, and its models are
+    /// asked for again.
     pub fn cli_replaced(&mut self, provider: Provider) {
         self.act(
             |engine| {
-                engine.restart_sessions(provider);
+                engine.end_stale_sessions(provider);
                 engine.rediscover_models();
             },
             |server| {

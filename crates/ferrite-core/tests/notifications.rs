@@ -859,6 +859,66 @@ fn contract_only_the_visible_subjects_requests_are_acknowledged() {
     assert_eq!(h.unread(), 0);
 }
 
+/// An agent that ended unseen (ADR 0032) leaves the window looking where
+/// it was: after the next prompt starts another, only the shown
+/// Subagent's requests are read.
+#[test]
+fn an_unseen_end_keeps_the_shown_subject() {
+    let clock = ferrite_core::clock::ThreadFixture::install(chrono::Local::now());
+    let mut h = Harness::new("unseen-end-subject", 1);
+    let thread = h.threads[0];
+    let child = h.child(0, "shown-child");
+    h.control.activity(
+        0,
+        ActivityEvent::Status {
+            key: child.clone(),
+            state: AgentStatus::Idle,
+        },
+    );
+    h.cockpit.pump();
+    h.cockpit
+        .set_visible_subject(thread, Subject::Subagent(child.clone()));
+    h.cockpit.focus_thread(thread);
+    clock.advance(Duration::from_secs(10 * 60));
+    h.cockpit.pump();
+    assert_eq!(h.control.0.lock().unwrap().len(), 1);
+    h.cockpit.send(thread, "carry on".into());
+    h.cockpit.pump();
+    assert_eq!(
+        h.control.0.lock().unwrap().len(),
+        2,
+        "the send started another"
+    );
+    for (id, subject) in [("main", Subject::Main), ("child", Subject::Subagent(child))] {
+        h.control.activity(
+            1,
+            ActivityEvent::Decision {
+                subject: Some(subject),
+                decision: ferrite_core::Decision {
+                    kind: Default::default(),
+                    policy: Default::default(),
+                    delivery: Default::default(),
+                    id: id.into(),
+                    tool_use_id: id.into(),
+                    tool_name: "Bash".into(),
+                    description: "Approve".into(),
+                    input: serde_json::json!({}),
+                    suggestions: vec![],
+                },
+            },
+        );
+    }
+    h.cockpit.pump();
+    let notices: Vec<_> = h.cockpit.notifications().decisions().collect();
+    assert!(
+        notices
+            .iter()
+            .find(|n| n.subject == Some(Subject::Main))
+            .is_some_and(|n| !n.read),
+        "Main's request stays unread while its child is shown"
+    );
+}
+
 #[test]
 fn clearing_attention_dismisses_live_requests_until_they_are_replaced() {
     let mut h = Harness::new("clear-requests", 2);

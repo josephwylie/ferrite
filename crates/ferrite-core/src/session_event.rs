@@ -189,6 +189,12 @@ pub enum SessionEvent {
         server: String,
         url: Option<String>,
     },
+    /// Whether the Session holds work it will start itself, out of
+    /// Ferrite's sight: a wakeup, cron or monitor it scheduled, or a goal
+    /// it pursues. While it does, it runs however long it is settled.
+    ScheduledWork {
+        pending: bool,
+    },
     /// The session process exited; no further events will arrive.
     Closed {
         reason: String,

@@ -1,7 +1,7 @@
 //! The Engine (ADR 0025): everything that keeps running without a window.
 //! The Store and its claim, every Session and its writer, the prompt
 //! queue, pending Decisions, Notices, Groups, the registry, and every
-//! policy — Handover, the memory watchdog, stale-CLI restarts, the titler,
+//! policy — Handover, the memory watchdog, ending idle Sessions, the titler,
 //! suggestions, deferred finish. The Server owns one; a window reads it
 //! through its client, `cockpit::Cockpit`, and changes it only by its acts.
 //!
@@ -460,6 +460,9 @@ impl Tune {
 /// refused.
 const TUNE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a Session may stay at rest before it ends (ADR 0032).
+const END_AFTER: Duration = Duration::from_secs(10 * 60);
+
 struct PendingBootstrap {
     prompt: String,
     group: Option<GroupId>,
@@ -551,6 +554,12 @@ struct Thread {
     /// The Session was started for use (ADR 0032) rather than asked for:
     /// it shows as starting only once a prompt waits for it.
     woken: bool,
+    /// Since when its Session has been at rest, or last used at rest;
+    /// `None` while it is not at rest.
+    settled_at: Option<Instant>,
+    /// Its Session said it holds work it will start itself
+    /// (`SessionEvent::ScheduledWork`).
+    scheduled_work: bool,
     native_queue: queue::Queue,
     /// An interrupt was sent while prompts were mirrored: when the turn
     /// ends, everything held goes out as one prompt — Escape means "stop,
@@ -652,6 +661,8 @@ impl Thread {
             title: None,
             awaiting: Awaiting::default(),
             woken: false,
+            settled_at: None,
+            scheduled_work: false,
             native_queue: queue::Queue::open(dir.join("queue.json")),
             resend_held_on_turn_end: false,
             prompt_history: PromptHistory::new(Vec::new()),
@@ -844,7 +855,7 @@ impl Thread {
             && self.awaiting.prompts.is_empty()
             && !self.awaiting.asks();
         if unseen {
-            self.session = None;
+            self.end_session();
         }
         unseen
     }
@@ -906,6 +917,46 @@ impl Thread {
             && view.decisions().is_empty()
             && !self.native_queue.pending()
     }
+
+    /// `session` serves it from now on. A fresh Session knows nothing:
+    /// its first prompt carries the session-context preface again, and it
+    /// has scheduled nothing yet.
+    fn begin_session(&mut self, session: SessionLifecycle) {
+        self.session = Some(session);
+        self.preface_pending = true;
+        self.scheduled_work = false;
+    }
+
+    /// Its Session ends; the Thread keeps everything else.
+    fn end_session(&mut self) {
+        self.session = None;
+    }
+
+    /// At rest, and nothing waits for a Session to take it: what the
+    /// Server may stop at, and what a Session may end at.
+    fn at_rest(&self) -> bool {
+        self.settled() && self.awaiting.prompts.is_empty()
+    }
+
+    /// Asked of its Session: it is in use, so its time at rest counts
+    /// again from now.
+    fn used(&mut self) {
+        self.settled_at = Some(crate::clock::instant());
+    }
+
+    /// Whether its Session has outlived its use at `now` (ADR 0032): at
+    /// rest for `END_AFTER`, or at all on a `stale` CLI, and holding no
+    /// work it will start itself. Starts the count on the first call at
+    /// rest.
+    fn outlived_use(&mut self, now: Instant, stale: bool) -> bool {
+        if self.session.is_none() || self.scheduled_work || !self.at_rest() {
+            self.settled_at = None;
+            return false;
+        }
+        let since = *self.settled_at.get_or_insert(now);
+        stale || now.saturating_duration_since(since) >= END_AFTER
+    }
+
     /// Whether the model and effort can change now: not mid-turn, not
     /// while the Session starts or is being replaced, and not while the
     /// last change waits on the provider.
@@ -1253,7 +1304,7 @@ impl Engine {
         .map(Path::to_path_buf);
         // Drop the old Session before asking for a new one: the old
         // process must not outlive its replacement.
-        thread.session = None;
+        thread.end_session();
         thread.replacement = None;
         thread.replace_generation();
         let spawned = self.spawner.start_after(
@@ -1280,56 +1331,39 @@ impl Engine {
                 launch: thread.agent_launch(thread.provider),
             },
         );
-        Some(spawned.map(|session| {
-            thread.session = Some(session);
-            // A fresh Session knows nothing: its first prompt must carry
-            // the session-context preface again.
-            thread.preface_pending = true;
-        }))
+        Some(spawned.map(|session| thread.begin_session(session)))
     }
 
-    /// The provider's CLI was replaced on disk: restart every Session of
-    /// `provider` on its own conversation so it runs the new release (and
-    /// announces its menu). A Thread mid-turn, waiting on the operator, or
-    /// with work queued is left alone until it is idle — see `pump`.
-    pub fn restart_sessions(&mut self, provider: Provider) {
+    /// The provider's CLI was replaced on disk: every Session of
+    /// `provider` ends once it is settled, so the next one runs the new
+    /// release — see `end_unused_sessions`.
+    pub fn end_stale_sessions(&mut self, provider: Provider) {
         let live = self.threads.iter().filter(|(_, state)| {
             state.provider == provider && (state.session.is_some() || state.replacement.is_some())
         });
         self.stale_sessions.extend(live.map(|(id, _)| *id));
     }
 
-    /// Restart each stale Session that has nothing in flight. A Thread
-    /// parked or deleted meanwhile needs nothing: its next Session starts
-    /// on the new CLI anyway.
-    fn restart_idle_stale(&mut self) {
-        if self.stale_sessions.is_empty() {
-            return;
+    /// End each Session its Thread has no use for (ADR 0032). Nothing
+    /// shows it: the Thread keeps its transcript, status and generation,
+    /// and its next use starts a Session on the same conversation.
+    fn end_unused_sessions(&mut self) {
+        let now = crate::clock::instant();
+        for (id, thread) in &mut self.threads {
+            if thread.outlived_use(now, self.stale_sessions.contains(id)) {
+                crate::log!("thread {id}: session ended, settled");
+                thread.end_session();
+                self.stale_sessions.remove(id);
+            }
         }
-        let mut idle = Vec::new();
+        // A stale Session parked, deleted or already ended needs nothing:
+        // the next one starts on the new CLI anyway.
+        let threads = &self.threads;
         self.stale_sessions.retain(|id| {
-            let Some(state) = self.threads.get(id) else {
-                return false;
-            };
-            if state.session.is_none() {
-                return false;
-            }
-            if state.settled() {
-                idle.push(*id);
-            }
-            true
+            threads
+                .get(id)
+                .is_some_and(|state| state.session.is_some() || state.replacement.is_some())
         });
-        for id in idle {
-            let note = match self.respawn(id) {
-                None => continue,
-                Some(Ok(())) => "restarted on the updated CLI".to_string(),
-                Some(Err(e)) => format!("restart on the updated CLI failed: {e}"),
-            };
-            crate::log!("thread {id}: session {note}");
-            if let Some(thread) = self.threads.get_mut(&id) {
-                thread.apply(Input::Notice(note));
-            }
-        }
     }
 
     /// Start a Thread: a durable log, a workspace to work in, and a Session
@@ -1666,7 +1700,7 @@ impl Engine {
         self.visible_subjects.remove(&thread);
         match self.threads.get_mut(&thread) {
             Some(state) => {
-                state.session = None;
+                state.end_session();
                 state.replacement = None;
                 state.replace_generation();
                 self.store.set_session_project_root(
@@ -1975,12 +2009,14 @@ impl Engine {
         if state.provider != provider {
             state.announced.forget();
         }
-        state.session = session;
+        match session {
+            Some(session) => state.begin_session(session),
+            None => state.end_session(),
+        }
         state.provider = provider;
         state.model = model;
         state.effort = effort;
         state.replace_generation();
-        state.preface_pending = true;
         Ok(())
     }
 
@@ -2311,9 +2347,10 @@ impl Engine {
     }
 
     /// Send a prompt now: on the wire, in the transcript, in the log. A
-    /// Thread whose Session was ended under it — a changed session project
-    /// root, a failed watchdog restart — respawns here through the same
-    /// resume path a revive uses, which re-arms the preface.
+    /// Thread with no Session starts one here through the same resume path
+    /// a revive uses, which re-arms the preface. One that closed starts
+    /// afresh on Main; one that ended unseen (ADR 0032) keeps what its
+    /// window shows.
     pub fn send(&mut self, thread: ThreadId, text: String) {
         if self.bootstraps.contains_key(&thread) {
             return;
@@ -2321,7 +2358,7 @@ impl Engine {
         if self
             .threads
             .get(&thread)
-            .is_some_and(|state| state.session.is_none())
+            .is_some_and(|state| state.session.is_none() && !state.activity.view().connected())
         {
             self.visible_subjects.remove(&thread);
         }
@@ -2383,9 +2420,9 @@ impl Engine {
         if let Some(refusal) = vanished_root_refusal(state) {
             return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
         }
-        // Every way a Session ends but closing starts a new generation as
-        // it goes; after a close, this start does. Otherwise nothing a
-        // window holds is invalidated: the start is unseen (ADR 0032).
+        // After a close, or with no Session yet, this start begins a new
+        // generation. After one ended unseen, nothing a window holds is
+        // invalidated: the start is unseen too (ADR 0032).
         if !state.activity.view().connected() {
             state.replace_generation();
         }
@@ -2420,9 +2457,8 @@ impl Engine {
                 },
             },
         )?;
-        state.session = Some(session);
+        state.begin_session(session);
         state.woken = true;
-        state.preface_pending = true;
         Ok(())
     }
 
@@ -2444,7 +2480,7 @@ impl Engine {
                 .as_ref()
                 .is_some_and(SessionLifecycle::is_starting)
         {
-            state.session = None;
+            state.end_session();
             state.replace_generation();
             state.give_up_awaiting();
             self.visible_subjects.remove(&thread);
@@ -2611,7 +2647,7 @@ impl Engine {
     }
 
     /// An open Thread whose agent is running or starting, for asking it
-    /// something.
+    /// something. The ask is use: its time at rest counts again.
     fn wake_for(&mut self, thread: ThreadId) -> io::Result<&mut Thread> {
         if !self.threads.contains_key(&thread) {
             return Err(io::Error::new(
@@ -2620,7 +2656,9 @@ impl Engine {
             ));
         }
         self.start_session(thread, None)?;
-        Ok(self.threads.get_mut(&thread).expect("checked"))
+        let state = self.threads.get_mut(&thread).expect("checked");
+        state.used();
+        Ok(state)
     }
 
     /// What was asked of `thread`'s agent while it started, besides
@@ -2809,7 +2847,7 @@ impl Engine {
         self.bootstraps.clear();
         for state in self.threads.values_mut() {
             state.replacement = None;
-            state.session = None;
+            state.end_session();
         }
         // reviewr's private index copies leave each checkout's git dir.
         ferrite_reviewr::git::end_sessions();
@@ -2964,7 +3002,7 @@ impl Engine {
                         }
                     }
                     Err(error) => {
-                        state.session = None;
+                        state.end_session();
                         state.replace_generation();
                         crate::log!("thread {id}: session could not start: {error}");
                         state.apply(Input::Notice(format!("could not start: {error}")));
@@ -3013,7 +3051,6 @@ impl Engine {
     /// down. What comes back is only the Panes that actually changed.
     pub fn pump(&mut self) -> Vec<PaneUpdate> {
         self.poll_model_discovery();
-        self.restart_idle_stale();
         // Predictions that finished between frames. Collected before the
         // Thread walk so a landing suggestion repaints in the same frame.
         let landed = self.poll_suggestions();
@@ -3290,7 +3327,7 @@ impl Engine {
                         .dirty
                         .extend(thread.apply(Input::Notice(notice)).dirty);
                 }
-                thread.session = None;
+                thread.end_session();
                 thread.history.clear();
                 thread.activity.apply(ActivityInput::Disconnect);
                 self.visible_subjects.remove(id);
@@ -3341,6 +3378,8 @@ impl Engine {
         // After the walk: whatever the provider said before its answer to a
         // setting change is in the transcript ahead of the change's line.
         frame.extend(self.settle_tuning());
+        // After the walk: a Thread settles on the frame its last event lands.
+        self.end_unused_sessions();
         // A landed prediction changes only the Composer's idle line, so it
         // owes its Pane a repaint and nothing else.
         for id in landed {
@@ -3375,7 +3414,8 @@ impl Engine {
         let agents: Vec<_> = self
             .threads
             .iter()
-            .filter(|(_, state)| state.session.is_some())
+            // A Session ended unseen is still the Thread's agent (ADR 0032).
+            .filter(|(_, state)| state.session.is_some() || state.activity.view().connected())
             .filter_map(|(id, state)| {
                 let cwd = crate::workspace::effective_cwd(
                     state.session_project_root.as_deref(),
@@ -4192,11 +4232,7 @@ impl Engine {
     /// Whether every Thread is at rest and nothing waits to be sent: what
     /// the Server may stop or restart at without cutting an agent off.
     pub fn idle(&self) -> bool {
-        self.bootstraps.is_empty()
-            && self
-                .threads
-                .values()
-                .all(|state| state.settled() && state.awaiting.prompts.is_empty())
+        self.bootstraps.is_empty() && self.threads.values().all(Thread::at_rest)
     }
 
     /// An open Thread's Attention, as the Server knows it (ADR 0015): a
@@ -5262,7 +5298,8 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::PermissionMode { .. }
         | SessionEvent::ContextDetails { .. }
         | SessionEvent::McpServers { .. }
-        | SessionEvent::McpAuthorization { .. } => false,
+        | SessionEvent::McpAuthorization { .. }
+        | SessionEvent::ScheduledWork { .. } => false,
         _ => true,
     }
 }
@@ -5405,6 +5442,7 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
         | SessionEvent::PermissionMode { .. }
         | SessionEvent::McpServers { .. } => state.announced.hear(event),
         SessionEvent::Init { session_id, .. } => state.resume = Some(session_id.clone()),
+        SessionEvent::ScheduledWork { pending } => state.scheduled_work = *pending,
         SessionEvent::ConversationReset { session_id } => {
             state.resume = Some(session_id.clone());
             state.history.clear();
