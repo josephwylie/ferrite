@@ -1516,6 +1516,44 @@ mod tests {
             .is_empty());
     }
 
+    /// A goal Codex pursues is work it starts itself, out of Ferrite's
+    /// sight, while the goal is active; one paused, met or cleared is not.
+    #[test]
+    fn an_active_goal_is_scheduled_work() {
+        let mut router = Router::default();
+        router.identify_main("main");
+        let mut said = |frame: serde_json::Value| -> Vec<bool> {
+            router
+                .observe(frame)
+                .events
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::ScheduledWork { pending } => Some(pending),
+                    _ => None,
+                })
+                .collect()
+        };
+        let goal = |status: &str| {
+            json!({"method":"thread/goal/updated","params":{"threadId":"main","turnId":null,
+                "goal":{"threadId":"main","objective":"ship it","status":status,
+                    "createdAt":1,"updatedAt":2,"timeUsedSeconds":0,"tokensUsed":0}}})
+        };
+        assert_eq!(said(goal("active")), [true]);
+        for status in [
+            "paused",
+            "blocked",
+            "usageLimited",
+            "budgetLimited",
+            "complete",
+        ] {
+            assert_eq!(said(goal(status)), [false], "{status}");
+        }
+        assert_eq!(
+            said(json!({"method":"thread/goal/cleared","params":{"threadId":"main"}})),
+            [false]
+        );
+    }
+
     #[test]
     fn incomplete_metadata_does_not_veto_later_explicit_discovery() {
         let mut router = Router::default();

@@ -359,7 +359,7 @@ over live processes.
   app's own executable, the app sends `restart {when: idle}`, once per app
   run, and shows "Ferrite's server will update when your agents are idle ·
   Restart now". "Restart now" sends `restart {when: now}`.
-- Idle is the predicate `restart_idle_stale` already uses for a stale CLI:
+- Idle is the predicate a stale CLI's Session already ends at (`settled`):
   for every Thread no turn, no working Subagent or background task, no
   Decision and nothing queued. New prompts are not blocked while a
   restart waits. "Restart now" asks first while that predicate is false,

@@ -2005,7 +2005,11 @@ impl Transcript {
             // Block, nothing dirty.
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
-            Input::Event(SessionEvent::Models { .. } | SessionEvent::Queue(_)) => Update::default(),
+            Input::Event(
+                SessionEvent::Models { .. }
+                | SessionEvent::Queue(_)
+                | SessionEvent::ScheduledWork { .. },
+            ) => Update::default(),
             Input::Event(SessionEvent::McpServers { servers }) => {
                 self.mcp_servers = servers;
                 Update::default()

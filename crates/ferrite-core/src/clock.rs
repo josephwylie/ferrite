@@ -152,6 +152,15 @@ impl ThreadFixture {
         HERE.with(|here| *here.borrow_mut() = Some(Override::at(at)));
         ThreadFixture { _here: PhantomData }
     }
+
+    /// Step this thread's clock forward by `by`.
+    pub fn advance(&self, by: Duration) {
+        HERE.with(|here| {
+            if let Some(fixed) = here.borrow_mut().as_mut() {
+                fixed.offset += by;
+            }
+        });
+    }
 }
 
 impl Drop for ThreadFixture {

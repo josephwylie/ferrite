@@ -1240,6 +1240,7 @@ impl Record {
             SessionEvent::Queue(_) => return None,
             SessionEvent::RateLimits { .. } => return None,
             SessionEvent::McpAuthorization { .. } => return None,
+            SessionEvent::ScheduledWork { .. } => return None,
         })
     }
 

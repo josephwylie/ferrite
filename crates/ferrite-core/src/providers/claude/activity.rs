@@ -209,6 +209,9 @@ impl Decoder {
                 weekly: self.rate_limits.1,
             });
         }
+        if wire::schedules_work(&value) {
+            events.push(SessionEvent::ScheduledWork { pending: true });
+        }
         match string(&value, "type") {
             Some("system") if string(&value, "subtype") == Some("init") => {
                 if let Some(mode) = string(&value, "permissionMode") {
@@ -1492,6 +1495,34 @@ mod tests {
             .flat_map(|line| decoder.decode(line))
             .collect();
         (decoder, events)
+    }
+
+    /// Work the CLI will start itself, which Ferrite cannot watch: a
+    /// wakeup, cron or monitor the agent scheduled, or an ambient task.
+    #[test]
+    fn scheduling_tools_and_ambient_tasks_are_scheduled_work() {
+        let tool = |name: &str| {
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,
+                "message":{"id":"msg_1","role":"assistant","content":[
+                    {"type":"tool_use","id":format!("toolu_{name}"),"name":name,"input":{}}]}})
+            .to_string()
+        };
+        let task = |ambient: bool| {
+            json!({"type":"system","subtype":"task_started","session_id":"s1",
+                "task_id":format!("task_{ambient}"),"description":"watch","ambient":ambient})
+            .to_string()
+        };
+        let scheduled = |line: String| {
+            Decoder::default()
+                .decode(&line)
+                .contains(&SessionEvent::ScheduledWork { pending: true })
+        };
+        for name in ["ScheduleWakeup", "CronCreate", "Monitor"] {
+            assert!(scheduled(tool(name)), "{name}");
+        }
+        assert!(scheduled(task(true)), "an ambient task");
+        assert!(!scheduled(tool("Bash")), "an ordinary tool");
+        assert!(!scheduled(task(false)), "a task Ferrite shows");
     }
 
     #[test]
