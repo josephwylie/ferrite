@@ -37,6 +37,7 @@ use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
+mod announced;
 mod commands;
 mod history;
 mod launch_args;
@@ -393,7 +394,9 @@ enum ReplacementKind {
 }
 
 struct Replacement {
-    session: SessionLifecycle,
+    /// None for a Thread with no Session (ADR 0032): the change starts no
+    /// agent, and the next start is made with it.
+    session: Option<SessionLifecycle>,
     provider: Provider,
     model: Option<String>,
     effort: Option<String>,
@@ -522,6 +525,11 @@ struct Thread {
     /// goes out as a turn when none runs, or into the provider's queue once
     /// it takes them; anything written meanwhile waits behind them.
     awaiting_session: VecDeque<String>,
+    /// Controls asked while the Session starts, in order: run once it is up.
+    awaiting_controls: Vec<crate::SessionControl>,
+    /// The file search asked while the Session starts, the latest only:
+    /// asked of it once it is up.
+    awaiting_search: Option<(String, crate::providers::FileSearchReply)>,
     /// The Session was started for use (ADR 0032) rather than asked for:
     /// it shows as starting only once a prompt waits for it.
     woken: bool,
@@ -558,15 +566,11 @@ struct Thread {
     /// revive that finds the switch's carry undelivered), taken by the
     /// first prompt that goes out.
     carry: Option<String>,
-    /// The live Session's command menu (#23) — what the Composer's `/`
-    /// popover lists. Announced by the Session itself at start; empty until
-    /// it speaks, and Session state only: a parked Thread keeps none.
-    commands: Vec<crate::SessionCommand>,
-    /// The models the live Session's install offers (#25) — the provider
-    /// picker's model rows. Announced like the command menu, empty until
-    /// the Session speaks, and Session state exactly like it: never a
-    /// static list, gone with the Session.
-    models: Vec<ModelInfo>,
+    /// What its agent last said of itself (ADR 0032): the command menu
+    /// (#23), models (#25), permission mode and modes, controls and MCP
+    /// servers. Offered while the Thread has no Session as well as while it
+    /// has one; forgotten when it changes Provider.
+    announced: announced::Announced,
     /// The lock every pre-prompt control reads (#25, #29): armed by the
     /// first operator prompt that goes out, and on revive when the replayed
     /// history holds one. Never disarmed — nothing re-aims a Thread the
@@ -579,10 +583,6 @@ struct Thread {
     /// a later completed turn requests a fresh prediction.
     suggestion: Option<String>,
     suggestion_revision: u64,
-    /// The live Session's permission mode (#23) — the meta row's mode chip,
-    /// in the provider's own word. Display-only, and Session state exactly
-    /// like the menu: None until announced, gone with the Session.
-    permission_mode: Option<String>,
     /// A model or effort change waiting on the provider. Session state: a
     /// replacement Session drops it, since its answer would be the old
     /// Session's.
@@ -614,7 +614,7 @@ impl Thread {
         resume: Option<String>,
         workspace: Option<WorkspaceBinding>,
         session_project_root: Option<PathBuf>,
-        queue_path: PathBuf,
+        dir: PathBuf,
     ) -> Self {
         let generation = next_generation();
         let mut activity = Journaled::new(boot);
@@ -633,8 +633,10 @@ impl Thread {
             effort,
             title: None,
             awaiting_session: VecDeque::new(),
+            awaiting_controls: Vec::new(),
+            awaiting_search: None,
             woken: false,
-            native_queue: queue::Queue::open(queue_path),
+            native_queue: queue::Queue::open(dir.join("queue.json")),
             resend_held_on_turn_end: false,
             prompt_history: PromptHistory::new(Vec::new()),
             resume,
@@ -643,12 +645,10 @@ impl Thread {
             follow: Follow::default(),
             preface_pending: true,
             carry: None,
-            commands: Vec::new(),
-            models: Vec::new(),
+            announced: announced::Announced::open(dir.join("announced.json")),
             first_prompt_sent: false,
             suggestion: None,
             suggestion_revision: 0,
-            permission_mode: None,
             tuning: None,
             agent_args: None,
         };
@@ -711,8 +711,7 @@ impl Thread {
     /// What a window reads of this Thread beyond its Activity. Whether a
     /// Draft is starting it is the Engine's to say (`Engine::thread_state`).
     fn wire_state(&self, id: ThreadId) -> protocol::ThreadState {
-        use crate::ControlKind as Kind;
-        let session = self.session.as_ref().and_then(SessionLifecycle::session);
+        let announced = &self.announced;
         protocol::ThreadState {
             thread: id,
             generation: self.generation,
@@ -742,32 +741,18 @@ impl Thread {
                 )
                 .collect(),
             suggestion: self.suggestion.clone(),
-            commands: self.commands.iter().map(Into::into).collect(),
-            models: self.models.clone(),
-            permission_mode: self.permission_mode.clone(),
-            permission_modes: session
-                .map(Session::permission_modes)
-                .unwrap_or_default()
-                .into_iter()
+            commands: announced.commands().iter().map(Into::into).collect(),
+            models: announced.models().to_vec(),
+            permission_mode: announced.permission_mode().map(str::to_string),
+            permission_modes: announced
+                .permission_modes()
+                .iter()
                 .map(|mode| protocol::WirePermissionMode {
-                    value: mode.value,
-                    label: mode.label,
+                    value: mode.value.clone(),
+                    label: mode.label.clone(),
                 })
                 .collect(),
-            controls: [
-                Kind::RefreshContext,
-                Kind::RefreshMcp,
-                Kind::ReconnectMcp,
-                Kind::LoginMcp,
-                Kind::ReloadMcp,
-                Kind::StopTask,
-                Kind::BackgroundTasks,
-                Kind::SetPermissionMode,
-            ]
-            .iter()
-            .filter(|kind| session.is_some_and(|session| session.supports_control(**kind)))
-            .map(Into::into)
-            .collect(),
+            controls: announced.controls().iter().map(Into::into).collect(),
             store_error: self.store_error.clone(),
             for_draft: false,
             recovered: self
@@ -827,6 +812,26 @@ impl Thread {
                 .as_ref()
                 .is_some_and(SessionLifecycle::is_starting)
                 && (!self.woken || !self.awaiting_session.is_empty())
+    }
+
+    /// The Session, once it can take what is asked of it: started, and not
+    /// being replaced.
+    fn ready_session(&mut self) -> Option<&mut (dyn Session + 'static)> {
+        if self.replacement.is_some() {
+            return None;
+        }
+        self.session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+    }
+
+    /// Its agent could not start: prompts that waited for it go back to the
+    /// Composer; the controls and file search that did are dropped.
+    fn give_up_awaiting(&mut self) {
+        let waited = self.awaiting_session.drain(..).map(|text| (text, false));
+        self.native_queue.recovered.extend(waited);
+        self.awaiting_controls.clear();
+        self.awaiting_search = None;
     }
 
     /// A prompt that could not be delivered goes back to the Composer, so
@@ -1479,7 +1484,7 @@ impl Engine {
                 resume,
                 Some(binding),
                 None,
-                self.store.dir().join(id.to_string()).join("queue.json"),
+                self.store.dir().join(id.to_string()),
             ),
         );
         if let Some(state) = self.threads.get_mut(&id) {
@@ -1659,9 +1664,11 @@ impl Engine {
     ///
     /// Before the first prompt the swap is a fresh Transcript — nothing
     /// operator-authored exists pre-lock, so the old Init and model must
-    /// not linger — and an eager respawn: the new Provider's commands and
-    /// models arrive while the operator is still choosing. Works on a
-    /// parked Thread too: only the store is touched.
+    /// not linger — and, when an agent runs, an eager respawn: the new
+    /// Provider's commands and models arrive while the operator is still
+    /// choosing. Works on a parked Thread too: only the store is touched.
+    /// A Thread with no agent running starts none (ADR 0032): its next
+    /// start is on the new Provider.
     ///
     /// After the first prompt the Transcript and history stay: the new
     /// Provider starts fresh (the old one's id means nothing to it) and the
@@ -1732,7 +1739,8 @@ impl Engine {
     }
 
     /// The old Session and durable choices stay authoritative until startup
-    /// succeeds. All replacement paths share this transaction.
+    /// succeeds. All replacement paths share this transaction. A Thread
+    /// with no Session gets no new one: the change is recorded for its next.
     fn replace_session(
         &mut self,
         thread: ThreadId,
@@ -1757,13 +1765,16 @@ impl Engine {
             state.session_project_root.as_deref(),
             state.workspace.as_ref(),
         );
-        let resume = match kind {
-            ReplacementKind::Retune => Some(state.resume.as_deref().ok_or(ProvisionError::Locked)?),
-            _ => None,
-        };
-        let session = self
-            .spawner
-            .start_after(
+        let session = if state.session.is_none() {
+            None
+        } else {
+            let resume = match kind {
+                ReplacementKind::Retune => {
+                    Some(state.resume.as_deref().ok_or(ProvisionError::Locked)?)
+                }
+                _ => None,
+            };
+            let started = self.spawner.start_after(
                 placement(
                     &self.registry,
                     self.store.dir(),
@@ -1785,8 +1796,9 @@ impl Engine {
                     ),
                     launch: state.agent_launch(provider),
                 },
-            )
-            .map_err(ProvisionError::Spawn)?;
+            );
+            Some(started.map_err(ProvisionError::Spawn)?)
+        };
         let mut replacement = Replacement {
             session,
             provider,
@@ -1795,7 +1807,11 @@ impl Engine {
             kind,
             exchanges: None,
         };
-        if replacement.session.is_starting() {
+        if replacement
+            .session
+            .as_ref()
+            .is_some_and(SessionLifecycle::is_starting)
+        {
             self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
             return Ok(());
         }
@@ -1888,7 +1904,7 @@ impl Engine {
                 if state.model != model {
                     let label = crate::providers::models::label(
                         model.as_deref().unwrap_or("default"),
-                        &state.models,
+                        state.announced.models(),
                     );
                     state.apply(Input::Notice(format!("model changed to {label}")));
                 }
@@ -1908,15 +1924,15 @@ impl Engine {
             };
             crate::log!("thread {thread}: session ended: {why}");
         }
-        state.session = Some(session);
+        if state.provider != provider {
+            state.announced.forget();
+        }
+        state.session = session;
         state.provider = provider;
         state.model = model;
         state.effort = effort;
         state.replace_generation();
         state.preface_pending = true;
-        state.commands.clear();
-        state.models.clear();
-        state.permission_mode = None;
         Ok(())
     }
 
@@ -2151,7 +2167,7 @@ impl Engine {
             resume,
             workspace,
             session_project_root,
-            self.store.dir().join(thread.to_string()).join("queue.json"),
+            self.store.dir().join(thread.to_string()),
         );
         state.title = title;
         state.agent_args = agent_args;
@@ -2173,6 +2189,10 @@ impl Engine {
             state.activity.apply(input);
         }
         state.apply(Input::Revived);
+        let servers = state.announced.mcp_servers().to_vec();
+        if !servers.is_empty() {
+            state.apply(Input::Event(SessionEvent::McpServers { servers }));
+        }
         for kept in self.store.pending_records(thread) {
             state.apply(Input::Notice(format!(
                 "history from before Ferrite last quit could not be saved in the log; \
@@ -2272,13 +2292,7 @@ impl Engine {
             return;
         }
         let state = self.threads.get_mut(&thread).expect("checked");
-        let ready = state.replacement.is_none()
-            && state
-                .session
-                .as_mut()
-                .and_then(SessionLifecycle::session_mut)
-                .is_some();
-        if !ready || !state.awaiting_session.is_empty() {
+        if state.ready_session().is_none() || !state.awaiting_session.is_empty() {
             state.awaiting_session.push_back(text);
             return;
         }
@@ -2504,43 +2518,74 @@ impl Engine {
         self.spawner.discover_sessions(roots, cap)
     }
 
+    /// Ask the Thread's agent for files matching `query`, starting it if it
+    /// is not running (ADR 0032): asked once it is up.
     pub fn search_files(
         &mut self,
         thread: ThreadId,
         query: &str,
     ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
-        self.threads
-            .get_mut(&thread)
-            .and_then(|state| state.session.as_mut())
-            .and_then(SessionLifecycle::session_mut)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
-            })?
-            .search_files(query)
+        let state = self.wake_for(thread)?;
+        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        match state.ready_session() {
+            Some(session) => session.search_files(query, reply)?,
+            None => state.awaiting_search = Some((query.to_string(), reply)),
+        }
+        Ok(answer)
     }
 
-    /// Route a provider-native control to the live Session for this Thread.
-    /// Controls never create or replace a Session and never alter Activity.
+    /// Route a provider-native control to the Thread's agent, starting it if
+    /// it is not running (ADR 0032): run once it is up, a failure then said
+    /// on the Thread. Controls never replace a Session and never alter
+    /// Activity.
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
-        let state = self
-            .threads
-            .get_mut(&thread)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?;
-        let session = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
-            })?;
-        let kind = control_kind(&action);
-        if !session.supports_control(kind) {
+        let state = self.wake_for(thread)?;
+        match state.ready_session() {
+            Some(session) => run_control(session, action),
+            None => {
+                state.awaiting_controls.push(action);
+                Ok(())
+            }
+        }
+    }
+
+    /// An open Thread whose agent is running or starting, for asking it
+    /// something.
+    fn wake_for(&mut self, thread: ThreadId) -> io::Result<&mut Thread> {
+        if !self.threads.contains_key(&thread) {
             return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Session does not support that control",
+                io::ErrorKind::NotFound,
+                "Thread is not open",
             ));
         }
-        session.control(action)
+        self.start_session(thread, None)?;
+        Ok(self.threads.get_mut(&thread).expect("checked"))
+    }
+
+    /// What was asked of `thread`'s agent while it started, besides
+    /// prompts, goes to it once it is up.
+    fn release_asked(&mut self, thread: ThreadId) {
+        let state = self.threads.get_mut(&thread).expect("checked by caller");
+        let asked = !state.awaiting_controls.is_empty() || state.awaiting_search.is_some();
+        if !asked || state.ready_session().is_none() {
+            return;
+        }
+        let controls = std::mem::take(&mut state.awaiting_controls);
+        let search = state.awaiting_search.take();
+        let session = state.ready_session().expect("checked");
+        let failed: Vec<io::Error> = controls
+            .into_iter()
+            .filter_map(|action| run_control(session, action).err())
+            .collect();
+        if let Some((query, reply)) = search {
+            let unanswered = reply.clone();
+            if let Err(error) = session.search_files(&query, reply) {
+                let _ = unanswered.try_send(Err(error));
+            }
+        }
+        for error in failed {
+            state.apply(Input::Notice(format!("control failed: {error}")));
+        }
     }
 
     /// Stop one Subagent of `thread`; Main's turn and the others run on.
@@ -2765,7 +2810,10 @@ impl Engine {
                 let ready = if replacement.exchanges.is_some() {
                     Ok(true)
                 } else {
-                    replacement.session.poll()
+                    replacement
+                        .session
+                        .as_mut()
+                        .map_or(Ok(true), SessionLifecycle::poll)
                 };
                 let result = match ready {
                     Ok(false) => {
@@ -2776,7 +2824,10 @@ impl Engine {
                         if replacement.exchanges.is_none() {
                             if let (Some(title), Some(session)) = (
                                 self.threads[&id].title.as_deref(),
-                                replacement.session.session_mut(),
+                                replacement
+                                    .session
+                                    .as_mut()
+                                    .and_then(SessionLifecycle::session_mut),
                             ) {
                                 let _ = session.set_name(title);
                             }
@@ -2857,11 +2908,19 @@ impl Engine {
                         state.replace_generation();
                         crate::log!("thread {id}: session could not start: {error}");
                         state.apply(Input::Notice(format!("could not start: {error}")));
+                        state.give_up_awaiting();
                     }
                 }
                 changed.push(id);
             }
-            if self.threads.contains_key(&id) && self.release_awaiting(id) {
+            let Some(state) = self.threads.get_mut(&id) else {
+                continue;
+            };
+            if let Some(session) = state.session.as_ref().and_then(SessionLifecycle::session) {
+                state.announced.ask(session);
+            }
+            self.release_asked(id);
+            if self.release_awaiting(id) {
                 changed.push(id);
             }
         }
@@ -3375,19 +3434,24 @@ impl Engine {
     /// Prompts that waited for `thread`'s Session go out once it can take
     /// them, oldest first: as a turn when none runs or waits, else into
     /// the provider's queue. One the provider cannot queue yet waits for
-    /// the next frame, and everything behind it with it. Answers whether
-    /// any went out.
+    /// the next frame, and everything behind it with it. Prompts sent while
+    /// a change was recorded for no Session start the next. Answers whether
+    /// any went out, or back to the Composer.
     fn release_awaiting(&mut self, thread: ThreadId) -> bool {
+        let state = self.threads.get_mut(&thread).expect("checked by caller");
+        if state.session.is_none()
+            && state.replacement.is_none()
+            && !state.awaiting_session.is_empty()
+            && !self.start_or_say(thread, "send failed")
+        {
+            let state = self.threads.get_mut(&thread).expect("checked by caller");
+            state.give_up_awaiting();
+            return true;
+        }
         let mut released = false;
         loop {
             let state = self.threads.get_mut(&thread).expect("checked by caller");
-            let ready = state.replacement.is_none()
-                && state
-                    .session
-                    .as_mut()
-                    .and_then(SessionLifecycle::session_mut)
-                    .is_some();
-            if !ready {
+            if state.ready_session().is_none() {
                 return released;
             }
             let Some(text) = state.awaiting_session.pop_front() else {
@@ -3824,7 +3888,7 @@ impl Engine {
                 "model changed to {}",
                 crate::providers::models::label(
                     model.as_deref().unwrap_or("default"),
-                    &state.models
+                    state.announced.models()
                 )
             ),
             Tune::Effort(_) => format!(
@@ -3893,7 +3957,8 @@ impl Engine {
     /// Model changes: the header always; pre-lock the
     /// eager respawn; post-lock a respawn resuming the same conversation,
     /// refused mid-turn (`Busy`) and when the Session never named itself
-    /// (`Locked` — nothing to resume). The transcript says what changed.
+    /// (`Locked` — nothing to resume). With no agent running, no respawn:
+    /// the next start takes the change. The transcript says what changed.
     fn retune(
         &mut self,
         thread: ThreadId,
@@ -4579,20 +4644,14 @@ impl<'a> ThreadView<'a> {
         self.state.generation
     }
 
+    /// Whether its agent offers the control `kind`, as it last said
+    /// (ADR 0032): running it starts the agent if it is not.
     pub fn supports_control(&self, kind: crate::ControlKind) -> bool {
-        self.state
-            .session
-            .as_ref()
-            .and_then(SessionLifecycle::session)
-            .is_some_and(|session| session.supports_control(kind))
+        self.state.announced.supports(kind)
     }
 
     pub fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
-        self.state
-            .session
-            .as_ref()
-            .and_then(SessionLifecycle::session)
-            .map_or_else(Vec::new, Session::permission_modes)
+        self.state.announced.permission_modes().to_vec()
     }
     pub fn activity(&self) -> ActivityView<'a> {
         self.state.activity.view()
@@ -4759,24 +4818,25 @@ impl<'a> ThreadView<'a> {
         self.state.activity.view().main().tool_timings()
     }
 
-    /// The live Session's command menu (#23): what `/` offers in this
-    /// Thread's Composer. Empty until the Session announces one — never a
+    /// Its agent's command menu (#23), as it last said: what `/` offers in
+    /// this Thread's Composer. Empty until an agent announces one — never a
     /// static list.
     pub fn commands(&self) -> &'a [crate::SessionCommand] {
-        &self.state.commands
+        self.state.announced.commands()
     }
 
-    /// The models the live Session's install offers (#25): the provider
-    /// picker's model rows. Empty until the Session announces a list —
-    /// never a static one.
+    /// The models its agent's install offers (#25), as it last said: the
+    /// provider picker's model rows. Empty until an agent announces a list
+    /// — never a static one.
     pub fn models(&self) -> &'a [ModelInfo] {
-        &self.state.models
+        self.state.announced.models()
     }
 
-    /// The live Session's permission mode (#23): the meta row's mode chip.
-    /// None until the Session announces one — a chip is never invented.
+    /// Its agent's permission mode (#23), as it last said: the meta row's
+    /// mode chip. None until an agent announces one — a chip is never
+    /// invented.
     pub fn permission_mode(&self) -> Option<&'a str> {
-        self.state.permission_mode.as_deref()
+        self.state.announced.permission_mode()
     }
 }
 
@@ -5093,6 +5153,17 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
     }
 }
 
+/// Run `action` on `session`, if it offers it.
+fn run_control(session: &mut dyn Session, action: crate::SessionControl) -> io::Result<()> {
+    if !session.supports_control(control_kind(&action)) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Session does not support that control",
+        ));
+    }
+    session.control(action)
+}
+
 fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
     match action {
         crate::SessionControl::RefreshContext => crate::ControlKind::RefreshContext,
@@ -5211,9 +5282,10 @@ fn apply_move(store: &Store, id: ThreadId, state: &mut Thread, moved: Move) -> b
 /// Only Session-level metadata belongs here; execution state lives in Activity.
 fn fold(state: &mut Thread, event: &SessionEvent) {
     match event {
-        SessionEvent::Commands { commands } => state.commands = commands.clone(),
-        SessionEvent::Models { models } => state.models = models.clone(),
-        SessionEvent::PermissionMode { mode } => state.permission_mode = Some(mode.clone()),
+        SessionEvent::Commands { .. }
+        | SessionEvent::Models { .. }
+        | SessionEvent::PermissionMode { .. }
+        | SessionEvent::McpServers { .. } => state.announced.hear(event),
         SessionEvent::Init { session_id, .. } => state.resume = Some(session_id.clone()),
         SessionEvent::ConversationReset { session_id } => {
             state.resume = Some(session_id.clone());

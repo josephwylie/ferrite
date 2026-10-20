@@ -153,16 +153,16 @@ pub enum SessionEvent {
     },
     /// The Session's own command menu, announced at Session start — what the
     /// Composer's `/` popover lists (#23). Claude lifts it from the initialize
-    /// handshake's `commands[]`; Codex answers a `skills/list` request. Session
-    /// state like a Decision, not durable history: a replacement Session
-    /// announces its own.
+    /// handshake's `commands[]`; Codex answers a `skills/list` request. Not
+    /// history: the Thread keeps the last one beside its log, offered until
+    /// its next Session announces its own (ADR 0032).
     Commands {
         commands: Vec<SessionCommand>,
     },
     /// The permission mode the Session started in, in the provider's own
     /// word (`"acceptEdits"`, `"bypassPermissions"`, …) — the Composer's
     /// meta-row mode chip (#23). Claude lifts it from the same initialize
-    /// handshake; display-only, and Session state like the menu above.
+    /// handshake; display-only, and kept like the menu above.
     PermissionMode {
         mode: String,
     },
@@ -170,8 +170,8 @@ pub enum SessionEvent {
     /// own menu shows — the model picker's rows (#25). Claude lifts the
     /// list from the same initialize handshake; Codex asks `model/list`
     /// once its thread is up. Until either speaks the picker falls back
-    /// to the catalog in `providers::models`. Session state exactly like
-    /// the command menu: gone with the Session.
+    /// to the catalog in `providers::models`. Kept exactly like the command
+    /// menu.
     Models {
         models: Vec<ModelInfo>,
     },
@@ -179,7 +179,8 @@ pub enum SessionEvent {
     ContextDetails {
         details: ContextDetails,
     },
-    /// Current MCP server state for this Session.
+    /// Current MCP server state for this Session; kept like the command
+    /// menu, shown again when the Thread reopens.
     McpServers {
         servers: Vec<McpServer>,
     },
@@ -211,7 +212,8 @@ pub struct UsageDetails {
     pub reasoning_output_tokens: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ControlKind {
     RefreshContext,
     RefreshMcp,
@@ -249,14 +251,15 @@ pub struct ContextCategory {
     pub tokens: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct McpServer {
     pub name: String,
     pub status: McpStatus,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum McpStatus {
     Connected,
     Connecting,
@@ -341,7 +344,7 @@ impl PartialEq<str> for ModelInfo {
 }
 
 /// One entry of a Session's command menu, in the provider's own words.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionCommand {
     /// What the operator types after `/`.
     pub name: String,
@@ -512,7 +515,7 @@ pub struct FormChoice {
 }
 
 /// A provider-native permission mode offered by the shared picker.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PermissionModeChoice {
     pub value: String,
     pub label: String,

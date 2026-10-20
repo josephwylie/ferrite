@@ -287,8 +287,9 @@ impl Session for SessionWithDefaults {
     fn search_files(
         &mut self,
         query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
-        self.inner.search_files(query)
+        reply: crate::providers::FileSearchReply,
+    ) -> io::Result<()> {
+        self.inner.search_files(query, reply)
     }
     fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
         self.inner.enqueue(client_id, text)

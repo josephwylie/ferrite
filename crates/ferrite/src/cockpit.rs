@@ -14157,14 +14157,7 @@ mod tests {
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
         controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
         native_controls: Rc<RefCell<bool>>,
-        file_searches: Rc<
-            RefCell<
-                Vec<(
-                    String,
-                    Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
-                )>,
-            >,
-        >,
+        file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
         native_files: Rc<RefCell<bool>>,
         effort_answers: EffortAnswers,
     }
@@ -14177,14 +14170,13 @@ mod tests {
         fn search_files(
             &mut self,
             query: &str,
-        ) -> std::io::Result<Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>>
-        {
+            reply: ferrite_core::providers::FileSearchReply,
+        ) -> std::io::Result<()> {
             if !*self.native_files.borrow() {
                 return Err(std::io::ErrorKind::Unsupported.into());
             }
-            let (tx, rx) = mpsc::channel();
-            self.file_searches.borrow_mut().push((query.into(), tx));
-            Ok(rx)
+            self.file_searches.borrow_mut().push((query.into(), reply));
+            Ok(())
         }
 
         fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
@@ -14285,14 +14277,7 @@ mod tests {
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
         controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
         native_controls: Rc<RefCell<bool>>,
-        file_searches: Rc<
-            RefCell<
-                Vec<(
-                    String,
-                    Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
-                )>,
-            >,
-        >,
+        file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
         native_files: Rc<RefCell<bool>>,
         effort_answers: EffortAnswers,
     }

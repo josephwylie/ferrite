@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::{FileSuggestion, SettingAck};
+use super::{FileSearchReply, SettingAck};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -567,12 +567,8 @@ impl ClaudeSession {
 
     /// Ask the live CLI for ranked paths. A newer query cancels the previous
     /// receiver locally; the control response is consumed by the reader.
-    pub fn search_files(
-        &mut self,
-        query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+    pub fn search_files(&mut self, query: &str, reply: FileSearchReply) -> io::Result<()> {
         let id = self.take_request_id();
-        let (reply, receiver) = sync_channel(1);
         lock(&self.file_search).begin(id.clone(), reply);
         if let Err(error) = self.write_line(&serde_json::json!({
             "type": "control_request",
@@ -582,7 +578,7 @@ impl ClaudeSession {
             lock(&self.file_search).discard(&id);
             return Err(error);
         }
-        Ok(receiver)
+        Ok(())
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.
