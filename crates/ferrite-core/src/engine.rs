@@ -9,7 +9,7 @@
 //! they opened (`open_threads`). Focus, the View, fullscreen and Drafts are
 //! each window's own.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -502,7 +502,7 @@ struct Thread {
     store_error: Option<String>,
     history: HashMap<AgentKey, history::Pending>,
     history_errors: HashMap<AgentKey, String>,
-    /// The live Session, or None for a parked Thread.
+    /// The live Session, or None while the Thread is not in use (ADR 0032).
     session: Option<SessionLifecycle>,
     replacement: Option<Replacement>,
     writer: ThreadWriter,
@@ -517,9 +517,14 @@ struct Thread {
     /// respawn, like the model.
     effort: Option<String>,
     title: Option<String>,
-    /// Prompts waiting for the Session to start, oldest first: the first
-    /// is sent once it is up, the rest go to its queue behind it.
-    held: Vec<String>,
+    /// Prompts the Session cannot take yet, oldest first: it is starting,
+    /// or it cannot queue yet (Claude, before its first turn starts). Each
+    /// goes out as a turn when none runs, or into the provider's queue once
+    /// it takes them; anything written meanwhile waits behind them.
+    awaiting_session: VecDeque<String>,
+    /// The Session was started for use (ADR 0032) rather than asked for:
+    /// it shows as starting only once a prompt waits for it.
+    woken: bool,
     native_queue: queue::Queue,
     /// An interrupt was sent while prompts were mirrored: when the turn
     /// ends, everything held goes out as one prompt — Escape means "stop,
@@ -627,7 +632,8 @@ impl Thread {
             model,
             effort,
             title: None,
-            held: Vec::new(),
+            awaiting_session: VecDeque::new(),
+            woken: false,
             native_queue: queue::Queue::open(queue_path),
             resend_held_on_turn_end: false,
             prompt_history: PromptHistory::new(Vec::new()),
@@ -718,21 +724,22 @@ impl Thread {
             session_project_root: self.session_project_root.clone(),
             first_prompt_sent: self.first_prompt_sent,
             has_prompt_history: self.prompt_history.has_entries(),
-            starting: self.replacement.is_some()
-                || self
-                    .session
-                    .as_ref()
-                    .is_some_and(SessionLifecycle::is_starting),
+            starting: self.starting(),
             working: self.busy(),
             tuning: self.tuning.is_some(),
             native_queue_pending: self.native_queue.pending(),
             queued: self
-                .native_queue
-                .items
+                .awaiting_session
                 .iter()
                 .rev()
-                .map(|item| item.text.clone())
-                .chain(self.held.iter().rev().cloned())
+                .cloned()
+                .chain(
+                    self.native_queue
+                        .items
+                        .iter()
+                        .rev()
+                        .map(|item| item.text.clone()),
+                )
                 .collect(),
             suggestion: self.suggestion.clone(),
             commands: self.commands.iter().map(Into::into).collect(),
@@ -809,6 +816,30 @@ impl Thread {
     }
     fn busy(&self) -> bool {
         self.activity.view().main().busy()
+    }
+
+    /// Whether a window shows the Session starting: a replacement, or a
+    /// start it was asked for. A wake shows only once a prompt waits on it.
+    fn starting(&self) -> bool {
+        self.replacement.is_some()
+            || self
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+                && (!self.woken || !self.awaiting_session.is_empty())
+    }
+
+    /// A prompt that could not be delivered goes back to the Composer, so
+    /// the operator can send it again; nothing retries it unasked.
+    fn undelivered(&mut self, text: String, error: io::Error) -> Update {
+        self.native_queue.recovered.push((text, false));
+        self.apply(Input::Notice(format!("send failed: {error}")))
+    }
+
+    /// Whether a prompt sent now would wait behind a turn: one runs, or
+    /// the provider still holds or takes queued prompts.
+    fn turn_ahead(&self) -> bool {
+        self.busy() || self.activity.view().main_operator_turn() || self.native_queue.pending()
     }
 
     /// Whether work runs behind Main: its Subagents, or its transcript's
@@ -1606,12 +1637,12 @@ impl Engine {
             }
             None => self.store.set_session_project_root(thread, root, None)?,
         }
-        let held = self
+        let awaiting = self
             .threads
             .get_mut(&thread)
-            .map(|state| std::mem::take(&mut state.held))
+            .map(|state| std::mem::take(&mut state.awaiting_session))
             .unwrap_or_default();
-        for text in held {
+        for text in awaiting {
             self.send(thread, text);
         }
         Ok(())
@@ -2023,7 +2054,7 @@ impl Engine {
     /// fresh Transcript, with nothing running in it (ADR 0032). Its Session
     /// starts when the Thread is used, told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        self.reopen(thread, false, None)
+        self.reopen(thread, None).map(drop)
     }
 
     /// Reopen a parked Thread as `launch` says (`thread.revive`, ADR 0031):
@@ -2031,19 +2062,23 @@ impl Engine {
     /// its Session carries on `launch.resume`'s conversation, or starts a
     /// new one under the Thread's history when there is none. The Thread
     /// keeps its id, as a Herdr pane does when its agent is started again.
+    /// Its Session starts now; one that cannot parks the Thread again.
     pub fn revive_with(&mut self, thread: ThreadId, launch: Launch) -> Result<(), LoadError> {
-        self.reopen(thread, true, Some(launch))
+        let first_args = self.reopen(thread, Some(launch))?;
+        if let Err(error) = self.start_session(thread, first_args.as_ref()) {
+            self.park(thread)?;
+            return Err(LoadError::Io(error));
+        }
+        Ok(())
     }
 
-    /// `start`: whether its Session starts now, rather than when it is used.
-    /// The worktree's git calls never hold the caller; they run where the
-    /// spawner starts the CLI (`Spawner::start_after`).
+    /// Open a parked Thread with nothing running in it, answering the
+    /// arguments its first Session starts with.
     fn reopen(
         &mut self,
         thread: ThreadId,
-        start: bool,
         launch: Option<Launch>,
-    ) -> Result<(), LoadError> {
+    ) -> Result<Option<launch_args::LaunchArgs>, LoadError> {
         // Reopened while open, a Thread would be replaced whole: its live
         // Session killed mid-turn, the records its log had not taken yet
         // lost, and a second CLI started on the conversation.
@@ -2067,7 +2102,6 @@ impl Engine {
         let model = snapshot.model();
         let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
-        let project_id = snapshot.project_id();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2076,7 +2110,7 @@ impl Engine {
         // agent's, not Ferrite's: gone while parked, the Thread goes back
         // to main rather than rebuilding somebody else's tree. Ferrite's
         // own (registered, or pre-registry under the store) are recreated
-        // below as ever.
+        // when its Session starts, as ever.
         if let Some(WorkspaceBinding::Worktree { repo, path }) = &workspace {
             if !path.exists()
                 && self.registry.branch_for(path).is_none()
@@ -2090,13 +2124,6 @@ impl Engine {
                 workspace = Some(main);
             }
         }
-        // On demand also means back on demand: a worktree deleted while the
-        // Thread was parked is recreated on its own branch before anything
-        // spawns into it.
-        let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
-            .map(Path::to_path_buf);
-        let additional_directories =
-            project_additional_directories(&self.registry, project_id, cwd.as_deref());
         let saved = launch_args::path(self.store.dir(), thread);
         // A new launch's own arguments start this Session; every later one
         // starts with what is saved of them.
@@ -2112,34 +2139,11 @@ impl Engine {
                 Err(error) => (None, None, Some(error)),
             },
         };
-        let session = if start {
-            let place = placement(&self.registry, self.store.dir(), workspace.as_ref(), thread);
-            let session = self
-                .spawner
-                .start_after(
-                    place,
-                    SpawnRequest {
-                        thread,
-                        provider,
-                        model: model.as_deref(),
-                        effort: effort.as_deref(),
-                        resume: resume.as_deref(),
-                        cwd: cwd.as_deref(),
-                        name: title.as_deref(),
-                        additional_directories,
-                        launch: launch_args::for_provider(first_args.as_ref(), provider),
-                    },
-                )
-                .map_err(LoadError::Io)?;
-            Some(session)
-        } else {
-            None
-        };
         let writer = revival.take_writer();
 
         let mut state = Thread::fresh(
             self.boot,
-            session,
+            None,
             writer,
             provider,
             model,
@@ -2188,16 +2192,10 @@ impl Engine {
         self.threads.insert(thread, state);
         self.note_open(thread);
         // Queued prompts the provider keeps are sent only by a running agent.
-        if !start && owes_delivery {
-            if let Err(error) = self.start_session(thread) {
-                if let Some(state) = self.threads.get_mut(&thread) {
-                    state.apply(Input::Notice(format!(
-                        "the queued prompts could not be sent: {error}"
-                    )));
-                }
-            }
+        if owes_delivery {
+            self.start_or_say(thread, "the queued prompts could not be sent");
         }
-        Ok(())
+        Ok(first_args)
     }
 
     /// Open every member of one persisted Group or leave the live set unchanged.
@@ -2270,38 +2268,59 @@ impl Engine {
             state.apply(Input::Notice(refusal));
             return;
         }
-        if state.session.is_none() {
-            if let Err(e) = self.start_session(thread) {
-                if let Some(state) = self.threads.get_mut(&thread) {
-                    state.apply(Input::Notice(format!("send failed: {e}")));
-                }
-                return;
-            }
-        }
-        let Some(state) = self.threads.get_mut(&thread) else {
+        if !self.start_or_say(thread, "send failed") {
             return;
-        };
-        if state.replacement.is_some()
-            || state
+        }
+        let state = self.threads.get_mut(&thread).expect("checked");
+        let ready = state.replacement.is_none()
+            && state
                 .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-        {
-            state.held.push(text);
+                .as_mut()
+                .and_then(SessionLifecycle::session_mut)
+                .is_some();
+        if !ready || !state.awaiting_session.is_empty() {
+            state.awaiting_session.push_back(text);
             return;
         }
         if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-            state.held.insert(0, text);
-            state.apply(Input::Notice(format!("send failed: {error}")));
+            state.undelivered(text, error);
         }
     }
 
-    /// Start an open Thread's Session where its conversation left off.
-    pub(super) fn start_session(&mut self, thread: ThreadId) -> io::Result<()> {
+    /// `start_session` for something the operator asked of the Thread: a
+    /// start that fails says so on it, `what` naming what failed.
+    fn start_or_say(&mut self, thread: ThreadId, what: &str) -> bool {
+        let Err(error) = self.start_session(thread, None) else {
+            return true;
+        };
+        if let Some(state) = self.threads.get_mut(&thread) {
+            state.apply(Input::Notice(format!("{what}: {error}")));
+        }
+        false
+    }
+
+    /// Start an open Thread's Session where its conversation left off, the
+    /// one way any does (ADR 0032), unless it has one running or starting.
+    /// `first`: arguments for this start only; otherwise the saved ones.
+    /// Refused while its session project root is gone. A worktree deleted
+    /// while the Thread was parked is recreated on its own branch before
+    /// anything spawns into it; the git calls never hold the caller, they
+    /// run where the spawner starts the CLI (`Spawner::start_after`).
+    fn start_session(
+        &mut self,
+        thread: ThreadId,
+        first: Option<&launch_args::LaunchArgs>,
+    ) -> io::Result<()> {
         let project = self.project_id(thread);
         let Some(state) = self.threads.get_mut(&thread) else {
             return Ok(());
         };
+        if state.session.is_some() || state.replacement.is_some() {
+            return Ok(());
+        }
+        if let Some(refusal) = vanished_root_refusal(state) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
+        }
         state.replace_generation();
         let cwd = workspace::effective_cwd(
             state.session_project_root.as_deref(),
@@ -2327,10 +2346,14 @@ impl Engine {
                 cwd: cwd.as_deref(),
                 name: state.title.as_deref(),
                 additional_directories,
-                launch: state.agent_launch(state.provider),
+                launch: match first {
+                    Some(args) => launch_args::for_provider(Some(args), state.provider),
+                    None => state.agent_launch(state.provider),
+                },
             },
         )?;
         state.session = Some(session);
+        state.woken = true;
         state.preface_pending = true;
         Ok(())
     }
@@ -2733,7 +2756,6 @@ impl Engine {
         let mut changed = Vec::new();
         let ids: Vec<_> = self.threads.keys().copied().collect();
         for id in ids {
-            let mut release = false;
             let replacement = self
                 .threads
                 .get_mut(&id)
@@ -2773,15 +2795,12 @@ impl Engine {
                     }
                     Err(error) => Err(ProvisionError::Spawn(error)),
                 };
-                match result {
-                    Ok(()) => release = true,
-                    Err(error) => {
-                        crate::log!("thread {id}: session change failed: {error}");
-                        self.threads
-                            .get_mut(&id)
-                            .expect("exists")
-                            .apply(Input::Notice(format!("Session change failed: {error}")));
-                    }
+                if let Err(error) = result {
+                    crate::log!("thread {id}: session change failed: {error}");
+                    self.threads
+                        .get_mut(&id)
+                        .expect("exists")
+                        .apply(Input::Notice(format!("Session change failed: {error}")));
                 }
                 changed.push(id);
             }
@@ -2832,7 +2851,6 @@ impl Engine {
                         ) {
                             let _ = session.set_name(title);
                         }
-                        release = true;
                     }
                     Err(error) => {
                         state.session = None;
@@ -2843,23 +2861,8 @@ impl Engine {
                 }
                 changed.push(id);
             }
-            if release {
-                let state = self.threads.get_mut(&id).expect("exists");
-                if !state.held.is_empty() {
-                    let behind = state.held.split_off(1);
-                    let text = state.held.remove(0);
-                    match deliver(state, text.clone(), self.suggestions_enabled) {
-                        Ok(_) => {
-                            for text in behind {
-                                self.queue(id, text);
-                            }
-                        }
-                        Err(error) => {
-                            state.held = std::iter::once(text).chain(behind).collect();
-                            state.apply(Input::Notice(format!("send failed: {error}")));
-                        }
-                    }
-                }
+            if self.threads.contains_key(&id) && self.release_awaiting(id) {
+                changed.push(id);
             }
         }
         changed.sort_unstable();
@@ -3286,7 +3289,39 @@ impl Engine {
             return false;
         };
         state.prompt_history.reset();
-        let id = format!(
+        if let Some(refusal) = vanished_root_refusal(state) {
+            state.apply(Input::Notice(refusal));
+            return false;
+        }
+        if !self.start_or_say(thread, "queue failed") {
+            return false;
+        }
+        let state = self.threads.get_mut(&thread).expect("checked");
+        let ready = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .is_some();
+        if !ready || !state.awaiting_session.is_empty() {
+            state.awaiting_session.push_back(text);
+            state.invalidate_suggestion();
+            return true;
+        }
+        match self.enqueue(thread, &text) {
+            Enqueued::Taken => true,
+            Enqueued::NotYet(error) => {
+                let state = self.threads.get_mut(&thread).expect("checked");
+                state.apply(Input::Notice(format!("native queue failed: {error}")));
+                false
+            }
+            Enqueued::Failed => false,
+        }
+    }
+
+    /// Hand `text` to the provider's queue.
+    fn enqueue(&mut self, thread: ThreadId, text: &str) -> Enqueued {
+        let state = self.threads.get_mut(&thread).expect("checked by caller");
+        let id = &format!(
             "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
             std::process::id(),
             state.generation & 0xffff,
@@ -3298,31 +3333,12 @@ impl Engine {
                 .as_nanos()
                 & 0xffffffffffff
         );
-        if let Some(refusal) = vanished_root_refusal(state) {
-            state.apply(Input::Notice(refusal));
-            return false;
-        }
-        let ready = state
-            .session
-            .as_mut()
-            .and_then(SessionLifecycle::session_mut)
-            .is_some();
-        if !ready {
-            state.held.push(text);
-            state.invalidate_suggestion();
-            if state.session.is_none() {
-                if let Err(error) = self.start_session(thread) {
-                    crate::log!("thread {thread}: its agent could not start: {error}");
-                }
-            }
-            return true;
-        }
-        if let Err(error) = state.native_queue.prepare(&id, &text) {
-            state.native_queue.refused(&id);
+        if let Err(error) = state.native_queue.prepare(id, text) {
+            state.native_queue.refused(id);
             state.apply(Input::Notice(format!(
                 "queue metadata could not be saved: {error}"
             )));
-            return false;
+            return Enqueued::Failed;
         }
         let result = state
             .session
@@ -3336,16 +3352,15 @@ impl Engine {
             })
             .and_then(|session| {
                 session.set_suggestions_enabled(self.suggestions_enabled)?;
-                session.enqueue(&id, &text)
+                session.enqueue(id, text)
             });
         if let Err(error) = result {
             if matches!(
                 error.kind(),
                 io::ErrorKind::Unsupported | io::ErrorKind::NotConnected
             ) {
-                state.native_queue.refused(&id);
-                state.apply(Input::Notice(format!("native queue failed: {error}")));
-                return false;
+                state.native_queue.refused(id);
+                return Enqueued::NotYet(error);
             }
             // A partial pipe write might have reached the provider. Keep its
             // correlation metadata and never turn uncertainty into a resend.
@@ -3354,13 +3369,58 @@ impl Engine {
             )));
         }
         state.invalidate_suggestion();
-        true
+        Enqueued::Taken
+    }
+
+    /// Prompts that waited for `thread`'s Session go out once it can take
+    /// them, oldest first: as a turn when none runs or waits, else into
+    /// the provider's queue. One the provider cannot queue yet waits for
+    /// the next frame, and everything behind it with it. Answers whether
+    /// any went out.
+    fn release_awaiting(&mut self, thread: ThreadId) -> bool {
+        let mut released = false;
+        loop {
+            let state = self.threads.get_mut(&thread).expect("checked by caller");
+            let ready = state.replacement.is_none()
+                && state
+                    .session
+                    .as_mut()
+                    .and_then(SessionLifecycle::session_mut)
+                    .is_some();
+            if !ready {
+                return released;
+            }
+            let Some(text) = state.awaiting_session.pop_front() else {
+                return released;
+            };
+            if !state.turn_ahead() {
+                if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
+                    state.undelivered(text, error);
+                }
+                released = true;
+                continue;
+            }
+            match self.enqueue(thread, &text) {
+                Enqueued::Taken => released = true,
+                // Its draft is gone: it goes back to the Composer.
+                Enqueued::Failed => {
+                    let state = self.threads.get_mut(&thread).expect("checked");
+                    state.native_queue.recovered.push((text, false));
+                    released = true;
+                }
+                Enqueued::NotYet(_) => {
+                    let state = self.threads.get_mut(&thread).expect("checked");
+                    state.awaiting_session.push_front(text);
+                    return released;
+                }
+            }
+        }
     }
 
     /// Empty-Composer Enter requests cancellation; retrieval arrives via the pump.
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
         if let Some(state) = self.threads.get_mut(&thread) {
-            if let Some(text) = state.held.pop() {
+            if let Some(text) = state.awaiting_session.pop_back() {
                 return Some(text);
             }
         }
@@ -3382,8 +3442,9 @@ impl Engine {
             return;
         };
         state.prompt_history.reset();
-        // Startup input has never reached a provider and can be taken back locally.
-        if let Some(text) = state.held.pop() {
+        // Input still waiting for the Session never reached the provider
+        // and can be taken back locally.
+        if let Some(text) = state.awaiting_session.pop_back() {
             if restore {
                 state.native_queue.recovered.push((text, prepend));
             }
@@ -3958,7 +4019,7 @@ impl Engine {
             && self
                 .threads
                 .values()
-                .all(|state| state.settled() && state.held.is_empty())
+                .all(|state| state.settled() && state.awaiting_session.is_empty())
     }
 
     /// An open Thread's Attention, as the Server knows it (ADR 0015): a
@@ -4405,15 +4466,14 @@ impl Engine {
         Ok(true)
     }
 
-    /// Whether a prompt already waits on `thread`'s Session to start: a
-    /// held send, or a new Thread's first prompt. Another send would
-    /// replace or drop it.
+    /// Whether a prompt waits on `thread`'s Session: one written while it
+    /// starts or before it can queue, or a new Thread's first prompt.
     pub fn holds_prompt(&self, thread: ThreadId) -> bool {
         self.bootstraps.contains_key(&thread)
             || self
                 .threads
                 .get(&thread)
-                .is_some_and(|state| !state.held.is_empty())
+                .is_some_and(|state| !state.awaiting_session.is_empty())
     }
 
     /// Whether `thread` is a Draft's first send still starting: its Pane is
@@ -4589,38 +4649,45 @@ impl<'a> ThreadView<'a> {
     /// the one `⌫ unqueue` and Up act on.
     pub fn queued(&self) -> Option<&'a str> {
         self.state
-            .native_queue
-            .items
-            .last()
-            .map(|item| item.text.as_str())
-            .or(self.state.held.last().map(String::as_str))
+            .awaiting_session
+            .back()
+            .map(String::as_str)
+            .or(self
+                .state
+                .native_queue
+                .items
+                .last()
+                .map(|item| item.text.as_str()))
     }
 
     /// Every prompt held back, newest first: the latest sits on top of the
     /// pile and what was said before it reads underneath.
     pub fn queued_all(&self) -> Vec<&'a str> {
         self.state
-            .native_queue
-            .items
+            .awaiting_session
             .iter()
             .rev()
-            .map(|item| item.text.as_str())
-            .chain(self.state.held.iter().rev().map(String::as_str))
+            .map(String::as_str)
+            .chain(
+                self.state
+                    .native_queue
+                    .items
+                    .iter()
+                    .rev()
+                    .map(|item| item.text.as_str()),
+            )
             .collect()
     }
 
-    /// Is a turn running? A prompt written now has to wait for it.
-    /// Startup/replacement is pending; its choices and first prompt have
-    /// not committed yet. Ready adapters never enter this state.
+    /// A replacement is pending, or a start that shows: its choices and
+    /// first prompt have not committed yet. Ready adapters never enter this
+    /// state, and a wake shows only once a prompt waits on it (ADR 0032).
     pub fn starting(&self) -> bool {
-        self.state.replacement.is_some()
-            || self
-                .state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
+        self.state.starting()
     }
 
+    /// Is a turn running, or a start that shows? A prompt written now has
+    /// to wait for it.
     pub fn busy(&self) -> bool {
         self.state.busy() || self.starting()
     }
@@ -4644,7 +4711,7 @@ impl<'a> ThreadView<'a> {
     }
 
     pub fn needs_queue(&self) -> bool {
-        self.busy() || self.state.activity.view().main_operator_turn() || self.queue_pending()
+        self.starting() || self.state.turn_ahead()
     }
 
     /// Whether the provider holds a queued prompt, or is still taking one.
@@ -4749,6 +4816,16 @@ pub fn title_from_prompt(text: &str) -> String {
     }
 }
 
+/// What became of a prompt handed to the provider's queue.
+enum Enqueued {
+    /// The provider took it, or may have: never resent.
+    Taken,
+    /// It cannot queue yet; nothing was sent.
+    NotYet(io::Error),
+    /// Ferrite could not record it, and said so; nothing was sent.
+    Failed,
+}
+
 /// The #24 guard: a session project root that no longer exists on disk
 /// refuses the send — readably, naming the path and the remedy — never a
 /// silent fallback to working in the binding.
@@ -4851,10 +4928,7 @@ fn resend_held(state: &mut Thread, suggestions_enabled: bool) -> Option<Update> 
         .join("\n\n");
     match deliver(state, text.clone(), suggestions_enabled) {
         Ok(applied) => Some(applied),
-        Err(error) => {
-            state.held.insert(0, text);
-            Some(state.apply(Input::Notice(format!("send failed: {error}"))))
-        }
+        Err(error) => Some(state.undelivered(text, error)),
     }
 }
 

@@ -34,7 +34,12 @@ struct Scripted {
     events: Receiver<SessionEvent>,
     answers: Answers,
     queued: Queued,
+    can_queue: CanQueue,
 }
+
+/// Whether the provider takes prompts into its queue yet: always, unless
+/// the test holds it shut, as Claude is until its first turn starts.
+type CanQueue = Option<Arc<std::sync::atomic::AtomicBool>>;
 
 impl Session for Scripted {
     fn events(&self) -> &Receiver<SessionEvent> {
@@ -50,8 +55,18 @@ impl Session for Scripted {
         self.answers.lock().unwrap().push((id.into(), answer));
         Ok(())
     }
-    /// Takes every prompt, as a provider that confirmed native queuing.
+    /// Takes every prompt once it can queue at all.
     fn enqueue(&mut self, client_id: &str, _: &str) -> io::Result<()> {
+        if self
+            .can_queue
+            .as_ref()
+            .is_some_and(|open| !open.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the provider cannot queue yet",
+            ));
+        }
         self.queued.lock().unwrap().push(client_id.into());
         Ok(())
     }
@@ -64,6 +79,7 @@ struct Spawn {
     queued: Queued,
     /// Sessions start only as the test lets each through; at once without.
     gate: Option<Arc<Mutex<Receiver<()>>>>,
+    can_queue: CanQueue,
 }
 
 impl Spawn {
@@ -74,6 +90,7 @@ impl Spawn {
             events,
             answers: self.answers.clone(),
             queued: self.queued.clone(),
+            can_queue: self.can_queue.clone(),
         }
     }
 }
@@ -139,6 +156,7 @@ fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>, projects: Option<Pa
         answers: answers.clone(),
         queued: queued.clone(),
         gate,
+        can_queue: None,
     };
     let settings_dir = dir.clone();
     let (relaunches, relaunched) = mpsc::channel();
@@ -1379,8 +1397,48 @@ pub(super) fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
         answers: Answers::default(),
         queued: Queued::default(),
         gate: None,
+        can_queue: None,
     };
     (Box::new(spawner), providers)
+}
+
+/// A Thread an earlier Server left open, and this one's Engine on the same
+/// Store after its boot reopened it, its agents started by `spawner`.
+fn restored(name: &str, spawner: Box<dyn Spawner>) -> (Engine, ThreadId) {
+    let dir = scratch(name);
+    let store = dir.join("threads");
+    let (first_spawner, _providers) = spawn();
+    let mut first = engine(&store, first_spawner);
+    let thread = open_in(&mut first, &dir);
+    first.halt_sessions();
+    drop(first);
+    let mut next = engine(&store, spawner);
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    (next, thread)
+}
+
+/// Pump `engine` until `done`, failing as `what` after five seconds.
+fn pump_engine_until(engine: &mut Engine, what: &str, done: impl Fn(&Engine) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done(engine) {
+        assert!(Instant::now() < deadline, "{what}");
+        engine.pump();
+    }
+}
+
+/// The operator's prompts in `thread`'s transcript, in order.
+fn prompts(engine: &Engine, thread: ThreadId) -> Vec<String> {
+    engine
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Prompt(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(super) fn open_in(engine: &mut Engine, dir: &Path) -> ThreadId {
@@ -1501,11 +1559,9 @@ fn a_restored_thread_starts_its_agent_on_send_without_a_trace() {
         })
         .unwrap();
     first.send(thread, "first".into());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while first.thread(thread).unwrap().provider_session() != Some("claude-1") {
-        assert!(Instant::now() < deadline, "the Init never landed");
-        first.pump();
-    }
+    pump_engine_until(&mut first, "the Init never landed", |engine| {
+        engine.thread(thread).unwrap().provider_session() == Some("claude-1")
+    });
     first.halt_sessions();
     drop(first);
 
@@ -1543,89 +1599,185 @@ fn a_restored_thread_starts_its_agent_on_send_without_a_trace() {
     assert_eq!(rows(&next), expected);
 }
 
-/// The operator starting to write to a restored Thread starts its agent,
-/// so it is ready by the time the prompt is sent; nothing is sent for it.
-#[test]
-fn writing_to_a_restored_thread_starts_its_agent() {
-    let dir = scratch("restored-compose");
-    let store = dir.join("threads");
-    let (spawner, _providers) = spawn();
-    let mut first = engine(&store, spawner);
-    let thread = open_in(&mut first, &dir);
-    first.halt_sessions();
-    drop(first);
+/// Scripted Sessions that start only as the returned Sender lets each
+/// through, and where their providers arrive.
+fn spawn_gated() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>, Sender<()>) {
+    let (sessions, providers) = mpsc::channel();
+    let (gate, opens) = mpsc::channel();
+    let spawner = Spawn {
+        sessions,
+        answers: Answers::default(),
+        queued: Queued::default(),
+        gate: Some(Arc::new(Mutex::new(opens))),
+        can_queue: None,
+    };
+    (Box::new(spawner), providers, gate)
+}
 
-    let (spawner, resumed) = spawn();
-    let mut next = engine(&store, spawner);
-    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
-    let before = next.thread(thread).unwrap().transcript().blocks().to_vec();
-    next.window_says(
+fn composing(engine: &mut Engine, thread: ThreadId) {
+    engine.window_says(
         1,
         &Op::Composing {
             thread,
             unsent: true,
         },
     );
-    next.pump();
+    engine.pump();
+}
 
-    resumed
+/// The operator starting to write to a restored Thread starts its agent,
+/// so it is ready by the time the prompt is sent; nothing shows it, and
+/// nothing is sent for it.
+#[test]
+fn writing_to_a_restored_thread_starts_its_agent_unseen() {
+    let (spawner, started, _gate) = spawn_gated();
+    let (mut engine, thread) = restored("restored-compose", spawner);
+    let before = engine
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .to_vec();
+    composing(&mut engine, thread);
+
+    started
         .recv_timeout(Duration::from_secs(5))
         .expect("the agent started");
-    assert_eq!(next.thread(thread).unwrap().transcript().blocks(), before);
+    let view = engine.thread(thread).unwrap();
+    assert!(!view.starting(), "a wake shows nothing");
+    assert_eq!(view.transcript().blocks(), before);
+
+    engine.send(thread, "go".into());
+    assert!(
+        engine.thread(thread).unwrap().starting(),
+        "a prompt waiting on it shows it starting"
+    );
+}
+
+/// A Thread whose session project root is gone starts no agent for a
+/// keystroke: the send it leads to refuses, naming the path.
+#[test]
+fn writing_to_a_thread_whose_root_is_gone_starts_no_agent() {
+    let (spawner, started) = spawn();
+    let (mut engine, thread) = restored("restored-vanished", spawner);
+    let root = scratch("restored-vanished-root");
+    engine
+        .set_session_project_root(thread, Some(root.clone()))
+        .unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    composing(&mut engine, thread);
+    assert!(started.try_recv().is_err(), "no agent started");
+}
+
+/// A model or Provider change starts the Thread's next agent; writing to
+/// the Thread meanwhile starts no second one.
+#[test]
+fn writing_during_a_provider_change_starts_no_second_agent() {
+    let (spawner, started, _gate) = spawn_gated();
+    let (mut engine, thread) = restored("restored-switch", spawner);
+    engine
+        .set_provider(
+            thread,
+            crate::engine::ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        )
+        .unwrap();
+    started
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the change started an agent");
+    composing(&mut engine, thread);
+    assert!(started.try_recv().is_err(), "and nothing else did");
 }
 
 /// A restored Thread's agent takes a moment to start; what the operator
 /// queues meanwhile waits for it, in order, instead of being refused.
 #[test]
 fn prompts_queued_while_the_agent_starts_wait_for_it() {
-    let dir = scratch("restored-queue");
-    let store = dir.join("threads");
-    let (spawner, _providers) = spawn();
-    let mut first = engine(&store, spawner);
-    let thread = open_in(&mut first, &dir);
-    first.halt_sessions();
-    drop(first);
-
     let (sessions, _providers) = mpsc::channel();
     let (gate, opens) = mpsc::channel();
     let queued = Queued::default();
-    let mut next = engine(
-        &store,
+    let (mut engine, thread) = restored(
+        "restored-queue",
         Box::new(Spawn {
             sessions,
             answers: Answers::default(),
             queued: queued.clone(),
             gate: Some(Arc::new(Mutex::new(opens))),
+            can_queue: None,
         }),
     );
-    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
-    next.send(thread, "first".into());
-    assert!(next.thread(thread).unwrap().starting());
-    assert!(next.queue(thread, "second".into()), "queued, not refused");
+    engine.send(thread, "first".into());
+    assert!(engine.thread(thread).unwrap().starting());
+    assert!(engine.queue(thread, "second".into()), "queued, not refused");
     assert_eq!(
-        next.thread(thread).unwrap().queued_all(),
+        engine.thread(thread).unwrap().queued_all(),
         vec!["second", "first"]
     );
 
     gate.send(()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while next.thread(thread).unwrap().starting() {
-        assert!(Instant::now() < deadline, "the agent never started");
-        next.pump();
-    }
-    let prompts: Vec<_> = next
-        .thread(thread)
-        .unwrap()
-        .transcript()
-        .blocks()
-        .iter()
-        .filter_map(|block| match &block.body {
-            Body::Prompt(text) => Some(text.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(prompts, vec!["first".to_string()]);
+    pump_engine_until(&mut engine, "the agent never started", |engine| {
+        !engine.thread(thread).unwrap().starting()
+    });
+    assert_eq!(prompts(&engine, thread), vec!["first"]);
     assert_eq!(queued.lock().unwrap().len(), 1, "second waits in its queue");
+}
+
+/// Claude can queue a prompt only once its first turn has started. What
+/// waited behind the first prompt for its agent waits on, in order, until
+/// the provider can queue it, or goes out as its own turn when the one
+/// ahead ends first.
+#[test]
+fn prompts_wait_for_a_provider_that_cannot_queue_yet() {
+    let (sessions, providers) = mpsc::channel();
+    let (gate, opens) = mpsc::channel();
+    let queued = Queued::default();
+    let can_queue = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut engine, thread) = restored(
+        "restored-cannot-queue",
+        Box::new(Spawn {
+            sessions,
+            answers: Answers::default(),
+            queued: queued.clone(),
+            gate: Some(Arc::new(Mutex::new(opens))),
+            can_queue: Some(can_queue.clone()),
+        }),
+    );
+    engine.send(thread, "first".into());
+    assert!(engine.queue(thread, "second".into()));
+    assert!(engine.queue(thread, "third".into()));
+
+    gate.send(()).unwrap();
+    pump_engine_until(&mut engine, "the agent never started", |engine| {
+        !engine.thread(thread).unwrap().starting()
+    });
+    engine.pump();
+    assert_eq!(prompts(&engine, thread), vec!["first"]);
+    assert_eq!(
+        engine.thread(thread).unwrap().queued_all(),
+        vec!["third", "second"],
+        "nothing is lost while the provider cannot queue"
+    );
+
+    let provider: Sender<SessionEvent> = providers.recv().unwrap();
+    provider
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    pump_engine_until(&mut engine, "second never went out", |engine| {
+        prompts(engine, thread).len() == 2
+    });
+    assert_eq!(prompts(&engine, thread), vec!["first", "second"]);
+    assert_eq!(engine.thread(thread).unwrap().queued_all(), vec!["third"]);
+
+    can_queue.store(true, std::sync::atomic::Ordering::SeqCst);
+    pump_engine_until(&mut engine, "third never reached the queue", |_| {
+        queued.lock().unwrap().len() == 1
+    });
+    assert_eq!(prompts(&engine, thread), vec!["first", "second"]);
 }
 
 /// Reopening a parked Thread shows it again; its agent starts only when

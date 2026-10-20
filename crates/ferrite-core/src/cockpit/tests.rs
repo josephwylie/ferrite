@@ -220,20 +220,17 @@ impl Spawner for Fake {
     }
 }
 
-/// The binding for tests that are not about bindings.
-/// Reopen a parked Thread and start its agent, as the operator writing to
-/// it does (ADR 0032).
+/// Reopen a parked Thread and start its agent, as the operator starting
+/// to write to it does (ADR 0032), and leave the Composer empty again.
 fn revive_awake(cockpit: &mut Cockpit, thread: ThreadId) {
     cockpit.revive(thread).unwrap();
-    cockpit.engine_mut().window_says(
-        0,
-        &crate::protocol::Op::Composing {
-            thread,
-            unsent: true,
-        },
-    );
+    cockpit.set_composing(thread, true);
+    cockpit.pump();
+    cockpit.set_composing(thread, false);
+    cockpit.pump();
 }
 
+/// The binding for tests that are not about bindings.
 fn main_choice() -> WorkspaceChoice {
     WorkspaceChoice::Main {
         checkout: std::env::temp_dir(),

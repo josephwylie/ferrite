@@ -2192,8 +2192,7 @@ impl Cockpit {
         Ok(())
     }
 
-    /// ⏎ on a parked Group member's tile: revive it on a fresh Session in
-    /// place — its Pane keeps the slot the board gave it, takes focus, and
+    /// ⏎ on a parked Group member's tile: revive it in place — its Pane keeps the slot the board gave it, takes focus, and
     /// the park order forgets it. An open Thread is left alone.
     pub fn wake(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         if self.thread(thread).is_some() {

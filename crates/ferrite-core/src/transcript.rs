@@ -584,7 +584,7 @@ pub enum Input {
         allowed: bool,
         tool_name: String,
     },
-    /// This Thread's history was replayed from the log into a fresh Session.
+    /// This Thread's history was replayed from the log: it reopened.
     /// Never recorded — a log that replayed itself would grow one revival
     /// line per restart.
     Revived,

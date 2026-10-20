@@ -84,9 +84,8 @@ Prompt it, and wait for it to finish:
   agent has said it can queue (early in its Session), such a prompt is
   refused `failed` and nothing is sent: `agent wait` for it to settle, then
   send it.
-- A prompt to a Thread whose agent is still starting is held until it is up.
-  Only one is held: another is refused `agent_starting` and not sent; send
-  it again once `thread get` shows the agent `working`.
+- A prompt to a Thread whose agent is still starting is held until it is
+  up, and so is every prompt after it, in order.
 - Put `--` before a prompt that starts with `-`:
   `"$F" agent prompt 14 -- "--help is broken"`.
 - With `--wait` it answers only after the agent was seen working and then

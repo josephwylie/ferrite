@@ -70,18 +70,12 @@ impl Engine {
         }
     }
 
-    /// Start the agent of a Thread the operator is writing to, if it has
-    /// none, so it is ready for the prompt (ADR 0032). A start that fails
-    /// is left for the send to retry and report.
+    /// Start the agent of a Thread the operator is writing to, so it is
+    /// ready for the prompt (ADR 0032). A start that fails is left for the
+    /// send to retry and report.
     fn wake(&mut self, thread: ThreadId) {
-        if self
-            .threads
-            .get(&thread)
-            .is_some_and(|state| state.session.is_none())
-        {
-            if let Err(error) = self.start_session(thread) {
-                crate::log!("thread {thread}: its agent could not start early: {error}");
-            }
+        if let Err(error) = self.start_session(thread, None) {
+            crate::log!("thread {thread}: its agent could not start early: {error}");
         }
     }
 

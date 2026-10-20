@@ -2030,7 +2030,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
 }
 
 /// What a parked tile's second line says: the one key that wakes it.
-const WAKE_HINT: &str = "\u{23ce} wakes it on a fresh Session";
+const WAKE_HINT: &str = "\u{23ce} reopens it";
 
 /// A working tile's clock: whole seconds (`12s`, `1m04s`) on the tile that
 /// holds the keyboard; elsewhere a minute and past reads in minutes alone

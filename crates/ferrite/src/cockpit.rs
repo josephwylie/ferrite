@@ -5818,8 +5818,8 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        // ⏎ on a parked Group member's tile wakes it on a fresh Session, in
-        // place (F-8): `⏎ wakes it on a fresh Session`.
+        // ⏎ on a parked Group member's tile reopens it in place (F-8):
+        // `⏎ reopens it`.
         if self.cockpit.thread(thread).is_none() {
             match self.cockpit.wake(thread) {
                 Ok(()) => {

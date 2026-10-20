@@ -1,6 +1,9 @@
 # 0018 — Revival prepares off the UI thread, staggered at launch
 
-Status: accepted 2026-10-15 (Herdr benchmark, Hygiene).
+Status: accepted 2026-10-15 (Herdr benchmark, Hygiene). Amended
+2026-10-20 by ADR 0032: a revive starts no Session, so there is nothing
+to stagger; `revive_after` and `LAUNCH_STAGGER` are gone. The
+preparation still runs ahead of every start.
 
 ## Context
 
