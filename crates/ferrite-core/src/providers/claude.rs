@@ -14,6 +14,7 @@ mod mcp;
 mod menu;
 mod queue;
 mod shell_output;
+mod skill_mentions;
 mod suggestions;
 pub(super) mod wire;
 
@@ -228,6 +229,7 @@ pub struct ClaudeSession {
     queue: Arc<Mutex<queue::Queue>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    skills: Arc<Mutex<skill_mentions::Skills>>,
     file_search: Arc<Mutex<file_search::Requests>>,
 }
 
@@ -340,6 +342,7 @@ impl ClaudeSession {
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
+        let skills = Arc::new(Mutex::new(skill_mentions::Skills::default()));
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let server = mcp::Server::new(config.visuals.clone(), Arc::clone(&stdin));
         let capabilities = read_stdout(
@@ -354,6 +357,7 @@ impl ClaudeSession {
             requests.clone(),
             queue.clone(),
             suggestions.clone(),
+            skills.clone(),
             file_search.clone(),
             server,
         );
@@ -373,6 +377,7 @@ impl ClaudeSession {
             queue,
             next_request_id: 1,
             suggestions,
+            skills,
             file_search,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
@@ -596,7 +601,7 @@ impl ClaudeSession {
         lock(&self.suggestions).sent();
         self.write_line(&serde_json::json!({
             "type":"user", "uuid":client_id, "isAsync":true,
-            "message":{"role":"user","content":wire::input_content(text,self.cwd.as_deref())}
+            "message":{"role":"user","content":wire::input_content(text,&lock(&self.skills),self.cwd.as_deref())}
         }))
     }
 
@@ -617,7 +622,7 @@ impl ClaudeSession {
             "type": "user",
             "message": {
                 "role": "user",
-                "content": wire::input_content(text, self.cwd.as_deref()),
+                "content": wire::input_content(text, &lock(&self.skills), self.cwd.as_deref()),
             },
         }))
     }
@@ -736,6 +741,7 @@ fn read_stdout(
     requests: Arc<Mutex<wire::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    skills: Arc<Mutex<skill_mentions::Skills>>,
     file_search: Arc<Mutex<file_search::Requests>>,
     server: mcp::Server,
 ) -> Receiver<ClaudeCapabilities> {
@@ -770,6 +776,7 @@ fn read_stdout(
                     }
                 }
                 lock(&suggestions).observe(&value);
+                lock(&skills).observe(&value);
                 lock(&requests).observe(&value);
                 let response = &value["response"];
                 // Released before any event is sent: `set_setting` takes this

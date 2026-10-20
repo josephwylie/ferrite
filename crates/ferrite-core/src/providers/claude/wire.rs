@@ -10,12 +10,20 @@
 /// Stream-json accepts native image and PDF blocks. Keep every path in the text
 /// too: unreadable, oversized and other formats remain available to Claude's
 /// tools. The reads are bounded, including across one prompt.
-pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<serde_json::Value> {
+///
+/// Skill notes go first: a text block after the prompt stops the CLI
+/// dispatching its leading `/name` (probed, 2.1.304).
+pub(super) fn input_content(
+    text: &str,
+    skills: &super::skill_mentions::Skills,
+    cwd: Option<&std::path::Path>,
+) -> Vec<serde_json::Value> {
     use base64::Engine;
     use std::io::Read;
     const ATTACHMENT_LIMIT: u64 = 5 * 1024 * 1024;
     const INLINE_ATTACHMENT_LIMIT: u64 = 20 * 1024 * 1024;
-    let mut content = vec![serde_json::json!({"type": "text", "text": text})];
+    let mut content = skills.notes(text);
+    content.push(serde_json::json!({"type": "text", "text": text}));
     let mut inline_bytes = 0;
     for path in crate::prompt_files::paths(text, cwd) {
         let Some((block, media_type)) = crate::prompt_files::image_type(&path)
@@ -1415,7 +1423,7 @@ mod tests {
         std::fs::write(&image, b"image bytes").unwrap();
         std::fs::write(&file, b"archive bytes").unwrap();
         let text = crate::prompt_files::compose("inspect", &[image.clone(), file]);
-        let blocks = input_content(&text, None);
+        let blocks = input_content(&text, &Default::default(), None);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0]["text"], text);
         assert_eq!(blocks[1]["source"]["media_type"], "image/png");
@@ -1427,7 +1435,7 @@ mod tests {
         );
         std::fs::remove_file(image).unwrap();
         assert_eq!(
-            input_content(&text, None).len(),
+            input_content(&text, &Default::default(), None).len(),
             1,
             "missing files keep their reference"
         );

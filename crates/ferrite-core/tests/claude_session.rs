@@ -813,6 +813,40 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     );
 }
 
+/// A skill named mid-prompt reaches the model as the terminal's note, learned
+/// from the handshake's menu and sent ahead of the prompt so a leading
+/// `/name` still dispatches.
+#[test]
+fn a_skill_named_mid_prompt_is_noted_ahead_of_the_prompt() {
+    let log = log_path("skill-mention.log");
+    let program = stub(
+        "claude-skill-mention",
+        &format!(
+            r#"{VERSION_CASE}
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_1","response":{{"commands":[{{"name":"grill","description":""}}]}}}}}}'
+while IFS= read -r line; do
+  case "$line" in *'"type":"user"'*) printf '%s\n' "$line" > '{}'; exec cat > /dev/null;; esac
+done"#,
+            log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    session.send("do we need /grill").unwrap();
+    let sent: Value = serde_json::from_str(&read_lines(&log, 1)[0]).unwrap();
+    drop(session);
+
+    let content = sent["message"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+    assert!(content[0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("The user's message contains /grill, which is the name of a skill."));
+    assert_eq!(
+        content[1],
+        serde_json::json!({"type":"text","text":"do we need /grill"})
+    );
+}
+
 /// Ferrite must not smuggle in a model or a permission posture the operator
 /// did not choose: with no override the CLI keeps its own configuration.
 #[test]
