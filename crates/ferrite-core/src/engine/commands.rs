@@ -29,6 +29,10 @@ fn unknown() -> WireError {
 
 impl Engine {
     pub fn execute(&mut self, op: &Op) -> Executed {
+        // An act on a Thread reads what the Engine holds of it.
+        if let Some(thread) = op.thread() {
+            self.hold(thread);
+        }
         match op {
             Op::Open {
                 provider,

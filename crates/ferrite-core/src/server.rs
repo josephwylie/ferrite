@@ -268,12 +268,17 @@ fn launch_threads(store: &Store) -> Vec<ThreadId> {
         .collect()
 }
 
-/// Reopen each Thread with nothing running in it (ADR 0032).
+/// Reopen each Thread with nothing running in it (ADR 0032). No window is
+/// attached yet: each is let go to its digest as soon as it is read, so
+/// only one Thread's history is held at a time.
 fn revive_launch(engine: &mut Engine, threads: Vec<ThreadId>) {
+    engine.set_watched(BTreeSet::new());
     for thread in threads {
         if let Err(error) = engine.revive(thread) {
             crate::log!("thread {thread} could not be revived: {error:?}");
         }
+        // Nobody to tell: a window attaching reads the snapshot.
+        drop(engine.take_messages());
     }
 }
 
@@ -312,6 +317,8 @@ struct Server {
     rings: HashMap<ThreadId, Ring>,
     /// The pending Decisions the clients were told of.
     decisions: BTreeSet<(ThreadId, WireHandle)>,
+    /// What the Engine was last told the windows watch (`tell_watched`).
+    told_watched: Option<BTreeSet<ThreadId>>,
     /// Who answered each of them that an answer was delivered for.
     answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
@@ -355,6 +362,7 @@ impl Server {
             clients: BTreeMap::new(),
             rings: HashMap::new(),
             decisions: BTreeSet::new(),
+            told_watched: None,
             answered: BTreeMap::new(),
             renders,
             searches: Vec::new(),
@@ -393,6 +401,7 @@ impl Server {
             while let Ok(heard) = hear.try_recv() {
                 self.hear(heard);
             }
+            self.tell_watched();
             self.engine.pump();
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
@@ -907,6 +916,21 @@ impl Server {
             .values()
             .any(|client| client.welcomed && client.lists_parked);
         self.engine.list_parked(wanted);
+    }
+
+    /// Tell the Engine what the windows watch, when that changed: what
+    /// nobody watches may be let go to its digest (ADR 0032).
+    fn tell_watched(&mut self) {
+        let watched: BTreeSet<ThreadId> = self
+            .clients
+            .values()
+            .filter(|client| client.welcomed)
+            .flat_map(|client| client.watching.iter().copied())
+            .collect();
+        if self.told_watched.as_ref() != Some(&watched) {
+            self.engine.set_watched(watched.clone());
+            self.told_watched = Some(watched);
+        }
     }
 
     /// Hand every message the Engine published to the clients that want

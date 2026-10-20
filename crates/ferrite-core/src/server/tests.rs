@@ -1488,6 +1488,8 @@ fn restored_after(
     drop(first);
     let mut next = engine(&store, spawner);
     revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    // A window shows it.
+    next.set_watched([thread].into());
     (next, thread)
 }
 
@@ -4274,4 +4276,111 @@ fn showing_a_subagent_refolds_the_digest_at_once() {
         shown.map(|shown| shown.subject),
         Some(crate::protocol::WireSubject::from(&subject))
     );
+}
+
+/// A Thread whose agent has ended and that no window watches holds only its
+/// digest (ADR 0032). Watched, read or sent to, it reads exactly as it did,
+/// on the same generation, and the next prompt resumes its conversation.
+#[test]
+fn a_thread_nobody_uses_holds_only_its_digest_until_used() {
+    let (spawner, started, providers) = recorded();
+    let (mut engine, thread, agent, clock) = at_rest("held", spawner, &providers);
+    agent.send(text("All done here.\n\n")).unwrap();
+    agent
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    pump_engine_until(&mut engine, "the turn never ended", |engine| {
+        engine.thread(thread).unwrap().transcript().turn_completed()
+    });
+    let said = |engine: &Engine| -> Vec<String> {
+        engine
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .map(|block| format!("{:?}", block.body))
+            .collect()
+    };
+    let before = said(&engine);
+    let generation = engine.thread(thread).unwrap().generation();
+    engine.set_watched(BTreeSet::new());
+    let let_go = |engine: &mut Engine| {
+        clock.advance(TEN_MINUTES);
+        engine.pump();
+        engine.take_messages();
+    };
+
+    let_go(&mut engine);
+    assert!(said(&engine).is_empty(), "nothing held but the digest");
+    let digest = engine.snapshot().digests.unwrap().remove(0).digest;
+    assert_eq!(
+        digest.wall.lines.first().map(|line| line.text.as_str()),
+        Some("\u{25cf} All done here.")
+    );
+
+    engine.set_watched([thread].into());
+    assert_eq!(said(&engine), before, "watched, it reads as it did");
+    assert_eq!(engine.thread(thread).unwrap().generation(), generation);
+
+    engine.set_watched(BTreeSet::new());
+    let_go(&mut engine);
+    assert!(said(&engine).is_empty());
+    started.lock().unwrap().clear();
+    engine
+        .execute(&Op::Send {
+            thread,
+            text: "and the docs".into(),
+        })
+        .unwrap();
+    engine.pump();
+    let mut expected = before.clone();
+    expected.push(format!("{:?}", Body::Prompt("and the docs".into())));
+    assert_eq!(said(&engine), expected);
+    assert_eq!(engine.thread(thread).unwrap().generation(), generation);
+    assert_eq!(
+        *started.lock().unwrap(),
+        vec![Start {
+            resume: Some("claude-1".into()),
+            ..Start::bare(Provider::Claude)
+        }]
+    );
+}
+
+/// A Thread whose agent exited and that no window watches is let go to its
+/// digest; the API's read and a window's watch read it back whole.
+#[test]
+fn a_thread_let_go_reads_back_whole_for_the_api_and_a_watch() {
+    let harness = start("let-go");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    provider.send(text("Kept on disk\n\n")).unwrap();
+    turn_ends(&provider);
+    exit(provider);
+    window.until(|window| {
+        window
+            .digest(thread)
+            .is_some_and(|digest| digest.status == crate::protocol::WireStatus::Closed)
+    });
+    std::thread::sleep(Duration::from_millis(100));
+
+    let mut caller = call(&harness);
+    let read = caller.answer("1", "agent.read", serde_json::json!({ "thread": thread }));
+    assert!(
+        read["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Kept on disk"),
+        "{read}"
+    );
+    window.watch(thread, None);
+    window.until(|window| {
+        window
+            .said(thread)
+            .iter()
+            .any(|said| said.contains("Kept on disk"))
+    });
 }
