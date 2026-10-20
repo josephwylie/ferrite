@@ -1800,7 +1800,7 @@ fn an_updated_cli_ends_a_settled_agent_without_a_trace() {
     let (mut engine, thread, agent, _clock) = at_rest("updated-cli", spawner, &providers);
     let rows = |engine: &Engine| engine.thread(thread).unwrap().transcript().blocks().len();
     let before = rows(&engine);
-    engine.retire_sessions(Provider::Claude);
+    engine.end_stale_sessions(Provider::Claude);
     engine.pump();
     assert!(!running(&agent), "the agent stopped");
     assert_eq!(rows(&engine), before, "nothing shows it");
@@ -1835,6 +1835,32 @@ fn work_in_flight_keeps_the_agent_and_restarts_its_ten_minutes() {
     clock.advance(TEN_MINUTES - Duration::from_secs(1));
     engine.pump();
     assert!(running(&agent), "ten minutes count from the settle");
+    clock.advance(Duration::from_secs(1));
+    engine.pump();
+    assert!(!running(&agent), "the agent stopped");
+}
+
+/// Asking an agent something it answers in its own time (a control, a
+/// file search) is using it: its ten minutes count from the ask.
+#[test]
+fn an_ask_restarts_the_agents_ten_minutes() {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, clock) = at_rest("asked", spawner, &providers);
+    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    engine.pump();
+    engine
+        .control(thread, crate::SessionControl::RefreshMcp)
+        .unwrap();
+    clock.advance(Duration::from_secs(1));
+    engine.pump();
+    assert!(running(&agent), "a control was just asked of it");
+
+    clock.advance(TEN_MINUTES - Duration::from_secs(2));
+    engine.pump();
+    let _answer = engine.search_files(thread, "main.rs").unwrap();
+    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    engine.pump();
+    assert!(running(&agent), "a file search was just asked of it");
     clock.advance(Duration::from_secs(1));
     engine.pump();
     assert!(!running(&agent), "the agent stopped");

@@ -1082,7 +1082,7 @@ impl Cockpit {
     pub fn cli_replaced(&mut self, provider: Provider) {
         self.act(
             |engine| {
-                engine.retire_sessions(provider);
+                engine.end_stale_sessions(provider);
                 engine.rediscover_models();
             },
             |server| {

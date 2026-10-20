@@ -241,7 +241,8 @@ const SCHEDULERS: [&str; 3] = ["ScheduleWakeup", "CronCreate", "Monitor"];
 
 /// Whether `value` shows the agent taking on work it will start itself,
 /// out of Ferrite's sight (ADR 0032): a scheduling tool called, or an
-/// ambient task begun.
+/// ambient task begun. Any call counts, a Subagent's or one later refused:
+/// Ferrite cannot tell what the CLI kept, so it keeps the Session.
 pub(super) fn schedules_work(value: &Value) -> bool {
     let scheduler = || {
         value["message"]["content"]

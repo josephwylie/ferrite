@@ -169,7 +169,7 @@ impl Engine {
                 Ok(None)
             }
             Op::CliReplaced { provider } => {
-                self.retire_sessions(*provider);
+                self.end_stale_sessions(*provider);
                 self.rediscover_models();
                 Ok(None)
             }
