@@ -7,7 +7,7 @@ use crate::activity::{
 };
 use crate::protocol::{WireOutcome, WireSubject};
 use crate::store::Provider;
-use crate::transcript::{Input, Todos, TurnEnd};
+use crate::transcript::{Input, Todos};
 use crate::{SessionEvent, ThreadId, ToolResult};
 
 /// A Thread's Activity with a live Session, the operator's prompt out.

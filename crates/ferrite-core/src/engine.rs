@@ -21,6 +21,7 @@ use crate::activity::{
     Activity, ActivityEvent, ActivityInput, ActivityUpdate, ActivityView, AgentKey, DecisionHandle,
     PendingDecision, Subject,
 };
+use crate::digest::Digest;
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
@@ -731,7 +732,19 @@ struct Published {
     /// reopen, so a `seq` names one moment of one Activity.
     seq: u64,
     state: Option<protocol::ThreadState>,
+    digest: Option<Digest>,
+    /// When the digest last refolded: a stream refolds it once per
+    /// `DIGEST_REFOLD`.
+    digest_at: Option<Instant>,
+    /// Inputs applied since the digest last refolded.
+    digest_owed: bool,
 }
+
+/// How often a streaming Thread's digest may refold: four times a second.
+/// The fold walks every Block the Thread holds (and its Subagents', for the
+/// changed files) while the pump drains a stream up to 125 times a second;
+/// a Wall card a quarter second behind is still ahead of the eye.
+const DIGEST_REFOLD: Duration = Duration::from_millis(250);
 
 impl Thread {
     /// Everything a window reads of this Thread that is not its Activity.
@@ -4281,6 +4294,15 @@ impl Engine {
             notices: self.published_shared.notices.clone(),
             providers: self.published_shared.providers.clone(),
             parked: self.published_shared.parked.clone(),
+            digests: Some(
+                self.threads
+                    .keys()
+                    .filter_map(|&thread| {
+                        let digest = self.published.get(&thread)?.digest.clone()?;
+                        Some(protocol::ThreadDigest { thread, digest })
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -4442,9 +4464,11 @@ impl Engine {
                     live: Vec::new(),
                 });
             }
+            let applied = std::mem::take(&mut thread.activity.applied);
+            published.digest_owed |= !applied.is_empty();
             // Taken, not drained: a revive's replay grows the journal to its
             // whole history, and a drained Vec keeps that capacity for good.
-            for input in std::mem::take(&mut thread.activity.applied) {
+            for input in applied {
                 let at_ms = match &input {
                     ActivityInput::Main { at, .. }
                     | ActivityInput::Observe { at, .. }
@@ -4475,6 +4499,7 @@ impl Engine {
                 }
             }
         }
+        self.publish_digests();
         let states: Vec<_> = self
             .threads
             .iter()
@@ -4497,6 +4522,8 @@ impl Engine {
             for (id, published) in &mut self.published {
                 if !self.threads.contains_key(id) {
                     published.state = None;
+                    published.digest = None;
+                    published.digest_at = None;
                 }
             }
             self.published_open = self.open.clone();
@@ -4549,6 +4576,40 @@ impl Engine {
             });
         }
         self.publish_parked();
+    }
+
+    /// Refold each digest its Thread's inputs left owing: at once when Main
+    /// started or ended a turn, a Decision came or went, or the windows
+    /// show another Subject; else once its `DIGEST_REFOLD` is up, the last
+    /// thing streamed included.
+    fn publish_digests(&mut self) {
+        let now = crate::clock::instant();
+        for (&id, thread) in &self.threads {
+            let published = self.published.entry(id).or_default();
+            if !published.digest_owed && published.digest.is_some() {
+                continue;
+            }
+            let activity = thread.activity.view();
+            let shown = self.visible_subjects.get(&id);
+            let due = published
+                .digest
+                .as_ref()
+                .is_none_or(|digest| digest.outdated_by(activity, shown))
+                || published
+                    .digest_at
+                    .is_none_or(|at| now.saturating_duration_since(at) >= DIGEST_REFOLD);
+            if !due {
+                continue;
+            }
+            published.digest_owed = false;
+            published.digest_at = Some(now);
+            let digest = Digest::of(id, activity, shown, self.boot);
+            if published.digest.as_ref() != Some(&digest) {
+                published.digest = Some(digest.clone());
+                self.outbox
+                    .push(ServerMessage::Digest { thread: id, digest });
+            }
+        }
     }
 
     /// Whether a window that lists this Server's parked Threads is attached

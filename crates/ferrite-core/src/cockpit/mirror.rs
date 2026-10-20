@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::activity::{Activity, ActivityInput, ActivityView, DecisionHandle, Subject, ToolTiming};
+use crate::digest::Digest;
 use crate::engine::{event_changes_content, PaneUpdate};
 use crate::protocol::{self, ServerMessage, ThreadState, WireInput};
 use crate::store::Provider;
@@ -23,6 +24,8 @@ pub(crate) struct Mirror {
     /// The last input applied.
     pub(crate) seq: u64,
     facts: Option<Facts>,
+    /// What every window reads of the Thread away from its Transcript.
+    digest: Option<Digest>,
     /// Server identities survive a history rebuild; local replay counters do not.
     decision_handles: HashMap<String, DecisionHandle>,
 }
@@ -111,6 +114,7 @@ impl Mirror {
             generation: 0,
             seq: 0,
             facts: None,
+            digest: None,
             decision_handles: HashMap::new(),
         }
     }
@@ -225,6 +229,11 @@ impl Mirrors {
                     .as_ref()
                     .is_none_or(|before| before.models != facts.models);
                 mirror.facts = Some(facts);
+                updated(&mut self.updates, thread).activity_changed = true;
+            }
+            ServerMessage::Digest { thread, digest } => {
+                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                mirror.digest = Some(digest);
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             ServerMessage::Decision { thread, handle, .. } => {
@@ -347,6 +356,11 @@ impl Mirrors {
             .history_errors
             .get(key.as_str())
             .map(String::as_str)
+    }
+
+    /// A Thread's digest, as the Server last sent it.
+    pub(crate) fn digest(&self, thread: ThreadId) -> Option<&Digest> {
+        self.threads.get(&thread)?.digest.as_ref()
     }
 
     fn facts(&self, thread: ThreadId) -> Option<&Facts> {

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::activity::{ActivityView, Subject, ToolTiming};
 use crate::docview::{is_test_run, passed_count, FileChange, Instruments, Tests};
-use crate::protocol::{PendingEntry, WireOutcome, WireSubject};
+use crate::protocol::{PendingEntry, WireHandle, WireOutcome, WireSubject};
 use crate::transcript::{Block, Body, Span, Status, ToolBlock, ToolState, Transcript};
 use crate::{Decision, ThreadId, TurnOutcome};
 
@@ -142,6 +142,31 @@ impl Digest {
             changed_files: changed_files(activity),
             finish: Finish::of(transcript),
         }
+    }
+}
+
+impl Digest {
+    /// Whether `activity` moved past this digest in a way no window should
+    /// wait a refold for: Main started or ended a turn, a Decision came or
+    /// went, work behind Main started or stopped, or the windows show
+    /// another Subject.
+    pub fn outdated_by(&self, activity: ActivityView<'_>, shown: Option<&Subject>) -> bool {
+        let main = activity.main();
+        let transcript = main.transcript();
+        let shown = shown.filter(|subject| **subject != Subject::Main);
+        let decisions = activity.decisions();
+        self.status != transcript.status()
+            || self.working != main.busy()
+            || self.operator_turn != activity.main_operator_turn()
+            || self.working_descendants != activity.working_descendants()
+            || self.pending.len() != decisions.len()
+            || self
+                .pending
+                .iter()
+                .zip(decisions)
+                .any(|(sent, pending)| sent.handle != WireHandle::from(&pending.handle))
+            || self.shown.as_ref().map(|shown| &shown.subject)
+                != shown.map(WireSubject::from).as_ref()
     }
 }
 

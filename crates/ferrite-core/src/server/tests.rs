@@ -268,6 +268,9 @@ fn attach(address: &Path) -> Window {
     for state in snapshot.threads {
         window.receive(ServerMessage::Thread { revision: 0, state });
     }
+    for protocol::ThreadDigest { thread, digest } in snapshot.digests.unwrap_or_default() {
+        window.receive(ServerMessage::Digest { thread, digest });
+    }
     window
 }
 
@@ -339,6 +342,10 @@ impl Window {
         self.client
             .send(&ClientMessage::Watch { thread, resume })
             .unwrap();
+    }
+
+    fn digest(&self, thread: ThreadId) -> Option<&crate::digest::Digest> {
+        self.mirrors.digest(thread)
     }
 
     fn said(&self, thread: ThreadId) -> Vec<String> {
@@ -4020,4 +4027,108 @@ fn manual_install_with_the_same_version_is_detected() {
         boot
     ));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A window reads every open Thread it does not watch from its digest
+/// (ADR 0032): what the agent does, the Decision it waits on, its Wall
+/// card. Nothing of its history or stream crosses; a window attaching
+/// later reads the same digest from its snapshot; a closed Thread's goes.
+#[test]
+fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
+    let harness = start("digests");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    provider.send(text("Reading the spike notes\n\n")).unwrap();
+    provider.send(decision()).unwrap();
+
+    window.until(|window| {
+        window
+            .digest(thread)
+            .is_some_and(|digest| !digest.pending.is_empty())
+    });
+
+    let digest = window.digest(thread).unwrap().clone();
+    assert_eq!(
+        digest.wall.lines.first().map(|line| line.text.as_str()),
+        Some("\u{25cf} Reading the spike notes")
+    );
+    assert_eq!(window.histories, 0, "no history crossed");
+    assert!(window.said(thread).is_empty(), "no input crossed");
+    let late = attach(&harness.address);
+    assert_eq!(late.digest(thread), Some(&digest));
+
+    window.command(2, Op::Park { thread });
+    window.until(|window| window.digest(thread).is_none());
+}
+
+/// A Thread's digest goes out as it changes: a stream at most four times
+/// a second, as the Wall card always refolded, and a Decision at once.
+#[test]
+fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, clock) = at_rest("digest-pace", spawner, &providers);
+    let holds = |engine: &Engine, said: &str| {
+        engine
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .any(|block| format!("{:?}", block.body).contains(said))
+    };
+    let digests = |engine: &mut Engine| -> Vec<crate::digest::Digest> {
+        engine
+            .take_messages()
+            .into_iter()
+            .filter_map(|message| match message {
+                ServerMessage::Digest { thread: of, digest } if of == thread => Some(digest),
+                _ => None,
+            })
+            .collect()
+    };
+    let first_line =
+        |digest: &crate::digest::Digest| digest.wall.lines.first().map(|line| line.text.clone());
+    let streamed = |engine: &mut Engine, said: &str| {
+        agent.send(text(said)).unwrap();
+        pump_engine_until(engine, "the text never landed", |engine| {
+            holds(engine, said)
+        });
+    };
+    streamed(&mut engine, "Reading");
+    clock.advance(Duration::from_millis(250));
+    engine.pump();
+    assert_eq!(
+        digests(&mut engine).last().and_then(first_line).as_deref(),
+        Some("\u{25cf} Reading")
+    );
+
+    clock.advance(Duration::from_millis(250));
+    streamed(&mut engine, " the notes");
+    assert_eq!(
+        digests(&mut engine).last().and_then(first_line).as_deref(),
+        Some("\u{25cf} Reading the notes"),
+        "a quarter second since the last: at once"
+    );
+    streamed(&mut engine, " again");
+    clock.advance(Duration::from_millis(249));
+    engine.pump();
+    assert_eq!(digests(&mut engine), Vec::new(), "not yet a quarter second");
+    clock.advance(Duration::from_millis(1));
+    engine.pump();
+    assert_eq!(
+        digests(&mut engine).last().and_then(first_line).as_deref(),
+        Some("\u{25cf} Reading the notes again")
+    );
+
+    agent.send(decision()).unwrap();
+    pump_engine_until(&mut engine, "the Decision never landed", |engine| {
+        engine.thread(thread).unwrap().pending().is_some()
+    });
+    assert_eq!(
+        digests(&mut engine)
+            .last()
+            .map(|digest| digest.pending.len()),
+        Some(1),
+        "at once"
+    );
 }
