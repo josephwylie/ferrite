@@ -333,7 +333,7 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
             Body::Tool(tool) => Some((
                 &tool.call,
                 &tool.name,
-                &tool.structured_result,
+                &tool.structured_preview,
                 &tool.output,
             )),
             _ => None,
