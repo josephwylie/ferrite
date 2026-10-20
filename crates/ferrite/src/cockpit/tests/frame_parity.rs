@@ -277,7 +277,7 @@ fn the_wall_digits_answer_allow_always_and_deny(cx: &mut TestAppContext) {
 }
 
 /// F-8: entering a Group spends no Session on a parked member — its Pane is
-/// the parked tile — and ⏎ on it wakes it on a fresh Session, in place.
+/// the parked tile — and ⏎ on it reopens it, in place.
 #[gpui::test]
 fn a_parked_member_is_its_tile_until_enter_wakes_it(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("frame-parked-member", 3);

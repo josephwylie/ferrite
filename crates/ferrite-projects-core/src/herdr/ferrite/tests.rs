@@ -503,7 +503,8 @@ fn prompts_reads_and_focus_reach_the_thread() {
 }
 
 /// The Coordinator keeps a refused prompt queued only for herdr's retryable
-/// errors. Ferrite's occupied startup slot must use that same contract.
+/// errors. An older Server's occupied startup slot must use that same
+/// contract.
 #[test]
 fn a_prompt_waiting_for_startup_is_retryable_without_restarting_the_agent() {
     let s = Stand::new("prompt-starting");

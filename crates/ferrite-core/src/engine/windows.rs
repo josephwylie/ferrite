@@ -61,11 +61,21 @@ impl Engine {
                 // Said late, of a Thread that has closed: nothing to hold.
                 if *unsent && self.threads.contains_key(thread) {
                     windows.composing.insert((window, *thread));
+                    self.wake(*thread);
                 } else {
                     windows.composing.remove(&(window, *thread));
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Start the agent of a Thread the operator is writing to, so it is
+    /// ready for the prompt (ADR 0032). A start that fails is left for the
+    /// send to retry and report.
+    fn wake(&mut self, thread: ThreadId) {
+        if let Err(error) = self.start_session(thread, None) {
+            crate::log!("thread {thread}: its agent could not start early: {error}");
         }
     }
 

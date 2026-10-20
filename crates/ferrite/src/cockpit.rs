@@ -5818,8 +5818,8 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        // ⏎ on a parked Group member's tile wakes it on a fresh Session, in
-        // place (F-8): `⏎ wakes it on a fresh Session`.
+        // ⏎ on a parked Group member's tile reopens it in place (F-8):
+        // `⏎ reopens it`.
         if self.cockpit.thread(thread).is_none() {
             match self.cockpit.wake(thread) {
                 Ok(()) => {
@@ -16868,20 +16868,7 @@ mod tests {
                 view.panes.iter().any(|pane| pane.thread() == Some(closed)),
                 "and it is the same Thread, not a new one"
             );
-            let blocks = view
-                .cockpit
-                .thread(closed)
-                .map(|open| open.transcript())
-                .expect("its transcript")
-                .blocks();
-            assert!(
-                blocks.iter().any(|block| matches!(
-                    &block.body,
-                    ferrite_core::transcript::Body::Meta(line)
-                        if line.starts_with("revived")
-                )),
-                "a revived Pane must not pretend it never died: {blocks:?}"
-            );
+            assert!(view.cockpit.thread(closed).is_some(), "with its history");
         });
     }
 
@@ -18520,8 +18507,9 @@ mod tests {
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-        // Reopening respawns the Session, so the revived Thread streams on
-        // the newest Sender, not the one it was parked with.
+        // The reopened Thread's agent starts when the operator writes to it
+        // (ADR 0032); it then streams on the newest Sender, not the one it
+        // was parked with.
         let say = |line: usize| {
             fake.streams
                 .borrow()
@@ -18581,6 +18569,8 @@ mod tests {
         );
 
         // Streaming into the reopened Pane keeps it on the tail.
+        view.update(cx, |view, _| view.cockpit.set_composing(closed, true));
+        tick(cx);
         for line in 80..100 {
             say(line);
         }

@@ -1172,14 +1172,6 @@ impl Cockpit {
         )
     }
 
-    /// Revive a Thread `delay` from now: the launch's stagger (ADR 0018). A
-    /// Server revives its open Threads itself.
-    pub fn revive_after(&mut self, thread: ThreadId, delay: Duration) -> Result<(), LoadError> {
-        let revived = self.in_process().revive_after(thread, delay);
-        self.settle();
-        revived
-    }
-
     /// The tests' own: no window revives a whole Group.
     #[cfg(test)]
     pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
@@ -2200,8 +2192,7 @@ impl Cockpit {
         Ok(())
     }
 
-    /// ⏎ on a parked Group member's tile: revive it on a fresh Session in
-    /// place — its Pane keeps the slot the board gave it, takes focus, and
+    /// ⏎ on a parked Group member's tile: revive it in place — its Pane keeps the slot the board gave it, takes focus, and
     /// the park order forgets it. An open Thread is left alone.
     pub fn wake(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         if self.thread(thread).is_some() {

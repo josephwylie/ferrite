@@ -1315,7 +1315,7 @@ pub enum Live {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         replayed: bool,
     },
-    /// The Thread's history was replayed into a fresh Session.
+    /// The Thread's history was replayed from the log: it reopened.
     Revived,
     Connect {
         generation: u64,

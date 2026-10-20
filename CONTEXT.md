@@ -15,8 +15,10 @@ Thread is deleted.
 _Avoid_: chat, conversation, task.
 
 **Session**
-The live provider process currently serving a Thread. A Thread may have no
-Session (parked) or one (hot). Sessions are disposable; Threads are not.
+The live provider process currently serving a Thread. A parked Thread has
+none; an open Thread has one only while it is in use — it starts when the
+Thread needs it and ends when the Thread has been idle a while, and the
+operator never sees either. Sessions are disposable; Threads are not.
 _Avoid_: process (when meaning the conversation), instance.
 
 **Activity**
@@ -108,12 +110,12 @@ permissions) and for the app's behaviour, in one file beside the store. Never hi
 Thread's header remains the durable truth about that Thread.
 
 **Semantic zoom**
-A Pane's rendering chosen by its size: **L1** (near: transcript + prompt),
-**L2** (instruments: progress, tests, diff stats), **L3** (wall: status LED +
-one signal). No user mode-switch; size decides.
+A Pane's rendering chosen by its size: **Transcript** (near: the transcript
+and its Composer) or **Wall** (far: the state word, the last few lines, quick
+answers). No user mode-switch; size decides.
 
 **Composer**
-The prompt box at the bottom of a Pane (L1 and L2): text that wraps and
+The prompt box at the bottom of a Transcript Pane: text that wraps and
 grows a row per line, keyboard-driven menus, queue-while-busy.
 _Avoid_: chat box, input field.
 
@@ -261,7 +263,7 @@ would be a new concept, not a revival of this one.
 - Name kept: Ferrite (iOS audio app collision accepted — distant category).
 - v1 providers: Claude + Codex, minimal.
 - v1 cockpit: Solo by default; an opened Group shows its exact membership with
-  semantic zoom L1–L3.
+  semantic zoom.
 - v1 git: workspace binding only (worktree or main); no checkpoints yet.
 - Issue-tracker/board integration: later, not v1.
 - Platforms: macOS (Metal) AND Windows (DirectX 11) first-class from the start.
@@ -270,7 +272,8 @@ would be a new concept, not a revival of this one.
 - Accessibility: no v1 story (GPUI limitation); one honest README note, topic
   closed until GPUI grows AccessKit-style support upstream.
 - Own repository at projects/ferrite (codingOS is an ignoring holder repo).
-- Sessions are operator-budgeted, never pooled: open Pane = live Session
-  once the Thread exists (a draft Pane spawns nothing until its first send,
-  #29), closed Pane = parked Thread. No hot-pool cap, no hidden eviction;
-  memory is shown, and a watchdog restarts leaking Sessions visibly.
+- Sessions follow attention (amended 2026-10-20, ADR 0032; was "open Pane =
+  live Session"): a Thread costs memory and a provider process only while it
+  is used. Closed Pane = parked Thread; an idle open Thread's Session ends
+  and restarts on demand, invisibly. A watchdog still restarts leaking
+  Sessions visibly.

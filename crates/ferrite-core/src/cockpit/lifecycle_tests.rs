@@ -339,10 +339,12 @@ fn handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry()
             .unwrap()
             .delivered
     );
-    assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("after"));
     assert!(replacement.sent().is_empty());
+    let (prompt, _) = cockpit
+        .take_retrieved_prompt(thread)
+        .expect("the failed prompt is back in the Composer");
+    assert_eq!(prompt, "after");
     replacement.fail_send.store(false, Ordering::SeqCst);
-    let prompt = cockpit.unqueue(thread).unwrap();
     cockpit.send(thread, prompt);
     let sent = replacement.sent();
     assert_eq!(sent.len(), 1);

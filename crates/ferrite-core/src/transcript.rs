@@ -584,7 +584,7 @@ pub enum Input {
         allowed: bool,
         tool_name: String,
     },
-    /// This Thread's history was replayed from the log into a fresh Session.
+    /// This Thread's history was replayed from the log: it reopened.
     /// Never recorded — a log that replayed itself would grow one revival
     /// line per restart.
     Revived,
@@ -1757,9 +1757,6 @@ impl Transcript {
                         output_tokens: None,
                     })));
                 }
-                dirty.push(self.push(Body::Meta(
-                    "revived — new Session, history from the log".into(),
-                )));
                 Update {
                     dirty,
                     ..Update::default()
@@ -3753,26 +3750,22 @@ mod tests {
         }
     }
 
+    /// ADR 0032: which Session serves a Thread is not the operator's
+    /// concern, so a revive adds nothing to a settled transcript.
     #[test]
-    fn a_revived_thread_says_it_was_revived() {
+    fn a_revived_thread_reads_as_it_was_left() {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Prompt("from before the restart".into()));
         transcript.apply(Input::Event(SessionEvent::TurnEnded {
             outcome: TurnOutcome::Completed,
             cost_usd: None,
         }));
+        let before = transcript.blocks().to_vec();
 
         let update = transcript.apply(Input::Revived);
 
-        // The history is real; the Session serving it is new, and the
-        // transcript says so rather than pretending nothing happened.
-        let last = transcript.blocks().last().unwrap();
-        assert_eq!(update.dirty, vec![last.id]);
-        assert!(matches!(last.body, Body::Meta(_)));
-        assert_eq!(
-            body_text(last),
-            "revived — new Session, history from the log"
-        );
+        assert!(update.dirty.is_empty());
+        assert_eq!(transcript.blocks(), before.as_slice());
     }
 
     #[test]
@@ -3794,13 +3787,9 @@ mod tests {
                 transcript.turn_outcome(),
                 Some(&crate::TurnOutcome::Interrupted)
             );
-            let rows: Vec<_> = transcript.blocks().iter().rev().take(2).collect();
-            assert_eq!(body_text(rows[1]), "interrupted");
-            assert_eq!(
-                body_text(rows[0]),
-                "revived — new Session, history from the log"
-            );
-            assert_eq!(update.dirty, vec![rows[1].id, rows[0].id]);
+            let last = transcript.blocks().last().unwrap();
+            assert_eq!(body_text(last), "interrupted");
+            assert_eq!(update.dirty, vec![last.id]);
         }
     }
 

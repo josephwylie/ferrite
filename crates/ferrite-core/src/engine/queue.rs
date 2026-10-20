@@ -59,6 +59,10 @@ impl Queue {
             )
         })
     }
+    /// Prompts handed to the provider's queue and not yet seen sent.
+    pub fn holds_unsent(&self) -> bool {
+        !self.metadata.pending.is_empty()
+    }
     pub fn pending(&self) -> bool {
         !self.items.is_empty() || !self.admitting.is_empty()
     }

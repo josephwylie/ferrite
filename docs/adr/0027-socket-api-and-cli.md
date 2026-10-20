@@ -133,18 +133,18 @@ Server from what it knows exactly (`Engine::attention`): blocked while a
 Decision waits, working while Main or its background work runs, done while
 an unseen Notice stands, else idle. A prompt not yet taken counts as work:
 one in the provider's queue (or being taken into it), since the turn before
-it can end a pass before it starts, and one held for a starting Session (a
-held send or a new Thread's first prompt), so a plain `agent.wait` after
+it can end a pass before it starts, and one held for its Session (a send
+while it starts or a new Thread's first prompt), so a plain `agent.wait` after
 `agent.prompt` is not answered by the idle before the agent has the prompt.
 `Attention` moves to core; the window reads the same type.
 
 ### Waiting, Herdr's semantics
 
 - `agent.prompt` refuses `agent_blocked` before sending anything.
-- A prompt to a Session still starting (a Server's staggered revival, a
-  model or provider change) is held, as a send to a stopped Session is; the
-  Thread holds one, so another is refused `agent_starting` rather than
-  replace it. A prompt to a working agent goes to the provider's native
+- A prompt to a Session still starting (a Thread's first use since it
+  opened, a model or provider change) is held, as a send to a stopped
+  Session is, and so is every one after it, in order (amended 2026-10-20,
+  ADR 0032: there is no `agent_starting` refusal). A prompt to a working agent goes to the provider's native
   queue, as the Composer's does; until the provider has confirmed it can
   queue, that is refused `failed` and nothing is sent (the window's Composer
   keeps its draft in the same case).
