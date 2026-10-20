@@ -3,7 +3,7 @@
 //! and so a Server's restart, starts the Thread with them again, as the
 //! safety and profile arguments Projects launches with must.
 
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -87,8 +87,7 @@ pub(super) fn path(dir: &Path, thread: ThreadId) -> PathBuf {
     dir.join(thread.to_string()).join("args.json")
 }
 
-/// Saved beside and renamed over, behind a barrier, as the queue is;
-/// nothing saved is no file.
+/// Saved whole (`store::replace_file`); nothing saved is no file.
 pub(super) fn save(path: &Path, saved: Option<&LaunchArgs>) -> io::Result<()> {
     let Some(saved) = saved else {
         return match std::fs::remove_file(path) {
@@ -96,11 +95,7 @@ pub(super) fn save(path: &Path, saved: Option<&LaunchArgs>) -> io::Result<()> {
             _ => Ok(()),
         };
     };
-    let temporary = path.with_extension("json.tmp");
-    let mut file = std::fs::File::create(&temporary)?;
-    file.write_all(&serde_json::to_vec(saved)?)?;
-    crate::store::sync_ordered(&file)?;
-    std::fs::rename(temporary, path)
+    crate::store::replace_file(path, &serde_json::to_vec(saved)?)
 }
 
 /// The saved arguments; `Ok(None)` for a Thread started without any, and

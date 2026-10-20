@@ -1231,14 +1231,14 @@ impl Record {
             SessionEvent::DecisionRequested { .. } => return None,
             // A streaming input is superseded by the start that follows it.
             SessionEvent::ToolDraft { .. } => return None,
-            // The command menu, the permission mode and the model menu are
-            // the live Session's, like a Decision: a replay has no Session
-            // to serve them and the next one announces its own.
-            SessionEvent::Commands { .. } => return None,
-            SessionEvent::PermissionMode { .. } => return None,
-            SessionEvent::Models { .. } | SessionEvent::Queue(_) => return None,
+            // What the Session says of itself is not history: the Thread
+            // keeps the last of it beside the log (`engine::announced`).
+            SessionEvent::Commands { .. }
+            | SessionEvent::PermissionMode { .. }
+            | SessionEvent::Models { .. }
+            | SessionEvent::McpServers { .. } => return None,
+            SessionEvent::Queue(_) => return None,
             SessionEvent::RateLimits { .. } => return None,
-            SessionEvent::McpServers { .. } => return None,
             SessionEvent::McpAuthorization { .. } => return None,
         })
     }

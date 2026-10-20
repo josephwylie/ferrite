@@ -224,6 +224,12 @@ impl Spawner for Fake {
 /// to write to it does (ADR 0032), and leave the Composer empty again.
 fn revive_awake(cockpit: &mut Cockpit, thread: ThreadId) {
     cockpit.revive(thread).unwrap();
+    wake(cockpit, thread);
+}
+
+/// Start an open Thread's agent, as the operator starting to write to it
+/// does, and leave the Composer empty again.
+fn wake(cockpit: &mut Cockpit, thread: ThreadId) {
     cockpit.set_composing(thread, true);
     cockpit.pump();
     cockpit.set_composing(thread, false);
@@ -3398,7 +3404,7 @@ fn a_turn_ending_with_nothing_held_sends_nothing() {
 
 /// #23: the Session's announced command menu becomes the Thread's — the
 /// `/` popover's source — without touching the transcript or the log; a
-/// revived Thread starts with none until its own Session speaks.
+/// revived Thread offers it before its agent starts (ADR 0032).
 #[test]
 fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
     let (mut cockpit, fake) = cockpit("commands");
@@ -3452,26 +3458,28 @@ fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
         "a menu is not conversation"
     );
 
-    // Session state only: the log replays nothing, so a revived Thread
-    // waits for its own Session's announcement.
+    // The log replays nothing; the revived Thread offers what its agent
+    // last said.
     cockpit.park(thread).unwrap();
     cockpit.revive(thread).unwrap();
-    assert!(cockpit
-        .thread(thread)
-        .map(|open| open.commands())
-        .unwrap_or_default()
-        .is_empty());
+    assert_eq!(
+        cockpit
+            .thread(thread)
+            .map(|open| open.commands())
+            .unwrap_or_default(),
+        menu.as_slice()
+    );
     assert_eq!(
         cockpit
             .thread(thread)
             .and_then(|open| open.permission_mode()),
-        None
+        Some("acceptEdits")
     );
 }
 
 /// #25: the Session's announced model list becomes the Thread's — the
 /// provider picker's rows — on the same lane as the command menu:
-/// never the history, never the log, gone with the Session.
+/// never the history, never the log, and kept for a revived Thread.
 #[test]
 fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
     let (mut cockpit, fake) = cockpit("models");
@@ -3512,11 +3520,14 @@ fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
 
     cockpit.park(thread).unwrap();
     cockpit.revive(thread).unwrap();
-    assert!(cockpit
-        .thread(thread)
-        .map(|open| open.models())
-        .unwrap_or_default()
-        .is_empty());
+    assert_eq!(
+        cockpit
+            .thread(thread)
+            .map(|open| open.models())
+            .unwrap_or_default()
+            .len(),
+        3
+    );
 }
 
 #[test]
@@ -4156,6 +4167,7 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
             },
         )
         .unwrap();
+    wake(&mut cockpit, thread);
     // Codex can name a thread before a first prompt creates its rollout.
     // Old Ferrite versions then tried to resume it when effort changed.
     let codex = fake.streams.borrow().last().unwrap().clone();
@@ -4175,12 +4187,6 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
     cockpit.park(thread).unwrap();
     cockpit.revive(thread).unwrap();
 
-    assert_eq!(fake.providers.borrow().last().unwrap(), &Provider::Codex);
-    assert_eq!(
-        fake.resumed.borrow().last().unwrap(),
-        &None,
-        "the undelivered handover needs a fresh Session, not the empty Codex id"
-    );
     let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
     assert!(
         blocks.iter().any(|b| matches!(
@@ -4190,6 +4196,12 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
         "the handover replays: {blocks:?}"
     );
     cockpit.send(thread, "next".into());
+    assert_eq!(fake.providers.borrow().last().unwrap(), &Provider::Codex);
+    assert_eq!(
+        fake.resumed.borrow().last().unwrap(),
+        &None,
+        "the undelivered handover needs a fresh Session, not the empty Codex id"
+    );
     cockpit.send(thread, "after".into());
     let sent = fake.sent.borrow();
     assert_eq!(

@@ -10,7 +10,8 @@ fn native_file_search_preserves_ranking_paths_and_directory_identity() {
     for provider in ["claude", "codex"] {
         let mut replay = Replay::new(provider, vec![]);
         replay.drain();
-        let reply = replay.session.search_files("src").unwrap();
+        let (answer, reply) = std::sync::mpsc::sync_channel(1);
+        replay.session.search_files("src", answer).unwrap();
         let rows = reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
         assert_eq!(rows[0].path, "src/zé.rs");
         assert!(!rows[0].is_directory);
@@ -31,12 +32,8 @@ fn native_file_search_preserves_ranking_paths_and_directory_identity() {
             let frame = replay.wait_host(|v| v["request"]["subtype"] == "file_suggestions");
             assert_eq!(frame["request"]["query"], "src");
         }
-        replay
-            .session
-            .search_files("next")
-            .unwrap()
-            .recv_timeout(Duration::from_secs(3))
-            .unwrap()
-            .unwrap();
+        let (answer, reply) = std::sync::mpsc::sync_channel(1);
+        replay.session.search_files("next", answer).unwrap();
+        reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
     }
 }

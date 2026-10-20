@@ -38,7 +38,7 @@ use crate::activity::AgentKey;
 use crate::store::Provider;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::FileSuggestion;
+use super::FileSearchReply;
 
 use wire::ThreadHandshake;
 
@@ -626,16 +626,12 @@ impl CodexSession {
     /// Ask the app-server for its ranked fuzzy matches. Its one cancellation
     /// token is stable for the Session, so each native query supersedes the
     /// prior search while normal requests retain their own IDs.
-    pub fn search_files(
-        &mut self,
-        query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+    pub fn search_files(&mut self, query: &str, reply: FileSearchReply) -> io::Result<()> {
         let root = match &self.cwd {
             Some(cwd) => cwd.clone(),
             None => std::env::current_dir()?,
         };
         let id = self.take_request_id();
-        let (reply, receiver) = sync_channel(1);
         let token = {
             let mut searches = lock(&self.file_search);
             searches.begin(id, reply);
@@ -654,7 +650,7 @@ impl CodexSession {
             lock(&self.file_search).discard(id);
             return Err(error);
         }
-        Ok(receiver)
+        Ok(())
     }
 
     /// Interrupt Main. When a sent start has not yet named its turn, retain

@@ -1440,6 +1440,7 @@ mod tests {
                 model: None,
                 effort: None,
                 resume: Some("4f2a"),
+                permission_mode: None,
                 cwd: None,
                 name: None,
                 additional_directories: Vec::new(),
