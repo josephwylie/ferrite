@@ -54,6 +54,9 @@ pub struct Digest {
     /// The card of the Subagent a window shows in its place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown: Option<ShownWall>,
+    /// What a Thread with no title is called: its first prompt, shortened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_title: Option<String>,
     /// Prompts Main holds.
     #[serde(default)]
     pub turns: usize,
@@ -65,6 +68,36 @@ pub struct Digest {
     /// How Main's latest turn finished, in the bell's words.
     #[serde(default)]
     pub finish: Finish,
+}
+
+/// Main's turn as the state word reads it: what Main does, how its last
+/// turn ended, and since when the running one works.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Turn {
+    pub status: Status,
+    pub outcome: Option<TurnOutcome>,
+    pub started: Option<Instant>,
+}
+
+impl Turn {
+    pub fn of(transcript: &Transcript) -> Self {
+        Self {
+            status: transcript.status(),
+            outcome: transcript.turn_outcome().cloned(),
+            started: transcript.turn_started(),
+        }
+    }
+
+    /// At rest after a successful turn (`Transcript::turn_completed`).
+    pub fn completed(&self) -> bool {
+        self.status == Status::Idle && self.outcome == Some(TurnOutcome::Completed)
+    }
+
+    /// How long the running (or last) turn has worked.
+    pub fn elapsed(&self) -> Option<Duration> {
+        self.started
+            .map(|started| crate::clock::instant().saturating_duration_since(started))
+    }
 }
 
 /// A Subagent's Wall card, for a tile showing it.
@@ -133,6 +166,7 @@ impl Digest {
                         wall: WallCard::of(view.transcript(), None, None),
                     })
                 }),
+            prompt_title: prompt_title(transcript),
             turns: transcript
                 .blocks()
                 .iter()
@@ -147,9 +181,9 @@ impl Digest {
 
 impl Digest {
     /// Whether `activity` moved past this digest in a way no window should
-    /// wait a refold for: Main started or ended a turn, a Decision came or
-    /// went, work behind Main started or stopped, or the windows show
-    /// another Subject.
+    /// wait a refold for: Main started or ended a turn or changed phase, a
+    /// Decision came or went, a Subagent came or work behind Main started
+    /// or stopped, or the windows show another Subject.
     pub fn outdated_by(&self, activity: ActivityView<'_>, shown: Option<&Subject>) -> bool {
         let main = activity.main();
         let transcript = main.transcript();
@@ -159,6 +193,12 @@ impl Digest {
             || self.working != main.busy()
             || self.operator_turn != activity.main_operator_turn()
             || self.working_descendants != activity.working_descendants()
+            || self.subagents != activity.children().len()
+            || self.wall.working
+                != transcript
+                    .progress()
+                    .caption()
+                    .unwrap_or_else(|| "Working".into())
             || self.pending.len() != decisions.len()
             || self
                 .pending
@@ -264,6 +304,17 @@ pub fn failing_tests(output: &str) -> Option<String> {
         return Some(format!("{passed} passed; {failed} failed"));
     }
     None
+}
+
+/// What a Thread with no title is called: its first prompt, shortened.
+pub fn prompt_title(transcript: &Transcript) -> Option<String> {
+    transcript
+        .blocks()
+        .iter()
+        .find_map(|block| match &block.body {
+            Body::Prompt(text) => Some(crate::engine::title_from_prompt(text)),
+            _ => None,
+        })
 }
 
 /// Files edited anywhere in the Thread, its Subagents' included, with their

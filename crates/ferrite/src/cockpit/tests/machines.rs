@@ -697,6 +697,7 @@ fn box_snapshot(
         notices: Some(notices),
         providers: None,
         parked: None,
+        digests: None,
     })
 }
 

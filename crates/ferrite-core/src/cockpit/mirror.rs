@@ -3,12 +3,15 @@
 //! the Thread's state from its latest `thread` message. What `ThreadView`
 //! reads, the window draws.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::activity::{Activity, ActivityInput, ActivityView, DecisionHandle, Subject, ToolTiming};
-use crate::digest::Digest;
+use crate::activity::{
+    Activity, ActivityInput, ActivityView, DecisionHandle, PendingDecision, Subject, ToolTiming,
+};
+use crate::digest::{Digest, Turn};
 use crate::engine::{event_changes_content, PaneUpdate};
 use crate::protocol::{self, ServerMessage, ThreadState, WireInput};
 use crate::store::Provider;
@@ -25,7 +28,10 @@ pub(crate) struct Mirror {
     pub(crate) seq: u64,
     facts: Option<Facts>,
     /// What every window reads of the Thread away from its Transcript.
-    digest: Option<Digest>,
+    summary: Option<Summary>,
+    /// Whether this window holds the Thread's Activity: what a view reads
+    /// first, the digest standing in while it does not.
+    watched: bool,
     /// Server identities survive a history rebuild; local replay counters do not.
     decision_handles: HashMap<String, DecisionHandle>,
 }
@@ -107,6 +113,50 @@ impl From<ThreadState> for Facts {
     }
 }
 
+/// A digest, and what of it a view lends in core types.
+struct Summary {
+    digest: Digest,
+    pending: Vec<PendingDecision>,
+    turn: Turn,
+}
+
+impl Summary {
+    /// `boot` is the Engine's clock zero on this side.
+    fn of(digest: Digest, boot: Instant) -> Self {
+        let pending = digest
+            .pending
+            .iter()
+            .filter_map(|entry| {
+                Some(PendingDecision {
+                    handle: (&entry.handle).into(),
+                    subject: match &entry.subject {
+                        Some(subject) => Some(subject.try_into().ok()?),
+                        None => None,
+                    },
+                    decision: (&entry.decision).try_into().ok()?,
+                    submitting: false,
+                    reply_error: None,
+                })
+            })
+            .collect();
+        let turn = Turn {
+            status: digest.status,
+            outcome: digest
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.try_into().ok()),
+            started: digest
+                .turn_started_ms
+                .map(|at| protocol::instant_at(at, boot)),
+        };
+        Self {
+            digest,
+            pending,
+            turn,
+        }
+    }
+}
+
 impl Mirror {
     fn new() -> Self {
         Self {
@@ -114,7 +164,8 @@ impl Mirror {
             generation: 0,
             seq: 0,
             facts: None,
-            digest: None,
+            summary: None,
+            watched: true,
             decision_handles: HashMap::new(),
         }
     }
@@ -233,7 +284,7 @@ impl Mirrors {
             }
             ServerMessage::Digest { thread, digest } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
-                mirror.digest = Some(digest);
+                mirror.summary = Some(Summary::of(digest, boot));
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             ServerMessage::Decision { thread, handle, .. } => {
@@ -358,11 +409,6 @@ impl Mirrors {
             .map(String::as_str)
     }
 
-    /// A Thread's digest, as the Server last sent it.
-    pub(crate) fn digest(&self, thread: ThreadId) -> Option<&Digest> {
-        self.threads.get(&thread)?.digest.as_ref()
-    }
-
     fn facts(&self, thread: ThreadId) -> Option<&Facts> {
         self.threads.get(&thread)?.facts.as_ref()
     }
@@ -370,8 +416,11 @@ impl Mirrors {
     pub(crate) fn view(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
         let mirror = self.threads.get(&thread)?;
         Some(ThreadView {
+            thread,
             activity: mirror.activity.view(),
             facts: mirror.facts.as_ref()?,
+            summary: mirror.summary.as_ref().filter(|_| !mirror.watched),
+            digest: mirror.summary.as_ref().map(|summary| &summary.digest),
         })
     }
 }
@@ -392,8 +441,12 @@ fn updated(updates: &mut Vec<PaneUpdate>, thread: ThreadId) -> &mut PaneUpdate {
 /// facts it read after the handle is gone.
 #[derive(Clone, Copy)]
 pub struct ThreadView<'a> {
+    thread: ThreadId,
     activity: ActivityView<'a>,
     facts: &'a Facts,
+    /// The digest's answers, while this window does not hold the Activity.
+    summary: Option<&'a Summary>,
+    digest: Option<&'a Digest>,
 }
 
 impl<'a> ThreadView<'a> {
@@ -451,12 +504,87 @@ impl<'a> ThreadView<'a> {
         self.facts.suggestion.as_deref()
     }
 
+    /// What every window reads of this Thread away from its Transcript —
+    /// its Wall card, counts and finish — as the Server last sent it, else
+    /// folded here from the Activity: a Server too old to send digests
+    /// mirrors every open Thread whole.
+    pub fn digest(&self) -> Cow<'a, Digest> {
+        match self.digest {
+            Some(digest) => Cow::Borrowed(digest),
+            None => Cow::Owned(Digest::of(
+                self.thread,
+                self.activity,
+                None,
+                crate::clock::instant(),
+            )),
+        }
+    }
+
+    /// The digest the Server sent, without the fallback.
+    #[cfg(test)]
+    pub(crate) fn sent_digest(&self) -> Option<&'a Digest> {
+        self.digest
+    }
+
+    /// Every Decision this Thread waits on, in the order they are answered.
+    pub fn pending_decisions(&self) -> &'a [PendingDecision] {
+        match self.summary {
+            Some(summary) => &summary.pending,
+            None => self.activity.decisions(),
+        }
+    }
+
     /// What this Thread is blocked on, if anything.
     pub fn pending(&self) -> Option<&'a Decision> {
-        self.activity
-            .decisions()
+        self.pending_decisions()
             .first()
             .map(|pending| &pending.decision)
+    }
+
+    /// Main's turn: what it does, how its last ended, since when it works.
+    pub fn turn(&self) -> Turn {
+        match self.summary {
+            Some(summary) => summary.turn.clone(),
+            None => Turn::of(self.transcript()),
+        }
+    }
+
+    /// What this Thread is called without a title: its first prompt,
+    /// shortened.
+    pub fn prompt_title(&self) -> Option<String> {
+        match self.summary {
+            Some(summary) => summary.digest.prompt_title.clone(),
+            None => crate::digest::prompt_title(self.transcript()),
+        }
+    }
+
+    /// How many Subagents the Thread has.
+    pub fn subagents(&self) -> usize {
+        match self.summary {
+            Some(summary) => summary.digest.subagents,
+            None => self.activity.children().len(),
+        }
+    }
+
+    /// The turn of the Subject a Pane shows: its own while this window holds
+    /// the Activity, else Main's from the digest. `None` for a Subject the
+    /// Thread does not hold.
+    pub fn subject_turn(&self, subject: &Subject) -> Option<Turn> {
+        match self.summary {
+            Some(summary) => Some(summary.turn.clone()),
+            None => self
+                .activity
+                .subject(subject)
+                .map(|subject| Turn::of(subject.transcript())),
+        }
+    }
+
+    /// How many Subagents work.
+    pub fn working_descendants(&self) -> usize {
+        match self.summary {
+            Some(summary) => summary.digest.working_descendants,
+            None => self.activity.working_descendants(),
+        }
     }
 
     /// The prompt held back while the turn runs — the latest, which is
@@ -485,14 +613,22 @@ impl<'a> ThreadView<'a> {
     /// Is the agent mid-turn? Unlike `busy`, a Session still starting
     /// (a launch's revival, a model or provider change) is not working.
     pub fn working(&self) -> bool {
-        self.activity.main().busy()
+        match self.summary {
+            Some(summary) => summary.digest.working,
+            None => self.activity.main().busy(),
+        }
     }
 
     /// Whether work runs behind Main: its Subagents, or its transcript's
     /// background tasks.
     pub fn background_work(&self) -> bool {
-        self.activity.working_descendants() > 0
-            || self.transcript().progress().working_background() > 0
+        match self.summary {
+            Some(summary) => summary.digest.background_work,
+            None => {
+                self.activity.working_descendants() > 0
+                    || self.transcript().progress().working_background() > 0
+            }
+        }
     }
 
     /// Whether a model or effort change waits on the provider's answer:
@@ -502,7 +638,11 @@ impl<'a> ThreadView<'a> {
     }
 
     pub fn needs_queue(&self) -> bool {
-        self.busy() || self.activity.main_operator_turn() || self.facts.native_queue_pending
+        let operator_turn = match self.summary {
+            Some(summary) => summary.digest.operator_turn,
+            None => self.activity.main_operator_turn(),
+        };
+        self.busy() || operator_turn || self.facts.native_queue_pending
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.

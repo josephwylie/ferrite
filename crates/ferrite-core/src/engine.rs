@@ -4602,7 +4602,9 @@ impl Engine {
                 continue;
             }
             published.digest_owed = false;
-            published.digest_at = Some(now);
+            // A Thread's first digest starts no throttle: what streams next
+            // lands at once.
+            published.digest_at = published.digest.is_some().then_some(now);
             let digest = Digest::of(id, activity, shown, self.boot);
             if published.digest.as_ref() != Some(&digest) {
                 published.digest = Some(digest.clone());

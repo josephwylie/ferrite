@@ -613,12 +613,7 @@ fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
     assert_eq!(composer_text(&view, cx), "", "the Composer keeps its line");
     let (thread, serial) = view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
-        let serial = view
-            .cockpit
-            .thread(thread)
-            .unwrap()
-            .activity()
-            .pending_decisions()[0]
+        let serial = view.cockpit.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial;
         (thread, serial)

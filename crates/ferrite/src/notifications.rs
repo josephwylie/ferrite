@@ -266,39 +266,6 @@ pub fn request_detail(
     }
 }
 
-/// A test run's summary from its output (`357 passed; 2 failed`): the last
-/// line that counts both, cut to the two counts. `None` when the output
-/// reports no failing run.
-pub fn test_summary(output: &str) -> Option<String> {
-    for line in output.lines().rev() {
-        let Some(passed_at) = line.find(" passed;") else {
-            continue;
-        };
-        let passed: String = line[..passed_at]
-            .chars()
-            .rev()
-            .take_while(char::is_ascii_digit)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        let rest = &line[passed_at + " passed;".len()..];
-        let failed: String = rest
-            .trim_start()
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        if passed.is_empty() || failed.is_empty() {
-            continue;
-        }
-        if failed == "0" || !rest.trim_start()[failed.len()..].starts_with(" failed") {
-            return None;
-        }
-        return Some(format!("{passed} passed; {failed} failed"));
-    }
-    None
-}
-
 /// A finished turn's detail (R7): its final answer when that is one line
 /// that fits the row unclipped (`room` cells after the title), else `worked
 /// for <settled duration>`, else nothing.
@@ -1138,16 +1105,6 @@ mod tests {
         };
         assert_eq!(touch.text(), "Write wants to edit src/nav.rs");
         assert_eq!(tool_verb("Read"), "read");
-        assert_eq!(
-            test_summary("running 359 tests\ntest result: FAILED. 357 passed; 2 failed; 0 ignored"),
-            Some("357 passed; 2 failed".into())
-        );
-        assert_eq!(
-            test_summary("test result: ok. 38 passed; 0 failed; 0 ignored"),
-            None,
-            "a green run is no failure"
-        );
-        assert_eq!(test_summary("nothing ran"), None);
         assert_eq!(
             done_words(
                 Some("14 crates bumped, deny clean"),

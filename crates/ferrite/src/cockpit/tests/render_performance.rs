@@ -1659,7 +1659,6 @@ fn a_pending_decision_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut Tes
             view.cockpit
                 .thread(thread)
                 .unwrap()
-                .activity()
                 .pending_decisions()
                 .len(),
             1,

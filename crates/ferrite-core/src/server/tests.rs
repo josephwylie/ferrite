@@ -344,8 +344,8 @@ impl Window {
             .unwrap();
     }
 
-    fn digest(&self, thread: ThreadId) -> Option<&crate::digest::Digest> {
-        self.mirrors.digest(thread)
+    fn digest(&self, thread: ThreadId) -> Option<crate::digest::Digest> {
+        self.mirrors.view(thread)?.sent_digest().cloned()
     }
 
     fn said(&self, thread: ThreadId) -> Vec<String> {
@@ -4047,7 +4047,7 @@ fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
             .is_some_and(|digest| !digest.pending.is_empty())
     });
 
-    let digest = window.digest(thread).unwrap().clone();
+    let digest = window.digest(thread).unwrap();
     assert_eq!(
         digest.wall.lines.first().map(|line| line.text.as_str()),
         Some("\u{25cf} Reading the spike notes")
@@ -4055,7 +4055,7 @@ fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
     assert_eq!(window.histories, 0, "no history crossed");
     assert!(window.said(thread).is_empty(), "no input crossed");
     let late = attach(&harness.address);
-    assert_eq!(late.digest(thread), Some(&digest));
+    assert_eq!(late.digest(thread), Some(digest));
 
     window.command(2, Op::Park { thread });
     window.until(|window| window.digest(thread).is_none());

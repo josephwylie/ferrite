@@ -1234,8 +1234,7 @@ impl Cockpit {
     /// Answer the pending Decision `decision` names, if it still waits.
     pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
         let handle = self.thread(thread).and_then(|open| {
-            open.activity()
-                .decisions()
+            open.pending_decisions()
                 .iter()
                 .find(|pending| pending.decision == *decision)
                 .map(|pending| pending.handle.clone())
@@ -1538,7 +1537,7 @@ impl Cockpit {
     /// read off its log: callers cache this rather than ask per frame.
     pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
         if let Some(open) = self.thread(thread) {
-            return Ok(open.activity().children().len());
+            return Ok(open.subagents());
         }
         self.log_reader().subagent_count(thread)
     }
@@ -1620,15 +1619,7 @@ impl Cockpit {
             if !auto {
                 return numbered();
             }
-            return open
-                .transcript()
-                .blocks()
-                .iter()
-                .find_map(|block| match &block.body {
-                    crate::transcript::Body::Prompt(text) => Some(title_from_prompt(text)),
-                    _ => None,
-                })
-                .unwrap_or_else(numbered);
+            return open.prompt_title().unwrap_or_else(numbered);
         }
         let Ok(meta) = self.parked.peek(thread) else {
             return numbered();
@@ -1908,7 +1899,7 @@ impl Cockpit {
             .into_iter()
             .filter(|thread| {
                 self.thread(*thread)
-                    .is_some_and(|open| !open.activity().decisions().is_empty())
+                    .is_some_and(|open| !open.pending_decisions().is_empty())
             })
             .collect()
     }

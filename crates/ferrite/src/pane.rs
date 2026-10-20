@@ -23,8 +23,8 @@ use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 pub(crate) use ferrite_core::digest::BULLET;
 use ferrite_core::digest::ELBOW;
-pub use ferrite_core::digest::{WallCard, WallLine};
-use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level};
+pub use ferrite_core::digest::{Turn, WallCard, WallLine};
+use ferrite_core::docview::{is_test_run, passed_count, Level};
 use ferrite_core::followup::{self, Followup};
 use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
@@ -696,15 +696,11 @@ pub enum WallState {
 
 /// glance.md's matrix, one row per state. Transcript owns the turn's meaning;
 /// the Pane chooses its presentation alongside Decisions and test results.
-pub fn wall_state(
-    transcript: Option<&Transcript>,
-    pending: bool,
-    tests_failing: bool,
-) -> WallState {
-    let Some(transcript) = transcript else {
+pub fn wall_state(turn: Option<&Turn>, pending: bool, tests_failing: bool) -> WallState {
+    let Some(turn) = turn else {
         return WallState::Parked;
     };
-    let status = transcript.status();
+    let status = turn.status;
     if pending || status == Status::Blocked {
         return WallState::Decision;
     }
@@ -712,7 +708,7 @@ pub fn wall_state(
         Status::Closed => WallState::Blocked,
         Status::Streaming if tests_failing => WallState::Failing,
         Status::Streaming => WallState::Working,
-        _ if transcript.turn_completed() => WallState::Done,
+        _ if turn.completed() => WallState::Done,
         _ => WallState::Idle,
     }
 }
@@ -892,8 +888,9 @@ pub fn render_pane(
     let status = subject.as_ref().map(|subject| {
         crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
     });
+    let turn = thread.and_then(|thread| thread.subject_turn(&view.selected));
     let state = wall_state(
-        transcript,
+        turn.as_ref(),
         decision.is_some_and(Decision::blocks_execution),
         wall.tests_failing,
     );
@@ -902,7 +899,7 @@ pub fn render_pane(
     // only, so nothing reflows when a Decision arrives. A waiting Pane
     // draws `ATTENTION_EDGE` on every side — focused or not; a focused one
     // says so in its head ground and title instead of a second ring.
-    let pending = thread.map(|thread| thread.activity().pending_decisions());
+    let pending = thread.map(|thread| thread.pending_decisions());
     let attention_pending =
         pending.is_some_and(|pending| !pending.is_empty()) || state == WallState::Decision;
     // Focus is drawn only where it tells the operator something: a lone
@@ -931,7 +928,7 @@ pub fn render_pane(
                 view.is_main(),
                 dot_state(
                     state,
-                    state_word(state, kind, wall, transcript, unread).as_ref(),
+                    state_word(state, kind, wall, turn.as_ref(), unread).as_ref(),
                 ),
                 unread,
                 thread.is_some_and(|thread| thread.background_work()),
@@ -965,7 +962,7 @@ pub fn render_pane(
                     card: wall,
                     state,
                     kind,
-                    transcript,
+                    turn: turn.as_ref(),
                     unread,
                     quick_answers,
                     focused,
@@ -1022,7 +1019,6 @@ pub fn render_pane(
             let child_request = !view.is_main()
                 && thread.is_some_and(|thread| {
                     thread
-                        .activity()
                         .pending_decisions()
                         .iter()
                         .any(|request| request.subject.as_ref() == Some(&view.selected))
@@ -1589,7 +1585,7 @@ struct WallTile<'a> {
     card: &'a WallCard,
     state: WallState,
     kind: Option<&'static str>,
-    transcript: Option<&'a Transcript>,
+    turn: Option<&'a Turn>,
     /// The tile's finish has not been seen: it reads `done`.
     unread: bool,
     quick_answers: Option<AnyElement>,
@@ -1615,7 +1611,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
         card,
         state,
         kind,
-        transcript,
+        turn,
         unread,
         quick_answers,
         focused,
@@ -1624,10 +1620,8 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
     } = tile;
     let word = match state {
         WallState::Parked => Some(HeadSlot::Parked),
-        _ => match state_word(state, kind, card, transcript, unread) {
-            Some(HeadSlot::Working(_)) => {
-                Some(HeadSlot::Working(working_clock(transcript, focused)))
-            }
+        _ => match state_word(state, kind, card, turn, unread) {
+            Some(HeadSlot::Working(_)) => Some(HeadSlot::Working(working_clock(turn, focused))),
             word => word,
         },
     };
@@ -1696,8 +1690,8 @@ const WAKE_HINT: &str = "\u{23ce} reopens it";
 /// A working tile's clock: whole seconds (`12s`, `1m04s`) on the tile that
 /// holds the keyboard; elsewhere a minute and past reads in minutes alone
 /// (`1m`), as the prototype's quiet Panes do.
-fn working_clock(transcript: Option<&Transcript>, focused: bool) -> String {
-    let Some(elapsed) = transcript.and_then(Transcript::turn_elapsed) else {
+fn working_clock(turn: Option<&Turn>, focused: bool) -> String {
+    let Some(elapsed) = turn.and_then(Turn::elapsed) else {
         return String::new();
     };
     if !focused && elapsed.as_secs() >= 60 {
@@ -1924,7 +1918,7 @@ fn state_word(
     state: WallState,
     kind: Option<&'static str>,
     card: &WallCard,
-    transcript: Option<&Transcript>,
+    turn: Option<&Turn>,
     unread: bool,
 ) -> Option<HeadSlot> {
     use ferrite_core::TurnOutcome;
@@ -1938,13 +1932,12 @@ fn state_word(
         WallState::Failing => HeadSlot::Failing(card.failing_count),
         WallState::Blocked => HeadSlot::Failed,
         WallState::Working => HeadSlot::Working(
-            transcript
-                .and_then(Transcript::turn_elapsed)
+            turn.and_then(Turn::elapsed)
                 .map(ferrite_core::progress::live_seconds)
                 .unwrap_or_default(),
         ),
         WallState::Parked => HeadSlot::Parked,
-        WallState::Done | WallState::Idle => match transcript.and_then(Transcript::turn_outcome) {
+        WallState::Done | WallState::Idle => match turn.and_then(|turn| turn.outcome.as_ref()) {
             Some(TurnOutcome::Error(_)) => HeadSlot::Failed,
             _ if unread => HeadSlot::Done,
             Some(TurnOutcome::Interrupted) => HeadSlot::Interrupted,
@@ -1976,14 +1969,14 @@ pub(crate) fn thread_word(
 ) -> Option<HeadSlot> {
     let empty = WallCard::default();
     let card = card.unwrap_or(&empty);
-    let transcript = open.transcript();
+    let turn = open.turn();
     let decision = open.pending();
     let state = wall_state(
-        Some(transcript),
+        Some(&turn),
         decision.is_some_and(Decision::blocks_execution),
         card.tests_failing,
     );
-    let pending = open.activity().pending_decisions();
+    let pending = open.pending_decisions();
     let kind = (!pending.is_empty() || state == WallState::Decision).then(|| {
         pending
             .first()
@@ -1991,7 +1984,7 @@ pub(crate) fn thread_word(
             .or_else(|| decision.map(request_kind))
             .unwrap_or(theme::words::APPROVAL)
     });
-    state_word(state, kind, card, Some(transcript), unread)
+    state_word(state, kind, card, Some(&turn), unread)
 }
 
 /// The Pane's foot while its question is too big for the body: `◆ needs
@@ -2837,7 +2830,7 @@ fn parked_body(parked_line: Option<SharedString>) -> Div {
         card: &card,
         state: WallState::Parked,
         kind: None,
-        transcript: None,
+        turn: None,
         unread: false,
         quick_answers: None,
         focused: false,
@@ -8481,6 +8474,7 @@ fn joined_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::docview::Instruments;
     use ferrite_core::transcript::Class;
     #[test]
     fn progress_token_counts_stay_compact() {
@@ -9401,7 +9395,10 @@ mod tests {
             outcome: ferrite_core::TurnOutcome::Completed,
             cost_usd: None,
         }));
-        assert_eq!(wall_state(Some(&transcript), false, false), WallState::Done);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            WallState::Done
+        );
     }
 
     /// glance.md §4's wall matrix, one assertion per row — the selection
@@ -9410,13 +9407,22 @@ mod tests {
     fn the_wall_state_matrix_reads_exactly_as_the_glance_spec() {
         use WallState::*;
         let mut transcript = Transcript::default();
-        assert_eq!(wall_state(Some(&transcript), false, false), Idle);
+        assert_eq!(wall_state(Some(&Turn::of(&transcript)), false, false), Idle);
         transcript.apply(Input::Prompt("go".into()));
         // Working, focused or not, is the streaming Thread.
-        assert_eq!(wall_state(Some(&transcript), false, false), Working);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Working
+        );
         // Failing tests stay a working Thread — red text, not a ring.
-        assert_eq!(wall_state(Some(&transcript), true, false), Decision);
-        assert_eq!(wall_state(Some(&transcript), false, true), Failing);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), true, false),
+            Decision
+        );
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, true),
+            Failing
+        );
         // A Decision waits: pending flag or Blocked status, either way.
         let decision = crate::demo::script()
             .into_iter()
@@ -9424,7 +9430,10 @@ mod tests {
             .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
             .unwrap();
         transcript.apply(Input::Event(decision));
-        assert_eq!(wall_state(Some(&transcript), false, false), Decision);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Decision
+        );
         // Only successful outcomes read Done, regardless of cost.
         for cost_usd in [None, Some(0.038)] {
             for (outcome, expected) in [
@@ -9433,7 +9442,10 @@ mod tests {
                 (ferrite_core::TurnOutcome::Error("failed".into()), Idle),
             ] {
                 transcript.apply(Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }));
-                assert_eq!(wall_state(Some(&transcript), false, false), expected);
+                assert_eq!(
+                    wall_state(Some(&Turn::of(&transcript)), false, false),
+                    expected
+                );
             }
         }
         // A closed Session is the red hard-blocker.
@@ -9444,7 +9456,10 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::Closed {
             reason: "Session exited".into(),
         }));
-        assert_eq!(wall_state(Some(&transcript), false, false), Blocked);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Blocked
+        );
         // No transcript at all — the cockpit could not open the Thread.
         assert_eq!(wall_state(None, false, false), Parked);
     }

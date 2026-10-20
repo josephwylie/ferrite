@@ -220,6 +220,7 @@ fn digest() -> crate::digest::Digest {
             },
             wall: WallCard::default(),
         }),
+        prompt_title: Some("Make the suite pass".into()),
         turns: 3,
         subagents: 1,
         changed_files: vec![crate::docview::FileChange {

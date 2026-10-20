@@ -2309,9 +2309,9 @@ impl CockpitView {
                 .threads()
                 .into_iter()
                 .filter(|thread| {
-                    self.cockpit.thread(*thread).is_some_and(|open| {
-                        open.busy() || open.activity().working_descendants() > 0
-                    })
+                    self.cockpit
+                        .thread(*thread)
+                        .is_some_and(|open| open.busy() || open.working_descendants() > 0)
                 })
                 .chain(moved)
                 .collect();
@@ -2325,10 +2325,6 @@ impl CockpitView {
             // up to two seconds, so the header follows without a pause.
             self.refresh_branches(cx);
         }
-        // A wall card a throttled stream left behind refolds once its
-        // quarter second is up, whether or not anything streams again.
-        let streaming: Vec<ThreadId> = frame.iter().map(|update| update.thread).collect();
-        let walls_settled = self.facts.settle_walls(&self.cockpit, now, &streaming);
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
@@ -2340,7 +2336,6 @@ impl CockpitView {
             && !startup_changed
             && !models_changed
             && !commands_changed
-            && !walls_settled
             && !server_moved
             && !parked_moved
             && !panes_changed
@@ -2385,11 +2380,7 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            turn_ended |= self.facts.streamed(&self.cockpit, update.thread, now);
-            if let Some(index) = self.pane_for(update.thread) {
-                self.facts
-                    .selected(&self.cockpit, update.thread, &self.panes[index].selected);
-            }
+            turn_ended |= self.facts.streamed(&self.cockpit, update.thread);
         }
         let precise = restarted.is_empty()
             && !swept_change
@@ -6079,7 +6070,6 @@ impl CockpitView {
                 .is_some_and(|thread| {
                     !thread.activity().children().is_empty()
                         || thread
-                            .activity()
                             .pending_decisions()
                             .iter()
                             .any(|request| pane::question_of(&request.decision).is_some())
@@ -6150,7 +6140,6 @@ impl CockpitView {
                 .is_some_and(|thread| {
                     !thread.activity().children().is_empty()
                         || thread
-                            .activity()
                             .pending_decisions()
                             .iter()
                             .any(|request| pane::question_of(&request.decision).is_some())
@@ -6314,8 +6303,7 @@ impl CockpitView {
         };
         let Some(request) = self.cockpit.thread(thread).and_then(|open| {
             let pending = open.pending()?;
-            open.activity()
-                .pending_decisions()
+            open.pending_decisions()
                 .iter()
                 .find(|request| {
                     &request.decision == pending
@@ -8919,9 +8907,8 @@ impl CockpitView {
                 nav::RowStatus::of(
                     pane::dot_state(
                         pane::wall_state(
-                            Some(open.transcript()),
-                            open.activity()
-                                .pending_decisions()
+                            Some(&open.turn()),
+                            open.pending_decisions()
                                 .iter()
                                 .any(|pending| pending.decision.blocks_execution()),
                             failing,
@@ -9267,7 +9254,7 @@ impl CockpitView {
         for pane in panes {
             if let Some(thread) = pane.thread() {
                 if let Some(open) = self.cockpit.thread(thread) {
-                    for request in open.activity().pending_decisions() {
+                    for request in open.pending_decisions() {
                         requests.push((
                             thread,
                             request
@@ -9763,9 +9750,8 @@ impl CockpitView {
             return;
         }
         let second = Duration::from_secs(1);
-        let rollover = |transcript: Option<&ferrite_core::transcript::Transcript>| {
-            transcript
-                .and_then(|transcript| transcript.turn_elapsed())
+        let rollover = |turn: Option<pane::Turn>| {
+            turn.and_then(|turn| turn.elapsed())
                 .map(|elapsed| ferrite_core::cadence::next_rollover(elapsed, second))
         };
         let now = cx.background_executor().now();
@@ -9778,15 +9764,13 @@ impl CockpitView {
             let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) else {
                 continue;
             };
-            let subject = open
-                .activity()
-                .subject(&pane.selected)
-                .map(|subject| subject.transcript());
-            let Some(next) = [rollover(Some(open.transcript())), rollover(subject)]
-                .into_iter()
-                .flatten()
-                .min()
-            else {
+            let Some(next) = [
+                rollover(Some(open.turn())),
+                rollover(open.subject_turn(&pane.selected)),
+            ]
+            .into_iter()
+            .flatten()
+            .min() else {
                 continue;
             };
             everything = Some(everything.map_or(next, |at| at.min(next)));
@@ -9802,8 +9786,7 @@ impl CockpitView {
         }
         // Every working Thread's nav row reads its clock.
         for thread in self.cockpit.threads() {
-            if let Some(next) = rollover(self.cockpit.thread(thread).map(|open| open.transcript()))
-            {
+            if let Some(next) = rollover(self.cockpit.thread(thread).map(|open| open.turn())) {
                 nav = Some(nav.map_or(next, |at| at.min(next)));
                 everything = Some(everything.map_or(next, |at| at.min(next)));
             }
@@ -9987,7 +9970,7 @@ impl CockpitView {
                     .thread()
                     .and_then(|thread| self.cockpit.thread(thread))
                     .is_some_and(|open| {
-                        open.activity().pending_decisions().iter().any(|request| {
+                        open.pending_decisions().iter().any(|request| {
                             (request.subject.as_ref() == Some(&pane.selected)
                                 || (request.subject.is_none() && pane.is_main()))
                                 && pane::question_of(&request.decision).is_some()
@@ -10115,8 +10098,8 @@ impl CockpitView {
                     .and_then(|id| self.cockpit.thread(id))
                     .is_some_and(|thread| {
                         !thread.activity().children().is_empty()
-                            || thread.activity().pending_decisions().len() > 1
-                            || thread.activity().pending_decisions().iter().any(|request| {
+                            || thread.pending_decisions().len() > 1
+                            || thread.pending_decisions().iter().any(|request| {
                                 request.subject.is_none()
                                     || pane::question_of(&request.decision).is_some()
                             })
@@ -10760,7 +10743,7 @@ impl CockpitView {
                 reduce_motion: facts.reduce_motion,
                 cell_width: facts.cell_width,
                 clock: open
-                    .and_then(|open| open.transcript().turn_elapsed())
+                    .and_then(|open| open.turn().elapsed())
                     .map(ferrite_core::progress::live_seconds),
                 renaming: matches!(
                     &self.rename,
@@ -11246,7 +11229,6 @@ impl CockpitView {
         let request = self
             .cockpit
             .thread(thread)?
-            .activity()
             .pending_decisions()
             .iter()
             .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?;
@@ -11456,7 +11438,7 @@ impl CockpitView {
     fn quick_answers(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index)?.thread()?;
         let open = self.cockpit.thread(thread)?;
-        let pending = open.activity().pending_decisions();
+        let pending = open.pending_decisions();
         let request = pending
             .iter()
             .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))
@@ -11527,7 +11509,7 @@ impl CockpitView {
     pub(crate) fn wall_answer_target(&self) -> Option<ThreadId> {
         let waits = |thread: ThreadId| {
             self.cockpit.thread(thread).is_some_and(|open| {
-                open.pending().is_some() || !open.activity().pending_decisions().is_empty()
+                open.pending().is_some() || !open.pending_decisions().is_empty()
             })
         };
         self.focused_thread()
@@ -11552,8 +11534,7 @@ impl CockpitView {
             .cockpit
             .thread(thread)
             .and_then(|open| {
-                open.activity()
-                    .pending_decisions()
+                open.pending_decisions()
                     .iter()
                     .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))
                     .map(|request| pane::questions_of(&request.decision).is_some())
@@ -12941,37 +12922,13 @@ impl CockpitView {
         now: std::time::SystemTime,
     ) -> NoticeRow {
         use crate::notifications::{Detail, State};
-        use ferrite_core::transcript::Body;
         let title = self.facts.name(notice.thread);
-        let blocks: &[ferrite_core::transcript::Block] = self
+        let finish = self
             .cockpit
             .thread(notice.thread)
-            .map(|open| open.transcript().blocks())
-            .unwrap_or(&[]);
-        let start = blocks
-            .iter()
-            .rposition(|block| matches!(block.body, Body::Prompt(_)))
-            .unwrap_or(0);
-        let turn = &blocks[start..];
-        // The turn's last test run, and what it said: a failing summary,
-        // or nothing for a green run.
-        let failing = turn
-            .iter()
-            .rev()
-            .find_map(|block| match &block.body {
-                Body::Tool(tool) => {
-                    let text = tool
-                        .output
-                        .as_ref()
-                        .map(|output| output.text.as_str())
-                        .or(tool.result_line.as_deref())?;
-                    text.contains(" passed;")
-                        .then(|| crate::notifications::test_summary(text))
-                }
-                _ => None,
-            })
-            .flatten();
-        let (state, detail) = match (&notice.outcome, failing) {
+            .map(|open| open.digest().finish.clone())
+            .unwrap_or_default();
+        let (state, detail) = match (&notice.outcome, finish.failing_tests) {
             (_, Some(summary)) => (State::Failed, Detail::Words(summary.into())),
             (ferrite_core::TurnOutcome::Error(error), None) => (
                 State::Failed,
@@ -12981,45 +12938,15 @@ impl CockpitView {
                 ),
             ),
             _ => {
-                // The final answer: the turn's prose after its last call,
-                // when it is a single paragraph.
-                let last_tool = turn
-                    .iter()
-                    .rposition(|block| matches!(block.body, Body::Tool(_)))
-                    .map_or(0, |at| at + 1);
-                let prose: Vec<&ferrite_core::transcript::Block> = turn[last_tool..]
-                    .iter()
-                    .filter(|block| {
-                        matches!(
-                            block.body,
-                            Body::Paragraph { .. }
-                                | Body::Heading { .. }
-                                | Body::Bullet { .. }
-                                | Body::Code { .. }
-                        )
-                    })
-                    .collect();
-                let answer = match prose.as_slice() {
-                    [only] => match &only.body {
-                        Body::Paragraph { spans } => Some(
-                            spans
-                                .iter()
-                                .map(|span| span.text.as_str())
-                                .collect::<String>(),
-                        ),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                let worked = turn.iter().rev().find_map(|block| match &block.body {
-                    Body::TurnEnd(end) => end.elapsed_ms.map(Duration::from_millis),
-                    _ => None,
-                });
                 let room =
                     crate::notifications::ROW_TEXT_CELLS.saturating_sub(title.chars().count() + 3);
                 (
                     State::Done,
-                    crate::notifications::done_words(answer.as_deref(), worked, room),
+                    crate::notifications::done_words(
+                        finish.answer.as_deref(),
+                        finish.worked_ms.map(Duration::from_millis),
+                        room,
+                    ),
                 )
             }
         };
@@ -13237,8 +13164,7 @@ impl CockpitView {
         let open = self.cockpit.thread(thread);
         let detail = open
             .and_then(|open| {
-                open.activity()
-                    .pending_decisions()
+                open.pending_decisions()
                     .iter()
                     .find(|request| request.handle == notice.id.handle)
                     .map(|request| request.decision.clone())
@@ -16467,11 +16393,7 @@ mod tests {
         cx.simulate_click(choice.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         let serial = view.read_with(cx, |view, _| {
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial
         });
@@ -16507,11 +16429,7 @@ mod tests {
         fake.streams.borrow()[0].send(question("q_02")).unwrap();
         tick(cx);
         let serial = view.read_with(cx, |view, _| {
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial
         });
@@ -16588,11 +16506,7 @@ mod tests {
                 !view.panes[0].composer.read(cx).is_empty(),
                 "the premise: half-typed text on the line"
             );
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial
         });
@@ -18070,62 +17984,6 @@ mod tests {
     fn step(cx: &mut gpui::VisualTestContext, ms: u64) {
         cx.executor().advance_clock(Duration::from_millis(ms));
         cx.run_until_parked();
-    }
-
-    /// The wall card is a fold over every Block, and the pump would refold
-    /// a streaming Thread's on every tick — 125 times a second. It refolds
-    /// at most four times a second instead, and nothing streamed is left
-    /// out: a line held back lands a quarter second after the last refold
-    /// even when the stream has gone quiet.
-    #[gpui::test]
-    fn a_streaming_wall_card_refolds_at_most_four_times_a_second(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("wall-throttle", 1);
-        let thread = core.threads()[0];
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        tick(cx);
-        step(cx, 1_000);
-        let stream = |text: String| {
-            fake.streams.borrow()[0]
-                .send(SessionEvent::TextDelta { text })
-                .unwrap()
-        };
-        let shows = |wall: &(String, Vec<String>), text: &str| {
-            wall.1.iter().any(|line| line.contains(text))
-        };
-
-        // A second of streaming, a line every display frame.
-        let mut refolds = 0;
-        let mut last = wall_text(&view, cx, thread);
-        for n in 0..60 {
-            stream(format!("streamed line {n:02}\n\n"));
-            step(cx, 16);
-            let now = wall_text(&view, cx, thread);
-            if now != last {
-                refolds += 1;
-                last = now;
-            }
-        }
-        assert!(
-            (3..=5).contains(&refolds),
-            "a second of streaming refolded the wall card {refolds} times"
-        );
-
-        // The stream goes quiet with its newest line held back; that line
-        // still reaches the card, with nothing more arriving.
-        step(cx, 250);
-        stream("the held-back line\n\n".into());
-        step(cx, 16);
-        stream("the last line\n\n".into());
-        step(cx, 16);
-        assert!(
-            !shows(&wall_text(&view, cx, thread), "the last line"),
-            "inside the quarter second the card holds still"
-        );
-        step(cx, 250);
-        assert!(
-            shows(&wall_text(&view, cx, thread), "the last line"),
-            "the trailing refold brings the card up to date"
-        );
     }
 
     /// What the operator must see at once is never held for the throttle:
