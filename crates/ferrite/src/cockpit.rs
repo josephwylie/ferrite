@@ -1517,6 +1517,9 @@ impl CockpitView {
         crate::theme::init_components(cx);
         subagents::init(cx);
         cockpit.settings_changed(&prefs.settings);
+        // This window says what it draws from its first frame on, so no
+        // Thread streams to it before it is drawn (ADR 0032).
+        cockpit.draws_transcripts([]);
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {

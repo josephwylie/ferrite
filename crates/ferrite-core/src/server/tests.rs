@@ -433,7 +433,7 @@ fn the_first_answer_wins_and_the_second_hears_already_answered() {
     first.until(pending);
     second.until(pending);
     let handle: protocol::WireHandle =
-        (&first.mirrors.view(thread).unwrap().activity().decisions()[0].handle).into();
+        (&first.mirrors.view(thread).unwrap().pending_decisions()[0].handle).into();
     let answer = |handle: &protocol::WireHandle| Op::Answer {
         thread,
         handle: handle.clone(),
@@ -1278,6 +1278,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     assert!(window.registry().project(project).is_some());
 
     let mut second = cockpit(&harness);
+    second.draws_transcripts([thread]);
     pump_until(&mut second, |second| shows(second, thread, "on it"));
 
     provider.send(decision()).unwrap();
@@ -1288,7 +1289,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     };
     pump_until(&mut window, pending);
     pump_until(&mut second, pending);
-    let handle = window.thread(thread).unwrap().activity().decisions()[0]
+    let handle = window.thread(thread).unwrap().pending_decisions()[0]
         .handle
         .clone();
     let allow = DecisionAnswer::Allow {
@@ -1341,7 +1342,7 @@ fn a_reopened_window_can_answer_questions() {
                 .is_some_and(|open| open.pending().is_some())
         };
         pump_until(&mut window, pending);
-        let first_handle = window.thread(thread).unwrap().activity().decisions()[0]
+        let first_handle = window.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
         assert!(window
@@ -1386,6 +1387,7 @@ fn a_reopened_window_can_answer_questions() {
         }
         drop(window);
         let mut reopened = cockpit(&harness);
+        reopened.draws_transcripts([thread]);
         pump_until(&mut reopened, |window| {
             window
                 .thread(thread)
@@ -1395,7 +1397,7 @@ fn a_reopened_window_can_answer_questions() {
             provider.send(question).unwrap();
         }
         pump_until(&mut reopened, pending);
-        let handle = reopened.thread(thread).unwrap().activity().decisions()[0]
+        let handle = reopened.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
         assert_eq!(
@@ -1427,7 +1429,7 @@ fn a_reopened_window_can_answer_questions() {
         assert_eq!(harness.answers.lock().unwrap().last().unwrap().1, answer);
         if delivery == crate::DecisionDelivery::Async {
             pump_until(&mut reopened, |window| {
-                window.thread(thread).unwrap().activity().decisions()[0].submitting
+                window.thread(thread).unwrap().pending_decisions()[0].submitting
             });
             provider
                 .send(SessionEvent::Activity(
@@ -4142,19 +4144,9 @@ fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
 fn a_window_mirrors_only_the_threads_it_draws() {
     let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
     let harness = start("mirrors-drawn");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
-    let thread = window
-        .open(
-            Provider::Claude,
-            crate::workspace::WorkspaceChoice::Main {
-                checkout: harness.dir.clone(),
-            },
-        )
-        .unwrap();
-    let provider = harness
-        .sessions
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap();
     let digest_says = |window: &crate::cockpit::Cockpit, said: &str| {
         window.thread(thread).is_some_and(|open| {
             open.digest()
@@ -4164,7 +4156,6 @@ fn a_window_mirrors_only_the_threads_it_draws() {
                 .any(|line| line.text.contains(said))
         })
     };
-    window.draws_transcripts([]);
     window.send(thread, "go".into());
     provider.send(text("on it\n\n")).unwrap();
     provider.send(decision()).unwrap();
@@ -4193,4 +4184,37 @@ fn a_window_mirrors_only_the_threads_it_draws() {
             .is_some_and(|open| open.pending().is_some()),
         "its Decision still reads"
     );
+}
+
+/// A window that says what it draws before its first frame streams no
+/// Thread it does not draw: attaching to a Server with Threads open reads
+/// their digests, and none of their histories (ADR 0032).
+#[test]
+fn a_window_attaching_streams_no_thread_it_does_not_draw() {
+    let harness = start("attach-draws-nothing");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    provider.send(text("before the window\n\n")).unwrap();
+    other.until(|other| {
+        other
+            .digest(thread)
+            .is_some_and(|digest| !digest.wall.lines.is_empty())
+    });
+
+    let mut window = cockpit(&harness);
+    pump_until(&mut window, |window| {
+        window.thread(thread).is_some_and(|open| {
+            open.digest()
+                .wall
+                .lines
+                .iter()
+                .any(|line| line.text.contains("before the window"))
+        })
+    });
+    for _ in 0..20 {
+        window.pump();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert!(!shows(&window, thread, "before the window"));
 }

@@ -81,7 +81,8 @@ pub struct Cockpit {
     /// when this window runs its agents itself (`settings_changed`).
     forge: ferrite_reviewr::config::PluginConfig,
     /// When this window last drew each Thread at Transcript level
-    /// (`draws_transcripts`); `None` until it first says.
+    /// (`draws_transcripts`). `None` for an Engine in this process until its
+    /// window first says: it streams every open Thread until then.
     drawn: Option<HashMap<ThreadId, Instant>>,
 }
 
@@ -141,6 +142,9 @@ impl Cockpit {
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
         let mut cockpit = Self::with(Link::Server(Box::new(remote)), parked, &dir);
+        // A window streams only what it draws, from its first attach on: it
+        // draws nothing yet (ADR 0032).
+        cockpit.drawn = Some(HashMap::new());
         cockpit.arrive(arrived.into_iter().collect());
         Ok(cockpit)
     }
