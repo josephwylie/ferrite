@@ -80,15 +80,57 @@ pub struct Cockpit {
     /// The self-hosted forges a review's pull request is read from here,
     /// when this window runs its agents itself (`settings_changed`).
     forge: ferrite_reviewr::config::PluginConfig,
-    /// When this window last drew each Thread at Transcript level
-    /// (`draws_transcripts`). `None` for an Engine in this process until its
-    /// window first says: it streams every open Thread until then.
-    drawn: Option<HashMap<ThreadId, Instant>>,
+    /// What this window draws at Transcript level (`draws_transcripts`).
+    /// `None` for an Engine in this process until its window first says:
+    /// until then it streams every open Thread.
+    drawn: Option<Drawn>,
 }
 
 /// How long a Thread off screen stays streamed whole: flipping between
 /// Threads reads none of their history again (ADR 0032).
 const UNWATCH_AFTER: Duration = Duration::from_secs(30);
+
+/// The Threads a window draws at Transcript level, and when each it no
+/// longer draws left the screen.
+#[derive(Default)]
+struct Drawn {
+    now: std::collections::BTreeSet<ThreadId>,
+    left: HashMap<ThreadId, Instant>,
+}
+
+impl Drawn {
+    fn draws(&mut self, threads: std::collections::BTreeSet<ThreadId>, at: Instant) {
+        for &gone in self.now.difference(&threads) {
+            self.left.insert(gone, at);
+        }
+        for thread in &threads {
+            self.left.remove(thread);
+        }
+        self.now = threads;
+    }
+
+    /// A Thread that opened while the window is up is one the operator is
+    /// about to look at: it is held as if it had just left the screen.
+    fn opened(&mut self, thread: ThreadId, at: Instant) {
+        if !self.now.contains(&thread) {
+            self.left.insert(thread, at);
+        }
+    }
+
+    /// Whether `thread` is drawn, or left the screen within `UNWATCH_AFTER`.
+    fn holds(&self, thread: ThreadId, at: Instant) -> bool {
+        self.now.contains(&thread)
+            || self
+                .left
+                .get(&thread)
+                .is_some_and(|left| at.saturating_duration_since(*left) < UNWATCH_AFTER)
+    }
+
+    fn retain(&mut self, open: &[ThreadId]) {
+        self.now.retain(|thread| open.contains(thread));
+        self.left.retain(|thread, _| open.contains(thread));
+    }
+}
 
 /// What only a window knows and the API reports (ADR 0030): the Thread it
 /// shows the operator, and its Composers holding unsent text.
@@ -144,7 +186,7 @@ impl Cockpit {
         let mut cockpit = Self::with(Link::Server(Box::new(remote)), parked, &dir);
         // A window streams only what it draws, from its first attach on: it
         // draws nothing yet (ADR 0032).
-        cockpit.drawn = Some(HashMap::new());
+        cockpit.drawn = Some(Drawn::default());
         cockpit.arrive(arrived.into_iter().collect());
         Ok(cockpit)
     }
@@ -362,15 +404,13 @@ impl Cockpit {
             self.bootstrap_results.push(result);
         }
         self.sync_roster();
-        // A Thread that opens while the window is up is one the operator is
-        // about to look at: it streams from the start, as if drawn. What a
-        // Server's snapshot lists is not new.
+        // What a Server's snapshot lists is not new.
         if !attached {
             let now = crate::clock::instant();
             if let Some(drawn) = &mut self.drawn {
                 for &thread in &self.shared.open {
                     if !open_before.contains(&thread) {
-                        drawn.insert(thread, now);
+                        drawn.opened(thread, now);
                     }
                 }
             }
@@ -378,15 +418,13 @@ impl Cockpit {
         self.follow_attention();
     }
 
-    /// The window draws these Threads at Transcript level now: it streams
-    /// them whole, and each `UNWATCH_AFTER` after it last drew it (ADR
-    /// 0032).
+    /// The window draws exactly these Threads at Transcript level now. It
+    /// streams them whole while it does, and each for `UNWATCH_AFTER` after
+    /// it stops (ADR 0032).
     pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadId>) {
-        let now = crate::clock::instant();
-        let drawn = self.drawn.get_or_insert_with(HashMap::new);
-        for thread in threads {
-            drawn.insert(thread, now);
-        }
+        self.drawn
+            .get_or_insert_with(Drawn::default)
+            .draws(threads.into_iter().collect(), crate::clock::instant());
     }
 
     /// The Threads this window streams whole: those it drew at Transcript
@@ -400,11 +438,7 @@ impl Cockpit {
         let now = crate::clock::instant();
         open.iter()
             .copied()
-            .filter(|thread| {
-                drawn
-                    .get(thread)
-                    .is_some_and(|at| now.saturating_duration_since(*at) < UNWATCH_AFTER)
-            })
+            .filter(|thread| drawn.holds(*thread, now))
             .collect()
     }
 
@@ -412,7 +446,7 @@ impl Cockpit {
     fn follow_attention(&mut self) {
         let watched = self.watched();
         if let Some(drawn) = &mut self.drawn {
-            drawn.retain(|thread, _| self.shared.open.contains(thread));
+            drawn.retain(&self.shared.open);
         }
         match &mut self.link {
             Link::Server(server) => {

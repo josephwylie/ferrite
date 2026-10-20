@@ -5,7 +5,7 @@ use super::*;
 use crate::activity::{
     Activity, ActivityEvent, ActivityInput, AgentInfo, AgentKey, ExecutionEvent, Subject,
 };
-use crate::protocol::{WireOutcome, WireSubject};
+use crate::protocol::{WireOutcome, WireStatus, WireSubject};
 use crate::store::Provider;
 use crate::transcript::{Input, Todos};
 use crate::{SessionEvent, ThreadId, ToolResult};
@@ -81,7 +81,7 @@ fn a_working_thread_digests_its_turn_and_its_tile() {
 
     let digest = Digest::of(ThreadId::new(1), activity.view(), None, boot);
 
-    assert_eq!(digest.status, Status::Streaming);
+    assert_eq!(digest.status, WireStatus::Streaming);
     assert!(digest.working);
     assert!(digest.operator_turn);
     assert_eq!(digest.turn_started_ms, Some(0));
@@ -152,7 +152,7 @@ fn a_finished_turn_digests_its_answer_or_its_failing_tests() {
 
     let done = Digest::of(ThreadId::new(1), activity.view(), None, boot);
 
-    assert_eq!(done.status, Status::Idle);
+    assert_eq!(done.status, WireStatus::Idle);
     assert!(!done.working);
     assert_eq!(done.outcome, Some(WireOutcome::Completed));
     assert_eq!(
@@ -447,44 +447,6 @@ fn every_decision_surface_shares_one_subject_derivation() {
             .as_str(),
         "unreadable permission request"
     );
-}
-
-/// What a tile's line says is one spelling per Body — a completed turn
-/// leaves no row, a docked Decision's notice keeps only its lead
-/// phrase, a call reads as the transcript spells it.
-#[test]
-fn the_tile_text_is_its_visible_text() {
-    use crate::transcript::TurnEnd;
-    assert_eq!(
-        tail_text(&Body::Prompt("  Fix the board  ".into()), false).as_deref(),
-        Some("Fix the board")
-    );
-    let notice = Body::Notice("asks 1 question \u{b7} Which layout?".into());
-    assert_eq!(
-        tail_text(&notice, false).as_deref(),
-        Some("asks 1 question \u{b7} Which layout?")
-    );
-    assert_eq!(tail_text(&notice, true).as_deref(), Some("asks 1 question"));
-    let done = Body::TurnEnd(TurnEnd {
-        outcome: TurnOutcome::Completed,
-        elapsed_ms: Some(18_000),
-        completed_at: None,
-        input_tokens: None,
-        output_tokens: None,
-    });
-    assert_eq!(tail_text(&done, false), None, "no `Worked for` row");
-    let stopped = TurnEnd {
-        outcome: TurnOutcome::Interrupted,
-        elapsed_ms: Some(4_100),
-        completed_at: None,
-        input_tokens: None,
-        output_tokens: None,
-    };
-    assert_eq!(
-        tail_text(&Body::TurnEnd(stopped.clone()), false),
-        Some(stopped.text())
-    );
-    assert_eq!(tail_text(&Body::Prompt("   ".into()), false), None);
 }
 
 #[test]

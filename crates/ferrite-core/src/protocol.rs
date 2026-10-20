@@ -1259,6 +1259,43 @@ pub enum WireNotice {
     Unknown,
 }
 
+/// `transcript::Status`, as a digest carries it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireStatus {
+    #[default]
+    Idle,
+    Streaming,
+    Blocked,
+    Closed,
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<crate::transcript::Status> for WireStatus {
+    fn from(status: crate::transcript::Status) -> Self {
+        use crate::transcript::Status;
+        match status {
+            Status::Idle => Self::Idle,
+            Status::Streaming => Self::Streaming,
+            Status::Blocked => Self::Blocked,
+            Status::Closed => Self::Closed,
+        }
+    }
+}
+
+impl From<WireStatus> for crate::transcript::Status {
+    /// A status this build does not know reads as at rest.
+    fn from(status: WireStatus) -> Self {
+        match status {
+            WireStatus::Streaming => Self::Streaming,
+            WireStatus::Blocked => Self::Blocked,
+            WireStatus::Closed => Self::Closed,
+            WireStatus::Idle | WireStatus::Unknown => Self::Idle,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WireOutcome {

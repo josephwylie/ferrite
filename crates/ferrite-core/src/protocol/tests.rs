@@ -190,7 +190,7 @@ fn digest() -> crate::digest::Digest {
         wraps,
     };
     Digest {
-        status: crate::transcript::Status::Streaming,
+        status: WireStatus::Streaming,
         outcome: Some(WireOutcome::Completed),
         turn_started_ms: Some(61_000),
         working: true,

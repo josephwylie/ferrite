@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::activity::{ActivityView, Subject, ToolTiming};
 use crate::docview::{is_test_run, passed_count, FileChange, Instruments, Tests};
-use crate::protocol::{PendingEntry, WireHandle, WireOutcome, WireSubject};
-use crate::transcript::{Block, Body, Span, Status, ToolBlock, ToolState, Transcript};
+use crate::protocol::{PendingEntry, WireHandle, WireOutcome, WireStatus, WireSubject};
+use crate::transcript::{Block, Body, Status, ToolBlock, ToolState, Transcript};
 use crate::{Decision, ThreadId, TurnOutcome};
 
 /// The agent's and a tool call's bullet: Geist Mono's own `●`.
@@ -26,7 +26,7 @@ pub const FAILED: &str = "failed";
 pub struct Digest {
     /// Main's status, as its transcript last saw it.
     #[serde(default)]
-    pub status: Status,
+    pub status: WireStatus,
     /// How Main's last turn ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<WireOutcome>,
@@ -133,7 +133,7 @@ impl Digest {
         let pending = activity.decisions();
         let working_descendants = activity.working_descendants();
         Self {
-            status: transcript.status(),
+            status: transcript.status().into(),
             outcome: transcript.turn_outcome().map(Into::into),
             turn_started_ms: transcript
                 .turn_started()
@@ -157,14 +157,16 @@ impl Digest {
                 pending.first().map(|pending| &pending.decision),
                 Some(main.tool_timings()),
             ),
+            // A Subagent the Thread no longer holds has an empty card: the
+            // digest still says which one it is, so it is not refolded for it.
             shown: shown
                 .filter(|subject| **subject != Subject::Main)
-                .and_then(|subject| {
-                    let view = activity.subject(subject)?;
-                    Some(ShownWall {
-                        subject: subject.into(),
-                        wall: WallCard::of(view.transcript(), None, None),
-                    })
+                .map(|subject| ShownWall {
+                    subject: subject.into(),
+                    wall: activity
+                        .subject(subject)
+                        .map(|view| WallCard::of(view.transcript(), None, None))
+                        .unwrap_or_default(),
                 }),
             prompt_title: prompt_title(transcript),
             turns: transcript
@@ -177,9 +179,14 @@ impl Digest {
             finish: Finish::of(transcript),
         }
     }
-}
 
-impl Digest {
+    /// Whether this digest carries the card of the Subject the windows
+    /// show (none for Main).
+    pub fn shows(&self, shown: Option<&Subject>) -> bool {
+        let shown = shown.filter(|subject| **subject != Subject::Main);
+        self.shown.as_ref().map(|shown| &shown.subject) == shown.map(WireSubject::from).as_ref()
+    }
+
     /// Whether `activity` moved past this digest in a way no window should
     /// wait a refold for: Main started or ended a turn or changed phase, a
     /// Decision came or went, a Subagent came or work behind Main started
@@ -187,26 +194,25 @@ impl Digest {
     pub fn outdated_by(&self, activity: ActivityView<'_>, shown: Option<&Subject>) -> bool {
         let main = activity.main();
         let transcript = main.transcript();
-        let shown = shown.filter(|subject| **subject != Subject::Main);
         let decisions = activity.decisions();
-        self.status != transcript.status()
+        self.status != transcript.status().into()
             || self.working != main.busy()
             || self.operator_turn != activity.main_operator_turn()
             || self.working_descendants != activity.working_descendants()
             || self.subagents != activity.children().len()
-            || self.wall.working
-                != transcript
-                    .progress()
-                    .caption()
-                    .unwrap_or_else(|| "Working".into())
+            || self.wall.working != caption(transcript)
+            || self.shown.as_ref().is_some_and(|card| {
+                shown
+                    .and_then(|subject| activity.subject(subject))
+                    .is_some_and(|view| card.wall.working != caption(view.transcript()))
+            })
             || self.pending.len() != decisions.len()
             || self
                 .pending
                 .iter()
                 .zip(decisions)
                 .any(|(sent, pending)| sent.handle != WireHandle::from(&pending.handle))
-            || self.shown.as_ref().map(|shown| &shown.subject)
-                != shown.map(WireSubject::from).as_ref()
+            || !self.shows(shown)
     }
 }
 
@@ -405,10 +411,7 @@ impl WallCard {
         decision: Option<&Decision>,
         timings: Option<&HashMap<String, ToolTiming>>,
     ) -> Self {
-        let working = transcript
-            .progress()
-            .caption()
-            .unwrap_or_else(|| "Working".into());
+        let working = caption(transcript);
         let context = match decision {
             Some(decision) => decision_subject(decision),
             // A closed Thread's context is the reason it closed — the last
@@ -448,6 +451,14 @@ impl WallCard {
     }
 }
 
+/// The working signal's detail: the progress caption, else `Working`.
+fn caption(transcript: &Transcript) -> String {
+    transcript
+        .progress()
+        .caption()
+        .unwrap_or_else(|| "Working".into())
+}
+
 /// A finished turn's length as the tile says it: `41s`, `3m 12s`.
 pub fn worked_label(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
@@ -485,10 +496,11 @@ fn wall_lines(
     let mut lines = Vec::new();
     for block in tail {
         match &block.body {
-            Body::Paragraph { .. } | Body::Bullet { .. } | Body::Heading { .. } => {
-                let Some(text) = tail_text(&block.body, false) else {
+            Body::Paragraph { spans } | Body::Bullet { spans } | Body::Heading { spans, .. } => {
+                let text: String = spans.iter().map(|span| span.text.as_str()).collect();
+                if text.trim().is_empty() {
                     continue;
-                };
+                }
                 // Two source lines at most: a line break in the prose is
                 // where its continuation starts.
                 let mut source = text.lines().filter(|line| !line.trim().is_empty());
@@ -502,7 +514,7 @@ fn wall_lines(
             Body::Notice(text)
                 if decision.is_none() && !crate::transcript::is_opened_notice(text) =>
             {
-                let text = first_line(notice_text(text.trim(), false));
+                let text = first_line(text);
                 if !text.is_empty() {
                     lines.push(WallLine::line(format!("{DIAMOND_GLYPH} {text}")));
                 }
@@ -530,7 +542,7 @@ fn wall_lines(
 
 /// `● Name(args) trail`: the call as the transcript names it, its trail
 /// one space after it — the change (`+31 −9`), `ok` for a passed test run,
-/// else a settled time from one second up. A running call has no trail:
+/// else a settled time from two seconds up (`DURATION_MIN_MS`). A running call has no trail:
 /// the state line's clock is ticking.
 fn wall_call_line(tool: &ToolBlock, timings: Option<&HashMap<String, ToolTiming>>) -> String {
     let label = tool.label();
@@ -675,34 +687,6 @@ fn wall_decision_lines(decision: &Decision) -> Vec<WallLine> {
     }
 }
 
-/// A Block's visible text as one line of words — what a wall tile's prose
-/// line reads (`wall_lines`), spelled once.
-pub fn tail_text(body: &Body, docked: bool) -> Option<String> {
-    let prose = |spans: &[Span]| -> String {
-        spans
-            .iter()
-            .map(|span| span.text.as_str())
-            .collect::<String>()
-            .trim()
-            .to_string()
-    };
-    let text = match body {
-        Body::Prompt(text) => text.trim().to_string(),
-        Body::Paragraph { spans } | Body::Bullet { spans } | Body::Heading { spans, .. } => {
-            prose(spans)
-        }
-        Body::Code { language, .. } => format!("```{}", language.as_deref().unwrap_or("")),
-        Body::Tool(tool) => tool.label(),
-        Body::Notice(text) => notice_text(text.trim(), docked).to_string(),
-        Body::Meta(text) => text.clone(),
-        Body::TurnEnd(end) if end.outcome == TurnOutcome::Completed => return None,
-        Body::TurnEnd(end) => end.text(),
-        Body::Thinking(text) => crate::progress::headline(text).to_string(),
-        Body::Visual(visual) => format!("Visual  {}", visual.title.trim()),
-    };
-    (!text.is_empty()).then_some(text)
-}
-
 /// The Decision's subject as one line of words — `Bash · gh issue close
 /// 212`, never a `Bash:` label: the tool, then what it would do (the
 /// command itself when the input carries one, else the provider's
@@ -727,15 +711,6 @@ pub fn decision_subject(decision: &Decision) -> String {
         (tool, "") => tool.to_string(),
         ("", text) => text.to_string(),
         (tool, text) => format!("{tool} \u{b7} {text}"),
-    }
-}
-
-/// A notice as the L2 tail reads it: whole, or only its lead phrase (before
-/// the first ` · `) while the Decision it announces is docked below it.
-pub fn notice_text(text: &str, docked: bool) -> &str {
-    match text.split_once(" \u{b7} ") {
-        Some((lead, _)) if docked => lead,
-        _ => text,
     }
 }
 

@@ -4586,11 +4586,15 @@ impl Engine {
         let now = crate::clock::instant();
         for (&id, thread) in &self.threads {
             let published = self.published.entry(id).or_default();
-            if !published.digest_owed && published.digest.is_some() {
+            let shown = self.visible_subjects.get(&id);
+            let current = published
+                .digest
+                .as_ref()
+                .is_some_and(|digest| digest.shows(shown));
+            if !published.digest_owed && current {
                 continue;
             }
             let activity = thread.activity.view();
-            let shown = self.visible_subjects.get(&id);
             let due = published
                 .digest
                 .as_ref()

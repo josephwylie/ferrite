@@ -4170,6 +4170,12 @@ fn a_window_mirrors_only_the_threads_it_draws() {
 
     window.draws_transcripts([thread]);
     pump_until(&mut window, |window| shows(window, thread, "on it"));
+    clock.advance(Duration::from_secs(31));
+    window.pump();
+    assert!(
+        shows(&window, thread, "on it"),
+        "still drawn, however long nothing redraws"
+    );
 
     window.draws_transcripts([]);
     clock.advance(Duration::from_secs(29));
@@ -4217,4 +4223,55 @@ fn a_window_attaching_streams_no_thread_it_does_not_draw() {
     }
 
     assert!(!shows(&window, thread, "before the window"));
+}
+
+/// A window showing a Subagent reads its card in the digest at once, though
+/// nothing streams: the shown Subject is a moment of its own.
+#[test]
+fn showing_a_subagent_refolds_the_digest_at_once() {
+    use crate::activity::{ActivityEvent, AgentInfo, AgentKey, ExecutionEvent, Subject};
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, _clock) = at_rest("digest-shown", spawner, &providers);
+    let key = AgentKey::new(Provider::Claude, "claude-1", "child");
+    let mut info = AgentInfo::new(key.clone());
+    info.parent = Some(Subject::Main);
+    agent
+        .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+        .unwrap();
+    agent
+        .send(SessionEvent::Activity(ActivityEvent::Content {
+            key: key.clone(),
+            id: None,
+            event: ExecutionEvent::TextDelta {
+                text: "Reading the spike notes".into(),
+            },
+        }))
+        .unwrap();
+    pump_engine_until(&mut engine, "the Subagent never spoke", |engine| {
+        engine
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .children()
+            .iter()
+            .any(|child| !child.transcript().blocks().is_empty())
+    });
+    engine.take_messages();
+
+    let subject = Subject::Subagent(key);
+    engine.set_visible_subject(thread, subject.clone());
+    engine.pump();
+
+    let shown = engine
+        .take_messages()
+        .into_iter()
+        .filter_map(|message| match message {
+            ServerMessage::Digest { thread: of, digest } if of == thread => digest.shown,
+            _ => None,
+        })
+        .last();
+    assert_eq!(
+        shown.map(|shown| shown.subject),
+        Some(crate::protocol::WireSubject::from(&subject))
+    );
 }

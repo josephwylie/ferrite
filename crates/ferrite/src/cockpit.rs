@@ -9844,8 +9844,9 @@ impl CockpitView {
         let level = self.level_now(window);
         // What this frame draws at Transcript level is what the window
         // streams whole; everything else reads its digest (ADR 0032).
-        let drawn: Vec<ThreadId> = match level {
-            Level::Transcript => self
+        let drawn: Vec<ThreadId> = match (level, fullscreen) {
+            (Level::Transcript, Some(index)) => self.panes[index].thread().into_iter().collect(),
+            (Level::Transcript, None) => self
                 .visible_indices()
                 .into_iter()
                 .filter_map(|index| self.panes[index].thread())
@@ -11522,9 +11523,9 @@ impl CockpitView {
     /// it waits, else the one that has waited longest.
     pub(crate) fn wall_answer_target(&self) -> Option<ThreadId> {
         let waits = |thread: ThreadId| {
-            self.cockpit.thread(thread).is_some_and(|open| {
-                open.pending().is_some() || !open.pending_decisions().is_empty()
-            })
+            self.cockpit
+                .thread(thread)
+                .is_some_and(|open| !open.pending_decisions().is_empty())
         };
         self.focused_thread()
             .filter(|thread| waits(*thread))
