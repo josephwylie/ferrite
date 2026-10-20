@@ -268,6 +268,9 @@ fn attach(address: &Path) -> Window {
     for state in snapshot.threads {
         window.receive(ServerMessage::Thread { revision: 0, state });
     }
+    for protocol::ThreadDigest { thread, digest } in snapshot.digests.unwrap_or_default() {
+        window.receive(ServerMessage::Digest { thread, digest });
+    }
     window
 }
 
@@ -339,6 +342,10 @@ impl Window {
         self.client
             .send(&ClientMessage::Watch { thread, resume })
             .unwrap();
+    }
+
+    fn digest(&self, thread: ThreadId) -> Option<crate::digest::Digest> {
+        self.mirrors.view(thread)?.sent_digest().cloned()
     }
 
     fn said(&self, thread: ThreadId) -> Vec<String> {
@@ -421,12 +428,12 @@ fn the_first_answer_wins_and_the_second_hears_already_answered() {
         window
             .mirrors
             .view(thread)
-            .is_some_and(|view| view.pending().is_some())
+            .is_some_and(|view| !view.activity().decisions().is_empty())
     };
     first.until(pending);
     second.until(pending);
     let handle: protocol::WireHandle =
-        (&first.mirrors.view(thread).unwrap().activity().decisions()[0].handle).into();
+        (&first.mirrors.view(thread).unwrap().pending_decisions()[0].handle).into();
     let answer = |handle: &protocol::WireHandle| Op::Answer {
         thread,
         handle: handle.clone(),
@@ -943,7 +950,7 @@ fn a_resume_the_server_cannot_meet_rebuilds_from_history() {
         window
             .mirrors
             .view(thread)
-            .is_some_and(|view| view.pending().is_some())
+            .is_some_and(|view| !view.activity().decisions().is_empty())
     });
 
     let mut back = attach(&harness.address);
@@ -958,7 +965,7 @@ fn a_resume_the_server_cannot_meet_rebuilds_from_history() {
         window
             .mirrors
             .view(thread)
-            .is_some_and(|view| view.pending().is_some())
+            .is_some_and(|view| !view.activity().decisions().is_empty())
     });
 
     assert_eq!(back.said(thread), steady.said(thread));
@@ -978,10 +985,11 @@ fn a_resume_never_crosses_a_reopened_thread() {
     window.watch(thread, None);
     provider.send(text("first life")).unwrap();
     window.until(|window| {
-        window
-            .said(thread)
-            .iter()
-            .any(|said| said.contains("first life"))
+        window.mirrors.seq(thread).is_some()
+            && window
+                .said(thread)
+                .iter()
+                .any(|said| said.contains("first life"))
     });
     let Window {
         mut mirrors,
@@ -1270,6 +1278,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     assert!(window.registry().project(project).is_some());
 
     let mut second = cockpit(&harness);
+    second.draws_transcripts([thread]);
     pump_until(&mut second, |second| shows(second, thread, "on it"));
 
     provider.send(decision()).unwrap();
@@ -1280,7 +1289,7 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
     };
     pump_until(&mut window, pending);
     pump_until(&mut second, pending);
-    let handle = window.thread(thread).unwrap().activity().decisions()[0]
+    let handle = window.thread(thread).unwrap().pending_decisions()[0]
         .handle
         .clone();
     let allow = DecisionAnswer::Allow {
@@ -1333,7 +1342,7 @@ fn a_reopened_window_can_answer_questions() {
                 .is_some_and(|open| open.pending().is_some())
         };
         pump_until(&mut window, pending);
-        let first_handle = window.thread(thread).unwrap().activity().decisions()[0]
+        let first_handle = window.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
         assert!(window
@@ -1378,6 +1387,7 @@ fn a_reopened_window_can_answer_questions() {
         }
         drop(window);
         let mut reopened = cockpit(&harness);
+        reopened.draws_transcripts([thread]);
         pump_until(&mut reopened, |window| {
             window
                 .thread(thread)
@@ -1387,7 +1397,7 @@ fn a_reopened_window_can_answer_questions() {
             provider.send(question).unwrap();
         }
         pump_until(&mut reopened, pending);
-        let handle = reopened.thread(thread).unwrap().activity().decisions()[0]
+        let handle = reopened.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
         assert_eq!(
@@ -1419,7 +1429,7 @@ fn a_reopened_window_can_answer_questions() {
         assert_eq!(harness.answers.lock().unwrap().last().unwrap().1, answer);
         if delivery == crate::DecisionDelivery::Async {
             pump_until(&mut reopened, |window| {
-                window.thread(thread).unwrap().activity().decisions()[0].submitting
+                window.thread(thread).unwrap().pending_decisions()[0].submitting
             });
             provider
                 .send(SessionEvent::Activity(
@@ -4020,4 +4030,248 @@ fn manual_install_with_the_same_version_is_detected() {
         boot
     ));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A window reads every open Thread it does not watch from its digest
+/// (ADR 0032): what the agent does, the Decision it waits on, its Wall
+/// card. Nothing of its history or stream crosses; a window attaching
+/// later reads the same digest from its snapshot; a closed Thread's goes.
+#[test]
+fn a_window_that_watches_nothing_reads_each_thread_from_its_digest() {
+    let harness = start("digests");
+    let mut window = attach(&harness.address);
+    let (thread, provider) = open(&mut window, &harness);
+    provider.send(text("Reading the spike notes\n\n")).unwrap();
+    provider.send(decision()).unwrap();
+
+    window.until(|window| {
+        window
+            .digest(thread)
+            .is_some_and(|digest| !digest.pending.is_empty())
+    });
+
+    let digest = window.digest(thread).unwrap();
+    assert_eq!(
+        digest.wall.lines.first().map(|line| line.text.as_str()),
+        Some("\u{25cf} Reading the spike notes")
+    );
+    assert_eq!(window.histories, 0, "no history crossed");
+    assert!(window.said(thread).is_empty(), "no input crossed");
+    let late = attach(&harness.address);
+    assert_eq!(late.digest(thread), Some(digest));
+
+    window.command(2, Op::Park { thread });
+    window.until(|window| window.digest(thread).is_none());
+}
+
+/// A Thread's digest goes out as it changes: a stream at most four times
+/// a second, as the Wall card always refolded, and a Decision at once.
+#[test]
+fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, clock) = at_rest("digest-pace", spawner, &providers);
+    let holds = |engine: &Engine, said: &str| {
+        engine
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .any(|block| format!("{:?}", block.body).contains(said))
+    };
+    let digests = |engine: &mut Engine| -> Vec<crate::digest::Digest> {
+        engine
+            .take_messages()
+            .into_iter()
+            .filter_map(|message| match message {
+                ServerMessage::Digest { thread: of, digest } if of == thread => Some(digest),
+                _ => None,
+            })
+            .collect()
+    };
+    let first_line =
+        |digest: &crate::digest::Digest| digest.wall.lines.first().map(|line| line.text.clone());
+    let streamed = |engine: &mut Engine, said: &str| {
+        agent.send(text(said)).unwrap();
+        pump_engine_until(engine, "the text never landed", |engine| {
+            holds(engine, said)
+        });
+    };
+    streamed(&mut engine, "Reading");
+    clock.advance(Duration::from_millis(250));
+    engine.pump();
+    assert_eq!(
+        digests(&mut engine).last().and_then(first_line).as_deref(),
+        Some("\u{25cf} Reading")
+    );
+
+    clock.advance(Duration::from_millis(250));
+    streamed(&mut engine, " the notes");
+    assert_eq!(
+        digests(&mut engine).last().and_then(first_line).as_deref(),
+        Some("\u{25cf} Reading the notes"),
+        "a quarter second since the last: at once"
+    );
+    streamed(&mut engine, " again");
+    clock.advance(Duration::from_millis(249));
+    engine.pump();
+    assert_eq!(digests(&mut engine), Vec::new(), "not yet a quarter second");
+    clock.advance(Duration::from_millis(1));
+    engine.pump();
+    assert_eq!(
+        digests(&mut engine).last().and_then(first_line).as_deref(),
+        Some("\u{25cf} Reading the notes again")
+    );
+
+    agent.send(decision()).unwrap();
+    pump_engine_until(&mut engine, "the Decision never landed", |engine| {
+        engine.thread(thread).unwrap().pending().is_some()
+    });
+    assert_eq!(
+        digests(&mut engine)
+            .last()
+            .map(|digest| digest.pending.len()),
+        Some(1),
+        "at once"
+    );
+}
+
+/// A window mirrors only the Threads it draws at Transcript level (ADR
+/// 0032). One off screen reads from its digest — what it does, the Decision
+/// it waits on — and holds none of its transcript; drawn, its history
+/// arrives; thirty seconds off screen, the window lets it go again.
+#[test]
+fn a_window_mirrors_only_the_threads_it_draws() {
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let harness = start("mirrors-drawn");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    let mut window = cockpit(&harness);
+    let digest_says = |window: &crate::cockpit::Cockpit, said: &str| {
+        window.thread(thread).is_some_and(|open| {
+            open.digest()
+                .wall
+                .lines
+                .iter()
+                .any(|line| line.text.contains(said))
+        })
+    };
+    window.send(thread, "go".into());
+    provider.send(text("on it\n\n")).unwrap();
+    provider.send(decision()).unwrap();
+
+    pump_until(&mut window, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| open.pending().is_some())
+    });
+    pump_until(&mut window, |window| digest_says(window, "on it"));
+    assert!(!shows(&window, thread, "on it"), "no transcript off screen");
+
+    window.draws_transcripts([thread]);
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    clock.advance(Duration::from_secs(31));
+    window.pump();
+    assert!(
+        shows(&window, thread, "on it"),
+        "still drawn, however long nothing redraws"
+    );
+
+    window.draws_transcripts([]);
+    clock.advance(Duration::from_secs(29));
+    window.pump();
+    assert!(shows(&window, thread, "on it"), "kept a while off screen");
+    clock.advance(Duration::from_secs(1));
+    window.pump();
+    assert!(!shows(&window, thread, "on it"), "let go");
+    assert!(
+        window
+            .thread(thread)
+            .is_some_and(|open| open.pending().is_some()),
+        "its Decision still reads"
+    );
+}
+
+/// A window that says what it draws before its first frame streams no
+/// Thread it does not draw: attaching to a Server with Threads open reads
+/// their digests, and none of their histories (ADR 0032).
+#[test]
+fn a_window_attaching_streams_no_thread_it_does_not_draw() {
+    let harness = start("attach-draws-nothing");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    provider.send(text("before the window\n\n")).unwrap();
+    other.until(|other| {
+        other
+            .digest(thread)
+            .is_some_and(|digest| !digest.wall.lines.is_empty())
+    });
+
+    let mut window = cockpit(&harness);
+    pump_until(&mut window, |window| {
+        window.thread(thread).is_some_and(|open| {
+            open.digest()
+                .wall
+                .lines
+                .iter()
+                .any(|line| line.text.contains("before the window"))
+        })
+    });
+    for _ in 0..20 {
+        window.pump();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert!(!shows(&window, thread, "before the window"));
+}
+
+/// A window showing a Subagent reads its card in the digest at once, though
+/// nothing streams: the shown Subject is a moment of its own.
+#[test]
+fn showing_a_subagent_refolds_the_digest_at_once() {
+    use crate::activity::{ActivityEvent, AgentInfo, AgentKey, ExecutionEvent, Subject};
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, _clock) = at_rest("digest-shown", spawner, &providers);
+    let key = AgentKey::new(Provider::Claude, "claude-1", "child");
+    let mut info = AgentInfo::new(key.clone());
+    info.parent = Some(Subject::Main);
+    agent
+        .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+        .unwrap();
+    agent
+        .send(SessionEvent::Activity(ActivityEvent::Content {
+            key: key.clone(),
+            id: None,
+            event: ExecutionEvent::TextDelta {
+                text: "Reading the spike notes".into(),
+            },
+        }))
+        .unwrap();
+    pump_engine_until(&mut engine, "the Subagent never spoke", |engine| {
+        engine
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .children()
+            .iter()
+            .any(|child| !child.transcript().blocks().is_empty())
+    });
+    engine.take_messages();
+
+    let subject = Subject::Subagent(key);
+    engine.set_visible_subject(thread, subject.clone());
+    engine.pump();
+
+    let shown = engine
+        .take_messages()
+        .into_iter()
+        .filter_map(|message| match message {
+            ServerMessage::Digest { thread: of, digest } if of == thread => digest.shown,
+            _ => None,
+        })
+        .last();
+    assert_eq!(
+        shown.map(|shown| shown.subject),
+        Some(crate::protocol::WireSubject::from(&subject))
+    );
 }

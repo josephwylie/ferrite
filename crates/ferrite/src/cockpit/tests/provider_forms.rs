@@ -51,7 +51,6 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
         v.cockpit
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -109,7 +108,6 @@ fn async_question_sends_picks_and_typed_answers_while_work_continues(cx: &mut Te
             v.cockpit
                 .thread(v.panes[0].thread().unwrap())
                 .unwrap()
-                .activity()
                 .pending_decisions()
                 .last()
                 .unwrap()
@@ -264,7 +262,6 @@ fn contract_mcp_form_defaults_submit_typed_values(cx: &mut TestAppContext) {
         v.cockpit
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -331,7 +328,6 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx: &mu
         v.cockpit
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -394,12 +390,7 @@ fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
     tick(cx);
     let (thread, serial) = view.read_with(cx, |v, _| {
         let thread = v.panes[0].thread().unwrap();
-        let serial = v
-            .cockpit
-            .thread(thread)
-            .unwrap()
-            .activity()
-            .pending_decisions()[0]
+        let serial = v.cockpit.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial;
         (thread, serial)

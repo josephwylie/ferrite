@@ -116,11 +116,7 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         let thread = view.panes[0].thread().unwrap();
         (
             thread,
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial,
         )
@@ -679,11 +675,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         .unwrap();
     tick(cx);
     let serial = view.read_with(cx, |view, _| {
-        view.cockpit
-            .thread(thread)
-            .unwrap()
-            .activity()
-            .pending_decisions()[0]
+        view.cockpit.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial
     });

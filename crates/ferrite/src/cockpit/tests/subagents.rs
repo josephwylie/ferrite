@@ -360,7 +360,6 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
         view.cockpit
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -375,7 +374,6 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
             .cockpit
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].decision.id, "Cedar");
@@ -762,7 +760,6 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
         view.cockpit
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial

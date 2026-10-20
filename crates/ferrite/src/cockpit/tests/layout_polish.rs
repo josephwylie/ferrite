@@ -50,11 +50,7 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
             let thread = view.panes[0].thread().unwrap();
             (
                 thread,
-                view.cockpit
-                    .thread(thread)
-                    .unwrap()
-                    .activity()
-                    .pending_decisions()[0]
+                view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                     .handle
                     .serial,
             )
@@ -85,11 +81,7 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
         let thread = view.panes[0].thread().unwrap();
         (
             thread,
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial,
         )
@@ -239,11 +231,7 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
         let thread = view.panes[0].thread().unwrap();
         (
             thread,
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial,
         )

@@ -463,7 +463,6 @@ impl CockpitView {
             .subject(&subject)
             .map(|subject| subject.revision())
             .unwrap_or(0);
-        self.facts.selected(&self.cockpit, thread, &subject);
         self.panes[index].select_subject(subject, generation, cx);
         self.retry_subject_history(index, cx);
         self.cockpit
@@ -500,7 +499,6 @@ impl CockpitView {
         let Some(subject_view) = open.activity().subject(&subject) else {
             return;
         };
-        self.facts.selected(&self.cockpit, thread, &subject);
         self.panes[index].select_subject(subject, subject_view.revision(), cx);
         self.retry_subject_history(index, cx);
         self.cockpit
@@ -1011,10 +1009,7 @@ impl CockpitView {
             Ok(true) => {
                 if let Some(index) = self.pane_for(thread) {
                     let pending = self.cockpit.thread(thread).is_some_and(|open| {
-                        open.activity()
-                            .pending_decisions()
-                            .iter()
-                            .any(|p| &p.handle == handle)
+                        open.pending_decisions().iter().any(|p| &p.handle == handle)
                     });
                     if !pending {
                         let forms = &self.panes[index].request_forms;
@@ -1050,7 +1045,7 @@ impl CockpitView {
         let Some(open) = self.cockpit.thread(thread) else {
             return false;
         };
-        open.activity().pending_decisions().iter().any(|request| {
+        open.pending_decisions().iter().any(|request| {
             (request.subject.as_ref() == Some(&pane.selected)
                 || (request.subject.is_none() && pane.is_main()))
                 && pane::questions_of(&request.decision).is_some()
@@ -1074,7 +1069,6 @@ impl CockpitView {
         let handles: Vec<_> = self
             .cockpit
             .thread(thread)?
-            .activity()
             .pending_decisions()
             .iter()
             .filter(|request| {
@@ -1332,7 +1326,6 @@ impl CockpitView {
         let pane = self.panes.get(index)?;
         self.cockpit
             .thread(pane.thread()?)?
-            .activity()
             .pending_decisions()
             .iter()
             .find(|request| shown_on(pane, request))
@@ -1447,7 +1440,7 @@ impl CockpitView {
         else {
             return;
         };
-        let pending = thread.activity().pending_decisions();
+        let pending = thread.pending_decisions();
         let forms = &self.panes[index].request_forms;
         forms
             .0
@@ -1464,17 +1457,15 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return;
         };
-        let Some(request) = self
-            .cockpit
-            .thread(thread)
-            .and_then(|thread| {
-                thread
-                    .activity()
-                    .pending_decisions()
-                    .iter()
-                    .find(|request| request.subject.as_ref() == Some(&self.panes[index].selected))
-            })
-            .cloned()
+        let Some(request) =
+            self.cockpit
+                .thread(thread)
+                .and_then(|thread| {
+                    thread.pending_decisions().iter().find(|request| {
+                        request.subject.as_ref() == Some(&self.panes[index].selected)
+                    })
+                })
+                .cloned()
         else {
             return;
         };

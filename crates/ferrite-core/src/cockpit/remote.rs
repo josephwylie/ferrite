@@ -663,15 +663,25 @@ impl Remote {
         );
     }
 
-    /// Stream every open Thread to this window: from where its mirror left
-    /// off when the boot is the same, else from its history.
-    pub(crate) fn watch(&mut self, open: &[ThreadId], seq: impl Fn(ThreadId) -> Option<u64>) {
+    /// Stream exactly `threads` to this window: each from where its mirror
+    /// left off when the boot is the same, else from its history. The rest
+    /// stop streaming.
+    pub(crate) fn watch(&mut self, threads: &[ThreadId], seq: impl Fn(ThreadId) -> Option<u64>) {
         let Some(attachment) = &self.attachment else {
             return;
         };
-        self.watching.retain(|thread| open.contains(thread));
         let boot_id = attachment.boot_id.clone();
-        for &thread in open {
+        let dropped: Vec<ThreadId> = self
+            .watching
+            .iter()
+            .filter(|thread| !threads.contains(thread))
+            .copied()
+            .collect();
+        for thread in dropped {
+            self.watching.remove(&thread);
+            self.say(&ClientMessage::Unwatch { thread });
+        }
+        for &thread in threads {
             if self.watching.contains(&thread) {
                 continue;
             }

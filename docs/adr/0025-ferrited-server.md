@@ -202,7 +202,7 @@ Client → Server:
 | Message | Meaning |
 |---|---|
 | `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capabilities: `render_visual` (this client can draw Visuals); `parked_threads` (it lists the Server's parked Threads off `parked`, ADR 0026). |
-| `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` is always sent. |
+| `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` and `digest` are always sent. A window watches the Threads it draws at Transcript level, and unwatches one 30 seconds after it stops drawing it (ADR 0032). |
 | `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `stop_subagent {thread, key}`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `search_files`, `list_dir {path}`, `list_repo {project}` (ADR 0026), `review_diff {path, scope, commit?}` (replied `diff`), `review_read {path, scope, commit?, since?}` (replied `review`; a window falls back to `review_diff` on `unsupported`), `list_commits {path}`, `search_repo {path, query}`, `read_file {path, file}`, `review_pull_request {path}`, `list_files {path}`, `list_bases {path}`, `pick_base {path, base}` (ADR 0021), `pull_request {path}` (ADR 0026), `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
 
@@ -211,13 +211,14 @@ Server → Client:
 | Message | Lane | Meaning |
 |---|---|---|
 | `welcome {generation, server:{version, executable}, boot_id, capabilities[], error?, uptime_ms?}` | — | `error.code = unsupported_generation` when the generations do not meet; the Server then closes. `uptime_ms` is the `at_ms` clock now. |
-| `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?, parked?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. |
+| `snapshot {boot_id, revision, threads[], roster, decisions[], groups?, registry?, notices?, providers?, parked?, digests?}` | — | Everything a window draws before any transcript. `roster` is the shared half: open Threads in order and the park order. A Server without `digests` predates ADR 0032: its windows watch every open Thread. |
 | `history {thread, after, inputs[]}` … `history_end {thread, seq, live[]}` | reliable | A watched Thread's log, read off the pump thread up to a writer `checkpoint` taken on the pump thread at `seq`, in pieces of about 1 MiB (`after` counts the inputs before each; `0` starts the Thread over); then `live`, the live-only inputs that rebuild what the log never holds and is still in effect (the Session's `Connect`, pending Decisions, MCP state, rate limits). Live inputs continue after `seq`. |
 | `input {thread, seq, at_ms, input}` | reliable | One `ActivityInput` the Engine applied, in order. |
 | `decision {thread, subject?, handle, decision}` / `decision_closed {thread, handle, by}` | reliable | To every client, watching or not. `by`: `answered {client}`, `cancelled` (the provider withdrew it), `session_ended`, `server_restart` (the Server restarts or stops). A watcher also reads each Decision from its Thread's inputs. |
 | `reply {id, ok?, error?:{code, message}}` | reliable | Codes: `already_answered`, `invalid_answer`, `unknown_thread`, `unsupported`, `restarting`, `failed`. |
 | `thread {revision, state}` | latest-wins per Thread | `ThreadState`: everything `ThreadView` reads that is not Activity — Header facts, Attention, starting/busy/working/background, queued prompts, suggestion, command and model menus, permission modes, supported controls, store error, generation. |
 | `tool_draft {thread, tool, input}` | latest-wins per tool | `SessionEvent::ToolDraft`, already a snapshot of the input so far. |
+| `digest {thread, digest}` | latest-wins per Thread | What every surface away from the Transcript reads (ADR 0032): Main's status, turn and outcome, pending Decisions, work behind Main, the Wall card (Main's, and the shown Subagent's), turn and Subagent counts, changed files, the latest turn's finish. Refolded at once when a turn, a phase, a Decision or a Subagent changes, else at most every 250 ms. |
 | `roster`, `groups`, `registry`, `notices`, `providers` `{revision, …}` | latest-wins | Replaces the snapshot's field. |
 | `parked {revision, threads[]}` | latest-wins | The Threads not open, as the Store says them: header facts, first-prompt title, last use, turn and Subagent counts. Added for machines (ADR 0026), whose windows have no Store to read: sent only while a `parked_threads` client is attached. |
 | `render {request, …}` | reliable | A Visual to draw, sent to one `render_visual` client (the one most recently focused). With none attached the agent is answered at once: no Ferrite window is open to draw it. |
@@ -499,7 +500,8 @@ Never the `live_*` tests. Scripted Sessions throughout.
 
 - Transcripts are held twice, by the Engine and by each window's mirror.
   Acceptable at today's sizes (ADR 0008 trims both); a leaner Engine model
-  is a later optimisation, not a contract change.
+  is a later optimisation, not a contract change. Since ADR 0032 a window
+  mirrors only the Threads it draws at Transcript level.
 - The window no longer owns the Store, so every write it made is now a
   command; a client cannot corrupt a log.
 - Notices still reach the operator only through a window: with none open

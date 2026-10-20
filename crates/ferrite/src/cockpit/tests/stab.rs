@@ -688,11 +688,7 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     let serial = view.read_with(cx, |view, _| {
-        view.cockpit
-            .thread(thread)
-            .unwrap()
-            .activity()
-            .pending_decisions()[0]
+        view.cockpit.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .serial
     });

@@ -183,6 +183,59 @@ fn record(input: Input) -> WireRecord {
     ))
 }
 
+fn digest() -> crate::digest::Digest {
+    use crate::digest::{Digest, Finish, ShownWall, WallCard, WallLine};
+    let line = |text: &str, wraps: bool| WallLine {
+        text: text.into(),
+        wraps,
+    };
+    Digest {
+        status: WireStatus::Streaming,
+        outcome: Some(WireOutcome::Completed),
+        turn_started_ms: Some(61_000),
+        working: true,
+        operator_turn: true,
+        working_descendants: 1,
+        background_work: true,
+        pending: vec![PendingEntry {
+            thread: ThreadId::new(4),
+            subject: None,
+            handle: handle(),
+            decision: decision(),
+        }],
+        wall: WallCard {
+            tests_failing: true,
+            failing_count: Some(2),
+            working: "Thinking".into(),
+            context: "Bash \u{b7} cargo test".into(),
+            done_after: Some("3m 12s".into()),
+            lines: vec![
+                line("\u{25cf} Reading the spike notes", true),
+                line("\u{25cf} Bash(cargo test)", false),
+            ],
+        },
+        shown: Some(ShownWall {
+            subject: WireSubject::Subagent {
+                key: "agent-a1".into(),
+            },
+            wall: WallCard::default(),
+        }),
+        prompt_title: Some("Make the suite pass".into()),
+        turns: 3,
+        subagents: 1,
+        changed_files: vec![crate::docview::FileChange {
+            path: "src/nav.rs".into(),
+            added: 31,
+            removed: 9,
+        }],
+        finish: Finish {
+            failing_tests: Some("357 passed; 2 failed".into()),
+            answer: Some("Renamed it everywhere.".into()),
+            worked_ms: Some(192_000),
+        },
+    }
+}
+
 fn state() -> ThreadState {
     ThreadState {
         thread: ThreadId::new(4),
@@ -837,6 +890,29 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     }),
                 }]),
                 parked: None,
+                digests: None,
+            })),
+        ),
+        (
+            "snapshot_digests",
+            Sample::Server(ServerMessage::Snapshot(Snapshot {
+                boot_id: "b-1".into(),
+                revision: 7,
+                threads: vec![state()],
+                roster: SharedRoster {
+                    open: vec![thread],
+                    parked: vec![],
+                },
+                decisions: vec![],
+                groups: None,
+                registry: None,
+                notices: None,
+                providers: None,
+                parked: None,
+                digests: Some(vec![ThreadDigest {
+                    thread,
+                    digest: digest(),
+                }]),
             })),
         ),
         (
@@ -855,6 +931,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 notices: None,
                 providers: None,
                 parked: Some(vec![parked_row()]),
+                digests: None,
             })),
         ),
         (
@@ -1210,6 +1287,13 @@ fn samples() -> Vec<(&'static str, Sample)> {
             Sample::Server(ServerMessage::Thread {
                 revision: 8,
                 state: state(),
+            }),
+        ),
+        (
+            "digest",
+            Sample::Server(ServerMessage::Digest {
+                thread,
+                digest: digest(),
             }),
         ),
         (

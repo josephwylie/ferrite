@@ -73,6 +73,7 @@ fn server_answering(
                             notices: None,
                             providers: None,
                             parked: None,
+                            digests: None,
                         }))
                         .unwrap();
                 }

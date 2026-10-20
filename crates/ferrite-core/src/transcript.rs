@@ -204,6 +204,42 @@ impl ToolBlock {
             .and_then(|value| serde_json::to_string_pretty(value).ok())
             .and_then(|text| retained_output(&text))
     }
+
+    /// The call line as it reads: `Name(args)`, the name as Claude Code
+    /// prints it (`Update`, `Bash`), a shell command out of its `bash -lc
+    /// '…'` wrapper.
+    pub fn label(&self) -> String {
+        let name = display_tool_name(&self.name);
+        if self.summary.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name}({})", self.summary_line())
+        }
+    }
+
+    /// The call line's argument. It never lays out hard line breaks: the
+    /// original command stays in the ToolBlock and becomes selectable in
+    /// the disclosed details.
+    fn summary_line(&self) -> std::borrow::Cow<'_, str> {
+        // A command reads as the command (`Bash(cargo test)`), as Claude
+        // Code prints it, whatever purpose the model wrote beside it
+        // (Claude's Bash `description`: "Run cargo test to identify failing
+        // tests").
+        let summary = if crate::docview::is_command_run(&self.name) && !self.summary.is_empty() {
+            crate::providers::shell::unwrap_shell(&self.summary)
+        } else {
+            std::borrow::Cow::Borrowed(self.title.as_deref().unwrap_or(&self.summary))
+        };
+        if summary.contains(['\n', '\r']) {
+            let first = summary
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
+            format!("{} \u{2026}", first.trim()).into()
+        } else {
+            summary
+        }
+    }
 }
 
 /// The name a tool row shows, the way Claude Code prints it: a file edit is
@@ -1166,6 +1202,11 @@ impl Transcript {
 
     pub fn rate_limits(&self) -> RateLimits {
         self.rate_limits
+    }
+
+    /// When the running turn started; None between turns.
+    pub fn turn_started(&self) -> Option<std::time::Instant> {
+        self.turn_started
     }
 
     /// How long the running turn has been going; None between turns. Read

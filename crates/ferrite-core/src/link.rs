@@ -168,6 +168,7 @@ pub struct Lagged;
 enum Slot {
     Thread(ThreadId),
     ToolDraft(ThreadId, String),
+    Digest(ThreadId),
     Roster,
     Groups,
     Registry,
@@ -180,6 +181,7 @@ fn slot(message: &ServerMessage) -> Option<Slot> {
     Some(match message {
         ServerMessage::Thread { state, .. } => Slot::Thread(state.thread),
         ServerMessage::ToolDraft { thread, id, .. } => Slot::ToolDraft(*thread, id.clone()),
+        ServerMessage::Digest { thread, .. } => Slot::Digest(*thread),
         ServerMessage::Roster { .. } => Slot::Roster,
         ServerMessage::Groups { .. } => Slot::Groups,
         ServerMessage::Registry { .. } => Slot::Registry,

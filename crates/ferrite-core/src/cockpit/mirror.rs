@@ -3,11 +3,15 @@
 //! the Thread's state from its latest `thread` message. What `ThreadView`
 //! reads, the window draws.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::activity::{Activity, ActivityInput, ActivityView, DecisionHandle, Subject, ToolTiming};
+use crate::activity::{
+    Activity, ActivityInput, ActivityView, DecisionHandle, PendingDecision, Subject, ToolTiming,
+};
+use crate::digest::{Digest, Turn};
 use crate::engine::{event_changes_content, PaneUpdate};
 use crate::protocol::{self, ServerMessage, ThreadState, WireInput};
 use crate::store::Provider;
@@ -23,6 +27,13 @@ pub(crate) struct Mirror {
     /// The last input applied.
     pub(crate) seq: u64,
     facts: Option<Facts>,
+    /// What every window reads of the Thread away from its Transcript.
+    digest: Option<HeldDigest>,
+    /// Whether this window streams the Thread's Activity (ADR 0032).
+    watched: bool,
+    /// Whether the Activity holds the stream: what a view reads first, the
+    /// digest standing in until it does.
+    loaded: bool,
     /// Server identities survive a history rebuild; local replay counters do not.
     decision_handles: HashMap<String, DecisionHandle>,
 }
@@ -104,6 +115,51 @@ impl From<ThreadState> for Facts {
     }
 }
 
+/// A digest as a window holds it: with what a view lends of it in core
+/// types.
+struct HeldDigest {
+    digest: Digest,
+    pending: Vec<PendingDecision>,
+    turn: Turn,
+}
+
+impl HeldDigest {
+    /// `boot` is the Engine's clock zero on this side.
+    fn of(digest: Digest, boot: Instant) -> Self {
+        let pending = digest
+            .pending
+            .iter()
+            .filter_map(|entry| {
+                Some(PendingDecision {
+                    handle: (&entry.handle).into(),
+                    subject: match &entry.subject {
+                        Some(subject) => Some(subject.try_into().ok()?),
+                        None => None,
+                    },
+                    decision: (&entry.decision).try_into().ok()?,
+                    submitting: false,
+                    reply_error: None,
+                })
+            })
+            .collect();
+        let turn = Turn {
+            status: digest.status.into(),
+            outcome: digest
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.try_into().ok()),
+            started: digest
+                .turn_started_ms
+                .map(|at| protocol::instant_at(at, boot)),
+        };
+        Self {
+            digest,
+            pending,
+            turn,
+        }
+    }
+}
+
 impl Mirror {
     fn new() -> Self {
         Self {
@@ -111,6 +167,9 @@ impl Mirror {
             generation: 0,
             seq: 0,
             facts: None,
+            digest: None,
+            watched: true,
+            loaded: false,
             decision_handles: HashMap::new(),
         }
     }
@@ -159,12 +218,23 @@ pub(crate) struct Mirrors {
     restarted: Vec<ThreadId>,
     /// A Session announced other models since the window last asked.
     models_changed: bool,
+    /// Whether the Engine sends digests: only then can a window hold less
+    /// than every open Thread whole.
+    digested: bool,
 }
 
 impl Mirrors {
     /// Apply one message. `boot` is the Engine's clock zero on this side.
     pub(crate) fn receive(&mut self, message: ServerMessage, boot: Instant) {
         match message {
+            ServerMessage::History { thread, .. }
+            | ServerMessage::HistoryEnd { thread, .. }
+            | ServerMessage::Input { thread, .. }
+            | ServerMessage::ToolDraft { thread, .. }
+                if self
+                    .threads
+                    .get(&thread)
+                    .is_some_and(|mirror| !mirror.watched) => {}
             ServerMessage::History {
                 thread,
                 after,
@@ -184,6 +254,7 @@ impl Mirrors {
             ServerMessage::HistoryEnd { thread, seq, live } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
                 mirror.seq = seq;
+                mirror.loaded = true;
                 let update = updated(&mut self.updates, thread);
                 for input in &live {
                     mirror.apply_wire(input, crate::clock::instant(), update);
@@ -197,6 +268,7 @@ impl Mirrors {
             } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
                 mirror.seq = seq;
+                mirror.loaded = true;
                 let update = updated(&mut self.updates, thread);
                 mirror.apply_wire(&input, protocol::instant_at(at_ms, boot), update);
             }
@@ -225,6 +297,12 @@ impl Mirrors {
                     .as_ref()
                     .is_none_or(|before| before.models != facts.models);
                 mirror.facts = Some(facts);
+                updated(&mut self.updates, thread).activity_changed = true;
+            }
+            ServerMessage::Digest { thread, digest } => {
+                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                mirror.digest = Some(HeldDigest::of(digest, boot));
+                self.digested = true;
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             ServerMessage::Decision { thread, handle, .. } => {
@@ -308,9 +386,50 @@ impl Mirrors {
     }
 
     /// The last input this window applied to a Thread: where a resume
-    /// picks up.
+    /// picks up. None for a Thread it does not hold: its history comes
+    /// whole.
     pub(crate) fn seq(&self, thread: ThreadId) -> Option<u64> {
-        self.threads.get(&thread).map(|mirror| mirror.seq)
+        self.threads
+            .get(&thread)
+            .filter(|mirror| mirror.watched && mirror.loaded)
+            .map(|mirror| mirror.seq)
+    }
+
+    /// A Server's snapshot: whether it sends digests, and each open
+    /// Thread's.
+    pub(crate) fn attached(&mut self, digests: Option<Vec<protocol::ThreadDigest>>, boot: Instant) {
+        self.digested = digests.is_some();
+        for protocol::ThreadDigest { thread, digest } in digests.unwrap_or_default() {
+            self.receive(ServerMessage::Digest { thread, digest }, boot);
+        }
+    }
+
+    /// Whether this window streams `thread` (`Mirrors::watch_only`).
+    pub(crate) fn watched(&self, thread: ThreadId) -> bool {
+        self.threads
+            .get(&thread)
+            .is_some_and(|mirror| mirror.watched)
+    }
+
+    /// Whether the Engine sends digests.
+    pub(crate) fn digested(&self) -> bool {
+        self.digested
+    }
+
+    /// Stream only these Threads: the rest let go of their Activity and
+    /// read from their digests.
+    pub(crate) fn watch_only(&mut self, watched: &[ThreadId]) {
+        for (&thread, mirror) in &mut self.threads {
+            let wanted = watched.contains(&thread);
+            if mirror.watched && !wanted {
+                mirror.activity = Activity::default();
+                mirror.generation = 0;
+                mirror.seq = 0;
+                mirror.loaded = false;
+                updated(&mut self.updates, thread).activity_changed = true;
+            }
+            mirror.watched = wanted;
+        }
     }
 
     /// Only these Threads are open: the rest go.
@@ -356,8 +475,11 @@ impl Mirrors {
     pub(crate) fn view(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
         let mirror = self.threads.get(&thread)?;
         Some(ThreadView {
+            thread,
             activity: mirror.activity.view(),
             facts: mirror.facts.as_ref()?,
+            stand_in: mirror.digest.as_ref().filter(|_| !mirror.loaded),
+            digest: mirror.digest.as_ref().map(|held| &held.digest),
         })
     }
 }
@@ -378,8 +500,12 @@ fn updated(updates: &mut Vec<PaneUpdate>, thread: ThreadId) -> &mut PaneUpdate {
 /// facts it read after the handle is gone.
 #[derive(Clone, Copy)]
 pub struct ThreadView<'a> {
+    thread: ThreadId,
     activity: ActivityView<'a>,
     facts: &'a Facts,
+    /// The digest's answers, while this window does not hold the Activity.
+    stand_in: Option<&'a HeldDigest>,
+    digest: Option<&'a Digest>,
 }
 
 impl<'a> ThreadView<'a> {
@@ -437,12 +563,87 @@ impl<'a> ThreadView<'a> {
         self.facts.suggestion.as_deref()
     }
 
+    /// What every window reads of this Thread away from its Transcript —
+    /// its Wall card, counts and finish — as the Server last sent it, else
+    /// folded here from the Activity: a Server too old to send digests
+    /// mirrors every open Thread whole.
+    pub fn digest(&self) -> Cow<'a, Digest> {
+        match self.digest {
+            Some(digest) => Cow::Borrowed(digest),
+            None => Cow::Owned(Digest::of(
+                self.thread,
+                self.activity,
+                None,
+                crate::clock::instant(),
+            )),
+        }
+    }
+
+    /// The digest the Server sent, without the fallback.
+    #[cfg(test)]
+    pub(crate) fn sent_digest(&self) -> Option<&'a Digest> {
+        self.digest
+    }
+
+    /// Every Decision this Thread waits on, in the order they are answered.
+    pub fn pending_decisions(&self) -> &'a [PendingDecision] {
+        match self.stand_in {
+            Some(held) => &held.pending,
+            None => self.activity.decisions(),
+        }
+    }
+
     /// What this Thread is blocked on, if anything.
     pub fn pending(&self) -> Option<&'a Decision> {
-        self.activity
-            .decisions()
+        self.pending_decisions()
             .first()
             .map(|pending| &pending.decision)
+    }
+
+    /// Main's turn: what it does, how its last ended, since when it works.
+    pub fn turn(&self) -> Turn {
+        match self.stand_in {
+            Some(held) => held.turn.clone(),
+            None => Turn::of(self.transcript()),
+        }
+    }
+
+    /// What this Thread is called without a title: its first prompt,
+    /// shortened.
+    pub fn prompt_title(&self) -> Option<String> {
+        match self.stand_in {
+            Some(held) => held.digest.prompt_title.clone(),
+            None => crate::digest::prompt_title(self.transcript()),
+        }
+    }
+
+    /// How many Subagents the Thread has.
+    pub fn subagents(&self) -> usize {
+        match self.stand_in {
+            Some(held) => held.digest.subagents,
+            None => self.activity.children().len(),
+        }
+    }
+
+    /// The turn of the Subject a Pane shows: its own while this window holds
+    /// the Activity, else Main's from the digest. `None` for a Subject the
+    /// Thread does not hold.
+    pub fn subject_turn(&self, subject: &Subject) -> Option<Turn> {
+        match self.stand_in {
+            Some(held) => Some(held.turn.clone()),
+            None => self
+                .activity
+                .subject(subject)
+                .map(|subject| Turn::of(subject.transcript())),
+        }
+    }
+
+    /// How many Subagents work.
+    pub fn working_descendants(&self) -> usize {
+        match self.stand_in {
+            Some(held) => held.digest.working_descendants,
+            None => self.activity.working_descendants(),
+        }
     }
 
     /// The prompt held back while the turn runs — the latest, which is
@@ -471,14 +672,22 @@ impl<'a> ThreadView<'a> {
     /// Is the agent mid-turn? Unlike `busy`, a Session still starting
     /// (a launch's revival, a model or provider change) is not working.
     pub fn working(&self) -> bool {
-        self.activity.main().busy()
+        match self.stand_in {
+            Some(held) => held.digest.working,
+            None => self.activity.main().busy(),
+        }
     }
 
     /// Whether work runs behind Main: its Subagents, or its transcript's
     /// background tasks.
     pub fn background_work(&self) -> bool {
-        self.activity.working_descendants() > 0
-            || self.transcript().progress().working_background() > 0
+        match self.stand_in {
+            Some(held) => held.digest.background_work,
+            None => {
+                self.activity.working_descendants() > 0
+                    || self.transcript().progress().working_background() > 0
+            }
+        }
     }
 
     /// Whether a model or effort change waits on the provider's answer:
@@ -488,7 +697,11 @@ impl<'a> ThreadView<'a> {
     }
 
     pub fn needs_queue(&self) -> bool {
-        self.busy() || self.activity.main_operator_turn() || self.facts.native_queue_pending
+        let operator_turn = match self.stand_in {
+            Some(held) => held.digest.operator_turn,
+            None => self.activity.main_operator_turn(),
+        };
+        self.busy() || operator_turn || self.facts.native_queue_pending
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.

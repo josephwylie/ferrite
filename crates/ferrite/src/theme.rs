@@ -469,7 +469,7 @@ pub mod words {
     /// A turn finished cleanly.
     pub const DONE: &str = "done";
     /// A turn or an agent failed (`BLOCKED`).
-    pub const FAILED: &str = "failed";
+    pub const FAILED: &str = ferrite_core::digest::FAILED;
     /// Tests are failing (`BLOCKED`).
     pub const FAILING: &str = "failing";
     /// The operator (or the runtime) stopped the work.
@@ -1170,10 +1170,7 @@ pub fn reading_step(step: f32, size: f32) -> f32 {
 /// not show it whole: a command (always, exactly), a titled call, a
 /// multi-line input, or one longer than this many characters.
 pub const INPUT_ECHO_CHARS: usize = 48;
-/// A settled call shows its time only from two seconds up (the prototype's
-/// `Bash(…) 2s`, and no time on a one-second `Read`); anything quicker is
-/// noise on every row.
-pub const DURATION_MIN_MS: u128 = 2_000;
+pub use ferrite_core::progress::DURATION_MIN_MS;
 /// Output up to `OUTPUT_INLINE_BYTES` draws inline under its elbow, where a
 /// copy sweep across the transcript reaches it; larger output scrolls in a
 /// bounded native viewport `OUTPUT_MAX_LINES` high, with `… +N lines` under

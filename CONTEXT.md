@@ -26,6 +26,13 @@ The Main and subagent activity observed within one Thread: their transcripts,
 relationships, latest outcomes, and Decisions. Observation does not create
 additional Ferrite Sessions or Threads.
 
+**Digest**
+What every window knows of a Thread it does not draw at Transcript level:
+what Main is doing, the Decisions it waits on, its Wall tile, its counts and
+how its latest turn finished. A window holds a Thread's whole Activity only
+while it draws its Transcript.
+_Avoid_: summary; not the Handover's digest of earlier exchanges.
+
 **Subject**
 The execution context a Pane is showing within its Thread: Main or one
 Subagent. Switching Subject changes the view, not the Thread or its Title.

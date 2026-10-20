@@ -21,7 +21,10 @@ pub(crate) use text::{collect_block_text, collect_group_text, group_live};
 
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
-use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
+pub(crate) use ferrite_core::digest::BULLET;
+use ferrite_core::digest::ELBOW;
+pub use ferrite_core::digest::{Turn, WallCard, WallLine};
+use ferrite_core::docview::{is_test_run, passed_count, Level};
 use ferrite_core::followup::{self, Followup};
 use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
@@ -693,15 +696,11 @@ pub enum WallState {
 
 /// glance.md's matrix, one row per state. Transcript owns the turn's meaning;
 /// the Pane chooses its presentation alongside Decisions and test results.
-pub fn wall_state(
-    transcript: Option<&Transcript>,
-    pending: bool,
-    tests_failing: bool,
-) -> WallState {
-    let Some(transcript) = transcript else {
+pub fn wall_state(turn: Option<&Turn>, pending: bool, tests_failing: bool) -> WallState {
+    let Some(turn) = turn else {
         return WallState::Parked;
     };
-    let status = transcript.status();
+    let status = turn.status;
     if pending || status == Status::Blocked {
         return WallState::Decision;
     }
@@ -709,350 +708,8 @@ pub fn wall_state(
         Status::Closed => WallState::Blocked,
         Status::Streaming if tests_failing => WallState::Failing,
         Status::Streaming => WallState::Working,
-        _ if transcript.turn_completed() => WallState::Done,
+        _ if turn.completed() => WallState::Done,
         _ => WallState::Idle,
-    }
-}
-
-/// The wall tile's folded reading — rebuilt only when the Thread changed,
-/// never per frame (the wall budget: 24 tiles × 60fps must not walk Blocks
-/// or format strings). Words only: the tile draws them.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct WallCard {
-    /// The latest test run failed (from `Instruments`, the one O(blocks)
-    /// read the wall needs).
-    pub tests_failing: bool,
-    /// The failing run's own count, where it reported one: the tile reads
-    /// `failing 2`, else `failing`.
-    pub failing_count: Option<usize>,
-    /// The working signal's detail: the progress caption (`Thinking`,
-    /// `Retrying · Server busy`), the working state word's tooltip.
-    pub working: SharedString,
-    /// An alert tile's context: the Decision's subject, or the reason the
-    /// Session closed — the `failed` state word's tooltip. Empty when
-    /// neither applies.
-    pub context: SharedString,
-    /// How long the last completed turn worked (`3m 12s`): `done · 3m 12s`.
-    pub done_after: Option<SharedString>,
-    /// The transcript's last lines as the tile prints them, oldest first
-    /// (the tile shows the last `WALL_LINES` rows), a pending Decision's
-    /// lines last.
-    pub lines: Vec<WallLine>,
-}
-
-/// One line of a wall tile: one `TEXT_MUTED` run, its glyph included —
-/// `● Update(canvas.rs) +31 −9`, `  └ 212/357 tests`, `◆ Bash wants to
-/// run`, `  $ gh issue close 212`, `? Which fix do you want?`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WallLine {
-    pub text: SharedString,
-    /// Agent prose: wider than the tile it wraps once, to a continuation
-    /// at col 2 (`  from the spike notes`); every other line truncates.
-    pub wraps: bool,
-}
-
-impl WallLine {
-    fn line(text: impl Into<SharedString>) -> Self {
-        Self {
-            text: text.into(),
-            wraps: false,
-        }
-    }
-}
-
-/// How many Blocks a wall card reaches back for — more than any tile can
-/// show.
-const WALL_TAIL_BLOCKS: usize = 16;
-
-/// `◆`, typed: the tile's lines are one run each, glyph included (F-6).
-const DIAMOND_GLYPH: &str = "\u{25c6}";
-
-/// Fold one Thread's wall reading. The activity phrase stays a status word
-/// — naming the running tool would put `Instruments::of` on every tile
-/// every rebuild during streaming.
-pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -> WallCard {
-    wall_card_timed(transcript, decision, None)
-}
-
-/// `wall_card` with the Thread's call clocks (`ThreadView::tool_timings`):
-/// a settled call's line carries its time (`● Bash(cargo test) 1m01s`).
-pub fn wall_card_timed(
-    transcript: Option<&Transcript>,
-    decision: Option<&Decision>,
-    timings: Option<&HashMap<String, ToolTiming>>,
-) -> WallCard {
-    let Some(transcript) = transcript else {
-        return WallCard::default();
-    };
-    let working = SharedString::from(
-        transcript
-            .progress()
-            .caption()
-            .unwrap_or_else(|| "Working".into()),
-    );
-    let context = match decision {
-        Some(decision) => decision_subject(decision),
-        // A closed Thread's context is the reason it closed — the last
-        // Notice the fold pushed (#22 C14).
-        None if transcript.status() == Status::Closed => transcript
-            .blocks()
-            .iter()
-            .rev()
-            .find_map(|block| match &block.body {
-                Body::Notice(reason) => Some(SharedString::from(reason.clone())),
-                _ => None,
-            })
-            .unwrap_or_else(|| SharedString::from("closed")),
-        None => SharedString::default(),
-    };
-    let tests = Instruments::of(transcript).tests;
-    let failing_count = match tests {
-        Some(Tests::Failed { count }) => count,
-        _ => None,
-    };
-    let blocks = transcript.blocks();
-    let tail = &blocks[blocks.len().saturating_sub(WALL_TAIL_BLOCKS)..];
-    let done_after = tail.iter().rev().find_map(|block| match &block.body {
-        Body::TurnEnd(end) if end.outcome == ferrite_core::TurnOutcome::Completed => end
-            .elapsed_ms
-            .map(|ms| SharedString::from(worked_label(Duration::from_millis(ms)))),
-        _ => None,
-    });
-    WallCard {
-        tests_failing: matches!(tests, Some(Tests::Failed { .. })),
-        failing_count,
-        working,
-        context,
-        done_after,
-        lines: wall_lines(tail, decision, timings),
-    }
-}
-
-/// A finished turn's length as the tile says it: `41s`, `3m 12s`.
-fn worked_label(elapsed: Duration) -> String {
-    let secs = elapsed.as_secs();
-    if secs < 60 {
-        ferrite_core::progress::settled_duration_label(elapsed)
-    } else {
-        format!("{}m {}s", secs / 60, secs % 60)
-    }
-}
-
-/// A transcript tail as the tile prints it, oldest first (F-6): agent
-/// prose behind `●` (it may wrap once); every call behind `●` with its
-/// trail inline after one space (`+31 −9`, a settled time, `ok` for a
-/// passed test run); under a test run its progress (`  └ 212/357 tests`)
-/// or, settled red, its result (`  └ 357 passed; 2 failed`); a failed
-/// call's reason; a notice behind `◆`. Prompts, reasoning, code, meta and
-/// a completed turn's end leave no line (the state word says `done`). A
-/// pending approval drops the call it gates and closes the list with
-/// `◆ Bash wants to run` and `  $ <command>`; a question with `? <text>`.
-fn wall_lines(
-    tail: &[Block],
-    decision: Option<&Decision>,
-    timings: Option<&HashMap<String, ToolTiming>>,
-) -> Vec<WallLine> {
-    let first_line = |text: &str| -> String {
-        text.lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    };
-    let gated = decision
-        .map(|decision| decision.tool_use_id.as_str())
-        .filter(|id| !id.is_empty());
-    let mut lines = Vec::new();
-    for block in tail {
-        match &block.body {
-            Body::Paragraph { .. } | Body::Bullet { .. } | Body::Heading { .. } => {
-                let Some(text) = tail_text(&block.body, false) else {
-                    continue;
-                };
-                // Two source lines at most: a line break in the prose is
-                // where its continuation starts.
-                let mut source = text.lines().filter(|line| !line.trim().is_empty());
-                let head = source.next().unwrap_or_default().trim().to_string();
-                let text = match source.next() {
-                    Some(next) => format!("{BULLET} {head}\n{}", next.trim()),
-                    None => format!("{BULLET} {head}"),
-                };
-                lines.push(WallLine {
-                    text: text.into(),
-                    wraps: true,
-                });
-            }
-            Body::Notice(text)
-                if decision.is_none() && !ferrite_core::transcript::is_opened_notice(text) =>
-            {
-                let text = first_line(notice_text(text.trim(), false));
-                if !text.is_empty() {
-                    lines.push(WallLine::line(format!("{DIAMOND_GLYPH} {text}")));
-                }
-            }
-            Body::TurnEnd(end) if !end.completed() => {
-                lines.push(WallLine::line(format!("  {ELBOW} {}", end.text())));
-            }
-            Body::Tool(tool) => {
-                if gated == Some(tool.call.as_str()) {
-                    continue;
-                }
-                lines.push(WallLine::line(wall_call_line(tool, timings)));
-                if let Some(result) = wall_result_line(tool) {
-                    lines.push(WallLine::line(format!("  {ELBOW} {result}")));
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(decision) = decision {
-        lines.extend(wall_decision_lines(decision));
-    }
-    lines
-}
-
-/// `● Name(args) trail`: the call as the transcript names it, its trail
-/// one space after it — the change (`+31 −9`), `ok` for a passed test run,
-/// else a settled time from one second up. A running call has no trail:
-/// the state line's clock is ticking.
-fn wall_call_line(tool: &ToolBlock, timings: Option<&HashMap<String, ToolTiming>>) -> String {
-    let label = text::tool_label(tool);
-    let trail = match &tool.state {
-        ToolState::Running => None,
-        ToolState::Ok if !tool.diffs.is_empty() => {
-            let added: usize = tool.diffs.iter().map(|diff| diff.added).sum();
-            let removed: usize = tool.diffs.iter().map(|diff| diff.removed).sum();
-            Some(format!("+{added} \u{2212}{removed}"))
-        }
-        ToolState::Ok if is_test_run(tool) => Some("ok".to_string()),
-        _ => match timings.and_then(|map| map.get(&tool.call)) {
-            Some(ToolTiming::Done(total)) if total.as_millis() >= theme::DURATION_MIN_MS => {
-                Some(ferrite_core::progress::live_seconds(*total))
-            }
-            _ => None,
-        },
-    };
-    match trail {
-        Some(trail) => format!("{BULLET} {label} {trail}"),
-        None => format!("{BULLET} {label}"),
-    }
-}
-
-/// What hangs under a call on its tile: a running test run's progress
-/// (`212/357 tests`, `ToolBlock::progress`), a red run's result (`357
-/// passed; 2 failed`), a failed call's reason. A passed run says `ok` on
-/// its own line, and nothing else hangs.
-fn wall_result_line(tool: &ToolBlock) -> Option<String> {
-    match &tool.state {
-        ToolState::Running => tool.progress.as_ref().map(|progress| {
-            if progress.known() {
-                format!("{}/{} tests", progress.done, progress.total)
-            } else {
-                format!("{} tests", progress.done)
-            }
-        }),
-        ToolState::Failed(message) => {
-            if is_test_run(tool) {
-                if let Some(summary) = test_summary(tool) {
-                    return Some(summary);
-                }
-            }
-            let reason = message
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .map(str::trim)
-                .unwrap_or_default();
-            Some(if reason.is_empty() {
-                theme::words::FAILED.to_string()
-            } else {
-                format!("{} \u{b7} {reason}", theme::words::FAILED)
-            })
-        }
-        _ => None,
-    }
-}
-
-/// A red test run's own count line, `357 passed; 2 failed`, read from the
-/// last line of its output that reports both.
-fn test_summary(tool: &ToolBlock) -> Option<String> {
-    let failure = match &tool.state {
-        ToolState::Failed(message) => Some(message.as_str()),
-        _ => None,
-    };
-    let texts = [
-        failure,
-        tool.result_line.as_deref(),
-        tool.output.as_ref().map(|output| output.text.as_str()),
-    ];
-    texts.into_iter().flatten().find_map(|text| {
-        text.lines().rev().find_map(|line| {
-            let passed = passed_count(line)?;
-            let failed = count_before(line, "failed")?;
-            Some(format!("{passed} passed; {failed} failed"))
-        })
-    })
-}
-
-/// The number standing directly before `word` (`2 failed` → 2).
-fn count_before(line: &str, word: &str) -> Option<usize> {
-    let lower = line.to_lowercase();
-    let tokens: Vec<&str> = lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-    tokens
-        .windows(2)
-        .find_map(|pair| (pair[1] == word).then(|| pair[0].parse().ok()).flatten())
-}
-
-/// A pending Decision's lines at the foot of its tile: an approval names
-/// what it would run (`◆ Bash wants to run`, then `  $ <command>`), else
-/// what it asks; a question is `? <its text>`.
-fn wall_decision_lines(decision: &Decision) -> Vec<WallLine> {
-    if let Some(questions) = questions_of(decision) {
-        let text = questions
-            .first()
-            .map(|question| question.question.trim().to_string())
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| ferrite_core::questions::summary(questions));
-        let text = text.lines().next().unwrap_or_default().trim().to_string();
-        return vec![WallLine::line(format!("? {text}"))];
-    }
-    let tool = ferrite_core::transcript::display_tool_name(&decision.tool_name).to_string();
-    let command = decision
-        .input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .filter(|command| !command.trim().is_empty());
-    match (tool.is_empty(), command) {
-        (false, Some(command)) => {
-            let command = ferrite_core::providers::shell::unwrap_shell(command).to_string();
-            let command = command
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            vec![
-                WallLine::line(format!("{DIAMOND_GLYPH} {tool} wants to run")),
-                WallLine::line(format!("  $ {command}")),
-            ]
-        }
-        (false, None) => {
-            let mut lines = vec![WallLine::line(format!(
-                "{DIAMOND_GLYPH} {tool} wants approval"
-            ))];
-            let description = decision.description.trim();
-            if !description.is_empty() {
-                let description = description.lines().next().unwrap_or_default().trim();
-                lines.push(WallLine::line(format!("  {description}")));
-            }
-            lines
-        }
-        (true, _) => vec![WallLine::line(format!(
-            "{DIAMOND_GLYPH} {}",
-            decision_subject(decision)
-        ))],
     }
 }
 
@@ -1064,7 +721,7 @@ pub(crate) fn wall_rows(lines: &[WallLine], columns: usize) -> Vec<SharedString>
     let mut rows: Vec<SharedString> = Vec::new();
     for line in lines {
         if !line.wraps {
-            rows.push(line.text.clone());
+            rows.push(line.text.clone().into());
             continue;
         }
         let (head, tail) = wrap_once(&line.text, columns);
@@ -1231,8 +888,9 @@ pub fn render_pane(
     let status = subject.as_ref().map(|subject| {
         crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
     });
+    let turn = thread.and_then(|thread| thread.subject_turn(&view.selected));
     let state = wall_state(
-        transcript,
+        turn.as_ref(),
         decision.is_some_and(Decision::blocks_execution),
         wall.tests_failing,
     );
@@ -1241,7 +899,7 @@ pub fn render_pane(
     // only, so nothing reflows when a Decision arrives. A waiting Pane
     // draws `ATTENTION_EDGE` on every side — focused or not; a focused one
     // says so in its head ground and title instead of a second ring.
-    let pending = thread.map(|thread| thread.activity().pending_decisions());
+    let pending = thread.map(|thread| thread.pending_decisions());
     let attention_pending =
         pending.is_some_and(|pending| !pending.is_empty()) || state == WallState::Decision;
     // Focus is drawn only where it tells the operator something: a lone
@@ -1270,7 +928,7 @@ pub fn render_pane(
                 view.is_main(),
                 dot_state(
                     state,
-                    state_word(state, kind, wall, transcript, unread).as_ref(),
+                    state_word(state, kind, wall, turn.as_ref(), unread).as_ref(),
                 ),
                 unread,
                 thread.is_some_and(|thread| thread.background_work()),
@@ -1304,7 +962,7 @@ pub fn render_pane(
                     card: wall,
                     state,
                     kind,
-                    transcript,
+                    turn: turn.as_ref(),
                     unread,
                     quick_answers,
                     focused,
@@ -1361,7 +1019,6 @@ pub fn render_pane(
             let child_request = !view.is_main()
                 && thread.is_some_and(|thread| {
                     thread
-                        .activity()
                         .pending_decisions()
                         .iter()
                         .any(|request| request.subject.as_ref() == Some(&view.selected))
@@ -1928,7 +1585,7 @@ struct WallTile<'a> {
     card: &'a WallCard,
     state: WallState,
     kind: Option<&'static str>,
-    transcript: Option<&'a Transcript>,
+    turn: Option<&'a Turn>,
     /// The tile's finish has not been seen: it reads `done`.
     unread: bool,
     quick_answers: Option<AnyElement>,
@@ -1954,7 +1611,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
         card,
         state,
         kind,
-        transcript,
+        turn,
         unread,
         quick_answers,
         focused,
@@ -1963,10 +1620,8 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
     } = tile;
     let word = match state {
         WallState::Parked => Some(HeadSlot::Parked),
-        _ => match state_word(state, kind, card, transcript, unread) {
-            Some(HeadSlot::Working(_)) => {
-                Some(HeadSlot::Working(working_clock(transcript, focused)))
-            }
+        _ => match state_word(state, kind, card, turn, unread) {
+            Some(HeadSlot::Working(_)) => Some(HeadSlot::Working(working_clock(turn, focused))),
             word => word,
         },
     };
@@ -2035,8 +1690,8 @@ const WAKE_HINT: &str = "\u{23ce} reopens it";
 /// A working tile's clock: whole seconds (`12s`, `1m04s`) on the tile that
 /// holds the keyboard; elsewhere a minute and past reads in minutes alone
 /// (`1m`), as the prototype's quiet Panes do.
-fn working_clock(transcript: Option<&Transcript>, focused: bool) -> String {
-    let Some(elapsed) = transcript.and_then(Transcript::turn_elapsed) else {
+fn working_clock(turn: Option<&Turn>, focused: bool) -> String {
+    let Some(elapsed) = turn.and_then(Turn::elapsed) else {
         return String::new();
     };
     if !focused && elapsed.as_secs() >= 60 {
@@ -2263,7 +1918,7 @@ fn state_word(
     state: WallState,
     kind: Option<&'static str>,
     card: &WallCard,
-    transcript: Option<&Transcript>,
+    turn: Option<&Turn>,
     unread: bool,
 ) -> Option<HeadSlot> {
     use ferrite_core::TurnOutcome;
@@ -2277,13 +1932,12 @@ fn state_word(
         WallState::Failing => HeadSlot::Failing(card.failing_count),
         WallState::Blocked => HeadSlot::Failed,
         WallState::Working => HeadSlot::Working(
-            transcript
-                .and_then(Transcript::turn_elapsed)
+            turn.and_then(Turn::elapsed)
                 .map(ferrite_core::progress::live_seconds)
                 .unwrap_or_default(),
         ),
         WallState::Parked => HeadSlot::Parked,
-        WallState::Done | WallState::Idle => match transcript.and_then(Transcript::turn_outcome) {
+        WallState::Done | WallState::Idle => match turn.and_then(|turn| turn.outcome.as_ref()) {
             Some(TurnOutcome::Error(_)) => HeadSlot::Failed,
             _ if unread => HeadSlot::Done,
             Some(TurnOutcome::Interrupted) => HeadSlot::Interrupted,
@@ -2315,14 +1969,14 @@ pub(crate) fn thread_word(
 ) -> Option<HeadSlot> {
     let empty = WallCard::default();
     let card = card.unwrap_or(&empty);
-    let transcript = open.transcript();
+    let turn = open.turn();
     let decision = open.pending();
     let state = wall_state(
-        Some(transcript),
+        Some(&turn),
         decision.is_some_and(Decision::blocks_execution),
         card.tests_failing,
     );
-    let pending = open.activity().pending_decisions();
+    let pending = open.pending_decisions();
     let kind = (!pending.is_empty() || state == WallState::Decision).then(|| {
         pending
             .first()
@@ -2330,7 +1984,7 @@ pub(crate) fn thread_word(
             .or_else(|| decision.map(request_kind))
             .unwrap_or(theme::words::APPROVAL)
     });
-    state_word(state, kind, card, Some(transcript), unread)
+    state_word(state, kind, card, Some(&turn), unread)
 }
 
 /// The Pane's foot while its question is too big for the body: `◆ needs
@@ -2399,35 +2053,6 @@ fn question_door(key: u64) -> AnyElement {
 }
 
 // ------------------------------------------------------------- tile text
-
-/// A Block's visible text as one line of words — what a wall tile's prose
-/// line reads (`wall_lines`), spelled once.
-pub(crate) fn tail_text(body: &Body, docked: bool) -> Option<String> {
-    use ferrite_core::TurnOutcome;
-    let prose = |spans: &[Span]| -> String {
-        spans
-            .iter()
-            .map(|span| span.text.as_str())
-            .collect::<String>()
-            .trim()
-            .to_string()
-    };
-    let text = match body {
-        Body::Prompt(text) => text.trim().to_string(),
-        Body::Paragraph { spans } | Body::Bullet { spans } | Body::Heading { spans, .. } => {
-            prose(spans)
-        }
-        Body::Code { language, .. } => format!("```{}", language.as_deref().unwrap_or("")),
-        Body::Tool(tool) => text::tool_label(tool).to_string(),
-        Body::Notice(text) => notice_text(text.trim(), docked).to_string(),
-        Body::Meta(text) => text.clone(),
-        Body::TurnEnd(end) if end.outcome == TurnOutcome::Completed => return None,
-        Body::TurnEnd(end) => end.text(),
-        Body::Thinking(text) => ferrite_core::progress::headline(text).to_string(),
-        Body::Visual(visual) => format!("Visual  {}", visual.title.trim()),
-    };
-    (!text.is_empty()).then_some(text)
-}
 
 // ------------------------------------------------------------- the head
 
@@ -3205,7 +2830,7 @@ fn parked_body(parked_line: Option<SharedString>) -> Div {
         card: &card,
         state: WallState::Parked,
         kind: None,
-        transcript: None,
+        turn: None,
         unread: false,
         quick_answers: None,
         focused: false,
@@ -4164,53 +3789,6 @@ pub(crate) fn approval_input(
     )
 }
 
-/// The Decision's subject in its parts: the tool, then what it would do —
-/// the command itself when the input carries one, else the provider's
-/// description. A question is its summary.
-struct DecisionSubject {
-    tool: Option<SharedString>,
-    text: Option<SharedString>,
-}
-
-fn subject_parts(decision: &Decision) -> DecisionSubject {
-    if let Some(questions) = questions_of(decision) {
-        return DecisionSubject {
-            tool: None,
-            text: Some(ferrite_core::questions::summary(questions).into()),
-        };
-    }
-    let command = decision
-        .input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .filter(|command| !command.trim().is_empty());
-    let tool = (!decision.tool_name.is_empty()).then(|| decision.tool_name.clone().into());
-    let text = match command {
-        Some(command) => Some(command.to_string().into()),
-        None => (!decision.description.is_empty()).then(|| decision.description.clone().into()),
-    };
-    if tool.is_none() && text.is_none() {
-        return DecisionSubject {
-            tool: None,
-            text: Some("unreadable permission request".into()),
-        };
-    }
-    DecisionSubject { tool, text }
-}
-
-/// The Decision's subject as one line of words — `Bash · gh issue close
-/// 212`, never a `Bash:` label; the tool's name alone without a
-/// description, else the honest unreadable fallback. Every surface that
-/// names a Decision in words (the wall alert's tooltip) goes through here.
-fn decision_subject(decision: &Decision) -> SharedString {
-    let DecisionSubject { tool, text } = subject_parts(decision);
-    match (tool, text) {
-        (Some(tool), Some(text)) => format!("{tool} \u{b7} {text}").into(),
-        (Some(only), None) | (None, Some(only)) => only,
-        (None, None) => "unreadable permission request".into(),
-    }
-}
-
 // -------------------------------------------------------------- questions
 
 /// The normalized questions a Decision carries. Providers classify the wire
@@ -5131,12 +4709,8 @@ impl Grid {
     }
 }
 
-/// The agent's and a tool call's bullet: Geist Mono's own `●`.
-pub(crate) const BULLET: &str = "\u{25cf}";
 /// A call whose result never came: the hollow `○`.
 const RING: &str = "\u{25cb}";
-/// The result elbow: Geist Mono's own `└`.
-const ELBOW: &str = "\u{2514}";
 
 /// A provider's brand colour, for its `✻` and its working spinner;
 /// `TEXT_MUTED` when the provider is not known.
@@ -6072,15 +5646,6 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
         .collect()
 }
 
-/// A notice as the L2 tail reads it: whole, or only its lead phrase (before
-/// the first ` · `) while the Decision it announces is docked below it.
-pub(crate) fn notice_text(text: &str, docked: bool) -> &str {
-    match text.split_once(" \u{b7} ") {
-        Some((lead, _)) if docked => lead,
-        _ => text,
-    }
-}
-
 /// A tool call's bullet: state is the bullet, never the name. Settled work
 /// is `TEXT_MUTED`, live work a still green `●` (no pulse: the working line
 /// is the one live thing), a failure `BLOCKED`, a call whose result never
@@ -6135,7 +5700,7 @@ pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
 /// line's `TEXT_MUTED`, a path argument in `PATH_INK`; one selectable line
 /// that copies back exactly as it reads.
 fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
-    let label = text::tool_label(tool);
+    let label = tool.label();
     let name = ferrite_core::transcript::display_tool_name(&tool.name)
         .len()
         .min(label.len());
@@ -6785,7 +6350,7 @@ pub(crate) fn render_tool(
         }) => (targeted, toggle, focus, overlay),
         None => (false, None, None, None),
     };
-    let label = text::tool_label(tool);
+    let label = tool.label();
     let call = div()
         .relative()
         .min_w_0()
@@ -8909,6 +8474,7 @@ fn joined_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::docview::Instruments;
     use ferrite_core::transcript::Class;
     #[test]
     fn progress_token_counts_stay_compact() {
@@ -8950,7 +8516,7 @@ mod tests {
             "a draft has no conversation to predict from"
         );
     }
-    use ferrite_core::transcript::{Input, Lexer, Todos};
+    use ferrite_core::transcript::{Input, Lexer};
     use ferrite_core::{Hunk, SessionEvent, ToolResult, TurnOutcome};
     use gpui::{size, TestAppContext};
     use std::sync::Arc;
@@ -9242,7 +8808,8 @@ mod tests {
                                 None,
                             )
                             .into_any_element(),
-                            decision::prose(decision_subject(decision)).into_any_element(),
+                            decision::prose(ferrite_core::digest::decision_subject(decision))
+                                .into_any_element(),
                         ]
                         .into_iter()
                         .chain(
@@ -9828,7 +9395,10 @@ mod tests {
             outcome: ferrite_core::TurnOutcome::Completed,
             cost_usd: None,
         }));
-        assert_eq!(wall_state(Some(&transcript), false, false), WallState::Done);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            WallState::Done
+        );
     }
 
     /// glance.md §4's wall matrix, one assertion per row — the selection
@@ -9837,13 +9407,22 @@ mod tests {
     fn the_wall_state_matrix_reads_exactly_as_the_glance_spec() {
         use WallState::*;
         let mut transcript = Transcript::default();
-        assert_eq!(wall_state(Some(&transcript), false, false), Idle);
+        assert_eq!(wall_state(Some(&Turn::of(&transcript)), false, false), Idle);
         transcript.apply(Input::Prompt("go".into()));
         // Working, focused or not, is the streaming Thread.
-        assert_eq!(wall_state(Some(&transcript), false, false), Working);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Working
+        );
         // Failing tests stay a working Thread — red text, not a ring.
-        assert_eq!(wall_state(Some(&transcript), true, false), Decision);
-        assert_eq!(wall_state(Some(&transcript), false, true), Failing);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), true, false),
+            Decision
+        );
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, true),
+            Failing
+        );
         // A Decision waits: pending flag or Blocked status, either way.
         let decision = crate::demo::script()
             .into_iter()
@@ -9851,7 +9430,10 @@ mod tests {
             .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
             .unwrap();
         transcript.apply(Input::Event(decision));
-        assert_eq!(wall_state(Some(&transcript), false, false), Decision);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Decision
+        );
         // Only successful outcomes read Done, regardless of cost.
         for cost_usd in [None, Some(0.038)] {
             for (outcome, expected) in [
@@ -9860,7 +9442,10 @@ mod tests {
                 (ferrite_core::TurnOutcome::Error("failed".into()), Idle),
             ] {
                 transcript.apply(Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }));
-                assert_eq!(wall_state(Some(&transcript), false, false), expected);
+                assert_eq!(
+                    wall_state(Some(&Turn::of(&transcript)), false, false),
+                    expected
+                );
             }
         }
         // A closed Session is the red hard-blocker.
@@ -9871,179 +9456,12 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::Closed {
             reason: "Session exited".into(),
         }));
-        assert_eq!(wall_state(Some(&transcript), false, false), Blocked);
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Blocked
+        );
         // No transcript at all — the cockpit could not open the Thread.
         assert_eq!(wall_state(None, false, false), Parked);
-    }
-
-    /// The wall card folds everything the L3 recipe needs that is not an
-    /// O(1) read — built on change, never per frame.
-    #[test]
-    fn the_wall_card_folds_progress_result_and_context_lines() {
-        // No transcript: an empty card.
-        let empty = wall_card(None, None);
-        assert!(!empty.tests_failing);
-        assert!(empty.lines.is_empty());
-
-        let mut transcript = Transcript::default();
-        for (id, subject) in [("1", "a"), ("2", "b"), ("3", "c"), ("4", "d")] {
-            transcript.apply(Input::Event(SessionEvent::Progress {
-                event: ferrite_core::progress::ProgressEvent::Task {
-                    id: id.into(),
-                    subject: subject.into(),
-                    status: Some(ferrite_core::progress::StepStatus::Pending),
-                    deleted: false,
-                },
-            }));
-        }
-        for task in ["1", "2", "3"] {
-            transcript.apply(Input::Event(SessionEvent::Progress {
-                event: ferrite_core::progress::ProgressEvent::Task {
-                    id: task.into(),
-                    subject: String::new(),
-                    status: Some(ferrite_core::progress::StepStatus::Completed),
-                    deleted: false,
-                },
-            }));
-        }
-        assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
-        let card = wall_card(Some(&transcript), None);
-        assert_eq!(card.working.as_ref(), "Working");
-
-        // A red suite flips the folded flag and folds the failing line —
-        // with the run's own count when its output reported one.
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "test1".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({ "command": "cargo test" }),
-        }));
-        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "test1".into(),
-            output: "test result: FAILED. 357 passed; 2 failed".into(),
-            is_error: true,
-            result: ToolResult::Opaque,
-        }));
-        let red = wall_card(Some(&transcript), None);
-        assert!(red.tests_failing);
-        assert_eq!(red.failing_count, Some(2));
-        assert_eq!(HeadSlot::Failing(red.failing_count).text(), "failing 2");
-
-        // A Decision's subject becomes the alert's second line, wearing the
-        // tool prefix every Decision surface shares (#22 C7).
-        let decision = Decision {
-            delivery: Default::default(),
-            kind: Default::default(),
-            policy: Default::default(),
-            id: "perm".into(),
-            tool_use_id: "toolu".into(),
-            tool_name: "Bash".into(),
-            description: "gh issue close 212".into(),
-            input: serde_json::Value::Null,
-            suggestions: vec![],
-        };
-        assert_eq!(
-            wall_card(Some(&transcript), Some(&decision))
-                .context
-                .as_ref(),
-            "Bash \u{b7} gh issue close 212"
-        );
-
-        // A closed Session's reason is promoted into the alert line itself
-        // (#22 C14).
-        let mut closed = Transcript::default();
-        closed.apply(Input::Event(SessionEvent::Closed {
-            reason: "claude CLI exited with code 1".into(),
-        }));
-        assert_eq!(
-            wall_card(Some(&closed), None).context.as_ref(),
-            "claude CLI exited with code 1"
-        );
-    }
-
-    /// F-6: a tile's lines are one dim run each, glyph included — a call's
-    /// trail inline after one space, a red run's result under it, a passed
-    /// run's `ok`, and a pending approval's command in place of the call it
-    /// gates.
-    #[test]
-    fn the_wall_card_prints_calls_trails_results_and_the_decision() {
-        let mut transcript = Transcript::default();
-        transcript.apply(Input::Prompt("fix it".into()));
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "t1".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({ "command": "cargo test --workspace" }),
-        }));
-        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "t1".into(),
-            output: "test result: FAILED. 357 passed; 2 failed; 0 ignored".into(),
-            is_error: true,
-            result: ToolResult::Opaque,
-        }));
-        let timings: HashMap<String, ToolTiming> =
-            [("t1".to_string(), ToolTiming::Done(Duration::from_secs(61)))]
-                .into_iter()
-                .collect();
-        let card = wall_card_timed(Some(&transcript), None, Some(&timings));
-        let texts: Vec<&str> = card.lines.iter().map(|line| line.text.as_ref()).collect();
-        assert_eq!(
-            texts,
-            [
-                "\u{25cf} Bash(cargo test --workspace) 1m01s",
-                "  \u{2514} 357 passed; 2 failed"
-            ],
-            "the prompt leaves no line"
-        );
-        assert!(card.lines.iter().all(|line| !line.wraps));
-
-        // A passed run says `ok` in its trail and hangs nothing.
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "t2".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({ "command": "cargo test -p ferrite theme::" }),
-        }));
-        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "t2".into(),
-            output: "test result: ok. 24 passed; 0 failed".into(),
-            is_error: false,
-            result: ToolResult::Opaque,
-        }));
-        let card = wall_card(Some(&transcript), None);
-        assert_eq!(
-            card.lines.last().unwrap().text.as_ref(),
-            "\u{25cf} Bash(cargo test -p ferrite theme::) ok"
-        );
-
-        // Prose is a line that may wrap; the call a Decision gates gives
-        // way to what the Decision would run.
-        transcript.apply(Input::Event(SessionEvent::TextDelta {
-            text: "Six of seven stale issues closed\n\n".into(),
-        }));
-        let command = "gh issue close 212 --reason \"not planned\"";
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "t3".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({ "command": command }),
-        }));
-        let decision = Decision {
-            delivery: Default::default(),
-            kind: Default::default(),
-            policy: Default::default(),
-            id: "perm".into(),
-            tool_use_id: "t3".into(),
-            tool_name: "Bash".into(),
-            description: String::new(),
-            input: serde_json::json!({ "command": command }),
-            suggestions: vec![],
-        };
-        let card = wall_card(Some(&transcript), Some(&decision));
-        assert_eq!(
-            wall_rows(&card.lines, 60),
-            [
-                "\u{25cf} Six of seven stale issues closed",
-                "\u{25c6} Bash wants to run",
-                "  $ gh issue close 212 --reason \"not planned\"",
-            ]
-        );
     }
 
     /// F-6: prose wraps once to a continuation at col 2 — at its own line
@@ -10097,49 +9515,6 @@ mod tests {
         );
         assert_eq!(rows.len(), theme::WALL_LINES);
         assert_eq!(rows[2].as_ref(), "  from the spike notes");
-        assert_eq!(worked_label(Duration::from_secs(192)), "3m 12s");
-        assert_eq!(worked_label(Duration::from_secs(41)), "41s");
-    }
-
-    /// One derivation for every surface that names a Decision (L1 card, L2
-    /// cell, wall alert) — and the unreadable-request fallback holds even
-    /// when the provider names no tool at all.
-    #[test]
-    fn every_decision_surface_shares_one_subject_derivation() {
-        let decision = |tool: &str, description: &str| Decision {
-            delivery: Default::default(),
-            kind: Default::default(),
-            policy: Default::default(),
-            id: "perm".into(),
-            tool_use_id: "toolu".into(),
-            tool_name: tool.into(),
-            description: description.into(),
-            input: serde_json::Value::Null,
-            suggestions: vec![],
-        };
-        let full = decision("Bash", "gh issue close 212");
-        assert_eq!(
-            decision_subject(&full).as_ref(),
-            "Bash \u{b7} gh issue close 212"
-        );
-        assert!(!decision_subject(&full).contains(':'), "no colon label");
-        // No description: the tool's name is the subject.
-        let bare = decision("Write", "");
-        assert_eq!(decision_subject(&bare).as_ref(), "Write");
-        // No tool at all: the honest fallback, on both lines.
-        let unreadable = decision("", "");
-        assert_eq!(
-            decision_subject(&unreadable).as_ref(),
-            "unreadable permission request"
-        );
-        // The wall's alert context runs through the same derivation.
-        let transcript = Transcript::default();
-        assert_eq!(
-            wall_card(Some(&transcript), Some(&unreadable))
-                .context
-                .as_ref(),
-            "unreadable permission request"
-        );
     }
 
     /// A written file's patch is the whole file, so the card draws a
@@ -10372,7 +9747,7 @@ mod tests {
                 output: None,
                 progress: None,
             };
-            assert_eq!(text::tool_label(&tool), "Bash(cargo test)");
+            assert_eq!(tool.label(), "Bash(cargo test)");
             let highlights = call_highlights(&tool);
             assert_eq!(
                 highlights.len(),
@@ -10850,44 +10225,6 @@ mod tests {
             }
         }
         assert_eq!(HeadSlot::Working("12s".into()).text(), "working 12s");
-    }
-
-    /// What a tile's line says is one spelling per Body — a completed turn
-    /// leaves no row, a docked Decision's notice keeps only its lead
-    /// phrase, a call reads as the transcript spells it.
-    #[test]
-    fn the_tile_text_is_its_visible_text() {
-        use ferrite_core::transcript::TurnEnd;
-        assert_eq!(
-            tail_text(&Body::Prompt("  Fix the board  ".into()), false).as_deref(),
-            Some("Fix the board")
-        );
-        let notice = Body::Notice("asks 1 question \u{b7} Which layout?".into());
-        assert_eq!(
-            tail_text(&notice, false).as_deref(),
-            Some("asks 1 question \u{b7} Which layout?")
-        );
-        assert_eq!(tail_text(&notice, true).as_deref(), Some("asks 1 question"));
-        let done = Body::TurnEnd(TurnEnd {
-            outcome: TurnOutcome::Completed,
-            elapsed_ms: Some(18_000),
-            completed_at: None,
-            input_tokens: None,
-            output_tokens: None,
-        });
-        assert_eq!(tail_text(&done, false), None, "no `Worked for` row");
-        let stopped = TurnEnd {
-            outcome: TurnOutcome::Interrupted,
-            elapsed_ms: Some(4_100),
-            completed_at: None,
-            input_tokens: None,
-            output_tokens: None,
-        };
-        assert_eq!(
-            tail_text(&Body::TurnEnd(stopped.clone()), false),
-            Some(stopped.text())
-        );
-        assert_eq!(tail_text(&Body::Prompt("   ".into()), false), None);
     }
 
     /// #11: import is offered exactly while a Thread has no conversation —

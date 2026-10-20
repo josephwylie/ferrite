@@ -261,6 +261,7 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
                 notices: None,
                 providers: None,
                 parked: None,
+                digests: None,
             }))
             .unwrap();
         connection

@@ -89,7 +89,7 @@ impl CockpitView {
     /// The approval `thread` waits on: the one its Pane shows, else Main's,
     /// else any.
     fn pending_approval(&self, thread: ThreadId) -> Option<PendingDecision> {
-        let pending = self.cockpit.thread(thread)?.activity().pending_decisions();
+        let pending = self.cockpit.thread(thread)?.pending_decisions();
         let approval = |request: &&PendingDecision| {
             matches!(request.decision.kind, ferrite_core::DecisionKind::Approval)
                 && !request.submitting
@@ -111,7 +111,7 @@ impl CockpitView {
 
     /// The question `thread` waits on, chosen the same way.
     fn pending_question(&self, thread: ThreadId) -> Option<PendingDecision> {
-        let pending = self.cockpit.thread(thread)?.activity().pending_decisions();
+        let pending = self.cockpit.thread(thread)?.pending_decisions();
         let question = |request: &&PendingDecision| pane::questions_of(&request.decision).is_some();
         let pane = self.pane_for(thread).map(|index| &self.panes[index]);
         pending
@@ -315,8 +315,7 @@ impl CockpitView {
                 .cockpit
                 .thread(thread)
                 .map(|open| {
-                    open.activity()
-                        .pending_decisions()
+                    open.pending_decisions()
                         .iter()
                         .filter(|request| {
                             !request.submitting
@@ -491,8 +490,7 @@ impl CockpitView {
     /// flight).
     fn still_waiting(&self, thread: ThreadId, handle: &DecisionHandle) -> bool {
         self.cockpit.thread(thread).is_some_and(|open| {
-            open.activity()
-                .pending_decisions()
+            open.pending_decisions()
                 .iter()
                 .any(|request| &request.handle == handle && !request.submitting)
         })
@@ -597,8 +595,7 @@ impl CockpitView {
             return;
         };
         let request = self.cockpit.thread(thread).and_then(|open| {
-            open.activity()
-                .pending_decisions()
+            open.pending_decisions()
                 .iter()
                 .find(|request| &request.handle == handle)
                 .cloned()

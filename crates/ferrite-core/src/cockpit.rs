@@ -9,6 +9,7 @@
 //! Thread's mirror, and the shared state's copies. The open Threads are
 //! shared: the Roster follows them (`sync_roster`).
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -79,6 +80,56 @@ pub struct Cockpit {
     /// The self-hosted forges a review's pull request is read from here,
     /// when this window runs its agents itself (`settings_changed`).
     forge: ferrite_reviewr::config::PluginConfig,
+    /// What this window draws at Transcript level (`draws_transcripts`).
+    /// `None` for an Engine in this process until its window first says:
+    /// until then it streams every open Thread.
+    drawn: Option<Drawn>,
+}
+
+/// How long a Thread off screen stays streamed whole: flipping between
+/// Threads reads none of their history again (ADR 0032).
+const UNWATCH_AFTER: Duration = Duration::from_secs(30);
+
+/// The Threads a window draws at Transcript level, and when each it no
+/// longer draws left the screen.
+#[derive(Default)]
+struct Drawn {
+    now: std::collections::BTreeSet<ThreadId>,
+    left: HashMap<ThreadId, Instant>,
+}
+
+impl Drawn {
+    fn draws(&mut self, threads: std::collections::BTreeSet<ThreadId>, at: Instant) {
+        for &gone in self.now.difference(&threads) {
+            self.left.insert(gone, at);
+        }
+        for thread in &threads {
+            self.left.remove(thread);
+        }
+        self.now = threads;
+    }
+
+    /// A Thread that opened while the window is up is one the operator is
+    /// about to look at: it is held as if it had just left the screen.
+    fn opened(&mut self, thread: ThreadId, at: Instant) {
+        if !self.now.contains(&thread) {
+            self.left.insert(thread, at);
+        }
+    }
+
+    /// Whether `thread` is drawn, or left the screen within `UNWATCH_AFTER`.
+    fn holds(&self, thread: ThreadId, at: Instant) -> bool {
+        self.now.contains(&thread)
+            || self
+                .left
+                .get(&thread)
+                .is_some_and(|left| at.saturating_duration_since(*left) < UNWATCH_AFTER)
+    }
+
+    fn retain(&mut self, open: &[ThreadId]) {
+        self.now.retain(|thread| open.contains(thread));
+        self.left.retain(|thread, _| open.contains(thread));
+    }
 }
 
 /// What only a window knows and the API reports (ADR 0030): the Thread it
@@ -133,6 +184,9 @@ impl Cockpit {
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
         let mut cockpit = Self::with(Link::Server(Box::new(remote)), parked, &dir);
+        // A window streams only what it draws, from its first attach on: it
+        // draws nothing yet (ADR 0032).
+        cockpit.drawn = Some(Drawn::default());
         cockpit.arrive(arrived.into_iter().collect());
         Ok(cockpit)
     }
@@ -153,6 +207,7 @@ impl Cockpit {
             window_active: true,
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
+            drawn: None,
             told: None,
         }
     }
@@ -303,6 +358,10 @@ impl Cockpit {
     }
 
     fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
+        let open_before = self.shared.open.clone();
+        let attached = arrived
+            .iter()
+            .any(|arrival| matches!(arrival, remote::Arrival::Attached { .. }));
         let boot = match &self.link {
             Link::InProcess(engine) => engine.boot(),
             Link::Server(server) => server.boot(),
@@ -329,6 +388,7 @@ impl Cockpit {
                             boot,
                         );
                     }
+                    self.mirrors.attached(snapshot.digests, boot);
                 }
                 remote::Arrival::Started(result) => settled.push(result),
             }
@@ -344,9 +404,76 @@ impl Cockpit {
             self.bootstrap_results.push(result);
         }
         self.sync_roster();
-        if let Link::Server(server) = &mut self.link {
-            let mirrors = &self.mirrors;
-            server.watch(&self.shared.open, |thread| mirrors.seq(thread));
+        // What a Server's snapshot lists is not new.
+        if !attached {
+            let now = crate::clock::instant();
+            if let Some(drawn) = &mut self.drawn {
+                for &thread in &self.shared.open {
+                    if !open_before.contains(&thread) {
+                        drawn.opened(thread, now);
+                    }
+                }
+            }
+        }
+        self.follow_attention();
+    }
+
+    /// The window draws exactly these Threads at Transcript level now. It
+    /// streams them whole while it does, and each for `UNWATCH_AFTER` after
+    /// it stops (ADR 0032).
+    pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadId>) {
+        self.drawn
+            .get_or_insert_with(Drawn::default)
+            .draws(threads.into_iter().collect(), crate::clock::instant());
+    }
+
+    /// The Threads this window streams whole: those it drew at Transcript
+    /// level within `UNWATCH_AFTER`. Until it says what it draws, or while
+    /// its Engine sends no digests to read the rest from, every open one.
+    fn watched(&self) -> Vec<ThreadId> {
+        let open = &self.shared.open;
+        let Some(drawn) = self.drawn.as_ref().filter(|_| self.mirrors.digested()) else {
+            return open.clone();
+        };
+        let now = crate::clock::instant();
+        open.iter()
+            .copied()
+            .filter(|thread| drawn.holds(*thread, now))
+            .collect()
+    }
+
+    /// Stream what the window draws, and let the rest go.
+    fn follow_attention(&mut self) {
+        let watched = self.watched();
+        if let Some(drawn) = &mut self.drawn {
+            drawn.retain(&self.shared.open);
+        }
+        match &mut self.link {
+            Link::Server(server) => {
+                let mirrors = &self.mirrors;
+                server.watch(&watched, |thread| mirrors.seq(thread));
+                self.mirrors.watch_only(&watched);
+            }
+            Link::InProcess(engine) => {
+                // As the Server streams a watch: what the Engine published
+                // was taken this pump, so the history meets it exactly.
+                let fresh: Vec<ThreadId> = watched
+                    .iter()
+                    .filter(|thread| !self.mirrors.watched(**thread))
+                    .copied()
+                    .collect();
+                self.mirrors.watch_only(&watched);
+                let boot = engine.boot();
+                for thread in fresh {
+                    if let Some(history) = engine.history(thread) {
+                        let mirrors = &mut self.mirrors;
+                        let _ = history.send(&mut |message| {
+                            mirrors.receive(message, boot);
+                            Ok(())
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -792,6 +919,10 @@ impl Cockpit {
             );
         }
         for &thread in engine.open_threads() {
+            // A Thread this window does not stream reads from its digest.
+            if !self.mirrors.watched(thread) {
+                continue;
+            }
             let engine = engine.thread(thread).expect("open in the Engine");
             let mirror = self
                 .mirrors
@@ -1234,8 +1365,7 @@ impl Cockpit {
     /// Answer the pending Decision `decision` names, if it still waits.
     pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
         let handle = self.thread(thread).and_then(|open| {
-            open.activity()
-                .decisions()
+            open.pending_decisions()
                 .iter()
                 .find(|pending| pending.decision == *decision)
                 .map(|pending| pending.handle.clone())
@@ -1538,7 +1668,7 @@ impl Cockpit {
     /// read off its log: callers cache this rather than ask per frame.
     pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
         if let Some(open) = self.thread(thread) {
-            return Ok(open.activity().children().len());
+            return Ok(open.subagents());
         }
         self.log_reader().subagent_count(thread)
     }
@@ -1620,15 +1750,7 @@ impl Cockpit {
             if !auto {
                 return numbered();
             }
-            return open
-                .transcript()
-                .blocks()
-                .iter()
-                .find_map(|block| match &block.body {
-                    crate::transcript::Body::Prompt(text) => Some(title_from_prompt(text)),
-                    _ => None,
-                })
-                .unwrap_or_else(numbered);
+            return open.prompt_title().unwrap_or_else(numbered);
         }
         let Ok(meta) = self.parked.peek(thread) else {
             return numbered();
@@ -1908,7 +2030,7 @@ impl Cockpit {
             .into_iter()
             .filter(|thread| {
                 self.thread(*thread)
-                    .is_some_and(|open| !open.activity().decisions().is_empty())
+                    .is_some_and(|open| !open.pending_decisions().is_empty())
             })
             .collect()
     }

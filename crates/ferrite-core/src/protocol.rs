@@ -695,6 +695,12 @@ pub enum ServerMessage {
         revision: u64,
         state: ThreadState,
     },
+    /// What every window reads of one Thread it does not draw (ADR 0032);
+    /// latest wins.
+    Digest {
+        thread: ThreadId,
+        digest: crate::digest::Digest,
+    },
     /// A tool call's input as far as it has streamed; latest wins.
     ToolDraft {
         thread: ThreadId,
@@ -826,6 +832,17 @@ pub struct Snapshot {
     pub providers: Option<Vec<ProviderState>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked: Option<Vec<ParkedThread>>,
+    /// Every open Thread's digest. A Server that sends none mirrors every
+    /// open Thread whole to its windows, as generation 1 began.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digests: Option<Vec<ThreadDigest>>,
+}
+
+/// One open Thread's digest, as the snapshot lists them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadDigest {
+    pub thread: ThreadId,
+    pub digest: crate::digest::Digest,
 }
 
 /// A Thread not open, in creation order: what its log's header and tail
@@ -1240,6 +1257,43 @@ pub enum WireNotice {
     },
     #[serde(other)]
     Unknown,
+}
+
+/// `transcript::Status`, as a digest carries it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireStatus {
+    #[default]
+    Idle,
+    Streaming,
+    Blocked,
+    Closed,
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<crate::transcript::Status> for WireStatus {
+    fn from(status: crate::transcript::Status) -> Self {
+        use crate::transcript::Status;
+        match status {
+            Status::Idle => Self::Idle,
+            Status::Streaming => Self::Streaming,
+            Status::Blocked => Self::Blocked,
+            Status::Closed => Self::Closed,
+        }
+    }
+}
+
+impl From<WireStatus> for crate::transcript::Status {
+    /// A status this build does not know reads as at rest.
+    fn from(status: WireStatus) -> Self {
+        match status {
+            WireStatus::Streaming => Self::Streaming,
+            WireStatus::Blocked => Self::Blocked,
+            WireStatus::Closed => Self::Closed,
+            WireStatus::Idle | WireStatus::Unknown => Self::Idle,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

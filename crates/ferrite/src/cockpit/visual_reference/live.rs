@@ -304,8 +304,7 @@ impl Live {
 
 fn waiting(view: &CockpitView, thread: ThreadId) -> bool {
     view.cockpit.thread(thread).is_some_and(|open| {
-        open.activity()
-            .pending_decisions()
+        open.pending_decisions()
             .iter()
             .any(|request| !request.submitting)
     })
@@ -527,8 +526,7 @@ fn focused_thread(live: &mut Live) -> Option<ThreadId> {
 /// The tool a standing request of `thread` asks for, if one stands.
 fn asking(view: &CockpitView, thread: ThreadId) -> Option<String> {
     view.cockpit.thread(thread).and_then(|open| {
-        open.activity()
-            .pending_decisions()
+        open.pending_decisions()
             .iter()
             .find(|request| !request.submitting)
             .map(|request| request.decision.tool_name.clone())
