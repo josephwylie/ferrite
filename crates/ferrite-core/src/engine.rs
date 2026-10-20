@@ -521,6 +521,20 @@ impl Journaled {
         self.activity.view()
     }
 
+    /// Forget the Activity without telling the mirrors: a Thread let go to
+    /// its digest (`Engine::let_go_unused`).
+    fn forget(&mut self) {
+        self.activity = Activity::default();
+        self.applied.clear();
+        self.reset = false;
+    }
+
+    /// What was applied since the last publish is not news: an Activity
+    /// read back as every window was already told it (`Engine::hold`).
+    fn settle(&mut self) {
+        self.applied.clear();
+    }
+
     /// A fresh Activity, for a Session that starts the conversation over.
     fn replace(&mut self) {
         self.activity = Activity::default();
@@ -561,6 +575,10 @@ struct Thread {
     /// Its Session said it holds work it will start itself
     /// (`SessionEvent::ScheduledWork`).
     scheduled_work: bool,
+    /// Whether the Engine holds its Activity. One with no Session that no
+    /// window watches is let go to its digest, and read back from its log
+    /// when used (ADR 0032).
+    held: bool,
     native_queue: queue::Queue,
     /// An interrupt was sent while prompts were mirrored: when the turn
     /// ends, everything held goes out as one prompt — Escape means "stop,
@@ -664,6 +682,7 @@ impl Thread {
             woken: false,
             settled_at: None,
             scheduled_work: false,
+            held: true,
             native_queue: queue::Queue::open(dir.join("queue.json")),
             resend_held_on_turn_end: false,
             prompt_history: PromptHistory::new(Vec::new()),
@@ -931,6 +950,20 @@ impl Thread {
             && !self.native_queue.pending()
     }
 
+    /// Its Activity as its log says it, with no Session running: what the
+    /// last one announced still stands (ADR 0032).
+    fn read_back(&mut self, inputs: Vec<ActivityInput>) {
+        self.activity.apply(ActivityInput::Disconnect);
+        for input in inputs {
+            self.activity.apply(input);
+        }
+        self.apply(Input::Revived);
+        let servers = self.announced.mcp_servers().to_vec();
+        if !servers.is_empty() {
+            self.apply(Input::Event(SessionEvent::McpServers { servers }));
+        }
+    }
+
     /// `session` serves it from now on. A fresh Session knows nothing:
     /// its first prompt carries the session-context preface again, and it
     /// has scheduled nothing yet.
@@ -1070,6 +1103,9 @@ pub struct Engine {
     /// The Subject the window has actually selected in each open Thread.
     /// Main is implicit until the renderer records a child selection.
     visible_subjects: BTreeMap<ThreadId, Subject>,
+    /// The Threads a Server's windows watch; `None` with no Server telling
+    /// (`set_watched`): every Thread is then held.
+    watched: Option<BTreeSet<ThreadId>>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
@@ -1143,6 +1179,7 @@ impl Engine {
             history_loader: None,
             notifications: Notifications::default(),
             visible_subjects: BTreeMap::new(),
+            watched: None,
             sampler: None,
             limit: u64::MAX,
             suggestions: channel(),
@@ -2281,15 +2318,7 @@ impl Engine {
         }
         state.prompt_history = PromptHistory::new(revival.snapshot().prompt_texts());
         state.first_prompt_sent = revival.prompted();
-        state.activity.apply(ActivityInput::Disconnect);
-        for input in revival.activity_inputs() {
-            state.activity.apply(input);
-        }
-        state.apply(Input::Revived);
-        let servers = state.announced.mcp_servers().to_vec();
-        if !servers.is_empty() {
-            state.apply(Input::Event(SessionEvent::McpServers { servers }));
-        }
+        state.read_back(revival.activity_inputs());
         for kept in self.store.pending_records(thread) {
             state.apply(Input::Notice(format!(
                 "history from before Ferrite last quit could not be saved in the log; \
@@ -2423,6 +2452,7 @@ impl Engine {
         thread: ThreadId,
         first: Option<&launch_args::LaunchArgs>,
     ) -> io::Result<()> {
+        self.hold(thread);
         let project = self.project_id(thread);
         let Some(state) = self.threads.get_mut(&thread) else {
             return Ok(());
@@ -3346,18 +3376,20 @@ impl Engine {
                 self.visible_subjects.remove(id);
                 update.activity_changed = true;
             }
-            // Every frame, every Thread: the deferral's grace is a clock
-            // only the pump ticks.
-            let born = self.notifications.observe(
-                *id,
-                Frame {
-                    activity: thread.activity.view(),
-                    settled,
-                    resumed: thread.native_queue.pending(),
-                },
-                crate::clock::instant(),
-            );
-            update.activity_changed |= born.is_some();
+            // Every frame, every Thread it holds: the deferral's grace is a
+            // clock only the pump ticks.
+            if thread.held {
+                let born = self.notifications.observe(
+                    *id,
+                    Frame {
+                        activity: thread.activity.view(),
+                        settled,
+                        resumed: thread.native_queue.pending(),
+                    },
+                    crate::clock::instant(),
+                );
+                update.activity_changed |= born.is_some();
+            }
             if turn_ended && thread.provider == Provider::Claude {
                 thread.invalidate_suggestion();
             }
@@ -3427,8 +3459,11 @@ impl Engine {
         let agents: Vec<_> = self
             .threads
             .iter()
-            // A Session ended unseen is still the Thread's agent (ADR 0032).
-            .filter(|(_, state)| state.session.is_some() || state.activity.view().connected())
+            // A Session ended unseen, or let go to its digest, is still the
+            // Thread's agent (ADR 0032).
+            .filter(|(_, state)| {
+                state.session.is_some() || !state.held || state.activity.view().connected()
+            })
             .filter_map(|(id, state)| {
                 let cwd = crate::workspace::effective_cwd(
                     state.session_project_root.as_deref(),
@@ -4367,6 +4402,11 @@ impl Engine {
     /// Everything published so far is in it; inputs continue after `seq`.
     pub fn history(&mut self, thread: ThreadId) -> Option<History> {
         use protocol::{Live, WireInput};
+        // Its watcher holds it from here, before the Server next says so.
+        if let Some(watched) = &mut self.watched {
+            watched.insert(thread);
+        }
+        self.hold(thread);
         self.publish();
         let state = self.threads.get_mut(&thread)?;
         let through = match state.writer.checkpoint() {
@@ -4376,7 +4416,7 @@ impl Engine {
                 return None;
             }
         };
-        let log = match self.store.log_at(thread, through) {
+        let log = match self.store.log_at(thread, &state.writer, through) {
             Ok(log) => log,
             Err(error) => {
                 crate::log!("thread {thread}: its log could not be opened: {error}");
@@ -4500,6 +4540,7 @@ impl Engine {
             }
         }
         self.publish_digests();
+        self.let_go_unused();
         let states: Vec<_> = self
             .threads
             .iter()
@@ -4578,13 +4619,83 @@ impl Engine {
         self.publish_parked();
     }
 
+    /// Let go of the Activity of each Thread with no Session that no window
+    /// watches, once at rest and its digest says so: that is all anyone
+    /// reads of it until it is used (`hold`). Only while a Server says what
+    /// its windows watch (`set_watched`).
+    fn let_go_unused(&mut self) {
+        let Some(watched) = &self.watched else {
+            return;
+        };
+        for (id, thread) in &mut self.threads {
+            let current = self
+                .published
+                .get(id)
+                .is_some_and(|published| published.digest.is_some() && !published.digest_owed);
+            if thread.held
+                && current
+                && !watched.contains(id)
+                && thread.session.is_none()
+                && thread.replacement.is_none()
+                && thread.at_rest()
+            {
+                thread.activity.forget();
+                thread.history.clear();
+                thread.held = false;
+            }
+        }
+    }
+
+    /// What a Server's windows watch now. A Thread newly watched is held
+    /// again; one nobody watches may be let go (`let_go_unused`).
+    pub fn set_watched(&mut self, watched: BTreeSet<ThreadId>) {
+        for &thread in &watched {
+            self.hold(thread);
+        }
+        self.watched = Some(watched);
+    }
+
+    /// Read a let-go Thread's Activity back from its log, as a revive does
+    /// but on its live writer, its Session's generation kept: nothing a
+    /// window holds of it changes.
+    pub(crate) fn hold(&mut self, thread: ThreadId) {
+        let Some(state) = self.threads.get_mut(&thread).filter(|state| !state.held) else {
+            return;
+        };
+        let replay = state
+            .writer
+            .checkpoint()
+            .map_err(LoadError::Io)
+            .and_then(|through| {
+                self.store
+                    .log_at(thread, &state.writer, through)
+                    .map_err(LoadError::Io)
+            })
+            .and_then(crate::store::LogAt::load);
+        let replay = match replay {
+            Ok(replay) => replay,
+            Err(error) => {
+                // Held as it is: its digest and notifications go on.
+                crate::log!("thread {thread}: its log could not be read back: {error:?}");
+                state.held = true;
+                return;
+            }
+        };
+        state.read_back(replay.activity_inputs());
+        state.activity.apply(ActivityInput::Connect {
+            generation: state.generation,
+        });
+        state.activity.settle();
+        state.held = true;
+    }
+
     /// Refold each digest its Thread's inputs left owing: at once when Main
     /// started or ended a turn, a Decision came or went, or the windows
     /// show another Subject; else once its `DIGEST_REFOLD` is up, the last
     /// thing streamed included.
     fn publish_digests(&mut self) {
         let now = crate::clock::instant();
-        for (&id, thread) in &self.threads {
+        for (&id, thread) in self.threads.iter().filter(|(_, thread)| thread.held) {
             let published = self.published.entry(id).or_default();
             let shown = self.visible_subjects.get(&id);
             let current = published
@@ -4800,7 +4911,7 @@ impl History {
     pub fn send(self, send: &mut dyn FnMut(ServerMessage) -> io::Result<()>) -> io::Result<()> {
         let thread = self.thread;
         let replay = match self.log.load() {
-            Ok(snapshot) => snapshot.activity_inputs(),
+            Ok(replay) => replay.activity_inputs(),
             Err(error) => {
                 crate::log!("thread {thread}: its history could not be read: {error:?}");
                 Vec::new()

@@ -307,7 +307,8 @@ impl Server {
         self.execute(op).map(|_| ())
     }
 
-    fn read(&self, params: AgentReadParams) -> Result<Value, ApiError> {
+    fn read(&mut self, params: AgentReadParams) -> Result<Value, ApiError> {
+        self.engine.hold(params.thread);
         let view = self
             .engine
             .thread(params.thread)
