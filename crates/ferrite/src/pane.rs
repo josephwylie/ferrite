@@ -2640,7 +2640,7 @@ pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
 /// an invisible row can never remain keyboard-addressable.
 pub fn tool_has_details(tool: &ToolBlock) -> bool {
     tool.output.is_some()
-        || tool.structured.is_some()
+        || tool.structured_preview.is_some()
         || !tool.summary.is_empty()
         || !tool.diffs.is_empty()
 }
@@ -7030,7 +7030,7 @@ fn tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRuns, grid: Gr
             details = details.child(omitted_line(output.omitted_bytes, grid));
         }
     }
-    if let Some(structured) = tool.structured_output() {
+    if let Some(structured) = tool.structured_preview.as_ref() {
         details = part(details, "details", &structured.text);
         if structured.omitted_bytes > 0 {
             details = details.child(omitted_line(structured.omitted_bytes, grid));
@@ -9742,7 +9742,7 @@ mod tests {
                 summary: "cargo test".into(),
                 state,
                 diffs: Vec::new(),
-                structured: None,
+                structured_preview: None,
                 result_line: None,
                 output: None,
                 progress: None,
@@ -9773,7 +9773,7 @@ mod tests {
             summary: "crates/ferrite/src/nav.rs".into(),
             state: ToolState::Ok,
             diffs: Vec::new(),
-            structured: None,
+            structured_preview: None,
             result_line: None,
             output: None,
             progress: None,
@@ -9810,7 +9810,7 @@ mod tests {
             summary: "cargo test".into(),
             state,
             diffs: Vec::new(),
-            structured: None,
+            structured_preview: None,
             result_line: Some("line 1".into()),
             output: Some(ferrite_core::transcript::ToolOutput {
                 text: output.clone(),

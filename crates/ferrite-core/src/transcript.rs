@@ -161,9 +161,10 @@ pub struct ToolBlock {
     pub state: ToolState,
     /// Every file this call changed.
     pub diffs: Vec<Diff>,
-    /// An unmodelled provider result, as its bounded preview for
-    /// disclosure: never the payload itself (ADR 0032).
-    pub structured: Option<ToolOutput>,
+    /// An unmodelled provider result, as its bounded, selectable JSON
+    /// preview for disclosure: never the payload itself, which only the log
+    /// keeps (ADR 0032).
+    pub structured_preview: Option<ToolOutput>,
     /// The first line of the tool's output, trimmed to a row — what the
     /// Pane's `⎿` continuation shows (DirectionDense). Errors carry their
     /// message in `state` instead; disclosure reads `output`.
@@ -197,12 +198,6 @@ impl TestProgress {
 }
 
 impl ToolBlock {
-    /// The bounded, selectable JSON preview of an otherwise unmodelled
-    /// result. The log keeps the payload; the row keeps only this.
-    pub fn structured_output(&self) -> Option<&ToolOutput> {
-        self.structured.as_ref()
-    }
-
     /// The call line as it reads: `Name(args)`, the name as Claude Code
     /// prints it (`Update`, `Bash`), a shell command out of its `bash -lc
     /// '…'` wrapper.
@@ -1852,65 +1847,54 @@ impl Transcript {
                 } else {
                     ToolState::Ok
                 };
-                // A payload Ferrite does not model is kept as its bounded
-                // preview; one settled already (a record's `Preview`) brings
-                // its preview and row line along.
-                let mut settled = None;
-                let (diffs, structured_result) = match result {
+                self.output_tails.remove(&id);
+                self.test_counts.remove(&id);
+                let name = self.tool(&id).map(|tool| tool.name.clone());
+                // A failure already carries its message in the state; a
+                // success keeps its summary (`412 lines`, `6 matches in 2
+                // files`) or its first output line for the `└` row.
+                let row_line = |payload: Option<&serde_json::Value>| {
+                    (!is_error)
+                        .then(|| {
+                            name.as_deref()
+                                .and_then(|name| result_summary(name, payload, &output))
+                                .or_else(|| result_line(&output))
+                        })
+                        .flatten()
+                };
+                // A payload Ferrite does not model is kept only as its bounded
+                // preview, made once here (ADR 0032); a record's `Preview`
+                // brings the preview and row line it settled with.
+                let (diffs, structured_preview, result_line) = match result {
                     ToolResult::Preview {
                         preview,
                         result_line,
                         ..
-                    } => {
-                        settled = Some((preview, result_line));
-                        (Vec::new(), None)
+                    } => (Vec::new(), preview, result_line),
+                    ToolResult::FileEdit { path, hunks } => {
+                        (vec![Diff::new(path, hunks)], None, row_line(None))
                     }
-                    ToolResult::FileEdit { path, hunks } => (vec![Diff::new(path, hunks)], None),
                     ToolResult::FileEdits { edits } => (
                         edits
                             .into_iter()
                             .map(|edit| Diff::new(edit.path, edit.hunks))
                             .collect(),
                         None,
+                        row_line(None),
                     ),
-                    ToolResult::Structured { value, .. } => (Vec::new(), Some(value)),
-                    _ => (Vec::new(), None),
-                };
-                // A failure already carries its message in the state; a
-                // success keeps its summary (`412 lines`, `6 matches in 2
-                // files`) or its first output line for the `└` row.
-                self.output_tails.remove(&id);
-                self.test_counts.remove(&id);
-                let name = self
-                    .blocks
-                    .iter()
-                    .rev()
-                    .find_map(|block| match &block.body {
-                        Body::Tool(tool) if tool.call == id => Some(tool.name.clone()),
-                        _ => None,
-                    });
-                let (structured, result_line) = match settled {
-                    Some(settled) => settled,
-                    None => (
-                        structured_result
-                            .as_ref()
-                            .and_then(|value| serde_json::to_string_pretty(value).ok())
+                    ToolResult::Structured { value, .. } => (
+                        Vec::new(),
+                        serde_json::to_string_pretty(&value)
+                            .ok()
                             .and_then(|text| retained_output(&text)),
-                        (!is_error)
-                            .then(|| {
-                                name.as_deref()
-                                    .and_then(|name| {
-                                        result_summary(name, structured_result.as_ref(), &output)
-                                    })
-                                    .or_else(|| result_line(&output))
-                            })
-                            .flatten(),
+                        row_line(Some(&value)),
                     ),
+                    _ => (Vec::new(), None, row_line(None)),
                 };
                 let output = retained_output(&output);
                 Update {
                     dirty: self
-                        .settle_tool(&id, state, diffs, structured, result_line, output)
+                        .settle_tool(&id, state, diffs, structured_preview, result_line, output)
                         .into_iter()
                         .collect(),
                     ..Update::default()
@@ -1981,7 +1965,7 @@ impl Transcript {
                     name,
                     state: ToolState::Running,
                     diffs,
-                    structured: None,
+                    structured_preview: None,
                     result_line: None,
                     output: None,
                     progress: None,
@@ -2271,7 +2255,7 @@ impl Transcript {
         call: &str,
         state: ToolState,
         diffs: Vec<Diff>,
-        structured: Option<ToolOutput>,
+        structured_preview: Option<ToolOutput>,
         result_line: Option<String>,
         output: Option<ToolOutput>,
     ) -> Option<BlockId> {
@@ -2284,7 +2268,7 @@ impl Transcript {
         };
         if tool.state == state
             && tool.diffs == diffs
-            && tool.structured == structured
+            && tool.structured_preview == structured_preview
             && tool.result_line == result_line
             && tool.output == output
         {
@@ -2293,7 +2277,7 @@ impl Transcript {
         let was_running = tool.state == ToolState::Running;
         tool.state = state;
         tool.diffs = diffs;
-        tool.structured = structured;
+        tool.structured_preview = structured_preview;
         if result_line.is_some() || !was_running {
             tool.result_line = result_line;
         }
@@ -2301,6 +2285,17 @@ impl Transcript {
             tool.output = output;
         }
         Some(block.id)
+    }
+
+    /// The row of call `call`, newest first.
+    pub fn tool(&self, call: &str) -> Option<&ToolBlock> {
+        self.blocks
+            .iter()
+            .rev()
+            .find_map(|block| match &block.body {
+                Body::Tool(tool) if tool.call == call => Some(tool),
+                _ => None,
+            })
     }
 
     /// Where the visual for call `id` is, newest first.
@@ -2412,7 +2407,7 @@ pub const VISUAL_UNFINISHED: &str = "not shown: the turn ended before it finishe
 /// the row cuts by width, never wrapping.
 const RESULT_CHARS: usize = crate::progress::ROW_CHARS;
 
-const TOOL_OUTPUT_BYTES: usize = 64 * 1024;
+pub(crate) const TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 
 fn retained_output(output: &str) -> Option<ToolOutput> {
     if output.trim().is_empty() {

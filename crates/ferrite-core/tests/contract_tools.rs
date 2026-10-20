@@ -58,7 +58,7 @@ fn claude_unrecognized_structured_tool_result_remains_available() {
     let a = fold(r.drain());
     assert!(a.view().main().transcript().blocks().iter().any(
         |block| matches!(&block.body, ferrite_core::transcript::Body::Tool(tool)
-            if tool.structured_output().map(|o| o.text.clone()) == serde_json::to_string_pretty(&payload).ok())
+            if shows_payload(tool, &payload))
     ));
 }
 #[test]
@@ -153,7 +153,7 @@ fn codex_mcp_and_dynamic_tools_preserve_native_timing_and_structured_payload() {
                 .elapsed(),
             std::time::Duration::from_millis(987)
         );
-        assert!(a.view().main().transcript().blocks().iter().any(|b| matches!(&b.body, ferrite_core::transcript::Body::Tool(t) if t.structured_output().map(|o| o.text.clone()) == serde_json::to_string_pretty(&payload).ok())), "native structured payload must use shared disclosure");
+        assert!(a.view().main().transcript().blocks().iter().any(|b| matches!(&b.body, ferrite_core::transcript::Body::Tool(t) if shows_payload(t, &payload))), "native structured payload must use shared disclosure");
     }
 }
 
@@ -170,5 +170,13 @@ fn failed_mcp_tools_keep_the_native_error_and_duration() {
         a.view().main().timings().get("failed").unwrap().elapsed(),
         std::time::Duration::from_millis(42)
     );
-    assert!(a.view().main().transcript().blocks().iter().any(|b|matches!(&b.body,ferrite_core::transcript::Body::Tool(t) if t.structured_output().map(|o| o.text.clone())==serde_json::to_string_pretty(&json!({"message":"No access"})).ok())));
+    assert!(a.view().main().transcript().blocks().iter().any(|b|matches!(&b.body,ferrite_core::transcript::Body::Tool(t) if shows_payload(t, &json!({"message":"No access"})))));
+}
+
+/// The row shows a provider's payload as its pretty preview.
+fn shows_payload(tool: &ferrite_core::transcript::ToolBlock, payload: &serde_json::Value) -> bool {
+    tool.structured_preview
+        .as_ref()
+        .map(|preview| preview.text.clone())
+        == serde_json::to_string_pretty(payload).ok()
 }

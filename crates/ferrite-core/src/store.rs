@@ -693,8 +693,11 @@ impl PersistedToolResult {
                     duration_ms: *duration_ms,
                 }
             }
-            // A row's own record, never a provider's event: nothing to keep.
-            crate::ToolResult::Preview { .. } => PersistedToolResult::Opaque,
+            // An Activity's own record, never a provider's event.
+            crate::ToolResult::Preview { .. } => {
+                debug_assert!(false, "a row's preview is never logged");
+                PersistedToolResult::Opaque
+            }
             crate::ToolResult::FileEdit { path, hunks } => PersistedToolResult::FileEdit {
                 path: path.clone(),
                 hunks: hunks

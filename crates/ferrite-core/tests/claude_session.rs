@@ -330,7 +330,12 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
         .blocks()
         .iter()
         .filter_map(|block| match &block.body {
-            Body::Tool(tool) => Some((&tool.call, &tool.name, &tool.structured, &tool.output)),
+            Body::Tool(tool) => Some((
+                &tool.call,
+                &tool.name,
+                &tool.structured_preview,
+                &tool.output,
+            )),
             _ => None,
         })
         .collect();

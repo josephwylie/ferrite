@@ -2601,17 +2601,9 @@ fn held_input(input: Input, transcript: &Transcript) -> Input {
     else {
         return input;
     };
-    let row = transcript
-        .blocks()
-        .iter()
-        .rev()
-        .find_map(|block| match &block.body {
-            transcript::Body::Tool(tool) if tool.call == id => Some(tool),
-            _ => None,
-        });
-    let result = match row {
+    let result = match transcript.tool(&id) {
         Some(row) => ToolResult::Preview {
-            preview: row.structured.clone(),
+            preview: row.structured_preview.clone(),
             result_line: row.result_line.clone(),
             duration_ms,
         },

@@ -432,20 +432,11 @@ fn a_finished_calls_payload_is_held_as_its_bounded_preview() {
     );
 
     let state = &activity.main;
-    let tool = |transcript: &Transcript| -> crate::transcript::ToolBlock {
-        transcript
-            .blocks()
-            .iter()
-            .find_map(|block| match &block.body {
-                Body::Tool(tool) => Some(tool.clone()),
-                _ => None,
-            })
-            .unwrap()
-    };
+    let tool = |transcript: &Transcript| transcript.tool("read").unwrap().clone();
     let row = tool(&state.transcript);
     assert_eq!(row.result_line.as_deref(), Some("412 lines"));
-    let preview = row.structured_output().expect("a preview");
-    assert!(preview.text.len() <= 64 * 1024);
+    let preview = row.structured_preview.as_ref().expect("a preview");
+    assert!(preview.text.len() <= crate::transcript::TOOL_OUTPUT_BYTES);
     assert!(preview.omitted_bytes > 0);
     assert_eq!(
         tool(&rebuilt(state, limits)),
