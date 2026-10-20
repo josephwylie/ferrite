@@ -89,6 +89,10 @@ pub struct SpawnRequest<'a> {
     /// The provider-native id of a Thread being revived, which the provider
     /// reloads its own history from.
     pub resume: Option<&'a str>,
+    /// The permission mode the Thread's last agent ran in, in the
+    /// provider's own word (ADR 0032). `None` is the operator's default for
+    /// the provider (Settings).
+    pub permission_mode: Option<&'a str>,
     /// The Thread's title, for the provider's own session list. `None`
     /// until the operator names the Thread.
     pub name: Option<&'a str>,
@@ -393,6 +397,28 @@ enum ReplacementKind {
     Retune,
 }
 
+/// What waits for a Thread's Session to take it (ADR 0032).
+#[derive(Default)]
+struct Awaiting {
+    /// Prompts the Session cannot take yet, oldest first: it is starting,
+    /// or it cannot queue yet (Claude, before its first turn starts). Each
+    /// goes out as a turn when none runs, or into the provider's queue once
+    /// it takes them; anything written meanwhile waits behind them.
+    prompts: VecDeque<String>,
+    /// Controls asked while it starts, in order: run once it is up.
+    controls: Vec<crate::SessionControl>,
+    /// The file search asked while it starts, the latest only: asked of it
+    /// once it is up.
+    search: Option<(String, crate::providers::FileSearchReply)>,
+}
+
+impl Awaiting {
+    /// Whether anything besides prompts waits.
+    fn asks(&self) -> bool {
+        !self.controls.is_empty() || self.search.is_some()
+    }
+}
+
 struct Replacement {
     /// None for a Thread with no Session (ADR 0032): the change starts no
     /// agent, and the next start is made with it.
@@ -520,16 +546,8 @@ struct Thread {
     /// respawn, like the model.
     effort: Option<String>,
     title: Option<String>,
-    /// Prompts the Session cannot take yet, oldest first: it is starting,
-    /// or it cannot queue yet (Claude, before its first turn starts). Each
-    /// goes out as a turn when none runs, or into the provider's queue once
-    /// it takes them; anything written meanwhile waits behind them.
-    awaiting_session: VecDeque<String>,
-    /// Controls asked while the Session starts, in order: run once it is up.
-    awaiting_controls: Vec<crate::SessionControl>,
-    /// The file search asked while the Session starts, the latest only:
-    /// asked of it once it is up.
-    awaiting_search: Option<(String, crate::providers::FileSearchReply)>,
+    /// What waits for the Session to take it.
+    awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
     /// it shows as starting only once a prompt waits for it.
     woken: bool,
@@ -632,9 +650,7 @@ impl Thread {
             model,
             effort,
             title: None,
-            awaiting_session: VecDeque::new(),
-            awaiting_controls: Vec::new(),
-            awaiting_search: None,
+            awaiting: Awaiting::default(),
             woken: false,
             native_queue: queue::Queue::open(dir.join("queue.json")),
             resend_held_on_turn_end: false,
@@ -728,7 +744,8 @@ impl Thread {
             tuning: self.tuning.is_some(),
             native_queue_pending: self.native_queue.pending(),
             queued: self
-                .awaiting_session
+                .awaiting
+                .prompts
                 .iter()
                 .rev()
                 .cloned()
@@ -811,7 +828,25 @@ impl Thread {
                 .session
                 .as_ref()
                 .is_some_and(SessionLifecycle::is_starting)
-                && (!self.woken || !self.awaiting_session.is_empty())
+                && (!self.woken || !self.awaiting.prompts.is_empty())
+    }
+
+    /// End a Session started unseen that nothing waits on yet: nothing of
+    /// it reached a window, so the generation stands. Answers whether it
+    /// did.
+    fn drop_unseen_start(&mut self) -> bool {
+        let unseen = self.woken
+            && self.replacement.is_none()
+            && self
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+            && self.awaiting.prompts.is_empty()
+            && !self.awaiting.asks();
+        if unseen {
+            self.session = None;
+        }
+        unseen
     }
 
     /// The Session, once it can take what is asked of it: started, and not
@@ -828,10 +863,9 @@ impl Thread {
     /// Its agent could not start: prompts that waited for it go back to the
     /// Composer; the controls and file search that did are dropped.
     fn give_up_awaiting(&mut self) {
-        let waited = self.awaiting_session.drain(..).map(|text| (text, false));
-        self.native_queue.recovered.extend(waited);
-        self.awaiting_controls.clear();
-        self.awaiting_search = None;
+        let waited = std::mem::take(&mut self.awaiting);
+        let prompts = waited.prompts.into_iter().map(|text| (text, false));
+        self.native_queue.recovered.extend(prompts);
     }
 
     /// A prompt that could not be delivered goes back to the Composer, so
@@ -1235,6 +1269,7 @@ impl Engine {
                 model: thread.model.as_deref(),
                 effort: thread.effort.as_deref(),
                 resume: resume.as_deref(),
+                permission_mode: thread.announced.permission_mode(),
                 cwd: cwd.as_deref(),
                 name: thread.title.as_deref(),
                 additional_directories: project_additional_directories(
@@ -1455,6 +1490,7 @@ impl Engine {
             model: model.as_deref(),
             effort: effort.as_deref(),
             resume: resume.as_deref(),
+            permission_mode: None,
             cwd: workspace::effective_cwd(None, Some(&binding)),
             name: None,
             additional_directories: project_additional_directories(
@@ -1645,7 +1681,7 @@ impl Engine {
         let awaiting = self
             .threads
             .get_mut(&thread)
-            .map(|state| std::mem::take(&mut state.awaiting_session))
+            .map(|state| std::mem::take(&mut state.awaiting.prompts))
             .unwrap_or_default();
         for text in awaiting {
             self.send(thread, text);
@@ -1681,6 +1717,14 @@ impl Engine {
     /// The effort resets to the new Provider's default: the old one's word
     /// may mean nothing to it.
     pub fn set_provider(
+        &mut self,
+        thread: ThreadId,
+        choice: ProviderChoice,
+    ) -> Result<(), ProvisionError> {
+        self.past_unseen_start(thread, |engine| engine.change_provider(thread, choice))
+    }
+
+    fn change_provider(
         &mut self,
         thread: ThreadId,
         choice: ProviderChoice,
@@ -1787,6 +1831,10 @@ impl Engine {
                     model: model.as_deref(),
                     effort: effort.as_deref(),
                     resume,
+                    // Another Provider's word means nothing to the next.
+                    permission_mode: (provider == state.provider)
+                        .then(|| state.announced.permission_mode())
+                        .flatten(),
                     cwd,
                     name: state.title.as_deref(),
                     additional_directories: project_additional_directories(
@@ -2292,8 +2340,8 @@ impl Engine {
             return;
         }
         let state = self.threads.get_mut(&thread).expect("checked");
-        if state.ready_session().is_none() || !state.awaiting_session.is_empty() {
-            state.awaiting_session.push_back(text);
+        if state.ready_session().is_none() || !state.awaiting.prompts.is_empty() {
+            state.awaiting.prompts.push_back(text);
             return;
         }
         if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
@@ -2335,7 +2383,12 @@ impl Engine {
         if let Some(refusal) = vanished_root_refusal(state) {
             return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
         }
-        state.replace_generation();
+        // Every way a Session ends but closing starts a new generation as
+        // it goes; after a close, this start does. Otherwise nothing a
+        // window holds is invalidated: the start is unseen (ADR 0032).
+        if !state.activity.view().connected() {
+            state.replace_generation();
+        }
         let cwd = workspace::effective_cwd(
             state.session_project_root.as_deref(),
             state.workspace.as_ref(),
@@ -2357,6 +2410,7 @@ impl Engine {
                 model: state.model.as_deref(),
                 effort: state.effort.as_deref(),
                 resume: state.resume.as_deref(),
+                permission_mode: state.announced.permission_mode(),
                 cwd: cwd.as_deref(),
                 name: state.title.as_deref(),
                 additional_directories,
@@ -2378,25 +2432,24 @@ impl Engine {
             let _ = self.park(thread);
             return;
         }
-        if self.threads.get(&thread).is_some_and(|state| {
-            state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting)
-        }) {
-            self.visible_subjects.remove(&thread);
-        }
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
-        if state
-            .session
-            .as_ref()
-            .is_some_and(SessionLifecycle::is_starting)
+        // A start the operator sees (prompts wait on it) is what Escape
+        // stops: what waited goes back to the Composer. An unseen one is
+        // not theirs to stop.
+        if state.starting()
+            && state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
         {
             state.session = None;
             state.replace_generation();
+            state.give_up_awaiting();
+            self.visible_subjects.remove(&thread);
         }
+        let state = self.threads.get_mut(&thread).expect("checked");
         state.replacement = None;
         if let Some(session) = state
             .session
@@ -2529,21 +2582,29 @@ impl Engine {
         let (reply, answer) = std::sync::mpsc::sync_channel(1);
         match state.ready_session() {
             Some(session) => session.search_files(query, reply)?,
-            None => state.awaiting_search = Some((query.to_string(), reply)),
+            None => state.awaiting.search = Some((query.to_string(), reply)),
         }
         Ok(answer)
     }
 
     /// Route a provider-native control to the Thread's agent, starting it if
-    /// it is not running (ADR 0032): run once it is up, a failure then said
-    /// on the Thread. Controls never replace a Session and never alter
+    /// it is not running (ADR 0032): refused at once if the agent last said
+    /// it does not offer it, else run once it is up, a failure then said on
+    /// the Thread. Controls never replace a Session and never alter
     /// Activity.
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
+        if self
+            .threads
+            .get(&thread)
+            .is_some_and(|state| !state.announced.supports(control_kind(&action)))
+        {
+            return Err(unsupported_control());
+        }
         let state = self.wake_for(thread)?;
         match state.ready_session() {
             Some(session) => run_control(session, action),
             None => {
-                state.awaiting_controls.push(action);
+                state.awaiting.controls.push(action);
                 Ok(())
             }
         }
@@ -2564,14 +2625,13 @@ impl Engine {
 
     /// What was asked of `thread`'s agent while it started, besides
     /// prompts, goes to it once it is up.
-    fn release_asked(&mut self, thread: ThreadId) {
+    fn release_asks(&mut self, thread: ThreadId) {
         let state = self.threads.get_mut(&thread).expect("checked by caller");
-        let asked = !state.awaiting_controls.is_empty() || state.awaiting_search.is_some();
-        if !asked || state.ready_session().is_none() {
+        if !state.awaiting.asks() || state.ready_session().is_none() {
             return;
         }
-        let controls = std::mem::take(&mut state.awaiting_controls);
-        let search = state.awaiting_search.take();
+        let controls = std::mem::take(&mut state.awaiting.controls);
+        let search = state.awaiting.search.take();
         let session = state.ready_session().expect("checked");
         let failed: Vec<io::Error> = controls
             .into_iter()
@@ -2919,8 +2979,7 @@ impl Engine {
             if let Some(session) = state.session.as_ref().and_then(SessionLifecycle::session) {
                 state.announced.ask(session);
             }
-            self.release_asked(id);
-            if self.release_awaiting(id) {
+            if self.serve_awaiting(id) {
                 changed.push(id);
             }
         }
@@ -3361,8 +3420,8 @@ impl Engine {
             .as_mut()
             .and_then(SessionLifecycle::session_mut)
             .is_some();
-        if !ready || !state.awaiting_session.is_empty() {
-            state.awaiting_session.push_back(text);
+        if !ready || !state.awaiting.prompts.is_empty() {
+            state.awaiting.prompts.push_back(text);
             state.invalidate_suggestion();
             return true;
         }
@@ -3431,30 +3490,47 @@ impl Engine {
         Enqueued::Taken
     }
 
+    /// Each frame, what waits for `thread`'s Session goes to it once it can
+    /// take it. Answers whether any prompt went out, or back to the
+    /// Composer.
+    fn serve_awaiting(&mut self, thread: ThreadId) -> bool {
+        if self.start_for_awaiting(thread) {
+            return true;
+        }
+        self.release_asks(thread);
+        self.release_prompts(thread)
+    }
+
+    /// Prompts sent while a change was recorded for no Session start the
+    /// next; if it cannot start they go back to the Composer, and the
+    /// answer is that they did.
+    fn start_for_awaiting(&mut self, thread: ThreadId) -> bool {
+        let state = self.threads.get_mut(&thread).expect("checked by caller");
+        if state.session.is_some()
+            || state.replacement.is_some()
+            || state.awaiting.prompts.is_empty()
+            || self.start_or_say(thread, "send failed")
+        {
+            return false;
+        }
+        let state = self.threads.get_mut(&thread).expect("checked by caller");
+        state.give_up_awaiting();
+        true
+    }
+
     /// Prompts that waited for `thread`'s Session go out once it can take
     /// them, oldest first: as a turn when none runs or waits, else into
     /// the provider's queue. One the provider cannot queue yet waits for
-    /// the next frame, and everything behind it with it. Prompts sent while
-    /// a change was recorded for no Session start the next. Answers whether
-    /// any went out, or back to the Composer.
-    fn release_awaiting(&mut self, thread: ThreadId) -> bool {
-        let state = self.threads.get_mut(&thread).expect("checked by caller");
-        if state.session.is_none()
-            && state.replacement.is_none()
-            && !state.awaiting_session.is_empty()
-            && !self.start_or_say(thread, "send failed")
-        {
-            let state = self.threads.get_mut(&thread).expect("checked by caller");
-            state.give_up_awaiting();
-            return true;
-        }
+    /// the next frame, and everything behind it with it. Answers whether
+    /// any went out.
+    fn release_prompts(&mut self, thread: ThreadId) -> bool {
         let mut released = false;
         loop {
             let state = self.threads.get_mut(&thread).expect("checked by caller");
             if state.ready_session().is_none() {
                 return released;
             }
-            let Some(text) = state.awaiting_session.pop_front() else {
+            let Some(text) = state.awaiting.prompts.pop_front() else {
                 return released;
             };
             if !state.turn_ahead() {
@@ -3474,7 +3550,7 @@ impl Engine {
                 }
                 Enqueued::NotYet(_) => {
                     let state = self.threads.get_mut(&thread).expect("checked");
-                    state.awaiting_session.push_front(text);
+                    state.awaiting.prompts.push_front(text);
                     return released;
                 }
             }
@@ -3484,7 +3560,7 @@ impl Engine {
     /// Empty-Composer Enter requests cancellation; retrieval arrives via the pump.
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
         if let Some(state) = self.threads.get_mut(&thread) {
-            if let Some(text) = state.awaiting_session.pop_back() {
+            if let Some(text) = state.awaiting.prompts.pop_back() {
                 return Some(text);
             }
         }
@@ -3508,7 +3584,7 @@ impl Engine {
         state.prompt_history.reset();
         // Input still waiting for the Session never reached the provider
         // and can be taken back locally.
-        if let Some(text) = state.awaiting_session.pop_back() {
+        if let Some(text) = state.awaiting.prompts.pop_back() {
             if restore {
                 state.native_queue.recovered.push((text, prepend));
             }
@@ -3763,6 +3839,14 @@ impl Engine {
         thread: ThreadId,
         model: Option<String>,
     ) -> Result<(), ProvisionError> {
+        self.past_unseen_start(thread, |engine| engine.change_model(thread, model))
+    }
+
+    fn change_model(
+        &mut self,
+        thread: ThreadId,
+        model: Option<String>,
+    ) -> Result<(), ProvisionError> {
         let effort = self.tuning(thread)?.1;
         let Some(state) = self.threads.get_mut(&thread) else {
             return self
@@ -3793,6 +3877,14 @@ impl Engine {
     /// submitted choices and prompts. No Session is replaced by this action.
     /// `None` is the operator's default for the provider.
     pub fn set_effort(
+        &mut self,
+        thread: ThreadId,
+        effort: Option<String>,
+    ) -> Result<(), ProvisionError> {
+        self.past_unseen_start(thread, |engine| engine.change_effort(thread, effort))
+    }
+
+    fn change_effort(
         &mut self,
         thread: ThreadId,
         effort: Option<String>,
@@ -3943,6 +4035,26 @@ impl Engine {
         settled
     }
 
+    /// Make `change` to `thread` as if the agent it started unseen (ADR
+    /// 0032), and nothing yet waits on, had not started: a change is
+    /// recorded for the next agent rather than refused while one starts.
+    /// The next starts at once if the operator is still writing.
+    fn past_unseen_start(
+        &mut self,
+        thread: ThreadId,
+        change: impl FnOnce(&mut Self) -> Result<(), ProvisionError>,
+    ) -> Result<(), ProvisionError> {
+        let dropped = self
+            .threads
+            .get_mut(&thread)
+            .is_some_and(Thread::drop_unseen_start);
+        let changed = change(self);
+        if dropped && self.composing(thread) {
+            self.wake(thread);
+        }
+        changed
+    }
+
     /// A Thread's current model and effort, live or off the header.
     fn tuning(&self, thread: ThreadId) -> Result<(Option<String>, Option<String>), ProvisionError> {
         match self.threads.get(&thread) {
@@ -4084,7 +4196,7 @@ impl Engine {
             && self
                 .threads
                 .values()
-                .all(|state| state.settled() && state.awaiting_session.is_empty())
+                .all(|state| state.settled() && state.awaiting.prompts.is_empty())
     }
 
     /// An open Thread's Attention, as the Server knows it (ADR 0015): a
@@ -4538,7 +4650,7 @@ impl Engine {
             || self
                 .threads
                 .get(&thread)
-                .is_some_and(|state| !state.awaiting_session.is_empty())
+                .is_some_and(|state| !state.awaiting.prompts.is_empty())
     }
 
     /// Whether `thread` is a Draft's first send still starting: its Pane is
@@ -4708,7 +4820,8 @@ impl<'a> ThreadView<'a> {
     /// the one `⌫ unqueue` and Up act on.
     pub fn queued(&self) -> Option<&'a str> {
         self.state
-            .awaiting_session
+            .awaiting
+            .prompts
             .back()
             .map(String::as_str)
             .or(self
@@ -4723,7 +4836,8 @@ impl<'a> ThreadView<'a> {
     /// pile and what was said before it reads underneath.
     pub fn queued_all(&self) -> Vec<&'a str> {
         self.state
-            .awaiting_session
+            .awaiting
+            .prompts
             .iter()
             .rev()
             .map(String::as_str)
@@ -5156,12 +5270,16 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
 /// Run `action` on `session`, if it offers it.
 fn run_control(session: &mut dyn Session, action: crate::SessionControl) -> io::Result<()> {
     if !session.supports_control(control_kind(&action)) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Session does not support that control",
-        ));
+        return Err(unsupported_control());
     }
     session.control(action)
+}
+
+fn unsupported_control() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Session does not support that control",
+    )
 }
 
 fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {

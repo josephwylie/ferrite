@@ -392,7 +392,10 @@ impl Spawn {
                 model,
                 effort: own_effort.or_else(default_effort),
                 name,
-                permission_mode: defaults.claude_permission_mode,
+                permission_mode: request
+                    .permission_mode
+                    .map(str::to_string)
+                    .or(defaults.claude_permission_mode),
                 prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
                 additional_directories,
@@ -410,8 +413,10 @@ impl Spawn {
                     cwd,
                     model: model.or(launch.model),
                     effort: own_effort.or(launch.effort).or_else(default_effort),
-                    approval_policy: launch
-                        .approval_policy
+                    approval_policy: request
+                        .permission_mode
+                        .map(str::to_string)
+                        .or(launch.approval_policy)
                         .or(defaults.codex_approval_policy.clone())
                         .or_else(|| Some("on-request".into())),
                     sandbox: launch.sandbox.or(defaults.codex_sandbox.clone()),
@@ -530,6 +535,7 @@ mod tests {
             model: None,
             effort: None,
             resume: None,
+            permission_mode: None,
             name: None,
             cwd: None,
             additional_directories: Vec::new(),
@@ -572,6 +578,7 @@ mod tests {
             model: None,
             effort: None,
             resume: None,
+            permission_mode: None,
             name: None,
             cwd: None,
             additional_directories: Vec::new(),
@@ -613,6 +620,7 @@ mod tests {
             model: None,
             effort: None,
             resume: None,
+            permission_mode: None,
             name: None,
             cwd: None,
             additional_directories: Vec::new(),

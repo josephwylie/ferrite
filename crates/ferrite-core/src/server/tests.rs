@@ -1602,11 +1602,44 @@ fn a_boot_starts_the_agent_of_a_thread_with_queued_prompts() {
     assert!(resumed.try_recv().is_err(), "and only that one");
 }
 
-/// Starts each Session through `inner`, noting the conversation it resumes.
-/// Each agent started: its Provider, model, and the conversation it resumed.
-type Started = Arc<Mutex<Vec<(Provider, Option<String>, Option<String>)>>>;
+/// What an agent was started with.
+#[derive(Debug, PartialEq)]
+struct Start {
+    provider: Provider,
+    model: Option<String>,
+    effort: Option<String>,
+    resume: Option<String>,
+    permission_mode: Option<String>,
+}
 
-/// Scripted Sessions, each start recorded.
+impl Start {
+    fn of(request: &SpawnRequest) -> Self {
+        let owned = |word: Option<&str>| word.map(str::to_string);
+        Self {
+            provider: request.provider,
+            model: owned(request.model),
+            effort: owned(request.effort),
+            resume: owned(request.resume),
+            permission_mode: owned(request.permission_mode),
+        }
+    }
+
+    /// `provider`'s agent with nothing chosen and nothing to resume.
+    fn bare(provider: Provider) -> Self {
+        Self {
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            permission_mode: None,
+        }
+    }
+}
+
+/// Each agent started, in order.
+type Started = Arc<Mutex<Vec<Start>>>;
+
+/// `inner`'s Sessions, each start recorded.
 struct Recorded {
     inner: Box<dyn Spawner>,
     started: Started,
@@ -1614,24 +1647,30 @@ struct Recorded {
 
 impl Spawner for Recorded {
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
-        self.started.lock().unwrap().push((
-            request.provider,
-            request.model.map(str::to_string),
-            request.resume.map(str::to_string),
-        ));
+        self.started.lock().unwrap().push(Start::of(&request));
         self.inner.spawn(request)
+    }
+    fn start(&mut self, request: SpawnRequest) -> io::Result<crate::session::SessionLifecycle> {
+        self.started.lock().unwrap().push(Start::of(&request));
+        self.inner.start(request)
     }
 }
 
-/// `spawn`, each start recorded.
-fn recorded() -> (Box<dyn Spawner>, Started, Receiver<Sender<SessionEvent>>) {
-    let (inner, providers) = spawn();
+/// `inner`, each start recorded.
+fn recording(inner: Box<dyn Spawner>) -> (Box<dyn Spawner>, Started) {
     let started = Started::default();
     let spawner = Recorded {
         inner,
         started: started.clone(),
     };
-    (Box::new(spawner), started, providers)
+    (Box::new(spawner), started)
+}
+
+/// `spawn`, each start recorded.
+fn recorded() -> (Box<dyn Spawner>, Started, Receiver<Sender<SessionEvent>>) {
+    let (inner, providers) = spawn();
+    let (spawner, started) = recording(inner);
+    (spawner, started, providers)
 }
 
 /// A Thread that came back with nothing running starts its agent when it
@@ -1661,31 +1700,50 @@ fn a_restored_thread_starts_its_agent_on_send_without_a_trace() {
     next.pump();
     assert_eq!(
         *started.lock().unwrap(),
-        vec![(Provider::Claude, None, Some("claude-1".to_string()))]
+        vec![Start {
+            resume: Some("claude-1".into()),
+            ..Start::bare(Provider::Claude)
+        }]
     );
     let mut expected = before;
     expected.push(Body::Prompt("carry on".into()));
     assert_eq!(rows(&next), expected);
 }
 
-/// A model or Provider chosen for a Thread whose agent is not running
-/// starts none: the choice is kept, and the next agent starts with it.
+/// A model, effort or Provider chosen for a Thread whose agent is not
+/// running starts none: the choice is kept, and the next agent starts with
+/// it, in the permission mode the last one ran in.
 #[test]
 fn a_choice_made_without_an_agent_is_the_next_agents() {
     let (spawner, started, _agents) = recorded();
-    let (mut engine, thread) = restored_after("restored-model", spawner, spoken);
+    let (mut engine, thread) =
+        restored_after("restored-model", spawner, |engine, thread, agent| {
+            spoken(engine, thread, agent);
+            agent
+                .send(SessionEvent::PermissionMode {
+                    mode: "plan".into(),
+                })
+                .unwrap();
+            pump_engine_until(engine, "the mode never landed", |engine| {
+                engine.thread(thread).unwrap().permission_mode() == Some("plan")
+            });
+        });
     engine.set_model(thread, Some("opus".into())).unwrap();
+    engine.set_effort(thread, Some("high".into())).unwrap();
     assert!(started.lock().unwrap().is_empty(), "no agent started");
-    assert_eq!(engine.thread(thread).unwrap().model(), Some("opus"));
+    let view = engine.thread(thread).unwrap();
+    assert_eq!((view.model(), view.effort()), (Some("opus"), Some("high")));
     engine.send(thread, "carry on".into());
     engine.pump();
     assert_eq!(
         *started.lock().unwrap(),
-        vec![(
-            Provider::Claude,
-            Some("opus".to_string()),
-            Some("claude-1".to_string())
-        )]
+        vec![Start {
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            resume: Some("claude-1".into()),
+            permission_mode: Some("plan".into()),
+            ..Start::bare(Provider::Claude)
+        }]
     );
 
     let (spawner, started, _agents) = recorded();
@@ -1704,10 +1762,44 @@ fn a_choice_made_without_an_agent_is_the_next_agents() {
     assert_eq!(engine.thread(thread).unwrap().provider(), Provider::Codex);
     engine.send(thread, "carry on".into());
     engine.pump();
+    assert_eq!(*started.lock().unwrap(), vec![Start::bare(Provider::Codex)]);
+}
+
+/// A model chosen while the agent started for the operator's writing is
+/// still starting is not refused: the next agent starts with it.
+#[test]
+fn a_choice_made_while_the_agent_starts_unseen_is_kept() {
+    let (inner, _agents, _gate) = spawn_gated();
+    let (spawner, started) = recording(inner);
+    let (mut engine, thread) = restored("restored-unseen-choice", spawner);
+    composing(&mut engine, thread);
+    assert_eq!(started.lock().unwrap().len(), 1);
+
+    engine.set_model(thread, Some("opus".into())).unwrap();
+    let started = started.lock().unwrap();
+    assert_eq!(started.len(), 2, "still writing: the next starts at once");
+    assert_eq!(started[1].model.as_deref(), Some("opus"));
+}
+
+/// Escape while a prompt waits for the agent to start stops it: the prompt
+/// goes back to the Composer, and nothing starts again for it.
+#[test]
+fn escape_while_the_agent_starts_gives_the_prompt_back() {
+    let (spawner, started, _gate) = spawn_gated();
+    let (mut engine, thread) = restored("restored-escape", spawner);
+    engine.send(thread, "go".into());
+    started
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the send started the agent");
+    engine.interrupt(thread);
+    engine.pump();
+    engine.pump();
+    assert!(started.try_recv().is_err(), "nothing started again");
     assert_eq!(
-        *started.lock().unwrap(),
-        vec![(Provider::Codex, None, None)]
+        engine.take_retrieved_prompt(thread),
+        Some(("go".to_string(), false))
     );
+    assert!(!engine.thread(thread).unwrap().starting());
 }
 
 /// Scripted Sessions that start only as the returned Sender lets each
@@ -1798,12 +1890,8 @@ fn a_thread_without_its_agent_offers_what_the_agent_last_said() {
 fn writing_to_a_restored_thread_starts_its_agent_unseen() {
     let (spawner, started, _gate) = spawn_gated();
     let (mut engine, thread) = restored("restored-compose", spawner);
-    let before = engine
-        .thread(thread)
-        .unwrap()
-        .transcript()
-        .blocks()
-        .to_vec();
+    let view = engine.thread(thread).unwrap();
+    let before = (view.transcript().blocks().to_vec(), view.generation());
     composing(&mut engine, thread);
 
     started
@@ -1811,7 +1899,11 @@ fn writing_to_a_restored_thread_starts_its_agent_unseen() {
         .expect("the agent started");
     let view = engine.thread(thread).unwrap();
     assert!(!view.starting(), "a wake shows nothing");
-    assert_eq!(view.transcript().blocks(), before);
+    assert_eq!(
+        (view.transcript().blocks().to_vec(), view.generation()),
+        before,
+        "and invalidates nothing a window holds"
+    );
 
     engine.send(thread, "go".into());
     assert!(
@@ -1876,8 +1968,21 @@ fn asking_a_thread_without_its_agent_starts_it_and_asks_it() {
         can_queue: None,
         controls: controls.clone(),
     };
-    let (mut engine, thread) = restored("restored-ask", Box::new(spawner));
+    let (mut engine, thread) =
+        restored_after("restored-ask", Box::new(spawner), |engine, thread, _| {
+            pump_engine_until(engine, "the agent's controls were not heard", |engine| {
+                let view = engine.thread(thread).unwrap();
+                view.supports_control(crate::ControlKind::RefreshMcp)
+            });
+        });
 
+    assert!(
+        engine
+            .control(thread, crate::SessionControl::ReloadMcp)
+            .is_err(),
+        "one the agent did not offer is refused, and starts nothing"
+    );
+    assert!(started.try_recv().is_err());
     engine
         .control(thread, crate::SessionControl::RefreshMcp)
         .unwrap();

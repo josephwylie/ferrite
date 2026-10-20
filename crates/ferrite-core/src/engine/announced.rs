@@ -4,7 +4,7 @@
 //! Thread reopened by a later Server offers them too without starting an
 //! agent to ask.
 
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 
 use crate::providers::Session;
@@ -121,13 +121,10 @@ impl Announced {
 
     /// Best effort: what is lost is asked again of the next Session.
     fn save(&self) {
-        let write = || -> io::Result<()> {
-            let temporary = self.path.with_extension("json.tmp");
-            let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(&serde_json::to_vec(&self.said)?)?;
-            std::fs::rename(temporary, &self.path)
-        };
-        if let Err(error) = write() {
+        let written = serde_json::to_vec(&self.said)
+            .map_err(io::Error::from)
+            .and_then(|bytes| crate::store::replace_file(&self.path, &bytes));
+        if let Err(error) = written {
             crate::log!(
                 "{}: what the agent said of itself could not be kept: {error}",
                 self.path.display()
