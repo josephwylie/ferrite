@@ -1935,17 +1935,116 @@ fn sync_dir(_: &Path) -> io::Result<()> {
 /// (`Store::log_at`).
 pub struct LogAt {
     thread: ThreadId,
-    file: File,
+    file: LogRead,
     through: u64,
+    /// Where a replay may start, as the writer last knew it.
+    base: Option<Base>,
+    facts: Facts,
+    base_cost: u64,
 }
 
 impl LogAt {
-    /// What a reopen would load, from the log's first `through` bytes.
-    pub fn load(self) -> Result<ThreadSnapshot, LoadError> {
+    /// What a revive would read of the log's first `through` bytes: from
+    /// its base when it can be trusted, else all of it.
+    pub fn load(self) -> Result<Replay, LoadError> {
+        let LogAt {
+            thread,
+            mut file,
+            through,
+            base,
+            facts,
+            base_cost,
+        } = self;
+        if let Some(base) = &base {
+            let reread = LogRead {
+                file: file.file.try_clone()?,
+                #[cfg(test)]
+                shared: file.shared.clone(),
+            };
+            if let Some((records, _, evict)) = read_from(reread, base, through, base_cost)? {
+                return Ok(Replay {
+                    snapshot: ThreadSnapshot::of(thread, facts, records),
+                    evict,
+                });
+            }
+            file.seek(io::SeekFrom::Start(0))?;
+        }
         let mut bytes = Vec::new();
-        self.file.take(self.through).read_to_end(&mut bytes)?;
-        Ok(parse(self.thread, &bytes)?.snapshot)
+        file.take(through).read_to_end(&mut bytes)?;
+        Ok(Replay {
+            snapshot: parse(thread, &bytes)?.snapshot,
+            evict: Vec::new(),
+        })
     }
+}
+
+/// The records a replay from `base` needs: the carried ones, read by
+/// offset, then the log from the base to `end`. `None` when the base
+/// cannot be trusted (an offset that is not a whole record), and the
+/// caller reads the whole log instead.
+#[allow(clippy::type_complexity)]
+fn read_from(
+    log: LogRead,
+    base: &Base,
+    end: u64,
+    base_cost: u64,
+) -> Result<Option<(Vec<Record>, Tracker, Vec<String>)>, LoadError> {
+    use std::io::BufRead;
+    // Small records mostly, read in log order: skip ahead within what
+    // is buffered rather than seek and refill for each one.
+    let mut file = io::BufReader::with_capacity(1024, log);
+    let mut position = 0;
+    let go_to = |file: &mut io::BufReader<LogRead>, position: u64, at: u64| {
+        if at >= position && at - position <= file.buffer().len() as u64 {
+            file.seek_relative((at - position) as i64)
+        } else {
+            file.seek(io::SeekFrom::Start(at)).map(|_| ())
+        }
+    };
+    let mut tracker = Tracker::new(base_cost);
+    let mut records = Vec::new();
+    let mut evict = Vec::new();
+    let mut line = Vec::new();
+    for at in &base.carry {
+        line.clear();
+        go_to(&mut file, position, *at)?;
+        position = *at + file.read_until(b'\n', &mut line)? as u64;
+        let Ok(record) = serde_json::from_slice::<Record>(&line) else {
+            return Ok(None);
+        };
+        if record.is_bookkeeping() || *at >= base.at {
+            return Ok(None);
+        }
+        if let Record::Activity { observation } = &record {
+            evict.extend(observation.children().map(str::to_string));
+        }
+        tracker.seed(*at, &record);
+        records.push(record);
+    }
+    tracker.idle();
+    go_to(&mut file, position, base.at)?;
+    let mut at = base.at;
+    while at < end {
+        line.clear();
+        let read = file.read_until(b'\n', &mut line)?;
+        if read == 0 {
+            break;
+        }
+        let Ok(record) = serde_json::from_slice::<Record>(&line) else {
+            return Ok(None);
+        };
+        if at == base.at && !matches!(record, Record::Prompt { .. }) {
+            return Ok(None);
+        }
+        tracker.observe(at, &record);
+        if !record.is_bookkeeping() {
+            records.push(record);
+        }
+        at += read as u64;
+    }
+    evict.sort_unstable();
+    evict.dedup();
+    Ok(Some((records, tracker, evict)))
 }
 
 /// A log opened for reading. Every read of a log goes through one, so
@@ -3204,19 +3303,7 @@ impl Store {
         };
         // From here the writer follows the log, so its marks name fresh bases.
         writer.tracker = Some(tracker);
-        let facts = writer.facts.clone();
-        let snapshot = ThreadSnapshot {
-            id,
-            provider: facts.provider,
-            schema: SCHEMA_VERSION,
-            workspace: facts.workspace,
-            session_project_root: facts.session_project_root,
-            model: facts.model,
-            project_id: facts.project_id,
-            title: facts.title,
-            effort: facts.effort,
-            records,
-        };
+        let snapshot = ThreadSnapshot::of(id, writer.facts.clone(), records);
         let owed = match snapshot.last_handover() {
             Some(handover) if !handover.delivered => self.load(id)?.last_handover(),
             _ => None,
@@ -3231,18 +3318,15 @@ impl Store {
                 .any(|record| matches!(record, Record::Prompt { .. }));
         drop(writer);
         Ok(Revival {
-            snapshot,
-            evict,
+            replay: Replay { snapshot, evict },
             owed,
             prompted,
             writer: Some(handle),
         })
     }
 
-    /// The records a replay from `base` needs: the carried ones, read by
-    /// offset, then the log from the base to `end`. `None` when the base
-    /// cannot be trusted (an offset that is not a whole record), and the
-    /// caller reads the whole log instead.
+    /// The records a replay from `base` needs (`read_from`), off this
+    /// Thread's log.
     #[allow(clippy::type_complexity)]
     fn read_from(
         &self,
@@ -3250,62 +3334,7 @@ impl Store {
         base: &Base,
         end: u64,
     ) -> Result<Option<(Vec<Record>, Tracker, Vec<String>)>, LoadError> {
-        use std::io::BufRead;
-        // Small records mostly, read in log order: skip ahead within what
-        // is buffered rather than seek and refill for each one.
-        let mut file = io::BufReader::with_capacity(1024, self.read_log(id)?);
-        let mut position = 0;
-        let go_to = |file: &mut io::BufReader<LogRead>, position: u64, at: u64| {
-            if at >= position && at - position <= file.buffer().len() as u64 {
-                file.seek_relative((at - position) as i64)
-            } else {
-                file.seek(io::SeekFrom::Start(at)).map(|_| ())
-            }
-        };
-        let mut tracker = Tracker::new(self.base_cost);
-        let mut records = Vec::new();
-        let mut evict = Vec::new();
-        let mut line = Vec::new();
-        for at in &base.carry {
-            line.clear();
-            go_to(&mut file, position, *at)?;
-            position = *at + file.read_until(b'\n', &mut line)? as u64;
-            let Ok(record) = serde_json::from_slice::<Record>(&line) else {
-                return Ok(None);
-            };
-            if record.is_bookkeeping() || *at >= base.at {
-                return Ok(None);
-            }
-            if let Record::Activity { observation } = &record {
-                evict.extend(observation.children().map(str::to_string));
-            }
-            tracker.seed(*at, &record);
-            records.push(record);
-        }
-        tracker.idle();
-        go_to(&mut file, position, base.at)?;
-        let mut at = base.at;
-        while at < end {
-            line.clear();
-            let read = file.read_until(b'\n', &mut line)?;
-            if read == 0 {
-                break;
-            }
-            let Ok(record) = serde_json::from_slice::<Record>(&line) else {
-                return Ok(None);
-            };
-            if at == base.at && !matches!(record, Record::Prompt { .. }) {
-                return Ok(None);
-            }
-            tracker.observe(at, &record);
-            if !record.is_bookkeeping() {
-                records.push(record);
-            }
-            at += read as u64;
-        }
-        evict.sort_unstable();
-        evict.dedup();
-        Ok(Some((records, tracker, evict)))
+        read_from(self.read_log(id)?, base, end, self.base_cost)
     }
 
     /// Recover one child's recent persisted content for an off-thread cache
@@ -3353,11 +3382,20 @@ impl Store {
     /// One Thread's log as it stands at `through` (`ThreadWriter::checkpoint`),
     /// to be read on another thread. The file is opened now, so a header
     /// rewrite in between replaces the path but not what this reads.
-    pub fn log_at(&self, thread: ThreadId, through: u64) -> io::Result<LogAt> {
+    pub fn log_at(
+        &self,
+        thread: ThreadId,
+        writer: &ThreadWriter,
+        through: u64,
+    ) -> io::Result<LogAt> {
+        let mut state = writer.lock();
         Ok(LogAt {
             thread,
-            file: File::open(self.log_path(thread))?,
+            file: self.read_log(thread)?,
             through,
+            base: state.tracker.as_mut().and_then(Tracker::base),
+            facts: state.facts.clone(),
+            base_cost: self.base_cost,
         })
     }
 
@@ -3496,30 +3534,26 @@ pub struct ThreadMeta {
 /// facts and the records a replay needs — the whole log, or a bounded read
 /// of it — plus its writer.
 pub struct Revival {
-    snapshot: ThreadSnapshot,
-    /// Children known from before the replay base: evicted once the replay
-    /// is done, their content restored from disk when shown.
-    evict: Vec<String>,
+    replay: Replay,
     owed: Option<Handover>,
     prompted: bool,
     writer: Option<ThreadWriter>,
 }
 
-impl Revival {
+/// What a replay of a log reads: its records from a base, and the
+/// children known from before it.
+pub struct Replay {
+    snapshot: ThreadSnapshot,
+    /// Children known from before the replay base: evicted once the replay
+    /// is done, their content restored from disk when shown.
+    evict: Vec<String>,
+}
+
+impl Replay {
     /// The facts and the records read; recall, the resume target and the
     /// handover state read exactly as from a full load.
     pub fn snapshot(&self) -> &ThreadSnapshot {
         &self.snapshot
-    }
-
-    /// The switch whose carry never went out, with every exchange before it.
-    pub(crate) fn owed_handover(&self) -> Option<&Handover> {
-        self.owed.as_ref()
-    }
-
-    /// Whether a prompt was ever sent: what locks the provider choice.
-    pub fn prompted(&self) -> bool {
-        self.prompted
     }
 
     /// The replay, then the eviction of every child known from before the
@@ -3533,6 +3567,26 @@ impl Revival {
             ))
         }));
         inputs
+    }
+}
+
+impl Revival {
+    pub fn snapshot(&self) -> &ThreadSnapshot {
+        self.replay.snapshot()
+    }
+
+    /// The switch whose carry never went out, with every exchange before it.
+    pub(crate) fn owed_handover(&self) -> Option<&Handover> {
+        self.owed.as_ref()
+    }
+
+    /// Whether a prompt was ever sent: what locks the provider choice.
+    pub fn prompted(&self) -> bool {
+        self.prompted
+    }
+
+    pub fn activity_inputs(&self) -> Vec<crate::activity::ActivityInput> {
+        self.replay.activity_inputs()
     }
 
     /// The Thread's writer, for amendments before the revive completes.
@@ -3656,6 +3710,22 @@ impl AnswerText {
 }
 
 impl ThreadSnapshot {
+    /// The Thread as its facts and a replay's records say it.
+    fn of(id: ThreadId, facts: Facts, records: Vec<Record>) -> Self {
+        Self {
+            id,
+            provider: facts.provider,
+            schema: SCHEMA_VERSION,
+            workspace: facts.workspace,
+            session_project_root: facts.session_project_root,
+            model: facts.model,
+            project_id: facts.project_id,
+            title: facts.title,
+            effort: facts.effort,
+            records,
+        }
+    }
+
     fn facts(&self) -> Facts {
         Facts {
             provider: self.provider,

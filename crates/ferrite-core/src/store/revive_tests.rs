@@ -390,7 +390,7 @@ fn a_bounded_revive_shows_what_a_full_replay_shows() {
             bounded_reads += 1;
         }
 
-        let evicted: Vec<&str> = revival.evict.iter().map(String::as_str).collect();
+        let evicted: Vec<&str> = revival.replay.evict.iter().map(String::as_str).collect();
         let expected = seen(&replayed(full.activity_inputs()), &evicted);
         let actual = seen(&replayed(revival.activity_inputs()), &evicted);
         if expected != actual {
@@ -478,6 +478,56 @@ fn a_long_thread_revives_from_its_tail() {
     assert!(read < 512 * 1024, "the revive read {read} of {size} bytes");
     assert_eq!(
         revival.snapshot().prompt_texts().len(),
+        400,
+        "recall is whole"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A watch reads an open Thread's log as a revive does (ADR 0032): from
+/// its tail, a few windows' worth, not all of it — while its writer is
+/// still appending.
+#[test]
+fn a_watch_reads_an_open_threads_log_from_its_tail() {
+    let dir = scratch("watch-tail");
+    let store = Store::open(&dir).unwrap().scaled(64 * 1024, limits());
+    let binding = WorkspaceBinding::Main {
+        checkout: "/fixture/repo".into(),
+    };
+    let (id, mut writer) = store.create(Provider::Claude, None, binding).unwrap();
+    for turn in 0..400 {
+        writer.record_prompt(&format!("turn {turn}")).unwrap();
+        writer
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "w".repeat(10_000),
+                },
+                None,
+            )
+            .unwrap();
+        writer
+            .record_event(
+                &SessionEvent::TurnEnded {
+                    outcome: crate::TurnOutcome::Completed,
+                    cost_usd: None,
+                },
+                None,
+            )
+            .unwrap();
+    }
+    let through = writer.checkpoint().unwrap();
+
+    let read = store.bytes_read();
+    let replay = store.log_at(id, &writer, through).unwrap().load().unwrap();
+    let read = store.bytes_read() - read;
+
+    assert!(through > 4_000_000);
+    assert!(
+        read < 512 * 1024,
+        "the watch read {read} of {through} bytes"
+    );
+    assert_eq!(
+        replay.snapshot().prompt_texts().len(),
         400,
         "recall is whole"
     );
@@ -578,7 +628,7 @@ fn a_real_log_revives_bounded_and_identical() {
         activity
     };
     eprintln!("LAB full load + replay ms={:.1}", ms(started));
-    let evicted: Vec<&str> = revival.evict.iter().map(String::as_str).collect();
+    let evicted: Vec<&str> = revival.replay.evict.iter().map(String::as_str).collect();
     assert_eq!(seen(&bounded, &evicted), seen(&full, &evicted));
     let _ = fs::remove_dir_all(&dir);
 }

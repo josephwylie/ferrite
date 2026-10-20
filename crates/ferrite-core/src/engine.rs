@@ -4376,7 +4376,7 @@ impl Engine {
                 return None;
             }
         };
-        let log = match self.store.log_at(thread, through) {
+        let log = match self.store.log_at(thread, &state.writer, through) {
             Ok(log) => log,
             Err(error) => {
                 crate::log!("thread {thread}: its log could not be opened: {error}");
@@ -4800,7 +4800,7 @@ impl History {
     pub fn send(self, send: &mut dyn FnMut(ServerMessage) -> io::Result<()>) -> io::Result<()> {
         let thread = self.thread;
         let replay = match self.log.load() {
-            Ok(snapshot) => snapshot.activity_inputs(),
+            Ok(replay) => replay.activity_inputs(),
             Err(error) => {
                 crate::log!("thread {thread}: its history could not be read: {error:?}");
                 Vec::new()
