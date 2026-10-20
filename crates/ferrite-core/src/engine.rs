@@ -521,6 +521,20 @@ impl Journaled {
         self.activity.view()
     }
 
+    /// Forget the Activity without telling the mirrors: a Thread let go to
+    /// its digest (`Engine::let_go_unused`).
+    fn forget(&mut self) {
+        self.activity = Activity::default();
+        self.applied.clear();
+        self.reset = false;
+    }
+
+    /// What was applied since the last publish is not news: an Activity
+    /// read back as every window was already told it (`Engine::hold`).
+    fn settle(&mut self) {
+        self.applied.clear();
+    }
+
     /// A fresh Activity, for a Session that starts the conversation over.
     fn replace(&mut self) {
         self.activity = Activity::default();
@@ -936,9 +950,6 @@ impl Thread {
             && !self.native_queue.pending()
     }
 
-    /// `session` serves it from now on. A fresh Session knows nothing:
-    /// its first prompt carries the session-context preface again, and it
-    /// has scheduled nothing yet.
     /// Its Activity as its log says it, with no Session running: what the
     /// last one announced still stands (ADR 0032).
     fn read_back(&mut self, inputs: Vec<ActivityInput>) {
@@ -953,6 +964,9 @@ impl Thread {
         }
     }
 
+    /// `session` serves it from now on. A fresh Session knows nothing:
+    /// its first prompt carries the session-context preface again, and it
+    /// has scheduled nothing yet.
     fn begin_session(&mut self, session: SessionLifecycle) {
         self.session = Some(session);
         self.preface_pending = true;
@@ -3445,7 +3459,8 @@ impl Engine {
         let agents: Vec<_> = self
             .threads
             .iter()
-            // A Session ended unseen is still the Thread's agent (ADR 0032).
+            // A Session ended unseen, or let go to its digest, is still the
+            // Thread's agent (ADR 0032).
             .filter(|(_, state)| {
                 state.session.is_some() || !state.held || state.activity.view().connected()
             })
@@ -4387,6 +4402,10 @@ impl Engine {
     /// Everything published so far is in it; inputs continue after `seq`.
     pub fn history(&mut self, thread: ThreadId) -> Option<History> {
         use protocol::{Live, WireInput};
+        // Its watcher holds it from here, before the Server next says so.
+        if let Some(watched) = &mut self.watched {
+            watched.insert(thread);
+        }
         self.hold(thread);
         self.publish();
         let state = self.threads.get_mut(&thread)?;
@@ -4620,8 +4639,7 @@ impl Engine {
                 && thread.replacement.is_none()
                 && thread.at_rest()
             {
-                thread.activity = Journaled::new(self.boot);
-                thread.activity.reset = false;
+                thread.activity.forget();
                 thread.history.clear();
                 thread.held = false;
             }
@@ -4657,7 +4675,9 @@ impl Engine {
         let replay = match replay {
             Ok(replay) => replay,
             Err(error) => {
+                // Held as it is: its digest and notifications go on.
                 crate::log!("thread {thread}: its log could not be read back: {error:?}");
+                state.held = true;
                 return;
             }
         };
@@ -4665,8 +4685,7 @@ impl Engine {
         state.activity.apply(ActivityInput::Connect {
             generation: state.generation,
         });
-        // Not news: what was read back is what every window was told.
-        state.activity.applied.clear();
+        state.activity.settle();
         state.held = true;
     }
 

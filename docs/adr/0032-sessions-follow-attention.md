@@ -29,10 +29,12 @@ decided independently:
   Session that has scheduled work Ferrite cannot observe stays up until it
   exits: Claude's `ScheduleWakeup`, `CronCreate`, `Monitor` or an ambient
   task; a Codex goal that is `active`.
-- **How much the Server holds.** A Thread with no Session holds its summary
-  only (the log's marks already carry one). One with a Session that nobody
-  watches holds its state and a short tail, enough for its Wall card. A
-  watched Thread holds today's full projection.
+- **How much the Server holds.** A Thread with no Session that nobody
+  watches holds its digest only, and is read back from its log when it is
+  watched, sent to or read. Every other Thread holds today's full
+  projection. (Amended 2026-10-20: a Session nobody watches no longer keeps
+  only a short tail. The digest's changed files and the API's read need the
+  whole projection, and such Threads are few now that Sessions follow use.)
 - **What a window mirrors.** Only Threads drawn at Transcript level. Every
   other surface (nav rows, Wall cards, the bell, toasts, needs-you) reads a
   per-Thread digest the Server computes and sends to every window; Decisions
@@ -47,8 +49,9 @@ answers. A model, effort or Provider change on a Thread with no Session is
 recorded and takes effect at the next start. The same rules apply to another
 machine's Server (ADR 0026).
 
-Watching reads history from the log's bounded base, as revive does, and pages
-older history in on scroll. There is no new snapshot file. Finished tool
+Watching reads history from the log's bounded base, as revive does. (Amended
+2026-10-20: no paging on scroll yet. A window's mirror trims to the limits the
+base is chosen for, so a bounded watch shows what a whole-log watch showed.) There is no new snapshot file. Finished tool
 results keep their bounded preview, not the provider's whole JSON value.
 
 ## Considered options
@@ -61,7 +64,7 @@ results keep their bounded preview, not the provider's whole JSON value.
   no window mirror.
 - **A serialized Activity snapshot per Thread.** Nothing in Activity or
   Transcript serializes today, and the bounded base already makes revive
-  ~26 ms. Paging older history in covers the rest.
+  ~26 ms, and a mirror keeps no more than the base holds.
 - **A visible "asleep" state.** The operator has nothing to do about it; a
   Session is an implementation detail of a Thread.
 

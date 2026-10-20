@@ -4351,12 +4351,16 @@ fn a_thread_nobody_uses_holds_only_its_digest_until_used() {
 }
 
 /// A Thread whose agent exited and that no window watches is let go to its
-/// digest; the API's read and a window's watch read it back whole.
+/// digest; the API's read and a window's watch read it back whole, what
+/// its last agent announced included.
 #[test]
 fn a_thread_let_go_reads_back_whole_for_the_api_and_a_watch() {
     let harness = start("let-go");
     let mut window = attach(&harness.address);
     let (thread, provider) = open(&mut window, &harness);
+    for event in announcements() {
+        provider.send(event).unwrap();
+    }
     provider.send(text("Kept on disk\n\n")).unwrap();
     turn_ends(&provider);
     exit(provider);
@@ -4378,9 +4382,20 @@ fn a_thread_let_go_reads_back_whole_for_the_api_and_a_watch() {
     );
     window.watch(thread, None);
     window.until(|window| {
-        window
-            .said(thread)
-            .iter()
-            .any(|said| said.contains("Kept on disk"))
+        window.mirrors.seq(thread).is_some()
+            && window
+                .said(thread)
+                .iter()
+                .any(|said| said.contains("Kept on disk"))
     });
+    let mirror = window.mirrors.view(thread).unwrap();
+    assert_eq!(
+        mirror.transcript().mcp_servers()[..],
+        [crate::McpServer {
+            name: "linear".into(),
+            status: crate::McpStatus::NeedsAuth,
+            error: None,
+        }],
+        "the watch carries what the last agent announced"
+    );
 }

@@ -1956,12 +1956,9 @@ impl LogAt {
             base_cost,
         } = self;
         if let Some(base) = &base {
-            let reread = LogRead {
-                file: file.file.try_clone()?,
-                #[cfg(test)]
-                shared: file.shared.clone(),
-            };
-            if let Some((records, _, evict)) = read_from(reread, base, through, base_cost)? {
+            if let Some((records, _, evict)) =
+                read_from(file.try_clone()?, base, through, base_cost)?
+            {
                 return Ok(Replay {
                     snapshot: ThreadSnapshot::of(thread, facts, records),
                     evict,
@@ -2053,6 +2050,17 @@ struct LogRead {
     file: File,
     #[cfg(test)]
     shared: std::sync::Arc<Shared>,
+}
+
+impl LogRead {
+    /// The same log, read again; the two share a position.
+    fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            file: self.file.try_clone()?,
+            #[cfg(test)]
+            shared: self.shared.clone(),
+        })
+    }
 }
 
 impl Read for LogRead {
@@ -3287,7 +3295,7 @@ impl Store {
         let handle = self.writer(id)?;
         let mut writer = handle.lock();
         let bounded = match writer.inherited.clone() {
-            Some(base) => self.read_from(id, &base, writer.len)?,
+            Some(base) => read_from(self.read_log(id)?, &base, writer.len, self.base_cost)?,
             None => None,
         };
         let (records, tracker, evict) = match bounded {
@@ -3323,18 +3331,6 @@ impl Store {
             prompted,
             writer: Some(handle),
         })
-    }
-
-    /// The records a replay from `base` needs (`read_from`), off this
-    /// Thread's log.
-    #[allow(clippy::type_complexity)]
-    fn read_from(
-        &self,
-        id: ThreadId,
-        base: &Base,
-        end: u64,
-    ) -> Result<Option<(Vec<Record>, Tracker, Vec<String>)>, LoadError> {
-        read_from(self.read_log(id)?, base, end, self.base_cost)
     }
 
     /// Recover one child's recent persisted content for an off-thread cache
@@ -3571,6 +3567,7 @@ impl Replay {
 }
 
 impl Revival {
+    /// The facts and the records read (`Replay::snapshot`).
     pub fn snapshot(&self) -> &ThreadSnapshot {
         self.replay.snapshot()
     }
@@ -3585,6 +3582,7 @@ impl Revival {
         self.prompted
     }
 
+    /// What the replay applies (`Replay::activity_inputs`).
     pub fn activity_inputs(&self) -> Vec<crate::activity::ActivityInput> {
         self.replay.activity_inputs()
     }

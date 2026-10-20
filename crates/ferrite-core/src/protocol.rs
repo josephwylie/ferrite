@@ -387,7 +387,8 @@ pub enum Op {
 }
 
 impl Op {
-    /// The Thread this act is on, if it names one.
+    /// The Thread this act is on, if it names one. Every act is listed, so
+    /// a new one is placed here on purpose.
     pub fn thread(&self) -> Option<ThreadId> {
         match self {
             Op::Send { thread, .. }
@@ -413,7 +414,33 @@ impl Op {
             | Op::Say { thread, .. }
             | Op::SearchFiles { thread, .. }
             | Op::Composing { thread, .. } => Some(*thread),
-            _ => None,
+            Op::Open { .. }
+            | Op::Bootstrap { .. }
+            | Op::CancelBootstrap { .. }
+            | Op::ReviveGroup { .. }
+            | Op::Import { .. }
+            | Op::Group { .. }
+            | Op::Layout { .. }
+            | Op::Project { .. }
+            | Op::Notice { .. }
+            | Op::SettingsChanged
+            | Op::CliReplaced { .. }
+            | Op::Focused { .. }
+            | Op::ListDir { .. }
+            | Op::ListRepo { .. }
+            | Op::ReviewDiff { .. }
+            | Op::ReviewRead { .. }
+            | Op::ListCommits { .. }
+            | Op::SearchRepo { .. }
+            | Op::ReadFile { .. }
+            | Op::ReviewPullRequest { .. }
+            | Op::ListFiles { .. }
+            | Op::ListBases { .. }
+            | Op::PickBase { .. }
+            | Op::PullRequest { .. }
+            | Op::Restart { .. }
+            | Op::Stop { .. }
+            | Op::Unknown => None,
         }
     }
 }
