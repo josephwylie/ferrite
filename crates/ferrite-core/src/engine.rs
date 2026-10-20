@@ -809,6 +809,13 @@ impl Thread {
         self.activity.view().main().busy()
     }
 
+    /// Whether work runs behind Main: its Subagents, or its transcript's
+    /// background tasks.
+    fn background_work(&self) -> bool {
+        self.activity.view().working_descendants() > 0
+            || self.transcript().progress().working_background() > 0
+    }
+
     /// At rest: no turn, no starting or replacement Session, no change
     /// waiting on the provider, no working Subagent or background task, no
     /// Decision and nothing in the provider's queue. What a Session may be
@@ -823,8 +830,7 @@ impl Thread {
             && self.tuning.is_none()
             && !self.busy()
             && !view.main_operator_turn()
-            && view.working_descendants() == 0
-            && self.transcript().progress().working_background() == 0
+            && !self.background_work()
             && view.decisions().is_empty()
             && !self.native_queue.pending()
     }
@@ -4120,6 +4126,8 @@ impl Engine {
                     live: Vec::new(),
                 });
             }
+            // Taken, not drained: a revive's replay grows the journal to its
+            // whole history, and a drained Vec keeps that capacity for good.
             for input in std::mem::take(&mut thread.activity.applied) {
                 let at_ms = match &input {
                     ActivityInput::Main { at, .. }
@@ -4584,8 +4592,7 @@ impl<'a> ThreadView<'a> {
     /// Whether work runs behind Main: its Subagents, or its transcript's
     /// background tasks.
     pub fn background_work(&self) -> bool {
-        self.activity().working_descendants() > 0
-            || self.transcript().progress().working_background() > 0
+        self.state.background_work()
     }
 
     /// Whether a model or effort change waits on the provider's answer:

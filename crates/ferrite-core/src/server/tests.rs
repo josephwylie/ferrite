@@ -181,8 +181,8 @@ struct Window {
     replies: Vec<ServerMessage>,
     /// The `decision` and `decision_closed` messages, in order.
     decisions: Vec<ServerMessage>,
-    /// How many history pieces the Server sent this window: a resume
-    /// the ring met needs none.
+    /// How many `history` and `history_end` messages the Server sent this
+    /// window: a resume the ring met needs none.
     histories: usize,
 }
 
