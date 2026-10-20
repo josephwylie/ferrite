@@ -544,6 +544,9 @@ fn overlapping_tool_and_message_ids_keep_transcripts_usage_and_resume_isolated()
         .unwrap();
     assert_eq!(snapshot.resume_target(), Some("main-0"));
     h.cockpit.revive(h.thread).unwrap();
+    // Its agent starts when the operator writes to it (ADR 0032).
+    h.cockpit.set_composing(h.thread, true);
+    h.cockpit.pump();
     assert_eq!(
         h.control.0.lock().unwrap()[1].resume.as_deref(),
         Some("main-0")

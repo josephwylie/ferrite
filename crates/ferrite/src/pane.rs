@@ -9072,7 +9072,6 @@ mod tests {
             output_tokens: None,
         });
         transcript.apply(Input::Notice("send failed: broken pipe".into()));
-        transcript.apply(Input::Revived);
         for answer in answers.try_iter() {
             transcript.apply(answer);
         }
@@ -9429,7 +9428,6 @@ mod tests {
             "tool-failed",
             "thinking",
             "notice",
-            "meta",
             "turn-end",
         ] {
             assert!(kinds.contains(&wanted), "no {wanted} block in {kinds:?}");

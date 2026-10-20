@@ -1172,14 +1172,6 @@ impl Cockpit {
         )
     }
 
-    /// Revive a Thread `delay` from now: the launch's stagger (ADR 0018). A
-    /// Server revives its open Threads itself.
-    pub fn revive_after(&mut self, thread: ThreadId, delay: Duration) -> Result<(), LoadError> {
-        let revived = self.in_process().revive_after(thread, delay);
-        self.settle();
-        revived
-    }
-
     /// The tests' own: no window revives a whole Group.
     #[cfg(test)]
     pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {

@@ -38,8 +38,6 @@ mod signals;
 const PUMP: Duration = Duration::from_millis(16);
 /// How long it waits with none: only to notice a signal.
 const IDLE: Duration = Duration::from_millis(250);
-/// The open Threads are revived this far apart at boot (ADR 0018).
-const LAUNCH_STAGGER: Duration = Duration::from_millis(100);
 /// How often the memory watchdog samples the Sessions.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 /// How long a going Server waits for its clients to hear it go.
@@ -270,11 +268,10 @@ fn launch_threads(store: &Store) -> Vec<ThreadId> {
         .collect()
 }
 
-/// Revive each Thread `LAUNCH_STAGGER` after the one before (ADR 0018):
-/// the Threads coming back do not start every CLI in one instant.
+/// Reopen each Thread with nothing running in it (ADR 0032).
 fn revive_launch(engine: &mut Engine, threads: Vec<ThreadId>) {
-    for (nth, thread) in threads.into_iter().enumerate() {
-        if let Err(error) = engine.revive_after(thread, LAUNCH_STAGGER * nth as u32) {
+    for thread in threads {
+        if let Err(error) = engine.revive(thread) {
             crate::log!("thread {thread} could not be revived: {error:?}");
         }
     }

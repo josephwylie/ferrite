@@ -517,8 +517,9 @@ struct Thread {
     /// respawn, like the model.
     effort: Option<String>,
     title: Option<String>,
-    /// A prompt the operator wrote while the turn was still running.
-    queued: Option<String>,
+    /// Prompts waiting for the Session to start, oldest first: the first
+    /// is sent once it is up, the rest go to its queue behind it.
+    held: Vec<String>,
     native_queue: queue::Queue,
     /// An interrupt was sent while prompts were mirrored: when the turn
     /// ends, everything held goes out as one prompt — Escape means "stop,
@@ -595,11 +596,12 @@ impl Thread {
         launch_args::for_provider(self.agent_args.as_ref(), provider)
     }
 
-    /// A Thread ready to serve: its own Lexer, a fresh Transcript, a live
-    /// Session. Revival replays history into the Transcript afterwards.
+    /// A Thread ready to serve: its own Lexer, a fresh Transcript, and its
+    /// Session when it starts with one. Revival replays history into the
+    /// Transcript afterwards.
     fn fresh(
         boot: Instant,
-        session: SessionLifecycle,
+        session: Option<SessionLifecycle>,
         writer: ThreadWriter,
         provider: Provider,
         model: Option<String>,
@@ -618,14 +620,14 @@ impl Thread {
             store_error: None,
             history: HashMap::new(),
             history_errors: HashMap::new(),
-            session: Some(session),
+            session,
             replacement: None,
             writer,
             provider,
             model,
             effort,
             title: None,
-            queued: None,
+            held: Vec::new(),
             native_queue: queue::Queue::open(queue_path),
             resend_held_on_turn_end: false,
             prompt_history: PromptHistory::new(Vec::new()),
@@ -730,7 +732,7 @@ impl Thread {
                 .iter()
                 .rev()
                 .map(|item| item.text.clone())
-                .chain(self.queued.clone())
+                .chain(self.held.iter().rev().cloned())
                 .collect(),
             suggestion: self.suggestion.clone(),
             commands: self.commands.iter().map(Into::into).collect(),
@@ -1438,7 +1440,7 @@ impl Engine {
             id,
             Thread::fresh(
                 self.boot,
-                session,
+                Some(session),
                 writer,
                 provider,
                 model,
@@ -1604,12 +1606,13 @@ impl Engine {
             }
             None => self.store.set_session_project_root(thread, root, None)?,
         }
-        if let Some(held) = self
+        let held = self
             .threads
             .get_mut(&thread)
-            .and_then(|state| state.queued.take())
-        {
-            self.send(thread, held);
+            .map(|state| std::mem::take(&mut state.held))
+            .unwrap_or_default();
+        for text in held {
+            self.send(thread, text);
         }
         Ok(())
     }
@@ -2017,19 +2020,10 @@ impl Engine {
     }
 
     /// Reopen a parked Thread: its history is replayed from the log into a
-    /// fresh Transcript, and the new Session is told where to resume.
+    /// fresh Transcript, with nothing running in it (ADR 0032). Its Session
+    /// starts when the Thread is used, told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
-        self.revive_after(thread, Duration::ZERO)
-    }
-
-    /// `revive`, its Session's start held back `delay`: a launch reopening
-    /// many Threads staggers them, so their CLIs do not all start at once.
-    /// Neither the delay nor the worktree's git calls hold the caller; they
-    /// run where the spawner starts the CLI (`Spawner::start_after`), and a
-    /// worktree that cannot be made is that start's failure, said in the
-    /// Pane.
-    pub fn revive_after(&mut self, thread: ThreadId, delay: Duration) -> Result<(), LoadError> {
-        self.reopen(thread, delay, None)
+        self.reopen(thread, false, None)
     }
 
     /// Reopen a parked Thread as `launch` says (`thread.revive`, ADR 0031):
@@ -2038,13 +2032,16 @@ impl Engine {
     /// new one under the Thread's history when there is none. The Thread
     /// keeps its id, as a Herdr pane does when its agent is started again.
     pub fn revive_with(&mut self, thread: ThreadId, launch: Launch) -> Result<(), LoadError> {
-        self.reopen(thread, Duration::ZERO, Some(launch))
+        self.reopen(thread, true, Some(launch))
     }
 
+    /// `start`: whether its Session starts now, rather than when it is used.
+    /// The worktree's git calls never hold the caller; they run where the
+    /// spawner starts the CLI (`Spawner::start_after`).
     fn reopen(
         &mut self,
         thread: ThreadId,
-        delay: Duration,
+        start: bool,
         launch: Option<Launch>,
     ) -> Result<(), LoadError> {
         // Reopened while open, a Thread would be replaced whole: its live
@@ -2096,11 +2093,6 @@ impl Engine {
         // On demand also means back on demand: a worktree deleted while the
         // Thread was parked is recreated on its own branch before anything
         // spawns into it.
-        let place = placement(&self.registry, self.store.dir(), workspace.as_ref(), thread);
-        let prepare: Preparation = Box::new(move || {
-            std::thread::sleep(delay);
-            place()
-        });
         let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
             .map(Path::to_path_buf);
         let additional_directories =
@@ -2120,23 +2112,29 @@ impl Engine {
                 Err(error) => (None, None, Some(error)),
             },
         };
-        let session = self
-            .spawner
-            .start_after(
-                prepare,
-                SpawnRequest {
-                    thread,
-                    provider,
-                    model: model.as_deref(),
-                    effort: effort.as_deref(),
-                    resume: resume.as_deref(),
-                    cwd: cwd.as_deref(),
-                    name: title.as_deref(),
-                    additional_directories,
-                    launch: launch_args::for_provider(first_args.as_ref(), provider),
-                },
-            )
-            .map_err(LoadError::Io)?;
+        let session = if start {
+            let place = placement(&self.registry, self.store.dir(), workspace.as_ref(), thread);
+            let session = self
+                .spawner
+                .start_after(
+                    place,
+                    SpawnRequest {
+                        thread,
+                        provider,
+                        model: model.as_deref(),
+                        effort: effort.as_deref(),
+                        resume: resume.as_deref(),
+                        cwd: cwd.as_deref(),
+                        name: title.as_deref(),
+                        additional_directories,
+                        launch: launch_args::for_provider(first_args.as_ref(), provider),
+                    },
+                )
+                .map_err(LoadError::Io)?;
+            Some(session)
+        } else {
+            None
+        };
         let writer = revival.take_writer();
 
         let mut state = Thread::fresh(
@@ -2185,9 +2183,20 @@ impl Engine {
             generation: state.generation,
         });
 
+        let owes_delivery = state.native_queue.holds_unsent();
         self.store.mark_open(thread)?;
         self.threads.insert(thread, state);
         self.note_open(thread);
+        // Queued prompts the provider keeps are sent only by a running agent.
+        if !start && owes_delivery {
+            if let Err(error) = self.start_session(thread) {
+                if let Some(state) = self.threads.get_mut(&thread) {
+                    state.apply(Input::Notice(format!(
+                        "the queued prompts could not be sent: {error}"
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2250,7 +2259,6 @@ impl Engine {
         {
             self.visible_subjects.remove(&thread);
         }
-        let project = self.project_id(thread);
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -2263,58 +2271,68 @@ impl Engine {
             return;
         }
         if state.session.is_none() {
-            state.replace_generation();
-            let resume = state.resume.clone();
-            let cwd = workspace::effective_cwd(
-                state.session_project_root.as_deref(),
-                state.workspace.as_ref(),
-            )
-            .map(Path::to_path_buf);
-            let additional_directories =
-                project_additional_directories(&self.registry, project, cwd.as_deref());
-            let place = placement(
-                &self.registry,
-                self.store.dir(),
-                state.workspace.as_ref(),
-                thread,
-            );
-            match self.spawner.start_after(
-                place,
-                SpawnRequest {
-                    thread,
-                    provider: state.provider,
-                    model: state.model.as_deref(),
-                    effort: state.effort.as_deref(),
-                    resume: resume.as_deref(),
-                    cwd: cwd.as_deref(),
-                    name: state.title.as_deref(),
-                    additional_directories,
-                    launch: state.agent_launch(state.provider),
-                },
-            ) {
-                Ok(session) => {
-                    state.session = Some(session);
-                    state.preface_pending = true;
-                }
-                Err(e) => {
+            if let Err(e) = self.start_session(thread) {
+                if let Some(state) = self.threads.get_mut(&thread) {
                     state.apply(Input::Notice(format!("send failed: {e}")));
-                    return;
                 }
+                return;
             }
         }
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return;
+        };
         if state.replacement.is_some()
             || state
                 .session
                 .as_ref()
                 .is_some_and(SessionLifecycle::is_starting)
         {
-            state.queued = Some(text);
+            state.held.push(text);
             return;
         }
         if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-            state.queued = Some(text);
+            state.held.insert(0, text);
             state.apply(Input::Notice(format!("send failed: {error}")));
         }
+    }
+
+    /// Start an open Thread's Session where its conversation left off.
+    pub(super) fn start_session(&mut self, thread: ThreadId) -> io::Result<()> {
+        let project = self.project_id(thread);
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return Ok(());
+        };
+        state.replace_generation();
+        let cwd = workspace::effective_cwd(
+            state.session_project_root.as_deref(),
+            state.workspace.as_ref(),
+        )
+        .map(Path::to_path_buf);
+        let additional_directories =
+            project_additional_directories(&self.registry, project, cwd.as_deref());
+        let place = placement(
+            &self.registry,
+            self.store.dir(),
+            state.workspace.as_ref(),
+            thread,
+        );
+        let session = self.spawner.start_after(
+            place,
+            SpawnRequest {
+                thread,
+                provider: state.provider,
+                model: state.model.as_deref(),
+                effort: state.effort.as_deref(),
+                resume: state.resume.as_deref(),
+                cwd: cwd.as_deref(),
+                name: state.title.as_deref(),
+                additional_directories,
+                launch: state.agent_launch(state.provider),
+            },
+        )?;
+        state.session = Some(session);
+        state.preface_pending = true;
+        Ok(())
     }
 
     /// Stop the running turn.
@@ -2827,10 +2845,19 @@ impl Engine {
             }
             if release {
                 let state = self.threads.get_mut(&id).expect("exists");
-                if let Some(text) = state.queued.take() {
-                    if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-                        state.queued = Some(text);
-                        state.apply(Input::Notice(format!("send failed: {error}")));
+                if !state.held.is_empty() {
+                    let behind = state.held.split_off(1);
+                    let text = state.held.remove(0);
+                    match deliver(state, text.clone(), self.suggestions_enabled) {
+                        Ok(_) => {
+                            for text in behind {
+                                self.queue(id, text);
+                            }
+                        }
+                        Err(error) => {
+                            state.held = std::iter::once(text).chain(behind).collect();
+                            state.apply(Input::Notice(format!("send failed: {error}")));
+                        }
                     }
                 }
             }
@@ -3275,6 +3302,21 @@ impl Engine {
             state.apply(Input::Notice(refusal));
             return false;
         }
+        let ready = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .is_some();
+        if !ready {
+            state.held.push(text);
+            state.invalidate_suggestion();
+            if state.session.is_none() {
+                if let Err(error) = self.start_session(thread) {
+                    crate::log!("thread {thread}: its agent could not start: {error}");
+                }
+            }
+            return true;
+        }
         if let Err(error) = state.native_queue.prepare(&id, &text) {
             state.native_queue.refused(&id);
             state.apply(Input::Notice(format!(
@@ -3318,7 +3360,7 @@ impl Engine {
     /// Empty-Composer Enter requests cancellation; retrieval arrives via the pump.
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
         if let Some(state) = self.threads.get_mut(&thread) {
-            if let Some(text) = state.queued.take() {
+            if let Some(text) = state.held.pop() {
                 return Some(text);
             }
         }
@@ -3341,7 +3383,7 @@ impl Engine {
         };
         state.prompt_history.reset();
         // Startup input has never reached a provider and can be taken back locally.
-        if let Some(text) = state.queued.take() {
+        if let Some(text) = state.held.pop() {
             if restore {
                 state.native_queue.recovered.push((text, prepend));
             }
@@ -3916,7 +3958,7 @@ impl Engine {
             && self
                 .threads
                 .values()
-                .all(|state| state.settled() && state.queued.is_none())
+                .all(|state| state.settled() && state.held.is_empty())
     }
 
     /// An open Thread's Attention, as the Server knows it (ADR 0015): a
@@ -4371,7 +4413,7 @@ impl Engine {
             || self
                 .threads
                 .get(&thread)
-                .is_some_and(|state| state.queued.is_some())
+                .is_some_and(|state| !state.held.is_empty())
     }
 
     /// Whether `thread` is a Draft's first send still starting: its Pane is
@@ -4551,7 +4593,7 @@ impl<'a> ThreadView<'a> {
             .items
             .last()
             .map(|item| item.text.as_str())
-            .or(self.state.queued.as_deref())
+            .or(self.state.held.last().map(String::as_str))
     }
 
     /// Every prompt held back, newest first: the latest sits on top of the
@@ -4563,7 +4605,7 @@ impl<'a> ThreadView<'a> {
             .iter()
             .rev()
             .map(|item| item.text.as_str())
-            .chain(self.state.queued.as_deref())
+            .chain(self.state.held.iter().rev().map(String::as_str))
             .collect()
     }
 
@@ -4810,7 +4852,7 @@ fn resend_held(state: &mut Thread, suggestions_enabled: bool) -> Option<Update> 
     match deliver(state, text.clone(), suggestions_enabled) {
         Ok(applied) => Some(applied),
         Err(error) => {
-            state.queued = Some(text);
+            state.held.insert(0, text);
             Some(state.apply(Input::Notice(format!("send failed: {error}"))))
         }
     }

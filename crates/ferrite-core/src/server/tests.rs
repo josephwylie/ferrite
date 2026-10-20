@@ -817,6 +817,13 @@ fn a_resume_after_a_reopen_needs_no_second_history() {
     provider.send(text("first life ")).unwrap();
     steady.command(2, Op::Park { thread });
     steady.command(3, Op::Revive { thread });
+    steady.command(
+        4,
+        Op::Composing {
+            thread,
+            unsent: true,
+        },
+    );
     let provider = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
@@ -917,6 +924,13 @@ fn a_resume_never_crosses_a_reopened_thread() {
     let mut other = attach(&harness.address);
     other.command(2, Op::Park { thread });
     other.command(3, Op::Revive { thread });
+    other.command(
+        4,
+        Op::Composing {
+            thread,
+            unsent: true,
+        },
+    );
     let provider = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
@@ -1396,8 +1410,10 @@ fn threads_the_operator_parked_stay_parked_at_the_next_boot() {
     assert_eq!(launch_threads(&Store::open(&store).unwrap()), vec![]);
 }
 
+/// ADR 0032: the open Threads come back open, but nothing is running in
+/// them, so no agent starts until one is used.
 #[test]
-fn a_boot_resumes_every_thread_that_was_open() {
+fn a_boot_reopens_every_open_thread_without_starting_its_agent() {
     let dir = scratch("open-resume");
     let store = dir.join("threads");
     let (spawner, _providers) = spawn();
@@ -1407,66 +1423,231 @@ fn a_boot_resumes_every_thread_that_was_open() {
     first.halt_sessions();
     drop(first);
 
-    let (spawner, _resumed) = spawn();
+    let (spawner, resumed) = spawn();
     let mut next = engine(&store, spawner);
     revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
     assert_eq!(next.threads(), vec![one, two]);
+    assert!(resumed.try_recv().is_err(), "no agent started");
 }
 
-/// ADR 0018: each resumed Session starts `LAUNCH_STAGGER` after the one
-/// before, the wait being its start's, not the boot's.
+/// Codex keeps a Thread's queued prompts across its Session, but only a
+/// running agent sends them: a Thread whose saved queue still holds some
+/// starts its agent at boot.
 #[test]
-fn a_boot_staggers_the_sessions_it_resumes() {
-    use crate::engine::Preparation;
-    use crate::session::SessionLifecycle;
-    struct Timing {
-        inner: Box<dyn Spawner>,
-        waits: Arc<Mutex<Vec<Duration>>>,
-    }
-    impl Spawner for Timing {
-        fn spawn(
-            &mut self,
-            request: SpawnRequest,
-        ) -> io::Result<Box<dyn crate::providers::Session>> {
-            self.inner.spawn(request)
-        }
-        fn start_after(
-            &mut self,
-            prepare: Preparation,
-            request: SpawnRequest,
-        ) -> io::Result<SessionLifecycle> {
-            let started = Instant::now();
-            prepare()?;
-            self.waits.lock().unwrap().push(started.elapsed());
-            self.start(request)
-        }
-    }
-    let dir = scratch("stagger");
+fn a_boot_starts_the_agent_of_a_thread_with_queued_prompts() {
+    let dir = scratch("open-queued");
     let store = dir.join("threads");
     let (spawner, _providers) = spawn();
     let mut first = engine(&store, spawner);
-    for _ in 0..3 {
-        open_in(&mut first, &dir);
+    let idle = open_in(&mut first, &dir);
+    let queued = first
+        .open(
+            Provider::Codex,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: dir.clone(),
+            },
+        )
+        .unwrap();
+    first.halt_sessions();
+    drop(first);
+    std::fs::write(
+        store.join(queued.to_string()).join("queue.json"),
+        r#"{"pending":{"client-1":"after this, run the tests"},"consumed":[]}"#,
+    )
+    .unwrap();
+
+    let (spawner, resumed) = spawn();
+    let mut next = engine(&store, spawner);
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    assert_eq!(next.threads(), vec![idle, queued]);
+    resumed
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the queued Thread's agent started");
+    assert!(resumed.try_recv().is_err(), "and only that one");
+}
+
+/// Starts each Session through `inner`, noting the conversation it resumes.
+struct Resumes {
+    inner: Box<dyn Spawner>,
+    resumed: Arc<Mutex<Vec<Option<String>>>>,
+}
+
+impl Spawner for Resumes {
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
+        self.resumed
+            .lock()
+            .unwrap()
+            .push(request.resume.map(str::to_string));
+        self.inner.spawn(request)
+    }
+}
+
+/// A Thread that came back with nothing running starts its agent when it
+/// is sent a prompt, on the conversation it left, and reads as if the agent
+/// had been there all along.
+#[test]
+fn a_restored_thread_starts_its_agent_on_send_without_a_trace() {
+    let dir = scratch("restored-send");
+    let store = dir.join("threads");
+    let (spawner, providers) = spawn();
+    let mut first = engine(&store, spawner);
+    let thread = open_in(&mut first, &dir);
+    providers
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .send(SessionEvent::Init {
+            session_id: "claude-1".into(),
+            model: "claude-model".into(),
+        })
+        .unwrap();
+    first.send(thread, "first".into());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while first.thread(thread).unwrap().provider_session() != Some("claude-1") {
+        assert!(Instant::now() < deadline, "the Init never landed");
+        first.pump();
     }
     first.halt_sessions();
     drop(first);
 
-    let waits = Arc::new(Mutex::new(Vec::new()));
-    let (inner, _resumed) = spawn();
+    let resumed = Arc::new(Mutex::new(Vec::new()));
+    let (inner, _providers) = spawn();
     let mut next = engine(
         &store,
-        Box::new(Timing {
+        Box::new(Resumes {
             inner,
-            waits: waits.clone(),
+            resumed: resumed.clone(),
         }),
     );
     revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    let rows = |engine: &Engine| {
+        engine
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .map(|block| block.body.clone())
+            .collect::<Vec<_>>()
+    };
+    let before = rows(&next);
+    assert!(
+        !before.iter().any(|body| matches!(body, Body::Meta(_))),
+        "{before:?}"
+    );
 
-    let waits = waits.lock().unwrap();
-    assert_eq!(waits.len(), 3);
-    for (nth, wait) in waits.iter().enumerate() {
-        assert!(*wait >= LAUNCH_STAGGER * nth as u32, "{waits:?}");
+    next.send(thread, "carry on".into());
+    next.pump();
+    assert_eq!(*resumed.lock().unwrap(), vec![Some("claude-1".to_string())]);
+    let mut expected = before;
+    expected.push(Body::Prompt("carry on".into()));
+    assert_eq!(rows(&next), expected);
+}
+
+/// The operator starting to write to a restored Thread starts its agent,
+/// so it is ready by the time the prompt is sent; nothing is sent for it.
+#[test]
+fn writing_to_a_restored_thread_starts_its_agent() {
+    let dir = scratch("restored-compose");
+    let store = dir.join("threads");
+    let (spawner, _providers) = spawn();
+    let mut first = engine(&store, spawner);
+    let thread = open_in(&mut first, &dir);
+    first.halt_sessions();
+    drop(first);
+
+    let (spawner, resumed) = spawn();
+    let mut next = engine(&store, spawner);
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    let before = next.thread(thread).unwrap().transcript().blocks().to_vec();
+    next.window_says(
+        1,
+        &Op::Composing {
+            thread,
+            unsent: true,
+        },
+    );
+    next.pump();
+
+    resumed
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the agent started");
+    assert_eq!(next.thread(thread).unwrap().transcript().blocks(), before);
+}
+
+/// A restored Thread's agent takes a moment to start; what the operator
+/// queues meanwhile waits for it, in order, instead of being refused.
+#[test]
+fn prompts_queued_while_the_agent_starts_wait_for_it() {
+    let dir = scratch("restored-queue");
+    let store = dir.join("threads");
+    let (spawner, _providers) = spawn();
+    let mut first = engine(&store, spawner);
+    let thread = open_in(&mut first, &dir);
+    first.halt_sessions();
+    drop(first);
+
+    let (sessions, _providers) = mpsc::channel();
+    let (gate, opens) = mpsc::channel();
+    let queued = Queued::default();
+    let mut next = engine(
+        &store,
+        Box::new(Spawn {
+            sessions,
+            answers: Answers::default(),
+            queued: queued.clone(),
+            gate: Some(Arc::new(Mutex::new(opens))),
+        }),
+    );
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    next.send(thread, "first".into());
+    assert!(next.thread(thread).unwrap().starting());
+    assert!(next.queue(thread, "second".into()), "queued, not refused");
+    assert_eq!(
+        next.thread(thread).unwrap().queued_all(),
+        vec!["second", "first"]
+    );
+
+    gate.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while next.thread(thread).unwrap().starting() {
+        assert!(Instant::now() < deadline, "the agent never started");
+        next.pump();
     }
+    let prompts: Vec<_> = next
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Prompt(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prompts, vec!["first".to_string()]);
+    assert_eq!(queued.lock().unwrap().len(), 1, "second waits in its queue");
+}
+
+/// Reopening a parked Thread shows it again; its agent starts only when
+/// the Thread is used (ADR 0032).
+#[test]
+fn reopening_a_thread_starts_no_agent() {
+    let harness = start("reopen-lazy");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    window.command(2, Op::Park { thread });
+    let reply = window.command(3, Op::Revive { thread });
+    assert!(
+        matches!(reply, ServerMessage::Reply { error: None, .. }),
+        "{reply:?}"
+    );
+    assert!(
+        harness
+            .sessions
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "no agent started"
+    );
 }
 
 /// The rows of the next `parked` message: the Engine reads them off its
@@ -2054,10 +2235,10 @@ fn a_prompt_queued_behind_a_turn_waits_for_its_own() {
 }
 
 /// A prompt to a Session still starting is held until it is up, and its
-/// wait does not stall meanwhile; a second is refused rather than replace
-/// it.
+/// wait does not stall meanwhile; a second waits behind it, in the
+/// provider's queue once the Session is up (ADR 0032).
 #[test]
-fn a_starting_session_holds_one_prompt_and_refuses_another() {
+fn a_starting_session_holds_one_prompt_and_queues_another() {
     let (harness, gate) = start_gated("api-starting");
     let mut caller = call(&harness);
     let started = caller.answer(
@@ -2066,7 +2247,7 @@ fn a_starting_session_holds_one_prompt_and_refuses_another() {
         serde_json::json!({ "cwd": harness.dir }),
     );
     let thread = started["result"]["thread"]["thread"].as_u64().unwrap();
-    let provider = harness
+    let _provider = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
@@ -2082,7 +2263,7 @@ fn a_starting_session_holds_one_prompt_and_refuses_another() {
         "agent.prompt",
         serde_json::json!({ "thread": thread, "text": "and again" }),
     );
-    assert_eq!(again["error"]["code"], "agent_starting", "{again}");
+    assert!(again.get("error").is_none(), "{again}");
 
     gate.send(()).unwrap();
     let working = caller.answer(
@@ -2091,9 +2272,15 @@ fn a_starting_session_holds_one_prompt_and_refuses_another() {
         serde_json::json!({ "thread": thread, "until": "working" }),
     );
     assert!(working.get("result").is_some(), "{working}");
-    turn_ends(&provider);
-    let settled = caller.next();
-    assert_eq!(settled["id"], "2", "{settled}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.queued.lock().unwrap().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the second never reached the provider's queue"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(harness.queued.lock().unwrap().len(), 1);
     let read = caller.answer("5", "agent.read", serde_json::json!({ "thread": thread }));
     let text = read["result"]["text"].as_str().unwrap();
     assert!(text.contains("> review"), "{read}");

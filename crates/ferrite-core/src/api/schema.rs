@@ -12,7 +12,6 @@
 //!   open Thread (parked, for `thread.revive`), Project, or pending
 //!   Decision on the Thread.
 //! - `agent_blocked`: a Decision waits; nothing was sent.
-//! - `agent_starting`: the Session is starting and holds a prompt already.
 //! - `agent_not_ready`: `thread.start --ready` found the agent blocked, or
 //!   not up within its time; the refusal names the Thread, which stays.
 //! - `agent_prompt_stalled`, `timeout`: a wait gave up; nothing was undone.

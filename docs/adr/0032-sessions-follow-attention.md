@@ -73,3 +73,6 @@ results keep their bounded preview, not the provider's whole JSON value.
   A new provider mechanism will need adding there.
 - Ferrite can no longer assume an open Thread has a live Session. Code that
   reads one must use the cached answers instead.
+- Supersedes ADR 0018's launch stagger, since boot starts no Sessions to
+  stagger, and ADR 0027's `agent_starting` refusal, since a second prompt
+  now waits behind the first.

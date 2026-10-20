@@ -137,9 +137,6 @@ pub enum Code {
     UnknownDecision,
     /// A Decision waits on the Thread: the prompt was not sent.
     AgentBlocked,
-    /// The Thread's Session is starting and already holds a prompt: this
-    /// one was not sent.
-    AgentStarting,
     /// The agent was not seen at work within [`STALL`] of its prompt. The
     /// prompt may still have arrived.
     AgentPromptStalled,

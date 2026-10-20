@@ -30,7 +30,7 @@ fn invariant_resume_ids_persist_exactly() {
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
     cockpit.park(thread).unwrap();
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(last_resume(&fake).as_deref(), Some("sess-1"));
 
     // A /clear names a new conversation; the next revive resumes that.
@@ -41,7 +41,7 @@ fn invariant_resume_ids_persist_exactly() {
         .unwrap();
     cockpit.pump();
     cockpit.park(thread).unwrap();
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(last_resume(&fake).as_deref(), Some("sess-2"));
 
     // A switch whose carry has not gone out: nothing to resume.
@@ -56,7 +56,7 @@ fn invariant_resume_ids_persist_exactly() {
         .unwrap();
     cockpit.pump();
     cockpit.park(thread).unwrap();
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(fake.providers.borrow().last(), Some(&Provider::Codex));
     assert_eq!(last_resume(&fake), None);
 
@@ -71,7 +71,7 @@ fn invariant_resume_ids_persist_exactly() {
     live(&fake).send(ended()).unwrap();
     cockpit.pump();
     cockpit.park(thread).unwrap();
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(last_resume(&fake).as_deref(), Some("codex-1"));
 }
 

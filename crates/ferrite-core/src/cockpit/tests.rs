@@ -221,6 +221,19 @@ impl Spawner for Fake {
 }
 
 /// The binding for tests that are not about bindings.
+/// Reopen a parked Thread and start its agent, as the operator writing to
+/// it does (ADR 0032).
+fn revive_awake(cockpit: &mut Cockpit, thread: ThreadId) {
+    cockpit.revive(thread).unwrap();
+    cockpit.engine_mut().window_says(
+        0,
+        &crate::protocol::Op::Composing {
+            thread,
+            unsent: true,
+        },
+    );
+}
+
 fn main_choice() -> WorkspaceChoice {
     WorkspaceChoice::Main {
         checkout: std::env::temp_dir(),
@@ -384,7 +397,7 @@ fn a_thread_follows_the_worktree_its_main_creates() {
     );
 
     cockpit.park(thread).unwrap();
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(fake.cwds.borrow().last().cloned().flatten(), Some(path));
 }
 
@@ -1070,7 +1083,7 @@ fn a_relaunch_restores_the_binding_and_spawns_where_it_points() {
         Store::open(&dir).unwrap(),
         Box::new(relaunched_fake.clone()),
     );
-    relaunched.revive(thread).unwrap();
+    revive_awake(&mut relaunched, thread);
 
     assert_eq!(
         relaunched.thread(thread).and_then(|open| open.workspace()),
@@ -1086,12 +1099,12 @@ fn a_relaunch_restores_the_binding_and_spawns_where_it_points() {
     );
 }
 
-/// ADR 0018: a revived Thread's git calls are the spawner's to run,
-/// ahead of the CLI, never the caller's. A spawner that holds the
-/// preparation back leaves the vanished worktree missing after
-/// `revive_after` returns; running the preparation brings it back.
+/// ADR 0018: a Thread's git calls are the spawner's to run, ahead of the
+/// CLI, never the caller's. A spawner that holds the preparation back
+/// leaves the vanished worktree missing after the revived Thread wakes;
+/// running the preparation brings it back.
 #[test]
-fn revive_leaves_the_worktree_to_the_spawners_preparation() {
+fn waking_leaves_the_worktree_to_the_spawners_preparation() {
     struct Holding {
         fake: Fake,
         held: Rc<RefCell<Vec<Preparation>>>,
@@ -1138,9 +1151,7 @@ fn revive_leaves_the_worktree_to_the_spawners_preparation() {
             held: held.clone(),
         }),
     );
-    relaunched
-        .revive_after(thread, Duration::from_millis(1))
-        .unwrap();
+    revive_awake(&mut relaunched, thread);
 
     assert!(!worktree.exists(), "no git on the caller's thread");
     let prepare = held.borrow_mut().pop().expect("the spawner was handed it");
@@ -1368,7 +1379,7 @@ fn failed_delete_restores_the_exact_group_snapshot() {
 
 #[test]
 fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
-    let (mut cockpit, fake) = cockpit("revive-group-atomic");
+    let (mut cockpit, _fake) = cockpit("revive-group-atomic");
     let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let third = cockpit.open(Provider::Claude, main_choice()).unwrap();
@@ -1388,7 +1399,17 @@ fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
     cockpit.park(second).unwrap();
     cockpit.park(third).unwrap();
     cockpit.engine_mut().refuse_park.insert(first);
-    *fake.fail_at.borrow_mut() = Some(*fake.attempts.borrow() + 3);
+    // Reviving starts no agent (ADR 0032): a member fails when its history
+    // cannot be read.
+    let log = std::env::temp_dir()
+        .join(format!(
+            "ferrite-cockpit-{}-revive-group-atomic",
+            std::process::id()
+        ))
+        .join(third.to_string())
+        .join("log.jsonl");
+    let aside = log.with_extension("aside");
+    std::fs::rename(&log, &aside).unwrap();
 
     assert!(matches!(
         cockpit.revive_group(group),
@@ -1404,7 +1425,7 @@ fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
     );
 
     cockpit.engine_mut().refuse_park.clear();
-    *fake.fail_at.borrow_mut() = None;
+    std::fs::rename(&aside, &log).unwrap();
     assert_eq!(cockpit.revive_group(group).unwrap(), [first, second, third]);
     assert_eq!(cockpit.threads(), [first, second, third]);
 }
@@ -3082,7 +3103,7 @@ fn a_parked_thread_revives_with_its_history_and_says_so() {
     assert!(cockpit.thread(thread).is_none());
     assert!(cockpit.threads().is_empty());
 
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
 
     let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
     let text_of = |body: &Body| match body {
@@ -3095,11 +3116,6 @@ fn a_parked_thread_revives_with_its_history_and_says_so() {
             .iter()
             .any(|b| text_of(&b.body) == "an answer from before"),
         "history should come back: {blocks:?}"
-    );
-    // Honest about what it is: a new Session wearing an old Thread.
-    assert_eq!(
-        text_of(&blocks.last().unwrap().body),
-        "revived — new Session, history from the log"
     );
     // And the provider is told where to pick up.
     assert_eq!(
@@ -3135,7 +3151,7 @@ fn a_session_file_imports_through_the_cockpits_own_door() {
         cockpit.parked().unwrap().contains(&thread),
         "the imported Thread is durable and parked, ready to revive"
     );
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(
         cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
         Some("first question".into()),
@@ -4307,7 +4323,7 @@ fn effort_changes_in_place_and_persists() {
         cockpit.peek(thread).unwrap().model.as_deref(),
         Some("claude-fable-5-1")
     );
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
     assert_eq!(cockpit.thread(thread).and_then(|open| open.effort()), None);
 
@@ -4417,7 +4433,7 @@ fn a_thread_s_title_reaches_its_session_and_every_respawn() {
     assert_eq!(fake.named.borrow().as_slice(), ["CI flake"]);
 
     cockpit.park(thread).unwrap();
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(
         fake.names.borrow().last().unwrap().as_deref(),
         Some("CI flake")
@@ -4435,7 +4451,7 @@ fn a_thread_s_title_reaches_its_session_and_every_respawn() {
     cockpit.park(thread).unwrap();
     cockpit.rename_thread(thread, "CI flake, again").unwrap();
     assert_eq!(fake.named.borrow().len(), 1);
-    cockpit.revive(thread).unwrap();
+    revive_awake(&mut cockpit, thread);
     assert_eq!(
         fake.names.borrow().last().unwrap().as_deref(),
         Some("CI flake, again")
@@ -5047,7 +5063,7 @@ fn a_thread_started_with_args_is_revived_with_them() {
         .open_with(Provider::Claude, main_choice(), launch)
         .unwrap();
     core.park(thread).unwrap();
-    core.revive(thread).unwrap();
+    revive_awake(&mut core, thread);
     assert_eq!(*fake.args.borrow(), [args.clone(), args]);
 }
 
@@ -5173,7 +5189,7 @@ fn only_the_first_session_names_the_conversation_it_begins() {
     core.pump();
     core.send(thread, "again".into());
     core.park(thread).unwrap();
-    core.revive(thread).unwrap();
+    revive_awake(&mut core, thread);
 
     let later = vec!["--dangerously-skip-permissions".to_string()];
     assert_eq!(
@@ -5224,7 +5240,7 @@ fn a_thread_started_with_env_and_a_launcher_is_revived_with_them() {
         .open_with(Provider::Claude, main_choice(), launch)
         .unwrap();
     core.park(thread).unwrap();
-    core.revive(thread).unwrap();
+    revive_awake(&mut core, thread);
     let launched = (env, launcher);
     assert_eq!(*fake.launched.borrow(), [launched.clone(), launched]);
 }
