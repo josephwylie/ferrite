@@ -9,6 +9,7 @@
 //! Thread's mirror, and the shared state's copies. The open Threads are
 //! shared: the Roster follows them (`sync_roster`).
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -79,7 +80,14 @@ pub struct Cockpit {
     /// The self-hosted forges a review's pull request is read from here,
     /// when this window runs its agents itself (`settings_changed`).
     forge: ferrite_reviewr::config::PluginConfig,
+    /// When this window last drew each Thread at Transcript level
+    /// (`draws_transcripts`); `None` until it first says.
+    drawn: Option<HashMap<ThreadId, Instant>>,
 }
+
+/// How long a Thread off screen stays streamed whole: flipping between
+/// Threads reads none of their history again (ADR 0032).
+const UNWATCH_AFTER: Duration = Duration::from_secs(30);
 
 /// What only a window knows and the API reports (ADR 0030): the Thread it
 /// shows the operator, and its Composers holding unsent text.
@@ -153,6 +161,7 @@ impl Cockpit {
             window_active: true,
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
+            drawn: None,
             told: None,
         }
     }
@@ -303,6 +312,10 @@ impl Cockpit {
     }
 
     fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
+        let open_before = self.shared.open.clone();
+        let attached = arrived
+            .iter()
+            .any(|arrival| matches!(arrival, remote::Arrival::Attached { .. }));
         let boot = match &self.link {
             Link::InProcess(engine) => engine.boot(),
             Link::Server(server) => server.boot(),
@@ -329,6 +342,7 @@ impl Cockpit {
                             boot,
                         );
                     }
+                    self.mirrors.attached(snapshot.digests, boot);
                 }
                 remote::Arrival::Started(result) => settled.push(result),
             }
@@ -344,9 +358,84 @@ impl Cockpit {
             self.bootstrap_results.push(result);
         }
         self.sync_roster();
-        if let Link::Server(server) = &mut self.link {
-            let mirrors = &self.mirrors;
-            server.watch(&self.shared.open, |thread| mirrors.seq(thread));
+        // A Thread that opens while the window is up is one the operator is
+        // about to look at: it streams from the start, as if drawn. What a
+        // Server's snapshot lists is not new.
+        if !attached {
+            let now = crate::clock::instant();
+            if let Some(drawn) = &mut self.drawn {
+                for &thread in &self.shared.open {
+                    if !open_before.contains(&thread) {
+                        drawn.insert(thread, now);
+                    }
+                }
+            }
+        }
+        self.follow_attention();
+    }
+
+    /// The window draws these Threads at Transcript level now: it streams
+    /// them whole, and each `UNWATCH_AFTER` after it last drew it (ADR
+    /// 0032).
+    pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadId>) {
+        let now = crate::clock::instant();
+        let drawn = self.drawn.get_or_insert_with(HashMap::new);
+        for thread in threads {
+            drawn.insert(thread, now);
+        }
+    }
+
+    /// The Threads this window streams whole: those it drew at Transcript
+    /// level within `UNWATCH_AFTER`. Until it says what it draws, or while
+    /// its Engine sends no digests to read the rest from, every open one.
+    fn watched(&self) -> Vec<ThreadId> {
+        let open = &self.shared.open;
+        let Some(drawn) = self.drawn.as_ref().filter(|_| self.mirrors.digested()) else {
+            return open.clone();
+        };
+        let now = crate::clock::instant();
+        open.iter()
+            .copied()
+            .filter(|thread| {
+                drawn
+                    .get(thread)
+                    .is_some_and(|at| now.saturating_duration_since(*at) < UNWATCH_AFTER)
+            })
+            .collect()
+    }
+
+    /// Stream what the window draws, and let the rest go.
+    fn follow_attention(&mut self) {
+        let watched = self.watched();
+        if let Some(drawn) = &mut self.drawn {
+            drawn.retain(|thread, _| self.shared.open.contains(thread));
+        }
+        match &mut self.link {
+            Link::Server(server) => {
+                let mirrors = &self.mirrors;
+                server.watch(&watched, |thread| mirrors.seq(thread));
+                self.mirrors.watch_only(&watched);
+            }
+            Link::InProcess(engine) => {
+                // As the Server streams a watch: what the Engine published
+                // was taken this pump, so the history meets it exactly.
+                let fresh: Vec<ThreadId> = watched
+                    .iter()
+                    .filter(|thread| !self.mirrors.watched(**thread))
+                    .copied()
+                    .collect();
+                self.mirrors.watch_only(&watched);
+                let boot = engine.boot();
+                for thread in fresh {
+                    if let Some(history) = engine.history(thread) {
+                        let mirrors = &mut self.mirrors;
+                        let _ = history.send(&mut |message| {
+                            mirrors.receive(message, boot);
+                            Ok(())
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -792,6 +881,10 @@ impl Cockpit {
             );
         }
         for &thread in engine.open_threads() {
+            // A Thread this window does not stream reads from its digest.
+            if !self.mirrors.watched(thread) {
+                continue;
+            }
             let engine = engine.thread(thread).expect("open in the Engine");
             let mirror = self
                 .mirrors

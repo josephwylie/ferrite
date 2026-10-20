@@ -497,10 +497,7 @@ fn wall_lines(
                     Some(next) => format!("{BULLET} {head}\n{}", next.trim()),
                     None => format!("{BULLET} {head}"),
                 };
-                lines.push(WallLine {
-                    text: text.into(),
-                    wraps: true,
-                });
+                lines.push(WallLine { text, wraps: true });
             }
             Body::Notice(text)
                 if decision.is_none() && !crate::transcript::is_opened_notice(text) =>

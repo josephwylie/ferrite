@@ -29,9 +29,11 @@ pub(crate) struct Mirror {
     facts: Option<Facts>,
     /// What every window reads of the Thread away from its Transcript.
     summary: Option<Summary>,
-    /// Whether this window holds the Thread's Activity: what a view reads
-    /// first, the digest standing in while it does not.
+    /// Whether this window streams the Thread's Activity (ADR 0032).
     watched: bool,
+    /// Whether the Activity holds the stream: what a view reads first, the
+    /// digest standing in until it does.
+    loaded: bool,
     /// Server identities survive a history rebuild; local replay counters do not.
     decision_handles: HashMap<String, DecisionHandle>,
 }
@@ -166,6 +168,7 @@ impl Mirror {
             facts: None,
             summary: None,
             watched: true,
+            loaded: false,
             decision_handles: HashMap::new(),
         }
     }
@@ -214,12 +217,23 @@ pub(crate) struct Mirrors {
     restarted: Vec<ThreadId>,
     /// A Session announced other models since the window last asked.
     models_changed: bool,
+    /// Whether the Engine sends digests: only then can a window hold less
+    /// than every open Thread whole.
+    digested: bool,
 }
 
 impl Mirrors {
     /// Apply one message. `boot` is the Engine's clock zero on this side.
     pub(crate) fn receive(&mut self, message: ServerMessage, boot: Instant) {
         match message {
+            ServerMessage::History { thread, .. }
+            | ServerMessage::HistoryEnd { thread, .. }
+            | ServerMessage::Input { thread, .. }
+            | ServerMessage::ToolDraft { thread, .. }
+                if self
+                    .threads
+                    .get(&thread)
+                    .is_some_and(|mirror| !mirror.watched) => {}
             ServerMessage::History {
                 thread,
                 after,
@@ -239,6 +253,7 @@ impl Mirrors {
             ServerMessage::HistoryEnd { thread, seq, live } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
                 mirror.seq = seq;
+                mirror.loaded = true;
                 let update = updated(&mut self.updates, thread);
                 for input in &live {
                     mirror.apply_wire(input, crate::clock::instant(), update);
@@ -252,6 +267,7 @@ impl Mirrors {
             } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
                 mirror.seq = seq;
+                mirror.loaded = true;
                 let update = updated(&mut self.updates, thread);
                 mirror.apply_wire(&input, protocol::instant_at(at_ms, boot), update);
             }
@@ -285,6 +301,7 @@ impl Mirrors {
             ServerMessage::Digest { thread, digest } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
                 mirror.summary = Some(Summary::of(digest, boot));
+                self.digested = true;
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             ServerMessage::Decision { thread, handle, .. } => {
@@ -368,9 +385,50 @@ impl Mirrors {
     }
 
     /// The last input this window applied to a Thread: where a resume
-    /// picks up.
+    /// picks up. None for a Thread it does not hold: its history comes
+    /// whole.
     pub(crate) fn seq(&self, thread: ThreadId) -> Option<u64> {
-        self.threads.get(&thread).map(|mirror| mirror.seq)
+        self.threads
+            .get(&thread)
+            .filter(|mirror| mirror.watched && mirror.loaded)
+            .map(|mirror| mirror.seq)
+    }
+
+    /// A Server's snapshot: whether it sends digests, and each open
+    /// Thread's.
+    pub(crate) fn attached(&mut self, digests: Option<Vec<protocol::ThreadDigest>>, boot: Instant) {
+        self.digested = digests.is_some();
+        for protocol::ThreadDigest { thread, digest } in digests.unwrap_or_default() {
+            self.receive(ServerMessage::Digest { thread, digest }, boot);
+        }
+    }
+
+    /// Whether this window streams `thread` (`Mirrors::watch_only`).
+    pub(crate) fn watched(&self, thread: ThreadId) -> bool {
+        self.threads
+            .get(&thread)
+            .is_some_and(|mirror| mirror.watched)
+    }
+
+    /// Whether the Engine sends digests (`Mirrors::digested`).
+    pub(crate) fn digested(&self) -> bool {
+        self.digested
+    }
+
+    /// Stream only these Threads: the rest let go of their Activity and
+    /// read from their digests.
+    pub(crate) fn watch_only(&mut self, watched: &[ThreadId]) {
+        for (&thread, mirror) in &mut self.threads {
+            let wanted = watched.contains(&thread);
+            if mirror.watched && !wanted {
+                mirror.activity = Activity::default();
+                mirror.generation = 0;
+                mirror.seq = 0;
+                mirror.loaded = false;
+                updated(&mut self.updates, thread).activity_changed = true;
+            }
+            mirror.watched = wanted;
+        }
     }
 
     /// Only these Threads are open: the rest go.
@@ -419,7 +477,7 @@ impl Mirrors {
             thread,
             activity: mirror.activity.view(),
             facts: mirror.facts.as_ref()?,
-            summary: mirror.summary.as_ref().filter(|_| !mirror.watched),
+            summary: mirror.summary.as_ref().filter(|_| !mirror.loaded),
             digest: mirror.summary.as_ref().map(|summary| &summary.digest),
         })
     }

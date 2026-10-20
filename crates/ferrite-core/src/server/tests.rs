@@ -428,7 +428,7 @@ fn the_first_answer_wins_and_the_second_hears_already_answered() {
         window
             .mirrors
             .view(thread)
-            .is_some_and(|view| view.pending().is_some())
+            .is_some_and(|view| !view.activity().decisions().is_empty())
     };
     first.until(pending);
     second.until(pending);
@@ -950,7 +950,7 @@ fn a_resume_the_server_cannot_meet_rebuilds_from_history() {
         window
             .mirrors
             .view(thread)
-            .is_some_and(|view| view.pending().is_some())
+            .is_some_and(|view| !view.activity().decisions().is_empty())
     });
 
     let mut back = attach(&harness.address);
@@ -965,7 +965,7 @@ fn a_resume_the_server_cannot_meet_rebuilds_from_history() {
         window
             .mirrors
             .view(thread)
-            .is_some_and(|view| view.pending().is_some())
+            .is_some_and(|view| !view.activity().decisions().is_empty())
     });
 
     assert_eq!(back.said(thread), steady.said(thread));
@@ -985,10 +985,11 @@ fn a_resume_never_crosses_a_reopened_thread() {
     window.watch(thread, None);
     provider.send(text("first life")).unwrap();
     window.until(|window| {
-        window
-            .said(thread)
-            .iter()
-            .any(|said| said.contains("first life"))
+        window.mirrors.seq(thread).is_some()
+            && window
+                .said(thread)
+                .iter()
+                .any(|said| said.contains("first life"))
     });
     let Window {
         mut mirrors,
@@ -4130,5 +4131,66 @@ fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
             .map(|digest| digest.pending.len()),
         Some(1),
         "at once"
+    );
+}
+
+/// A window mirrors only the Threads it draws at Transcript level (ADR
+/// 0032). One off screen reads from its digest — what it does, the Decision
+/// it waits on — and holds none of its transcript; drawn, its history
+/// arrives; thirty seconds off screen, the window lets it go again.
+#[test]
+fn a_window_mirrors_only_the_threads_it_draws() {
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let harness = start("mirrors-drawn");
+    let mut window = cockpit(&harness);
+    let thread = window
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: harness.dir.clone(),
+            },
+        )
+        .unwrap();
+    let provider = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let digest_says = |window: &crate::cockpit::Cockpit, said: &str| {
+        window.thread(thread).is_some_and(|open| {
+            open.digest()
+                .wall
+                .lines
+                .iter()
+                .any(|line| line.text.contains(said))
+        })
+    };
+    window.draws_transcripts([]);
+    window.send(thread, "go".into());
+    provider.send(text("on it\n\n")).unwrap();
+    provider.send(decision()).unwrap();
+
+    pump_until(&mut window, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| open.pending().is_some())
+    });
+    pump_until(&mut window, |window| digest_says(window, "on it"));
+    assert!(!shows(&window, thread, "on it"), "no transcript off screen");
+
+    window.draws_transcripts([thread]);
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+
+    window.draws_transcripts([]);
+    clock.advance(Duration::from_secs(29));
+    window.pump();
+    assert!(shows(&window, thread, "on it"), "kept a while off screen");
+    clock.advance(Duration::from_secs(1));
+    window.pump();
+    assert!(!shows(&window, thread, "on it"), "let go");
+    assert!(
+        window
+            .thread(thread)
+            .is_some_and(|open| open.pending().is_some()),
+        "its Decision still reads"
     );
 }

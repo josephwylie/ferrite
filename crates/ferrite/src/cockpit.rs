@@ -9839,6 +9839,17 @@ impl CockpitView {
             .fullscreen()
             .and_then(|shown| self.index_of(shown));
         let level = self.level_now(window);
+        // What this frame draws at Transcript level is what the window
+        // streams whole; everything else reads its digest (ADR 0032).
+        let drawn: Vec<ThreadId> = match level {
+            Level::Transcript => self
+                .visible_indices()
+                .into_iter()
+                .filter_map(|index| self.panes[index].thread())
+                .collect(),
+            _ => Vec::new(),
+        };
+        self.cockpit.draws_transcripts(drawn);
 
         if level == Level::Transcript {
             for index in 0..self.panes.len() {
