@@ -245,9 +245,11 @@ unchanged: a log from a newer schema is refused whole. On the wire, a
 record kind this client does not know decodes to `Unknown` and is
 skipped, and the window says it is older than its Server.
 
-`seq` counts a Thread's inputs within one `boot_id`. The Engine keeps the
-last 8 MiB of each open Thread's encoded inputs, watched or not: a
-reconnecting client has, by then, stopped watching. A `watch` whose
+`seq` counts a Thread's inputs within one `boot_id`. The Server keeps the
+last 8 MiB of encoded inputs of each open Thread a client has watched this
+boot, whether or not one still is: a reconnecting client has, by then,
+stopped watching. A Thread nobody has watched keeps none, since no client
+holds a `seq` of it to resume from (amended 2026-10-20). A `watch` whose
 `resume` names this boot and a `seq` still held replays from there; any
 other starts again from `history` and the client rebuilds that Thread's
 mirror. `revision` counts the Server's committed changes; latest-wins
