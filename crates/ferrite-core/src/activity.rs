@@ -608,6 +608,7 @@ impl SubjectState {
         if matches!(input, Input::Highlighted { .. } | Input::Revived) {
             return update;
         }
+        let input = held_input(input, &self.transcript);
         // A report repeating the last record replays as nothing after its
         // twin; the live view above has taken it already.
         if update.dirty.is_empty()
@@ -2550,6 +2551,14 @@ pub(crate) fn input_bytes(input: &Input) -> usize {
                     + match result {
                         ToolResult::Command { stdout, stderr, .. } => stdout.len() + stderr.len(),
                         ToolResult::Structured { value, .. } => value.to_string().len(),
+                        ToolResult::Preview {
+                            preview,
+                            result_line,
+                            ..
+                        } => {
+                            preview.as_ref().map_or(0, |preview| preview.text.len())
+                                + result_line.as_ref().map_or(0, String::len)
+                        }
                         ToolResult::FileEdit { path, hunks } => {
                             path.len()
                                 + hunks
@@ -2577,6 +2586,43 @@ pub(crate) fn input_bytes(input: &Input) -> usize {
         },
         _ => 64,
     }
+}
+
+/// What a record keeps of an input the row has taken: a settled call's
+/// provider payload only as the row holds it (`ToolResult::Preview`), so a
+/// rebuild reads the same row without the payload (ADR 0032).
+fn held_input(input: Input, transcript: &Transcript) -> Input {
+    let Input::Event(SessionEvent::ToolCompleted {
+        id,
+        output,
+        is_error,
+        result: ToolResult::Structured { value, duration_ms },
+    }) = input
+    else {
+        return input;
+    };
+    let row = transcript
+        .blocks()
+        .iter()
+        .rev()
+        .find_map(|block| match &block.body {
+            transcript::Body::Tool(tool) if tool.call == id => Some(tool),
+            _ => None,
+        });
+    let result = match row {
+        Some(row) => ToolResult::Preview {
+            preview: row.structured.clone(),
+            result_line: row.result_line.clone(),
+            duration_ms,
+        },
+        None => ToolResult::Structured { value, duration_ms },
+    };
+    Input::Event(SessionEvent::ToolCompleted {
+        id,
+        output,
+        is_error,
+        result,
+    })
 }
 
 fn bounded_input(input: &Input, capacity: usize) -> Input {

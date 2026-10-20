@@ -189,7 +189,7 @@ pub(crate) fn shows_input(tool: &ToolBlock) -> bool {
         && (tool.title.is_some()
             || tool.summary.contains(['\n', '\r'])
             || tool.summary.chars().count() > theme::INPUT_ECHO_CHARS
-            || (tool.output.is_none() && tool.structured_result.is_none() && tool.diffs.is_empty()))
+            || (tool.output.is_none() && tool.structured.is_none() && tool.diffs.is_empty()))
 }
 
 /// The word a settled edit's result says (`applied`, `The file … has been

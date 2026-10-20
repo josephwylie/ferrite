@@ -13,7 +13,7 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
         summary: summary.into(),
         state,
         diffs: Vec::new(),
-        structured_result: None,
+        structured: None,
         result_line: None,
         output: (!output.is_empty()).then(|| ToolOutput {
             text: output.into(),

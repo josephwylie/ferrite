@@ -391,3 +391,70 @@ fn a_record_streaming_into_a_trimmed_block_is_rebuilt_not_lost() {
     assert_eq!(spans[0].text, "b".repeat(150));
     check(state, limits, 0, 0, "Main");
 }
+
+/// A finished call keeps the provider's payload as its bounded preview,
+/// not the payload (ADR 0032): the row reads the summary the payload gave
+/// it, a rebuild reads the same row, and what the records keep is the
+/// preview's size, not the payload's.
+#[test]
+fn a_finished_calls_payload_is_held_as_its_bounded_preview() {
+    let limits = ActivityLimits::default();
+    let mut activity = Activity::new(limits);
+    activity.apply(ActivityInput::Connect { generation: 1 });
+    let main = |activity: &mut Activity, event: SessionEvent| {
+        activity.apply(ActivityInput::Main {
+            input: Input::Event(event),
+            at: crate::clock::instant(),
+        });
+    };
+    let content = "x".repeat(400_000);
+    main(
+        &mut activity,
+        SessionEvent::ToolStarted {
+            id: "read".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": "src/big.rs" }),
+        },
+    );
+    main(
+        &mut activity,
+        SessionEvent::ToolCompleted {
+            id: "read".into(),
+            output: String::new(),
+            is_error: false,
+            result: ToolResult::Structured {
+                value: serde_json::json!({
+                    "file": { "content": content, "numLines": 412 }
+                }),
+                duration_ms: Some(12),
+            },
+        },
+    );
+
+    let state = &activity.main;
+    let tool = |transcript: &Transcript| -> crate::transcript::ToolBlock {
+        transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match &block.body {
+                Body::Tool(tool) => Some(tool.clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let row = tool(&state.transcript);
+    assert_eq!(row.result_line.as_deref(), Some("412 lines"));
+    let preview = row.structured_output().expect("a preview");
+    assert!(preview.text.len() <= 64 * 1024);
+    assert!(preview.omitted_bytes > 0);
+    assert_eq!(
+        tool(&rebuilt(state, limits)),
+        row,
+        "a rebuild reads the same row"
+    );
+    assert!(
+        state.bytes < 100 * 1024,
+        "the records keep {} bytes",
+        state.bytes
+    );
+}

@@ -379,6 +379,15 @@ pub enum ToolResult {
         value: serde_json::Value,
         duration_ms: Option<u64>,
     },
+    /// A `Structured` payload as its row keeps it once the call settled:
+    /// its bounded preview and the line it gave the row, never the payload
+    /// (ADR 0032). Only an Activity's own records hold one; it is never
+    /// logged or sent.
+    Preview {
+        preview: Option<crate::transcript::ToolOutput>,
+        result_line: Option<String>,
+        duration_ms: Option<u64>,
+    },
     /// A file was written. `hunks` is empty when the file was created, which
     /// has nothing to diff against.
     FileEdit { path: String, hunks: Vec<Hunk> },
@@ -390,9 +399,9 @@ impl ToolResult {
     /// Native execution time when the provider supplied one.
     pub fn duration_ms(&self) -> Option<u64> {
         match self {
-            Self::Command { duration_ms, .. } | Self::Structured { duration_ms, .. } => {
-                *duration_ms
-            }
+            Self::Command { duration_ms, .. }
+            | Self::Structured { duration_ms, .. }
+            | Self::Preview { duration_ms, .. } => *duration_ms,
             _ => None,
         }
     }

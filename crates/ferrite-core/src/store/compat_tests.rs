@@ -294,9 +294,9 @@ const V12_TORN: &str = concat!(
 /// Each fixture: its log, how many records it must load (every whole line
 /// after the header), and the fingerprint of what it shows.
 pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
-    ("v1", V1, 5, 9959750768830046166),
-    ("v8-handover", V8_HANDOVER, 13, 17518645202087855028),
-    ("v11-activity", V11_ACTIVITY, 31, 13604963610014101423),
+    ("v1", V1, 5, 6060831333500457778),
+    ("v8-handover", V8_HANDOVER, 13, 14983499535293528674),
+    ("v11-activity", V11_ACTIVITY, 31, 10281686592160986459),
     ("v12-torn", V12_TORN, 10, 5782667316263972688),
 ];
 
