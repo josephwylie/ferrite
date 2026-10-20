@@ -2,8 +2,244 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use super::*;
+use crate::activity::{
+    Activity, ActivityEvent, ActivityInput, AgentInfo, AgentKey, ExecutionEvent, Subject,
+};
+use crate::protocol::{WireOutcome, WireSubject};
+use crate::store::Provider;
 use crate::transcript::{Input, Todos, TurnEnd};
-use crate::{SessionEvent, ToolResult};
+use crate::{SessionEvent, ThreadId, ToolResult};
+
+/// A Thread's Activity with a live Session, the operator's prompt out.
+fn asked(prompt: &str) -> Activity {
+    let mut activity = Activity::default();
+    activity.apply(ActivityInput::Connect { generation: 1 });
+    activity.apply(ActivityInput::Main {
+        input: Input::Prompt(prompt.into()),
+        at: crate::clock::instant(),
+    });
+    activity
+}
+
+fn said(activity: &mut Activity, event: SessionEvent) {
+    activity.apply(ActivityInput::Main {
+        input: Input::Event(event),
+        at: crate::clock::instant(),
+    });
+}
+
+fn ran(activity: &mut Activity, id: &str, command: &str, output: Option<&str>) {
+    said(
+        activity,
+        SessionEvent::ToolStarted {
+            id: id.into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": command }),
+        },
+    );
+    if let Some(output) = output {
+        said(
+            activity,
+            SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: output.into(),
+                is_error: output.contains("FAILED"),
+                result: ToolResult::Opaque,
+            },
+        );
+    }
+}
+
+fn bash_decision(call: &str, command: &str) -> Decision {
+    Decision {
+        delivery: Default::default(),
+        kind: Default::default(),
+        policy: Default::default(),
+        id: "perm".into(),
+        tool_use_id: call.into(),
+        tool_name: "Bash".into(),
+        description: String::new(),
+        input: serde_json::json!({ "command": command }),
+        suggestions: vec![],
+    }
+}
+
+/// The nav row, the Wall card and the clocks read a working Thread from
+/// its digest alone: what Main does, since when, and its tile.
+#[test]
+fn a_working_thread_digests_its_turn_and_its_tile() {
+    let _clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let boot = crate::clock::instant();
+    let mut activity = asked("make the suite pass");
+    ran(
+        &mut activity,
+        "t1",
+        "cargo test",
+        Some("test result: FAILED. 357 passed; 2 failed"),
+    );
+    ran(&mut activity, "t2", "cargo test -p ferrite", None);
+
+    let digest = Digest::of(ThreadId::new(1), activity.view(), None, boot);
+
+    assert_eq!(digest.status, Status::Streaming);
+    assert!(digest.working);
+    assert!(digest.operator_turn);
+    assert_eq!(digest.turn_started_ms, Some(0));
+    assert_eq!(digest.turns, 1);
+    assert!(digest.pending.is_empty());
+    assert_eq!(digest.wall.failing_count, Some(2));
+    assert_eq!(
+        digest
+            .wall
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "\u{25cf} Bash(cargo test)",
+            "  \u{2514} 357 passed; 2 failed",
+            "\u{25cf} Bash(cargo test -p ferrite)",
+        ]
+    );
+}
+
+/// A Decision reaches every surface that answers or counts it — the bell,
+/// ⌘D, a tile's quick answers — through the digest, its handle with it.
+#[test]
+fn a_pending_decision_is_in_the_digest_with_its_handle() {
+    let boot = crate::clock::instant();
+    let mut activity = asked("tidy the issues");
+    ran(&mut activity, "t3", "gh issue close 212", None);
+    said(
+        &mut activity,
+        SessionEvent::DecisionRequested {
+            decision: bash_decision("t3", "gh issue close 212"),
+        },
+    );
+
+    let digest = Digest::of(ThreadId::new(1), activity.view(), None, boot);
+
+    let pending = activity.view().decisions();
+    assert_eq!(digest.pending.len(), 1);
+    assert_eq!(digest.pending[0].thread, ThreadId::new(1));
+    assert_eq!(digest.pending[0].handle, (&pending[0].handle).into());
+    assert_eq!(digest.pending[0].decision, (&pending[0].decision).into());
+    assert_eq!(
+        digest.wall.lines.last().map(|line| line.text.as_str()),
+        Some("  $ gh issue close 212")
+    );
+}
+
+/// The bell and a toast word a finished turn from its digest: its one
+/// paragraph answer and how long it worked, or the tests it left failing.
+#[test]
+fn a_finished_turn_digests_its_answer_or_its_failing_tests() {
+    let boot = crate::clock::instant();
+    let mut activity = asked("rename the flag");
+    said(
+        &mut activity,
+        SessionEvent::TextDelta {
+            text: "Renamed it everywhere.".into(),
+        },
+    );
+    said(
+        &mut activity,
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        },
+    );
+
+    let done = Digest::of(ThreadId::new(1), activity.view(), None, boot);
+
+    assert_eq!(done.status, Status::Idle);
+    assert!(!done.working);
+    assert_eq!(done.outcome, Some(WireOutcome::Completed));
+    assert_eq!(
+        done.finish.answer.as_deref(),
+        Some("Renamed it everywhere.")
+    );
+    assert_eq!(done.finish.failing_tests, None);
+
+    activity.apply(ActivityInput::Main {
+        input: Input::Prompt("and run the tests".into()),
+        at: crate::clock::instant(),
+    });
+    ran(
+        &mut activity,
+        "t4",
+        "cargo test",
+        Some("test result: FAILED. 40 passed; 1 failed; 0 ignored"),
+    );
+    said(
+        &mut activity,
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        },
+    );
+
+    let red = Digest::of(ThreadId::new(1), activity.view(), None, boot);
+
+    assert_eq!(red.turns, 2);
+    assert_eq!(
+        red.finish.failing_tests.as_deref(),
+        Some("40 passed; 1 failed")
+    );
+}
+
+/// A tile showing a Subagent prints that Subagent's lines, so the digest
+/// carries the card of the Subject the windows show beside Main's.
+#[test]
+fn a_shown_subagent_digests_its_own_tile() {
+    let boot = crate::clock::instant();
+    let mut activity = asked("split the work");
+    let key = AgentKey::new(Provider::Claude, "root", "child");
+    let mut info = AgentInfo::new(key.clone());
+    info.parent = Some(Subject::Main);
+    activity.apply(ActivityInput::Observe {
+        generation: 1,
+        event: ActivityEvent::Discovered(info),
+        at: crate::clock::instant(),
+    });
+    activity.apply(ActivityInput::Observe {
+        generation: 1,
+        event: ActivityEvent::Content {
+            key: key.clone(),
+            id: None,
+            event: ExecutionEvent::TextDelta {
+                text: "Reading the spike notes".into(),
+            },
+        },
+        at: crate::clock::instant(),
+    });
+    let subject = Subject::Subagent(key);
+
+    let digest = Digest::of(ThreadId::new(1), activity.view(), Some(&subject), boot);
+
+    assert_eq!(digest.subagents, 1);
+    let shown = digest.shown.expect("the shown Subagent's card");
+    assert_eq!(shown.subject, WireSubject::from(&subject));
+    assert_eq!(
+        shown
+            .wall
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>(),
+        ["\u{25cf} Reading the spike notes"]
+    );
+    assert_eq!(
+        Digest::of(
+            ThreadId::new(1),
+            activity.view(),
+            Some(&Subject::Main),
+            boot
+        )
+        .shown,
+        None
+    );
+}
 
 /// The wall card folds everything the L3 recipe needs that is not an
 /// O(1) read — built on change, never per frame.
@@ -255,4 +491,18 @@ fn the_tile_text_is_its_visible_text() {
 fn a_finished_turn_reads_its_length_as_the_tile_says_it() {
     assert_eq!(worked_label(Duration::from_secs(192)), "3m 12s");
     assert_eq!(worked_label(Duration::from_secs(41)), "41s");
+}
+
+#[test]
+fn a_failing_run_is_summed_up_by_its_two_counts() {
+    assert_eq!(
+        failing_tests("running 359 tests\ntest result: FAILED. 357 passed; 2 failed; 0 ignored"),
+        Some("357 passed; 2 failed".into())
+    );
+    assert_eq!(
+        failing_tests("test result: ok. 38 passed; 0 failed; 0 ignored"),
+        None,
+        "a green run is no failure"
+    );
+    assert_eq!(failing_tests("nothing ran"), None);
 }

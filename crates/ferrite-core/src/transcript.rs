@@ -683,15 +683,18 @@ pub struct RateLimits {
     pub weekly: Option<RateLimitWindow>,
 }
 
-/// What the Session is doing, as the transcript last saw it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// What the Session is doing, as the transcript last saw it. It crosses
+/// the wire in a `Digest`; an unknown status reads as idle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Status {
-    #[default]
-    Idle,
     Streaming,
     /// Stopped on a Decision only the operator can answer.
     Blocked,
     Closed,
+    #[default]
+    #[serde(other)]
+    Idle,
 }
 
 /// Somewhere the transcript is consistent enough to persist.
@@ -1206,6 +1209,11 @@ impl Transcript {
 
     /// How long the running turn has been going; None between turns. Read
     /// off `clock::instant`, so a fixture freezes it.
+    /// When the running (or last) turn started.
+    pub fn turn_started(&self) -> Option<std::time::Instant> {
+        self.turn_started
+    }
+
     pub fn turn_elapsed(&self) -> Option<std::time::Duration> {
         self.turn_started
             .map(|started| crate::clock::instant().saturating_duration_since(started))

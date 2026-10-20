@@ -31,7 +31,7 @@ pub struct Instruments {
 }
 
 /// One touched file's rolled-up diff stat.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FileChange {
     pub path: String,
     pub added: usize,

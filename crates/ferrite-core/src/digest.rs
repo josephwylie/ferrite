@@ -3,12 +3,15 @@
 //! only a Thread drawn at Transcript level is mirrored whole.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::activity::ToolTiming;
-use crate::docview::{is_test_run, passed_count, Instruments, Tests};
+use serde::{Deserialize, Serialize};
+
+use crate::activity::{ActivityView, Subject, ToolTiming};
+use crate::docview::{is_test_run, passed_count, FileChange, Instruments, Tests};
+use crate::protocol::{PendingEntry, WireOutcome, WireSubject};
 use crate::transcript::{Block, Body, Span, Status, ToolBlock, ToolState, Transcript};
-use crate::{Decision, TurnOutcome};
+use crate::{Decision, ThreadId, TurnOutcome};
 
 /// The agent's and a tool call's bullet: Geist Mono's own `●`.
 pub const BULLET: &str = "\u{25cf}";
@@ -17,10 +20,256 @@ pub const ELBOW: &str = "\u{2514}";
 /// A turn or an agent failed.
 pub const FAILED: &str = "failed";
 
+/// One Thread as every window reads it away from its Transcript: the nav
+/// row, the Wall card, the bell and its toasts, Needs-you, the board.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Digest {
+    /// Main's status, as its transcript last saw it.
+    #[serde(default)]
+    pub status: Status,
+    /// How Main's last turn ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WireOutcome>,
+    /// When Main's turn started, on the Server's clock (`ms_since` its boot).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_ms: Option<u64>,
+    /// Main is mid-turn.
+    #[serde(default)]
+    pub working: bool,
+    /// The operator's prompt is out and unanswered.
+    #[serde(default)]
+    pub operator_turn: bool,
+    /// Subagents working.
+    #[serde(default)]
+    pub working_descendants: usize,
+    /// Work runs behind Main: its Subagents, or its background tasks.
+    #[serde(default)]
+    pub background_work: bool,
+    /// Every pending Decision, in the order they are answered.
+    #[serde(default)]
+    pub pending: Vec<PendingEntry>,
+    /// Main's Wall card.
+    #[serde(default)]
+    pub wall: WallCard,
+    /// The card of the Subagent a window shows in its place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown: Option<ShownWall>,
+    /// Prompts Main holds.
+    #[serde(default)]
+    pub turns: usize,
+    #[serde(default)]
+    pub subagents: usize,
+    /// Files edited anywhere in the Thread, its Subagents' included.
+    #[serde(default)]
+    pub changed_files: Vec<FileChange>,
+    /// How Main's latest turn finished, in the bell's words.
+    #[serde(default)]
+    pub finish: Finish,
+}
+
+/// A Subagent's Wall card, for a tile showing it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShownWall {
+    pub subject: WireSubject,
+    pub wall: WallCard,
+}
+
+/// What a finished turn left for the bell: the tests it left failing, else
+/// its answer when that is one paragraph after its last call.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Finish {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failing_tests: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worked_ms: Option<u64>,
+}
+
+impl Digest {
+    /// Fold one Thread's digest. `shown` is the Subject the windows show
+    /// for it; `boot` is the Server's clock zero.
+    pub fn of(
+        thread: ThreadId,
+        activity: ActivityView<'_>,
+        shown: Option<&Subject>,
+        boot: Instant,
+    ) -> Self {
+        let main = activity.main();
+        let transcript = main.transcript();
+        let pending = activity.decisions();
+        let working_descendants = activity.working_descendants();
+        Self {
+            status: transcript.status(),
+            outcome: transcript.turn_outcome().map(Into::into),
+            turn_started_ms: transcript
+                .turn_started()
+                .map(|at| crate::protocol::ms_since(at, boot)),
+            working: main.busy(),
+            operator_turn: activity.main_operator_turn(),
+            working_descendants,
+            background_work: working_descendants > 0
+                || transcript.progress().working_background() > 0,
+            pending: pending
+                .iter()
+                .map(|pending| PendingEntry {
+                    thread,
+                    subject: pending.subject.as_ref().map(Into::into),
+                    handle: (&pending.handle).into(),
+                    decision: (&pending.decision).into(),
+                })
+                .collect(),
+            wall: WallCard::of(
+                transcript,
+                pending.first().map(|pending| &pending.decision),
+                Some(main.tool_timings()),
+            ),
+            shown: shown
+                .filter(|subject| **subject != Subject::Main)
+                .and_then(|subject| {
+                    let view = activity.subject(subject)?;
+                    Some(ShownWall {
+                        subject: subject.into(),
+                        wall: WallCard::of(view.transcript(), None, None),
+                    })
+                }),
+            turns: transcript
+                .blocks()
+                .iter()
+                .filter(|block| matches!(block.body, Body::Prompt(_)))
+                .count(),
+            subagents: activity.children().len(),
+            changed_files: changed_files(activity),
+            finish: Finish::of(transcript),
+        }
+    }
+}
+
+impl Finish {
+    /// Main's latest turn: from its last prompt on.
+    fn of(transcript: &Transcript) -> Self {
+        let blocks = transcript.blocks();
+        let start = blocks
+            .iter()
+            .rposition(|block| matches!(block.body, Body::Prompt(_)))
+            .unwrap_or(0);
+        let turn = &blocks[start..];
+        // The turn's last test run, and what it said: a failing summary,
+        // or nothing for a green run.
+        let failing_tests = turn
+            .iter()
+            .rev()
+            .find_map(|block| match &block.body {
+                Body::Tool(tool) => {
+                    let text = tool
+                        .output
+                        .as_ref()
+                        .map(|output| output.text.as_str())
+                        .or(tool.result_line.as_deref())?;
+                    text.contains(" passed;").then(|| failing_tests(text))
+                }
+                _ => None,
+            })
+            .flatten();
+        // The final answer: the turn's prose after its last call, when it
+        // is a single paragraph.
+        let last_tool = turn
+            .iter()
+            .rposition(|block| matches!(block.body, Body::Tool(_)))
+            .map_or(0, |at| at + 1);
+        let mut prose = turn[last_tool..].iter().filter(|block| {
+            matches!(
+                block.body,
+                Body::Paragraph { .. }
+                    | Body::Heading { .. }
+                    | Body::Bullet { .. }
+                    | Body::Code { .. }
+            )
+        });
+        let answer = match (prose.next(), prose.next()) {
+            (
+                Some(Block {
+                    body: Body::Paragraph { spans },
+                    ..
+                }),
+                None,
+            ) => Some(spans.iter().map(|span| span.text.as_str()).collect()),
+            _ => None,
+        };
+        let worked_ms = turn.iter().rev().find_map(|block| match &block.body {
+            Body::TurnEnd(end) => end.elapsed_ms,
+            _ => None,
+        });
+        Self {
+            failing_tests,
+            answer,
+            worked_ms,
+        }
+    }
+}
+
+/// A test run's summary from its output (`357 passed; 2 failed`): the last
+/// line that counts both, cut to the two counts. `None` when the output
+/// reports no failing run.
+pub fn failing_tests(output: &str) -> Option<String> {
+    for line in output.lines().rev() {
+        let Some(passed_at) = line.find(" passed;") else {
+            continue;
+        };
+        let passed: String = line[..passed_at]
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let rest = &line[passed_at + " passed;".len()..];
+        let failed: String = rest
+            .trim_start()
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if passed.is_empty() || failed.is_empty() {
+            continue;
+        }
+        if failed == "0" || !rest.trim_start()[failed.len()..].starts_with(" failed") {
+            return None;
+        }
+        return Some(format!("{passed} passed; {failed} failed"));
+    }
+    None
+}
+
+/// Files edited anywhere in the Thread, its Subagents' included, with their
+/// rolled-up totals.
+fn changed_files(activity: ActivityView<'_>) -> Vec<FileChange> {
+    let mut changed = Vec::<FileChange>::new();
+    let transcripts = std::iter::once(activity.main().transcript()).chain(
+        activity
+            .children()
+            .into_iter()
+            .map(|agent| agent.transcript()),
+    );
+    for transcript in transcripts {
+        for file in Instruments::of(transcript).changed {
+            match changed.iter_mut().find(|changed| changed.path == file.path) {
+                Some(changed) => {
+                    changed.added += file.added;
+                    changed.removed += file.removed;
+                }
+                None => changed.push(file),
+            }
+        }
+    }
+    changed
+}
+
 /// The wall tile's folded reading — rebuilt only when the Thread changed,
 /// never per frame (the wall budget: 24 tiles × 60fps must not walk Blocks
 /// or format strings). Words only: the tile draws them.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WallCard {
     /// The latest test run failed (from `Instruments`, the one O(blocks)
     /// read the wall needs).
@@ -46,7 +295,7 @@ pub struct WallCard {
 /// One line of a wall tile: one `TEXT_MUTED` run, its glyph included —
 /// `● Update(canvas.rs) +31 −9`, `  └ 212/357 tests`, `◆ Bash wants to
 /// run`, `  $ gh issue close 212`, `? Which fix do you want?`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WallLine {
     pub text: String,
     /// Agent prose: wider than the tile it wraps once, to a continuation
