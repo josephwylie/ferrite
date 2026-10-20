@@ -4,40 +4,6 @@
 //! rendering tests compare both projections, including hidden tool details.
 use super::*;
 
-/// A call line as it reads: `Name(args)`, the name as Claude Code prints it
-/// (`Update`, `Bash`), a shell command out of its `bash -lc '…'` wrapper.
-pub(super) fn tool_label(tool: &ToolBlock) -> String {
-    let name = ferrite_core::transcript::display_tool_name(&tool.name);
-    if tool.summary.is_empty() {
-        name.to_string()
-    } else {
-        format!("{name}({})", tool_summary_line(tool))
-    }
-}
-
-/// The call line's argument. It never lays out hard line breaks: the
-/// original command stays in the ToolBlock and becomes selectable in the
-/// disclosed details.
-fn tool_summary_line(tool: &ToolBlock) -> std::borrow::Cow<'_, str> {
-    // A command reads as the command (`Bash(cargo test)`), as Claude Code
-    // prints it, whatever purpose the model wrote beside it (Claude's Bash
-    // `description`: "Run cargo test to identify failing tests").
-    let summary = if ferrite_core::docview::is_command_run(&tool.name) && !tool.summary.is_empty() {
-        ferrite_core::providers::shell::unwrap_shell(&tool.summary)
-    } else {
-        std::borrow::Cow::Borrowed(tool.title.as_deref().unwrap_or(&tool.summary))
-    };
-    if summary.contains(['\n', '\r']) {
-        let first = summary
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("");
-        format!("{} \u{2026}", first.trim()).into()
-    } else {
-        summary
-    }
-}
-
 /// Where a path argument sits in its call line, in cells: `(start, len)` —
 /// after the name and its `(`. `None` when the argument is not a path.
 pub(super) fn path_argument(tool: &ToolBlock) -> Option<(usize, usize)> {
@@ -393,7 +359,7 @@ fn collect_tool_text(
     let line = |text: String| {
         let _ = selection.line(block, text, Vec::new());
     };
-    line(tool_label(tool));
+    line(tool.label());
     let command = ferrite_core::docview::is_command_run(&tool.name);
     match &tool.state {
         ToolState::Running => {

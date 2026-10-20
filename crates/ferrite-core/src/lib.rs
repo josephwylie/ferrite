@@ -11,6 +11,7 @@ pub mod cadence;
 pub mod clock;
 pub mod cockpit;
 pub mod diagnostics;
+pub mod digest;
 pub mod docview;
 pub mod draft;
 pub mod engine;

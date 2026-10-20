@@ -1406,7 +1406,7 @@ mod tests {
     /// permission-waits.
     #[test]
     fn the_demo_seeds_deal_the_wall_census() {
-        use crate::pane::{wall_card, wall_state, WallState};
+        use crate::pane::{wall_state, WallCard, WallState};
         let mut census = Vec::new();
         for variant in 0..SEEDS {
             let mut transcript = Transcript::default();
@@ -1417,7 +1417,7 @@ mod tests {
                 }
                 transcript.apply(Input::Event(step.event));
             }
-            let card = wall_card(Some(&transcript), None);
+            let card = WallCard::of(&transcript, None, None);
             census.push(wall_state(Some(&transcript), pending, card.tests_failing));
         }
         use WallState::*;

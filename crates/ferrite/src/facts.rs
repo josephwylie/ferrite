@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::pane::{wall_card, wall_card_timed, WallCard};
+use crate::pane::WallCard;
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::docview::{FileChange, Instruments};
@@ -508,7 +508,7 @@ impl Facts {
             cockpit
                 .thread(thread)
                 .and_then(|open| open.activity().subject(subject))
-                .map(|view| (subject.clone(), wall_card(Some(view.transcript()), None)))
+                .map(|view| (subject.clone(), WallCard::of(view.transcript(), None, None)))
         };
         self.threads.entry(thread).or_default().selected_wall = card;
     }
@@ -539,11 +539,9 @@ impl Facts {
     /// passes its pump's clock (`streamed`), which the throttle runs from.
     fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId, streamed_at: Option<Instant>) {
         let open = cockpit.thread(thread);
-        let card = wall_card_timed(
-            open.map(|open| open.transcript()),
-            open.and_then(|open| open.pending()),
-            open.map(|open| open.tool_timings()),
-        );
+        let card = open
+            .map(|open| WallCard::of(open.transcript(), open.pending(), Some(open.tool_timings())))
+            .unwrap_or_default();
         let turns = open.map(|open| {
             open.transcript()
                 .blocks()

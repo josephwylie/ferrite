@@ -442,6 +442,11 @@ pub fn spinner_verb(thread: u64, turn: usize) -> &'static str {
     SPINNER_VERBS[(hash % SPINNER_VERBS.len() as u64) as usize]
 }
 
+/// A settled call shows its time only from two seconds up (the prototype's
+/// `Bash(…) 2s`, and no time on a one-second `Read`); anything quicker is
+/// noise on every row.
+pub const DURATION_MIN_MS: u128 = 2_000;
+
 /// A live counter's reading, ticked at 1Hz: whole seconds, floored, so it
 /// never runs ahead of the clock — `0s` … `59s`, then `1m04s`, and from an
 /// hour `3h11m` (never `191m16s`). A frozen fact keeps its tenths
