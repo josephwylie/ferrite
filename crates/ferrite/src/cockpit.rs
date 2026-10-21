@@ -10257,7 +10257,7 @@ impl CockpitView {
             .bg(crate::theme::paint::WINDOW)
             .font_family(crate::theme::FONT_UI)
             .track_focus(&self.focus)
-            .key_context("Ferrite")
+            .key_context(crate::keymap::COCKPIT)
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
             // flagged, without the operator focusing it first.

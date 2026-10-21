@@ -38,6 +38,11 @@ pub const PLATFORM: Platform = Platform::Windows;
 /// a Composer nor a kit input is on the focus path.
 pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input";
 
+/// The Cockpit's own key context, on the window's root: a row bound in it
+/// acts anywhere in the Cockpit, and every deeper context — a Composer, a
+/// float, the kit's menus, popovers and dialogs — outranks it.
+pub const COCKPIT: &str = "Ferrite";
+
 /// One row of the table: (keystroke, action name, key context).
 pub type Binding = (String, &'static str, Option<&'static str>);
 
@@ -184,10 +189,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // The Cockpit's own, not every context's: a binding with none ranks
         // as deep as the deepest, so it outranked the kit's menus, popovers
         // and dialogs, whose Enter picks and Escape closes.
-        ("enter".into(), "cockpit::Submit", Some("Ferrite")),
+        ("enter".into(), "cockpit::Submit", Some(COCKPIT)),
         // Kit buttons synthesize clicks from Enter/Space; do not submit a prompt.
         ("enter".into(), "zed::NoAction", Some("PromptAttachment")),
-        ("escape".into(), "cockpit::Interrupt", Some("Ferrite")),
+        ("escape".into(), "cockpit::Interrupt", Some(COCKPIT)),
         // Only while a Decision holds the keyboard: elsewhere these are
         // just letters going into the Composer.
         ("y".into(), "cockpit::Allow", Some("Decision")),
@@ -273,8 +278,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // walk or L1 tool disclosure walk. Shift-Tab cycles the permission
         // mode (the status line's `⇧⇥ mode`); inside a tool disclosure walk
         // it stays the walk's reverse step.
-        ("tab".into(), "cockpit::BandCycle", Some("Ferrite")),
-        ("shift-tab".into(), "status::CycleMode", Some("Ferrite")),
+        ("tab".into(), "cockpit::BandCycle", Some(COCKPIT)),
+        ("shift-tab".into(), "status::CycleMode", Some(COCKPIT)),
         (
             "shift-tab".into(),
             "cockpit::ToolCyclePrevious",
@@ -311,9 +316,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("down".into(), "composer::Down", Some("Composer")),
         // A Decision row under an empty line: ↑↓ walk its options, ⏎ picks
         // the selected one, esc denies, tab amends (a note sent with the
-        // answer). Bound after the history and row walks and after the bare
-        // enter and escape rows, so the empty line's own context wins the
-        // same-depth tie; with text on the line every key edits it.
+        // answer). Bound after the history and row walks, so the empty
+        // line's own context wins their same-depth tie; it is deeper than the
+        // Cockpit's enter and escape. With text on the line every key edits
+        // it.
         (
             "up".into(),
             "decision::SelectPrevious",
@@ -344,8 +350,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("up".into(), "empty_board::Previous", Some("EmptyBoard")),
         ("down".into(), "empty_board::Next", Some("EmptyBoard")),
         ("enter".into(), "empty_board::Run", Some("EmptyBoard")),
-        // The floats' own keys, each in its float's context and bound after
-        // the bare rows they shadow: the palette (↑↓ select, ⏎ open, ⇥
+        // The floats' own keys, each in its float's context, deeper than the
+        // Cockpit's: the palette (↑↓ select, ⏎ open, ⇥
         // preview in a pane, esc), the notifications list (↑↓ select, ⏎
         // open, ⌫ dismiss, esc) and the shortcuts sheet (↑↓ scroll, esc).
         ("up".into(), "palette::SelectPrevious", Some("Palette")),
@@ -377,13 +383,12 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
         ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
         ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
-        // Enter in the sheet's filter line submits nothing: the bare row
+        // Enter in the sheet's filter line submits nothing: the Cockpit's
         // would send the Pane's draft from under the sheet.
         ("enter".into(), NO_ACTION, Some("Shortcuts")),
         // #23: the Composer's `/` and `@` popovers (and #29's band
-        // popovers, which ride the same keys). These sit BELOW the bare
-        // enter and escape rows, because gpui breaks a same-depth tie
-        // toward the later binding: it hands the keys to the open menu —
+        // popovers, which ride the same keys). The Composer's context is
+        // deeper than the Cockpit's, so the open menu takes the keys —
         // enter picks instead of submitting, escape dismisses instead of
         // interrupting — and escape with no popover keeps its existing
         // meaning.
@@ -408,8 +413,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // scope's base, esc goes back or closes the slot. In its comment
         // field ⏎ adds and esc cancels; in its search field ↑↓ walk the
         // results, ⏎ opens one and esc closes it; in its base field ↑↓ walk
-        // the bases, ⏎ picks one and esc closes it. Bound after the bare
-        // rows they shadow.
+        // the bases, ⏎ picks one and esc closes it. Each context is deeper
+        // than the Cockpit's.
         ("up".into(), "review::Previous", Some(REVIEW)),
         ("down".into(), "review::Next", Some(REVIEW)),
         ("shift-up".into(), "review::ExtendPrevious", Some(REVIEW)),
@@ -440,8 +445,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("enter".into(), "review::ChooseBase", Some("ReviewBase")),
         ("escape".into(), "review::CloseBases", Some("ReviewBase")),
         // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
-        // closes it. Last, so its context wins every same-depth tie: send,
-        // the Composer's new line, Groups (⌘G, ⌘⇧G) and interrupt.
+        // closes it. Last, so its context wins every same-depth tie: the
+        // Composer's new line and Groups (⌘G, ⌘⇧G).
         ("enter".into(), "find::Next", Some("Find")),
         (with_primary("g"), "find::Next", Some("Find")),
         ("shift-enter".into(), "find::Previous", Some("Find")),
@@ -837,10 +842,10 @@ mod tests {
         for platform in [Platform::Mac, Platform::Windows] {
             let table = bindings(platform);
             assert!(
-                table.contains(&("tab".into(), "cockpit::BandCycle", Some("Ferrite"))),
+                table.contains(&("tab".into(), "cockpit::BandCycle", Some(COCKPIT))),
                 "{platform:?} is missing tab for cockpit::BandCycle"
             );
-            assert!(table.contains(&("shift-tab".into(), "status::CycleMode", Some("Ferrite"))));
+            assert!(table.contains(&("shift-tab".into(), "status::CycleMode", Some(COCKPIT))));
             assert!(table.contains(&(
                 "shift-tab".into(),
                 "cockpit::ToolCyclePrevious",
@@ -850,7 +855,7 @@ mod tests {
                 !table.contains(&(
                     "shift-tab".into(),
                     "cockpit::ToolCyclePrevious",
-                    Some("Ferrite")
+                    Some(COCKPIT)
                 )),
                 "the mode owns shift-tab outside a disclosure walk"
             );
@@ -870,11 +875,30 @@ mod tests {
     }
 
     /// A Decision row's keys live under an empty Composer line only, and
-    /// sit after every bare and Composer row they shadow, so gpui's
-    /// same-depth tie-break hands them the key: ↑↓ past history and the row
-    /// walk, ⏎ past Submit, esc past Interrupt. The ComposerMenu rows stay
-    /// later still. The number keys answer by number in the Decision
+    /// sit after the Composer rows they shadow, so gpui's same-depth
+    /// tie-break hands them ↑↓ past history and the row walk. The
+    /// ComposerMenu rows stay later still. The number keys answer by number in the Decision
     /// context and on the wall.
+    /// Enter sends and Escape interrupts in the Cockpit's own context,
+    /// never in none: a binding with none ranks as deep as the deepest and
+    /// would take both keys from every float, menu, popover and dialog.
+    #[test]
+    fn enter_and_escape_are_the_cockpits_own() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            assert!(table.contains(&("enter".into(), "cockpit::Submit", Some(COCKPIT))));
+            assert!(table.contains(&("escape".into(), "cockpit::Interrupt", Some(COCKPIT))));
+            for key in ["enter", "escape"] {
+                assert!(
+                    !table
+                        .iter()
+                        .any(|(keys, _, context)| keys == key && context.is_none()),
+                    "{platform:?} binds a bare {key}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn decision_keys_win_on_an_empty_line_and_numbers_pick() {
         for platform in [Platform::Mac, Platform::Windows] {
@@ -902,13 +926,6 @@ mod tests {
                 at(&table, "down", "composer::Down") < at(&table, "down", "decision::SelectNext")
             );
             assert!(
-                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "decision::Confirm")
-            );
-            assert!(
-                at(&table, "escape", "cockpit::Interrupt")
-                    < at(&table, "escape", "decision::Dismiss")
-            );
-            assert!(
                 at(&table, "up", "decision::SelectPrevious")
                     < at(&table, "up", "cockpit::MenuPrevious")
             );
@@ -931,8 +948,7 @@ mod tests {
         }
     }
 
-    /// Every float's keys sit in its own context and after the bare rows
-    /// they shadow; `?` opens the shortcuts sheet only where no text is
+    /// Every float's keys sit in its own context; `?` opens the shortcuts sheet only where no text is
     /// being typed; ⌘⌫ parks from an empty line or with no text field.
     #[test]
     fn the_floats_and_the_empty_board_have_their_keys() {
@@ -965,22 +981,8 @@ mod tests {
                 );
             }
             assert!(
-                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "palette::Confirm")
-            );
-            assert!(
-                at(&table, "escape", "cockpit::Interrupt")
-                    < at(&table, "escape", "palette::Dismiss")
-            );
-            assert!(
                 at(&table, "backspace", "composer::Backspace")
                     < at(&table, "backspace", "notifications::Dismiss")
-            );
-            assert!(
-                at(&table, "escape", "cockpit::Interrupt")
-                    < at(&table, "escape", "shortcuts::Dismiss")
-            );
-            assert!(
-                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "empty_board::Run")
             );
             let park = match platform {
                 Platform::Mac => "cmd-backspace",
@@ -1002,9 +1004,7 @@ mod tests {
 
     /// #23: the Composer menus' keys exist on both platforms, only inside
     /// the ComposerMenu key context — a bare arrow key must never steal
-    /// from anything else — and their enter/escape rows sit after the bare
-    /// Submit/Interrupt rows so gpui's same-depth tie-break picks them
-    /// while a popover is up. Escape with no popover keeps its meaning.
+    /// from anything else.
     #[test]
     fn the_composer_menu_keys_are_scoped_to_its_context_on_both_platforms() {
         for platform in [Platform::Mac, Platform::Windows] {
@@ -1020,35 +1020,11 @@ mod tests {
                     "{platform:?} is missing {key} for {action} in ComposerMenu"
                 );
             }
-            for (bare, scoped) in [
-                ("cockpit::Submit", "cockpit::MenuPick"),
-                ("cockpit::Interrupt", "cockpit::MenuDismiss"),
-            ] {
-                let at = |wanted: &str| {
-                    table
-                        .iter()
-                        .position(|(_, action, _)| *action == wanted)
-                        .unwrap_or_else(|| panic!("{wanted} is not in the table"))
-                };
-                assert!(
-                    at(bare) < at(scoped),
-                    "{scoped} must be bound after {bare} ({platform:?})"
-                );
-            }
             assert!(table.contains(&(
                 "enter".into(),
                 "cockpit::ToggleTool",
                 Some("ToolDisclosure")
             )));
-            let submit = table
-                .iter()
-                .position(|(_, action, _)| *action == "cockpit::Submit")
-                .unwrap();
-            let toggle = table
-                .iter()
-                .position(|(_, action, _)| *action == "cockpit::ToggleTool")
-                .unwrap();
-            assert!(submit < toggle, "tool Enter must beat bare Submit");
         }
     }
 
@@ -1152,8 +1128,7 @@ mod tests {
     }
 
     /// The Review slot's keys live in its own context — never while its
-    /// comment or search field takes text — and sit after the bare rows
-    /// they shadow.
+    /// comment or search field takes text.
     #[test]
     fn the_review_keys_are_scoped_to_the_slot_and_its_fields() {
         for platform in [Platform::Mac, Platform::Windows] {
@@ -1177,28 +1152,11 @@ mod tests {
                     "{platform:?} is missing {key} for {action}"
                 );
             }
-            assert!(
-                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::Comment")
-            );
-            assert!(
-                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::SaveComment")
-            );
-            assert!(
-                at(&table, "escape", "cockpit::Interrupt")
-                    < at(&table, "escape", "review::CancelComment")
-            );
             assert!(table.contains(&(
                 "escape".into(),
                 "review::CancelComment",
                 Some("ReviewComment")
             )));
-            assert!(
-                at(&table, "enter", "cockpit::Submit") < at(&table, "enter", "review::OpenFound")
-            );
-            assert!(
-                at(&table, "escape", "cockpit::Interrupt")
-                    < at(&table, "escape", "review::CloseSearch")
-            );
         }
     }
 
