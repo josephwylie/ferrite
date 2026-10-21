@@ -1914,7 +1914,7 @@ fn scheduled_work_keeps_the_agent() {
 }
 
 /// Scheduled work is the Thread's to hold, not its Activity's: windows
-/// are told nothing of it, and telling them the rest goes on.
+/// are told nothing of it, and what the agent says after still crosses.
 #[test]
 fn scheduled_work_crosses_to_no_window() {
     let (spawner, providers) = spawn();
@@ -1923,15 +1923,15 @@ fn scheduled_work_crosses_to_no_window() {
     for pending in [true, false] {
         agent.send(SessionEvent::ScheduledWork { pending }).unwrap();
     }
+    agent.send(text("after\n\n")).unwrap();
     engine.pump();
 
     let messages = engine.take_messages();
-    assert!(
-        !messages
-            .iter()
-            .any(|message| matches!(message, ServerMessage::Input { .. })),
-        "{messages:?}"
-    );
+    let inputs = messages
+        .iter()
+        .filter(|message| matches!(message, ServerMessage::Input { .. }))
+        .count();
+    assert_eq!(inputs, 1, "only what it said: {messages:?}");
 }
 
 /// A model, effort or Provider chosen for a Thread whose agent is not
