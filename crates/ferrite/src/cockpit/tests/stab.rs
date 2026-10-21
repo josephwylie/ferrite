@@ -1171,8 +1171,7 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
 
 /// Terminal-native (WP-D, FL-10): the Composer is one input row on its band
 /// — no box, no send control, no verb hint. Its status line is the
-/// window's, in the bottom bar (ADR 0014), and no key hint rides it: `?`
-/// is the one way in. Enter sends and Esc interrupts.
+/// window's, in the bottom bar (ADR 0014), and no key hint rides it. Enter sends and Esc interrupts.
 #[gpui::test]
 fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
@@ -1199,7 +1198,9 @@ fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext)
     );
     assert!(cx.debug_bounds("prompt-placeholder-hint").is_none());
     assert!(cx.debug_bounds("status-keys").is_none(), "no key hints");
-    assert!(cx.debug_bounds("bottom-bar-help").is_some(), "`?` instead");
+    // `?` left the bar (SPEC §5.7): the palette's `keyboard shortcuts`
+    // and the Help menu are the keys' doors now.
+    assert!(cx.debug_bounds("bottom-bar-help").is_none());
     for verb in ["send", "stop"] {
         let hint: &'static str = Box::leak(
             format!("composer-{verb}-{:?}", PaneIdentity::Thread(thread)).into_boxed_str(),

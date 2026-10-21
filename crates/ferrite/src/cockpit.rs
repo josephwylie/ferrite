@@ -357,6 +357,12 @@ pub struct CockpitView {
     /// When the frame's own clock text (the bottom bar's minute, a
     /// notice's age) next turns over, as of the last draw.
     frame_turn_at: Option<std::time::SystemTime>,
+    /// Free bytes on the volume holding the Threads' checkouts, as last
+    /// read (the bar's `N GB free`); `None` until read, or when unknown.
+    free_disk: Option<u64>,
+    /// When free disk was last asked for, on the executor's clock: at
+    /// launch, then by the sweep once a minute (`read_free_disk`).
+    free_disk_asked: Option<std::time::Instant>,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
     /// A moment that must not be skipped (a turn ended) asked for a
@@ -1364,6 +1370,9 @@ const TAIL_SLACK: Pixels = px(2.);
 /// sweep per frame would spawn a `ps`/`tasklist` per Session per tick.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How often the sweep re-reads free disk for the bar: its minute.
+const FREE_DISK_EVERY: Duration = Duration::from_secs(60);
+
 #[cfg(test)]
 thread_local! {
     /// Root Cockpit renders on this (test) thread: the unit the idle frame
@@ -1405,17 +1414,7 @@ pub(crate) mod drawn {
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
         static STATUS_USAGE: RefCell<Option<String>> = const { RefCell::new(None) };
         static STATUS_RENDERS: Cell<usize> = const { Cell::new(0) };
-        static BAR_TALLY: RefCell<Option<String>> = const { RefCell::new(None) };
         static PROJECTS_TOGGLES: Cell<usize> = const { Cell::new(0) };
-    }
-
-    /// The bar's Projects word as last drawn: the board header's tally.
-    pub(crate) fn record_bar_tally(tally: Option<String>) {
-        BAR_TALLY.with(|said| *said.borrow_mut() = tally);
-    }
-
-    pub(crate) fn bar_tally() -> Option<String> {
-        BAR_TALLY.with(|said| said.borrow().clone())
     }
 
     pub(crate) fn toggled_projects() {
@@ -1591,6 +1590,8 @@ impl CockpitView {
             frame_tick: cx.new(|_| parts::FrameTick),
             ages_turn_at: None,
             frame_turn_at: None,
+            free_disk: None,
+            free_disk_asked: None,
             branch_refreshing: false,
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
@@ -1706,6 +1707,10 @@ impl CockpitView {
         // frame — a launch that opens nothing has no change to notice.
         view.sync_panes(cx);
         view.parked_changed(cx);
+        // The bar's free disk from the first frame; the sweep re-reads it
+        // each minute.
+        view.free_disk_asked = Some(cx.background_executor().now());
+        view.read_free_disk(cx);
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice. A machine's Threads
         // arrive once it is connected, and its Projects are its own.
@@ -2327,6 +2332,14 @@ impl CockpitView {
             swept_frame = self.frame_turn_at.is_some_and(|at| wall >= at);
             swept_change = aged;
             self.refresh_branches(cx);
+            // Free disk rides the sweep, once a minute: no wake of its own.
+            if self
+                .free_disk_asked
+                .is_none_or(|at| now.duration_since(at) >= FREE_DISK_EVERY)
+            {
+                self.free_disk_asked = Some(now);
+                self.read_free_disk(cx);
+            }
         } else if self.cockpit.wants_worktree_listing() {
             // A Main just finished making a worktree: ask git now, not in
             // up to two seconds, so the header follows without a pause.
@@ -10930,11 +10943,11 @@ impl CockpitView {
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
-    /// The bottom bar (theme WP-C, F-9): `ferrite`, then ` 1 solo ` always
-    /// and one tab per Group in the nav's order, open or not, lowercased —
-    /// the current view's bright (none on the empty board) — a press on
-    /// `1 solo` showing Solo (the loose Thread used last, else the empty
-    /// board) and on a Group entering it; each provider's usage; the clock.
+    /// The bottom bar (SPEC §5.7): `1 Solo` always and one tab per Group
+    /// in the nav's order, open or not — the current view's selected (none
+    /// on the empty board), each with its roll-up dot — a press on `Solo`
+    /// showing Solo (the loose Thread used last, else the empty board) and
+    /// on a Group entering it; then the status stretch and the vitals.
     fn bottom_bar(&self, level: Level, cx: &mut Context<Self>) -> Div {
         let view = self.cockpit.roster().view();
         let empty = self.empty_board_shown();
@@ -10945,29 +10958,20 @@ impl CockpitView {
             .filter_map(PaneView::thread)
             .filter(|thread| self.cockpit.groups().of(*thread).is_none())
             .max_by_key(|thread| self.last_used(*thread));
-        // A tab's mark is the roll-up of the Threads its view shows — the
-        // loose ones for Solo, the members for a Group — when it says
-        // anything (`nav::RowStatus::roll_up`).
-        let mark = |threads: &mut dyn Iterator<Item = ThreadId>| {
-            let rows: Vec<nav::ThreadRow> = threads.map(|thread| self.thread_row(thread)).collect();
-            nav::RowStatus::roll_up(&rows)
-                .filter(|status| status.attention() != Attention::Idle)
-                .map(nav::RowStatus::face)
+        // A tab's dot rolls up the Threads its view shows: Solo's one
+        // Thread, a Group's members.
+        let roll_up = |threads: &mut dyn Iterator<Item = ThreadId>| {
+            crate::titlebar::RollUp::of(
+                threads.map(|thread| self.thread_row(thread).status.attention()),
+            )
         };
-        let loose = mark(
-            &mut self
-                .panes
-                .iter()
-                .filter_map(PaneView::thread)
-                .filter(|thread| self.cockpit.groups().of(*thread).is_none()),
-        );
         tabs.push(
             crate::titlebar::bar_tab(
                 "bottom-bar-tab-solo".into(),
                 1,
-                "solo".into(),
+                "Solo".into(),
                 !empty && view == View::Solo,
-                loose,
+                roll_up(&mut solo.into_iter()),
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| match solo {
                 Some(thread) => {
@@ -10980,14 +10984,13 @@ impl CockpitView {
         );
         for (at, group) in self.cockpit.groups().iter().enumerate() {
             let id = group.id;
-            let title = group.display_title().to_lowercase();
             tabs.push(
                 crate::titlebar::bar_tab(
                     SharedString::from(format!("bottom-bar-tab-{}", id.get())),
                     at + 2,
-                    title.into(),
+                    crate::titlebar::tab_name(&group.display_title()).into(),
                     !empty && view == View::Group(id),
-                    mark(&mut group.members.iter().copied()),
+                    roll_up(&mut group.members.iter().copied()),
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     view.enter_group(id, cx);
@@ -10995,47 +10998,77 @@ impl CockpitView {
                 .into_any_element(),
             );
         }
-        let usage = self
-            .projects_bar_word(cx)
+        let needs_you =
+            crate::titlebar::bar_needs_you(self.cockpit.needs_you().len()).map(|count| {
+                count
+                    .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        view.toggle_notifications(&ToggleNotifications, window, cx);
+                    }))
+                    .into_any_element()
+            });
+        let usage = [Provider::Claude, Provider::Codex]
             .into_iter()
-            .chain(
-                [Provider::Claude, Provider::Codex]
-                    .into_iter()
-                    .filter_map(|provider| {
-                        crate::titlebar::bar_usage(provider, &self.cockpit.account_limits(provider))
-                    })
-                    .map(IntoElement::into_any_element),
-            )
+            .filter_map(|provider| {
+                crate::titlebar::bar_usage(provider, &self.cockpit.account_limits(provider))
+            })
+            .map(IntoElement::into_any_element);
+        let disk = self
+            .free_disk
+            .and_then(crate::titlebar::bar_free_disk)
+            .map(IntoElement::into_any_element);
+        let clock = crate::titlebar::bar_clock(ferrite_core::progress::clock_label().into());
+        let vitals = needs_you
+            .into_iter()
+            .chain(usage)
+            .chain(disk)
+            .chain(Some(clock.into_any_element()))
             .collect();
-        let gear = prefs::gear(
-            prefs::gear_button(cx).on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.toggle_settings(cx);
-            })),
-            "settings-gear-tip",
-        );
-        // The sidebar toggle is the nav head's (§5.1.1).
-        let mut doors = vec![self.bell_element(cx)];
-        doors.extend(self.board_door(cx));
-        // Settings keeps its gear only where it has no other visible door:
-        // macOS lists it in the app menu (and ⌘,).
-        if !cfg!(target_os = "macos") {
-            doors.push(gear.into_any_element());
+        let vitals = crate::titlebar::vitals(vitals).into_any_element();
+        crate::titlebar::bottom_bar(tabs, self.status_slot(level, cx), vitals)
+    }
+
+    /// Read free disk for the bar off the UI thread: the least free of the
+    /// volumes holding the Threads' checkouts (SPEC §8), or a fixture
+    /// world's figure. Nothing on a machine, whose checkouts are its own;
+    /// tests and captures never read the real disk.
+    fn read_free_disk(&mut self, cx: &mut Context<Self>) {
+        if let Some(bytes) = self.cockpit.free_disk_fixture() {
+            self.free_disk_landed(Some(bytes), cx);
+            return;
         }
-        let help = crate::titlebar::help_door()
-            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                view.toggle_shortcuts(window, cx);
-            }))
-            .into_any_element();
-        crate::titlebar::bottom_bar(
-            doors,
-            tabs,
-            self.status_slot(level, cx),
-            usage,
-            help,
-            SharedString::from(ferrite_core::progress::clock_label()),
-        )
+        if self.on_machine() || cfg!(any(test, feature = "visual-reference")) {
+            return;
+        }
+        let mut paths: Vec<std::path::PathBuf> = self
+            .cockpit
+            .threads()
+            .into_iter()
+            .filter_map(|thread| self.thread_path(thread))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        cx.spawn(async move |this, cx| {
+            let free = cx
+                .background_executor()
+                .spawn(async move {
+                    ferrite_core::disk::least_free(paths.iter().map(std::path::PathBuf::as_path))
+                })
+                .await;
+            this.update(cx, |view, cx| view.free_disk_landed(free, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Adopt a free-disk reading; redraw only when the bar's words move.
+    fn free_disk_landed(&mut self, free: Option<u64>, cx: &mut Context<Self>) {
+        let words = |free: Option<u64>| free.and_then(crate::titlebar::free_disk_words);
+        let moved = words(free) != words(self.free_disk);
+        self.free_disk = free;
+        if moved {
+            cx.notify();
+        }
     }
 
     /// The focused Pane's status line, for the window's bar (ADR 0014): a
@@ -13404,30 +13437,6 @@ impl CockpitView {
         rows
     }
 
-    /// The bell's door in the bottom bar (FL-17), its badge the unread
-    /// waiting requests; a click shows the Needs-you view (§5.1.2).
-    fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
-        let requests =
-            self.cockpit.notifications().unread_requests() + self.away_unread_requests(cx);
-        let door = crate::notifications::door(requests, self.needs_you_shown(), cx).on_click(
-            cx.listener(|view, _: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                view.toggle_notifications(&ToggleNotifications, window, cx);
-            }),
-        );
-        div()
-            .id("notifications-bell-tip")
-            .relative()
-            .flex_shrink_0()
-            .h_full()
-            .tooltip(crate::menu::action_tooltip(
-                "Notifications",
-                "cockpit::ToggleNotifications",
-            ))
-            .child(door)
-            .into_any_element()
-    }
-
     /// The nav's content at its own width (`nav::content`, §5.1): the head
     /// in the head row, the views, the tree — or the shown view's list in
     /// its place — with its scrollbar, and the foot.
@@ -15011,10 +15020,11 @@ mod tests {
     }
 
     /// ADR 0014: the titlebar band says nothing — no location, no build
-    /// badge, no doors. The sidebar toggle, the bell and `?` live in the
-    /// window's one bar at its foot.
+    /// badge, no doors. The window's one bar at its foot keeps only views
+    /// and vitals (SPEC §5.7): the sidebar toggle, the bell, the gear,
+    /// `ferrite` and `?` have left it.
     #[gpui::test]
-    fn the_titlebar_band_says_nothing_and_the_bar_holds_the_doors(cx: &mut TestAppContext) {
+    fn the_titlebar_band_says_nothing_and_the_bar_keeps_views_and_vitals(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("titlebar-says-nothing", 1);
         let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -15028,11 +15038,24 @@ mod tests {
             assert!(cx.debug_bounds(gone).is_none(), "{gone} is gone");
         }
         let bar = cx.debug_bounds("bottom-bar").expect("the bottom bar");
-        for door in ["notifications-bell", "bottom-bar-help"] {
-            let at = cx.debug_bounds(door).unwrap_or_else(|| panic!("{door}"));
+        for kept in ["bottom-bar-tabs", "bottom-bar-vitals", "bottom-bar-clock"] {
+            let at = cx.debug_bounds(kept).unwrap_or_else(|| panic!("{kept}"));
             assert!(
                 at.top() >= bar.top() && at.bottom() <= bar.bottom(),
-                "{door} rides the bar: {at:?} in {bar:?}"
+                "{kept} rides the bar: {at:?} in {bar:?}"
+            );
+        }
+        for gone in [
+            "notifications-bell",
+            "settings-gear",
+            "bottom-bar-session",
+            "bottom-bar-help",
+            "projects-board-door",
+        ] {
+            assert!(
+                cx.debug_bounds(gone)
+                    .is_none_or(|at| at.bottom() <= bar.top()),
+                "{gone} left the bar"
             );
         }
         let toggle = cx.debug_bounds("nav-collapse").expect("the sidebar toggle");
@@ -21434,8 +21457,7 @@ mod tests {
 
     /// #21: the nav's width is part of the zoom input — cmd-b folding it
     /// away hands width back, so a Pane that could not hold a transcript
-    /// beside the full nav can without it. Folded, the bottom bar keeps the
-    /// bell and Settings in reach. cmd-b again takes the width back.
+    /// beside the full nav can without it. cmd-b again takes the width back.
     #[gpui::test]
     fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-toggle", 1);
@@ -21459,22 +21481,6 @@ mod tests {
         let collapsed = cx.update(|window, cx| view.read(cx).level_now(window));
         assert_eq!(collapsed, Level::Transcript, "folding hands width back");
         tick(cx);
-        let bar = cx.debug_bounds("bottom-bar").expect("the bottom bar");
-        // Settings has its gear only off macOS (the app menu lists it).
-        let doors: &[&'static str] = if cfg!(target_os = "macos") {
-            &["notifications-bell"]
-        } else {
-            &["settings-gear", "notifications-bell"]
-        };
-        for &door in doors {
-            let bounds = cx
-                .debug_bounds(door)
-                .unwrap_or_else(|| panic!("folded, {door} stays in reach"));
-            assert!(
-                bounds.top() >= bar.top() && bounds.bottom() <= bar.bottom(),
-                "{door} sits in the bar: {bounds:?} in {bar:?}"
-            );
-        }
 
         cx.simulate_keystrokes("cmd-b");
         let reopened = cx.update(|window, cx| view.read(cx).level_now(window));
@@ -24431,21 +24437,16 @@ mod tests {
         cx.simulate_click(close, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(!view.settings_open));
-        // The bottom bar carries the gear only where Settings has no
-        // other visible door: macOS lists it in the app menu (and ⌘,), so
-        // there the bar has none (the prototype).
-        if cfg!(target_os = "macos") {
-            assert!(cx.debug_bounds("settings-gear").is_none());
-            cx.simulate_keystrokes("cmd-b");
-            tick(cx);
-            assert!(cx.debug_bounds("settings-gear").is_none());
-            cx.simulate_keystrokes("cmd-b");
-            tick(cx);
-            cx.simulate_keystrokes("cmd-,");
-        } else {
-            let gear = cx.debug_bounds("settings-gear").unwrap().center();
-            cx.simulate_click(gear, gpui::Modifiers::none());
-        }
+        // The gear left the bar (SPEC §5.7) for the nav's foot; ⌘, (and
+        // macOS' app menu, and the palette's `settings`) still opens it,
+        // folded or not.
+        assert!(cx.debug_bounds("settings-gear").is_none());
+        cx.simulate_keystrokes("cmd-b");
+        tick(cx);
+        assert!(cx.debug_bounds("settings-gear").is_none());
+        cx.simulate_keystrokes("cmd-b");
+        tick(cx);
+        cx.simulate_keystrokes("cmd-,");
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(view.settings_open));
         cx.simulate_keystrokes("escape");

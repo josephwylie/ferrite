@@ -83,6 +83,9 @@ pub struct Cockpit {
     /// What a fixture world's forge says (`fixture_forge`), by checkout:
     /// answered in place of its CLI. Empty outside fixtures.
     forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
+    /// What a fixture world's disk says is free (`fixture_free_disk`):
+    /// answered in place of the volume. `None` outside fixtures.
+    free_disk_fixture: Option<u64>,
     /// What this window draws at Transcript level (`draws_transcripts`).
     /// `None` for an Engine in this process until its window first says:
     /// until then it streams every open Thread.
@@ -211,6 +214,7 @@ impl Cockpit {
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
             forge_fixture: HashMap::new(),
+            free_disk_fixture: None,
             drawn: None,
             told: None,
         }
@@ -2108,6 +2112,17 @@ impl Cockpit {
     /// `view`, as its forge's CLI would, without running one.
     pub fn fixture_forge(&mut self, path: PathBuf, view: ferrite_reviewr::forge::PrView) {
         self.forge_fixture.insert(path, view);
+    }
+
+    /// A fixture world's free disk: from now on the bar's `N GB free`
+    /// reads `bytes` (`free_disk_fixture`) instead of the volume.
+    pub fn fixture_free_disk(&mut self, bytes: u64) {
+        self.free_disk_fixture = Some(bytes);
+    }
+
+    /// The free bytes a fixture world stands in for the volume, if any.
+    pub fn free_disk_fixture(&self) -> Option<u64> {
+        self.free_disk_fixture
     }
 
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {

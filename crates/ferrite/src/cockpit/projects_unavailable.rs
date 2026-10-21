@@ -73,13 +73,7 @@ impl CockpitView {
     pub(super) fn start_sidebar_refresh(_: &mut Context<Self>) {}
     pub(super) fn board_gives_way(&mut self) {}
     pub(super) fn present_projects_toasts(&mut self, _: &mut Window, _: &mut Context<Self>) {}
-    pub(super) fn board_door(&self, _: &mut Context<Self>) -> Option<AnyElement> {
-        None
-    }
     pub(super) fn tasks_tally(&self) -> Option<gpui::SharedString> {
-        None
-    }
-    pub(super) fn projects_bar_word(&self, _: &mut Context<Self>) -> Option<AnyElement> {
         None
     }
     pub(super) fn projects_float(&self, _: &mut Window, _: &mut Context<Self>) -> Vec<AnyElement> {

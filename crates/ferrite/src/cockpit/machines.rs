@@ -202,18 +202,6 @@ impl CockpitView {
         (requests, finished)
     }
 
-    /// The unread live requests on the machines off screen: what the
-    /// bell's badge adds to the ones here.
-    pub(super) fn away_unread_requests(&self, cx: &App) -> usize {
-        self.machines.as_ref().map_or(0, |machines| {
-            machines
-                .read(cx)
-                .off_screen()
-                .map(|away| away.notifications.unread_requests())
-                .sum()
-        })
-    }
-
     fn fold_machine(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(machines) = &self.machines {
             machines.update(cx, |machines, cx| {

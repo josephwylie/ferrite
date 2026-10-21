@@ -11,8 +11,8 @@
 //! drift, the agent's edits. The pull request the panel's PR tab reads
 //! (SPEC §5.6.2) comes from the forge's fixture (`Cockpit::fixture_forge`):
 //! the world answers both PR reads of the crash fix's worktree with one of
-//! `Pr`'s snapshots. Free disk (`7.5 GB free`) has no source yet (SPEC §8):
-//! nothing here feeds it.
+//! `Pr`'s snapshots. The bar's `7.5 GB free` comes from the disk's fixture
+//! (`Cockpit::fixture_free_disk`), in place of the capturing machine's own.
 //!
 //! Where the mockups disagree with themselves, the world takes the reading
 //! most of them share and says so where it happens.
@@ -46,6 +46,10 @@ use super::world::{
 /// `5m22s` since its `12:26 pm` prompt, so the clock stands at least 22
 /// seconds into the minute; thirty keeps every other stamp on its minute.
 pub(crate) const CAPTURE: Secs = hms(12, 31, 30);
+
+/// The free space the mockups' bar reads (`7.5 GB free`), in the bar's
+/// decimal gigabytes.
+pub(crate) const FREE_DISK: u64 = 7_500_000_000;
 
 // ------------------------------------------------------------------ world
 
@@ -351,6 +355,8 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
 
     // Both PR reads of the crash fix's worktree answer the chosen snapshot.
     core.fixture_forge(worktree, pr.view(clock));
+    // The bar's `7.5 GB free`: under 20 GB it shows, over 5 GB it is calm.
+    core.fixture_free_disk(FREE_DISK);
 
     let agenticos = status("main", 715, 0, 0);
     let invoicemate = status("main", 1, 5, 0);

@@ -12,7 +12,7 @@ use crate::palette::{
 };
 use crate::projects::{self, Command};
 use crate::sidebar::{self, Sidebar};
-use crate::theme::{paint, ICON_BUTTON, ICON_BUTTON_GLYPH, TEXT, TEXT_DIM, TRANSPARENT};
+use crate::theme::TEXT_DIM;
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::Selectable;
 use gpui::component::WindowExt as _;
@@ -231,60 +231,6 @@ impl CockpitView {
             .and_then(|project| targets.iter().find(|target| target.root == project.root))
             .or_else(|| targets.first())
             .map(|target| target.root.clone())
-    }
-
-    /// The board's door in the bottom bar, after the bell: the board glyph,
-    /// lit while the board shows; a click does what the board key does.
-    /// None outside the operator's window, where no board opens.
-    pub(super) fn board_door(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.projects.live {
-            return None;
-        }
-        let shown = self
-            .projects
-            .board
-            .as_ref()
-            .is_some_and(|board| board.shown);
-        let id = gpui::ElementId::from("projects-board-door");
-        let key = crate::pointer::hover_key(&id);
-        let (rest, glyph): (gpui::Hsla, gpui::Hsla) = if shown {
-            (paint::HOVER.into(), rgb(TEXT).into())
-        } else {
-            (
-                gpui::rgba(TRANSPARENT).into(),
-                crate::motion::hover_blend(&key, rgb(TEXT_DIM).into(), rgb(TEXT).into()),
-            )
-        };
-        let door = crate::components::faded_button(
-            id,
-            rest,
-            paint::HOVER.into(),
-            paint::PRESS.into(),
-            rgb(TEXT_DIM).into(),
-            cx,
-        )
-        .debug_selector(|| "projects-board-door".into())
-        .w(px(ICON_BUTTON))
-        .h_full()
-        .p_0()
-        .accessibility_label("Tasks")
-        .child(
-            crate::icons::icon(crate::icons::BOARD, ICON_BUTTON_GLYPH, TEXT_DIM).text_color(glyph),
-        )
-        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            view.toggle_projects(window, cx);
-            cx.notify();
-        }));
-        Some(
-            div()
-                .id("projects-board-door-tip")
-                .flex_shrink_0()
-                .h_full()
-                .tooltip(crate::menu::action_tooltip("Tasks", "projects::Toggle"))
-                .child(door)
-                .into_any_element(),
-        )
     }
 
     /// Whether the board shows and holds the keyboard: shown but left (a
@@ -802,32 +748,10 @@ impl CockpitView {
         vec![veil, float]
     }
 
-    /// The board header's tally (`3 need you · 1 ready · 2 working`), while
-    /// the board has tasks; a press opens the board.
     /// The board's tally (`3 working · 1 review`), which the nav's `Tasks`
     /// view says at its right; `None` while it says nothing.
     pub(super) fn tasks_tally(&self) -> Option<SharedString> {
         let tally = &self.projects.sidebar.tally;
         (!tally.is_empty()).then(|| SharedString::from(tally.clone()))
-    }
-
-    pub(super) fn projects_bar_word(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let tally = &self.projects.sidebar.tally;
-        #[cfg(test)]
-        super::drawn::record_bar_tally((!tally.is_empty()).then(|| tally.clone()));
-        (!tally.is_empty()).then(|| {
-            div()
-                .id("bottom-bar-projects")
-                .debug_selector(|| "bottom-bar-projects".into())
-                .flex_shrink_0()
-                .text_color(rgb(crate::theme::CHROME_MUTED))
-                .cursor_pointer()
-                .child(SharedString::from(tally.clone()))
-                .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    window.dispatch_action(Box::new(projects::Toggle), cx);
-                }))
-                .into_any_element()
-        })
     }
 }

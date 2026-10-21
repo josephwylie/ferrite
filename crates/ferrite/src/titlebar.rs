@@ -25,17 +25,15 @@
 //!
 //! The band says nothing (ADR 0014): no location, no doors. The nav's
 //! selected row names the Thread; the window's one bar is the bottom bar
-//! (`bottom_bar`, F-9) — the sidebar toggle and the bell, the session,
-//! `1 solo` and a tab per Group, the focused Pane's status line, usage, `?`
-//! and the clock: tmux's grammar on the chrome.
+//! (`bottom_bar`, SPEC §5.7): `1 Solo` and a tab per Group, the focused
+//! Pane's status line until the Composer and the panel take it, then the
+//! vitals — who needs you, usage, free disk and the clock.
 //!
 //! Drawing only, like `nav.rs`: the cockpit places these and owns the state
 //! they read.
 
 use gpui::prelude::*;
-use gpui::{
-    div, px, rgb, rgba, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea,
-};
+use gpui::{div, px, rgb, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
 use crate::theme::paint;
 
@@ -157,147 +155,200 @@ fn drag_region(maximized: bool) -> Div {
 
 // ------------------------------------------------------------- bottom bar
 
-/// The bottom bar (theme WP-C, F-9), the window's one bar (ADR 0014): one
-/// row on the chrome (`paint::CHROME`), closed above by a `paint::LINE`
-/// rule, tmux's grammar in the one face — the window's `doors` (the
-/// sidebar toggle, the bell and, off macOS, the gear), `ferrite` in
-/// `TEXT_STRONG` at the strong weight, `1 solo` and a tab per Group (the current
-/// view's bright on a band), the stretch holding the focused Pane's
-/// `status` line, a usage segment per provider, the `?` door and the clock
-/// in `TEXT`. No state counts: the sidebar and the bell hold those. The
-/// status line gives way first when the window is narrow.
-pub fn bottom_bar(
-    doors: Vec<AnyElement>,
-    tabs: Vec<AnyElement>,
-    status: Div,
-    usage: Vec<AnyElement>,
-    help: AnyElement,
-    clock: SharedString,
-) -> Div {
+/// The bottom bar (SPEC §5.7), the window's one bar (ADR 0014, amended by
+/// ADR 0033): full width on `paint::BAR`, closed above by a `BAR_TOP`
+/// hairline, `BAR_PAD_X` in from each end, `BAR_GAP` between its items,
+/// Geist `FS_META` in `TEXT_DIM` (`CHROME_MUTED`, its step up on glass).
+/// Left the view `tabs`; then the `status` stretch, which also pushes the
+/// `vitals` to the right end.
+///
+/// `status` is the focused Pane's status line until the Composer and the
+/// panel take its parts (phases 6 and 7a); then the caller passes a bare
+/// `div().flex_1()` and this stays as it is.
+pub fn bottom_bar(tabs: Vec<AnyElement>, status: Div, vitals: AnyElement) -> Div {
     div()
         .debug_selector(|| "bottom-bar".into())
         .flex()
         .flex_row()
+        .items_center()
         .flex_shrink_0()
         .w_full()
         .h(px(STATUS_BAR_H))
+        .px(px(BAR_PAD_X))
+        .gap(px(BAR_GAP))
         .bg(paint::BAR)
         .border_t_1()
-        .border_color(rgba(BAR_TOP))
+        .border_color(paint::BAR_TOP)
         .font_family(FONT_UI)
-        .text_size(px(FS_UI))
-        .line_height(px(LH_UI))
+        .text_size(px(FS_META))
+        .line_height(px(LH_META))
         .text_color(rgb(CHROME_MUTED))
         .whitespace_nowrap()
         .overflow_hidden()
-        .children(doors)
         .child(
             div()
-                .debug_selector(|| "bottom-bar-session".into())
+                .debug_selector(|| "bottom-bar-tabs".into())
                 .flex()
+                .flex_row()
                 .flex_shrink_0()
                 .items_center()
-                .px(px(BAR_SEG_PAD_X))
-                .font_weight(W_STRONG)
-                .text_color(rgb(TEXT_STRONG))
-                .child(components::cells("ferrite")),
+                .gap(px(SPACE_0_5))
+                .children(tabs),
         )
-        .children(tabs)
         .child(status)
-        .children(usage)
-        .child(help)
-        .child(
-            components::tabular(
-                div()
-                    .debug_selector(|| "bottom-bar-clock".into())
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .pl(px(BAR_SEG_PAD_X))
-                    .pr(px(BAR_SEG_PAD_TAIL))
-                    .text_color(rgb(TEXT)),
-            )
-            .child(components::cells(clock)),
-        )
+        .child(vitals)
 }
 
-/// The `?` door (ADR 0014): the one way in to the keys, a bar segment in
-/// `CHROME_MUTED` that lifts to `TEXT` on `paint::HOVER` under the pointer.
-/// The cockpit wires the press to the shortcuts sheet.
-pub fn help_door() -> Stateful<Div> {
-    let key = SharedString::from("bottom-bar-help");
+/// The bar's right end, in order: the need-you count, a usage segment per
+/// provider, free disk, the clock — `BAR_GAP` apart, never shrunk.
+pub fn vitals(items: Vec<AnyElement>) -> Div {
     div()
-        .id(gpui::ElementId::Name(key.clone()))
-        .debug_selector(|| "bottom-bar-help".into())
-        .group(key.clone())
+        .debug_selector(|| "bottom-bar-vitals".into())
         .flex()
+        .flex_row()
         .flex_shrink_0()
         .items_center()
-        .px(px(BAR_SEG_PAD_X))
-        .cursor_pointer()
-        .hover_row(key.clone())
-        .tooltip(crate::menu::action_tooltip(
-            "Shortcuts",
-            "shortcuts::Toggle",
-        ))
-        .child(
-            components::cells("?")
-                .text_color(rgb(CHROME_MUTED))
-                .group_hover(key, |style| style.text_color(rgb(TEXT))),
-        )
+        .gap(px(BAR_GAP))
+        .children(items)
 }
 
-/// One view's tab: ` 1 solo `, ` 2 perf sweep ` — the words a cell in from
-/// the tab's own cell of padding, and the roll-up `mark` of the Threads it
-/// shows after them (` 2 perf sweep ✓ `) while it says anything. The
-/// current view's is `TEXT_STRONG` on `paint::BAND2`; the rest are dim and
-/// lift to `TEXT` on `paint::HOVER` under the pointer. The cockpit wires
-/// the press.
+/// A view's roll-up dot (SPEC §5.7): `ATTENTION` when anything it shows is
+/// blocked, else `RUNNING` when anything is working, else none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RollUp {
+    Working,
+    Blocked,
+}
+
+impl RollUp {
+    /// The roll-up of `attentions`: blocked wins over working.
+    pub fn of(attentions: impl IntoIterator<Item = ferrite_core::Attention>) -> Option<Self> {
+        use ferrite_core::Attention;
+        let mut working = false;
+        for attention in attentions {
+            match attention {
+                Attention::Blocked => return Some(RollUp::Blocked),
+                Attention::Working => working = true,
+                _ => {}
+            }
+        }
+        working.then_some(RollUp::Working)
+    }
+
+    fn ink(self) -> u32 {
+        match self {
+            RollUp::Working => RUNNING,
+            RollUp::Blocked => ATTENTION,
+        }
+    }
+}
+
+/// A round state dot `size` across in `ink`.
+fn bar_dot(size: f32, ink: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .size(px(size))
+        .rounded_full()
+        .bg(rgb(ink))
+}
+
+/// One view's tab (SPEC §5.7): `1 Solo`, `2 Work` — `BAR_TAB_H` high,
+/// `BAR_TAB_PAD_X` in, radius `R_SMALL`, the digit in `TEXT_DIM` and the
+/// name in `TEXT_BAR`, then the view's roll-up dot. The current view's
+/// sits on `paint::SELECTED` with its name `TEXT_STRONG` at the label
+/// weight; the rest take the hover fill under the pointer. The cockpit
+/// wires the press.
 pub fn bar_tab(
     id: SharedString,
     ordinal: usize,
     label: SharedString,
     current: bool,
-    mark: Option<crate::cockpit::ThreadStatus>,
+    roll_up: Option<RollUp>,
 ) -> Stateful<Div> {
     let selector = id.clone();
     let key = id.clone();
-    let words = format!("{ordinal} {label}");
-    // The prototype's ` 2 perf sweep `, one run, in a cell of padding
-    // each side; a mark takes a space and its cell more.
-    let width = components::run_width(&format!(" {words} "))
-        + 2.0 * BAR_SEG_PAD_X
-        + if mark.is_some() { 2.0 * CH } else { 0.0 };
     div()
         .id(gpui::ElementId::Name(id))
         .debug_selector(move || selector.to_string())
         .flex()
         .flex_shrink_0()
         .items_center()
-        .w(px(width))
-        .pl(px(2.0 * BAR_SEG_PAD_X))
+        .gap(px(SPACE_1_5))
+        .h(px(BAR_TAB_H))
+        .px(px(BAR_TAB_PAD_X))
+        .rounded(px(R_SMALL))
         .map(|tab| {
             if current {
                 tab.cursor_pointer()
-                    .bg(paint::BAND2)
+                    .bg(paint::SELECTED)
                     .text_color(rgb(TEXT_STRONG))
+                    .font_weight(W_LABEL)
             } else {
-                tab.hover_row(key.clone()).group(key.clone()).press_row()
+                tab.hover_row(key).press_row().text_color(rgb(TEXT_BAR))
             }
         })
         .child(
-            div()
-                .when(!current, |label| {
-                    label.group_hover(key, |style| style.text_color(rgb(TEXT)))
-                })
-                .child(components::cells(words)),
+            components::tabular(div().text_color(rgb(CHROME_MUTED)))
+                .child(SharedString::from(ordinal.to_string())),
         )
-        .children(mark.map(|mark| div().flex_shrink_0().ml(px(CH)).child(mark.dot())))
+        .child(label)
+        .children(roll_up.map(|dot| bar_dot(BAR_TAB_DOT, dot.ink())))
 }
 
-/// The window a provider's usage segment reads: its more used one, the 5h
-/// window on a tie (`5h 41%`, `wk 12%`). `None` when it has reported
-/// neither.
+/// A Group's title as its tab names it, in sentence case (SPEC §7):
+/// `WORK` → `Work`, `InvoiceMate Business` → `InvoiceMate business`. The
+/// first word is capitalised; a later word is lowercased unless it is an
+/// acronym (`API`) or a name with its own inner capitals (`InvoiceMate`).
+pub fn tab_name(title: &str) -> String {
+    title
+        .split(' ')
+        .enumerate()
+        .map(|(index, word)| {
+            let mut chars = word.chars();
+            let Some(first) = chars.next() else {
+                return String::new();
+            };
+            let rest: String = chars.collect();
+            let shouting =
+                rest.chars().any(char::is_alphabetic) && !rest.chars().any(char::is_lowercase);
+            let inner_capitals = !shouting && rest.chars().any(char::is_uppercase);
+            if index == 0 {
+                let rest = if shouting { rest.to_lowercase() } else { rest };
+                first.to_uppercase().chain(rest.chars()).collect()
+            } else if shouting || inner_capitals {
+                word.to_owned()
+            } else {
+                word.to_lowercase()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The need-you count (SPEC §5.7): a `BAR_NEED_DOT` `ATTENTION` dot and
+/// `N need you` in `TEXT_BAR`. `None` at zero. The cockpit wires the press
+/// to the Needs-you view.
+pub fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
+    (count > 0).then(|| {
+        div()
+            .id("bottom-bar-needs-you")
+            .debug_selector(|| "bottom-bar-needs-you".into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(SPACE_1_5))
+            .cursor_pointer()
+            .child(bar_dot(BAR_NEED_DOT, ATTENTION))
+            .child(
+                components::tabular(div().text_color(rgb(TEXT_BAR)))
+                    .child(SharedString::from(format!("{count} need you"))),
+            )
+    })
+}
+
+/// The window a provider's usage segment reads and its words: the more
+/// used one, `this week` or `of 5h` (the five-hour window on a tie).
+/// `None` when it has reported neither.
 pub fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'static str, f32)> {
     let five = limits
         .five_hour
@@ -306,47 +357,91 @@ pub fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'
         .weekly
         .map(|window| window.used_fraction.clamp(0.0, 1.0));
     match (five, week) {
-        (Some(five), Some(week)) if week > five => Some(("wk", week)),
-        (Some(five), _) => Some(("5h", five)),
-        (None, Some(week)) => Some(("wk", week)),
+        (Some(five), Some(week)) if week > five => Some(("this week", week)),
+        (Some(five), _) => Some(("of 5h", five)),
+        (None, Some(week)) => Some(("this week", week)),
         (None, None) => None,
     }
 }
 
-/// One provider's usage segment (F-9): its 11px mark, a cell, and its more
-/// used window (`5h 41%`), a cell of padding each side, `CHROME_MUTED` —
-/// `TEXT` on `paint::HOVER` under the pointer. `None` when the provider has
-/// reported no window.
+/// One provider's usage segment (SPEC §5.7): its glyph (`✻` Claude, `◉`
+/// Codex) in its ink, then `14% this week` or `41% of 5h`. `None` when the
+/// provider has reported no window.
 pub fn bar_usage(
     provider: ferrite_core::store::Provider,
     limits: &ferrite_core::transcript::RateLimits,
-) -> Option<Stateful<Div>> {
+) -> Option<Div> {
     let (window, used) = usage_window(limits)?;
     let (glyph, ink, name) = match provider {
-        ferrite_core::store::Provider::Claude => (icons::CLAUDE, PROVIDER_CLAUDE, "claude"),
-        ferrite_core::store::Provider::Codex => (icons::CODEX, PROVIDER_CODEX, "codex"),
+        ferrite_core::store::Provider::Claude => ("\u{273b}", PROVIDER_CLAUDE, "claude"),
+        ferrite_core::store::Provider::Codex => ("\u{25c9}", PROVIDER_CODEX, "codex"),
     };
-    let key = SharedString::from(format!("bottom-bar-usage-{name}"));
-    let selector = key.clone();
     Some(
         div()
-            .id(gpui::ElementId::Name(key.clone()))
-            .debug_selector(move || selector.to_string())
-            .group(key.clone())
+            .debug_selector(move || format!("bottom-bar-usage-{name}"))
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(BAR_SEG_PAD_X))
-            .pl(px(BAR_SEG_PAD_X))
-            .pr(px(BAR_SEG_PAD_TAIL))
-            .hover_row(key.clone())
-            .child(icon(glyph, BAR_MARK, ink))
-            .child(components::tabular(
-                components::cells(format!("{window} {}%", (used * 100.).round() as u32))
-                    .text_color(rgb(CHROME_MUTED))
-                    .group_hover(key, |style| style.text_color(rgb(TEXT))),
-            )),
+            .gap(px(SPACE_1_5))
+            .child(components::glyph(glyph, ink))
+            .child(components::tabular(div()).child(SharedString::from(format!(
+                "{}% {window}",
+                (used * 100.).round() as u32
+            )))),
     )
+}
+
+/// Free space under which the bar shows it, and under which it asks for
+/// attention (SPEC §5.7), in the bar's decimal bytes.
+const DISK_SHOWN_UNDER: u64 = 20 * GB;
+const DISK_LOW_UNDER: u64 = 5 * GB;
+const GB: u64 = 1_000_000_000;
+
+/// `7.5 GB free` and its ink, for `bytes` free on the Threads' volume:
+/// one decimal under ten gigabytes, whole ones from there. `None` from
+/// 20 GB up: the bar says nothing while space is plentiful.
+pub fn free_disk_words(bytes: u64) -> Option<(String, u32)> {
+    if bytes >= DISK_SHOWN_UNDER {
+        return None;
+    }
+    let gb = bytes as f64 / GB as f64;
+    let words = if gb < 9.95 {
+        format!("{gb:.1} GB free")
+    } else {
+        format!("{gb:.0} GB free")
+    };
+    let ink = if bytes < DISK_LOW_UNDER {
+        ATTENTION
+    } else {
+        CHROME_MUTED
+    };
+    Some((words, ink))
+}
+
+/// The free-disk segment: `free_disk_words`, or `None` when it says
+/// nothing.
+pub fn bar_free_disk(bytes: u64) -> Option<Div> {
+    let (words, ink) = free_disk_words(bytes)?;
+    Some(
+        components::tabular(
+            div()
+                .debug_selector(|| "bottom-bar-disk".into())
+                .flex_shrink_0()
+                .text_color(rgb(ink)),
+        )
+        .child(SharedString::from(words)),
+    )
+}
+
+/// The clock (`progress::clock_label`) in `TEXT_BAR`, tabular figures.
+pub fn bar_clock(clock: SharedString) -> Div {
+    components::tabular(
+        div()
+            .debug_selector(|| "bottom-bar-clock".into())
+            .flex_shrink_0()
+            .text_color(rgb(TEXT_BAR)),
+    )
+    .child(clock)
 }
 
 /// Minimise, maximise/restore and close, in the platform's order, flush to
@@ -482,8 +577,8 @@ mod tests {
         assert_eq!(board_top(), WIN_CHROME_H);
     }
 
-    /// F-9: a usage segment reads the provider's more used window, the 5h
-    /// one on a tie.
+    /// SPEC §5.7: a usage segment reads the provider's more used window,
+    /// the five-hour one on a tie.
     #[test]
     fn a_usage_segment_reads_the_more_used_window() {
         use ferrite_core::transcript::RateLimits;
@@ -497,17 +592,67 @@ mod tests {
         let limits = |five_hour, weekly| RateLimits { five_hour, weekly };
         assert_eq!(
             usage_window(&limits(window(0.41), window(0.12))),
-            Some(("5h", 0.41))
+            Some(("of 5h", 0.41))
         );
         assert_eq!(
             usage_window(&limits(window(0.10), window(0.12))),
-            Some(("wk", 0.12))
+            Some(("this week", 0.12))
         );
         assert_eq!(
             usage_window(&limits(window(0.3), window(0.3))),
-            Some(("5h", 0.3))
+            Some(("of 5h", 0.3))
         );
         assert_eq!(usage_window(&limits(None, None)), None);
+    }
+
+    /// SPEC §5.7: free disk shows only under 20 GB, in `ATTENTION` under
+    /// 5 GB, one decimal under ten.
+    #[test]
+    fn free_disk_speaks_only_when_space_runs_low() {
+        assert_eq!(free_disk_words(20 * GB), None);
+        assert_eq!(
+            free_disk_words(19_600_000_000),
+            Some(("20 GB free".into(), CHROME_MUTED))
+        );
+        assert_eq!(
+            free_disk_words(12_300_000_000),
+            Some(("12 GB free".into(), CHROME_MUTED))
+        );
+        assert_eq!(
+            free_disk_words(7_500_000_000),
+            Some(("7.5 GB free".into(), CHROME_MUTED))
+        );
+        assert_eq!(
+            free_disk_words(4_990_000_000),
+            Some(("5.0 GB free".into(), ATTENTION))
+        );
+    }
+
+    /// SPEC §7: a Group's tab is named in sentence case, keeping acronyms
+    /// and inner capitals.
+    #[test]
+    fn a_group_tab_is_named_in_sentence_case() {
+        assert_eq!(tab_name("WORK"), "Work");
+        assert_eq!(tab_name("InvoiceMate Business"), "InvoiceMate business");
+        assert_eq!(tab_name("perf sweep"), "Perf sweep");
+        assert_eq!(tab_name("Fix the API"), "Fix the API");
+        assert_eq!(tab_name("group-03"), "Group-03");
+    }
+
+    /// SPEC §5.7: a view's dot says blocked over working, and nothing for
+    /// a view at rest.
+    #[test]
+    fn a_tab_rolls_up_blocked_over_working() {
+        use ferrite_core::Attention;
+        assert_eq!(RollUp::of([Attention::Idle, Attention::Done]), None);
+        assert_eq!(
+            RollUp::of([Attention::Done, Attention::Working]),
+            Some(RollUp::Working)
+        );
+        assert_eq!(
+            RollUp::of([Attention::Working, Attention::Blocked, Attention::Idle]),
+            Some(RollUp::Blocked)
+        );
     }
 
     /// A restored window keeps its top resize edge, which is an inset the

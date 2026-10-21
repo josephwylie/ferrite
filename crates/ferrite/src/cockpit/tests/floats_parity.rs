@@ -473,7 +473,7 @@ fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {
 /// FL-16 / FL-17: the bell's list is the nav's Needs-you view (§5.1.2),
 /// its first row selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
 /// interrupting, `mark all read` reads everything and removes nothing; the
-/// badge counts the unread waiting requests only.
+/// unread count is the waiting requests only.
 #[gpui::test]
 fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("bell-list", 6);
@@ -518,7 +518,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
             "2 waiting; 3 unread completions never count"
         );
     });
-    assert!(cx.debug_bounds("notifications-badge").is_some());
+    assert!(cx.debug_bounds("bottom-bar-needs-you").is_some());
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
     let column = cx.debug_bounds("nav-column").unwrap();

@@ -1114,42 +1114,6 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
     }
 }
 
-/// The bottom bar's gear: the door to this panel. Ground and glyph blend
-/// to their hover faces over the one 150ms blend (`TEXT_DIM` → `TEXT`, as
-/// the collapse button does). `gear` hangs its tooltip, `Settings ⌘,`.
-pub fn gear_button(cx: &App) -> Button {
-    let id = gpui::ElementId::from("settings-gear");
-    let key = crate::pointer::hover_key(&id);
-    let glyph = crate::motion::hover_blend(&key, rgb(TEXT_DIM).into(), rgb(TEXT).into());
-    components::faded_button(
-        id,
-        gpui::rgba(TRANSPARENT).into(),
-        paint::HOVER.into(),
-        paint::PRESS.into(),
-        rgb(TEXT_DIM).into(),
-        cx,
-    )
-    .debug_selector(|| "settings-gear".into())
-    .w(px(ICON_BUTTON))
-    .h_full()
-    .p_0()
-    .accessibility_label("Settings")
-    .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_DIM).text_color(glyph))
-}
-
-/// The gear with its tooltip, `Settings ⌘,` (a kit button's own tooltip is
-/// plain text, so the key rides a wrapper).
-pub fn gear(button: Button, id: &'static str) -> gpui::Stateful<Div> {
-    div()
-        .id(id)
-        .flex_shrink_0()
-        .h_full()
-        .tooltip(crate::menu::action_tooltip(
-            "Settings",
-            "cockpit::OpenSettings",
-        ))
-        .child(button)
-}
 #[cfg(test)]
 mod tests {
     use super::*;

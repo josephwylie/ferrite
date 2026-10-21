@@ -411,9 +411,9 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 
-/// F-9: the bottom bar always shows `1 solo` and a tab per Group, open or
-/// not; a press on a Group's tab enters it, and on `1 solo` with no loose
-/// Thread it shows the empty board.
+/// SPEC §5.7: the bottom bar always shows `1 Solo` and a tab per Group,
+/// open or not; a press on a Group's tab enters it, and on `Solo` with no
+/// loose Thread it shows the empty board.
 #[gpui::test]
 fn the_bottom_bar_has_solo_and_every_group(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("frame-bottom-bar", 2);
@@ -433,8 +433,85 @@ fn the_bottom_bar_has_solo_and_every_group(cx: &mut TestAppContext) {
     tick(cx);
     assert!(
         cx.debug_bounds("empty-board").is_some(),
-        "no loose Thread: `1 solo` is the empty board"
+        "no loose Thread: `Solo` is the empty board"
     );
+}
+
+/// SPEC §5.7: the bar is 30 high and full width, 14px in at each end:
+/// the views' tabs (22 high) at its left, the vitals at its right ending in
+/// the clock. `N need you` shows only while a Thread waits, and opens the
+/// nav's Needs-you view; free disk only under
+/// 20 GB, and never while unknown.
+#[gpui::test]
+fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
+    let (view, fake, cx, group) = board_of("frame-bar-vitals", 2, cx);
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    let window = cx.update(|window, _| window.viewport_size());
+    assert_eq!(bar.size.height, px(crate::theme::STATUS_BAR_H));
+    assert_eq!(crate::theme::STATUS_BAR_H, 30.0);
+    assert_eq!(
+        (bar.left(), bar.right()),
+        (px(0.), window.width),
+        "full width"
+    );
+    assert_eq!(bar.bottom(), window.height);
+    let tabs = cx.debug_bounds("bottom-bar-tabs").unwrap();
+    assert_eq!(tabs.left(), bar.left() + px(14.));
+    let solo = bounds(cx, "bottom-bar-tab-solo".to_string());
+    let work = bounds(cx, format!("bottom-bar-tab-{}", group.get()));
+    assert_eq!(solo.size.height, px(22.));
+    assert_eq!(work.left() - solo.right(), px(2.), "tabs 2px apart");
+    let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
+    let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
+    assert_eq!(vitals.right(), bar.right() - px(14.));
+    assert_eq!(clock.right(), vitals.right(), "the clock ends the bar");
+
+    assert!(
+        cx.debug_bounds("bottom-bar-needs-you").is_none(),
+        "none waits"
+    );
+    fake.streams.borrow()[0]
+        .send(SessionEvent::DecisionRequested {
+            decision: Decision {
+                delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
+                id: "req0".into(),
+                tool_use_id: "toolu_req0".into(),
+                tool_name: "Bash".into(),
+                description: "ls".into(),
+                input: serde_json::json!({ "command": "ls" }),
+                suggestions: vec![],
+            },
+        })
+        .unwrap();
+    tick(cx);
+    let needs = cx
+        .debug_bounds("bottom-bar-needs-you")
+        .expect("one waits: `1 need you`");
+    let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
+    let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
+    assert!(needs.left() >= vitals.left() && needs.right() <= clock.left());
+    cx.simulate_click(needs.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.needs_you_shown()),
+        "the Needs-you view is up"
+    );
+
+    for (free, shown) in [
+        (None, false),
+        (Some(30_000_000_000), false),
+        (Some(7_500_000_000), true),
+    ] {
+        view.update(cx, |view, cx| view.free_disk_landed(free, cx));
+        tick(cx);
+        assert_eq!(
+            cx.debug_bounds("bottom-bar-disk").is_some(),
+            shown,
+            "{free:?} free"
+        );
+    }
 }
 
 /// F-14: a reader opens beside the Solo Pane at a line — half and half —

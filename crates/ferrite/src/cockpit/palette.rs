@@ -955,9 +955,11 @@ impl CockpitView {
             bound_chord("cockpit::ToggleNotifications"),
             Command::Notifications,
         );
+        // The keys' one door now that `?` has left the bar (SPEC §5.7),
+        // beside the Help menu's `Keyboard Shortcuts`.
         add(
             true,
-            "shortcuts".into(),
+            "keyboard shortcuts".into(),
             "",
             bound_chord_in("shortcuts::Toggle", Some("ComposerEmpty")),
             Command::Shortcuts,

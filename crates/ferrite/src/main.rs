@@ -708,14 +708,19 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Next Pane", NextPane),
                 MenuItem::action("Previous Pane", PreviousPane),
                 MenuItem::action("Next Decision", NextDecision),
-                MenuItem::separator(),
-                MenuItem::action("Keyboard Shortcuts", shortcuts::Toggle),
             ],
         },
         Menu {
             disabled: false,
             name: "Window".into(),
             items: vec![],
+        },
+        // The keys' door off the bar (SPEC §5.7), beside the palette's
+        // `keyboard shortcuts`.
+        Menu {
+            disabled: false,
+            name: "Help".into(),
+            items: vec![MenuItem::action("Keyboard Shortcuts", shortcuts::Toggle)],
         },
     ]
 }
@@ -726,7 +731,7 @@ mod tests {
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{
         adopt, app_menus, bind_keys, demo, dock_launch_dir, find, keep_mouse_cursor_visible,
-        keymap, load_bindings, KEY_TABLE,
+        keymap, load_bindings, shortcuts, KEY_TABLE,
     };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
@@ -796,6 +801,20 @@ mod tests {
             item,
             gpui::MenuItem::Action { name, action, .. }
                 if name == "Find\u{2026}" && action.partial_eq(&find::Open)
+        )));
+    }
+
+    /// `?` left the bar (SPEC §5.7): the Help menu opens the keys.
+    #[test]
+    fn the_help_menu_opens_the_keys() {
+        let help = app_menus()
+            .into_iter()
+            .find(|menu| menu.name == "Help")
+            .expect("a Help menu");
+        assert!(help.items.iter().any(|item| matches!(
+            item,
+            gpui::MenuItem::Action { name, action, .. }
+                if name == "Keyboard Shortcuts" && action.partial_eq(&shortcuts::Toggle)
         )));
     }
 

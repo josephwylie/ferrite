@@ -18,7 +18,6 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful, Window};
 
 use crate::components;
-use crate::icons;
 use crate::machines::MachineKey;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
@@ -591,73 +590,6 @@ impl Default for Bell {
     }
 }
 
-// --------------------------------------------------------------- the door
-
-/// The bell's door in the bottom bar (the prototype's `.ib`, FL-17):
-/// `ICON_BUTTON` wide and the bar's full height, the bell at `ICON_BUTTON_GLYPH` in
-/// `TEXT_DIM`, `paint::HOVER` and `TEXT` under the pointer (and while the
-/// list is down), and the badge: the unread waiting requests as a bare
-/// `BADGE_FS` digit in `ATTENTION` at its top-right corner — hidden at
-/// zero, never tinted by a failure.
-pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::Button {
-    let id = gpui::ElementId::from("notifications-bell");
-    let key = crate::pointer::hover_key(&id);
-    let rest: gpui::Hsla = if open {
-        paint::HOVER.into()
-    } else {
-        gpui::rgba(TRANSPARENT).into()
-    };
-    let glyph = if open {
-        rgb(TEXT).into()
-    } else {
-        crate::motion::hover_blend(&key, rgb(TEXT_DIM).into(), rgb(TEXT).into())
-    };
-    components::faded_button(
-        id,
-        rest,
-        paint::HOVER.into(),
-        paint::PRESS.into(),
-        rgb(TEXT_DIM).into(),
-        cx,
-    )
-    .debug_selector(|| "notifications-bell".into())
-    .relative()
-    .w(px(ICON_BUTTON))
-    .h_full()
-    .p_0()
-    .accessibility_label("Notifications")
-    .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_DIM).text_color(glyph))
-    .when(requests > 0, |door| door.child(badge(requests)))
-}
-
-/// The badge: the prototype's superscript — `BADGE_FS` `W_STRONG` tabular
-/// digits in `ATTENTION` on no ground at the door's top-right, `99+` past
-/// two digits, its right edge 1px in from the door's (the prototype's
-/// `right:1px`).
-fn badge(requests: usize) -> Div {
-    let count: SharedString = if requests > 99 {
-        "99+".into()
-    } else {
-        requests.to_string().into()
-    };
-    components::tabular(
-        div()
-            .debug_selector(|| "notifications-badge".into())
-            .absolute()
-            .top(px(0.))
-            .right(px(1.))
-            .font_family(FONT_UI)
-            .text_size(px(BADGE_FS))
-            .line_height(px(BADGE_LH))
-            .font_weight(W_STRONG)
-            .text_color(rgb(BADGE_INK))
-            .child(count),
-    )
-}
-
-/// The badge's one ink: what waits on the operator.
-pub const BADGE_INK: u32 = ATTENTION;
-
 // ---------------------------------------------------------- marks, words
 
 /// A row's or toast's mark, typed in its 2-cell column: `◆` for an
@@ -977,7 +909,6 @@ mod tests {
             (words::DONE, TEXT_DIM)
         );
         assert_eq!(mark(State::Done), Mark("\u{2713}", TEXT_DIM));
-        assert_eq!(BADGE_INK, ATTENTION);
         const { assert!(ROW_TEXT_CELLS >= 40) };
     }
 

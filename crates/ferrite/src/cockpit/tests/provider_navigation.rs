@@ -169,10 +169,11 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
 
 /// Folded (cmd-B), the column is the rail and the board takes the width;
 /// the rail keeps the sidebar toggle at its top, under the head row
-/// (§5.1.7), and the toggle opens the column again.
+/// (§5.1.7), and ⌘B opens the column again.
 #[gpui::test]
 fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);
+    bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
@@ -196,7 +197,7 @@ fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
         "the bar no longer carries it"
     );
 
-    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-b");
     tick(cx);
     assert!(!view.read_with(cx, |view, _| view.nav_railed()));
     assert!(

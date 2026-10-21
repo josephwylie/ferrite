@@ -316,7 +316,6 @@ pub const HAIRLINE_STRONG: u32 = 0xffffff1a;
 #[allow(dead_code)]
 pub const ROW_RING: u32 = 0xffffff0f;
 /// 5% — the bottom bar's top edge.
-#[allow(dead_code)]
 pub const BAR_TOP: u32 = 0xffffff0d;
 /// 22% — the focused Pane on a Group (more than one Pane shows), a drop
 /// target's edge.
@@ -369,6 +368,7 @@ pub mod paint {
     /// The hairlines: white overlays on every platform.
     pub const HAIRLINE: Paint = Paint(super::HAIRLINE);
     pub const HAIRLINE_STRONG: Paint = Paint(super::HAIRLINE_STRONG);
+    pub const BAR_TOP: Paint = Paint(super::BAR_TOP);
     pub const LINE: Paint = Paint::pick(super::LINE_GLASS, solid(super::LINE));
     pub const LINE2: Paint = Paint::pick(super::LINE2_GLASS, solid(super::LINE2));
     pub const CHROME_SEAM: Paint = Paint::pick(super::CHROME_SEAM_GLASS, TRANSPARENT);
@@ -1703,13 +1703,24 @@ pub const EMPTY_RECENT_AGE_W: f32 = 6.0 * CH;
 /// How many recent Threads the empty board lists (R13).
 pub const EMPTY_RECENT_MAX: usize = 4;
 
-/// The bottom bar's segments (session, tabs, usage, clock): a cell of
-/// padding each side, the full bar's height.
+/// The status line's segments in the bottom bar: a cell of padding each
+/// side (until the Composer and the panel take them, phases 6 and 7a).
 pub const BAR_SEG_PAD_X: f32 = CH;
-/// The trailing cell of a right-hand bottom-bar segment (usage, clock).
-pub const BAR_SEG_PAD_TAIL: f32 = CH;
-/// The provider mark before a usage segment.
+/// The provider mark on the empty board's provider rows.
 pub const BAR_MARK: f32 = 11.0;
+/// 14px — the bottom bar's inset at each end (SPEC §5.7; off the space
+/// scale, as the mockup draws it).
+pub const BAR_PAD_X: f32 = 14.0;
+/// 18px — between the bottom bar's items (SPEC §5.7; off the space scale,
+/// the mockup's).
+pub const BAR_GAP: f32 = 18.0;
+/// 22px — a view tab in the bottom bar, `SPACE_2` in from each side.
+pub const BAR_TAB_H: f32 = 22.0;
+pub const BAR_TAB_PAD_X: f32 = SPACE_2;
+/// 5px — a view tab's roll-up dot (off the scale: a mark, the mockup's).
+pub const BAR_TAB_DOT: f32 = 5.0;
+/// 6px — the need-you count's dot.
+pub const BAR_NEED_DOT: f32 = SPACE_1_5;
 
 /// An empty draft's mark, flat, in a quiet ink a step over the plane.
 pub const EMBOSS_ON_PANE: u32 = LINE;
@@ -1945,11 +1956,6 @@ pub const FORM_BUTTON_PAD_X: f32 = CH;
 pub const TOOLTIP_PAD_X: f32 = CH;
 pub const TOOLTIP_PAD_Y: f32 = 0.0;
 pub const TOOLTIP_MAX_W: f32 = 40.0 * CH;
-/// The bell's unread count: the prototype's superscript — 10px `W_STRONG`
-/// digits on no ground at the button's top-right corner, coloured by what
-/// waits (`ATTENTION`, `BLOCKED`, else `TEXT_STRONG`).
-pub const BADGE_FS: f32 = 10.0;
-pub const BADGE_LH: f32 = 12.0;
 /// The kit's own toast stack (unused by the bell, kept for the kit's
 /// margins in `init_components`): this far up from the window's foot.
 pub const TOAST_ABOVE_COMPOSER: f32 =
