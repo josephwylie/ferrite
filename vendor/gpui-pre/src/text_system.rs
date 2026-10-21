@@ -530,6 +530,22 @@ impl WindowTextSystem {
         wrap_width: Option<Pixels>,
         line_clamp: Option<usize>,
     ) -> Result<SmallVec<[WrappedLine; 1]>> {
+        self.shape_text_padded(text, font_size, runs, &[], wrap_width, line_clamp)
+    }
+
+    /// Ferrite: `shape_text` with room either side of some byte ranges of
+    /// `text` (`RunPadding`, in `text`'s offsets; a range never spans a
+    /// `\n`).
+    pub fn shape_text_padded(
+        &self,
+        text: SharedString,
+        font_size: Pixels,
+        runs: &[TextRun],
+        pads: &[RunPadding],
+        wrap_width: Option<Pixels>,
+        line_clamp: Option<usize>,
+    ) -> Result<SmallVec<[WrappedLine; 1]>> {
+        let mut line_pads: SmallVec<[RunPadding; 1]> = SmallVec::new();
         let mut runs = runs.iter().filter(|run| run.len > 0).cloned().peekable();
         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
 
@@ -590,10 +606,20 @@ impl WindowTextSystem {
                 run_start += run_len_within_line;
             }
 
+            line_pads.clear();
+            line_pads.extend(pads.iter().filter_map(|pad| {
+                let start = pad.range.start.max(line_start);
+                let end = pad.range.end.min(line_end);
+                (start < end).then(|| RunPadding {
+                    range: start - line_start..end - line_start,
+                    pad: pad.pad,
+                })
+            }));
             let layout = self.line_layout_cache.layout_wrapped_line(
                 &line_text,
                 font_size,
                 &font_runs,
+                &line_pads,
                 wrap_width,
                 max_wrap_lines.map(|max| max.saturating_sub(wrapped_lines)),
             );

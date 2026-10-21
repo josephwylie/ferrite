@@ -1095,6 +1095,7 @@ pub(crate) struct WorkingFacts {
 pub(crate) fn working_line(
     view: &PaneView,
     transcript: &Transcript,
+    solo: bool,
     focused: bool,
 ) -> Option<AnyElement> {
     let facts = view.working.get();
@@ -1102,6 +1103,7 @@ pub(crate) fn working_line(
         working_line_for(
             transcript,
             false,
+            solo,
             focused,
             facts.reasoning_visible,
             facts.reduce_motion,
@@ -1214,7 +1216,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
         // A subagent's tab keeps the working line over its footer.
         let working = cx
             .transcript
-            .and_then(|transcript| working_line(cx.view, transcript, cx.focused));
+            .and_then(|transcript| working_line(cx.view, transcript, !cx.grid, cx.focused));
         return Some(
             div()
                 .flex()
@@ -1222,12 +1224,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 .flex_shrink_0()
                 .min_w_0()
                 .when_some(working, |stack, line| {
-                    stack.child(
-                        div()
-                            .pl(px(theme::COMPOSER_PAD_L))
-                            .pr(px(theme::COMPOSER_PAD_R))
-                            .child(line),
-                    )
+                    stack.child(div().px(px(theme::tx_inset(!cx.grid))).child(line))
                 })
                 .child(footer)
                 .into_any_element(),
@@ -1235,7 +1232,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
     }
     let transcript = cx.transcript?;
     // The working line (`working_line`), noted for this frame above.
-    let working = working_line(cx.view, transcript, cx.focused);
+    let working = working_line(cx.view, transcript, !cx.grid, cx.focused);
     Some(
         composer_region(
             cx.view,
@@ -2663,6 +2660,9 @@ pub fn tool_has_details(tool: &ToolBlock) -> bool {
         || !tool.diffs.is_empty()
 }
 
+/// What every working line says at its right end.
+const INTERRUPT_HINT: &str = "esc to interrupt";
+
 /// The working line's mark (the prototype's `.spin`): the star spinner
 /// cycling `· ✢ ✳ ✶ ✻ ✽` in the provider's colour (`live`), the still `✻`
 /// under reduced motion. Its selector says which.
@@ -2693,6 +2693,7 @@ fn working_row(
     working_line_for(
         transcript,
         compact,
+        true,
         focused,
         received_reasoning_is_visible,
         reduce_motion,
@@ -2701,12 +2702,12 @@ fn working_row(
     )
 }
 
-/// The working line (the prototype's `.comp > .r`): one row on the chrome
-/// grid, the star spinner in the gutter, the provider's live caption in its
-/// colour — the turn's spinner verb (`Reticulating…`,
+/// The working line (SPEC §5.4): one row on a Solo (`solo`) or a Group
+/// Pane's transcript grid, the star spinner in the gutter, the provider's
+/// live caption in its colour — the turn's spinner verb (`Reticulating…`,
 /// `progress::spinner_verb`, held for the whole turn) unless the provider
-/// has something better to say (R16) — and then `(1m04s · ↑ 4.1k tokens ·
-/// esc to interrupt)` in `TEXT_DIM`. Every working line's spinner cycles,
+/// has something better to say (R16) — then `1m04s · ↑ 4.1k tokens` in
+/// `TEXT_DIM`, and `esc to interrupt` (`TEXT_DIM`) at the line's right. Every working line's spinner cycles,
 /// on the one shared clock, so all of them show the same frame (the
 /// prototype's `.spin`); only the focused Pane's caption shimmers. The seconds
 /// are whole (`progress::live_seconds`), tabular, so the text changes once a
@@ -2717,6 +2718,7 @@ fn working_row(
 fn working_line_for(
     transcript: &Transcript,
     compact: bool,
+    solo: bool,
     focused: bool,
     received_reasoning_is_visible: bool,
     reduce_motion: bool,
@@ -2734,9 +2736,6 @@ fn working_line_for(
     if tokens > 0 && !compact {
         facts.push(format!("\u{2191} {} tokens", tokens_label(tokens)));
     }
-    // Every working line names the key, as the prototype's do — focused
-    // or not (the key acts where the keyboard is).
-    facts.push("esc to interrupt".into());
     let progress = transcript.progress();
     let generic = Phase::Working.label();
     let caption = progress
@@ -2769,16 +2768,19 @@ fn working_line_for(
                 (format!("progress-caption-{caption}"), words)
             }
         });
+    // The line stands at the Standard size: the reading keys scale the
+    // transcript only.
+    let grid = Grid::pane(Default::default(), solo);
     let mut row = div()
         .flex()
         .items_center()
         .flex_shrink_0()
         .w_full()
         .min_w_0()
-        .h(px(theme::LH_UI))
+        .h(px(grid.line))
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI));
+        .text_size(px(grid.size))
+        .line_height(px(grid.line));
     if let Some((selector, caption)) = caption {
         let caption = SharedString::from(caption);
         // The caption and the facts hold their runs' widths, the facts'
@@ -2794,7 +2796,7 @@ fn working_line_for(
                 .child(caption)
                 .into_any_element()
         };
-        let metadata = SharedString::from(format!(" ({})", facts.join(" \u{b7} ")));
+        let metadata = SharedString::from(format!(" {}", facts.join(" \u{b7} ")));
         let highlights = separators(&metadata);
         let metadata_w = components::run_width(&metadata);
         row = row
@@ -2804,8 +2806,8 @@ fn working_line_for(
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .w(px(theme::GLYPH_GUTTER))
-                    .h(px(theme::LH_UI))
+                    .w(px(grid.gutter()))
+                    .h(px(grid.line))
                     .child(working_mark(ink, spinning)),
             )
             .child(
@@ -2827,7 +2829,18 @@ fn working_line_for(
                         .text_color(rgb(TEXT_DIM))
                         .child(StyledText::new(metadata).with_highlights(highlights)),
                 ))
-            });
+            })
+            // Every working line names the key, focused or not (it acts
+            // where the keyboard is), at the right end of the line.
+            .child(div().flex_1().min_w(px(2.0 * grid.cell())))
+            .child(
+                div()
+                    .debug_selector(|| "progress-interrupt".into())
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .text_color(rgb(TEXT_DIM))
+                    .child(INTERRUPT_HINT),
+            );
     }
     div().w_full().min_w_0().flex_shrink_0().child(row)
 }
@@ -3140,16 +3153,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     }),
             )
         })
-        // The working line (`.comp > .r`), on the transcript rows' axis,
-        // `COMPOSER_WORKING_GAP` over the band's upper rule.
+        // The working line, on the transcript column (`tx_inset`; a board
+        // cell's Composer is a Group Pane's), `COMPOSER_WORKING_GAP` over the
+        // band's upper rule.
         .when_some(working, |stack, working| {
             stack.child(
                 div()
                     .debug_selector(|| "transcript-progress".into())
                     .flex_shrink_0()
                     .min_w_0()
-                    .pl(px(theme::COMPOSER_PAD_L))
-                    .pr(px(theme::COMPOSER_PAD_R))
+                    .px(px(theme::tx_inset(!grid)))
                     .mb(px(theme::COMPOSER_WORKING_GAP))
                     .child(working),
             )
@@ -4698,11 +4711,29 @@ pub(crate) struct Grid {
 }
 
 impl Grid {
+    /// A Solo transcript's grid (and a reader's, a review's): the reading
+    /// size on its line.
     pub(crate) fn of(reading: ferrite_core::settings::ReadingSize) -> Self {
+        Self::sized(theme::answer_text_size(reading))
+    }
+
+    /// The grid of a Solo (`solo`) or a Group Pane's transcript
+    /// (`theme::tx_size`).
+    pub(crate) fn pane(reading: ferrite_core::settings::ReadingSize, solo: bool) -> Self {
+        Self::sized(theme::tx_size(reading, solo))
+    }
+
+    fn sized(size: f32) -> Self {
         Self {
-            size: theme::answer_text_size(reading),
-            line: theme::answer_line_height(reading),
+            size,
+            line: theme::prose_line_height(size),
         }
+    }
+
+    /// The grid a diff or a code fence inside this one is set on:
+    /// `TX_BLOCK_STEP` smaller.
+    pub(crate) fn block(self) -> Self {
+        Self::sized(self.size - theme::TX_BLOCK_STEP)
     }
 
     /// One cell of the grid.
@@ -4819,7 +4850,9 @@ pub(crate) struct RowCx<'a> {
     pub timings: Option<&'a HashMap<String, ToolTiming>>,
     pub provider: Option<Provider>,
     pub preview: &'a crate::attachment_preview::Preview,
-    pub reading: ferrite_core::settings::ReadingSize,
+    pub grid: Grid,
+    /// The Pane stands alone (Solo), not on a Group's board.
+    pub solo: bool,
     pub wide: bool,
     pub focused: bool,
     pub scope: &'a SharedString,
@@ -4828,7 +4861,7 @@ pub(crate) struct RowCx<'a> {
 
 impl RowCx<'_> {
     fn grid(&self) -> Grid {
-        Grid::of(self.reading)
+        self.grid
     }
 
     /// A path a call names, as a target hosted by this transcript.
@@ -5128,15 +5161,17 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
     out
 }
 
-/// The prompt echo (the prototype's `.prompt`): a full-width
-/// `paint::BAND` with half a line above and below, the strong `❯` in the
-/// gutter, the operator's words in `TEXT_STRONG` at body weight with its
-/// files' chips flowing inline after them, and its send time (`7:31 pm`,
-/// `TEXT_DIM`) in its own right-aligned column on the first line — so a
-/// wrapping prompt keeps the time beside its first line. An image hangs
-/// under the band in its 1px frame with its caption. Nothing on the band
-/// answers the pointer. `pinned` draws exactly the band again for the top
-/// of the body (not part of the selection, no image).
+/// The prompt echo (SPEC §5.4): a `paint::FIELD` box at `R_CONTROL`,
+/// `PROMPT_BAND_PAD_X` either side (the row's inset pulls it out by as
+/// much, so its text keeps the transcript's column) and
+/// `prompt_band_pad_y` above and below; the `❯` in the gutter in
+/// `W_STRONG` `TEXT_STRONG`, the operator's words in `TEXT_STRONG` at body
+/// weight with its files' chips flowing inline after them, and its send
+/// time (`7:31 pm`, `TEXT_DIM`) in its own right-aligned column on the
+/// first line — so a wrapping prompt keeps the time beside its first line.
+/// An image hangs under the band in its 1px frame with its caption.
+/// Nothing on the band answers the pointer. `pinned` draws exactly the band
+/// again for the top of the body (not part of the selection, no image).
 pub(crate) fn prompt_row(
     block: &Block,
     line: &str,
@@ -5209,11 +5244,11 @@ pub(crate) fn prompt_row(
         .w_full()
         .min_w_0()
         .flex_shrink_0()
-        .bg(theme::paint::BAND)
-        .pt(px(grid.half()))
-        .pb(px(grid.half() + chip_line))
-        .pl(px(theme::TX_PAD_L))
-        .pr(px(theme::TX_PAD_R))
+        .bg(theme::paint::FIELD)
+        .rounded(px(theme::R_CONTROL))
+        .pt(px(theme::prompt_band_pad_y(row_cx.solo)))
+        .pb(px(theme::prompt_band_pad_y(row_cx.solo) + chip_line))
+        .px(px(theme::PROMPT_BAND_PAD_X))
         .font_weight(theme::W_BODY)
         .text_color(rgb(TEXT_STRONG))
         .child(mark_gutter(
@@ -5268,8 +5303,8 @@ pub(crate) fn prompt_row(
                 .w_full()
                 .min_w_0()
                 .pt(px(grid.half()))
-                .pl(px(theme::TX_PAD_L + grid.gutter()))
-                .pr(px(theme::TX_PAD_R))
+                .pl(px(theme::PROMPT_BAND_PAD_X + grid.gutter()))
+                .pr(px(theme::PROMPT_BAND_PAD_X))
                 .children(images),
         )
         .into_any_element()
@@ -5306,9 +5341,9 @@ fn open_file(
     }
 }
 
-/// A prompt's file as its band's inline chip (the prototype's `.att`): the
-/// 12px image mark (or the file mark), a cell, the name in `LINK_INK`, on
-/// `paint::BAND2` with a cell of padding each side. A click opens it (an
+/// A prompt's file as its band's inline chip (SPEC §5.4): the 12px image
+/// mark (or the file mark), a cell, the name, all `TEXT_STRONG`, on
+/// `paint::RAISED` at `R_INLINE` with a cell of padding each side. A click opens it (an
 /// image in the Pane's preview). Sized for the Markdown flow that places
 /// it: monospace cells at the size it is drawn in.
 pub(crate) fn prompt_chip(
@@ -5340,15 +5375,16 @@ pub(crate) fn prompt_chip(
         .w(px(width))
         .h(line)
         .px(px(cell))
-        .bg(theme::paint::BAND2)
+        .bg(theme::paint::RAISED)
+        .rounded(px(theme::R_INLINE))
         .cursor_pointer()
         .whitespace_nowrap()
         .font_weight(theme::W_BODY)
-        .text_color(rgb(theme::LINK_INK))
+        .text_color(rgb(TEXT_STRONG))
         .child(icon(
             if image { icons::IMAGE } else { icons::FILE },
             theme::GLYPH_BOX,
-            theme::LINK_INK,
+            TEXT_STRONG,
         ))
         // The chip is sized in whole cells; the label never cuts (a
         // measured run rounds up past its cells by a fraction of a pixel).
@@ -5690,8 +5726,7 @@ impl DotShape {
 }
 
 /// Whether a call's argument is a file path (`Read(crates/x.rs)`), which
-/// reads in `LINK_INK` like every path in the transcript and is a path
-/// target.
+/// reads `TEXT_DIM` with the rest of the arguments and is a path target.
 pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
     const PATH_TOOLS: &[&str] = &[
         "Read",
@@ -5711,7 +5746,7 @@ pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
 
 /// A call line `Name(args)`, one CLI token on the grid (the prototype's
 /// `.name` and `.args`): the name — as Claude Code prints it (`Update`,
-/// `Bash`) — in `TEXT_STRONG` at `W_LABEL`, the parens and arguments in the
+/// `Bash`) — in `TEXT_STRONG` at `W_STRONG`, the parens and arguments in the
 /// line's `TEXT_DIM`, a path argument too (a hover target, never cyan:
 /// ADR 0033); one selectable line
 /// that copies back exactly as it reads.
@@ -5724,7 +5759,7 @@ fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightSt
         0..name,
         HighlightStyle {
             color: Some(rgb(TEXT_STRONG).into()),
-            font_weight: Some(theme::W_LABEL),
+            font_weight: Some(theme::W_STRONG),
             ..Default::default()
         },
     )];
@@ -7398,19 +7433,15 @@ fn stated_mark(path: &str, side: &mut DiffSide) {
     });
 }
 
-/// A diff as rows (the prototype's `.diff`). `Unified` rows carry both line
-/// numbers; `Split` pairs a removed line with the added line it became, a
+/// A diff as rows. A `Unified` row is one side, numbered by the file it is
+/// in (the old file's for a removed line, the new file's else); `Split` pairs a removed line with the added line it became, a
 /// side with no partner left empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum DiffRow {
     /// `@@ -208,7 +208,11 @@ fn thread_row`: drawn only where the hunk
     /// names a section.
     Hunk(String),
-    Unified {
-        old: Option<u32>,
-        new: Option<u32>,
-        side: DiffSide,
-    },
+    Unified(DiffSide),
     Split {
         left: Option<DiffSide>,
         right: Option<DiffSide>,
@@ -7423,7 +7454,7 @@ impl DiffRow {
     pub(super) fn selectable(&self) -> Vec<&DiffSide> {
         match self {
             Self::Hunk(_) => Vec::new(),
-            Self::Unified { side, .. } => vec![side],
+            Self::Unified(side) => vec![side],
             Self::Split { left, right } => {
                 let left = left
                     .as_ref()
@@ -7631,21 +7662,6 @@ fn file_section(path: &str, hunk: &ferrite_core::Hunk) -> Option<String> {
 /// a header only where the hunk names a section; each change's removed and
 /// added lines paired by likeness (`pair_lines`), their changed tokens
 /// marked.
-/// The rows a diff under a call draws: split, every row; unified (a
-/// narrow Pane), its changes alone under their hunk heads — the prototype's
-/// narrow `91 -` `91 +` `92 +` with no context between.
-pub(super) fn preview_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
-    let rows = diff_rows(diff, cap, split);
-    if split {
-        return rows;
-    }
-    rows.into_iter()
-        .filter(
-            |row| !matches!(row, DiffRow::Unified { side, .. } if side.kind == DiffKind::Context),
-        )
-        .collect()
-}
-
 pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
     let mut rows = Vec::new();
     let mut drawn = 0usize;
@@ -7689,11 +7705,7 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                             right: Some(side(new)),
                         }
                     } else {
-                        DiffRow::Unified {
-                            old: Some(old),
-                            new: Some(new),
-                            side: side(new),
-                        }
+                        DiffRow::Unified(side(new))
                     });
                     old += 1;
                     new += 1;
@@ -7758,20 +7770,7 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                             });
                         }
                     } else {
-                        for side in left {
-                            rows.push(DiffRow::Unified {
-                                old: Some(side.number),
-                                new: None,
-                                side,
-                            });
-                        }
-                        for side in right {
-                            rows.push(DiffRow::Unified {
-                                old: None,
-                                new: Some(side.number),
-                                side,
-                            });
-                        }
+                        rows.extend(left.into_iter().chain(right).map(DiffRow::Unified));
                     }
                 }
             }
@@ -7846,16 +7845,17 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
     (syntax, words)
 }
 
-/// A diff under its call (the prototype's `.diff`, clean): no box, half a
-/// line under the call, on the content column. A `TEXT_DIM` hunk header opens a hunk that names a
-/// section (none otherwise); each row is `[number][sign][code]` (unified
-/// carries the old and the new number), the numbers `TEXT_DIM`
-/// right-aligned in `DIFF_NUMBER_CELLS`, the sign in its hue, the code in
-/// full syntax colour with its indentation intact — exactly one line tall,
-/// cut with `…` at the column's edge. Removed and added rows wear their
-/// washes, the changed tokens a deeper one. `wide` lays it side by side, a
-/// 1px `paint::LINE` between the halves and an empty side on
-/// `paint::NODIFF`.
+/// A diff under its call (SPEC §5.4): a block box (`block_box`) on the
+/// content column, set `TX_BLOCK_STEP` under the transcript. A `TEXT_DIM`
+/// hunk header opens a hunk that names a section (none otherwise); each
+/// row is `[number][sign][code]`: the number right-aligned in
+/// `DIFF_NUMBER_CELLS` with `DIFF_NUMBER_PAD_CELLS` after it, in
+/// `TEXT_FAINT` or the add/delete number tint; the sign (`DIFF_SIGN_CELLS`)
+/// in its hue; the code in full syntax colour with its indentation intact,
+/// exactly one line tall, cut with `…` at the column's edge. Removed and
+/// added rows wear their washes, the changed tokens a deeper one. `wide`
+/// lays it side by side, a 1px `paint::LINE` between the halves and an
+/// empty side on `paint::NODIFF`.
 ///
 /// The code cells route through the overlay — their lines copy honestly and
 /// whole, however they are cut; numbers, signs and headers are chrome and
@@ -7869,28 +7869,32 @@ fn render_diff(
     grid: Grid,
     wide: bool,
 ) -> impl IntoElement {
+    let content = grid;
+    let grid = grid.block();
     let total: usize = diff.hunks.iter().map(|hunk| hunk.lines.len()).sum();
     let (cap, omitted) = hunk_rows(total);
     let cells = diff_number_cells(diff_max_number(diff, cap));
     let number_w = cells * grid.cell();
     let sign_w = theme::DIFF_SIGN_CELLS * grid.cell();
     let language = ferrite_core::transcript::language_for_path(std::path::Path::new(&diff.path));
-    let number = |number: Option<u32>| {
+    let number = |number: u32, ink: u32| {
         components::tabular(
             div()
                 .flex_shrink_0()
                 .w(px(number_w))
-                .pr(px(grid.cell()))
+                .pr(px(theme::DIFF_NUMBER_PAD_CELLS * grid.cell()))
                 .text_right()
                 .whitespace_nowrap()
-                .text_color(rgb(TEXT_DIM))
-                .children(number.map(|number| SharedString::from(number.to_string()))),
+                .text_color(rgb(ink))
+                .child(SharedString::from(number.to_string())),
         )
     };
-    let cell = |side: &DiffSide, selectable: bool| {
+    // One side of a row: its number, sign and code, and its wash.
+    let side_cells = |side: &DiffSide, selectable: bool| {
         let DiffPaint {
             sign,
             sign_color,
+            number_color,
             code_color,
             wash,
         } = side.kind.paint();
@@ -7911,52 +7915,39 @@ fn render_diff(
                 .with_highlights(highlights)
                 .into_any_element(),
         };
-        (
-            div()
-                .flex_shrink_0()
-                .w(px(sign_w))
-                .pl(px(grid.cell() / 2.))
-                .whitespace_nowrap()
-                .text_color(rgb(sign_color))
-                .child(sign),
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_color(rgb(code_color))
-                .child(cut.child(code)),
-            wash,
-        )
-    };
-    let side_view = |side: Option<&DiffSide>, selectable: bool| -> Div {
-        match side {
-            Some(side) => {
-                let (sign, code, wash) = cell(side, selectable);
-                let content = div()
-                    .flex()
-                    .items_start()
-                    .w_full()
-                    .min_w_0()
-                    .child(number(Some(side.number)))
-                    .child(sign)
-                    .child(code);
+        div()
+            .flex()
+            .items_start()
+            .flex_1()
+            .min_w_0()
+            .h(px(grid.line))
+            .overflow_hidden()
+            .when_some(wash, |row, wash| row.bg(rgba(wash)))
+            .child(number(side.number, number_color))
+            .child(
                 div()
-                    .flex()
-                    .items_start()
+                    .flex_shrink_0()
+                    .w(px(sign_w))
+                    .whitespace_nowrap()
+                    .text_color(rgb(sign_color))
+                    .child(sign),
+            )
+            .child(
+                div()
                     .flex_1()
                     .min_w_0()
-                    .h(px(grid.line))
                     .overflow_hidden()
-                    .when_some(wash, |row, wash| row.bg(rgba(wash)))
-                    .child(content)
-            }
-            None => div()
-                .flex_1()
-                .min_w_0()
-                .h(px(grid.line))
-                .bg(theme::paint::NODIFF),
-        }
+                    .whitespace_nowrap()
+                    .text_color(rgb(code_color))
+                    .child(cut.child(code)),
+            )
+    };
+    let empty_side = || {
+        div()
+            .flex_1()
+            .min_w_0()
+            .h(px(grid.line))
+            .bg(theme::paint::NODIFF)
     };
     let mut lines = div()
         .debug_selector(|| "tool-diff".into())
@@ -7965,46 +7956,39 @@ fn render_diff(
         .w_full()
         .min_w_0()
         .text_color(rgb(TEXT));
-    for row in preview_rows(diff, cap, wide) {
+    for row in diff_rows(diff, cap, wide) {
         lines = lines.child(match &row {
             DiffRow::Hunk(header) => div()
                 .debug_selector(|| "diff-hunk".into())
                 .w_full()
                 .min_w_0()
                 .h(px(grid.line))
+                .pl(px(number_w + sign_w))
                 .truncate()
                 .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(header.clone())),
-            DiffRow::Unified { old, new, side } => {
-                let (sign, code, wash) = cell(side, true);
-                div()
-                    .flex()
-                    .items_start()
-                    .w_full()
-                    .min_w_0()
-                    .h(px(grid.line))
-                    .overflow_hidden()
-                    .when_some(wash, |row, wash| row.bg(rgba(wash)))
-                    .child(number(*old))
-                    .child(number(*new))
-                    .child(sign)
-                    .child(code)
-            }
+            DiffRow::Unified(side) => div()
+                .flex()
+                .w_full()
+                .min_w_0()
+                .child(side_cells(side, true)),
             DiffRow::Split { left, right } => {
                 let selectable = row.selectable();
-                let pick = |side: &Option<DiffSide>| {
-                    side.as_ref().is_some_and(|side| {
-                        selectable.iter().any(|picked| std::ptr::eq(*picked, side))
-                    })
+                let pick =
+                    |side: &DiffSide| selectable.iter().any(|picked| std::ptr::eq(*picked, side));
+                let half = |side: &Option<DiffSide>| match side {
+                    Some(side) => side_cells(side, pick(side)),
+                    None => empty_side(),
                 };
                 div()
+                    .debug_selector(|| "diff-split".into())
                     .flex()
                     .items_stretch()
                     .w_full()
                     .min_w_0()
-                    .child(side_view(left.as_ref(), pick(left)))
+                    .child(half(left))
                     .child(div().flex_shrink_0().w(px(1.)).bg(theme::paint::LINE))
-                    .child(side_view(right.as_ref(), pick(right)))
+                    .child(half(right))
             }
         });
     }
@@ -8012,23 +7996,45 @@ fn render_diff(
     if omitted > 0 {
         lines = lines.child(
             div()
+                .debug_selector(|| "diff-omitted".into())
                 .w_full()
                 .min_w_0()
+                .h(px(grid.line))
+                .pl(px(number_w + sign_w))
                 .truncate()
                 .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(format!("\u{2026} +{omitted} lines"))),
         );
     }
-    // The prototype's `.diff` keeps its 1px border, clear: the rows sit a
-    // pixel in from every side.
-    content_row(grid).pt(px(grid.half())).child(
-        div()
-            .w_full()
-            .min_w_0()
-            .border_1()
-            .border_color(gpui::transparent_black())
+    content_row(content).pt(px(theme::BLOCK_MARGIN_T)).child(
+        block_box(grid)
+            .debug_selector(|| "diff-box".into())
             .child(lines),
     )
+}
+
+/// The box a diff or a code fence sits in (SPEC §5.4): `paint::BAR`,
+/// `R_CONTROL` corners, `BLOCK_PAD_Y` above and below its lines, and an
+/// inset 1px `HAIRLINE` laid over it (so it moves nothing), set at the
+/// block's grid (`Grid::block`).
+pub(crate) fn block_box(grid: Grid) -> Div {
+    div()
+        .relative()
+        .w_full()
+        .min_w_0()
+        .py(px(theme::BLOCK_PAD_Y))
+        .rounded(px(theme::R_CONTROL))
+        .bg(theme::paint::BAR)
+        .text_size(px(grid.size))
+        .line_height(px(grid.line))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px(theme::R_CONTROL))
+                .border_1()
+                .border_color(theme::paint::HAIRLINE),
+        )
 }
 
 /// A one-line code run cut at its column's edge as the prototype's
@@ -8300,11 +8306,11 @@ fn diff_max_number(diff: &Diff, cap: usize) -> usize {
     max
 }
 
-/// The number column in cells: `DIFF_NUMBER_CELLS` (four digits and the
-/// cell after them), wider only for a number past four digits.
+/// The number column in cells: `DIFF_NUMBER_CELLS` (three digits and the
+/// `DIFF_NUMBER_PAD_CELLS` after them), wider only for a longer number.
 fn diff_number_cells(max: usize) -> f32 {
     let digits = max.max(1).ilog10() as f32 + 1.;
-    theme::DIFF_NUMBER_CELLS.max(digits + 1.)
+    theme::DIFF_NUMBER_CELLS.max(digits + theme::DIFF_NUMBER_PAD_CELLS)
 }
 
 /// What a unified-diff line is, read from its first byte.
@@ -8320,6 +8326,9 @@ pub(crate) enum DiffKind {
 pub(crate) struct DiffPaint {
     pub sign: &'static str,
     pub sign_color: u32,
+    /// The line number's ink: the sign's hue dimmed, structure on a
+    /// context row.
+    pub number_color: u32,
     pub code_color: u32,
     pub wash: Option<u32>,
 }
@@ -8342,18 +8351,21 @@ impl DiffKind {
             Self::Added => DiffPaint {
                 sign: "+",
                 sign_color: theme::DIFF_ADDED_SIGN,
+                number_color: theme::DIFF_ADDED_NUMBER,
                 code_color: DIFF_ADDED_INK,
                 wash: Some(DIFF_ADDED_WASH),
             },
             Self::Removed => DiffPaint {
                 sign: "-",
                 sign_color: theme::DIFF_REMOVED_SIGN,
+                number_color: theme::DIFF_REMOVED_NUMBER,
                 code_color: DIFF_REMOVED_INK,
                 wash: Some(DIFF_REMOVED_WASH),
             },
             Self::Context => DiffPaint {
                 sign: "",
                 sign_color: TEXT_DIM,
+                number_color: TEXT_FAINT,
                 code_color: theme::SYN_PLAIN,
                 wash: None,
             },
@@ -8383,7 +8395,7 @@ fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyl
 fn span_style(style: Style) -> Option<HighlightStyle> {
     match style {
         Style::Plain => None,
-        // Inline code is cyan ink with no chip (rule 6).
+        // Inline code's ink (its chip is the Markdown path's).
         Style::Code => Some(HighlightStyle {
             color: Some(rgb(INLINE_CODE_INK).into()),
             ..Default::default()
@@ -8394,8 +8406,8 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
             font_weight: Some(W_STRONG),
             ..Default::default()
         }),
-        // A link or a path reads cyan, like every path in the transcript,
-        // with no underline at rest. Inert — paths render, nothing opens.
+        // A link or a path reads `TEXT_STRONG`, with no underline at rest.
+        // Inert — paths render, nothing opens.
         Style::Link => Some(HighlightStyle {
             color: Some(rgb(theme::LINK_INK).into()),
             ..Default::default()
@@ -8574,10 +8586,15 @@ mod tests {
             assert!(metadata.left() >= reasoning.right());
             assert_eq!(
                 footer.size.height,
-                px(theme::LH_UI),
+                px(theme::LH_PROSE),
                 "one line, and no command detail below it"
             );
             assert!(metadata.right() <= px(width), "the caption truncates first");
+            let interrupt = cx.debug_bounds("progress-interrupt").unwrap();
+            assert!(
+                interrupt.left() >= metadata.right(),
+                "`esc to interrupt` closes the line, after its facts"
+            );
         }
     }
 
@@ -9629,6 +9646,7 @@ mod tests {
             DiffPaint {
                 sign: "+",
                 sign_color: theme::DIFF_ADDED_SIGN,
+                number_color: theme::DIFF_ADDED_NUMBER,
                 code_color: DIFF_ADDED_INK,
                 wash: Some(DIFF_ADDED_WASH),
             }
@@ -9638,6 +9656,7 @@ mod tests {
             DiffPaint {
                 sign: "-",
                 sign_color: theme::DIFF_REMOVED_SIGN,
+                number_color: theme::DIFF_REMOVED_NUMBER,
                 code_color: DIFF_REMOVED_INK,
                 wash: Some(DIFF_REMOVED_WASH),
             }
@@ -9647,6 +9666,7 @@ mod tests {
             DiffPaint {
                 sign: "",
                 sign_color: TEXT_DIM,
+                number_color: TEXT_FAINT,
                 code_color: theme::SYN_PLAIN,
                 wash: None,
             }
@@ -9769,13 +9789,13 @@ mod tests {
                 highlights[0].1,
                 HighlightStyle {
                     color: Some(rgb(TEXT_STRONG).into()),
-                    font_weight: Some(theme::W_LABEL),
+                    font_weight: Some(theme::W_STRONG),
                     ..Default::default()
                 },
-                "the name is the prototype's `.name`: strong ink at 500, whatever happened"
+                "the name is strong ink at 600 (SPEC §5.4), whatever happened"
             );
         }
-        // A path argument reads cyan, like every path in the transcript.
+        // A path argument reads `TEXT_DIM`, like the rest of the arguments.
         let read = ToolBlock {
             call: "r".into(),
             name: "Read".into(),
@@ -9850,8 +9870,8 @@ mod tests {
         assert_eq!(DiffKind::Removed.paint().sign, "-", "ASCII, like both CLIs");
         // The number column is `DIFF_NUMBER_CELLS` until a number outgrows it.
         assert_eq!(diff_number_cells(7), theme::DIFF_NUMBER_CELLS);
-        assert_eq!(diff_number_cells(9_999), theme::DIFF_NUMBER_CELLS);
-        assert_eq!(diff_number_cells(10_000), 6.);
+        assert_eq!(diff_number_cells(999), theme::DIFF_NUMBER_CELLS);
+        assert_eq!(diff_number_cells(9_999), 5.5);
         // Word marks: the tokens left once the common leading and trailing
         // tokens go — whole identifiers, never a piece of one.
         assert_eq!(

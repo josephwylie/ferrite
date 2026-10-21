@@ -404,7 +404,7 @@ impl TranscriptView {
         let rows = TranscriptRows::new(
             &input.blocks,
             &input.shape(),
-            theme::answer_text_size(input.reading_size),
+            Grid::pane(input.reading_size, input.solo).size,
         );
         let scroll = TranscriptScroll::new(rows.len());
         scroll.scroll_to_bottom();
@@ -537,11 +537,9 @@ impl TranscriptView {
         // opening or the banner and tail changing re-project them too.
         if content_changed || reading_changed || shape_changed {
             let tail = self.rows.rows().last().map(|row| row.id().clone());
-            let delta = self.rows.reconcile(
-                &self.input.blocks,
-                &self.input.shape(),
-                theme::answer_text_size(self.input.reading_size),
-            );
+            let delta =
+                self.rows
+                    .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
             self.scroll.reconcile(&delta);
             self.note_arrivals(tail, cx);
             let live: HashSet<&str> = self
@@ -909,7 +907,8 @@ impl TranscriptView {
             timings: Some(&self.input.timings),
             provider: self.input.provider,
             preview: &self.input.preview,
-            reading: self.input.reading_size,
+            grid: self.grid(),
+            solo: self.input.solo,
             wide: self.wide.get(),
             focused: self.input.focused,
             scope: &self.input.namespace,
@@ -953,7 +952,7 @@ impl TranscriptView {
                 .expect("markdown row has a block")
                 .markdown_run
                 .unwrap_or(blocks[0].id);
-            let grid = Grid::of(self.input.reading_size);
+            let grid = self.grid();
             let marked = row.answer_mark();
             // The prototype's `.r` with `.g-prose`: the bright `●` in the
             // gutter on the first prose after a speaker change, the answer on
@@ -1039,7 +1038,13 @@ impl TranscriptView {
     /// A row's width (the list's, less the row insets), once laid out.
     fn content_width(&self) -> Option<f32> {
         let width = self.list_w.get();
-        (width > 0.).then_some(width - theme::TX_PAD_L - theme::TX_PAD_R)
+        (width > 0.).then_some(width - 2. * theme::tx_inset(self.input.solo))
+    }
+
+    /// The transcript's grid: the reading size in Solo, a half step under
+    /// it in a Group Pane (`theme::tx_size`).
+    fn grid(&self) -> Grid {
+        Grid::pane(self.input.reading_size, self.input.solo)
     }
 
     /// A visual's page changed height: the list re-measures its row (off
@@ -1194,7 +1199,7 @@ impl TranscriptView {
     /// The banner (ADR 0014): one muted line — the checkout, a path target,
     /// on its branch, and when the Thread started. Its text is selectable.
     fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
-        let grid = Grid::of(self.input.reading_size);
+        let grid = self.grid();
         let line = banner_line(facts);
         let highlights = line
             .path
@@ -1264,7 +1269,7 @@ impl TranscriptView {
         let targeted = self.tool_targeted(call);
         let toggle = self.toggle(call.clone(), view);
         let overlay = details.then(|| {
-            let grid = Grid::of(self.input.reading_size);
+            let grid = self.grid();
             let clicked = toggle.clone();
             let control = div()
                 .absolute()
@@ -1333,7 +1338,7 @@ impl TranscriptView {
             expanded,
             targeted,
             &self.input.disclosure_focus,
-            Grid::of(self.input.reading_size).gutter(),
+            self.grid().gutter(),
         )
         // The disclosure overlay fills the rendered header. Keep the handler
         // on it so the chevron, label, and trailing row text share one target.
@@ -1557,7 +1562,7 @@ impl TranscriptView {
             return None;
         };
         let selection = self.text_runs();
-        let line_height = Grid::of(self.input.reading_size).line;
+        let line_height = self.grid().line;
         let available = f32::from(self.scroll.list_state().viewport_bounds().size.height) / 3.;
         // Reserve a line for the band's padding, then keep whole text lines.
         let lines = ((available / line_height) as usize)
@@ -1585,6 +1590,7 @@ impl TranscriptView {
                         .block_mouse_except_scroll()
                         .cursor_default()
                         .w_full()
+                        .px(px(row_inset(RowKind::Prompt, self.input.solo)))
                         // The band over an opaque plane: together they hide
                         // the rows scrolling under it, glass or not.
                         .bg(gpui::rgb(theme::PLANE))
@@ -1605,7 +1611,7 @@ impl TranscriptView {
             .filter_map(|row| heights.get(row.id()).copied())
             .collect();
         let fallback = if known.is_empty() {
-            3.0 * Grid::of(self.input.reading_size).line
+            3.0 * self.grid().line
         } else {
             known.iter().sum::<f32>() / known.len() as f32
         };
@@ -1844,6 +1850,18 @@ fn pinned_of(
     Some((prompt, shift))
 }
 
+/// A row's inset from the list's edges: the transcript column's
+/// (`tx_inset`), less `PROMPT_BAND_PAD_X` for a prompt band, whose box
+/// reaches past the column so its text keeps it.
+fn row_inset(kind: RowKind, solo: bool) -> f32 {
+    let inset = theme::tx_inset(solo);
+    if kind == RowKind::Prompt {
+        inset - theme::PROMPT_BAND_PAD_X
+    } else {
+        inset
+    }
+}
+
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.arm_second_tick(cx);
@@ -1863,7 +1881,8 @@ impl Render for TranscriptView {
         if self.scroll.is_following_tail() {
             self.scroll.scroll_to_bottom();
         }
-        let grid = Grid::of(self.input.reading_size);
+        let grid = self.grid();
+        let solo = self.input.solo;
         let list = list(
             self.scroll.list_state().clone(),
             move |index, window, cx| {
@@ -1883,15 +1902,16 @@ impl Render for TranscriptView {
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
                 // resolve against and shrinks to its text. The wrapper holds
-                // the row's inset (two cells left, three right; a prompt band
-                // runs full width and insets its own text) and the row's own
-                // gap above it (the first row's is the body's top padding:
-                // the list's own top padding flickers mid-scroll).
+                // the row's inset (`tx_inset`; a prompt band's box reaches
+                // `PROMPT_BAND_PAD_X` past it and insets its own text by as
+                // much) and the row's own gap above it (the first row's is
+                // the body's top padding: the list's own top padding
+                // flickers mid-scroll).
                 let gap = row.gap();
-                let band = row.kind() == RowKind::Prompt;
-                let wrapper = div().w_full().pt(px(gap)).when(!band, |wrapper| {
-                    wrapper.pl(px(theme::TX_PAD_L)).pr(px(theme::TX_PAD_R))
-                });
+                let wrapper = div()
+                    .w_full()
+                    .pt(px(gap))
+                    .px(px(row_inset(row.kind(), solo)));
                 // A row appended live rises into place; its gap does not
                 // move, so the rows above it hold still.
                 let wrapper = match arrival {
@@ -1921,8 +1941,9 @@ impl Render for TranscriptView {
         let shelf = self.visuals.clone();
         let list_w = self.list_w.clone();
         let reading = self.input.reading_size;
+        let inset = theme::tx_inset(solo);
         let line = grid.line;
-        let half = grid.half();
+        let band_pad = theme::prompt_band_pad_y(solo);
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
@@ -1989,7 +2010,7 @@ impl Render for TranscriptView {
                         gaps.get(index).map_or(0., |row| {
                             row.gap()
                                 + if row.kind() == RowKind::Prompt {
-                                    half
+                                    band_pad
                                 } else {
                                     0.
                                 }
@@ -2037,7 +2058,7 @@ impl Render for TranscriptView {
                                 crate::visual::visual_of(block).map(|visual| (index, visual))
                             })
                             .collect();
-                        shelf.reach(&state, &visuals, &height_of, reading, window, cx);
+                        shelf.reach(&state, &visuals, &height_of, reading, inset, window, cx);
                     });
                 }
                 // The band pinned at render came from the previous layout:

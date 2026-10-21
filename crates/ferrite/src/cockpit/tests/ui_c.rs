@@ -368,12 +368,12 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     }
 }
 
-/// Terminal-native (WP-A, WP-D): the Composer's `❯` hangs in the
-/// prototype's 2-cell gutter, `COMPOSER_PAD_L` in from the Pane's own edge
-/// (the edge is an overlay, F-1), on the same axis as the transcript's
-/// prompt `❯`.
+/// SPEC §5.4: the transcript column sits `tx_inset` in from the Pane's
+/// edge (Solo's 28px), the prompt band's box `PROMPT_BAND_PAD_X` outside it,
+/// so the band's `❯` keeps the column every other row's mark is on. (The
+/// Composer's `❯` leaves with its box, SPEC §5.5.)
 #[gpui::test]
-fn the_composer_mark_shares_the_transcript_mark_axis(cx: &mut TestAppContext) {
+fn the_prompt_mark_keeps_the_transcript_column(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
     let thread = core.threads()[0];
     core.send(thread, "Line the marks up".into());
@@ -386,26 +386,23 @@ fn the_composer_mark_shares_the_transcript_mark_axis(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    // The Composer's `❯` hangs `COMPOSER_PAD_L` in from the Pane's edge
-    // (`.comp{padding-left:2ch}`), and the transcript's `❯` two chrome
-    // cells in from the body's left edge (`TX_PAD_L`): one axis.
-    let composer = cx.debug_bounds("composer-mark").unwrap();
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert!(
-        (composer.left() - px(rect.x + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
-        "L1: {composer:?} / {rect:?}"
-    );
+    let column = px(rect.x + crate::theme::TX_INSET_SOLO);
     let mark = cx.debug_bounds("prompt-mark").unwrap();
-    let body = cx.debug_bounds("transcript-prompt").unwrap();
+    let band = cx.debug_bounds("transcript-prompt").unwrap();
     assert!(
-        (mark.left() - (body.left() + px(crate::theme::TX_PAD_L))).abs() <= px(1.),
-        "L1: {mark:?} / {body:?}"
+        (band.left() - (column - px(crate::theme::PROMPT_BAND_PAD_X))).abs() <= px(1.),
+        "the band reaches past the column: {band:?} / {rect:?}"
     );
     assert!(
-        (mark.left() - composer.left()).abs() <= px(1.),
-        "the transcript's ❯ {mark:?} and the Composer's {composer:?} share an axis"
+        (mark.left() - column).abs() <= px(1.),
+        "the band's ❯ {mark:?} is on the column {column:?}"
     );
-    let _ = thread;
+    let answer = cx.debug_bounds("answer-mark").unwrap();
+    assert!(
+        (answer.left() - mark.left()).abs() <= px(1.),
+        "the answer's ● {answer:?} and the ❯ {mark:?} share an axis"
+    );
 }
 
 /// The expand and approve keys still reach a board cell once the head's

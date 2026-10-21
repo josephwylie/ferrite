@@ -577,7 +577,7 @@ fn the_bar_fits_a_narrow_pane(cx: &mut TestAppContext) {
     tick(cx);
     let shown = viewport(&view, cx);
     assert!(
-        shown.size.width < px(crate::theme::FIND_W + crate::theme::TX_PAD_R),
+        shown.size.width < px(crate::theme::FIND_W + crate::theme::TX_INSET_GROUP),
         "narrower than the bar: {shown:?}"
     );
     open(cx);

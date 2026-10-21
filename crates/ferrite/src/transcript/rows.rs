@@ -1060,10 +1060,10 @@ mod tests {
         let prose = Answer { commentary: false };
         let call = Activity { diff_shown: false };
         for (size, line) in [
-            (ReadingSize::STANDARD, 20.),
-            (ReadingSize::nearest(14), 21.),
-            (ReadingSize::nearest(16), 24.),
-            (ReadingSize::nearest(18), 27.),
+            (ReadingSize::STANDARD, 21.),
+            (ReadingSize::nearest(14), 22.),
+            (ReadingSize::nearest(16), 26.),
+            (ReadingSize::nearest(18), 29.),
         ] {
             let reading = answer_text_size(size);
             assert_eq!(gap_before(Some(prose), Prompt, reading), line, "{size:?}");
@@ -1090,7 +1090,7 @@ mod tests {
             Rc::ptr_eq(&first, rows.get(0).unwrap()),
             "the body padding does not scale"
         );
-        assert_eq!(rows.get(2).unwrap().gap(), 27.);
+        assert_eq!(rows.get(2).unwrap().gap(), 29.);
     }
 
     #[test]

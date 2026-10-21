@@ -1647,7 +1647,7 @@ impl ReviewView {
             .child(self.file_head(file, index == 0))
             .child(
                 div()
-                    .px(px(TX_PAD_L))
+                    .px(px(TX_INSET_SOLO))
                     .pb(px(self.grid.half()))
                     .font_family(FONT_UI)
                     .text_size(px(FS_PROSE))

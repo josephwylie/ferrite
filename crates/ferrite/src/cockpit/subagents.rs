@@ -239,8 +239,9 @@ fn request_frame(card: impl IntoElement, overlay: bool) -> Div {
             .when(overlay, |frame| {
                 frame
                     .bg(theme::paint::PLANE)
-                    .pl(px(theme::TX_PAD_L))
-                    .pr(px(theme::TX_PAD_R))
+                    // The transcript column's inset (Solo's; a Group
+                    // Pane's overlay is the Decision phase's to fit).
+                    .px(px(theme::TX_INSET_SOLO))
                     .py(px(theme::DECISION_PAD_Y))
             })
             .child(card),

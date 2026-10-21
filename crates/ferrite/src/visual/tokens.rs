@@ -236,11 +236,11 @@ mod tests {
         let small = theme_css(Scheme::Dark, ReadingSize::SMALLEST);
         let large = theme_css(Scheme::Dark, ReadingSize::LARGEST);
         assert!(
-            small.contains("--ferrite-font-size:12px;--ferrite-line:18px;"),
+            small.contains("--ferrite-font-size:12px;--ferrite-line:19px;"),
             "{small}"
         );
         assert!(
-            large.contains("--ferrite-font-size:24px;--ferrite-line:36px;"),
+            large.contains("--ferrite-font-size:24px;--ferrite-line:38px;"),
             "{large}"
         );
         fn strip(css: &str) -> Vec<&str> {

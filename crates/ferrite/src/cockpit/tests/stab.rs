@@ -1279,8 +1279,8 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     // prompt is the turn step.
     assert_eq!(
         line(prompts[1]).top() - line(stamps[0]).bottom(),
-        px(crate::theme::LH_PROSE + crate::theme::tx_half(crate::theme::LH_PROSE)),
-        "turns sit a blank line and the band's half line apart"
+        px(crate::theme::LH_PROSE + crate::theme::PROMPT_BAND_PAD_Y),
+        "turns sit a blank line and the band's padding apart"
     );
 }
 

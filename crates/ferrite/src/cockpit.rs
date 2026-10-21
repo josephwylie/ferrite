@@ -19521,7 +19521,7 @@ mod tests {
             let line = crate::theme::answer_line_height(size);
             assert_eq!(
                 prompt.size.height,
-                px(line + 2. * crate::theme::tx_half(line)),
+                px(line + 2. * crate::theme::PROMPT_BAND_PAD_Y),
                 "{size:?}: the echo sits on the answer's line in its band"
             );
             let echo = view.read_with(cx, |view, cx| {
@@ -24741,13 +24741,15 @@ mod tests {
                 .debug_bounds("prompt-chip-data.weird-extension")
                 .expect("a sent file is its band's chip");
             let band = cx.debug_bounds("transcript-prompt").unwrap();
-            // Half a line above and below the chips, which wrap in a
-            // half-width Pane; the last chip line stands taller, as the
-            // prototype's inline chip makes it.
-            let lines =
-                (band.size.height - px(crate::theme::PROMPT_CHIP_LINE_EXTRA)) / chip.size.height;
+            // The band's padding above and below the chips (a Group Pane's),
+            // which wrap in a half-width Pane; the last chip line stands
+            // taller, as the inline chip makes it.
+            let lines = (band.size.height
+                - px(crate::theme::PROMPT_CHIP_LINE_EXTRA
+                    + 2. * crate::theme::prompt_band_pad_y(false)))
+                / chip.size.height;
             assert!(
-                lines >= 2. && lines.fract() == 0.,
+                lines >= 1. && lines.fract() == 0.,
                 "whole lines plus the chip line's extra: {band:?} / {chip:?}"
             );
             assert!(

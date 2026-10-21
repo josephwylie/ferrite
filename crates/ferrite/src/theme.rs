@@ -25,11 +25,12 @@
 //!    Chrome type is a set of roles (SPEC §3.5: `FS_UI` 13/20 default,
 //!    `FS_TITLE`, `FS_LABEL`, `FS_META`, `FS_BADGE`, …) with tabular
 //!    figures; the transcript is the reading size (`answer_text_size`,
-//!    cmd-= / cmd-- / cmd-0, the transcript only) on its 1.5× line, and
+//!    cmd-= / cmd-- / cmd-0, the transcript only) on its 1.6× line (a Group
+//!    Pane's half a pixel smaller, `tx_size`), and
 //!    everything inside it scales with it, measured in cells (`tx_cell`,
 //!    the face's 0.6em). Chrome metrics are pixels on the space scale, not
-//!    cells. Weights: 400 body; 500 tabs, buttons, Pane titles, labels, a
-//!    tool's name; 600 a view title, the prompt `❯`, strong prose,
+//!    cells. Weights: 400 body; 500 tabs, buttons, Pane titles, labels;
+//!    600 a view title, the prompt `❯`, a tool's name, strong prose,
 //!    headings, a badge count. 700 is unused. Never reach a weight by
 //!    family name.
 //! 2. **Cards on a frame** (supersedes "square and flat inside"). The
@@ -666,14 +667,15 @@ pub const SHADOW_FLOAT_BLUR: f32 = 7.0;
 // **Two faces** (rule 1). The chrome is Geist (`FONT_UI`) at `FS_UI` 13 on
 // `LH_UI` 20 by default, with the roles of SPEC §3.5 below (`FS_TITLE`,
 // `FS_LABEL`, `FS_META`, …). The transcript is Geist Mono (`FONT_CODE`) at
-// the reading size on its own line (`answer_text_size`,
-// `answer_line_height`; 13 on 20 at Standard) and every transcript measure
+// the reading size on its own 1.6× line (`answer_text_size`,
+// `answer_line_height`; 13 on 21 at Standard, half a pixel smaller in a
+// Group Pane: `tx_size`) and every transcript measure
 // scales from it. Numbers and glyphs from the terminal's world (diffstats,
 // spinners, `❯`) stay in Geist Mono inside chrome too.
 //
 // **Weights:** `W_BODY` (400) for everything that is read; `W_LABEL` (500)
-// tabs, buttons, Pane titles, labels, a tool's name; `W_STRONG` (600) a
-// view title, the prompt `❯`, headings, `**strong**`, a badge count. 700
+// tabs, buttons, Pane titles, labels; `W_STRONG` (600) a view title, the
+// prompt `❯`, a tool's name, headings, `**strong**`, a badge count. 700
 // is never used, and no render site names a `FontWeight` itself. Weight
 // never signals state on a row that can truncate.
 //
@@ -687,11 +689,11 @@ pub const FS_UI: f32 = 13.0;
 /// 20px — the grid's row.
 pub const LH_UI: f32 = 20.0;
 /// 13px — the Standard reading size (`ReadingSize::STANDARD`): agent prose
-/// and every transcript row at the default zoom, on `LH_PROSE` — the
-/// chrome's own grid.
+/// and every Solo transcript row at the default zoom, on `LH_PROSE`.
 pub const FS_PROSE: f32 = 13.0;
-/// 20px — the Standard reading size's line: 1.5×, whole.
-pub const LH_PROSE: f32 = 20.0;
+/// 21px — the Standard reading size's line: 1.6×, whole (SPEC §3.5's
+/// 13/21; `prose_line_height`).
+pub const LH_PROSE: f32 = 21.0;
 /// 13.5 on 20 — a view title (the Solo and Group heads), at `W_STRONG`.
 #[allow(dead_code)]
 pub const FS_TITLE: f32 = 13.5;
@@ -737,14 +739,25 @@ pub fn answer_text_size(size: ferrite_core::settings::ReadingSize) -> f32 {
     f32::from(size.px())
 }
 
-/// The pixel line height paired with each reading size: 1.5× and whole, the
-/// terminal's row (13 sits on the chrome's 20): 12/18 · 13/20 · 14/21 ·
-/// 15/23 · 16/24 · 18/27 · 20/30 · 22/33 · 24/36.
+/// The pixel line height paired with each reading size: 1.6× and whole
+/// (`prose_line_height`), the terminal's row: 12/19 · 13/21 · 14/22 ·
+/// 15/24 · 16/26 · 18/29 · 20/32 · 22/35 · 24/38.
 pub fn answer_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
-    match size.px() {
-        13 => LH_UI,
-        px => prose_line_height(f32::from(px)),
-    }
+    prose_line_height(answer_text_size(size))
+}
+
+/// How much smaller a Group Pane's transcript is set than the reading
+/// size: one half-pixel step (SPEC §3.5's 12.5/20 at Standard), so four
+/// Panes hold more of their Threads.
+pub const TX_GROUP_STEP: f32 = 0.5;
+/// How much smaller a diff or a code fence is set than the transcript
+/// around it (SPEC §3.5: 12.5/20 in a Solo transcript at Standard).
+pub const TX_BLOCK_STEP: f32 = 0.5;
+
+/// A transcript's text size: the reading size in Solo, `TX_GROUP_STEP`
+/// under it in a Group Pane.
+pub fn tx_size(size: ferrite_core::settings::ReadingSize, solo: bool) -> f32 {
+    answer_text_size(size) - if solo { 0. } else { TX_GROUP_STEP }
 }
 
 /// Headings are the body size (rule 1): they stand apart by weight and ink.
@@ -753,9 +766,13 @@ pub fn heading_scale(_level: u8) -> f32 {
     1.
 }
 
-/// A prose size's pixel line height: `round(size × 1.5)`.
+/// The transcript's line over its size: the mockups' 13/21 and 12.5/20
+/// (SPEC §3.5).
+pub const TX_LINE_RATIO: f32 = 1.6;
+
+/// A transcript size's pixel line height: `round(size × 1.6)`.
 pub fn prose_line_height(size: f32) -> f32 {
-    (size * 1.5).round()
+    (size * TX_LINE_RATIO).round()
 }
 
 /// 0.6em — Geist Mono's advance width (600/1000 em): every glyph's cell.
@@ -1232,18 +1249,20 @@ pub const HUNK: u32 = BAR;
 // ---------------------------------------------------- transcript grammar
 //
 // The transcript is a terminal: Claude Code's own layout on one monospace
-// grid, in Ferrite's ink (the prototype's `.r`, `.prompt`, `.line`, `.out`).
+// grid, in Ferrite's ink, inside the Pane's card (SPEC §5.4).
 //
 // - **One grid.** Every transcript row is set at the operator's reading
-//   size on its 1.5x line (`answer_text_size`, `answer_line_height`), set
-//   once on the transcript list and inherited by every row: prose, tool
-//   calls, results, diffs, the stamp. Horizontal measures are cells at that
-//   size (`tx_cell`); vertical ones are its line and half line.
+//   size on its 1.6× line (`answer_text_size`, `answer_line_height`) in
+//   Solo, `TX_GROUP_STEP` smaller in a Group Pane (`tx_size`), set once on
+//   the transcript list and inherited by every row: prose, tool calls,
+//   results, the stamp. Diffs and fences are set `TX_BLOCK_STEP` smaller
+//   again. Horizontal measures are cells at that size (`tx_cell`);
+//   vertical ones are its line and half line.
 // - **The 2-cell gutter.** Every row is `[gutter | content]`: the mark in
 //   the gutter's first cell (`tx_gutter`, two cells wide), the content
 //   column after it, and wrapped lines hang under the content column, never
-//   under the mark. Rows sit `TX_PAD_L` (two chrome cells) from the Pane's
-//   left edge and `TX_PAD_R` from its right; there is no centred column.
+//   under the mark. Rows sit `tx_inset` (28px Solo, 18px Group) from the
+//   card's edges; there is no centred column.
 // - **Marks.** `❯` (`TEXT_STRONG`, semibold) heads the operator's prompt; `●`
 //   heads agent prose (`TEXT_STRONG`, once per speaker change:
 //   `transcript::AnswerMarks`) and every tool call (`TEXT_DIM` done,
@@ -1253,16 +1272,18 @@ pub const HUNK: u32 = BAR;
 // - **The banner.** Every transcript opens on one `TEXT_DIM` line:
 //   `~/ferrite on dev · started 7:18 pm` (ADR 0014). The nav row names
 //   the Thread and the status line its model.
-// - **The prompt band.** The prompt echo is a full-width `paint::BAND` with
-//   half a line above and below its text: `❯` in the gutter, the text in
-//   `TEXT_STRONG` at body weight, its attachments inline after the words
-//   (`LINK_INK` names on `paint::BAND2`), and its send time (`7:31 pm`,
+// - **The prompt band.** The prompt echo is a `paint::FIELD` box
+//   (`R_CONTROL`), `PROMPT_BAND_PAD_X` either side and pulled out by as
+//   much so its text keeps the column, `prompt_band_pad_y` above and below:
+//   `❯` (`W_STRONG`) in the gutter, the text in `TEXT_STRONG` at body
+//   weight, its attachments inline after the words (`TEXT_STRONG` names on
+//   `paint::RAISED` chips at `R_INLINE`), and its send time (`7:31 pm`,
 //   `TEXT_DIM`) in its own right-aligned column on the first line. The
 //   band of the turn being read stays pinned at the top of the body while
-//   its output scrolls under it — exactly the band, pushed up by the next
-//   turn's band. Nothing on a band answers the pointer.
+//   its output scrolls under it — exactly the band, on the card, pushed up
+//   by the next turn's band. Nothing on a band answers the pointer.
 // - **Tool rows.** `● Name(args)`, one row per call (never folded into a
-//   summary): the name `TEXT_STRONG` at `W_LABEL` (`Update`, `Bash`, the
+//   summary): the name `TEXT_STRONG` at `W_STRONG` (`Update`, `Bash`, the
 //   way Claude Code names them), the parens and arguments `TEXT_DIM` (a
 //   path argument `TEXT_DIM`, a hover target), one line that truncates; the
 //   trail hard right (`+N −M` in `RUNNING`/`BLOCKED`, then the duration
@@ -1281,11 +1302,14 @@ pub const HUNK: u32 = BAR;
 //   `TEXT_DIM`, every `·` too. A failed or interrupted turn hangs under
 //   the last row: `└ failed · 0.1s · <message>`, the lead word in its state
 //   ink.
-// - **Diffs** have no box: a `TEXT_DIM` hunk header naming its section
-//   (none when it has none), `TEXT_DIM` line numbers, red and green row
-//   washes (`DIFF_*_WASH`) with the changed tokens washed deeper
-//   (`DIFF_*_WORD`), code in full syntax colour and one line per row, cut
-//   with `…`, the sign carrying the hue. Side by side once the transcript
+// - **Diffs** sit in the block box (`BLOCK_*`: `paint::BAR`, `R_CONTROL`,
+//   an inset `HAIRLINE`), `BLOCK_MARGIN_T` under their call: a `TEXT_DIM`
+//   hunk header naming its section (none when it has none), line numbers
+//   right-aligned in `DIFF_NUMBER_CELLS` (`TEXT_FAINT`, or
+//   `DIFF_*_NUMBER` on a changed row), a `DIFF_SIGN_CELLS` sign carrying
+//   the hue, red and green row washes (`DIFF_*_WASH`) with the changed
+//   tokens washed deeper (`DIFF_*_WORD`), code in full syntax colour and
+//   one line per row, cut with `…`. Side by side once the transcript
 //   is `SPLIT_DIFF_MIN_W` wide, unified when narrower; a split row's empty
 //   side is `paint::NODIFF`. A later edit to a file already diffed in the
 //   turn shows `+ show diff` instead.
@@ -1354,12 +1378,56 @@ pub fn tx_half(line: f32) -> f32 {
     (line / 2.0).floor()
 }
 
-/// The transcript's inset in the Pane body: two chrome cells on the left
-/// (the prototype's `.scroll{padding:0 3ch 0 2ch}`), so the transcript `❯`
-/// and the Composer's share one axis whatever the reading size, and three
-/// on the right, clear of the minimap rail.
-pub const TX_PAD_L: f32 = GLYPH_GUTTER;
-pub const TX_PAD_R: f32 = 3.0 * CH;
+/// The transcript column's inset from the card's edges, left and right
+/// (SPEC §5.4): 28px in Solo, 18px in a Group Pane. Off the space scale:
+/// the mockups' `padding: 0 28px` / `0 18px`, which put the prompt band
+/// (pulled out `PROMPT_BAND_PAD_X`) 16px and 6px in from the card. The
+/// right inset clears the minimap rail (`MINIMAP_W`).
+pub const TX_INSET_SOLO: f32 = 28.0;
+pub const TX_INSET_GROUP: f32 = 18.0;
+const _: () = assert!(TX_INSET_GROUP - PROMPT_BAND_PAD_X > 0.0);
+
+/// The transcript column's inset for a Solo (`solo`) or a Group Pane.
+pub fn tx_inset(solo: bool) -> f32 {
+    if solo {
+        TX_INSET_SOLO
+    } else {
+        TX_INSET_GROUP
+    }
+}
+
+/// **The prompt band** (SPEC §5.4): a `paint::FIELD` box, `R_CONTROL`
+/// corners, `PROMPT_BAND_PAD_X` either side and pulled out by as much, so
+/// its `❯` and words keep the transcript's column; `PROMPT_BAND_PAD_Y`
+/// above and below in Solo, `PROMPT_BAND_PAD_Y_GROUP` in a Group Pane (the
+/// mockups' `padding: 8px 12px` / `7px 12px`: one off-scale pixel less on
+/// the Group's 20px line).
+pub const PROMPT_BAND_PAD_X: f32 = SPACE_3;
+pub const PROMPT_BAND_PAD_Y: f32 = SPACE_2;
+pub const PROMPT_BAND_PAD_Y_GROUP: f32 = 7.0;
+
+/// The prompt band's padding above and below its text, Solo or Group.
+pub fn prompt_band_pad_y(solo: bool) -> f32 {
+    if solo {
+        PROMPT_BAND_PAD_Y
+    } else {
+        PROMPT_BAND_PAD_Y_GROUP
+    }
+}
+
+/// **The block box** — a diff's or a code fence's (SPEC §5.4): `paint::BAR`
+/// ground, `R_CONTROL` corners, an inset 1px `HAIRLINE`, `BLOCK_PAD_Y`
+/// above its first line and below its last, `BLOCK_MARGIN_T` under the row
+/// it hangs from.
+pub const BLOCK_PAD_Y: f32 = SPACE_1_5;
+pub const BLOCK_MARGIN_T: f32 = SPACE_1_5;
+/// A diff line's number ink on an added or a removed row (`TEXT_FAINT` on
+/// a context row): the sign's hue, dimmed to structure.
+pub const DIFF_ADDED_NUMBER: u32 = 0x5f8a66;
+pub const DIFF_REMOVED_NUMBER: u32 = 0x8a6460;
+/// The gap between a diff line's number and its sign: the mockups'
+/// `padding-right: 1.5ch`, inside the number's `DIFF_NUMBER_CELLS`.
+pub const DIFF_NUMBER_PAD_CELLS: f32 = 1.5;
 /// Long tool output folds to this many lines under its elbow, then a
 /// `+ N lines` line that unfolds it in place.
 pub const OUTPUT_PREVIEW_LINES: usize = 3;
@@ -1447,16 +1515,16 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 // Owner: WP-B (rich.rs, scrollbar.rs, attachments::inline_file, the Markdown vendor knobs.)
 // Edit values and append tokens only inside this section.
 
-/// **Markdown** (the prototype's `.p`, `.code`, `table.t`, `ul.md`, clean).
-/// Agent prose is the one face in `TEXT` at the reading size, left-aligned
-/// on the content column and held to `MEASURE_CH` cells; code, tables and
-/// rules keep the whole column. Blocks sit one blank line apart; headings
-/// are the body size in `W_STRONG` `TEXT_STRONG`, `**strong**` the same.
-/// Inline code is `INLINE_CODE_INK` with no chip (yet); links and file paths are
-/// `LINK_INK` with no underline at rest, every link underlining under
-/// the pointer (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_DIM`, hanging
-/// in the first of two cells. A fence has no ground: a 1px `paint::LINE2`
-/// rule on its left, the code two cells in, in full syntax colour, at most
+/// **Markdown** (SPEC §5.4). Agent prose is the one face in `TEXT_PROSE`
+/// at the transcript's size, left-aligned on the content column and held to
+/// `MEASURE_CH` cells; code, tables and rules keep the whole column. Blocks
+/// sit one blank line apart; headings are the body size in `W_STRONG`
+/// `TEXT_STRONG`, `**strong**` the same. Inline code is `INLINE_CODE_INK`
+/// on its `RAISED` chip; links and file paths are `LINK_INK` with no
+/// underline at rest, every link underlining under the pointer
+/// (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_DIM`, hanging in the first
+/// of two cells. A fence is the diff's block box (`BLOCK_*`), the code two
+/// cells in, `TX_BLOCK_STEP` under the prose, in full syntax colour, at most
 /// `MEASURE_CH` cells from the content column; its language tag dim at its
 /// top right and a lowercase `copy` `CODE_COPY_RIGHT_CELLS` in from the
 /// block's right edge, fading in under the pointer over
@@ -1473,14 +1541,18 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// sizes scale them with `reading_step`.
 #[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
 pub const PROSE_GAP: f32 = SPACE_3;
-/// Inline code's ink: `TEXT_STRONG` (cyan is retired, ADR 0033; the chip
-/// under it lands with the transcript's phase). The Markdown path paints
-/// it; the plain-text fallback carries the ink alone.
+/// Inline code's ink: `TEXT_STRONG` on its chip (cyan is retired, ADR
+/// 0033). The Markdown path paints both; the plain-text fallback carries
+/// the ink alone.
 pub const INLINE_CODE_INK: u32 = TEXT_STRONG;
-/// The inline-code chip reaches 2px past its glyphs. Painted, never laid
-/// out; its height is `inline_code_chip_h`, centred in the prose line box.
-#[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
-pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
+/// The inline-code chip (`rich::inline_code_wash`): a `paint::RAISED`
+/// ground at `R_INLINE`, with `INLINE_CODE_PAD_X` of room laid out either
+/// side of the code (the text after a chip moves along, as the mockups'
+/// `padding: 1px 5px` moves it; the copied text is unchanged) and
+/// `INLINE_CODE_INSET_Y` inside the line box. Off-scale, as the mockups
+/// draw it.
+pub const INLINE_CODE_PAD_X: f32 = 5.0;
+pub const INLINE_CODE_INSET_Y: f32 = 1.0;
 
 /// A quote's rule. Its text inset is the hang less the rule
 /// (`PROSE_HANG − QUOTE_RULE_W`, 26 at Standard), so quoted text starts
@@ -2921,7 +2993,7 @@ mod tests {
         const { assert!(SHADOW_FLOAT_Y > 0.0 && SHADOW_FLOAT_BLUR > 0.0) };
     }
 
-    /// Rule 1: every type role on a whole-pixel line, a 1.5× terminal row
+    /// Rule 1: every type role on a whole-pixel line, a 1.6× terminal row
     /// at every reading size, headings at the body size, a code cell of
     /// 0.6em.
     #[test]
@@ -2935,10 +3007,13 @@ mod tests {
         for reading in ReadingSize::STEPS.map(ReadingSize::nearest) {
             let (size, line) = (answer_text_size(reading), answer_line_height(reading));
             assert_eq!(line, line.round());
-            assert!(line >= size * 1.5, "{reading:?}: {size}/{line}");
-            assert!(line <= size * 1.55, "{reading:?}: {size}/{line}");
+            assert!(line >= size * 1.55, "{reading:?}: {size}/{line}");
+            assert!(line <= size * 1.65, "{reading:?}: {size}/{line}");
         }
-        assert_eq!(answer_line_height(ReadingSize::nearest(13)), LH_UI);
+        // SPEC §3.5: Solo 13/21, a Group Pane 12.5/20.
+        assert_eq!(answer_line_height(ReadingSize::nearest(13)), 21.0);
+        let group = tx_size(ReadingSize::STANDARD, false);
+        assert_eq!((group, prose_line_height(group)), (12.5, 20.0));
         assert_eq!(answer_text_size(ReadingSize::STANDARD), FS_PROSE);
         assert_eq!(answer_line_height(ReadingSize::STANDARD), LH_PROSE);
         for level in 1..=6 {

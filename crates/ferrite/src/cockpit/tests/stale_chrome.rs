@@ -408,8 +408,8 @@ fn the_reading_size_reaches_every_pane(cx: &mut TestAppContext) {
     for prefix in &prefixes {
         assert_eq!(
             b.cx.update(|_, cx| crate::rich::testing::font_size(prefix, cx)),
-            Some(px(18.)),
-            "{prefix} reads at the new size"
+            Some(px(18. - crate::theme::TX_GROUP_STEP)),
+            "{prefix} reads at the new size (a Group Pane's half step under it)"
         );
     }
 }

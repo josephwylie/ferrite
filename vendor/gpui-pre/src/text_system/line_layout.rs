@@ -597,11 +597,14 @@ impl LineLayoutCache {
         curr_frame.used_wrapped_lines_by_hash.clear();
     }
 
+    /// Lay out a line that wraps at `wrap_width`. Ferrite: with room either
+    /// side of some ranges (`RunPadding`).
     pub fn layout_wrapped_line<Text>(
         &self,
         text: Text,
         font_size: Pixels,
         runs: &[FontRun],
+        pads: &[RunPadding],
         wrap_width: Option<Pixels>,
         max_lines: Option<usize>,
     ) -> Arc<WrappedLineLayout>
@@ -613,6 +616,7 @@ impl LineLayoutCache {
             text: text.as_ref(),
             font_size,
             runs,
+            pads,
             wrap_width,
             force_width: None,
         } as &dyn AsCacheKeyRef;
@@ -633,7 +637,8 @@ impl LineLayoutCache {
         } else {
             drop(current_frame);
             let text = SharedString::from(text);
-            let unwrapped_layout = self.layout_line::<&SharedString>(&text, font_size, runs, None);
+            let unwrapped_layout =
+                self.layout_line_padded::<&SharedString>(&text, font_size, runs, pads, None);
             let wrap_boundaries = if let Some(wrap_width) = wrap_width {
                 unwrapped_layout.compute_wrap_boundaries(text.as_ref(), wrap_width, max_lines)
             } else {
@@ -648,6 +653,7 @@ impl LineLayoutCache {
                 text,
                 font_size,
                 runs: SmallVec::from(runs),
+                pads: pads.iter().cloned().collect(),
                 wrap_width,
                 force_width: None,
             });
@@ -673,10 +679,26 @@ impl LineLayoutCache {
         Text: AsRef<str>,
         SharedString: From<Text>,
     {
+        self.layout_line_padded(text, font_size, runs, &[], force_width)
+    }
+
+    fn layout_line_padded<Text>(
+        &self,
+        text: Text,
+        font_size: Pixels,
+        runs: &[FontRun],
+        pads: &[RunPadding],
+        force_width: Option<Pixels>,
+    ) -> Arc<LineLayout>
+    where
+        Text: AsRef<str>,
+        SharedString: From<Text>,
+    {
         let key = &CacheKeyRef {
             text: text.as_ref(),
             font_size,
             runs,
+            pads,
             wrap_width: None,
             force_width,
         } as &dyn AsCacheKeyRef;
@@ -700,11 +722,13 @@ impl LineLayoutCache {
             if let Some(force_width) = force_width {
                 apply_force_width_to_layout(&mut layout, force_width);
             }
+            apply_padding_to_layout(&mut layout, pads);
 
             let key = Arc::new(CacheKey {
                 text,
                 font_size,
                 runs: SmallVec::from(runs),
+                pads: pads.iter().cloned().collect(),
                 wrap_width: None,
                 force_width,
             });
@@ -897,6 +921,50 @@ fn apply_force_width_to_layout(layout: &mut LineLayout, force_width: Pixels) {
     }
 }
 
+/// Ferrite: room laid out either side of a byte range of a line, as CSS
+/// inline padding is (an inline-code chip's): the range's glyphs move `pad`
+/// right, everything after it `2 × pad`, and the line grows by `2 × pad`.
+/// Wrapping, hit testing and `x_for_index` all read the moved glyphs; the
+/// text itself is unchanged, so a copy never gains a character.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct RunPadding {
+    /// The padded byte range, in the line's text.
+    pub range: Range<usize>,
+    /// The room on each side.
+    pub pad: Pixels,
+}
+
+/// Move a shaped line's glyphs by its paddings (`RunPadding`).
+fn apply_padding_to_layout(layout: &mut LineLayout, pads: &[RunPadding]) {
+    let pads: SmallVec<[&RunPadding; 2]> = pads
+        .iter()
+        .filter(|pad| !pad.range.is_empty() && pad.range.start < layout.len)
+        .collect();
+    if pads.is_empty() {
+        return;
+    }
+    let shift = |index: usize| {
+        pads.iter()
+            .map(|pad| {
+                let mut shift = px(0.);
+                if index >= pad.range.start {
+                    shift += pad.pad;
+                }
+                if index >= pad.range.end {
+                    shift += pad.pad;
+                }
+                shift
+            })
+            .fold(px(0.), |sum, shift| sum + shift)
+    };
+    for run in layout.runs.iter_mut() {
+        for glyph in run.glyphs.iter_mut() {
+            glyph.position.x += shift(glyph.index);
+        }
+    }
+    layout.width += shift(layout.len);
+}
+
 /// A run of text with a single font.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[expect(missing_docs)]
@@ -914,6 +982,7 @@ struct CacheKey {
     text: SharedString,
     font_size: Pixels,
     runs: SmallVec<[FontRun; 1]>,
+    pads: SmallVec<[RunPadding; 1]>,
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
 }
@@ -923,6 +992,7 @@ struct CacheKeyRef<'a> {
     text: &'a str,
     font_size: Pixels,
     runs: &'a [FontRun],
+    pads: &'a [RunPadding],
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
 }
@@ -1015,6 +1085,7 @@ impl AsCacheKeyRef for CacheKey {
             text: &self.text,
             font_size: self.font_size,
             runs: self.runs.as_slice(),
+            pads: self.pads.as_slice(),
             wrap_width: self.wrap_width,
             force_width: self.force_width,
         }

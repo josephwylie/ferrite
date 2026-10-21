@@ -371,13 +371,13 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
     let start = caret(&view, cx, 0, 0);
     // Select through the last word, leaving the final period unselected. The
-    // native card has its own width and the flow reserves its trailing
-    // `INLINE_CODE_OVERHANG` margin, so measure the suffix from there.
+    // native card has its own width, so measure the suffix from a hair past
+    // its right edge.
     let end = cx.update(|window, cx| {
         let suffix_caret =
             crate::rich::testing::caret(&id, 0, 1, suffix, suffix.len() - 1, window, cx).unwrap();
         gpui::point(
-            card.right() + px(crate::theme::INLINE_CODE_OVERHANG) + suffix_caret.x - before.left(),
+            card.right() + px(crate::theme::SPACE_0_5) + suffix_caret.x - before.left(),
             card.center().y,
         )
     });
@@ -845,8 +845,11 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
     view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
     cx.update(|_, cx| {
-        // One size for every transcript: a Group reads at it too.
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
+        // A Group Pane reads half a step under it (SPEC §3.5).
+        assert_eq!(
+            crate::rich::testing::font_size(&prefix, cx),
+            Some(px(18. - crate::theme::TX_GROUP_STEP))
+        );
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)

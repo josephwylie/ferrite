@@ -410,7 +410,9 @@ fn reading_anchor_survives_expanding_earlier_tool_details(cx: &mut TestAppContex
     let (core, fake) = cockpit("anchor-earlier-disclosure", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    // Tall enough that the second tool row is on screen under the Solo
+    // head, the tab strip and the 1.6× transcript line.
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     for id in ["earlier", "visible"] {
         fake.streams.borrow()[0]
             .send(SessionEvent::ToolStarted {

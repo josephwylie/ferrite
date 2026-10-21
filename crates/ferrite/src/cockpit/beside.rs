@@ -651,7 +651,7 @@ impl CockpitView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&pane.reader_markdown_scroll)
-                    .px(px(crate::theme::TX_PAD_L))
+                    .px(px(crate::theme::TX_INSET_SOLO))
                     .pt(px(crate::theme::BODY_PAD_T))
                     .pb(px(crate::theme::HALF_ROW))
                     .child(crate::rich::document_body(

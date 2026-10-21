@@ -66,6 +66,10 @@ pub struct InlineCodeWash {
     pub radius: Pixels,
     /// How far it reaches past the run's first and last glyph.
     pub overhang: Pixels,
+    /// Room laid out either side of the run (CSS inline padding), so the
+    /// text after it moves along; `0` paints the ground over its
+    /// neighbours' space instead.
+    pub pad: Pixels,
     /// How far it stays inside the line box, top and bottom.
     pub inset_y: Pixels,
 }
@@ -659,6 +663,7 @@ mod tests {
             color: gpui::red(),
             radius: px(4.),
             overhang: px(2.),
+            pad: px(0.),
             inset_y: px(1.),
         };
         let style = TextViewStyle::default().with_inline_code_wash(Some(wash));
