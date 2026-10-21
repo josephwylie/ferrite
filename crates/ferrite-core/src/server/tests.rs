@@ -1913,6 +1913,27 @@ fn scheduled_work_keeps_the_agent() {
     assert!(!running(&agent), "the agent stopped");
 }
 
+/// Scheduled work is the Thread's to hold, not its Activity's: windows
+/// are told nothing of it, and telling them the rest goes on.
+#[test]
+fn scheduled_work_crosses_to_no_window() {
+    let (spawner, providers) = spawn();
+    let (mut engine, _thread, agent, _clock) = at_rest("scheduled-wire", spawner, &providers);
+    let _ = engine.take_messages();
+    for pending in [true, false] {
+        agent.send(SessionEvent::ScheduledWork { pending }).unwrap();
+    }
+    engine.pump();
+
+    let messages = engine.take_messages();
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, ServerMessage::Input { .. })),
+        "{messages:?}"
+    );
+}
+
 /// A model, effort or Provider chosen for a Thread whose agent is not
 /// running starts none: the choice is kept, and the next agent starts with
 /// it, in the permission mode the last one ran in.

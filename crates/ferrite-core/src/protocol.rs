@@ -1896,9 +1896,10 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             server: server.clone(),
             url: url.clone(),
         },
-        // Queue acknowledgements are the Thread's state, not its Activity's;
-        // the highlighter is each side's own; `Answered` is Activity's.
-        Input::Event(SessionEvent::Queue(_))
+        // Queue acknowledgements and scheduled work are the Thread's state,
+        // not its Activity's; the highlighter is each side's own; `Answered`
+        // is Activity's.
+        Input::Event(SessionEvent::Queue(_) | SessionEvent::ScheduledWork { .. })
         | Input::Highlighted { .. }
         | Input::Answered { .. } => return Outgoing::Local,
         Input::Event(_)
