@@ -4174,7 +4174,8 @@ fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
 /// A window mirrors only the Threads it draws at Transcript level (ADR
 /// 0032). One off screen reads from its digest — what it does, the Decision
 /// it waits on — and holds none of its transcript; drawn, its history
-/// arrives; thirty seconds off screen, the window lets it go again.
+/// arrives; five minutes off screen and settled, the window lets it go
+/// again.
 #[test]
 fn a_window_mirrors_only_the_threads_it_draws() {
     let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
@@ -4196,7 +4197,13 @@ fn a_window_mirrors_only_the_threads_it_draws() {
 
     window.draws_transcripts([thread]);
     pump_until(&mut window, |window| shows(window, thread, "on it"));
-    clock.advance(Duration::from_secs(31));
+    turn_ends(&provider);
+    pump_until(&mut window, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| !open.digest().working)
+    });
+    clock.advance(Duration::from_secs(31 * 60));
     window.pump();
     assert!(
         shows(&window, thread, "on it"),
@@ -4204,18 +4211,85 @@ fn a_window_mirrors_only_the_threads_it_draws() {
     );
 
     window.draws_transcripts([]);
-    clock.advance(Duration::from_secs(29));
+    clock.advance(Duration::from_secs(5 * 60 - 1));
     window.pump();
     assert!(shows(&window, thread, "on it"), "kept a while off screen");
     clock.advance(Duration::from_secs(1));
     window.pump();
     assert!(!shows(&window, thread, "on it"), "let go");
-    assert!(
+}
+
+/// A Thread at work stays streamed whole however long it is off screen:
+/// the operator comes back to it as it is, never to a reload. Five minutes
+/// after it settles the window lets it go.
+#[test]
+fn a_thread_at_work_stays_mirrored_off_screen() {
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let harness = start("mirrors-working");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    let mut window = cockpit(&harness);
+    window.draws_transcripts([thread]);
+    window.send(thread, "go".into());
+    provider.send(text("on it\n\n")).unwrap();
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    pump_until(&mut window, |window| {
         window
             .thread(thread)
-            .is_some_and(|open| open.pending().is_some()),
-        "its Decision still reads"
+            .is_some_and(|open| open.digest().working)
+    });
+
+    window.draws_transcripts([]);
+    clock.advance(Duration::from_secs(20 * 60));
+    window.pump();
+    assert!(shows(&window, thread, "on it"), "kept while it works");
+
+    turn_ends(&provider);
+    pump_until(&mut window, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| !open.digest().working)
+    });
+    clock.advance(Duration::from_secs(5 * 60 - 1));
+    window.pump();
+    assert!(
+        shows(&window, thread, "on it"),
+        "kept a while after it settles"
     );
+    clock.advance(Duration::from_secs(1));
+    window.pump();
+    assert!(!shows(&window, thread, "on it"), "let go");
+}
+
+/// A Thread another window opens is held here as one just off screen,
+/// but never drawn here its work keeps it no longer: the window mirrors
+/// only what it draws.
+#[test]
+fn a_thread_opened_elsewhere_is_not_kept_for_its_work() {
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let harness = start("opened-unseen");
+    let mut window = cockpit(&harness);
+    window.draws_transcripts([]);
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    other.command(
+        2,
+        Op::Send {
+            thread,
+            text: "go".into(),
+        },
+    );
+    provider.send(text("on it\n\n")).unwrap();
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    pump_until(&mut window, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| open.digest().working)
+    });
+
+    clock.advance(Duration::from_secs(5 * 60));
+    window.pump();
+    assert!(!shows(&window, thread, "on it"), "let go though it works");
 }
 
 /// A window drawing a Thread it let go shows its transcript whole or not
