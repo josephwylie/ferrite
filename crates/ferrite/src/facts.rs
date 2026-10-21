@@ -90,6 +90,20 @@ pub struct ThreadFacts {
     subagents_known: bool,
 }
 impl ThreadFacts {
+    /// The Thread's summed diffstat, `(added, removed)`, when it changed
+    /// anything: the nav row's and the branch chip's `+N −N`. It counts the
+    /// agent's own edits (`changed_files`), not a git diff against the
+    /// base (SPEC §8: acceptable for v1).
+    pub fn diff_totals(&self) -> Option<(usize, usize)> {
+        (!self.changed_files.is_empty()).then(|| {
+            self.changed_files
+                .iter()
+                .fold((0, 0), |(added, removed), file| {
+                    (added + file.added, removed + file.removed)
+                })
+        })
+    }
+
     /// Whether `branch` is the Project's default, which the nav row and the
     /// titlebar crumb leave unsaid.
     #[cfg(test)]

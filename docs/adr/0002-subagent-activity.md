@@ -132,3 +132,16 @@ Scope block, highlighting, and view caches by Subject and content revision so
 late work cannot update another transcript. Hidden requests remain reachable
 through Decision navigation. The kit migration is recorded in
 [ADR 0003](0003-native-gpui-components.md).
+
+## Amendment (2026-10-21): live-only tabs and the done menu
+
+The UI refresh ([ADR 0033](0033-sans-chrome-and-card-panes.md), SPEC §5.3)
+changes the strip. Tabs are `Main` plus one per *live* Subagent (waiting,
+working or failing), ordered waiting, working, failing, each by start; a
+selected tab stays until the operator leaves it, even once its Subagent is
+done. Every other Subagent (finished, stopped, idle) lives in an `N done ▾`
+menu, newest first, with its result word; picking one selects its tab. When
+the live tabs overflow the strip, their tail folds into the same menu under
+a `Live` heading and the button reads `N more ▾`; `Main` and the selected
+tab always show. Tabs keep a fixed width while shown, and still carry no
+close button.

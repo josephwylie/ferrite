@@ -215,9 +215,8 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
     );
 }
 
-/// The Subject strip is Ferrite's own tab row: exactly one active pill,
-/// which follows the pick, on a row no taller than a chip (no kit rule
-/// hanging under it).
+/// The Subject strip is Ferrite's own tab row: exactly one active tab,
+/// which follows the pick, as high as a tab (no kit rule hanging under it).
 #[gpui::test]
 fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAppContext) {
     use ferrite_core::activity::{
@@ -235,7 +234,7 @@ fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAp
         ActivityEvent::Discovered(info),
         ActivityEvent::Status {
             key: key.clone(),
-            state: AgentStatus::Idle,
+            state: AgentStatus::Working,
         },
     ] {
         fake.streams.borrow()[0]
@@ -247,7 +246,7 @@ fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAp
     let pill = cx.debug_bounds("subject-tab-selected").expect("one pill");
     let main = cx.debug_bounds("subject-main-1").unwrap();
     assert_eq!(pill, main, "Main is active first");
-    assert_eq!(pill.size.height, px(crate::theme::CHIP_H));
+    assert_eq!(pill.size.height, px(crate::theme::SUBJECT_TAB_H));
     assert!(strip.size.height <= px(crate::theme::SUBJECT_STRIP_H));
 
     let atlas: &'static str =
@@ -447,9 +446,7 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
         .unwrap();
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for name in [
-        // Short names: on a wide Pane the head spans the reading column
-        // (720), and the title at its cap, the checkout and all four tabs
-        // must fit there.
+        // Short names, all working: every live tab fits a wide strip.
         "nav", "cmp", "set", "tok",
     ] {
         let key = AgentKey::new(Provider::Claude, "ui-fixture", name);
@@ -461,7 +458,7 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
             ActivityEvent::Discovered(info),
             ActivityEvent::Status {
                 key,
-                state: AgentStatus::Idle,
+                state: AgentStatus::Working,
             },
         ] {
             fake.streams.borrow()[0]
@@ -469,7 +466,8 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
                 .unwrap();
         }
     }
-    // Solo has no head (C2): the tabs keep a strip of their own.
+    // Solo has no Pane head (the view head names it): the tabs keep a
+    // strip of their own.
     for width in [900., 1800., 2400.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));
         tick(cx);
@@ -644,7 +642,7 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
         ActivityEvent::Discovered(info),
         ActivityEvent::Status {
             key: key.clone(),
-            state: AgentStatus::Idle,
+            state: AgentStatus::Working,
         },
     ] {
         fake.streams.borrow()[0]
@@ -667,6 +665,7 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
     // footer keeps its column until WP-F takes it onto the band, so only
     // its own placement is asserted here.
     assert!(main_block.size.width >= footer.size.width);
+    assert_eq!(footer.size.height, px(crate::theme::CHILD_FOOTER_H));
     assert!(
         (px(pane.y + pane.h) - footer.bottom() - px(crate::theme::COMPOSER_INSET_B)).abs()
             <= px(1.5),

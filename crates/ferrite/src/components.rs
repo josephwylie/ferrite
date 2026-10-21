@@ -253,8 +253,6 @@ pub enum Elevation {
     /// The focused Pane of a board: flat (its border says focus).
     #[cfg_attr(not(test), allow(dead_code))]
     Lifted,
-    /// A control's face: flat.
-    Control,
     /// Menus, pickers, the palette, popovers, tooltips, a dragged ghost:
     /// the one float shadow.
     Float,
@@ -277,7 +275,7 @@ fn layer(color: u32, y: f32, blur: f32, spread: f32) -> BoxShadow {
 /// (`float_shadow`).
 pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
     match rung {
-        Elevation::Pane | Elevation::Lifted | Elevation::Control => Vec::new(),
+        Elevation::Pane | Elevation::Lifted => Vec::new(),
         Elevation::Float | Elevation::Sheet => float_shadow(),
     }
 }
@@ -1137,34 +1135,47 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
     )
 }
 
-/// A text-only control with no ground at all (`Back to Main`): `CONTROL_H`,
-/// UI `FS_UI` `W_BODY` `TEXT_DIM`, brightening to `TEXT` under the
-/// pointer. For a way out that must stay quieter than the line it ends.
-pub fn quiet_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
-    let none: gpui::Hsla = rgba(theme::TRANSPARENT).into();
-    button(id)
-        .custom(crate::pointer::button_variant(
-            none,
-            rgb(theme::TEXT_DIM).into(),
-            none,
-            cx,
-        ))
-        .group(QUIET_BUTTON_GROUP)
-        .h(px(theme::CONTROL_H))
-        .px(px(theme::CONTROL_PAD_X))
-        .child(
-            text_ui()
-                .font_weight(theme::W_BODY)
-                .text_color(rgb(theme::TEXT_DIM))
-                .group_hover(QUIET_BUTTON_GROUP, |style| {
-                    style.text_color(rgb(theme::TEXT))
-                })
-                .child(label.into()),
-        )
+/// A secondary button (SPEC §5.2, §5.3): `CONTROL_H` at `R_CONTROL` on
+/// `paint::RAISED`, stepping to `paint::SELECTED` under the pointer and
+/// `paint::PRESS` pressed; its label `FS_LABEL` at `W_LABEL` in
+/// `TEXT_STRONG`, led by a `CONTROL_CHIP_ICON` glyph when it has one (then
+/// padded 10 / 12, the icon `CONTROL_CHIP_GAP` before the label).
+pub fn secondary_button(
+    id: impl Into<ElementId>,
+    glyph: Option<&'static str>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> Button {
+    faded_button(
+        id,
+        theme::paint::RAISED.into(),
+        theme::paint::SELECTED.into(),
+        theme::paint::PRESS.into(),
+        rgb(theme::TEXT_STRONG).into(),
+        cx,
+    )
+    .h(px(theme::CONTROL_H))
+    .rounded(px(theme::R_CONTROL))
+    .pl(px(if glyph.is_some() {
+        theme::CONTROL_CHIP_PAD_X
+    } else {
+        theme::CONTROL_PAD_X
+    }))
+    .pr(px(theme::CONTROL_PAD_X))
+    .child(
+        text_ui()
+            .flex()
+            .items_center()
+            .gap(px(theme::CONTROL_CHIP_GAP))
+            .text_size(px(theme::FS_LABEL))
+            .font_weight(theme::W_LABEL)
+            .text_color(rgb(theme::TEXT_STRONG))
+            .children(
+                glyph.map(|glyph| icons::icon(glyph, theme::CONTROL_CHIP_ICON, theme::TEXT_STRONG)),
+            )
+            .child(label.into()),
+    )
 }
-
-/// `quiet_button`'s hover reaches its label through this group.
-const QUIET_BUTTON_GROUP: &str = "quiet-button";
 
 // ------------------------------------------------------------------ menus
 
@@ -1920,7 +1931,7 @@ mod tests {
     #[test]
     fn only_a_float_casts_and_nothing_is_lit() {
         use Elevation::*;
-        for rung in [Pane, Lifted, Control] {
+        for rung in [Pane, Lifted] {
             assert!(elevation(rung).is_empty(), "{rung:?} is flat");
         }
         for rung in [Float, Sheet] {

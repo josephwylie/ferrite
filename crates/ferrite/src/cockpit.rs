@@ -17,6 +17,7 @@ pub(crate) mod subagents;
 mod transcript_glue;
 mod updating;
 mod user_commands;
+mod view_head;
 
 /// Card triggers' bounds by key, recorded in prepaint.
 type FloatTriggers =
@@ -679,6 +680,8 @@ enum RenameTarget {
     /// A Thread, renamed from its Pane head — the same title, a different
     /// editor site, so the two never draw one editor twice.
     PaneTitle(ThreadId),
+    /// A Thread, renamed from the Solo view head (`view_head`).
+    ViewTitle(ThreadId),
 }
 
 /// What the window is handed at launch beyond the core: the operator's
@@ -3345,9 +3348,9 @@ impl CockpitView {
             // A Thread with no stored title shows its generated one, so
             // that is what the editor opens on: the operator edits the name
             // they can see.
-            RenameTarget::Thread(thread) | RenameTarget::PaneTitle(thread) => {
-                Some(self.facts.name(thread).to_string())
-            }
+            RenameTarget::Thread(thread)
+            | RenameTarget::PaneTitle(thread)
+            | RenameTarget::ViewTitle(thread) => Some(self.facts.name(thread).to_string()),
         };
         let Some(title) = title else {
             return;
@@ -3384,7 +3387,9 @@ impl CockpitView {
                 .apply_group(GroupChange::Rename { group, title })
                 .map(|_| ())
                 .map_err(|error| error.to_string()),
-            RenameTarget::Thread(thread) | RenameTarget::PaneTitle(thread) => self
+            RenameTarget::Thread(thread)
+            | RenameTarget::PaneTitle(thread)
+            | RenameTarget::ViewTitle(thread) => self
                 .cockpit
                 .rename_thread(thread, &title)
                 .map_err(|error| error.to_string()),
@@ -3392,7 +3397,10 @@ impl CockpitView {
         if let Err(error) = result {
             self.group_error = Some(error.into());
         } else {
-            if let RenameTarget::Thread(thread) | RenameTarget::PaneTitle(thread) = target {
+            if let RenameTarget::Thread(thread)
+            | RenameTarget::PaneTitle(thread)
+            | RenameTarget::ViewTitle(thread) = target
+            {
                 self.facts.renamed(&self.cockpit, thread);
                 self.refresh_names();
             }
@@ -10643,6 +10651,7 @@ impl CockpitView {
                 !self.overlay_open(),
                 self.maximized,
             ))
+            .children(self.view_head(cx))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(window, cx))
@@ -10719,17 +10728,6 @@ impl CockpitView {
             },
             hover,
         )
-    }
-
-    /// Whether a Pane is wider than the reading column (inside its padding
-    /// and edges), so its head lays out on the column's grid.
-    fn head_column(&self, index: usize, window: &Window) -> bool {
-        let width = self
-            .pane_rects(window)
-            .into_iter()
-            .find(|(at, _)| *at == index)
-            .map_or(self.cell(window).width, |(_, rect)| rect.w);
-        width - 2. * (crate::theme::PANE_PAD_X + 1.) > crate::theme::READING_MAX_W
     }
 
     /// Whether native files hover this Pane right now: the last Pane their
@@ -10861,7 +10859,6 @@ impl CockpitView {
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
             show_focus: self.grid_board(),
-            head_column: self.head_column(index, window),
             // Every head names its provider (theme WP-C): the mark is the
             // one thing a head carries beside the Thread.
             provider_mark: open
@@ -10928,6 +10925,7 @@ impl CockpitView {
             // handle could not be rearranged at all.
             title: Some(self.activity_title(index, cx)),
             agents: l1.then(|| self.subject_strip(index, window, cx)).flatten(),
+            split: l1.then(|| self.split_beside_button(index, cx)).flatten(),
             activity_decisions,
             expand_question,
             question_measurement: l1

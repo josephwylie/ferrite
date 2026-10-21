@@ -2,11 +2,11 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Solo has no head (C2), and the titlebar does not name the Thread either
-/// (ADR 0014): the nav's row does. The plan's meter and the PR/CI chip are
-/// palette commands (F-11), not chrome.
+/// Solo has no Pane head: the view head in the head row names the Thread
+/// (SPEC §5.2), as the nav's row does. The plan's meter sits at the tab
+/// strip's right (SPEC §5.3); the PR/CI chip is not chrome (F-11).
 #[gpui::test]
-fn the_solo_thread_wears_no_chrome(cx: &mut TestAppContext) {
+fn the_solo_thread_is_named_by_the_view_head_and_meters_its_plan(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("head-one-row", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -35,10 +35,16 @@ fn the_solo_thread_wears_no_chrome(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("titlebar-location").is_none());
     let row: &'static str = format!("nav-thread-{}", thread.get()).leak();
     assert!(cx.debug_bounds(row).is_some(), "the nav's row names it");
+    let head = cx
+        .debug_bounds("view-title")
+        .expect("the view head names it");
     assert!(
-        cx.debug_bounds("tasks-meter-1").is_none(),
-        "no meter in the chrome"
+        head.bottom() <= px(crate::theme::WIN_CHROME_H),
+        "in the head row"
     );
+    let meter = cx.debug_bounds("tasks-meter-1").expect("the plan's meter");
+    let strip = cx.debug_bounds("pane-tabs-1").expect("the tab strip");
+    assert!(strip.contains(&meter.center()), "on the tab strip");
     assert!(
         cx.debug_bounds("ci-mark-1").is_none(),
         "no PR/CI chip in the chrome"

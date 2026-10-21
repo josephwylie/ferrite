@@ -261,8 +261,9 @@ pub const FIELD: u32 = 0x222222;
 /// A field as glass: a white overlay on the card.
 pub const FIELD_GLASS: u32 = 0xffffff0d;
 /// `#262626` — the active tab inside a card.
-#[allow(dead_code)]
 pub const TAB_ACTIVE: u32 = 0x262626;
+/// The active tab as glass: a white overlay on the card.
+pub const TAB_ACTIVE_GLASS: u32 = 0xffffff0f;
 /// `#2a2a2a` — raised a step: chips, inline code, secondary buttons, the
 /// panel's file block, and the hover fill on the frame.
 pub const RAISED: u32 = 0x2a2a2a;
@@ -359,6 +360,7 @@ pub mod paint {
     pub const FIELD: Paint = Paint::pick(super::FIELD_GLASS, solid(super::FIELD));
     pub const RAISED: Paint = Paint::pick(super::RAISED_GLASS, solid(super::RAISED));
     pub const SELECTED: Paint = Paint::pick(super::SELECTED_GLASS, solid(super::SELECTED));
+    pub const TAB_ACTIVE: Paint = Paint::pick(super::TAB_ACTIVE_GLASS, solid(super::TAB_ACTIVE));
     pub const SELECTION_HOVER: Paint =
         Paint::pick(super::SELECTION_HOVER_GLASS, solid(super::SELECTION_HOVER));
     /// Every press: the selected row's hover face.
@@ -869,6 +871,21 @@ pub const WIN_CHROME_H: f32 = TITLEBAR_H;
 /// `BAR` under a `BAR_TOP` line). Off the scale: the mockups' rows.
 pub const TITLEBAR_H: f32 = 46.0;
 pub const STATUS_BAR_H: f32 = 30.0;
+/// The view head in the head row over the board (SPEC §5.2): padded
+/// `VIEW_HEAD_PAD_L` / `VIEW_HEAD_PAD_R` (6 / 4; a Group's 0 at the right)
+/// inside the board's
+/// column, its parts `VIEW_HEAD_GAP` (10) apart — the title (`FS_TITLE`
+/// 600), the Project in `TEXT_DIM`, a spacer, then the branch chip (Solo)
+/// or `New thread` (Group). The chip is `CONTROL_H` at `R_CONTROL` on
+/// `RAISED`, padded `CONTROL_CHIP_PAD_X` (10), its icon, branch and
+/// diffstat `CONTROL_CHIP_GAP` (6) apart, the icon `CONTROL_CHIP_ICON`
+/// (13). Off the scale: the mockups' head.
+pub const VIEW_HEAD_PAD_L: f32 = SPACE_1_5;
+pub const VIEW_HEAD_PAD_R: f32 = SPACE_1;
+pub const VIEW_HEAD_GAP: f32 = 10.0;
+pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
+pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
+pub const CONTROL_CHIP_ICON: f32 = 13.0;
 /// Where the host traffic-light group's close button sits: 13px in from the
 /// window's left edge, vertically centred for a 14px button in the band.
 pub const TRAFFIC_X: f32 = 13.0;
@@ -942,9 +959,6 @@ pub const KEY_GLYPH: f32 = 7.0;
 pub const KBD_H: f32 = 18.0;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const KBD_PAD_X: f32 = 5.0;
-/// A chip: 20px high (one row), 6px inline padding.
-pub const CHIP_H: f32 = 20.0;
-pub const CHIP_PAD_X: f32 = 6.0;
 /// 4px — a floating menu's inset around its rows (`FLOAT_PAD`).
 pub const MENU_PAD: f32 = 4.0;
 /// 28px — one menu row: `LH_UI` plus 4px above and below.
@@ -1624,8 +1638,6 @@ pub const HEAD_DOT_W: f32 = 2.0 * CH;
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
 pub const HEAD_TITLE_MIN_W: f32 = 96.0;
-/// Between the tab strip's tabs and the plan's meter at its right.
-pub const HEAD_CLUSTER_GAP: f32 = SPACE_3;
 /// The tasks meter: 6 × 3 segments, 1px radius, 2px apart (an 8px pitch).
 /// Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track.
 pub const METER_SEG_W: f32 = 6.0;
@@ -1796,8 +1808,8 @@ pub const COMPOSER_SEG_PAD_TAIL: f32 = CH;
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
 pub const COMPOSER_INSET_B: f32 = SPACE_2;
 pub const COMPOSER_CHIP_R: f32 = R_CHIP;
-/// One band row: what an unfocused board cell's band measures, and the
-/// Subagent footer's row.
+/// One band row: what an unfocused board cell's band measures.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H;
 /// The ctx meter: eight cells by 4px on a `paint::LINE2` track, filled
 /// `RUNNING` below `CTX_METER_WARN`, `ATTENTION` below `CTX_METER_FULL`,
@@ -2172,22 +2184,39 @@ pub const QUESTION_OTHER_H: f32 = LH_UI;
 /// on the primary fill.
 pub const SEND_KEY_INK: u32 = 0x111214b3;
 
-/// Subagent tabs (rule 2.2.4-5): their own `SUBJECT_STRIP_H` row at the
-/// Pane's top — under the Group head in a board cell — closed by a
-/// permanent `HAIRLINE` the body clips at. 20px tabs packed with no gap
-/// and centred in the row, 8px inline padding, no edge; the active tab a
-/// `paint::SELECTION` pill in `TEXT_STRONG` (stepping up under the pointer), the
-/// others `TEXT_DIM` blending to `TEXT` with no ground. Main's label sits
-/// on the text column. Labels truncate at 112px. A still status dot
-/// leads a subagent's label 6px before it, in a slot every tab reserves —
-/// waiting `ATTENTION` > failed `BLOCKED` > working `RUNNING` — so a tab
-/// never changes width with its state; the `+N` overflow uses the same
-/// slot.
-pub const SUBJECT_TAB_PAD_X: f32 = SPACE_2;
-pub const SUBJECT_TAB_GAP: f32 = SPACE_1;
-pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_1_5;
-pub const SUBJECT_LABEL_MAX_W: f32 = 112.0;
-pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
+/// The Solo card's tab strip (SPEC §5.3): one `SUBJECT_STRIP_H` (38) row
+/// at the card's top — under the Group head in a board cell — padded
+/// `SUBJECT_STRIP_PAD_X` (6) at both ends, its tabs `SUBJECT_TAB_GAP` (2)
+/// apart, closed by a `HAIRLINE` the body clips at. A tab is
+/// `SUBJECT_TAB_H` (28) high at `R_TAB`, `FS_LABEL` Geist: the selected one
+/// on `TAB_ACTIVE` in `TEXT_STRONG`, the others bare in `TEXT_MUTED`.
+/// `Main` leads with the `terminal` icon (`SUBJECT_TAB_ICON`, 13) and pads
+/// `SUBJECT_TAB_PAD_L` / `SUBJECT_MAIN_PAD_R` (10 / 8); a live Subagent's
+/// tab pads 10 both sides and leads with its mark in a fixed
+/// `SUBJECT_MARK_W` slot (Geist Mono 12's cell: the braille spinner's), so
+/// a state change never resizes it. Labels ellipsise at
+/// `SUBJECT_LABEL_MAX_W` (200). Icon or mark to label: `SUBJECT_TAB_INNER_GAP`
+/// (8). The `N done ▾` menu button pads 10 / 8, its parts
+/// `SUBJECT_MENU_GAP` (6) apart, after a 1×16 `HAIRLINE` separator with
+/// `SUBJECT_SEPARATOR_MX` (6) either side. Off the scale: the mockups' tabs.
+pub const SUBJECT_STRIP_H: f32 = 38.0;
+pub const SUBJECT_STRIP_PAD_X: f32 = SPACE_1_5;
+pub const SUBJECT_TAB_GAP: f32 = SPACE_0_5;
+pub const SUBJECT_TAB_H: f32 = 28.0;
+pub const SUBJECT_TAB_PAD_L: f32 = 10.0;
+pub const SUBJECT_MAIN_PAD_R: f32 = SPACE_2;
+pub const SUBJECT_TAB_ICON: f32 = 13.0;
+pub const SUBJECT_MARK_W: f32 = 0.6 * FS_META;
+pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_2;
+pub const SUBJECT_LABEL_MAX_W: f32 = 200.0;
+pub const SUBJECT_MENU_GAP: f32 = SPACE_1_5;
+pub const SUBJECT_MENU_CHEVRON: f32 = 11.0;
+pub const SUBJECT_SEPARATOR_H: f32 = SPACE_4;
+pub const SUBJECT_SEPARATOR_MX: f32 = SPACE_1_5;
+/// A Subagent tab's `Back to Main` row in the Composer's place (SPEC
+/// §5.3): `SUBJECT_STRIP_H` high, the coverage words in `TEXT_DIM` on the
+/// Composer's inset.
+pub const CHILD_FOOTER_H: f32 = SUBJECT_STRIP_H;
 // (end WP-F) — append above this line only
 
 // ======================================== WP-G · nav

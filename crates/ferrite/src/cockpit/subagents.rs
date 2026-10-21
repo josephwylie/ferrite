@@ -336,41 +336,173 @@ pub(crate) fn agent_name(info: &AgentInfo) -> String {
         .unwrap_or_else(|| "Subagent".into())
 }
 
-/// A subagent tab's one mark, by precedence: a request waiting
-/// (`ATTENTION`) > failed or not found (`BLOCKED`) > working (`RUNNING`).
-/// Idle, stopped and starting agents carry none (the tooltip keeps the
-/// status word). The mark is a still dot: nothing on a tab moves.
-fn subject_mark(agent: &ferrite_core::activity::AgentView<'_>, waiting: bool) -> Option<u32> {
-    if waiting {
-        Some(theme::ATTENTION)
-    } else if matches!(agent.status(), AgentStatus::Failed | AgentStatus::NotFound) {
-        Some(theme::BLOCKED)
-    } else if agent.fresh() && agent.status() == AgentStatus::Working {
-        Some(theme::RUNNING)
-    } else {
-        None
+/// Where a Subagent stands on the strip (SPEC §5.3), in the live tabs'
+/// order: waiting, then working, then failing; anything else is done
+/// (finished, stopped, idle or unavailable) and lives in the `N done` menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Standing {
+    Waiting,
+    Working,
+    Failing,
+    Done,
+}
+
+impl Standing {
+    /// `agent`'s standing; `waiting` when a request of its own pends.
+    fn of(agent: ferrite_core::activity::AgentView<'_>, waiting: bool) -> Self {
+        if waiting || agent.fresh() && agent.status() == AgentStatus::Waiting {
+            Self::Waiting
+        } else if matches!(agent.status(), AgentStatus::Failed | AgentStatus::NotFound) {
+            Self::Failing
+        } else if agent.fresh()
+            && matches!(agent.status(), AgentStatus::Working | AgentStatus::Pending)
+        {
+            Self::Working
+        } else {
+            Self::Done
+        }
+    }
+
+    fn live(self) -> bool {
+        self != Self::Done
+    }
+
+    /// The tab's mark (the nav's, `nav::mark`), by `subject_mark`'s
+    /// precedence: a waiting agent's `ATTENTION` dot, a failing one's
+    /// `BLOCKED` dot, the braille spinner while working. Starting and done
+    /// agents carry none; the slot stays.
+    fn mark(self, status: AgentStatus) -> Option<AnyElement> {
+        use crate::nav::RowStatus;
+        let face = match self {
+            Self::Waiting => RowStatus::NeedsYou,
+            Self::Failing => RowStatus::Failed,
+            Self::Working if status == AgentStatus::Working => RowStatus::Working,
+            Self::Working | Self::Done => return None,
+        };
+        Some(crate::nav::mark(face, false))
     }
 }
 
-/// The mark's slot: always in layout, `STATUS_DOT` square, holding the dot
-/// when there is one — so a tab never changes width with its state.
-fn mark_slot(mark: Option<u32>) -> Div {
+/// One Subagent as the strip plans it: where it stands, when it started
+/// (`AgentView::discovered`), its tab's fixed width, and whether the Pane
+/// shows it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StripAgent {
+    pub standing: Standing,
+    pub started: u64,
+    pub width: f32,
+    pub selected: bool,
+}
+
+/// What the strip shows, as indices into its agents: the Subagent tabs
+/// after Main, in order; the live tabs that did not fit (the menu's `Live`
+/// section); and the done ones, newest first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct StripPlan {
+    pub tabs: Vec<usize>,
+    pub folded: Vec<usize>,
+    pub done: Vec<usize>,
+}
+
+impl StripPlan {
+    /// How many rows the menu holds; its button hides at 0.
+    pub fn menu_len(&self) -> usize {
+        self.folded.len() + self.done.len()
+    }
+
+    /// The menu button's words: `N done`, or `N more` once live tabs fold
+    /// into it.
+    pub fn menu_label(&self) -> String {
+        if self.folded.is_empty() {
+            format!("{} done", self.done.len())
+        } else {
+            format!("{} more", self.menu_len())
+        }
+    }
+}
+
+/// Lay out the strip (SPEC §5.3): one tab per live Subagent — waiting,
+/// working, failing, each by start — plus the selected one even once it is
+/// done (it sticks until the operator leaves it); every other done
+/// Subagent goes to the menu, newest first. `room` is what the tabs after
+/// Main may take, gaps included; `menu` is the menu button's cost (its
+/// separator included) for a menu of that many rows. When the live tabs
+/// overflow, their tail folds into the menu; the selected tab is always
+/// kept.
+fn plan_strip(agents: &[StripAgent], room: f32, menu: impl Fn(usize) -> f32) -> StripPlan {
+    let mut live: Vec<usize> = (0..agents.len())
+        .filter(|at| agents[*at].standing.live() || agents[*at].selected)
+        .collect();
+    // The sticky done tab rides after the live ones.
+    live.sort_by_key(|at| (agents[*at].standing, agents[*at].started));
+    let mut done: Vec<usize> = (0..agents.len()).filter(|at| !live.contains(at)).collect();
+    done.sort_by_key(|at| std::cmp::Reverse(agents[*at].started));
+    let cost = |at: usize| theme::SUBJECT_TAB_GAP + agents[at].width;
+    let mut used: f32 = live
+        .iter()
+        .filter(|at| agents[**at].selected)
+        .map(|at| cost(*at))
+        .sum();
+    let mut tabs = Vec::new();
+    let mut folded = Vec::new();
+    for (place, at) in live.iter().enumerate() {
+        if agents[*at].selected {
+            tabs.push(*at);
+            continue;
+        }
+        // What would still fold if this tab is the last to show: every
+        // later unselected live tab, and the done ones.
+        let later = live[place + 1..]
+            .iter()
+            .filter(|at| !agents[**at].selected)
+            .count();
+        let after = later + done.len();
+        let menu_cost = if after == 0 { 0. } else { menu(after) };
+        if folded.is_empty() && used + cost(*at) + menu_cost <= room {
+            used += cost(*at);
+            tabs.push(*at);
+        } else {
+            folded.push(*at);
+        }
+    }
+    StripPlan { tabs, folded, done }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Each Thread's strip plan as last drawn, for the tests.
+    static DRAWN_PLANS: RefCell<HashMap<ThreadId, StripPlan>> = RefCell::new(HashMap::new());
+}
+
+/// `thread`'s strip plan as its last frame drew it.
+#[cfg(test)]
+pub(crate) fn drawn_plan(thread: ThreadId) -> Option<StripPlan> {
+    DRAWN_PLANS.with(|plans| plans.borrow().get(&thread).cloned())
+}
+
+/// The mark's slot: always in layout, `SUBJECT_MARK_W` wide, holding the
+/// mark when there is one — so a tab never changes width with its state.
+fn mark_slot(mark: Option<AnyElement>) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .size(px(theme::STATUS_DOT))
-        .children(mark.map(components::status_dot))
+        .w(px(theme::SUBJECT_MARK_W))
+        .children(mark)
 }
 
 /// One Subject tab's face on the headless tab (its role and selection are
-/// the platform's): `width` wide (`tab_width`), `CHIP_H` high. Selected, a
-/// `SELECTION` pill in `TEXT_STRONG` that goes to `SELECTION_HOVER` under the pointer
-/// (`hover_carried`); otherwise no ground, `TEXT_DIM` blending to `TEXT`
-/// through the one hover blend. No edge and no rule: the pill says which.
-fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) -> gpui_base::Tab {
-    use crate::pointer::Pointer as _;
+/// the platform's): `width` wide (`tab_width`), `SUBJECT_TAB_H` high at
+/// `R_TAB`. Selected, `paint::TAB_ACTIVE` in `TEXT_STRONG`; otherwise no
+/// ground, `TEXT_MUTED` blending to `TEXT` through the one hover blend.
+fn subject_tab_face(
+    at: usize,
+    selected: bool,
+    width: f32,
+    pad_right: f32,
+    key: SharedString,
+) -> gpui_base::Tab {
     gpui_base::Tab::new(at)
         .selected(selected)
         .justify_start()
@@ -378,22 +510,19 @@ fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) ->
         .flex_shrink_0()
         .items_center()
         .w(px(width))
-        .h(px(theme::CHIP_H))
-        .px(px(theme::SUBJECT_TAB_PAD_X))
+        .h(px(theme::SUBJECT_TAB_H))
+        .pl(px(theme::SUBJECT_TAB_PAD_L))
+        .pr(px(pad_right))
         .overflow_hidden()
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_TAB))
         .cursor_pointer()
-        .text_size(px(theme::FS_UI))
+        .text_size(px(theme::FS_LABEL))
         .line_height(px(theme::LH_UI))
         .when(selected, |tab| {
-            // The tab's own debug name is its Subject's; the pill is named
-            // by a box laid exactly over it.
+            // The tab's own debug name is its Subject's; the selected face
+            // is named by a box laid exactly over it.
             tab.relative()
-                .hover_carried(key.clone())
-                // The pill is a face on the strip: lit (rule 4).
-                .shadow(crate::components::elevation(
-                    crate::components::Elevation::Control,
-                ))
+                .bg(theme::paint::TAB_ACTIVE)
                 .text_color(rgb(theme::TEXT_STRONG))
                 .child(
                     div()
@@ -405,23 +534,49 @@ fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) ->
         .when(!selected, |tab| {
             tab.text_color(crate::motion::hover_blend(
                 &key,
-                rgb(theme::TEXT_DIM).into(),
+                rgb(theme::TEXT_MUTED).into(),
                 rgb(theme::TEXT).into(),
             ))
             .on_hover(crate::motion::hover_listener(key.clone()))
         })
 }
 
-/// A subagent tab's laid-out width: its inline padding, the label up to its
-/// cap, and the mark slot after its gap — whatever the agent's state. The
-/// overflow model and the tab's own `w` both come from here.
+/// A Subagent tab's laid-out width: its inline padding, the mark slot and
+/// its gap, and the label up to its cap — whatever the agent's state. The
+/// plan and the tab's own `w` both come from here.
 fn tab_width(label: f32) -> f32 {
-    main_tab_width(label) + theme::SUBJECT_TAB_INNER_GAP + theme::STATUS_DOT
+    2. * theme::SUBJECT_TAB_PAD_L
+        + theme::SUBJECT_MARK_W
+        + theme::SUBJECT_TAB_INNER_GAP
+        + label.min(theme::SUBJECT_LABEL_MAX_W)
 }
 
-/// Main's tab: no mark, so no slot.
+/// Main's tab: the `terminal` icon, then its label.
 fn main_tab_width(label: f32) -> f32 {
-    2. * theme::SUBJECT_TAB_PAD_X + label.min(theme::SUBJECT_LABEL_MAX_W)
+    theme::SUBJECT_TAB_PAD_L
+        + theme::SUBJECT_TAB_ICON
+        + theme::SUBJECT_TAB_INNER_GAP
+        + label
+        + theme::SUBJECT_MAIN_PAD_R
+}
+
+/// The menu button's width for a `label` (`23 done`), its separator
+/// included: the 1px rule, its margins and the strip's gaps, the padding, the
+/// `check-circle`, the label and the chevron.
+fn menu_button_width(label: f32) -> f32 {
+    2. * (theme::SUBJECT_TAB_GAP + theme::SUBJECT_SEPARATOR_MX)
+        + 1.
+        + theme::SUBJECT_TAB_PAD_L
+        + theme::SUBJECT_TAB_ICON
+        + 2. * theme::SUBJECT_MENU_GAP
+        + label
+        + theme::SUBJECT_MENU_CHEVRON
+        + theme::SUBJECT_MAIN_PAD_R
+}
+
+/// A done Subagent's result word in the menu: its state word, or `done`.
+fn result_word(agent: ferrite_core::activity::AgentView<'_>) -> &'static str {
+    status_label(agent.status(), agent.fresh()).unwrap_or(theme::words::DONE)
 }
 
 impl CockpitView {
@@ -508,6 +663,10 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// The card's tab strip (SPEC §5.3), less its right side: `Main`, a tab
+    /// per live Subagent (and the selected one), and the `N done ▾` menu
+    /// for the rest. Solo always shows it; a board Pane only while its
+    /// Thread has Subagents.
     pub(super) fn subject_strip(
         &self,
         index: usize,
@@ -519,14 +678,14 @@ impl CockpitView {
         let thread = pane.thread()?;
         let activity = self.cockpit.thread(thread)?.activity();
         let children = activity.children();
-        if children.is_empty() {
+        if children.is_empty() && self.grid_board() {
             return None;
         }
         let measure = |text: &str| {
             let run = gpui::TextRun {
                 len: text.len(),
                 font: gpui::font(theme::FONT_UI),
-                color: rgb(theme::TEXT_DIM).into(),
+                color: rgb(theme::TEXT_MUTED).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -534,75 +693,55 @@ impl CockpitView {
             f32::from(
                 window
                     .text_system()
-                    .shape_line(text.to_string().into(), px(theme::FS_UI), &[run], None)
+                    .shape_line(text.to_string().into(), px(theme::FS_LABEL), &[run], None)
                     .width,
             )
+            .ceil()
         };
-        let widths: Vec<f32> = children
+        let waiting = |agent: &ferrite_core::activity::AgentView<'_>| {
+            activity
+                .pending_decisions()
+                .iter()
+                .any(|request| request.subject.as_ref() == Some(&agent.subject()))
+        };
+        let agents: Vec<StripAgent> = children
             .iter()
-            .map(|agent| tab_width(measure(&agent_name(agent.info())).ceil()))
+            .map(|agent| StripAgent {
+                standing: Standing::of(*agent, waiting(agent)),
+                started: agent.discovered(),
+                width: tab_width(measure(&agent_name(agent.info()))),
+                selected: agent.subject() == pane.selected,
+            })
             .collect();
-        // The strip is its own row: the tabs have the whole column, less
-        // the indent that puts Main's label on the text column. The plain
-        // Tab variant packs its tabs with no gap.
-        let main_width = main_tab_width(measure("Main").ceil());
-        let selected = children
-            .iter()
-            .position(|agent| agent.subject() == pane.selected);
-        let overflow_width = |hidden: usize| {
-            if hidden == 0 {
-                0.
-            } else {
-                2. * (theme::SUBJECT_TAB_GAP + theme::CHIP_PAD_X)
-                    + measure(&format!("+{hidden}"))
-                    + theme::SUBJECT_TAB_INNER_GAP
-                    + theme::STATUS_DOT
-            }
-        };
-        // Main and the selected Subject are navigation anchors. Reserve their
-        // room first so resizing never hides the transcript being read.
-        let minimum = main_width
-            + selected.map_or(0., |at| widths[at])
-            + overflow_width(children.len() - usize::from(selected.is_some()));
-        let available = pane.subject_strip_width.max(minimum);
-        let mut visible_indices: Vec<usize> = (0..children.len()).collect();
-        let all_width = main_width + widths.iter().sum::<f32>();
-        if all_width > available {
-            visible_indices = selected.into_iter().collect();
-            let mut used = main_width + selected.map_or(0., |at| widths[at]);
-            for (at, width) in widths.iter().enumerate() {
-                if selected == Some(at) {
-                    continue;
-                }
-                let overflow = overflow_width(children.len() - visible_indices.len() - 1);
-                if used + width + overflow > available {
-                    break;
-                }
-                used += width;
-                visible_indices.push(at);
-            }
-            // Priority changes visibility, not the Provider's child order.
-            visible_indices.sort_unstable();
-        }
-        let visible: Vec<_> = visible_indices.iter().map(|at| &children[*at]).collect();
+        let main_width = main_tab_width(measure("Main"));
+        let plan = plan_strip(&agents, pane.subject_strip_width - main_width, |rows| {
+            menu_button_width(
+                measure(&format!("{rows} done")).max(measure(&format!("{rows} more"))),
+            )
+        });
+        #[cfg(test)]
+        DRAWN_PLANS.with(|plans| plans.borrow_mut().insert(thread, plan.clone()));
         let mut order = vec![Subject::Main];
-        order.extend(visible.iter().map(|agent| agent.subject()));
+        order.extend(plan.tabs.iter().map(|at| children[*at].subject()));
         let nav = Rc::new(order);
         let interaction = pane.tab_interaction.clone();
         let identity = format!("subject-tabs-{}-{:?}", thread.get(), nav);
         // Our own row, not the kit's TabBar: the kit edges its active tab
-        // and rules the bar in the global border colour. The active tab is
-        // a `SELECTION` pill and nothing else; the id carries the ordered Subjects
-        // so a reorder discards positional press state before any release.
+        // and rules the bar in the global border colour. The id carries the
+        // ordered Subjects so a reorder discards positional press state
+        // before any release.
         let selected_at = nav.iter().position(|subject| subject == &pane.selected);
         let mut tabs = gpui_base::Tabs::new(SharedString::from(identity))
             .flex()
             .items_center()
-            .h(px(theme::CHIP_H));
+            .gap(px(theme::SUBJECT_TAB_GAP))
+            .h(px(theme::SUBJECT_TAB_H));
+        let main_selected = selected_at == Some(0);
         let main = subject_tab_face(
             0,
-            selected_at == Some(0),
+            main_selected,
             main_width,
+            theme::SUBJECT_MAIN_PAD_R,
             format!("subject-tab-{}-main", thread.get()).into(),
         )
         .accessibility_label("Main transcript")
@@ -612,9 +751,23 @@ impl CockpitView {
         .debug_selector(move || format!("subject-main-{}", thread.get()))
         .child(
             div()
-                .debug_selector(move || format!("subject-main-label-{}", thread.get()))
-                .text_size(px(theme::FS_UI))
-                .child("Main"),
+                .flex()
+                .items_center()
+                .gap(px(theme::SUBJECT_TAB_INNER_GAP))
+                .child(crate::icons::icon(
+                    crate::icons::TERMINAL,
+                    theme::SUBJECT_TAB_ICON,
+                    if main_selected {
+                        theme::TEXT_STRONG
+                    } else {
+                        theme::TEXT_MUTED
+                    },
+                ))
+                .child(
+                    div()
+                        .debug_selector(move || format!("subject-main-label-{}", thread.get()))
+                        .child("Main"),
+                ),
         );
         tabs = tabs.child(self.subject_tab(
             main,
@@ -625,26 +778,20 @@ impl CockpitView {
             interaction.clone(),
             cx,
         ));
-        for (at, agent) in visible.iter().enumerate() {
+        for (place, at) in plan.tabs.iter().enumerate() {
+            let agent = children[*at];
             let subject = agent.subject();
             let name = agent_name(agent.info());
-            let waiting = activity
-                .pending_decisions()
-                .iter()
-                .any(|request| request.subject.as_ref() == Some(&subject));
-            let mark = subject_mark(agent, waiting);
-            // The mark leads the label, in a slot every tab keeps.
             let content = div()
                 .flex()
                 .items_center()
                 .gap(px(theme::SUBJECT_TAB_INNER_GAP))
                 .min_w_0()
-                .child(mark_slot(mark))
+                .child(mark_slot(agents[*at].standing.mark(agent.status())))
                 .child(
                     div()
                         .max_w(px(theme::SUBJECT_LABEL_MAX_W))
                         .truncate()
-                        .text_size(px(theme::FS_UI))
                         .child(name.clone()),
                 );
             let selector = format!(
@@ -657,9 +804,10 @@ impl CockpitView {
             );
             let tooltip = name_and_status(&name, agent.status(), agent.fresh());
             let tab = subject_tab_face(
-                at + 1,
-                selected_at == Some(at + 1),
-                widths[visible_indices[at]],
+                place + 1,
+                selected_at == Some(place + 1),
+                agents[*at].width,
+                theme::SUBJECT_TAB_PAD_L,
                 format!("{selector}-hover").into(),
             )
             .accessibility_label(tooltip.clone())
@@ -672,7 +820,7 @@ impl CockpitView {
                 tab,
                 thread,
                 subject,
-                at + 1,
+                place + 1,
                 nav.clone(),
                 interaction.clone(),
                 cx,
@@ -680,90 +828,27 @@ impl CockpitView {
         }
         let mut strip = div()
             .id(("subject-strip", thread.get()))
+            .debug_selector(move || format!("subject-strip-{}", thread.get()))
             .font_family(theme::FONT_UI)
             .font_weight(theme::W_BODY)
             .flex()
             .items_center()
             .flex_1()
-            .min_w(px(minimum))
-            .h(px(theme::SUBJECT_STRIP_H))
-            .debug_selector(move || format!("subject-strip-{}", thread.get()))
+            .min_w_0()
+            .gap(px(theme::SUBJECT_TAB_GAP))
+            .h(px(theme::SUBJECT_TAB_H))
             .child(tabs);
-        if visible_indices.len() < children.len() {
-            let hidden: Vec<_> = children
-                .iter()
-                .enumerate()
-                .filter(|(at, _)| !visible_indices.contains(at))
-                .map(|(_, agent)| agent)
-                .collect();
-            let choices = hidden
-                .iter()
-                .map(|agent| components::Choice {
-                    label: name_and_status(
-                        &agent_name(agent.info()),
-                        agent.status(),
-                        agent.fresh(),
-                    )
-                    .into(),
-                    checked: agent.subject() == pane.selected,
-                    ..Default::default()
-                })
-                .collect();
-            let subjects: Vec<_> = hidden.iter().map(|agent| agent.subject()).collect();
-            // A request waiting behind the overflow still shows its dot.
-            let hidden_waiting = hidden.iter().any(|agent| {
-                activity
-                    .pending_decisions()
-                    .iter()
-                    .any(|request| request.subject.as_ref() == Some(&agent.subject()))
-            });
-            let weak = cx.entity().downgrade();
-            let picking = weak.clone();
-            strip = strip.child(components::ChoiceMenu {
-                id: format!("subject-overflow-{}", thread.get()).into(),
-                // The strip runs across the Pane's top: the list drops below it.
-                anchor: gpui::Anchor::TopLeft,
-                trigger: components::button(("subject-overflow", thread.get()))
-                    .tab_stop(true)
-                    .h(px(theme::CHIP_H))
-                    .px(px(theme::CHIP_PAD_X))
-                    .mx(px(theme::SUBJECT_TAB_GAP))
-                    .rounded(px(theme::R_CHIP))
-                    .accessibility_label("More subagents")
-                    .tooltip("More subagents")
-                    .debug_selector(move || format!("subject-overflow-{}", thread.get()))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(theme::SUBJECT_TAB_INNER_GAP))
-                            .text_size(px(theme::FS_UI))
-                            .line_height(px(theme::LH_UI))
-                            .text_color(rgb(theme::TEXT_DIM))
-                            .child(mark_slot(hidden_waiting.then_some(theme::ATTENTION)))
-                            .child(components::tabular(
-                                div().child(format!("+{}", hidden.len())),
-                            )),
-                    ),
-                choices,
-                open: pane.agent_menu_open,
-                return_focus: pane.transcript_focus.clone(),
-                on_open: Rc::new(move |open, _, cx| {
-                    let _ = weak.update(cx, |view, cx| {
-                        if let Some(index) = view.pane_for(thread) {
-                            view.panes[index].agent_menu_open = open;
-                            cx.notify();
-                        }
-                    });
-                }),
-                on_pick: Rc::new(move |at, window, cx| {
-                    if let Some(subject) = subjects.get(at) {
-                        let _ = picking.update(cx, |view, cx| {
-                            view.select_subject(thread, subject.clone(), window, cx)
-                        });
-                    }
-                }),
-            });
+        if plan.menu_len() > 0 {
+            strip = strip
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(1.))
+                        .h(px(theme::SUBJECT_SEPARATOR_H))
+                        .mx(px(theme::SUBJECT_SEPARATOR_MX))
+                        .bg(theme::paint::HAIRLINE),
+                )
+                .child(self.subject_menu(index, thread, &children, &plan, cx));
         }
         let weak = cx.entity().downgrade();
         let measured_width = pane.subject_strip_width;
@@ -785,6 +870,158 @@ impl CockpitView {
                         });
                     }
                 })
+                .into_any_element(),
+        )
+    }
+
+    /// The `N done ▾` menu (SPEC §5.3): the done Subagents newest first,
+    /// each with its result word and its last turn's time where the
+    /// transcript holds one; under a `Live` heading first, the live tabs
+    /// that did not fit, and then the button reads `N more ▾`. Picking a
+    /// row selects that Subagent's tab.
+    fn subject_menu(
+        &self,
+        index: usize,
+        thread: ThreadId,
+        children: &[ferrite_core::activity::AgentView<'_>],
+        plan: &StripPlan,
+        cx: &mut Context<Self>,
+    ) -> components::ChoiceMenu {
+        let pane = &self.panes[index];
+        let mut choices = Vec::new();
+        let mut subjects = Vec::new();
+        let section = |title: &'static str,
+                       choices: &mut Vec<components::Choice>,
+                       subjects: &mut Vec<Option<Subject>>| {
+            choices.push(components::Choice {
+                label: title.into(),
+                section: true,
+                ..Default::default()
+            });
+            subjects.push(None);
+        };
+        let row = |agent: ferrite_core::activity::AgentView<'_>, word: &str| {
+            let time = agent.transcript().last_working_ms().map(|ms| {
+                ferrite_core::progress::duration_label(std::time::Duration::from_millis(ms))
+            });
+            components::Choice {
+                label: agent_name(agent.info()).into(),
+                detail: Some(match time {
+                    Some(time) => format!("{word} \u{b7} {time}").into(),
+                    None => SharedString::from(word.to_string()),
+                }),
+                ..Default::default()
+            }
+        };
+        if !plan.folded.is_empty() {
+            section("Live", &mut choices, &mut subjects);
+            for at in &plan.folded {
+                let agent = children[*at];
+                let word =
+                    status_label(agent.status(), agent.fresh()).unwrap_or(theme::words::WORKING);
+                choices.push(row(agent, word));
+                subjects.push(Some(agent.subject()));
+            }
+            if !plan.done.is_empty() {
+                section("Done", &mut choices, &mut subjects);
+            }
+        }
+        for at in &plan.done {
+            let agent = children[*at];
+            choices.push(row(agent, result_word(agent)));
+            subjects.push(Some(agent.subject()));
+        }
+        let label = plan.menu_label();
+        let weak = cx.entity().downgrade();
+        let picking = weak.clone();
+        components::ChoiceMenu {
+            id: format!("subject-overflow-{}", thread.get()).into(),
+            // The strip runs across the card's top: the list drops below it.
+            anchor: gpui::Anchor::TopLeft,
+            trigger: components::button(("subject-overflow", thread.get()))
+                .tab_stop(true)
+                .h(px(theme::SUBJECT_TAB_H))
+                .pl(px(theme::SUBJECT_TAB_PAD_L))
+                .pr(px(theme::SUBJECT_MAIN_PAD_R))
+                .rounded(px(theme::R_TAB))
+                .accessibility_label("More subagents")
+                .tooltip("More subagents")
+                .debug_selector(move || format!("subject-overflow-{}", thread.get()))
+                .child(
+                    div()
+                        .debug_selector(move || format!("subject-overflow-label-{}", thread.get()))
+                        .flex()
+                        .items_center()
+                        .gap(px(theme::SUBJECT_MENU_GAP))
+                        .text_size(px(theme::FS_LABEL))
+                        .line_height(px(theme::LH_UI))
+                        .text_color(rgb(theme::TEXT_DIM))
+                        .child(crate::icons::icon(
+                            crate::icons::CHECK_CIRCLE,
+                            theme::SUBJECT_TAB_ICON,
+                            theme::TEXT_DIM,
+                        ))
+                        .child(components::tabular(div().child(label)))
+                        .child(crate::icons::icon(
+                            crate::icons::CHEVRON_DOWN,
+                            theme::SUBJECT_MENU_CHEVRON,
+                            theme::TEXT_DIM,
+                        )),
+                ),
+            choices,
+            open: pane.agent_menu_open,
+            return_focus: pane.transcript_focus.clone(),
+            on_open: Rc::new(move |open, _, cx| {
+                let _ = weak.update(cx, |view, cx| {
+                    if let Some(index) = view.pane_for(thread) {
+                        view.panes[index].agent_menu_open = open;
+                        cx.notify();
+                    }
+                });
+            }),
+            on_pick: Rc::new(move |at, window, cx| {
+                if let Some(Some(subject)) = subjects.get(at) {
+                    let _ = picking.update(cx, |view, cx| {
+                        view.select_subject(thread, subject.clone(), window, cx)
+                    });
+                }
+            }),
+        }
+    }
+
+    /// The strip's split-right button (SPEC §5.3): opens a Thread beside
+    /// this one (`open_beside`, `Beside::Thread`) through the palette,
+    /// whose ⏎ then opens the picked Thread beside rather than in place.
+    /// Solo only; there is no split down while the Beside slot has one
+    /// axis.
+    pub(super) fn split_beside_button(
+        &self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let thread = self.panes.get(index)?.thread()?;
+        if self.grid_board() {
+            return None;
+        }
+        Some(
+            components::button(("split-beside", thread.get()))
+                .debug_selector(move || format!("split-beside-{}", thread.get()))
+                .flex_shrink_0()
+                .w(px(theme::ICON_BUTTON))
+                .h(px(theme::ICON_BUTTON))
+                .p_0()
+                .rounded(px(theme::R_TAB))
+                .accessibility_label("Split right")
+                .tooltip("Open a thread beside")
+                .child(crate::icons::icon(
+                    crate::icons::SPLIT_RIGHT,
+                    theme::ICON_BUTTON_GLYPH,
+                    theme::TEXT_DIM,
+                ))
+                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.open_palette_beside(window, cx);
+                }))
                 .into_any_element(),
         )
     }
@@ -940,14 +1177,14 @@ impl CockpitView {
             (None, None) => text,
         };
         // A read-only line in the Composer's slot: one fixed
-        // `COMPOSER_GRID_H` row on the Pane's own ground — no box, no edge,
-        // no `❯` (nothing to type here) — its words on the text column and
-        // the way back to Main at the right.
+        // `CHILD_FOOTER_H` row on the card's own ground — no box, no edge,
+        // nothing to type here — its words on the text column in
+        // `TEXT_DIM` and `Back to Main`, a secondary button, at the right.
         let footer = div()
             .debug_selector(move || format!("child-footer-{}", thread.get()))
             .flex()
             .items_center()
-            .h(px(theme::COMPOSER_GRID_H))
+            .h(px(theme::CHILD_FOOTER_H))
             .pl(px(theme::BOX_INSET_X + theme::GUTTER_W))
             .pr(px(theme::COMPOSER_PAD_END))
             .font_family(theme::FONT_UI)
@@ -975,12 +1212,19 @@ impl CockpitView {
                         )
                     })
                     .child(
-                        components::quiet_button(("return-main", thread.get()), "Back to Main", cx)
-                            .tab_stop(true)
-                            .debug_selector(move || format!("return-main-{}", thread.get()))
-                            .on_click(cx.listener(move |view, _, window, cx| {
+                        components::secondary_button(
+                            ("return-main", thread.get()),
+                            None,
+                            "Back to Main",
+                            cx,
+                        )
+                        .tab_stop(true)
+                        .debug_selector(move || format!("return-main-{}", thread.get()))
+                        .on_click(cx.listener(
+                            move |view, _, window, cx| {
                                 view.select_subject(thread, Subject::Main, window, cx)
-                            })),
+                            },
+                        )),
                     ),
             );
         // The Composer's slot: the Pane's inline padding, the reading
@@ -2612,22 +2856,78 @@ mod status_word_tests {
         for label in [0., 24., 80., 400.] {
             assert!(near(
                 tab_width(label),
-                2. * theme::SUBJECT_TAB_PAD_X
-                    + f32::min(label, theme::SUBJECT_LABEL_MAX_W)
+                2. * theme::SUBJECT_TAB_PAD_L
+                    + theme::SUBJECT_MARK_W
                     + theme::SUBJECT_TAB_INNER_GAP
-                    + theme::STATUS_DOT
+                    + f32::min(label, theme::SUBJECT_LABEL_MAX_W)
             ));
-            assert!(
-                near(
-                    tab_width(label) - main_tab_width(label),
-                    theme::SUBJECT_TAB_INNER_GAP + theme::STATUS_DOT,
-                ),
-                "Main carries no slot"
-            );
+        }
+        // Main: the mockup's 67px tab around a 27px `Main`.
+        assert!(near(main_tab_width(27.), 66.));
+    }
+
+    fn agent(standing: Standing, started: u64) -> StripAgent {
+        StripAgent {
+            standing,
+            started,
+            width: 100.,
+            selected: false,
         }
     }
 
-    /// Nothing on the strip or a Decision loops: no repeating animation.
+    /// Live tabs run waiting, working, failing, each by start; the rest
+    /// are the menu's, newest first.
+    #[test]
+    fn the_strip_orders_live_tabs_and_lists_done_newest_first() {
+        let agents = [
+            agent(Standing::Working, 1),
+            agent(Standing::Done, 2),
+            agent(Standing::Failing, 3),
+            agent(Standing::Waiting, 4),
+            agent(Standing::Done, 5),
+            agent(Standing::Working, 6),
+        ];
+        let plan = plan_strip(&agents, 10_000., |_| 80.);
+        assert_eq!(plan.tabs, [3, 0, 5, 2]);
+        assert!(plan.folded.is_empty());
+        assert_eq!(plan.done, [4, 1]);
+        assert_eq!(plan.menu_label(), "2 done");
+    }
+
+    /// A done tab the operator is reading stays, after the live ones.
+    #[test]
+    fn the_selected_done_tab_sticks() {
+        let mut agents = [agent(Standing::Done, 1), agent(Standing::Working, 2)];
+        agents[0].selected = true;
+        let plan = plan_strip(&agents, 10_000., |_| 80.);
+        assert_eq!(plan.tabs, [1, 0]);
+        assert!(plan.done.is_empty());
+        assert_eq!(plan.menu_len(), 0, "no menu button");
+    }
+
+    /// Live tabs that overflow fold, tail first, into the menu, which then
+    /// reads `N more`; the selected tab always shows.
+    #[test]
+    fn overflowing_live_tabs_fold_into_the_menu_keeping_the_selected() {
+        let mut agents: Vec<_> = (0..5).map(|at| agent(Standing::Working, at)).collect();
+        agents.push(agent(Standing::Done, 9));
+        agents[4].selected = true;
+        let gap = theme::SUBJECT_TAB_GAP;
+        // Room for the selected tab, one more and the menu.
+        let room = 2. * (100. + gap) + 80.;
+        let plan = plan_strip(&agents, room, |_| 80.);
+        assert_eq!(plan.tabs, [0, 4]);
+        assert_eq!(plan.folded, [1, 2, 3]);
+        assert_eq!(plan.done, [5]);
+        assert_eq!(plan.menu_label(), "4 more");
+        // No room at all: the selected tab alone.
+        let plan = plan_strip(&agents, 0., |_| 80.);
+        assert_eq!(plan.tabs, [4]);
+        assert_eq!(plan.folded, [0, 1, 2, 3]);
+    }
+
+    /// Nothing here schedules a loop of its own: a working tab's spinner is
+    /// the shared one (`nav::mark`).
     #[test]
     fn subagents_schedule_no_loops() {
         let source = include_str!("subagents.rs");

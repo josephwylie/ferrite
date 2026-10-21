@@ -17,6 +17,9 @@ use crate::shortcuts::Shortcuts;
 /// while they are up, and the focus the notifications list's keys ride.
 pub(super) struct Floats {
     pub palette: Option<Entity<Palette>>,
+    /// The palette is open to pick a Thread to open beside (the tab
+    /// strip's split button): ⏎ on a Thread row does what ⇥ does.
+    pub beside: bool,
     pub shortcuts: Option<Entity<Shortcuts>>,
     pub notice_focus: FocusHandle,
 }
@@ -25,6 +28,7 @@ impl Floats {
     pub(super) fn new(cx: &mut Context<CockpitView>) -> Self {
         Self {
             palette: None,
+            beside: false,
             shortcuts: None,
             notice_focus: cx.focus_handle(),
         }
@@ -233,8 +237,16 @@ impl CockpitView {
         let palette = cx.new(|cx| Palette::new(scope, rows, query, cx));
         let focus = palette.read(cx).input.focus_handle(cx);
         self.floats.palette = Some(palette);
+        self.floats.beside = false;
         window.focus(&focus, cx);
         cx.notify();
+    }
+
+    /// The palette, to pick a Thread to open beside the focused Pane (the
+    /// tab strip's split-right button, `Beside::Thread`).
+    pub(super) fn open_palette_beside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette(PaletteScope::All, "", window, cx);
+        self.floats.beside = true;
     }
 
     /// Shut the palette without touching anything else (esc, the veil): a
@@ -264,6 +276,7 @@ impl CockpitView {
         if preview && !matches!(row.act, Act::Thread(_)) {
             return;
         }
+        let preview = preview || self.floats.beside;
         self.floats.palette = None;
         self.run_palette_act(row.act, preview, window, cx);
         cx.notify();

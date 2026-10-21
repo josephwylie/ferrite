@@ -614,9 +614,6 @@ pub struct PaneFacts<'a> {
     /// More than one Pane is on the board, so which one holds the keyboard
     /// needs showing: only then does focus draw the `FOCUS_RING` edge.
     pub show_focus: bool,
-    /// The Pane is wider than the reading column, so its Solo tab strip
-    /// lays out on the column's grid.
-    pub head_column: bool,
     /// This Thread's provider: the Group head's mark at its right.
     pub provider_mark: Option<Provider>,
     /// This Pane's docked Decision merges into its live Composer (one
@@ -654,7 +651,11 @@ pub struct PaneWiring {
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
     pub title: Option<AnyElement>,
+    /// The tab strip's tabs and its `N done` menu (`subject_strip`); None
+    /// draws no strip.
     pub agents: Option<AnyElement>,
+    /// The strip's split-right button (Solo).
+    pub split: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
     /// A question too big for this Pane's body: it answers in fullscreen
     /// (the expand key), and the body keeps its transcript meanwhile.
@@ -849,7 +850,6 @@ pub fn render_pane(
         editing,
         drop_target,
         show_focus,
-        head_column,
         provider_mark,
         decision_joined,
         cell_width,
@@ -865,6 +865,7 @@ pub fn render_pane(
         menu,
         title,
         agents,
+        split,
         activity_decisions,
         expand_question,
         question_measurement,
@@ -1006,7 +1007,7 @@ pub fn render_pane(
     // own either way.
     let mut pane = shell.children(head(title));
     if let Some(agents) = agents {
-        pane = pane.child(tab_strip(key, agents, l1_tasks(&mut cx), head_column));
+        pane = pane.child(tab_strip(key, agents, l1_tasks(&mut cx), split));
     }
     match transcript {
         Some(_) => {
@@ -2213,45 +2214,40 @@ pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div
     .into_any_element()
 }
 
-/// The subagent tabs' own strip, under the head (or at the card's top edge
-/// in Solo, which has no head): one `PANE_HEAD_H` row closed by the head's
-/// rule, the tabs taking the width and the plan's meter at the right. It
-/// exists only while tabs do.
-fn tab_strip(key: u64, agents: AnyElement, tasks: Option<AnyElement>, column: bool) -> Div {
-    let row = div()
-        .flex()
-        .items_center()
-        .w_full()
-        .h_full()
-        .min_w_0()
-        .gap(px(theme::HEAD_CLUSTER_GAP))
-        // Main's pill hangs its inline padding left of the text column, so
-        // its label starts where the transcript's text does.
-        .pl(px(theme::GUTTER_W - theme::SUBJECT_TAB_PAD_X))
-        .child(agents)
-        .children(tasks.map(|tasks| div().flex_shrink_0().child(tasks)));
-    let strip = div()
+/// The card's tab strip (SPEC §5.3), under the head on a board and at the
+/// card's top edge in Solo: one `SUBJECT_STRIP_H` row padded
+/// `SUBJECT_STRIP_PAD_X`, closed by a `HAIRLINE` — the tabs and their menu
+/// taking the width, then the plan's meter in 12 `TEXT_DIM` and the split
+/// button at the right.
+fn tab_strip(
+    key: u64,
+    agents: AnyElement,
+    tasks: Option<AnyElement>,
+    split: Option<AnyElement>,
+) -> Div {
+    div()
         .debug_selector(move || format!("pane-tabs-{key}"))
         .flex()
         .flex_shrink_0()
         .items_center()
-        .h(px(theme::PANE_HEAD_H))
-        .px(px(theme::PANE_PAD_X))
+        .gap(px(theme::SUBJECT_TAB_GAP))
+        // The rule lies under the row's 38, as the mockup's border does.
+        .h(px(theme::SUBJECT_STRIP_H + 1.))
+        .px(px(theme::SUBJECT_STRIP_PAD_X))
         .border_b_1()
-        .border_color(theme::paint::LINE)
-        .text_size(px(theme::FS_UI))
+        .border_color(theme::paint::HAIRLINE)
+        .text_size(px(theme::FS_LABEL))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_DIM));
-    let inset = div()
-        .h_full()
-        .w_full()
-        .px(px(theme::BOX_INSET_X))
-        .child(row);
-    if column {
-        strip.child(components::reading_column(inset))
-    } else {
-        strip.child(inset)
-    }
+        .text_color(rgb(TEXT_DIM))
+        .child(agents)
+        .children(tasks.map(|tasks| {
+            div()
+                .flex_shrink_0()
+                .px(px(theme::SPACE_2))
+                .text_size(px(theme::FS_META))
+                .child(tasks)
+        }))
+        .children(split)
 }
 
 /// The floor a head title keeps however narrow its head: `HEAD_TITLE_MIN_W`,
