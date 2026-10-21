@@ -180,12 +180,11 @@ fn a_three_by_three_is_tiles_and_a_two_by_two_transcripts(cx: &mut TestAppContex
     assert!(cx.debug_bounds("wall-tile").is_none());
 }
 
-/// F-7: a quick answer is 22px outside (a line and its two borders) and as
-/// wide as its words and a cell of padding each side — `1 allow` is 72px —
-/// its first box two cells in from the tile's edge, its row half a row
-/// above the tile's foot.
+/// F-7: a quick answer is 22px tall and as wide as its words and a cell
+/// of padding each side, edgeless; its first button two cells in from the
+/// tile's edge, its row half a row above the tile's foot.
 #[gpui::test]
-fn a_quick_answer_box_is_one_line_and_its_borders(cx: &mut TestAppContext) {
+fn a_quick_answer_is_22px_and_as_wide_as_its_words(cx: &mut TestAppContext) {
     let (view, fake, cx, _group) = board_of("frame-quick-box", 9, cx);
     fake.streams.borrow()[1]
         .send(decision("quick-box"))
@@ -204,7 +203,7 @@ fn a_quick_answer_box_is_one_line_and_its_borders(cx: &mut TestAppContext) {
     });
     let allow = bounds(cx, format!("wall-answer-{key}-allow"));
     assert_eq!(allow.size.height, px(crate::theme::QUICK_ANSWER_H));
-    let width = 7.0 * crate::theme::CH + 2.0 * crate::theme::QUICK_ANSWER_PAD_X + 2.0;
+    let width = 7.0 * crate::theme::CH + 2.0 * crate::theme::QUICK_ANSWER_PAD_X;
     assert!(
         (allow.size.width - px(width)).abs() <= px(1.),
         "`1 allow` is {width}px: {allow:?}"

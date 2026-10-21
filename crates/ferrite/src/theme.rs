@@ -1827,9 +1827,9 @@ pub const WALL_PAD_X: f32 = 2.0 * CH;
 /// How many rows of a tile's last transcript lines it shows, dim, under its
 /// state word (a wrapped prose line spends two).
 pub const WALL_LINES: usize = 3;
-/// A quick answer at the wall: `1 allow` in a 1px `paint::LINE2` box 22px
-/// tall outside (one line and its two borders), a cell of padding each
-/// side, a cell between boxes, half a row above the row.
+/// A quick answer at the wall: `1 allow` as an edgeless secondary button,
+/// 22px tall (a line and a pixel above and below), a cell of padding each
+/// side, a cell between buttons, half a row above the row.
 pub const QUICK_ANSWER_H: f32 = LH_UI + 2.0;
 pub const QUICK_ANSWER_PAD_X: f32 = CH;
 pub const QUICK_ANSWER_GAP: f32 = CH;

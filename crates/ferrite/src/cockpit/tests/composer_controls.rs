@@ -239,14 +239,29 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
         );
         view.pick(pick, window, cx);
         let menu = view.popover.as_ref().expect("explanation stays open");
-        assert_eq!(menu.rows[0].name, TUNING_BUSY_HINT);
+        assert_eq!(menu.hold, Some(TUNING_BUSY_HINT));
         assert!(menu.rows.iter().all(|row| row.inert));
         assert!(menu.rows.iter().any(|row| row.active));
         assert_eq!(view.cockpit.thread(thread).unwrap().model(), Some("sonnet"));
         view.open_effort_picker(thread, cx);
         let menu = view.popover.as_ref().unwrap();
-        assert_eq!(menu.rows[0].name, TUNING_BUSY_HINT);
+        assert_eq!(menu.hold, Some(TUNING_BUSY_HINT));
         assert!(menu.rows.iter().all(|row| row.inert));
+        // SPEC §5.5: each busy choice is disabled with the reason in its
+        // tooltip; no inert note row says it inside the menu.
+        let drawn = view.choice_menu(
+            0,
+            Kind::Effort,
+            gpui::component::button::Button::new("effort-trigger"),
+            cx,
+        );
+        assert!(!drawn.choices.is_empty());
+        for choice in &drawn.choices {
+            assert!(choice.disabled, "{} is disabled", choice.label);
+            assert_eq!(choice.why.as_deref(), Some(TUNING_BUSY_HINT));
+            assert_ne!(choice.label.as_ref(), TUNING_BUSY_HINT);
+        }
+        let menu = view.popover.as_ref().unwrap();
         assert_eq!(
             menu.rows.iter().find(|row| row.active).unwrap().name,
             "High"
@@ -267,7 +282,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
             .popover
             .as_ref()
             .expect("finishing keeps the picker open");
-        assert_ne!(menu.rows[0].name, TUNING_BUSY_HINT);
+        assert_eq!(menu.hold, None);
         assert!(menu.rows.iter().any(|row| !row.inert));
         assert_eq!(
             menu.rows.iter().find(|row| row.active).unwrap().name,
@@ -290,7 +305,7 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
         assert_eq!(view.cockpit.thread(thread).unwrap().effort(), None);
         view.open_effort_picker(thread, cx);
         let menu = view.popover.as_ref().unwrap();
-        assert_eq!(menu.rows[0].name, TUNING_PENDING_HINT);
+        assert_eq!(menu.hold, Some(TUNING_PENDING_HINT));
         assert!(menu.rows.iter().all(|row| row.inert));
     });
     fake.effort_answers
@@ -307,7 +322,7 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
             .popover
             .as_ref()
             .expect("the answer keeps the picker open");
-        assert_ne!(menu.rows[0].name, TUNING_PENDING_HINT);
+        assert_eq!(menu.hold, None);
         assert!(menu.rows.iter().any(|row| !row.inert));
         assert_eq!(
             menu.rows.iter().find(|row| row.active).unwrap().name,

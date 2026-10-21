@@ -383,7 +383,7 @@ impl CockpitView {
             .when(has_recent, |board| {
                 board
                     .child(div().flex_shrink_0().h(px(2.0 * ROW)))
-                    .child(div().text_color(rgb(TEXT_DIM)).child("recent"))
+                    .child(div().text_color(rgb(TEXT_DIM)).child("Recent"))
                     .child(div().flex_shrink_0().h(px(HALF_ROW)))
                     .child(rows_list)
             })

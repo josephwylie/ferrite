@@ -400,13 +400,13 @@ impl CockpitView {
                     .collect();
                 self.show_sessions(
                     rows,
-                    format!("no CLI sessions found under {roots}").into(),
+                    format!("No CLI sessions found under {roots}").into(),
                     cx,
                 );
             }
             Err(error) => self.show_sessions(
                 Vec::new(),
-                format!("could not list sessions: {error}").into(),
+                format!("Could not list sessions: {error}").into(),
                 cx,
             ),
         }
@@ -461,7 +461,7 @@ impl CockpitView {
                 .cockpit
                 .groups()
                 .get(group)
-                .map(|group| SharedString::from(group.display_title().to_lowercase())),
+                .map(|group| SharedString::from(group.display_title())),
             View::Solo => None,
         };
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
@@ -571,8 +571,7 @@ impl CockpitView {
                     _ => self
                         .facts
                         .get(thread)
-                        .and_then(|facts| facts.project_label.clone())
-                        .map(|label| SharedString::from(label.to_lowercase())),
+                        .and_then(|facts| facts.project_label.clone()),
                 };
                 let name = if row.status == nav::RowStatus::Parked {
                     SharedString::from(format!("Parked \u{b7} {}", row.name))
@@ -614,7 +613,7 @@ impl CockpitView {
                 let noun = if count == 1 { "thread" } else { "threads" };
                 Some(PaletteRow {
                     section: PaletteSection::Projects,
-                    name: project.title.to_lowercase().into(),
+                    name: project.title.clone().into(),
                     context: format!("{count} {noun}").into(),
                     status: Some(status),
                     detail: None,
@@ -666,11 +665,7 @@ impl CockpitView {
                     })
                     .collect();
                 let scope: SharedString = if projects.len() == 1 {
-                    projects
-                        .into_iter()
-                        .next()
-                        .map(|label| SharedString::from(label.to_lowercase()))
-                        .unwrap_or_default()
+                    projects.into_iter().next().unwrap_or_default()
                 } else {
                     "all projects".into()
                 };
@@ -757,77 +752,77 @@ impl CockpitView {
             .map(|(keys, _, _)| crate::components::spell_chord(&keys));
         add(
             focused.is_some(),
-            "park thread".into(),
+            "Park thread".into(),
             "",
             bound_chord_in("cockpit::CloseThread", Some("ComposerEmpty")),
             Command::ParkThread,
         );
         add(
             parked,
-            "show parked".into(),
+            "Show parked".into(),
             "",
             bound_chord("palette::ShowParked"),
             Command::ShowParked,
         );
         add(
             focused.is_some_and(|thread| self.thread_path(thread).is_some()),
-            "review branch".into(),
+            "Review branch".into(),
             "against the default branch",
             bound_chord("palette::ReviewBranch"),
             Command::ReviewBranch,
         );
         add(
             focused.is_some_and(|thread| self.thread_path(thread).is_some()),
-            "review changes".into(),
+            "Review changes".into(),
             "comment on the diff",
             None,
             Command::ReviewChanges,
         );
         add(
             true,
-            "new thread".into(),
+            "New thread".into(),
             "",
             bound_chord("cockpit::NewThread"),
             Command::NewThread,
         );
         add(
             true,
-            "new worktree thread".into(),
+            "New worktree thread".into(),
             "",
             bound_chord("cockpit::NewWorktreeThread"),
             Command::NewWorktreeThread,
         );
         add(
             true,
-            "import a session".into(),
+            "Import a session".into(),
             "/import",
             None,
             Command::ImportSession,
         );
         add(
             in_group,
-            "new thread in this group".into(),
+            "New thread in this group".into(),
             "",
             new_thread_in_group,
             Command::NewThreadInGroup,
         );
         add(
             focused.is_some_and(|thread| self.cockpit.groups().of(thread).is_none()),
-            "new group".into(),
+            "New group".into(),
             "",
             bound_chord("cockpit::NewGroup"),
             Command::NewGroup,
         );
         add(
             self.cockpit.groups().iter().next().is_some(),
-            "open a group".into(),
+            "Open a group".into(),
             "",
             bound_chord("palette::OpenGroups"),
             Command::OpenGroup,
         );
         add(
             parked,
-            "reopen last".into(),
+            "Reopen last".into(),
             "",
             bound_chord("cockpit::ReopenThread"),
             Command::ReopenLast,
@@ -842,7 +837,7 @@ impl CockpitView {
         for (project, title) in &projects {
             add(
                 true,
-                format!("new thread in {}", title.to_lowercase()),
+                format!("New thread in {title}"),
                 "",
                 None,
                 Command::NewThreadIn(*project),
@@ -850,7 +845,7 @@ impl CockpitView {
         }
         add(
             self.nav_filter.is_some(),
-            "filter: all projects".into(),
+            "Filter: all projects".into(),
             "",
             None,
             Command::FilterAll,
@@ -858,7 +853,7 @@ impl CockpitView {
         for (project, title) in &projects {
             add(
                 self.nav_filter != Some(*project),
-                format!("filter: {}", title.to_lowercase()),
+                format!("Filter: {title}"),
                 "",
                 None,
                 Command::FilterProject(*project),
@@ -867,30 +862,30 @@ impl CockpitView {
         let order = self.prefs.settings.thread_list_order;
         add(
             order != ThreadListOrder::Created,
-            "sort: created".into(),
+            "Sort: created".into(),
             "",
             None,
             Command::SortCreated,
         );
         add(
             order != ThreadListOrder::Recent,
-            "sort: recent".into(),
+            "Sort: recent".into(),
             "",
             None,
             Command::SortRecent,
         );
         add(
             order != ThreadListOrder::Attention,
-            "sort: attention".into(),
+            "Sort: attention".into(),
             "what needs you first",
             None,
             Command::SortAttention,
         );
-        add(true, "new project".into(), "", None, Command::NewProject);
+        add(true, "New project".into(), "", None, Command::NewProject);
         for (project, title) in &projects {
             add(
                 true,
-                format!("edit project {}", title.to_lowercase()),
+                format!("Edit project {title}"),
                 "",
                 None,
                 Command::EditProject(*project),
@@ -898,42 +893,42 @@ impl CockpitView {
         }
         add(
             true,
-            "settings".into(),
+            "Settings".into(),
             "",
             bound_chord("cockpit::OpenSettings"),
             Command::Settings,
         );
         add(
             true,
-            "toggle sidebar".into(),
+            "Toggle sidebar".into(),
             "",
             bound_chord("cockpit::ToggleNav"),
             Command::ToggleSidebar,
         );
         add(
             !self.panes.is_empty(),
-            "fullscreen pane".into(),
+            "Fullscreen pane".into(),
             "",
             bound_chord("cockpit::ToggleFullscreen"),
             Command::FullscreenPane,
         );
         add(
             size.step(1) != size,
-            "text larger".into(),
+            "Text larger".into(),
             "",
             bound_chord("cockpit::TextLarger"),
             Command::TextLarger,
         );
         add(
             size.step(-1) != size,
-            "text smaller".into(),
+            "Text smaller".into(),
             "",
             bound_chord("cockpit::TextSmaller"),
             Command::TextSmaller,
         );
         add(
             size != ferrite_core::settings::ReadingSize::STANDARD,
-            "text reset".into(),
+            "Text reset".into(),
             "",
             bound_chord("cockpit::TextReset"),
             Command::TextReset,
@@ -943,14 +938,14 @@ impl CockpitView {
         let thinking = self.prefs.settings.show_thinking;
         add(
             !thinking,
-            "show thinking".into(),
+            "Show thinking".into(),
             "",
             None,
             Command::ShowThinking,
         );
         add(
             thinking,
-            "hide thinking".into(),
+            "Hide thinking".into(),
             "",
             None,
             Command::HideThinking,
@@ -959,21 +954,21 @@ impl CockpitView {
         let smart = self.prefs.settings.smart_filtering;
         add(
             !smart,
-            "smart filtering on".into(),
+            "Smart filtering on".into(),
             "",
             None,
             Command::SmartFilteringOn,
         );
         add(
             smart,
-            "smart filtering off".into(),
+            "Smart filtering off".into(),
             "",
             None,
             Command::SmartFilteringOff,
         );
         add(
             true,
-            "notifications".into(),
+            "Needs you".into(),
             "",
             bound_chord("cockpit::ToggleNotifications"),
             Command::Notifications,
@@ -982,51 +977,51 @@ impl CockpitView {
         // beside the Help menu's `Keyboard Shortcuts`.
         add(
             true,
-            "keyboard shortcuts".into(),
+            "Keyboard shortcuts".into(),
             "",
             bound_chord_in("shortcuts::Toggle", Some("ComposerEmpty")),
             Command::Shortcuts,
         );
         add(
             !self.cockpit.needs_you().is_empty(),
-            "next request".into(),
+            "Next request".into(),
             "",
             bound_chord("cockpit::NextDecision"),
             Command::NextRequest,
         );
         add(
             has_prompt,
-            "copy prompt".into(),
+            "Copy prompt".into(),
             "",
             None,
             Command::CopyPrompt,
         );
         add(
             has_prompt,
-            "resend prompt".into(),
+            "Resend prompt".into(),
             "",
             None,
             Command::ResendPrompt,
         );
         add(
             open.is_some(),
-            "model".into(),
+            "Model".into(),
             "/model",
             None,
             Command::Model,
         );
-        add(ladder, "effort".into(), "/effort", None, Command::Effort);
+        add(ladder, "Effort".into(), "/effort", None, Command::Effort);
         add(
             supports(ferrite_core::ControlKind::SetPermissionMode)
                 && open.is_some_and(|open| !open.permission_modes().is_empty()),
-            "permission mode".into(),
+            "Permission mode".into(),
             "",
             bound_chord("status::CycleMode"),
             Command::PermissionMode,
         );
         add(
             supports(ferrite_core::ControlKind::RefreshMcp),
-            "refresh MCP".into(),
+            "Refresh MCP".into(),
             "",
             None,
             Command::RefreshMcp,
@@ -1034,7 +1029,7 @@ impl CockpitView {
         add(
             supports(ferrite_core::ControlKind::ReconnectMcp)
                 && open.is_some_and(|open| !open.transcript().mcp_servers().is_empty()),
-            "reconnect MCP".into(),
+            "Reconnect MCP".into(),
             "",
             None,
             Command::ReconnectMcp,
@@ -1044,58 +1039,58 @@ impl CockpitView {
                 open.supports_control(ferrite_core::ControlKind::BackgroundTasks)
                     || !open.transcript().progress().background().is_empty()
             }),
-            "background tasks".into(),
+            "Background tasks".into(),
             "",
             None,
             Command::BackgroundTasks,
         );
         add(
             changed,
-            "show changes".into(),
+            "Show changes".into(),
             "",
             None,
             Command::ShowChanges,
         );
-        add(checks, "show checks".into(), "", None, Command::ShowChecks);
+        add(checks, "Show checks".into(), "", None, Command::ShowChecks);
         add(
             focused.is_some(),
-            "refresh PR status".into(),
+            "Refresh PR status".into(),
             "",
             bound_chord("cockpit::RefreshPrStatus"),
             Command::RefreshPr,
         );
         add(
             pr.is_some_and(|pr| pr.url.is_some()),
-            "open PR in browser".into(),
+            "Open PR in browser".into(),
             "",
             bound_chord("cockpit::OpenPrInBrowser"),
             Command::OpenPr,
         );
-        add(plan, "show plan".into(), "", None, Command::ShowPlan);
+        add(plan, "Show plan".into(), "", None, Command::ShowPlan);
         add(
             !self.cli_updates.ready().is_empty(),
-            "update CLIs".into(),
+            "Update CLIs".into(),
             "",
             None,
             Command::UpdateClis,
         );
         add(
             self.ferrite_update.restart_offered(),
-            "restart to update Ferrite".into(),
+            "Restart to update Ferrite".into(),
             "",
             None,
             Command::UpdateFerrite,
         );
         add(
             draft,
-            "discard draft".into(),
+            "Discard draft".into(),
             "",
             bound_chord("cockpit::CloseThread"),
             Command::DiscardDraft,
         );
         add(
             !self.prefs.settings.keys.is_empty(),
-            "reset keys".into(),
+            "Reset keys".into(),
             "forget the keys in settings.json",
             None,
             Command::ResetKeys,

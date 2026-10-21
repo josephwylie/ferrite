@@ -702,7 +702,7 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Review Branch", palette::ReviewBranch),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
-                MenuItem::action("Notifications", ToggleNotifications),
+                MenuItem::action("Needs You", ToggleNotifications),
                 MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
                 MenuItem::separator(),
                 MenuItem::action("Next Pane", NextPane),

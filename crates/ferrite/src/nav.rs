@@ -1776,7 +1776,7 @@ pub fn empty_filter(project: Option<&str>, parked: bool) -> Div {
                 .gap(px(SPACE_1))
                 .text_color(rgb(TEXT_DIM))
                 .child(chord_glyphs(&keys))
-                .child("new thread")
+                .child("New thread")
                 .into_any_element()
         }),
         (Some(_), false) => None,

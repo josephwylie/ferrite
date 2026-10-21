@@ -845,6 +845,39 @@ fn picking_a_done_subagent_opens_it(cx: &mut TestAppContext) {
     );
 }
 
+/// SPEC §5.3: a Subagent that finishes failed is no longer live, so its
+/// tab leaves for the done menu, unless it is the selected tab, which
+/// stays until the operator leaves it.
+#[gpui::test]
+fn a_failed_subagent_leaves_the_strip_unless_selected(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-failed-leaves", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Cedar", AgentStatus::Working);
+    tick(cx);
+    click_child(cx, "Cedar");
+    for name in ["Atlas", "Cedar"] {
+        emit(
+            &fake,
+            ActivityEvent::Status {
+                key: key(name),
+                state: AgentStatus::Failed,
+            },
+        );
+    }
+    tick(cx);
+    assert!(
+        debug_bounds(cx, format!("subject-agent-1-{}", key("Atlas").as_str())).is_none(),
+        "the failed Atlas left the strip"
+    );
+    let _ = tab(cx, "Cedar");
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let plan = crate::cockpit::subagents::drawn_plan(thread).unwrap();
+    assert_eq!(plan.tabs.len(), 1, "only the selected Cedar stays");
+    assert_eq!(plan.menu_label(), "1 done");
+}
+
 /// Esc on a live Subagent's tab, picked on the strip, stops that Subagent
 /// and leaves Main's turn running.
 #[gpui::test]

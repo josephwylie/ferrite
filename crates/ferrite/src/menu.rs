@@ -545,7 +545,7 @@ struct ChoiceState {
 }
 
 fn live(choice: &components::Choice) -> bool {
-    !choice.section && !choice.note && !choice.disabled
+    !choice.section && !choice.disabled
 }
 
 /// The live row `delta` steps from `from`, wrapping.
@@ -687,10 +687,6 @@ impl ChoiceContent {
                 ));
                 continue;
             }
-            if choice.note {
-                rows = rows.child(note(choice.label.clone()));
-                continue;
-            }
             let mut item = MenuItem::new(choice.label.clone())
                 .checked(choice.checked)
                 .disabled(choice.disabled);
@@ -706,6 +702,7 @@ impl ChoiceContent {
             rows = rows.child(
                 item_row(("choice-row", index), &item, cursor == Some(index), false)
                     .debug_selector(move || format!("choice-row-{index}"))
+                    .when_some(choice.why.clone(), |row, why| row.tooltip(tooltip(why)))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         pick.pick(index, window, cx);

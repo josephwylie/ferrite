@@ -157,7 +157,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
             .filter(|row| row.section == Section::Commands)
             .map(|row| row.name.as_ref())
             .collect();
-        assert_eq!(commands, ["park thread", "show parked"]);
+        assert_eq!(commands, ["Park thread", "Show parked"]);
         let threads: Vec<&str> = survivors
             .iter()
             .filter(|row| row.section == Section::Threads)
@@ -167,7 +167,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
         assert_eq!(palette.lit(0), Some(&[0..3][..]), "`Par` lit");
         let park = survivors
             .iter()
-            .find(|row| row.name.as_ref() == "park thread")
+            .find(|row| row.name.as_ref() == "Park thread")
             .unwrap();
         assert_eq!(park.keys.as_deref(), Some("cmd-\u{232b}"), "⌘⌫");
     });
@@ -291,7 +291,7 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
             Some(format!("cmd-{}", at + 1).as_str())
         );
         assert!(
-            row.context.starts_with("perf sweep"),
+            row.context.starts_with("Perf sweep"),
             "the shown Group names its Threads: {:?}",
             row.context
         );
@@ -300,7 +300,7 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
         .iter()
         .find(|row| row.act == Act::Thread(threads[0]))
         .unwrap();
-    assert_eq!(working.context.as_ref(), "perf sweep \u{b7} working");
+    assert_eq!(working.context.as_ref(), "Perf sweep \u{b7} working");
     assert_eq!(working.status, Some(nav::RowStatus::Working));
 }
 
@@ -444,9 +444,9 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
         })
     };
     let shown = labels(cx);
-    assert_eq!(shown.first(), Some(&"park thread"), "{shown:?}");
-    assert!(shown.contains(&"show parked"));
-    assert!(!shown.contains(&"new thread"));
+    assert_eq!(shown.first(), Some(&"Park thread"), "{shown:?}");
+    assert!(shown.contains(&"Show parked"));
+    assert!(!shown.contains(&"New thread"));
     assert_eq!(resolves("down", cx), Some("shortcuts::ScrollDown"));
     // Through key dispatch: no binding claims `?` in the filter, so it is
     // text there.

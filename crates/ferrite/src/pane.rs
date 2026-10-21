@@ -1769,12 +1769,12 @@ pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
         .children(buttons)
 }
 
-/// One quick answer (F-7): `1 allow` in a 1px `paint::LINE2` box,
-/// `QUICK_ANSWER_H` (22px) outer — one line and its two borders — 1ch in
-/// from each side. The digit is `TEXT_DIM` on every waiting tile, the
-/// word `TEXT`; under the pointer the face blends to `paint::RAISED` and the
-/// word to `TEXT_STRONG` over the one 150ms hover blend, the digit staying
-/// dim.
+/// One quick answer (F-7): `1 allow` as a secondary button, no edge
+/// (theme rule: no grey borders) — a `paint::RAISED` face, radius
+/// `R_TAB`, `QUICK_ANSWER_H` (22px) tall, 1ch in from each side. The digit
+/// is `TEXT_DIM` on every waiting tile, the word `TEXT`; under the pointer
+/// the face blends to `paint::SELECTED` and the word to `TEXT_STRONG` over
+/// the one 150ms hover blend, the digit staying dim.
 pub(crate) fn quick_answer(
     id: SharedString,
     key: SharedString,
@@ -1783,17 +1783,16 @@ pub(crate) fn quick_answer(
     let hover = id.clone();
     let ground = crate::motion::hover_blend(
         &hover,
-        rgba(TRANSPARENT).into(),
         theme::paint::RAISED.hsla(),
+        theme::paint::SELECTED.hsla(),
     );
     let word = crate::motion::hover_blend(&hover, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
     let selector = id.clone();
-    // Its two runs, a cell of padding each side and its edge.
+    // Its two runs and a cell of padding each side.
     let key = format!("{key} ");
     let width = components::run_width(&key)
         + components::run_width(&label)
-        + 2.0 * theme::QUICK_ANSWER_PAD_X
-        + 2.0;
+        + 2.0 * theme::QUICK_ANSWER_PAD_X;
     div()
         .id(gpui::ElementId::Name(id))
         .debug_selector(move || selector.to_string())
@@ -1803,8 +1802,7 @@ pub(crate) fn quick_answer(
         .w(px(width))
         .h(px(theme::QUICK_ANSWER_H))
         .px(px(theme::QUICK_ANSWER_PAD_X))
-        .border_1()
-        .border_color(theme::paint::LINE2)
+        .rounded(px(theme::R_TAB))
         .bg(ground)
         .cursor_pointer()
         .whitespace_nowrap()
@@ -2373,8 +2371,9 @@ pub fn checks_card() -> Div {
         .max_w(px(theme::CHECKS_CARD_MAX_W))
 }
 
-/// The card's heading: the PR by number at the left, and how its runs
-/// divide at the right — the counts the head's chip had no room for. Only
+/// The card's heading: the label `Checks` and the PR's number at the
+/// left, and how its runs divide at the right — the counts the head's chip
+/// had no room for. Only
 /// states with runs in them are named, so the line never reads `0 failed`,
 /// and only the failure is coloured; its figures are tabular, so a run
 /// finishing never shifts the tally. Space, not a rule, separates summary
@@ -2445,9 +2444,13 @@ pub fn checks_head(pr: &PullRequest) -> Div {
                     div()
                         .font_weight(theme::W_LABEL)
                         .text_color(rgb(TEXT_STRONG))
-                        .child(SharedString::from(format!("#{}", pr.number))),
+                        .child("Checks"),
                 )
-                .child(div().text_color(rgb(TEXT_DIM)).child("checks")),
+                .child(
+                    div()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(SharedString::from(format!("#{}", pr.number))),
+                ),
         )
         .child(tally_line)
 }

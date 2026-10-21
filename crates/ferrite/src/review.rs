@@ -1868,7 +1868,7 @@ impl ReviewView {
             Some(Ok(_)) => {
                 let rows = search.rows();
                 if rows.is_empty() {
-                    crate::menu::note("nothing found").into_any_element()
+                    crate::menu::note("Nothing found").into_any_element()
                 } else {
                     div()
                         .id("review-found")
@@ -1941,14 +1941,14 @@ impl ReviewView {
         let entries = match &tree.entries {
             None => return crate::menu::note("reading\u{2026}").into_any_element(),
             Some(Err(error)) => {
-                return crate::menu::note(format!("can\u{2019}t list the files \u{b7} {error}"))
+                return crate::menu::note(format!("Can\u{2019}t list the files \u{b7} {error}"))
                     .into_any_element()
             }
             Some(Ok(entries)) => entries,
         };
         let rows = tree.rows();
         if rows.is_empty() {
-            return crate::menu::note("no files").into_any_element();
+            return crate::menu::note("No files").into_any_element();
         }
         let cell = self.grid.cell();
         div()

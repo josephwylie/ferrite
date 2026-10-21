@@ -289,36 +289,6 @@ pub fn bar_tab(
         .children(roll_up.map(|dot| bar_dot(BAR_TAB_DOT, dot.ink())))
 }
 
-/// A Group's title as its tab names it, in sentence case (SPEC §7):
-/// `WORK` → `Work`, `InvoiceMate Business` → `InvoiceMate business`. The
-/// first word is capitalised; a later word is lowercased unless it is an
-/// acronym (`API`) or a name with its own inner capitals (`InvoiceMate`).
-pub fn tab_name(title: &str) -> String {
-    title
-        .split(' ')
-        .enumerate()
-        .map(|(index, word)| {
-            let mut chars = word.chars();
-            let Some(first) = chars.next() else {
-                return String::new();
-            };
-            let rest: String = chars.collect();
-            let shouting =
-                rest.chars().any(char::is_alphabetic) && !rest.chars().any(char::is_lowercase);
-            let inner_capitals = !shouting && rest.chars().any(char::is_uppercase);
-            if index == 0 {
-                let rest = if shouting { rest.to_lowercase() } else { rest };
-                first.to_uppercase().chain(rest.chars()).collect()
-            } else if shouting || inner_capitals {
-                word.to_owned()
-            } else {
-                word.to_lowercase()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// The need-you count (SPEC §5.7): a `BAR_NEED_DOT` `ATTENTION` dot and
 /// `N need you` in `TEXT_BAR`. `None` at zero. The cockpit wires the press
 /// to the Needs-you view.
@@ -620,17 +590,6 @@ mod tests {
             free_disk_words(4_990_000_000),
             Some(("5.0 GB free".into(), ATTENTION))
         );
-    }
-
-    /// SPEC §7: a Group's tab is named in sentence case, keeping acronyms
-    /// and inner capitals.
-    #[test]
-    fn a_group_tab_is_named_in_sentence_case() {
-        assert_eq!(tab_name("WORK"), "Work");
-        assert_eq!(tab_name("InvoiceMate Business"), "InvoiceMate business");
-        assert_eq!(tab_name("perf sweep"), "Perf sweep");
-        assert_eq!(tab_name("Fix the API"), "Fix the API");
-        assert_eq!(tab_name("group-03"), "Group-03");
     }
 
     /// SPEC §5.7: a view's dot says blocked over working, and nothing for

@@ -338,13 +338,14 @@ pub(crate) fn agent_name(info: &AgentInfo) -> String {
 }
 
 /// Where a Subagent stands on the strip (SPEC §5.3), in the live tabs'
-/// order: waiting, then working, then failing; anything else is done
-/// (finished, stopped, idle or unavailable) and lives in the `N done` menu.
+/// order: waiting, then working; anything else is done (finished, failed,
+/// stopped, idle or unavailable) and lives in the `N done` menu. SPEC's
+/// third live state, failing (still running with failures), has no signal
+/// on a Subagent: its checks are its parent Thread's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Standing {
     Waiting,
     Working,
-    Failing,
     Done,
 }
 
@@ -353,8 +354,6 @@ impl Standing {
     fn of(agent: ferrite_core::activity::AgentView<'_>, waiting: bool) -> Self {
         if waiting || agent.fresh() && agent.status() == AgentStatus::Waiting {
             Self::Waiting
-        } else if matches!(agent.status(), AgentStatus::Failed | AgentStatus::NotFound) {
-            Self::Failing
         } else if agent.fresh()
             && matches!(agent.status(), AgentStatus::Working | AgentStatus::Pending)
         {
@@ -368,16 +367,18 @@ impl Standing {
         self != Self::Done
     }
 
-    /// The tab's mark (the nav's, `nav::mark`), by `subject_mark`'s
-    /// precedence: a waiting agent's `ATTENTION` dot, a failing one's
-    /// `BLOCKED` dot, the braille spinner while working. Starting and done
+    /// The tab's mark (the nav's, `nav::mark`): a waiting agent's
+    /// `ATTENTION` dot, the braille spinner while working, and a failed
+    /// one's `BLOCKED` dot on its sticky tab. Starting and other done
     /// agents carry none; the slot stays.
     fn mark(self, status: AgentStatus) -> Option<AnyElement> {
         use crate::nav::RowStatus;
         let face = match self {
             Self::Waiting => RowStatus::NeedsYou,
-            Self::Failing => RowStatus::Failed,
             Self::Working if status == AgentStatus::Working => RowStatus::Working,
+            Self::Done if matches!(status, AgentStatus::Failed | AgentStatus::NotFound) => {
+                RowStatus::Failed
+            }
             Self::Working | Self::Done => return None,
         };
         Some(crate::nav::mark(face, false))
@@ -423,7 +424,7 @@ impl StripPlan {
 }
 
 /// Lay out the strip (SPEC §5.3): one tab per live Subagent — waiting,
-/// working, failing, each by start — plus the selected one even once it is
+/// then working, each by start — plus the selected one even once it is
 /// done (it sticks until the operator leaves it); every other done
 /// Subagent goes to the menu, newest first. `room` is what the tabs after
 /// Main may take, gaps included; `menu` is the menu button's cost (its
@@ -2900,22 +2901,21 @@ mod status_word_tests {
         }
     }
 
-    /// Live tabs run waiting, working, failing, each by start; the rest
-    /// are the menu's, newest first.
+    /// Live tabs run waiting, then working, each by start; the rest are
+    /// the menu's, newest first.
     #[test]
     fn the_strip_orders_live_tabs_and_lists_done_newest_first() {
         let agents = [
             agent(Standing::Working, 1),
             agent(Standing::Done, 2),
-            agent(Standing::Failing, 3),
-            agent(Standing::Waiting, 4),
-            agent(Standing::Done, 5),
-            agent(Standing::Working, 6),
+            agent(Standing::Waiting, 3),
+            agent(Standing::Done, 4),
+            agent(Standing::Working, 5),
         ];
         let plan = plan_strip(&agents, 10_000., |_| 80.);
-        assert_eq!(plan.tabs, [3, 0, 5, 2]);
+        assert_eq!(plan.tabs, [2, 0, 4]);
         assert!(plan.folded.is_empty());
-        assert_eq!(plan.done, [4, 1]);
+        assert_eq!(plan.done, [3, 1]);
         assert_eq!(plan.menu_label(), "2 done");
     }
 

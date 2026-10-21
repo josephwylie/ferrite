@@ -1615,20 +1615,9 @@ impl gpui::Element for Measured {
     }
 }
 
-/// An inert status line (loading, empty, error) in a menu.
-pub fn menu_note(text: impl Into<SharedString>) -> Div {
-    text_meta()
-        .flex()
-        .items_center()
-        .h(px(theme::FLOAT_ROW_H))
-        .px(px(theme::MENU_ROW_PAD_X))
-        .cursor_default()
-        .child(text.into())
-}
-
 /// The same menu is opened by a chip or a slash command. PopupMenu owns
 /// keyboard navigation, focus, scrolling and dismissal; every row draws in
-/// the one menu grammar (`menu_row_content`, `menu_section`, `menu_note`).
+/// the one menu grammar (`menu_row_content`, `menu_section`).
 #[derive(Clone, Default)]
 pub struct Choice {
     pub label: SharedString,
@@ -1641,8 +1630,9 @@ pub struct Choice {
     pub section: bool,
     /// A muted mono tag after the label (a section tag, a path).
     pub detail: Option<SharedString>,
-    /// An inert explanatory line (why the menu is short or locked).
-    pub note: bool,
+    /// Why a disabled row is dead for now (`Available when this turn
+    /// finishes`): its tooltip (SPEC §5.5).
+    pub why: Option<SharedString>,
 }
 
 impl Choice {
@@ -1746,7 +1736,7 @@ impl gpui::RenderOnce for ChoiceMenu {
                     .max_h(px(theme::MENU_MAX_H))
                     .scrollable(true);
                 for (index, choice) in self.choices.into_iter().enumerate() {
-                    // Sections and notes are disabled element items: the kit
+                    // Sections are disabled element items: the kit
                     // skips them on the arrows, so `steps` still counts only
                     // live rows.
                     if choice.section {
@@ -1766,17 +1756,10 @@ impl gpui::RenderOnce for ChoiceMenu {
                         );
                         continue;
                     }
-                    if choice.note {
-                        let text = choice.label.clone();
-                        menu = menu.item(
-                            PopupMenuItem::element(move |_, _| kit_row(menu_note(text.clone())))
-                                .disabled(true),
-                        );
-                        continue;
-                    }
                     // Our strong check draws inside the row, so the kit's own
                     // `.checked()` is never set and its check never doubles.
                     let item = choice.item(marked);
+                    let why = choice.why.clone();
                     let picked = pick.clone();
                     menu = menu.item(
                         PopupMenuItem::element(move |_, _| {
@@ -1786,6 +1769,10 @@ impl gpui::RenderOnce for ChoiceMenu {
                             kit_row(menu_row_content(&item, false, false))
                                 .max_w(px(theme::CHOICE_MENU_MAX_W - 2. * theme::FLOAT_PAD))
                                 .debug_selector(move || format!("choice-row-{index}"))
+                                .id(("choice-row", index))
+                                .when_some(why.clone(), |row, why| {
+                                    row.tooltip(crate::menu::tooltip(why))
+                                })
                         })
                         .disabled(choice.disabled)
                         .on_click(move |_, window, cx| picked(index, window, cx)),
@@ -1853,7 +1840,7 @@ impl gpui::RenderOnce for ChoiceMenu {
 /// the first live row). Every choice is one kit item; the first press
 /// selects item 0 whatever it is, each later one the next live item.
 fn cursor_steps(choices: &[Choice]) -> usize {
-    let live = |choice: &Choice| !choice.section && !choice.note && !choice.disabled;
+    let live = |choice: &Choice| !choice.section && !choice.disabled;
     let target = choices
         .iter()
         .position(|choice| live(choice) && choice.checked)

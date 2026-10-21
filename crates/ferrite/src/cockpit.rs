@@ -248,13 +248,6 @@ fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
     }
 }
 
-/// The hold a picker's rows were built under: its inert first row.
-fn shown_hold(rows: &[Row]) -> Option<&str> {
-    rows.first()
-        .map(|row| row.name.as_ref())
-        .filter(|name| [TUNING_BUSY_HINT, TUNING_PENDING_HINT].contains(name))
-}
-
 pub struct CockpitView {
     cockpit: Cockpit,
     /// One view per Pane of the Cockpit's roster, in its order — the
@@ -1087,6 +1080,9 @@ struct Popover {
     /// may be a picker's standing choice below the fold.
     scroll: ScrollHandle,
     revealed: std::cell::Cell<bool>,
+    /// Why every row is dead for now (`tuning_hold`): a picker built while
+    /// its Thread's turn runs. The disabled rows say it in their tooltip.
+    hold: Option<&'static str>,
 }
 
 /// Which popover holds the slot. The rows, keys, dismissal, heal and paint
@@ -2176,7 +2172,7 @@ impl CockpitView {
                     self.cockpit
                         .thread(thread)
                         .and_then(|thread| tuning_hold(&thread))
-                        != shown_hold(&open.rows)
+                        != open.hold
                 })
         });
         if models_changed || tuning_availability_changed {
@@ -6450,6 +6446,7 @@ impl CockpitView {
                         return Some(Popover {
                             scroll: ScrollHandle::new(),
                             revealed: Default::default(),
+                            hold: None,
                             pane: identity,
                             kind: Kind::Commands,
                             rows: vec![Row {
@@ -6526,6 +6523,7 @@ impl CockpitView {
                 return Some(Popover {
                     scroll: ScrollHandle::new(),
                     revealed: Default::default(),
+                    hold: None,
                     pane: identity,
                     kind: Kind::Commands,
                     rows,
@@ -6608,6 +6606,7 @@ impl CockpitView {
             return Some(Popover {
                 scroll: ScrollHandle::new(),
                 revealed: Default::default(),
+                hold: None,
                 pane: pane.identity,
                 kind: Kind::Commands,
                 rows,
@@ -6650,6 +6649,7 @@ impl CockpitView {
                 return Some(Popover {
                     scroll: ScrollHandle::new(),
                     revealed: Default::default(),
+                    hold: None,
                     pane: pane.identity,
                     kind: Kind::Files {
                         files: std::rc::Rc::new(Vec::new()),
@@ -6705,6 +6705,7 @@ impl CockpitView {
         Some(Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
+            hold: None,
             pane: pane.identity,
             kind: Kind::Files {
                 files,
@@ -7059,21 +7060,20 @@ impl CockpitView {
         let serving = open.transcript().model().map(str::to_string);
         let locked = open.first_prompt_sent();
         let hold = tuning_hold(&open);
-        let (mut rows, mut selected) = self.provider_rows(
+        let (mut rows, selected) = self.provider_rows(
             current,
             chosen.as_deref(),
             serving.as_deref(),
             locked,
             |choice| Consequence::Provision(choice),
         );
-        if let Some(hold) = hold {
-            Self::unavailable_tuning_rows(&mut rows, &mut selected, hold);
-        }
+        Self::hold_tuning_rows(&mut rows, hold);
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
         self.popover = Some(Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
+            hold,
             pane: PaneIdentity::Thread(thread),
             kind: Kind::Provider,
             rows,
@@ -7083,27 +7083,14 @@ impl CockpitView {
     }
 
     /// Keep the current checkmark and catalog inspectable while choices
-    /// cannot be applied. The reason (`hold`) is a visible, inert menu row.
-    fn unavailable_tuning_rows(rows: &mut Vec<Row>, selected: &mut usize, hold: &'static str) {
-        for row in rows.iter_mut() {
-            row.row.inert = true;
+    /// cannot be applied: every row disabled, the reason (`Popover::hold`)
+    /// in their tooltips (SPEC §5.5).
+    fn hold_tuning_rows(rows: &mut [Row], hold: Option<&'static str>) {
+        if hold.is_some() {
+            for row in rows.iter_mut() {
+                row.row.inert = true;
+            }
         }
-        rows.insert(
-            0,
-            Row {
-                row: pane::MenuRow {
-                    insert: SharedString::default(),
-                    name: hold.into(),
-                    matched: Vec::new(),
-                    detail: SharedString::default(),
-                    prose_detail: true,
-                    inert: true,
-                },
-                active: false,
-                consequence: Consequence::Inert,
-            },
-        );
-        *selected += 1;
     }
 
     /// The sectioned rows every model picker shows — the Composer's and
@@ -7614,6 +7601,7 @@ impl CockpitView {
         self.popover = Some(Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
+            hold: None,
             pane: identity,
             kind: Kind::Band(chip),
             rows,
@@ -10964,7 +10952,7 @@ impl CockpitView {
                 crate::titlebar::bar_tab(
                     SharedString::from(format!("bottom-bar-tab-{}", id.get())),
                     at + 2,
-                    crate::titlebar::tab_name(&group.display_title()).into(),
+                    group.display_title().into(),
                     !empty && view == View::Group(id),
                     roll_up(&mut group.members.iter().copied()),
                 )
@@ -12416,10 +12404,11 @@ impl CockpitView {
                             // What a row resolves to (`Opus 5.5 (1M) · from
                             // Settings`); a section's handover note too.
                             detail: (!row.detail.is_empty()).then(|| row.detail.clone()),
-                            // Why every row is dead for now.
-                            note: row.inert
-                                && [TUNING_BUSY_HINT, TUNING_PENDING_HINT]
-                                    .contains(&row.name.as_ref()),
+                            // Why the row is dead for now: its tooltip.
+                            why: open
+                                .hold
+                                .filter(|_| row.inert && !section)
+                                .map(SharedString::from),
                             icon: provider.map(|provider| match provider {
                                 Provider::Claude => {
                                     (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE)
@@ -12573,13 +12562,12 @@ impl CockpitView {
                 consequence: Consequence::Effort(Some(effort)),
             });
         }
-        let mut selected = rows.iter().position(|row| row.active).unwrap_or(0);
-        if let Some(hold) = hold {
-            Self::unavailable_tuning_rows(&mut rows, &mut selected, hold);
-        }
+        let selected = rows.iter().position(|row| row.active).unwrap_or(0);
+        Self::hold_tuning_rows(&mut rows, hold);
         self.popover = Some(Popover {
             scroll: ScrollHandle::new(),
             revealed: Default::default(),
+            hold,
             pane: PaneIdentity::Thread(thread),
             kind: Kind::Effort,
             rows,
@@ -22592,7 +22580,7 @@ mod tests {
 
         assert!(session_rows(&view, cx).is_empty());
         let note = format!(
-            "no CLI sessions found under {}",
+            "No CLI sessions found under {}",
             base.join("claude-projects").display()
         );
         view.read_with(cx, |view, cx| {

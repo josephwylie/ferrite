@@ -437,7 +437,7 @@ pub fn body(
                     list.child(
                         components::text_ui()
                             .text_color(rgb(TEXT_DIM))
-                            .child("no matching settings"),
+                            .child("No matching settings"),
                     )
                 })
                 .children(

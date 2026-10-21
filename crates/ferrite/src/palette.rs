@@ -433,7 +433,7 @@ pub(crate) const GROUPS_FOOTER: &str = "\u{2191}\u{2193} select \u{b7} \u{23ce} 
 /// The import picker's footer: ⏎ imports the session and resumes it.
 pub(crate) const SESSIONS_FOOTER: &str =
     "\u{2191}\u{2193} select \u{b7} \u{23ce} import \u{b7} esc";
-pub(crate) const NO_MATCHES: &str = "no matches";
+pub(crate) const NO_MATCHES: &str = "No matches";
 
 /// The footer's right: how many rows survive.
 fn results_word(count: usize) -> String {
