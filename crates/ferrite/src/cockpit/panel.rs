@@ -12,7 +12,10 @@
 //!
 //! One function per tab draws its body (`panel_changes`, `panel_pr`,
 //! `panel_context`), so the later phases each own one: 7b adds a file's
-//! hunks under its head (`panel_file_block`), 7c the PR tab's body.
+//! hunks under its head (`panel_file_block`, `hunks`), 7c the PR tab's
+//! body.
+
+pub(crate) mod hunks;
 
 use super::*;
 use crate::icons::{self, icon};
@@ -39,6 +42,8 @@ pub(crate) struct Panel {
     /// ⌥⌘B while the window is too narrow: the operator's override, for
     /// the session (another ⌥⌘B gives the narrow rule back). Never saved.
     forced_open: bool,
+    /// The Changes tab's unfolded files and their hunks.
+    hunks: hunks::Hunks,
 }
 
 impl Default for Panel {
@@ -47,6 +52,7 @@ impl Default for Panel {
             tabs: Default::default(),
             narrow: std::cell::Cell::new(true),
             forced_open: false,
+            hunks: Default::default(),
         }
     }
 }
@@ -396,7 +402,7 @@ impl CockpitView {
         );
         let cwd = self.thread_path(thread);
         for (index, file) in files.iter().enumerate() {
-            body = body.child(self.panel_file_block(index, file, cwd.as_deref(), cx));
+            body = body.child(self.panel_file_block(thread, index, file, cwd.as_deref(), cx));
         }
         let review_id = gpui::ElementId::from("panel-review-changes");
         let review_key = crate::pointer::hover_key(&review_id);
@@ -481,12 +487,14 @@ impl CockpitView {
             }))
     }
 
-    /// One changed file's block (r8, `RAISED`): its head (48) — the name,
+    /// One changed file's block (r8): its head (48, `RAISED`) — the name,
     /// which opens the file in the reader as a file link does, its `+N −N`,
-    /// and its directory under it. Phase 7b adds the fold chevron to the
-    /// head and the file's hunks under it, in this block.
+    /// and its directory under it — and, unfolded, its hunks (`hunks`).
+    /// The rest of the head folds and unfolds them; under the pointer its
+    /// icon turns to the fold's chevron.
     fn panel_file_block(
         &self,
+        thread: ThreadId,
         index: usize,
         file: &FileChange,
         cwd: Option<&std::path::Path>,
@@ -514,7 +522,41 @@ impl CockpitView {
                     .to_string()
             })
             .filter(|dir| !dir.is_empty());
-        let head = panel_row(icons::FILE, TEXT_MUTED)
+        let unfolded = self.panel_file_unfolded(thread, file, cx);
+        let group = SharedString::from(format!("panel-file-head-{index}"));
+        let chevron = if unfolded {
+            icons::CHEVRON_DOWN
+        } else {
+            icons::CHEVRON_RIGHT
+        };
+        let slot = div()
+            .debug_selector(move || format!("panel-file-fold-{index}"))
+            .relative()
+            .size(px(PANEL_ROW_ICON))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .group_hover(group.clone(), |style| style.invisible())
+                    .child(icon(icons::FILE, PANEL_ROW_ICON, TEXT_MUTED)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .invisible()
+                    .group_hover(group.clone(), |style| style.visible())
+                    .child(icon(chevron, PANEL_ROW_ICON, TEXT_MUTED)),
+            );
+        let fold_path = file.path.clone();
+        let head = panel_row_with(slot)
+            .id(("panel-file-head", index))
+            .group(group)
+            .bg(paint::RAISED)
+            .cursor_pointer()
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                view.toggle_panel_file(thread, fold_path.clone(), cx);
+            }))
             .child(
                 div()
                     .flex()
@@ -532,6 +574,7 @@ impl CockpitView {
                             .text_color(rgb(TEXT_STRONG))
                             .child(SharedString::from(name))
                             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                                cx.stop_propagation();
                                 view.open_beside(
                                     beside::Beside::Reader {
                                         path: path.clone(),
@@ -557,9 +600,13 @@ impl CockpitView {
             .flex_col()
             .flex_shrink_0()
             .rounded(px(R_BLOCK))
-            .bg(paint::RAISED)
             .overflow_hidden()
             .child(head)
+            .children(
+                unfolded
+                    .then(|| self.panel_hunks_element(thread, index, &file.path))
+                    .flatten(),
+            )
     }
 
     /// The PR tab. Phase 7a draws only its empty state, for a branch with
@@ -739,6 +786,11 @@ impl CockpitView {
 /// A two-line panel row (48): its icon at the row's left, its two lines
 /// (the caller's children) on the text column, centred down the row.
 fn panel_row(glyph: &'static str, ink: u32) -> Div {
+    panel_row_with(icon(glyph, crate::theme::PANEL_ROW_ICON, ink))
+}
+
+/// A two-line panel row whose icon slot holds `slot`.
+fn panel_row_with(slot: impl IntoElement) -> Div {
     use crate::theme::*;
     div()
         .relative()
@@ -755,7 +807,7 @@ fn panel_row(glyph: &'static str, ink: u32) -> Div {
                 .absolute()
                 .left(px(PANEL_ROW_ICON_X))
                 .top(px(PANEL_ROW_ICON_Y))
-                .child(icon(glyph, PANEL_ROW_ICON, ink)),
+                .child(slot),
         )
 }
 

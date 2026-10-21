@@ -720,9 +720,7 @@ pub const FS_COMPOSER: f32 = 13.5;
 #[allow(dead_code)]
 pub const FS_PALETTE: f32 = 14.5;
 /// 11 on 19 — the panel's diff, in Geist Mono.
-#[allow(dead_code)]
 pub const FS_PANEL_DIFF: f32 = 11.0;
-#[allow(dead_code)]
 pub const LH_PANEL_DIFF: f32 = 19.0;
 /// 11.5 — a diffstat, a spinner or a `#N` set in Geist Mono inside chrome.
 #[allow(dead_code)]
@@ -952,6 +950,13 @@ pub const PANEL_ROW_TEXT_X: f32 = 34.0;
 pub const PANEL_SECTION_H: f32 = 30.0;
 /// 32px — the panel's full-width secondary buttons (`Review changes`).
 pub const PANEL_BUTTON_H: f32 = 32.0;
+/// A file block's hunk area (phase 7b): on `BAR`, padding 4 0 6, its lines
+/// in the panel's diff face (`FS_PANEL_DIFF`/`LH_PANEL_DIFF`), each on a
+/// 2.5-cell sign column inset 1 cell; no line numbers.
+pub const PANEL_HUNK_PAD_T: f32 = SPACE_1;
+pub const PANEL_HUNK_PAD_B: f32 = SPACE_1_5;
+pub const PANEL_HUNK_INSET_CELLS: f32 = 1.0;
+pub const PANEL_HUNK_SIGN_CELLS: f32 = 2.5;
 /// The foot's context meter: 6px high, 2px between segments, radius 2,
 /// over an empty track of `PANEL_METER_TRACK`; the foot's padding is
 /// 14 10 4 with 10px between its line and the meter.
@@ -1383,11 +1388,11 @@ pub const OUTPUT_INLINE_BYTES: usize = 8 * 1024;
 /// its wash (the sign, `DIFF_*_SIGN`, carries the hue; rule 6).
 pub const DIFF_ADDED_INK: u32 = TEXT;
 pub const DIFF_REMOVED_INK: u32 = TEXT;
-/// A diff row's wash: green at 10%, red at 11% (the prototype's `.h.ad`,
-/// `.h.rm`); the changed words wash deeper (`DIFF_*_WORD`, in the head).
+/// A diff row's wash: green and red at 9% (SPEC §3.4, the mockups'
+/// add and delete rows); the changed words wash deeper (`DIFF_*_WORD`, in the head).
 /// (`BLOCKED_WASH` is for one-line uses only.)
-pub const DIFF_ADDED_WASH: u32 = 0x93cf8c1a;
-pub const DIFF_REMOVED_WASH: u32 = 0xef8a801c;
+pub const DIFF_ADDED_WASH: u32 = 0x93cf8c17;
+pub const DIFF_REMOVED_WASH: u32 = 0xef8a8017;
 /// How many rows one hunk card draws before it stops and says how many it
 /// did not. An edit's patch is a handful of lines; a written file's is
 /// however long the file is, and a card that redrew a 900-line file would

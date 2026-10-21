@@ -167,6 +167,9 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         if let Some(tab) = shot.panel() {
             open_panel(view, cast.memory, tab, cx);
         }
+        if shot == Shot::SoloChanges {
+            unfold_file(view, cast.memory, "scheduled_work.rs", cx);
+        }
         if shot == Shot::Palette {
             view.open_palette(PaletteScope::All, "supp", window, cx);
         }
@@ -223,4 +226,25 @@ fn open_panel(
     cx: &mut Context<CockpitView>,
 ) {
     view.open_panel_tab(thread, tab, cx);
+}
+
+/// The Changes tab's block for `name` unfolded, as solo-changes.png draws
+/// `scheduled_work.rs`: its hunks read from the crash fix's worktree.
+fn unfold_file(
+    view: &mut CockpitView,
+    thread: ThreadId,
+    name: &str,
+    cx: &mut Context<CockpitView>,
+) {
+    let path = view.facts.get(thread).and_then(|facts| {
+        facts
+            .changed_files
+            .iter()
+            .find(|file| file.path.ends_with(name))
+            .map(|file| file.path.clone())
+    });
+    match path {
+        Some(path) => view.toggle_panel_file(thread, path, cx),
+        None => eprintln!("ferrite: refresh scene: no changed file {name} to unfold"),
+    }
 }

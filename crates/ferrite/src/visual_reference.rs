@@ -619,6 +619,9 @@ fn render(
     // gpui's `with_animation` runs on the wall clock, not the executor's:
     // a toast's entrance fade is only settled once real time has passed.
     std::thread::sleep(std::time::Duration::from_millis(500));
+    // A read off the UI thread (git, for the panel's hunks) answered on the
+    // wall clock meanwhile: step the executor's clock so its poll lands.
+    cx.advance_clock(std::time::Duration::from_millis(150));
     cx.run_until_parked();
     cx.update_window(window.into(), |_, window, cx| {
         // Two frames: toasts and anchored popovers land on the second.
