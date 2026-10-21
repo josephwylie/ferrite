@@ -965,6 +965,43 @@ pub const PANEL_METER_TRACK: u32 = 0x333333;
 pub const PANEL_FOOT_PAD_T: f32 = 14.0;
 pub const PANEL_FOOT_PAD_B: f32 = SPACE_1;
 
+// ------------------------------------------------------------ PR tab
+
+/// 14px — between the PR tab's sections (SPEC §5.6.2), and under its head.
+pub const PR_SECTION_GAP: f32 = 14.0;
+/// The state pill: 22 high, round (r11), padding 0 9 0 7, a 13px icon 5px
+/// from its word.
+pub const PR_PILL_H: f32 = 22.0;
+/// `RUNNING` at 14% — an open pull request's pill.
+pub const PR_OPEN_PILL: u32 = 0x93cf8c24;
+/// The pull request's title: 14/20 600, at most three lines.
+pub const FS_PR_TITLE: f32 = 14.0;
+/// 26px — the head's `refresh` and `external` buttons (r6), a 14px icon.
+pub const PR_ICON_BUTTON: f32 = 26.0;
+pub const ICON_PR_BUTTON_GLYPH: f32 = 14.0;
+/// 15px — a readiness or check row's mark.
+pub const PR_MARK: f32 = 15.0;
+/// 40px — a readiness row (icon 15, padding 0 12, 10px gaps).
+pub const PR_READY_ROW_H: f32 = 40.0;
+/// The checks listed before `Show N more`.
+pub const PR_CHECKS_SHOWN: usize = 8;
+/// A comment card's avatar: an 18px circle on `#3a3a3a` (`SEND`'s grey).
+pub const PR_AVATAR: f32 = 18.0;
+pub const PR_AVATAR_FILL: u32 = SEND;
+/// Inline code in a comment card, a step over the card's `RAISED`.
+pub const PR_CODE_CHIP: u32 = 0x333333;
+/// 18px — a comment body's line (12.5 type).
+pub const PR_BODY_LH: f32 = 18.0;
+/// The lines a folded comment body shows.
+pub const PR_BODY_LINES: usize = 3;
+/// 26px — a reply's indent under its comment.
+pub const PR_REPLY_INDENT: f32 = 26.0;
+/// The ink a resolved comment card keeps.
+pub const PR_RESOLVED_OPACITY: f32 = 0.6;
+/// A turn of the `refresh` icon while a read is out, in steps.
+pub const PR_SPIN_MS: u64 = 900;
+pub const PR_SPIN_STEPS: usize = 18;
+
 /// A toast's width: 52 cells (the prototype's `.toast`).
 pub const TOAST_W: f32 = 52.0 * CH;
 /// The gap the kit fans a stack out by under the pointer. The stack holds

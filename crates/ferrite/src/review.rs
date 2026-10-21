@@ -756,8 +756,9 @@ impl ReviewView {
         }
     }
 
-    /// `p`, or the bar's `PR`: the pull request, read afresh.
-    fn open_pr(&mut self, cx: &mut Context<Self>) {
+    /// `p`, or the bar's `PR` (or the panel's `Review PR`): the pull
+    /// request, read afresh.
+    pub(crate) fn open_pr(&mut self, cx: &mut Context<Self>) {
         self.tree = None;
         self.pr_open = true;
         self.pr = None;
@@ -2665,6 +2666,7 @@ mod tests {
                 ReviewPullRequest {
                     noun: "PR".into(),
                     pr: Err("No PR yet. Ready to ship?".into()),
+                    unread: None,
                 },
                 cx,
             )

@@ -108,6 +108,7 @@ icons![
     "shield",
     "arrow-up",
     "arrow-down",
+    "arrow-right",
     "corner-down-left",
     "git-pull-request",
     "git-merge",
@@ -242,6 +243,8 @@ pub const ARROW_UP: &str = "icons/arrow-up.svg";
 /// A commit to pull.
 #[allow(dead_code)]
 pub const ARROW_DOWN: &str = "icons/arrow-down.svg";
+/// A pull request's head branch into its base.
+pub const ARROW_RIGHT: &str = "icons/arrow-right.svg";
 /// The palette cursor row's enter hint.
 #[allow(dead_code)]
 pub const CORNER_DOWN_LEFT: &str = "icons/corner-down-left.svg";
@@ -574,7 +577,7 @@ mod tests {
     }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 19] = [
+    const REFRESH_ICONS: [&str; 20] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -588,6 +591,7 @@ mod tests {
         SHIELD,
         ARROW_UP,
         ARROW_DOWN,
+        ARROW_RIGHT,
         CORNER_DOWN_LEFT,
         GIT_PULL_REQUEST,
         GIT_MERGE,

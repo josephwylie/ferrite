@@ -10,17 +10,16 @@
 //! held down to `PANEL_HIDE_W`) and the operator has not hidden it
 //! (`Settings::panel_shown`, ⌥⌘B). Hidden, the board takes its width.
 //!
-//! One function per tab draws its body (`panel_changes`, `panel_pr`,
-//! `panel_context`), so the later phases each own one: 7b adds a file's
-//! hunks under its head (`panel_file_block`, `hunks`), 7c the PR tab's
-//! body.
+//! One function per tab draws its body (`panel_changes`, `panel_context`,
+//! and the PR tab's `panel_pr`, in `pr_tab`, which also reads it): 7b adds
+//! a file's hunks under its head (`panel_file_block`, `hunks`).
 
 pub(crate) mod hunks;
 
 use super::*;
 use crate::icons::{self, icon};
 use ferrite_core::docview::FileChange;
-use gpui::{relative, StyledText};
+use gpui::relative;
 
 /// A panel tab. A Thread the panel has not shown yet opens on `Changes`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -199,7 +198,7 @@ impl CockpitView {
         let tab = self.panel_tab(thread);
         let body = match tab {
             PanelTab::Changes => self.panel_changes(thread, cx),
-            PanelTab::Pr => self.panel_pr(thread),
+            PanelTab::Pr => self.panel_pr(thread, window, cx),
             PanelTab::Context => self.panel_context(thread, window, cx),
         };
         Some(
@@ -607,77 +606,6 @@ impl CockpitView {
                     .then(|| self.panel_hunks_element(thread, index, &file.path))
                     .flatten(),
             )
-    }
-
-    /// The PR tab. Phase 7a draws only its empty state, for a branch with
-    /// no pull request (SPEC §5.6.2); phase 7c draws the pull request
-    /// itself (head, readiness, checks, comments, `Review PR`), the no-`gh`
-    /// line and the snapshot's loading, here.
-    fn panel_pr(&self, thread: ThreadId) -> AnyElement {
-        use crate::theme::*;
-        if self.facts.pr(thread).is_some() {
-            return div().into_any_element();
-        }
-        let branch = self
-            .facts
-            .get(thread)
-            .and_then(|facts| facts.branch.clone());
-        let lead = "When a pull request is open for ";
-        let tail = ", its checks, merge state and comments show here.";
-        let (text, highlight) = match branch {
-            Some(branch) => {
-                let at = lead.len()..lead.len() + branch.len();
-                (format!("{lead}{branch}{tail}"), Some(at))
-            }
-            None => (format!("{lead}this branch{tail}"), None),
-        };
-        let highlights = highlight
-            .map(|range| {
-                (
-                    range,
-                    gpui::HighlightStyle {
-                        color: Some(rgb(TEXT_BAR).into()),
-                        ..Default::default()
-                    },
-                )
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
-        div()
-            .debug_selector(|| "panel-no-pr".into())
-            .flex()
-            .flex_col()
-            .items_start()
-            .gap(px(10.))
-            .pt(px(18.))
-            .px(px(SPACE_1))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(36.))
-                    .rounded(px(R_PANE))
-                    .bg(paint::RAISED)
-                    .child(icon(icons::GIT_PULL_REQUEST, 17., TEXT_MUTED)),
-            )
-            .child(
-                div()
-                    .text_size(px(FS_TITLE))
-                    .font_weight(W_STRONG)
-                    .text_color(rgb(TEXT_STRONG))
-                    .child("No pull request"),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .whitespace_normal()
-                    .text_size(px(FS_LABEL))
-                    .line_height(px(18.))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(StyledText::new(text).with_highlights(highlights)),
-            )
-            .into_any_element()
     }
 
     /// The Context tab: what fills the Thread's context window, by

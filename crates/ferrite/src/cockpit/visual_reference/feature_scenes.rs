@@ -606,7 +606,10 @@ fn pull_request() -> ReviewPullRequest {
                 },
             ],
             truncated: false,
+            checks_truncated: false,
+            comments_truncated: false,
         }),
+        unread: None,
     }
 }
 

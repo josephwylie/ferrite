@@ -11,6 +11,7 @@ mod machines;
 mod palette;
 mod panel;
 mod parts;
+mod pr_tab;
 #[cfg_attr(not(unix), path = "cockpit/projects_unavailable.rs")]
 mod projects;
 mod server;
@@ -491,6 +492,9 @@ pub struct CockpitView {
     /// The Solo view's right panel (`panel`): its tab per Thread and
     /// whether the window has room for it.
     panel: panel::Panel,
+    /// The panel's PR tab (`pr_tab`): each Thread's last snapshot, its
+    /// reads' pacing, and what the operator unfolded.
+    pr_tab: pr_tab::PrTab,
     /// Whether the panel's Context tab has its legend open. Kept across
     /// openings: an operator who wants the breakdown wants it every time.
     context_usage_expanded: bool,
@@ -599,6 +603,9 @@ pub struct CockpitView {
     /// The PR reads `check_pr` would have sent `gh`: (Thread, manual).
     #[cfg(test)]
     pub(crate) pr_asked: Vec<(ThreadId, bool)>,
+    /// The PR tab's snapshot reads, by Thread, fixture or not.
+    #[cfg(test)]
+    pub(crate) pr_tab_reads: Vec<ThreadId>,
     /// The palette, the shortcuts sheet and the notifications list's focus
     /// (`cockpit::palette`).
     floats: palette::Floats,
@@ -1598,6 +1605,7 @@ impl CockpitView {
             rename: None,
             context_menu: None,
             panel: Default::default(),
+            pr_tab: Default::default(),
             context_usage_expanded: false,
             session_controls: None,
             mode_picker: None,
@@ -1651,6 +1659,8 @@ impl CockpitView {
             pr_focus: None,
             #[cfg(test)]
             pr_asked: Vec::new(),
+            #[cfg(test)]
+            pr_tab_reads: Vec::new(),
             floats: palette::Floats::new(cx),
             transcript_entities: Default::default(),
             decisions: decisions::DecisionState::new(cx.weak_entity()),
@@ -1819,10 +1829,12 @@ impl CockpitView {
             return;
         }
         self.notify_part(parts::Part::Nav, cx);
-        // Tests and captures never run `gh`; a test reads what was asked.
-        if cfg!(any(test, feature = "visual-reference")) {
-            #[cfg(test)]
-            self.pr_asked.push((thread, manual));
+        #[cfg(test)]
+        self.pr_asked.push((thread, manual));
+        // Tests and captures never run `gh`: only a fixture world's forge
+        // answers them (`Cockpit::fixture_forge`); a test reads what was
+        // asked.
+        if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
             return;
         }
         let answer = self.cockpit.pull_request(&path);
@@ -1849,7 +1861,12 @@ impl CockpitView {
 
     /// Open the Thread's PR on the forge, in the browser on this computer.
     pub(crate) fn open_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let Some(url) = self.facts.pr(thread).and_then(|pr| pr.url.as_deref()) {
+        let url = self
+            .facts
+            .pr(thread)
+            .and_then(|pr| pr.url.as_deref())
+            .or_else(|| self.pr_tab.url(thread));
+        if let Some(url) = url {
             cx.open_url(url);
         }
     }
@@ -2274,6 +2291,7 @@ impl CockpitView {
                 self.check_pr(thread, false, cx);
             }
         }
+        self.tend_pr_tab(cx);
         let mut restarted = Vec::new();
         // What the sweep found moved: a fact or a Thread's age (everything
         // redraws), a working Thread (its Pane and the nav), the frame's
@@ -14073,6 +14091,7 @@ mod tests {
     mod nav_parity;
     mod panel;
     mod pr;
+    mod pr_tab;
     #[cfg(unix)]
     mod projects;
     mod provider_controls;

@@ -217,8 +217,8 @@ fn prepare(
 
 /// The Solo panel on `tab` for `thread` (SPEC §5.6): the Changes tab, or
 /// the PR tab reading the forge's fixture (`Cockpit::fixture_forge`, which
-/// answers `review_pull_request` for the crash fix's worktree; phase 7c
-/// draws what it reads).
+/// answers both PR reads of the crash fix's worktree: the tab's snapshot,
+/// and the nav label's, so the tab reads `PR #146`).
 fn open_panel(
     view: &mut CockpitView,
     thread: ThreadId,

@@ -2114,6 +2114,12 @@ impl Cockpit {
         self.forge_fixture.insert(path, view);
     }
 
+    /// Whether a fixture world's forge answers for the checkout at `path`:
+    /// the one PR read tests and captures make, since they never run a CLI.
+    pub fn has_forge_fixture(&self, path: &Path) -> bool {
+        self.forge_fixture.contains_key(path)
+    }
+
     /// A fixture world's free disk: from now on the bar's `N GB free`
     /// reads `bytes` (`free_disk_fixture`) instead of the volume.
     pub fn fixture_free_disk(&mut self, bytes: u64) {

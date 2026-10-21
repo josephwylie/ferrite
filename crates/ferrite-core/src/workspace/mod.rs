@@ -527,20 +527,27 @@ impl PullRequest {
     /// The label's reading of a forge read's snapshot: what `gh pr view`
     /// would have said of the same pull request. `None` without one.
     pub fn of_view(view: &ferrite_reviewr::forge::PrView) -> Option<Self> {
-        use ferrite_reviewr::forge::{CheckStatus, PrState as Forge, PrView};
-        let PrView::Pr(pr) = view else {
+        let ferrite_reviewr::forge::PrView::Pr(pr) = view else {
             return None;
         };
+        Some(Self::of_wire(&(**pr).clone().into()))
+    }
+
+    /// The label's reading of the Review's whole snapshot (the panel's PR
+    /// tab): its number, state and checks. The snapshot names no check's
+    /// page, so no run has a url.
+    pub fn of_wire(pr: &crate::protocol::WirePr) -> Self {
+        use crate::protocol::{WireCheckStatus as Status, WirePrState as Wire};
         let runs: Vec<Check> = pr
             .checks
             .iter()
             .map(|check| {
                 let (state, detail) = match check.status {
-                    CheckStatus::Success => (CheckState::Passing, "success"),
-                    CheckStatus::Failure => (CheckState::Failing, "failure"),
-                    CheckStatus::Running => (CheckState::Pending, "in_progress"),
-                    CheckStatus::Pending => (CheckState::Pending, "queued"),
-                    CheckStatus::Skipped => (CheckState::Skipped, "skipped"),
+                    Status::Success => (CheckState::Passing, "success"),
+                    Status::Failure => (CheckState::Failing, "failure"),
+                    Status::Running => (CheckState::Pending, "in_progress"),
+                    Status::Pending | Status::Unknown => (CheckState::Pending, "queued"),
+                    Status::Skipped => (CheckState::Skipped, "skipped"),
                 };
                 Check {
                     name: check.name.clone(),
@@ -551,18 +558,18 @@ impl PullRequest {
                 }
             })
             .collect();
-        Some(Self {
+        Self {
             number: pr.number,
             state: match pr.state {
-                Forge::Open => PrState::Open,
-                Forge::Merged => PrState::Merged,
-                Forge::Closed => PrState::Closed,
+                Wire::Merged => PrState::Merged,
+                Wire::Closed => PrState::Closed,
+                Wire::Open | Wire::Unknown => PrState::Open,
             },
-            draft: pr.is_draft,
+            draft: pr.draft,
             url: (!pr.url.is_empty()).then(|| pr.url.clone()),
             checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
             runs,
-        })
+        }
     }
 }
 

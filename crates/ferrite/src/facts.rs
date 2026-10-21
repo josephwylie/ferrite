@@ -278,6 +278,12 @@ impl Facts {
         self.threads.entry(thread).or_default().pr.answered(reading)
     }
 
+    /// Adopt the PR tab's read of the Thread's PR (`PrWatch::adopt`).
+    /// Whether its label moved.
+    pub fn pr_adopt(&mut self, thread: ThreadId, reading: PullRequest) -> bool {
+        self.threads.entry(thread).or_default().pr.adopt(reading)
+    }
+
     /// The Thread's last PR reading.
     pub fn pr(&self, thread: ThreadId) -> Option<&PullRequest> {
         self.get(thread)?.pr.reading.as_ref()
