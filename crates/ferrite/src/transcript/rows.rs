@@ -561,7 +561,7 @@ fn common_suffix_after_prefix<T: Eq>(left: &[T], right: &[T], prefix: usize) -> 
 }
 
 /// The splices that turn `previous` into `next`. Past their common start
-/// (the banner and the rows that stayed), they align on the first previous
+/// (the banner and any rows before the first change), they align on the first previous
 /// row `next` still holds: the head before it on either side is one splice
 /// — history evicted from the far end, rows prepended, or a group renamed
 /// for a new oldest call — and the rest a common prefix, one splice and a
