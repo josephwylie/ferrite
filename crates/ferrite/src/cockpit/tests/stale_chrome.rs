@@ -431,14 +431,19 @@ fn a_working_clock_turns_over_on_its_pane(cx: &mut TestAppContext) {
     assert_ne!(after, before, "the Pane redrew its clock");
 }
 
-/// A choice menu: the model picker opens placed on its Composer's edge
-/// with no frame asked for beyond its own, and its drawn cursor follows the
-/// arrows.
+/// A choice menu: the model picker opens placed over its chip with no
+/// frame asked for beyond its own, and its drawn cursor follows the arrows.
+/// The chip is Solo's (SPEC §5.5): the board's Pane fills it first.
 #[gpui::test]
 fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut TestAppContext) {
     let b = board("stale-picker", &[], cx);
     bind_production_keys(b.cx);
     let thread = b.threads[0];
+    b.view.update(b.cx, |view, cx| {
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    frames(b.cx, 300);
     b.view
         .update(b.cx, |view, cx| view.open_provider_picker(thread, cx));
     frames(b.cx, 300);

@@ -1,7 +1,6 @@
-//! The files a prompt carries, drawn the same way in the draft and in the
-//! delivered prompt: the prototype's `.att` chip (theme WP-D) — one row on
-//! `paint::BAND2`, a cell of padding each side, the image mark (or the file
-//! mark) and the name in `LINK_INK`. This module owns presentation and
+//! The files a draft carries, as shelf chips over the Composer (SPEC §5.5):
+//! `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, Geist `FS_META`,
+//! the image mark (or the file mark) and the name in `LINK_INK`. This module owns presentation and
 //! image preview; callers only supply paths and, for a draft, a removal
 //! callback. The prompt codec owns persistence. A draft's review comments
 //! (ADR 0021) ride the same shelf as one more chip.
@@ -71,8 +70,8 @@ impl Attachments {
     }
 }
 
-/// The files as `.att` chips, wrapping: one row on `paint::BAND2`, a cell of
-/// padding each side, a mark — an image's is a real button (a tab stop,
+/// The files as shelf chips, wrapping (`SHELF_CHIP_H` on `paint::RAISED`),
+/// a mark — an image's is a real button (a tab stop,
 /// Enter/Space) that opens the preview; any other file's the `FILE` mark —
 /// then the name in `LINK_INK` cut at `ATTACH_CHIP_MAX_W` (a file name is
 /// machine text), and, on a draft, a quiet `×` that removes it (a button
@@ -152,13 +151,14 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .h(px(theme::ATTACH_CHIP_H))
             .max_w(px(theme::ATTACH_CHIP_MAX_W))
             .min_w_0()
-            .px(px(theme::CH))
-            .bg(theme::paint::BAND2)
+            .px(px(theme::SPACE_2))
+            .rounded(px(theme::R_CHIP))
+            .bg(theme::paint::RAISED)
             .cursor_pointer()
             .hover_carried(format!("attachment-{index}-{}", open.display()))
-            .font_family(theme::FONT_CODE)
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
+            .font_family(theme::FONT_UI)
+            .text_size(px(theme::FS_META))
+            .line_height(px(theme::LH_META))
             .font_weight(theme::W_BODY)
             .text_color(rgb(theme::LINK_INK))
             .whitespace_nowrap()
@@ -235,11 +235,12 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
         .items_center()
         .gap(px(theme::CH))
         .h(px(theme::ATTACH_CHIP_H))
-        .px(px(theme::CH))
-        .bg(theme::paint::BAND2)
-        .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
+        .px(px(theme::SPACE_2))
+        .rounded(px(theme::R_CHIP))
+        .bg(theme::paint::RAISED)
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
         .font_weight(theme::W_BODY)
         .text_color(rgb(theme::LINK_INK))
         .whitespace_nowrap()

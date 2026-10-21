@@ -598,18 +598,21 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
         .expect("the draft Composer");
     let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
     let model = cx.debug_bounds("draft-model-picker").expect("model");
-    // Terminal-native (WP-D): the pair rides the status line under the
-    // band, inside the band's width (there is no send control to clear).
+    // SPEC §5.5: the pair rides the box's toolbar, left of send, inside
+    // the box.
     assert!(
         effort.right() <= block.right() + px(0.5),
-        "effort {effort:?} stays inside the band {block:?}"
+        "effort {effort:?} stays inside the box {block:?}"
     );
     assert!(model.right() <= effort.left());
-    let band = cx.debug_bounds("draft-band").expect("the setup chips");
-    assert!(
-        band.top() >= block.bottom(),
-        "the setup chips ride the meta row under the box: {band:?} / {block:?}"
-    );
+    let toolbar = cx.debug_bounds("composer-toolbar").expect("the toolbar");
+    for chip in ["band-chip-0", "band-chip-1"] {
+        let chip = cx.debug_bounds(chip).expect("a setup chip");
+        assert!(
+            toolbar.contains(&chip.center()) && chip.right() <= model.left(),
+            "the setup chips ride the toolbar's left: {chip:?} / {toolbar:?}"
+        );
+    }
     // The meter gives way first, so the setup chips keep their names.
     assert!(cx.debug_bounds("usage-meter-draft-1").is_none());
     for chip in ["band-chip-0", "band-chip-1"] {
@@ -1070,8 +1073,8 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     assert_eq!(
         cx.update(|_, cx| crate::composer::testing::face(composer, cx))
             .as_deref(),
-        Some(FONT_CODE),
-        "the Composer's line is code"
+        Some(crate::theme::FONT_UI),
+        "the Solo Composer's line is chrome (SPEC §3.5)"
     );
     // Code in prose: fenced blocks and inline spans.
     let style = crate::rich::style(px(16.));
@@ -1168,11 +1171,11 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     );
 }
 
-/// Terminal-native (WP-D, FL-10): the Composer is one input row on its band
-/// — no box, no send control, no verb hint. Its status line is the
-/// window's, in the bottom bar (ADR 0014), and no key hint rides it. Enter sends and Esc interrupts.
+/// SPEC §5.5: at rest the Solo Composer is a box of one input row over its
+/// toolbar, with no key hint; the bar carries no status line. Enter sends
+/// and Esc interrupts.
 #[gpui::test]
-fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext) {
+fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
     let thread = core.threads()[0];
     bind_production_keys(cx);
@@ -1180,17 +1183,15 @@ fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext)
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
     let block = cx.debug_bounds("composer-block").unwrap();
-    let meta = cx.debug_bounds("composer-meta").expect("the meta row");
-    let bar = cx.debug_bounds("bottom-bar").unwrap();
     assert_eq!(
         block.size.height,
-        px(2. * crate::theme::COMPOSER_PAD_Y + crate::theme::COMPOSER_ROW_H),
-        "one row on the band"
+        px(crate::theme::COMPOSER_INPUT_PAD_T
+            + crate::theme::COMPOSER_ROW_H
+            + crate::theme::COMPOSER_INPUT_PAD_B
+            + crate::theme::COMPOSER_TOOLBAR_H),
+        "one row over the toolbar"
     );
-    assert!(
-        meta.top() >= bar.top() && meta.bottom() <= bar.bottom(),
-        "the status line rides the bar: {meta:?} in {bar:?}"
-    );
+    assert!(cx.debug_bounds("composer-meta").is_none(), "no status line");
     assert!(
         cx.debug_bounds("prompt-placeholder").is_some(),
         "the resting line says what to do"

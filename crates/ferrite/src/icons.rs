@@ -234,6 +234,8 @@ pub const X_CIRCLE: &str = "icons/x-circle.svg";
 /// The permission mode.
 #[allow(dead_code)]
 pub const SHIELD: &str = "icons/shield.svg";
+/// The send circle while a turn runs and nothing is typed.
+pub const STOP: &str = "icons/stop.svg";
 /// Send; a commit not pushed.
 #[allow(dead_code)]
 pub const ARROW_UP: &str = "icons/arrow-up.svg";

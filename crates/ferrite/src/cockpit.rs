@@ -2434,7 +2434,7 @@ impl CockpitView {
         let focused = self.focused_thread();
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
-            // Its usage and mode read in the bar's status line.
+            // Its usage reads in the bar (`pane_status`).
             if Some(thread) == focused {
                 self.notify_part(parts::Part::Status, cx);
             }
@@ -8292,17 +8292,14 @@ impl CockpitView {
         }
     }
 
-    /// The focused draft's setup chips — project and workspace, wired to
-    /// their popovers (#29) and riding the left of the controls row. The
-    /// model and effort controls sit in the trailing slot instead, where a
-    /// live Thread's Composer draws them: `draft_model_picker`.
-    ///
-    /// A chip click shares `open_band_popover` with ↵ on a tab-focused
-    /// chip; the closure re-finds the Pane by its Composer, a draft's one
-    /// stable identity.
-    fn draft_band_element(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// The focused draft's setup chips (#29) — Project and Workspace — for
+    /// the Composer's toolbar, wired to their popovers, which hang above
+    /// them (`band_menu_element`). A chip click shares `open_band_popover`
+    /// with ↵ on a tab-focused chip; the closure re-finds the Pane by its
+    /// Composer, a draft's one stable identity.
+    fn draft_band_chips(&self, index: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(draft) = self.panes[index].draft() else {
-            return div().into_any_element();
+            return Vec::new();
         };
         let composer = self.panes[index].composer.clone();
         let project_title = self
@@ -8310,13 +8307,13 @@ impl CockpitView {
             .registry()
             .project(draft.binding.project())
             .map(|project| project.title.clone())
-            .unwrap_or_else(|| "project".into());
+            .unwrap_or_else(|| "Project".into());
         let workspace_label = match draft.binding.target() {
             DraftTarget::Main => self.checked_out_branch(draft.binding.project(), cx),
             DraftTarget::Branch { name } => SharedString::from(name.clone()),
-            DraftTarget::NewBranch => SharedString::from("new branch"),
+            DraftTarget::NewBranch => SharedString::from("New branch"),
             DraftTarget::Existing { branch, .. } => SharedString::from(branch.clone()),
-            DraftTarget::New => SharedString::from("new worktree"),
+            DraftTarget::New => SharedString::from("New worktree"),
         };
         let chips = [
             (
@@ -8328,13 +8325,13 @@ impl CockpitView {
                 pane::band_chip_label(&workspace_label),
             ),
         ];
-        let mut band = pane::draft_band();
-        for (slot, (chip, label)) in chips.into_iter().enumerate() {
-            let focused = draft.band_focus == Some(chip);
-            let chip_composer = composer.clone();
-            let chip_element = pane::band_chip(slot, label, false, focused)
-                .relative()
-                .on_mouse_down(
+        chips
+            .into_iter()
+            .enumerate()
+            .map(|(slot, (chip, label))| {
+                let focused = draft.band_focus == Some(chip);
+                let chip_composer = composer.clone();
+                let chip_element = pane::band_chip(slot, label, focused).on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                         // The chip is this Pane's: land on it first, then
@@ -8351,25 +8348,25 @@ impl CockpitView {
                         view.open_band_popover(chip, cx);
                     }),
                 );
-            band = band.child(crate::components::on_bounds(
-                chip_element,
-                self.record_trigger(band_trigger(chip)),
-            ));
-        }
-        band.into_any_element()
+                crate::components::on_bounds(chip_element, self.record_trigger(band_trigger(chip)))
+                    .into_any_element()
+            })
+            .collect()
     }
 
-    /// The focused draft's model and effort controls (#29): the same
-    /// pickers a live Thread's Composer draws, in the same trailing slot,
-    /// so a new Thread and an existing one share one input silhouette.
-    /// They open the band's popovers rather than the Thread's.
-    fn draft_model_picker(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// The focused draft's model and effort chips (#29): the chips a live
+    /// Thread's toolbar draws, in the same place, so a new Thread and an
+    /// existing one share one silhouette. They open the band's popovers
+    /// rather than the Thread's. The effort chip stays put, as the band is
+    /// a tab-stop sequence: with no effort resolving it reads the picker's
+    /// own `Default` row — the value in force.
+    fn draft_model_chips(&self, index: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(draft) = self.panes[index].draft() else {
-            return div().into_any_element();
+            return Vec::new();
         };
         let provider = draft.binding.provider().provider;
-        // The provider's own word until a model is chosen; the groomed
-        // model name after — one spelling, wherever it shows.
+        // The provider's own word until a model is chosen; the model's name
+        // after — one spelling, wherever it shows.
         let model_label = match draft.binding.provider().model.as_deref() {
             Some(model) => SharedString::from(ferrite_core::providers::models::label(
                 model,
@@ -8377,9 +8374,6 @@ impl CockpitView {
             )),
             None => SharedString::from(provider_title(provider)),
         };
-        // The band is a tab-stop sequence, so its effort chip stays put:
-        // with no effort resolving it reads the picker's own `default` row
-        // — the value in force — never the bare word `effort`.
         let effort_label = effort_value(
             draft.binding.effort(),
             self.prefs.settings.effort_for(provider),
@@ -8387,14 +8381,17 @@ impl CockpitView {
             draft.binding.provider().model.as_deref(),
             &self.cockpit.announced_models(provider),
         )
-        .unwrap_or_else(|| SharedString::from("default"));
+        .map_or_else(
+            || SharedString::from("Default"),
+            |label| pane::sentence_case(&label).into(),
+        );
         let controls = [
             (
                 pane::BandChip::Provider,
                 pane::draft_picker(
                     "draft-model-picker",
                     draft.band_focus == Some(pane::BandChip::Provider),
-                    pane::model_picker(Some(provider), model_label, None, false),
+                    pane::model_chip(Some(provider), model_label),
                     cx,
                 ),
             ),
@@ -8403,22 +8400,96 @@ impl CockpitView {
                 pane::draft_picker(
                     "draft-effort-picker",
                     draft.band_focus == Some(pane::BandChip::Effort),
-                    pane::effort_picker(effort_label, false),
+                    pane::effort_chip(effort_label),
                     cx,
                 )
                 .tip("Reasoning effort"),
             ),
         ];
-        // The model and its effort read as one segment pair, split by the
-        // status line's faint `·`.
-        let mut row = div().flex().flex_shrink_0().items_center();
-        for (at, (chip, control)) in controls.into_iter().enumerate() {
-            if at > 0 {
-                row = row.child(pane::status_seam());
-            }
-            row = row.child(self.choice_menu(index, Kind::Band(chip), control, cx));
+        controls
+            .into_iter()
+            .map(|(chip, control)| {
+                self.choice_menu(index, Kind::Band(chip), control, cx)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// The Solo Composer's toolbar (SPEC §5.5): the `+` that attaches
+    /// files; a draft's Project and Workspace chips, or a Thread's
+    /// permission mode; then, at the right, the model and effort chips and
+    /// the send circle. None on a board (its compact Composer is input
+    /// only, SPEC §5.9) and on a Subagent's tab, whose footer stands in.
+    fn composer_toolbar(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = &self.panes[index];
+        if self.grid_board() || !pane.is_main() {
+            return None;
         }
-        row.into_any_element()
+        let attach = pane::attach_button(cx)
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.attach_files(index, cx);
+            }))
+            .into_any_element();
+        let mut lead = vec![attach];
+        let mut trail = match pane.thread() {
+            None => {
+                lead.extend(self.draft_band_chips(index, cx));
+                self.draft_model_chips(index, cx)
+            }
+            Some(_) => {
+                lead.extend(self.mode_chip(index, cx));
+                self.model_chips(index, cx)
+            }
+        };
+        trail.push(self.send_button(index, cx));
+        Some(pane::composer_toolbar(lead, trail).into_any_element())
+    }
+
+    /// The send circle: Enter's act — or, while Main is busy (a turn runs
+    /// or its Session starts) and the line is empty, `stop`, Esc's.
+    fn send_button(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let pane = &self.panes[index];
+        let running = pane
+            .thread()
+            .and_then(|thread| self.cockpit.thread(thread))
+            .is_some_and(|open| open.busy());
+        let stop = running && pane.composer.read(cx).is_empty();
+        pane::send_button(stop, cx)
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.focus_pane(index);
+                let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                match view.panes[index].thread() {
+                    Some(thread) if stop => {
+                        view.cockpit.interrupt(thread);
+                        view.facts.acted(&view.cockpit, thread);
+                        cx.notify();
+                    }
+                    _ => view.submit(&Submit, window, cx),
+                }
+            }))
+            .into_any_element()
+    }
+
+    /// The toolbar's `+`: the system's file picker, its picks staged on
+    /// this Pane's Composer as a drop or a paste stages them.
+    fn attach_files(&mut self, index: usize, cx: &mut Context<Self>) {
+        let composer = self.panes[index].composer.clone();
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn(async move |_, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            composer.update(cx, |composer, cx| composer.add_files(&paths, cx));
+        })
+        .detach();
     }
 
     /// Test-only: aim the launch project at a scratch repo — production
@@ -8469,7 +8540,8 @@ impl CockpitView {
             .borrow()
             .get(band_trigger(chip).as_ref())
             .copied()?;
-        let floor = self.bar_place().floor - FLOAT_OFFSET;
+        // Above its chip, in the Composer's toolbar.
+        let floor = f32::from(trigger.top()) - FLOAT_OFFSET;
         let width = SLASH_MENU_W.min(f32::from(window.viewport_size().width) - 2. * GRID_PAD);
         Some(
             deferred(
@@ -10100,7 +10172,7 @@ impl CockpitView {
                         .thread()
                         .and_then(|thread| self.cockpit.thread(thread))
                         .map_or(0, |thread| thread.queued_all().len());
-                    pane::composer_row_limit(rect.h, false, queued)
+                    pane::composer_row_limit(rect.h, self.grid_board(), queued)
                 })
                 .unwrap_or(crate::composer::MAX_ROWS);
             // Derive this every frame so answering, leaving fullscreen, or
@@ -10798,6 +10870,9 @@ impl CockpitView {
                     reduce_motion: cx.reduce_motion(),
                     drop_target: self.drop_target(index, cx),
                     show_focus: self.grid_board(),
+                    toolbar: (level == Level::Transcript)
+                        .then(|| self.composer_toolbar(index, cx))
+                        .flatten(),
                 },
                 level,
             ));
@@ -10847,7 +10922,7 @@ impl CockpitView {
             composer_files: pane.composer.read(cx).attachment_count(),
             composer_queue_height: pane::composer_queue_height(
                 rect.map_or(self.cell(window).height, |rect| rect.h),
-                false,
+                self.grid_board(),
                 open.map_or(0, |thread| thread.queued_all().len()),
             ),
             focused,
@@ -10938,6 +11013,16 @@ impl CockpitView {
             quick_answers: (level == Level::Wall)
                 .then(|| self.quick_answers(index, cx))
                 .flatten(),
+            toolbar: l1.then(|| self.composer_toolbar(index, cx)).flatten(),
+            unqueue: (l1 && !self.grid_board()).then(|| {
+                pane::queued_close(cx)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.cockpit.cancel_queued(thread, false);
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            }),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -11069,10 +11154,11 @@ impl CockpitView {
         }
     }
 
-    /// The focused Pane's status line, for the window's bar (ADR 0014): a
-    /// draft's setup chips, model and usage; a Thread's mode, model, `ctx`
-    /// and changed files. Nothing on the empty board, below L1, or on a
-    /// Subagent's tab, whose footer stands in for the Composer.
+    /// What is left of the focused Pane's status line in the window's bar:
+    /// its `ctx` meter and its changed files, until the right panel takes
+    /// them (SPEC §5.6, phase 7a). The mode, model and effort are the
+    /// Composer's chips now (`composer_toolbar`). Nothing on the empty
+    /// board, below L1, or on a Subagent's tab.
     fn pane_status(&self, level: Level, cx: &mut Context<Self>) -> Option<AnyElement> {
         if level != Level::Transcript || self.empty_board_shown() {
             return None;
@@ -11091,37 +11177,26 @@ impl CockpitView {
                 self.cockpit.account_limits(open.provider())
             ))
         }));
-        let segments: Vec<AnyElement> = match pane.thread() {
-            None => [
-                Some(
-                    div()
-                        .flex_shrink(1.)
-                        .min_w_0()
-                        .child(self.draft_band_element(index, cx))
-                        .into_any_element(),
-                ),
-                Some(self.draft_model_picker(index, cx)),
-                self.usage_meter(index, cx),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
-            Some(thread) => {
-                let mode = self.cockpit.thread(thread).and_then(|open| {
-                    pane::permission_mode_label(open.permission_mode()?, &open.permission_modes())
-                });
-                [
-                    mode.map(|mode| pane::mode_segment(thread, &mode, self.mode_picker(index, cx))),
-                    self.model_picker(index, cx),
-                    self.usage_meter(index, cx),
-                    self.changed_files_chip(index, cx),
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
-            }
-        };
-        (!segments.is_empty()).then(|| pane::status_line(segments).into_any_element())
+        let items: Vec<AnyElement> = [
+            self.usage_meter(index, cx),
+            self.changed_files_chip(index, cx),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!items.is_empty()).then(|| {
+            div()
+                .debug_selector(|| "bar-meters".into())
+                .flex()
+                .flex_shrink(1.)
+                .items_center()
+                .h_full()
+                .min_w_0()
+                .pl(px(crate::theme::BAR_SEG_PAD_X))
+                .overflow_hidden()
+                .children(items)
+                .into_any_element()
+        })
     }
 
     /// A bound action's first keystroke as a keycap reads it, from this
@@ -11232,7 +11307,7 @@ impl CockpitView {
         let removed = files.iter().map(|file| file.removed).sum();
         let was_open = self.changed_files_card == Some(thread);
         Some(
-            pane::composer_control(("changed-files", thread.get() as usize), cx)
+            pane::bar_control(("changed-files", thread.get() as usize), cx)
                 .tip("Files changed")
                 .child(pane::files_chip(count, added, removed))
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -11940,23 +12015,40 @@ impl CockpitView {
             .map(|error| (thread, generation, error.to_string()));
     }
 
-    /// The Composer's mode chip as a menu (§D.7): the Session's own list of
-    /// permission modes, ✓ on the one in force, a pick sent as the native
-    /// `SetPermissionMode` control. None when the Session has announced no
-    /// mode or offers no list — the Pane then draws the plain chip.
-    fn mode_picker(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The Composer's permission mode chip (SPEC §5.5, §D.7): the `shield`,
+    /// the mode's label from the Session's own list (`permission_modes`),
+    /// in `ATTENTION` for bypass or full access. Always shown once the
+    /// Thread has a list or a mode, so the mode can be changed, from the
+    /// cached answers when no Session runs (ADR 0032). Its menu is that
+    /// list, ✓ on the mode in force, a pick sent as the native
+    /// `SetPermissionMode` control; ⇧⇥ still cycles (`cycle_mode`). A
+    /// Session that cannot switch modes shows the chip without a menu.
+    fn mode_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
         let generation = open.generation();
-        let mode = open.permission_mode()?;
         let modes = open.permission_modes();
-        if modes.is_empty() || !open.supports_control(ferrite_core::ControlKind::SetPermissionMode)
-        {
+        if modes.is_empty() && open.permission_mode().is_none() {
             return None;
         }
-        // Hidden at the default: the mode stays reachable in the session
-        // controls card (`•••`) and Settings.
-        let label = pane::permission_mode_label(mode, &modes)?;
+        let mode = open.permission_mode().unwrap_or("default").to_string();
+        let label = pane::permission_mode_label(&mode, &modes);
+        let key = thread.get() as usize;
+        let trigger = pane::toolbar_chip(("mode-picker", key), cx)
+            .debug_selector(move || format!("mode-picker-{key}"))
+            .tip("Permission mode")
+            .child(pane::mode_chip(label, &mode));
+        let wrap = |chip: AnyElement| {
+            div()
+                .debug_selector(move || format!("composer-mode-{key}"))
+                .flex_shrink_0()
+                .child(chip)
+                .into_any_element()
+        };
+        if modes.is_empty() || !open.supports_control(ferrite_core::ControlKind::SetPermissionMode)
+        {
+            return Some(wrap(trigger.into_any_element()));
+        }
         let choices = modes
             .iter()
             .map(|choice| crate::components::Choice {
@@ -11972,7 +12064,7 @@ impl CockpitView {
         });
         let weak = cx.entity().downgrade();
         let picker = weak.clone();
-        Some(
+        Some(wrap(
             crate::menu::ChoiceMenu {
                 head: Some(("permission mode".into(), SharedString::default())),
                 ladder: None,
@@ -11983,11 +12075,8 @@ impl CockpitView {
                 ],
                 width: None,
                 lead: 0.,
-                id: format!("mode-picker-{}", thread.get()).into(),
-                trigger: pane::composer_control(("mode-picker", thread.get() as usize), cx)
-                    .debug_selector(move || format!("mode-picker-{}", thread.get()))
-                    .tip("Permission mode")
-                    .child(pane::mode_chip(&label, true)),
+                id: format!("mode-picker-{key}").into(),
+                trigger,
                 choices,
                 open: is_open,
                 return_focus: self.panes[index].composer.focus_handle(cx),
@@ -12019,10 +12108,10 @@ impl CockpitView {
                         cx.notify();
                     });
                 }),
-                place: self.bar_place(),
+                place: self.composer_place(index),
             }
             .into_any_element(),
-        )
+        ))
     }
 
     /// The Pane's background shelf: the Session's running background tasks
@@ -12671,13 +12760,19 @@ impl CockpitView {
         )
     }
 
-    /// The Composer's model picker (#25): the provider logomark, the bare
-    /// model name, and a chevron — on **every** L1 Pane, not only pre-lock.
-    /// Its click opens the catalog even while working; the current choice
-    /// stays visible and availability follows the Thread's busy state.
-    fn model_picker(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.panes[index].thread()?;
-        let open = self.cockpit.thread(thread)?;
+    /// The Thread's model and effort chips (#25, SPEC §5.5): the provider's
+    /// logomark and the model as the picker names it; then the effort in
+    /// force, sentence case, when the model takes one. Each opens its own
+    /// picker, even while working: the current choice stays visible and
+    /// availability follows the Thread's busy state, said in the tooltip.
+    /// Both read the cached answers, so they work with no Session.
+    fn model_chips(&self, index: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(thread) = self.panes[index].thread() else {
+            return Vec::new();
+        };
+        let Some(open) = self.cockpit.thread(thread) else {
+            return Vec::new();
+        };
         let provider = open.provider();
         let hold = tuning_hold(&open);
         // The standing choice names the chip; else what the Session's own
@@ -12689,10 +12784,6 @@ impl CockpitView {
             }
             None => SharedString::from(provider_title(provider)),
         };
-        // `opus 5.5 (1M) · medium` is one segment and one control: the
-        // effort shows only when it resolves (R3) — the Thread's choice, the
-        // saved default, the catalog's — with its `·` muted like the rest,
-        // and the picker it opens carries the effort row.
         let ladder =
             ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
         let effort = (!ladder.is_empty())
@@ -12704,30 +12795,58 @@ impl CockpitView {
                     open.model(),
                     open.models(),
                 )
+                .or_else(|| {
+                    ferrite_core::providers::models::cli_default_effort(provider, open.model())
+                        .map(effort_chip_label)
+                })
             })
             .flatten();
-        let model_chip = self.choice_menu(
-            index,
-            Kind::Provider,
-            pane::composer_control(("model-picker", thread.get() as usize), cx)
-                .debug_selector(move || format!("model-picker-{}", thread.get()))
-                .tip(hold.unwrap_or("Model"))
-                .child(pane::model_picker(
-                    Some(provider),
-                    label,
-                    effort,
-                    hold.is_some(),
-                )),
-            cx,
-        );
-        Some(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .child(model_chip)
+        let key = thread.get() as usize;
+        let mut chips = vec![self
+            .choice_menu(
+                index,
+                Kind::Provider,
+                pane::toolbar_chip(("model-picker", key), cx)
+                    .debug_selector(move || format!("model-picker-{key}"))
+                    .tip(hold.unwrap_or("Model"))
+                    .child(pane::model_chip(Some(provider), label)),
+                cx,
+            )
+            .into_any_element()];
+        if let Some(effort) = effort {
+            chips.push(
+                self.choice_menu(
+                    index,
+                    Kind::Effort,
+                    pane::toolbar_chip(("effort-picker", key), cx)
+                        .debug_selector(move || format!("effort-picker-{key}"))
+                        .tip(hold.unwrap_or("Reasoning effort"))
+                        .child(pane::effort_chip(pane::sentence_case(&effort).into())),
+                    cx,
+                )
                 .into_any_element(),
-        )
+            );
+        }
+        chips
+    }
+
+    /// Where a Composer chip's menu rests (SPEC §5.5): its foot over the
+    /// chip's top — the toolbar's chips stand centred in the box's foot
+    /// row — and inside the box's right edge. Until the box has been laid
+    /// out once, over the bar.
+    fn composer_place(&self, index: usize) -> crate::components::FloatPlace {
+        use crate::theme::{COMPOSER_TOOLBAR_H, TOOL_CHIP_H};
+        match self
+            .panes
+            .get(index)
+            .and_then(|pane| pane.geometry.get().composer)
+        {
+            Some(field) => crate::components::FloatPlace {
+                floor: f32::from(field.bottom()) - (COMPOSER_TOOLBAR_H + TOOL_CHIP_H) / 2.,
+                limit_right: f32::from(field.right()),
+            },
+            None => self.bar_place(),
+        }
     }
 
     fn choice_menu(
@@ -12873,7 +12992,7 @@ impl CockpitView {
             on_pick: std::rc::Rc::new(move |at, window, cx| {
                 let _ = picker.update(cx, |view, cx| view.pick(at, window, cx));
             }),
-            place: self.bar_place(),
+            place: self.composer_place(index),
         }
     }
 
@@ -16372,7 +16491,10 @@ mod tests {
                 bar.top() - px(crate::theme::FLOAT_OFFSET),
                 "the card rests FLOAT_OFFSET above the bar it opened from"
             );
-            assert_eq!(card.right(), meter.right(), "it hangs off its trigger");
+            assert!(
+                card.right() >= meter.right(),
+                "it hangs off its trigger, pulled right only to stay inside the window"
+            );
             assert!(
                 cx.debug_bounds("context-usage-limits-unknown").is_some(),
                 "no account window reported: one line, no bars"
@@ -16384,9 +16506,9 @@ mod tests {
         assert_eq!(origins[0], origins[1], "the pointer does not move the card");
     }
 
-    /// The model picker rests on the bar its chip rides, not over it (ADR
-    /// 0014): its foot `MODEL_PICKER_GAP` above the bar, its right edge
-    /// inside the window's margin, every row one menu row high.
+    /// The model picker rests above its chip in the Composer's toolbar
+    /// (SPEC §5.5): its foot `MODEL_PICKER_GAP` over the chip, its right
+    /// edge inside the Composer, every row one menu row high.
     #[gpui::test]
     fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("model-picker-place", 1);
@@ -16402,17 +16524,18 @@ mod tests {
             cx.run_until_parked();
         }
         let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
-        let bar = cx.debug_bounds("bottom-bar").unwrap();
-        assert_eq!(
-            menu.bottom(),
-            bar.top() - px(crate::theme::MODEL_PICKER_GAP),
-            "FL-13: the picker's foot 5px over the bar its chip rides"
+        let chip = debug_bounds(cx, format!("model-picker-{}", thread.get()))
+            .expect("the model chip rides the toolbar");
+        let composer = cx.debug_bounds("composer-block").unwrap();
+        assert!(
+            (menu.bottom() - (chip.top() - px(crate::theme::MODEL_PICKER_GAP))).abs() <= px(1.),
+            "FL-13: the picker's foot 5px over its chip: {menu:?} / {chip:?}"
         );
         assert!(
             (menu.size.width - px(crate::theme::MODEL_PICKER_W)).abs() <= px(1.),
             "66 cells: {menu:?}"
         );
-        assert!(menu.right() <= bar.right() - px(crate::theme::GRID_PAD) + px(1.5));
+        assert!(menu.right() <= composer.right() + px(1.5));
         let row = cx
             .debug_bounds("choice-row-1")
             .expect("a live row under the section");
@@ -16420,11 +16543,10 @@ mod tests {
         assert_eq!(row.size.height, px(crate::theme::FLOAT_ROW_H));
     }
 
-    /// The status line's popovers hang off their triggers in the bar, not
-    /// off the focused Pane (ADR 0014): with focus in a Group's right
-    /// column, the ctx card's right edge is the meter's and the model
-    /// picker's left edge stands its nudge left of its chip, both resting
-    /// on the bar.
+    /// The bar's ctx card hangs off its meter, not off the focused Pane
+    /// (ADR 0014): with focus in a Group's right column, the card's right
+    /// edge is the meter's, resting on the bar. A Group Pane's Composer
+    /// carries no chips (SPEC §5.9): the mode, model and effort are Solo's.
     #[gpui::test]
     fn the_status_lines_popovers_hang_off_the_bar(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("bar-popovers", 2);
@@ -16468,24 +16590,12 @@ mod tests {
         assert_eq!(card.right(), meter.right(), "the card hangs off the meter");
         assert_eq!(card.bottom(), bar.top() - px(crate::theme::FLOAT_OFFSET));
         cx.simulate_keystrokes("escape");
-        view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
-        settle(cx);
-        let chip = debug_bounds(cx, format!("model-picker-{}", thread.get()))
-            .expect("the model chip rides the bar");
-        let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
-        assert_eq!(
-            menu.bottom(),
-            bar.top() - px(crate::theme::MODEL_PICKER_GAP)
-        );
-        assert!(
-            (menu.left() - (chip.left() - px(crate::theme::MODEL_PICKER_NUDGE))).abs() <= px(1.5),
-            "the picker stands its nudge left of its chip: {menu:?} / {chip:?}"
-        );
+        assert!(cx.debug_bounds("composer-toolbar").is_none());
+        assert!(debug_bounds(cx, format!("model-picker-{}", thread.get())).is_none());
     }
 
-    /// A draft's Project menu hangs off its chip in the bar, not off the
-    /// draft's Composer (ADR 0014): its left edge at the chip's, resting
-    /// on the bar.
+    /// A draft's Project menu hangs off its chip in the Composer's toolbar
+    /// (SPEC §5.5): its left edge at the chip's, resting above it.
     #[gpui::test]
     fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("band-menu-place", 1);
@@ -16508,8 +16618,6 @@ mod tests {
                 .as_ref()
                 .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project))));
         });
-        let bar = cx.debug_bounds("bottom-bar").unwrap();
-        let composer = cx.debug_bounds("composer-block").unwrap();
         let rows = cx
             .debug_bounds("composer-menu-rows")
             .expect("the menu is drawn");
@@ -16517,10 +16625,9 @@ mod tests {
             (rows.left() - chip.left()).abs() <= px(1.5),
             "the menu stands on its chip: {rows:?} / {chip:?}"
         );
-        assert!(rows.bottom() <= bar.top() - px(crate::theme::FLOAT_OFFSET));
         assert!(
-            rows.bottom() > composer.bottom(),
-            "it rests on the bar, not over the draft's Composer: {rows:?} / {composer:?}"
+            rows.bottom() <= chip.top() - px(crate::theme::FLOAT_OFFSET),
+            "it rests above its chip: {rows:?} / {chip:?}"
         );
     }
 
@@ -17001,9 +17108,9 @@ mod tests {
         );
     }
 
-    /// Two prompts sent while the turn runs both stay visible: they pile up
-    /// above the line, the latest on top, and only the top row carries
-    /// the take-back key.
+    /// Two prompts sent while the turn runs: Solo's queued row shows the top
+    /// of the pile — the latest, what ↑ takes back and ⌫ drops — and `+1`
+    /// for the one under it (SPEC §5.5).
     #[gpui::test]
     fn queued_prompts_pile_up_with_the_latest_on_top(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("queued-pile", 1);
@@ -17033,14 +17140,9 @@ mod tests {
         let top = cx
             .debug_bounds("queued-0")
             .expect("the latest prompt is drawn");
-        let below = cx
-            .debug_bounds("queued-1")
-            .expect("the earlier prompt is drawn too");
-        assert!(
-            top.origin.y < below.origin.y,
-            "the latest sits on top: {top:?} above {below:?}"
-        );
-        assert!(cx.debug_bounds("queued-2").is_none());
+        let more = cx.debug_bounds("queued-more").expect("+1 counts the rest");
+        assert!(more.left() >= top.right(), "{more:?} follows {top:?}");
+        assert!(cx.debug_bounds("queued-1").is_none(), "one row, not a pile");
     }
 
     /// The queued row's `⌫ unqueue` hint is a real key: Backspace on an
@@ -20663,15 +20765,11 @@ mod tests {
 
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
         let placeholder = cx.debug_bounds("prompt-placeholder").unwrap();
-        // Terminal-native (WP-D): the block caret's one cell, then a space
-        // (within the half pixel layout rounds to).
+        // SPEC §5.5: Solo's box has no `❯` and its caret is a bar, so the
+        // placeholder starts where typed text would.
         assert!(
-            (placeholder.left()
-                - editor.left()
-                - px(2.0 * crate::theme::FS_UI * crate::theme::CODE_ADVANCE))
-            .abs()
-                <= px(0.5),
-            "the caret's cell and one space before placeholder text"
+            (placeholder.left() - editor.left()).abs() <= px(0.5),
+            "the placeholder starts at the text's start"
         );
     }
 
@@ -23871,7 +23969,7 @@ mod tests {
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         view.update(cx, |view, cx| {
             assert!(
-                view.model_picker(0, cx).is_some(),
+                !view.model_chips(0, cx).is_empty(),
                 "pre-lock the Composer offers the control"
             );
         });
@@ -23903,7 +24001,7 @@ mod tests {
                 "this Provider's models are live"
             );
             assert!(
-                view.model_picker(0, cx).is_some(),
+                !view.model_chips(0, cx).is_empty(),
                 "and the control itself stays — every Pane draws one"
             );
             view.popover = None;
@@ -25177,9 +25275,9 @@ mod tests {
         });
     }
     /// #25: the mouse door — a click on the model chip opens the picker.
-    /// The sweep covers the status line (where the model pair rides under
-    /// the input band, terminal-native) so the test does not encode the
-    /// chip's exact position.
+    /// The sweep covers the Composer's toolbar from its right (where the
+    /// model and effort chips ride, left of send) so the test does not
+    /// encode the chip's exact position.
     #[gpui::test]
     fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("provider-chip-click", 1);
@@ -25188,12 +25286,12 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
-        let meta = cx.debug_bounds("composer-meta").unwrap();
-        let row = meta.center().y;
-        let left = f32::from(meta.left());
+        let toolbar = cx.debug_bounds("composer-toolbar").unwrap();
+        let row = toolbar.center().y;
+        let right = f32::from(toolbar.right());
         let mut opened = false;
         'sweep: for y in [row - px(4.), row, row + px(4.)] {
-            for x in (0..60).map(|step| left + 4. + step as f32 * 8.) {
+            for x in (0..60).map(|step| right - 40. - step as f32 * 8.) {
                 cx.simulate_mouse_down(
                     gpui::point(px(x), y),
                     gpui::MouseButton::Left,

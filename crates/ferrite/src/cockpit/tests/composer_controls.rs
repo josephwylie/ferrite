@@ -481,8 +481,6 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         tick(cx);
         let latest = bounds(cx, format!("queue-row-{namespace}-0"));
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-        // The focused cell's status line stands under its band (FL-11).
-        let send = cx.debug_bounds("composer-meta").expect("the status line");
         assert!(
             queue.size.height
                 <= px(crate::theme::COMPOSER_QUEUE_ROWS as f32 * crate::theme::QUEUE_ROW_H + 1.)
@@ -497,7 +495,6 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             );
             assert!(progress.size.height <= px(crate::theme::COMPOSER_ROW_H));
         }
-        assert!(editor.bottom() <= send.top() || (editor.top() - send.top()).abs() <= px(1.));
         cx.simulate_event(gpui::ScrollWheelEvent {
             position: queue.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1000.))),
@@ -559,4 +556,141 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         assert_eq!(view.cockpit.thread(other).unwrap().queued_all().len(), 8);
     });
     assert_eq!(fake.sent.borrow().as_slice(), ["Working", "Other work"]);
+}
+
+/// SPEC §5.5: the Solo Composer's toolbar holds every picker the bar's
+/// status line did. Each chip opens its own picker from a click — with a
+/// live Session, and again once that Session has closed, from the cached
+/// answers (ADR 0032) — and each menu rests above its chip.
+#[gpui::test]
+fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("toolbar-pickers", 1);
+    bind_production_keys(cx);
+    *fake.native_controls.borrow_mut() = true;
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::PermissionMode {
+            mode: "native-mode".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("composer-meta").is_none(),
+        "the bar carries no status line"
+    );
+    for live in [true, false] {
+        if !live {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Closed {
+                    reason: "settled".into(),
+                })
+                .unwrap();
+            tick(cx);
+        }
+        let toolbar = cx
+            .debug_bounds("composer-toolbar")
+            .expect("the Solo box draws its toolbar");
+        let chip = |name: &str, cx: &mut gpui::VisualTestContext| {
+            let chip = debug_bounds(cx, format!("{name}-{}", thread.get()))
+                .unwrap_or_else(|| panic!("the {name} chip (live: {live})"));
+            assert!(toolbar.contains(&chip.center()), "{name} rides the toolbar");
+            chip
+        };
+        // The mode: its menu is the Session's own list.
+        let mode = chip("mode-picker", cx);
+        cx.simulate_click(mode.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.mode_picker.is_some(), "the mode chip opens its menu");
+        });
+        let item = cx
+            .debug_bounds("choice-row-0")
+            .expect("the mode menu is drawn");
+        assert!(item.bottom() <= mode.top(), "{item:?} rests above {mode:?}");
+        view.update(cx, |view, cx| {
+            view.mode_picker = None;
+            cx.notify();
+        });
+        tick(cx);
+        // The model, then the effort: each opens its part of the picker.
+        for (name, effort) in [("model-picker", false), ("effort-picker", true)] {
+            let at = chip(name, cx);
+            cx.simulate_click(at.center(), gpui::Modifiers::none());
+            cx.run_until_parked();
+            tick(cx);
+            view.read_with(cx, |view, _| {
+                let open = view.popover.as_ref().expect("the chip opens its picker");
+                assert_eq!(open.kind.picker_slot(), Some((effort, false)), "{name}");
+            });
+            let row = cx.debug_bounds("choice-menu").expect("the picker is drawn");
+            assert!(row.bottom() <= at.top(), "{name}: {row:?} above {at:?}");
+            view.update(cx, |view, cx| {
+                view.popover = None;
+                cx.notify();
+            });
+            tick(cx);
+        }
+    }
+}
+
+/// SPEC §5.5: the queued row says what waits — the top of the pile, `+N`
+/// for the rest — and its close button drops it, as ⌫ does. The send circle
+/// sends what is typed; with a turn running and nothing typed it is `stop`,
+/// and interrupts.
+#[gpui::test]
+fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("toolbar-send", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Working".into());
+    assert!(core.queue(thread, "First follow-up".into()));
+    assert!(core.queue(thread, "Second follow-up".into()));
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "working".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("queued-more").is_some(),
+        "+1 counts the rest"
+    );
+    let close = cx
+        .debug_bounds("queued-close")
+        .expect("the row's close button");
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.cockpit.thread(thread).unwrap().queued_all(),
+            ["First follow-up"],
+            "the close button drops the top of the pile"
+        );
+    });
+    assert!(cx.debug_bounds("queued-more").is_none());
+    // A running turn and an empty line: the circle stops it.
+    let stop = cx
+        .debug_bounds("composer-stop")
+        .expect("stop while working");
+    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1, "stop is Esc's act");
+    // Typed text turns it back into send, which is Enter's act.
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set("Typed".into(), cx));
+    });
+    tick(cx);
+    let send = cx.debug_bounds("composer-send").expect("send with text");
+    cx.simulate_click(send.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.panes[0].composer.read(cx).is_empty(), "sent");
+    });
 }

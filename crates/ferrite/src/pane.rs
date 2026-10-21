@@ -46,6 +46,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::components;
+use crate::components::Tip as _;
 use crate::composer::Composer;
 #[allow(unused_imports)]
 use crate::decision;
@@ -669,6 +670,10 @@ pub struct PaneWiring {
     /// approval's verbs or the question's options, each a boxed word wired
     /// to its answer in the cockpit.
     pub quick_answers: Option<AnyElement>,
+    /// The Solo Composer's toolbar and its queued row's close button,
+    /// wired in the cockpit (SPEC §5.5). None on a board.
+    pub toolbar: Option<AnyElement>,
+    pub unqueue: Option<AnyElement>,
 }
 
 /// Turns the Pane head's band into its drag handle: the cockpit gives it an
@@ -825,6 +830,9 @@ pub(crate) struct PaneCtx<'a> {
     pub activity_decisions: Option<AnyElement>,
     /// The docked Decision merges into this Pane's Composer (one block).
     pub decision_joined: bool,
+    /// `l1_composer`: the Solo box's toolbar and queued-row close button.
+    pub toolbar: Option<AnyElement>,
+    pub unqueue: Option<AnyElement>,
 }
 
 /// The group name every Pane root carries (`.group(PANE_GROUP)`): what a
@@ -872,6 +880,8 @@ pub fn render_pane(
         child_footer,
         head_drag,
         quick_answers,
+        toolbar,
+        unqueue,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
     // The Decision is the transcript's tail now (`decision_tail`): no card
@@ -999,6 +1009,8 @@ pub fn render_pane(
         child_footer,
         activity_decisions: None,
         decision_joined,
+        toolbar,
+        unqueue,
     };
 
     // Solo (fullscreen included) has no head: the nav's row names the
@@ -1255,6 +1267,8 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 editing: cx.editing,
                 drop_target: cx.drop_target,
                 joined: cx.decision_joined,
+                toolbar: cx.toolbar.take(),
+                unqueue: cx.unqueue.take(),
             },
         )
         .into_any_element(),
@@ -1399,6 +1413,8 @@ pub struct DraftState<'a> {
     pub drop_target: bool,
     /// More than one Pane is on the board (`PaneFacts::show_focus`).
     pub show_focus: bool,
+    /// The Solo box's toolbar (`PaneWiring::toolbar`).
+    pub toolbar: Option<AnyElement>,
 }
 
 /// What a draft is called until its first send names the Thread — in its
@@ -1423,6 +1439,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         reduce_motion,
         drop_target,
         show_focus,
+        toolbar,
     } = state;
     // A draft wears the live Pane's edge: transparent at rest or, beside
     // other Panes, the focus ink. It has no state to announce.
@@ -1465,6 +1482,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             editing,
             drop_target,
             joined: false,
+            toolbar,
+            unqueue: None,
         },
     );
     // The body says nothing — the Composer's placeholder says what to do,
@@ -1533,25 +1552,12 @@ pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -
         .child(button)
 }
 
-/// Draft setup controls ride the status line's first segments. In a narrow
-/// Pane they give way first: their labels truncate before the model and
-/// effort pair or the usage meter loses a pixel. Their focus ring is inset
-/// and takes no layout.
-pub fn draft_band() -> Div {
-    div()
-        .debug_selector(|| "draft-band".into())
-        .flex()
-        .flex_shrink(1.)
-        .min_w_0()
-        .items_center()
-        .h(px(theme::COMPOSER_ROW_H))
-}
-
-/// One band chip (project, workspace): a status segment — the choice — ringed
-/// by the one focus recipe (`components::focused`) while tab rests on it,
-/// because the popover opens on ↵ and the segment must say where ↵ will
-/// land.
-pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
+/// A draft's Project or Workspace chip (SPEC §5.5), in the toolbar's chip
+/// style: the choice and a chevron, ringed by the one focus recipe
+/// (`components::focused`) while tab rests on it, because the popover
+/// opens on ↵ and the chip must say where ↵ will land. In a narrow Pane its
+/// label cuts first.
+pub fn band_chip(slot: usize, label: SharedString, focused: bool) -> Stateful<Div> {
     // The label truncates in a narrow Pane; the tooltip keeps the whole
     // choice reachable and names the keys that change it.
     let tooltip = SharedString::from(format!("{label} \u{b7} Tab, then \u{21b5} to change"));
@@ -1561,17 +1567,17 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
             gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
         })
         .debug_selector(move || format!("band-chip-{slot}"))
+        .flex()
         .flex_shrink(1.)
         .min_w_0()
+        .items_center()
+        .h(px(theme::TOOL_CHIP_H))
+        .px(px(theme::TOOL_CHIP_PAD_X))
+        .rounded(px(theme::R_CHIP))
         .map(|chip| components::focused(chip, focused))
         .hover_raised(format!("band-chip-{slot}"))
         .press_raised()
-        .child(
-            status_seg(if accent { TEXT } else { TEXT_DIM })
-                .flex_shrink(1.)
-                .min_w_0()
-                .child(div().min_w_0().truncate().child(label)),
-        )
+        .child(chip_face(None, label, TEXT_MUTED, theme::W_BODY))
 }
 
 /// A band chip's text: the choice itself (the chip draws its own chevron).
@@ -1579,24 +1585,19 @@ pub fn band_chip_label(choice: &str) -> SharedString {
     SharedString::from(choice.to_owned())
 }
 
-/// A draft's model or effort control: the live Composer's own picker
-/// chip, ringed like the band chip while tab rests on it, so tab still says
+/// A draft's model or effort chip: the live Composer's own toolbar chip,
+/// ringed like the band chip while tab rests on it, so tab still says
 /// where ↵ will land.
 pub fn draft_picker(
     id: &'static str,
     focused: bool,
-    control: Div,
+    face: Div,
     cx: &gpui::App,
 ) -> gpui::component::button::Button {
-    chip_button(id, cx)
+    toolbar_chip(id, cx)
         .debug_selector(move || id.to_string())
-        .p_0()
-        .h_auto()
-        .flex()
-        .flex_shrink_0()
-        .rounded(px(theme::R_CHIP))
         .map(|chip| components::focused(chip, focused))
-        .child(control)
+        .child(face)
 }
 
 /// Everything one wall tile reads, gathered by `render_pane`.
@@ -2583,61 +2584,139 @@ pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
 
-/// The status line's model segment (FL-10): the provider's logomark in its
-/// brand colour, a cell, and the model's name in the status line's own
-/// voice — lowercase, a parenthesised context size kept as written (`opus
-/// 5.5 (1M)`, `gpt-6 astra`) — then, when an effort resolves, ` · medium`
-/// with its `·` muted like the rest: one segment, one control. Render-only;
-/// the cockpit gives it its id and its click.
-pub fn model_picker(
-    provider: Option<Provider>,
-    label: SharedString,
-    effort: Option<SharedString>,
-    _busy: bool,
-) -> Div {
+/// The model chip's face (SPEC §5.5): the provider's logomark in its brand
+/// colour, the model's name as the picker names it, and a chevron.
+/// Render-only; the cockpit gives it its button and its menu.
+pub fn model_chip(provider: Option<Provider>, label: SharedString) -> Div {
     let mark = provider.map(|provider| {
         let (glyph, ink) = match provider {
             Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
             Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE),
         };
-        // Inline in the segment's line, as the prototype's `svg.logo`
-        // (`vertical-align: -1px`): its foot a pixel under the baseline.
-        icon(glyph, theme::STATUS_LOGO, ink).mt(px(-theme::STATUS_LOGO_FOOT))
+        icon(glyph, theme::TOOL_CHIP_LOGO, ink).into_any_element()
     });
-    let word = status_model_word(&label);
-    let text: SharedString = match effort {
-        Some(effort) => format!("{word} \u{b7} {effort}").into(),
-        None => word,
-    };
-    status_seg(TEXT_DIM)
-        .children(mark)
-        .child(components::cells(text))
+    chip_face(mark, label, TEXT_MUTED, theme::W_BODY)
 }
 
-/// A model's name as the status line says it: lowercase outside any
-/// parentheses, so `Opus 5.5 (1M)` reads `opus 5.5 (1M)`.
-pub(crate) fn status_model_word(label: &str) -> SharedString {
-    let mut depth = 0usize;
-    let mut word = String::with_capacity(label.len());
-    for ch in label.chars() {
-        match ch {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if depth == 0 {
-            word.extend(ch.to_lowercase());
+/// The effort chip's face: the level in force, sentence case, and a
+/// chevron.
+pub fn effort_chip(label: SharedString) -> Div {
+    chip_face(None, label, TEXT_MUTED, theme::W_BODY)
+}
+
+/// The permission mode chip's face: the `shield`, the mode's label and a
+/// chevron, in `theme::mode_ink`: `ATTENTION` for a mode that lets
+/// everything run, else `TEXT_MUTED`.
+pub fn mode_chip(label: SharedString, mode: &str) -> Div {
+    let ink = theme::mode_ink(mode);
+    chip_face(
+        Some(icon(icons::SHIELD, theme::TOOL_CHIP_ICON, ink).into_any_element()),
+        label,
+        ink,
+        theme::W_LABEL,
+    )
+}
+
+/// A toolbar chip's face: an optional lead mark, the label cut at its end
+/// in a narrow Pane, and the chevron that says it opens a menu.
+fn chip_face(
+    lead: Option<AnyElement>,
+    label: SharedString,
+    ink: u32,
+    weight: gpui::FontWeight,
+) -> Div {
+    div()
+        .flex()
+        .flex_shrink(1.)
+        .min_w_0()
+        .items_center()
+        .gap(px(theme::TOOL_CHIP_GAP))
+        .whitespace_nowrap()
+        .font_family(theme::FONT_UI)
+        .font_weight(weight)
+        .text_size(px(theme::FS_LABEL))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(ink))
+        .children(lead)
+        .child(div().min_w_0().truncate().child(label))
+        .child(icon(icons::CHEVRON_DOWN, theme::TOOL_CHIP_CHEVRON, ink))
+}
+
+/// A toolbar chip's button (SPEC §5.5): `TOOL_CHIP_H` high at `R_CHIP`,
+/// `TOOL_CHIP_PAD_X` at each side, no ground at rest, `paint::RAISED`
+/// under the pointer. The cockpit gives it its face and its menu.
+pub fn toolbar_chip(
+    id: impl Into<gpui::ElementId>,
+    cx: &gpui::App,
+) -> gpui::component::button::Button {
+    chip_button(id, cx)
+        .p_0()
+        .h(px(theme::TOOL_CHIP_H))
+        .px(px(theme::TOOL_CHIP_PAD_X))
+        .flex_shrink_0()
+        .rounded(px(theme::R_CHIP))
+}
+
+/// The toolbar's `+`: a `COMPOSER_ATTACH` square that attaches files.
+pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
+    chip_button("composer-attach", cx)
+        .debug_selector(|| "composer-attach".into())
+        .p_0()
+        .size(px(theme::COMPOSER_ATTACH))
+        .flex_shrink_0()
+        .rounded(px(theme::R_CHIP))
+        .tip("Attach files")
+        .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, TEXT_DIM))
+}
+
+/// The send circle: `COMPOSER_SEND` round on `paint::SEND`, `arrow-up` in
+/// `TEXT_STRONG` — or, while a turn runs with nothing typed, `stop`.
+pub fn send_button(stop: bool, cx: &gpui::App) -> gpui::component::button::Button {
+    components::faded_button(
+        "composer-send",
+        theme::paint::SEND.into(),
+        theme::paint::SEND.into(),
+        theme::paint::PRESS.into(),
+        rgb(TEXT_STRONG).into(),
+        cx,
+    )
+    .debug_selector(move || {
+        if stop {
+            "composer-stop"
         } else {
-            word.push(ch);
+            "composer-send"
         }
-    }
-    word.into()
+        .into()
+    })
+    .p_0()
+    .size(px(theme::COMPOSER_SEND))
+    .ml(px(theme::COMPOSER_SEND_GAP))
+    .flex_shrink_0()
+    .rounded_full()
+    .tip(if stop { "Stop" } else { "Send" })
+    .child(icon(
+        if stop { icons::STOP } else { icons::ARROW_UP },
+        theme::COMPOSER_SEND_ICON,
+        TEXT_STRONG,
+    ))
 }
 
-/// The effort segment after the model: the level in force, lowercase (the
-/// menu rows keep their titles).
-pub fn effort_picker(label: SharedString, _busy: bool) -> Div {
-    status_seg(TEXT_DIM).child(div().flex_shrink_0().child(label))
+/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): `lead` from the left —
+/// the `+`, a draft's chips, the mode — then a spacer and `trail` — the
+/// model, the effort, send.
+pub fn composer_toolbar(lead: Vec<AnyElement>, trail: Vec<AnyElement>) -> Div {
+    div()
+        .debug_selector(|| "composer-toolbar".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::COMPOSER_TOOLBAR_GAP))
+        .h(px(theme::COMPOSER_TOOLBAR_H))
+        .min_w_0()
+        .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
+        .children(lead)
+        .child(div().flex_1().min_w_0())
+        .children(trail)
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -2914,6 +2993,11 @@ struct ComposerStack<'a> {
     /// (no box to join); kept so the levels hand the Composer one shape.
     #[allow(dead_code)]
     joined: bool,
+    /// The Solo box's toolbar, wired in the cockpit (`+`, a draft's chips,
+    /// the mode, model and effort chips, send). None on a board.
+    toolbar: Option<AnyElement>,
+    /// The queued row's close button, wired to ⌫'s act in the cockpit.
+    unqueue: Option<AnyElement>,
 }
 
 /// One of the band's two rules (the prototype's `.comp .rule`): 1px of
@@ -2922,20 +3006,28 @@ fn composer_rule() -> Div {
     div().flex_shrink_0().h(px(theme::COMPOSER_RULE))
 }
 
-/// The Composer (theme WP-D, the prototype's `.comp`): no box. While a turn
-/// runs, the working line; then an input band across the Pane's width on
+/// The Composer stack (theme WP-D): a board cell's input band
+/// (`band_composer`), Solo's box (`box_composer`, SPEC §5.5). The shelf —
+/// pending files at left, background tasks at right — and the working line
+/// stand above either. The Pane lays the stack out `flex_shrink_0` below
+/// the body, so the transcript gives way. The Decision row is **not**
+/// here: it is the transcript's tail. While a Decision pends the input
+/// carries the `Decision` key context, so its keys answer with the
+/// keyboard in the Composer (#23).
+fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
+    if stack.grid {
+        band_composer(view, transcript, stack)
+    } else {
+        box_composer(view, transcript, stack)
+    }
+}
+
+/// A board cell's Composer (the prototype's `.comp`, until SPEC §5.9's
+/// compact box lands): an input band across the Pane's width on
 /// `paint::INBAND` between two transparent rules — queued prompts, then the
 /// `❯` in its 2-cell gutter and the line growing upward to
-/// `composer::MAX_ROWS` rows — and the stack's foot. Its status line is the
-/// window's (`status_line`, in the bottom bar, ADR 0014).
-///
-/// The shelf — pending files at left, background tasks at right — stands
-/// above the band. The Pane lays the stack out `flex_shrink_0` below the
-/// body, so the transcript gives way. The Decision row is **not** here: it
-/// is the transcript's tail. While a Decision pends the band carries the
-/// `Decision` key context, so its keys answer with the keyboard in the
-/// Composer (#23).
-fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
+/// `composer::MAX_ROWS` rows.
+fn band_composer(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
         grid,
         decision,
@@ -2954,6 +3046,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         editing,
         drop_target,
         joined: _,
+        toolbar: _,
+        unqueue: _,
     } = stack;
     // On a board only the focused cell's Composer is live (C4): the others
     // keep their band — `❯`, the hollow caret, a Decision's placeholder —
@@ -3079,7 +3173,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .child(view.composer.clone());
     if empty && (live || decision.is_some()) {
         let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
-        line = line.child(ghost_row(ghost));
+        line = line.child(ghost_row(ghost, 2.0 * theme::FS_UI * theme::CODE_ADVANCE));
     }
 
     // The `❯` is always in layout and always `TEXT_STRONG` (the prompt's own
@@ -3125,25 +3219,185 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
+    composer_stack(attachments, background, working, false)
+        .pb(px(theme::COMPOSER_STATUS_PAD_B))
+        .child(composer_rule())
+        .child(band)
+        .child(composer_rule())
+}
+
+/// The Solo Composer (SPEC §5.5): a box `COMPOSER_INSET` inside the card's
+/// sides and foot — `paint::FIELD` at `R_PANE`, its `FIELD_RING` laid
+/// outside it — holding the queued row, the input (Geist, no `❯`) and the
+/// toolbar the cockpit wires.
+fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
+    let ComposerStack {
+        grid: _,
+        decision,
+        queued,
+        queue_height: _,
+        empty,
+        files: _,
+        attachments,
+        background,
+        menu,
+        draft,
+        draft_error,
+        suggestion,
+        working,
+        focused,
+        editing: _,
+        drop_target,
+        joined: _,
+        toolbar,
+        unqueue,
+    } = stack;
+    let geometry = view.geometry.clone();
+    let namespace = view.text_namespace();
+    let ring = |ink: u32| {
+        // Outside the box, as the mockup's `box-shadow: 0 0 0 1px`: it
+        // takes no layout.
+        div()
+            .absolute()
+            .top(px(-1.))
+            .left(px(-1.))
+            .right(px(-1.))
+            .bottom(px(-1.))
+            .rounded(px(theme::R_PANE + 1.))
+            .border_1()
+            .border_color(rgba(ink))
+    };
+    let field = div()
+        .debug_selector(|| "composer-block".into())
+        .when(drop_target, |field| {
+            field.debug_selector(|| "composer-drop-target".into())
+        })
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .min_w_0()
+        .mx(px(theme::COMPOSER_INSET))
+        .rounded(px(theme::R_PANE))
+        .bg(theme::paint::FIELD)
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(TEXT))
+        .when(decision.is_some(), |field| field.key_context("Decision"))
+        .child(ring(theme::FIELD_RING));
+    let mut field = components::on_bounds(field, move |bounds, _, _| {
+        geometry.set(PaneGeometry {
+            composer: Some(bounds),
+            ..geometry.get()
+        })
+    });
+    // Files hovering the Pane: the box's edge in `DROP_EDGE`.
+    if drop_target {
+        field = field.child(ring(theme::DROP_EDGE));
+    }
+    if let Some(row) = queued_row(&queued, &namespace, unqueue) {
+        field = field.child(row);
+    }
+    if let Some(error) = draft_error {
+        field = field.child(
+            div()
+                .flex_shrink_0()
+                .min_w_0()
+                .px(px(theme::COMPOSER_INPUT_PAD_X))
+                .pt(px(theme::COMPOSER_INPUT_PAD_B))
+                .whitespace_normal()
+                .text_color(rgb(BLOCKED))
+                .child(error),
+        );
+    }
+    // The one line that grows: `COMPOSER_ROW_H` per visual row. The
+    // placeholder overlays its first row while the line is empty.
+    let mut line = div()
+        .debug_selector(move || {
+            if focused {
+                "focused-prompt-editor"
+            } else {
+                "prompt-editor"
+            }
+            .into()
+        })
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .font_family(theme::FONT_UI)
+        .font_weight(theme::W_BODY)
+        .text_size(px(theme::FS_COMPOSER))
+        .line_height(px(theme::COMPOSER_ROW_H))
+        .text_color(rgb(TEXT_STRONG))
+        .child(view.composer.clone());
+    if empty {
+        let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
+        line = line.child(ghost_row(ghost, 0.));
+    }
+    field = field.child(
+        div()
+            .debug_selector(move || format!("composer-live-{namespace}"))
+            .flex()
+            .items_start()
+            .min_h(px(theme::COMPOSER_ROW_H))
+            .min_w_0()
+            .pt(px(theme::COMPOSER_INPUT_PAD_T))
+            .px(px(theme::COMPOSER_INPUT_PAD_X))
+            .pb(px(theme::COMPOSER_INPUT_PAD_B))
+            .child(line),
+    );
+    field = field.children(toolbar);
+    // The `/` or `@` popover paints above the stack — deferred, so it
+    // escapes the Pane's clip and draws over the transcript (#24) — from
+    // the box's left edge, at most `SLASH_MENU_W` wide.
+    if let Some(menu) = menu {
+        field = field.child(deferred(
+            div()
+                .absolute()
+                .bottom(relative(1.))
+                .left_0()
+                .right_0()
+                .mb(px(theme::FLOAT_OFFSET))
+                .child(div().max_w(px(theme::SLASH_MENU_W)).child(menu)),
+        ));
+    }
+    composer_stack(attachments, background, working, true)
+        .pb(px(theme::COMPOSER_INSET))
+        .child(field)
+}
+
+/// What stands over either Composer: the shelf — pending files at left,
+/// background chips at right; the chips give way first, cutting their
+/// labels — then the working line (`.comp > .r`), on the transcript rows'
+/// axis, `COMPOSER_WORKING_GAP` (Solo: `COMPOSER_WORKING_GAP_SOLO`) over
+/// the input. Solo's shelf keeps to the box's inset (`boxed`).
+fn composer_stack(
+    attachments: Option<AnyElement>,
+    background: Option<AnyElement>,
+    working: Option<AnyElement>,
+    boxed: bool,
+) -> Div {
+    let (shelf_l, shelf_r) = if boxed {
+        (theme::COMPOSER_INSET, theme::COMPOSER_INSET)
+    } else {
+        (theme::COMPOSER_PAD_L, theme::COMPOSER_PAD_R)
+    };
     div()
         .flex()
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
-        .pb(px(theme::COMPOSER_STATUS_PAD_B))
         .when(attachments.is_some() || background.is_some(), |stack| {
-            // The shelf stands over the band: pending files from the `❯`
-            // column, the background chips at right. The chips give way
-            // first — they cut their labels, the files do not.
             stack.child(
                 div()
                     .debug_selector(|| "composer-shelf".into())
                     .flex()
                     .items_end()
-                    .gap(px(theme::CH))
+                    .gap(px(theme::SPACE_2))
                     .min_w_0()
-                    .pl(px(theme::COMPOSER_PAD_L))
-                    .pr(px(theme::COMPOSER_PAD_R))
+                    .pl(px(shelf_l))
+                    .pr(px(shelf_r))
                     .pb(px(theme::SHELF_GAP))
                     .when_some(attachments, |shelf, attachments| {
                         shelf.child(div().flex_1().min_w_0().child(attachments))
@@ -3153,113 +3407,93 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     }),
             )
         })
-        // The working line, on the transcript column (`tx_inset`; a board
-        // cell's Composer is a Group Pane's), `COMPOSER_WORKING_GAP` over the
-        // band's upper rule.
         .when_some(working, |stack, working| {
             stack.child(
                 div()
                     .debug_selector(|| "transcript-progress".into())
                     .flex_shrink_0()
                     .min_w_0()
-                    .px(px(theme::tx_inset(!grid)))
-                    .mb(px(theme::COMPOSER_WORKING_GAP))
+                    .px(px(theme::tx_inset(boxed)))
+                    .mb(px(if boxed {
+                        theme::COMPOSER_WORKING_GAP_SOLO
+                    } else {
+                        theme::COMPOSER_WORKING_GAP
+                    }))
                     .child(working),
             )
         })
-        .child(composer_rule())
-        .child(band)
-        .child(composer_rule())
 }
 
-/// The focused Pane's status line (the prototype's `.status`), laid in the
-/// window's bottom bar (ADR 0014): its segments — a draft's setup chips,
-/// the mode, the model with its effort, `ctx`, the changed files — split by
-/// a faint `·`, in `TEXT_DIM`, a cell after the view tabs. It gives way
-/// to the bar's own segments, clipping at its right.
-pub fn status_line(segments: Vec<AnyElement>) -> Div {
-    let mut line = div()
-        .debug_selector(|| "composer-meta".into())
-        .flex()
-        .flex_shrink(1.)
-        .items_center()
-        .h_full()
-        .min_w_0()
-        .pl(px(theme::BAR_SEG_PAD_X))
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_DIM));
-    for (index, segment) in segments.into_iter().enumerate() {
-        if index > 0 {
-            line = line.child(status_seam());
-        }
-        line = line.child(segment);
-    }
-    line
+/// The Solo box's queued row (`QUEUED_ROW_H`, a `HAIRLINE` under it):
+/// `Queued`, the top of the pile on one cut line — the prompt ↑ takes back
+/// and ⌫ drops — `+N` for the rest, and the close button that drops it.
+/// The keys act as ever; they are not printed. None with nothing queued.
+fn queued_row(queued: &[&str], namespace: &str, close: Option<AnyElement>) -> Option<Div> {
+    let latest = queued.first()?;
+    let more = queued.len() - 1;
+    let selector = format!("composer-queue-{namespace}");
+    Some(
+        div()
+            .debug_selector(move || selector.clone())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::QUEUED_GAP))
+            .h(px(theme::QUEUED_ROW_H + 1.))
+            .min_w_0()
+            .pl(px(theme::QUEUED_PAD_L))
+            .pr(px(theme::QUEUED_PAD_R))
+            .border_b_1()
+            .border_color(theme::paint::HAIRLINE)
+            .whitespace_nowrap()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(theme::FS_META))
+                    .font_weight(theme::W_LABEL)
+                    .text_color(rgb(TEXT_DIM))
+                    .child("Queued"),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "queued-0".into())
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(SharedString::from(queued_preview(latest))),
+            )
+            .when(more > 0, |row| {
+                row.child(components::tabular(
+                    div()
+                        .debug_selector(|| "queued-more".into())
+                        .flex_shrink_0()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(format!("+{more}")),
+                ))
+            })
+            .children(close),
+    )
 }
 
-/// The mode segment: the Session's permission mode, wired to its menu when
-/// the Session can switch it (`picker`), else the plain chip.
-pub fn mode_segment(thread: ThreadId, mode: &str, picker: Option<AnyElement>) -> AnyElement {
-    let key = thread.get();
-    div()
-        .debug_selector(move || format!("composer-mode-{key}"))
+/// The queued row's close button: a `QUEUED_CLOSE` square at `R_TAB`, the
+/// `close` icon in `TEXT_DIM`, `paint::RAISED` under the pointer. The
+/// cockpit wires its click.
+pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
+    chip_button("queued-close", cx)
+        .debug_selector(|| "queued-close".into())
+        .p_0()
+        .size(px(theme::QUEUED_CLOSE))
         .flex_shrink_0()
-        .child(match picker {
-            Some(picker) => picker,
-            None => mode_chip(mode, false).into_any_element(),
-        })
-        .into_any_element()
+        .rounded(px(theme::R_TAB))
+        .tip("Remove queued message")
+        .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, TEXT_DIM))
 }
 
-/// The faint `·` between two status segments.
-pub(crate) fn status_seam() -> Div {
-    components::cells("\u{b7}").text_color(rgb(TEXT_FAINT))
-}
-
-/// A status segment (the prototype's `.status .seg`): one row, a cell of
-/// padding each side, its words in `ink`, a mark a cell before them. No
-/// ground at rest and no chevron: the button it rides in
-/// (`composer_control`, `draft_picker`) or its own id'd wrapper wears
-/// `paint::HOVER` under the pointer. Render-only; the cockpit wires it.
-fn status_seg(ink: u32) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::CH))
-        .h(px(theme::COMPOSER_STATUS_H))
-        .pl(px(theme::COMPOSER_SEG_PAD_X))
-        .pr(px(theme::COMPOSER_SEG_PAD_TAIL))
-        .whitespace_nowrap()
-        .font_family(theme::FONT_UI)
-        .font_weight(theme::W_BODY)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(ink))
-}
-
-/// The status line's mode segment, one run of text in its `mode_ink`: the
-/// marker (`⏵⏵` for a mode that lets edits run, `⏸` for plan, `⏵` for any
-/// other, in the face the platform falls back to), a space, the mode word.
-/// Hidden at the default: the mode stays reachable through ⇧⇥ and the
-/// palette's `permission mode`.
-pub fn mode_chip(mode: &str, _menu: bool) -> Div {
-    let mark = match mode {
-        "accept edits" | "bypass permissions" | "auto" => "\u{23f5}\u{23f5}",
-        "plan" => "\u{23f8}",
-        _ => "\u{23f5}",
-    };
-    let ink = theme::mode_ink(mode);
-    status_seg(ink).child(components::glyph(format!("{mark} {mode}"), ink))
-}
-
-/// The button a status segment rides in (model, effort, mode, files, the
-/// session `•••`): no padding of its own and square, so the hover
-/// (`paint::HOVER`) and press faces fill exactly the segment.
-pub fn composer_control(
+/// The bar's last two status items until the panel takes them (SPEC
+/// §5.6, phase 7a): `ctx` and the changed files, each a quiet control —
+/// no ground at rest, `paint::HOVER` under the pointer.
+pub fn bar_control(
     id: impl Into<gpui::ElementId>,
     cx: &gpui::App,
 ) -> gpui::component::button::Button {
@@ -3269,8 +3503,8 @@ pub fn composer_control(
         .rounded(px(theme::R_CHIP))
 }
 
-/// A segment's button: no ground at rest, `paint::HOVER` under the pointer
-/// over the one 150ms blend, `paint::PRESS` pressed at once.
+/// A quiet control's button: no ground at rest, `paint::HOVER` under the
+/// pointer over the one 150ms blend, `paint::PRESS` pressed at once.
 fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::component::button::Button {
     components::faded_button(
         id,
@@ -3282,13 +3516,22 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
     )
 }
 
-/// The status line's changed-files segment: `3 files` (`1 file`) and the
-/// Thread's whole `+N −N`, the signs in the diff hues — a reading that
-/// opens the changed-files card.
+/// The bar's changed-files item: `3 files` (`1 file`) and the Thread's
+/// whole `+N −N`, the signs in the diff hues — a reading that opens the
+/// changed-files card.
 pub fn files_chip(count: usize, added: usize, removed: usize) -> Div {
     let word = if count == 1 { "file" } else { "files" };
-    status_seg(TEXT_DIM)
+    div()
         .debug_selector(move || format!("changed-files-{count}"))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::CH))
+        .h(px(theme::LH_UI))
+        .px(px(theme::CH))
+        .whitespace_nowrap()
+        .text_size(px(theme::FS_UI))
+        .text_color(rgb(TEXT_DIM))
         .child(components::tabular(components::cells(format!(
             "{count} {word}"
         ))))
@@ -3450,14 +3693,15 @@ pub(crate) fn flat_facts_text(files: usize, queued: usize) -> String {
     facts.join(" \u{b7} ")
 }
 
-/// The placeholder drawn on a clipped row one line high, starting two cells
-/// in (after the caret's cell and a space). A prediction lets its own words
+/// The placeholder drawn on a clipped row one line high, `left` in (Solo's
+/// box: at the text's start; a board's band: two cells, after the caret's
+/// cell and a space). A prediction lets its own words
 /// truncate before the accept hint, which never goes.
-fn ghost_row(ghost: Ghost) -> Div {
+fn ghost_row(ghost: Ghost, left: f32) -> Div {
     div()
         .debug_selector(|| "prompt-placeholder".into())
         .absolute()
-        .left(px(2.0 * theme::FS_UI * theme::CODE_ADVANCE))
+        .left(px(left))
         .right_0()
         .top_0()
         .h(px(theme::COMPOSER_ROW_H))
@@ -3502,24 +3746,18 @@ pub fn offers_import(transcript: Option<&Transcript>) -> bool {
     transcript.is_some_and(Transcript::offers_import)
 }
 
-/// The status line's word for the Session's permission mode (rule 2.11.5):
-/// `None` at the default, which is hidden; a known id's own word
-/// (`theme::mode_word`); else the adapter's label, lowercased; else the id
-/// split at its humps. Never a raw id, never a capital.
+/// The mode chip's label (SPEC §5.5): the Session's own label for `mode`
+/// when its list has one (`permission_modes`, already sentence case); else
+/// the mode's word (`theme::mode_word`), sentence case; `Default` at the
+/// default. Never a raw id.
 pub fn permission_mode_label(
     mode: &str,
     choices: &[ferrite_core::PermissionModeChoice],
-) -> Option<SharedString> {
-    let word = theme::mode_word(mode)?;
-    if theme::known_mode(mode).is_some() {
-        return Some(word);
+) -> SharedString {
+    if let Some(choice) = choices.iter().find(|choice| choice.value == mode) {
+        return choice.label.clone().into();
     }
-    Some(
-        choices
-            .iter()
-            .find(|choice| choice.value == mode)
-            .map_or(word, |choice| choice.label.to_lowercase().into()),
-    )
+    theme::mode_word(mode).map_or_else(|| "Default".into(), |word| sentence_case(&word).into())
 }
 
 /// One row of the `/` or `@` popover, ready to draw: what a pick inserts,
@@ -3608,34 +3846,47 @@ fn head_truncated(path: &SharedString, tail: usize) -> SharedString {
     format!("…/{rest}").into()
 }
 
-/// The bounded queue viewport, shared with the editor's pane-height budget.
-pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) -> f32 {
+/// The queue's share of the editor's pane-height budget: Solo's one
+/// queued row and its hairline whenever anything is queued; a board band's
+/// scrolling viewport of up to `COMPOSER_QUEUE_ROWS` rows.
+pub(crate) fn composer_queue_height(height: f32, grid: bool, count: usize) -> f32 {
+    if !grid {
+        return if count > 0 {
+            theme::QUEUED_ROW_H + 1.
+        } else {
+            0.
+        };
+    }
     let budget = height * theme::COMPOSER_MAX_PANE_FRACTION
-        - composer_fixed_height()
+        - composer_fixed_height(grid)
         - theme::COMPOSER_ROW_H;
     let fitting = (budget / theme::QUEUE_ROW_H).floor().max(1.) as usize;
-    let rows = count.min(fitting).min(if compact {
-        theme::COMPOSER_COMPACT_QUEUE_ROWS
-    } else {
-        theme::COMPOSER_QUEUE_ROWS
-    });
+    let rows = count.min(fitting).min(theme::COMPOSER_QUEUE_ROWS);
     rows as f32 * theme::QUEUE_ROW_H
 }
 
-/// The Composer's height less its editor rows and queue: the band's
-/// padding, its two rules and the air under the stack — the same at every
-/// level, focused or not; its status line is the window's (ADR 0014). The
-/// shelf and the working line stand above and are not part of it.
-fn composer_fixed_height() -> f32 {
-    2. * theme::COMPOSER_PAD_Y + 2. * theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B
+/// The Composer's height less its editor rows and queue, the same at every
+/// level, focused or not. Solo's box: the input's padding, the toolbar and
+/// the inset under it (its ring lies outside it). A board's band: its
+/// padding, its two rules and the air under the stack. The shelf and the
+/// working line stand above and are not part of it.
+fn composer_fixed_height(grid: bool) -> f32 {
+    if grid {
+        2. * theme::COMPOSER_PAD_Y + 2. * theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B
+    } else {
+        theme::COMPOSER_INPUT_PAD_T
+            + theme::COMPOSER_INPUT_PAD_B
+            + theme::COMPOSER_TOOLBAR_H
+            + theme::COMPOSER_INSET
+    }
 }
 
 /// Leave the majority of a Pane available for its Thread context. Only the
 /// viewport changes: the Composer keeps every character and scrolls to its
 /// caret, then reveals more rows again when the Pane grows.
-pub(crate) fn composer_row_limit(height: f32, compact: bool, queued: usize) -> usize {
-    let fixed = composer_fixed_height();
-    let queue = composer_queue_height(height, compact, queued);
+pub(crate) fn composer_row_limit(height: f32, grid: bool, queued: usize) -> usize {
+    let fixed = composer_fixed_height(grid);
+    let queue = composer_queue_height(height, grid, queued);
     ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue) / theme::COMPOSER_ROW_H)
         .floor()
         .max(1.)
@@ -4414,9 +4665,10 @@ pub fn context_usage(
         .overflow_y_scrollbar()
 }
 
-/// A provider's category name in sentence case ("mcp tools" → "Mcp
-/// tools" is wrong, so known acronyms keep their capitals).
-fn sentence_case(name: &str) -> String {
+/// A name in sentence case — a provider's category, a chip label (SPEC
+/// §5.5, amending rule 11 for chip labels only) — keeping known acronyms'
+/// capitals ("mcp tools" → "MCP tools", not "Mcp tools").
+pub(crate) fn sentence_case(name: &str) -> String {
     let lower = name.to_lowercase();
     let words: Vec<String> = lower
         .split(' ')
@@ -4546,34 +4798,43 @@ pub fn usage_meter_body(
         |used| ((used.clamp(0., 1.) * 100.).round() as u32).to_string(),
     );
     Some(
-        status_seg(TEXT_DIM).child(components::tabular(
-            div()
-                .debug_selector(move || format!("usage-readout-{key}"))
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(theme::CH))
-                .whitespace_nowrap()
-                .children(tokens.into_iter().map(|(token, used)| {
-                    let selector = token.clone();
-                    let reading = div()
-                        .debug_selector(move || format!("usage-token-{selector}"))
-                        .flex()
-                        .items_center()
-                        .gap(px(theme::CH));
-                    // The context window reads as a meter between its name
-                    // and its share; an account window as plain words.
-                    match token.strip_prefix("ctx ") {
-                        Some(share) => reading
-                            .child(components::cells("ctx"))
-                            .child(ctx_meter(used))
-                            .child(components::cells(share.to_owned())),
-                        None => reading
-                            .text_color(rgb(readout_ink(used)))
-                            .child(components::cells(token)),
-                    }
-                })),
-        )),
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(theme::LH_UI))
+            .px(px(theme::CH))
+            .whitespace_nowrap()
+            .text_size(px(theme::FS_UI))
+            .text_color(rgb(TEXT_DIM))
+            .child(components::tabular(
+                div()
+                    .debug_selector(move || format!("usage-readout-{key}"))
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(theme::CH))
+                    .whitespace_nowrap()
+                    .children(tokens.into_iter().map(|(token, used)| {
+                        let selector = token.clone();
+                        let reading = div()
+                            .debug_selector(move || format!("usage-token-{selector}"))
+                            .flex()
+                            .items_center()
+                            .gap(px(theme::CH));
+                        // The context window reads as a meter between its name
+                        // and its share; an account window as plain words.
+                        match token.strip_prefix("ctx ") {
+                            Some(share) => reading
+                                .child(components::cells("ctx"))
+                                .child(ctx_meter(used))
+                                .child(components::cells(share.to_owned())),
+                            None => reading
+                                .text_color(rgb(readout_ink(used)))
+                                .child(components::cells(token)),
+                        }
+                    })),
+            )),
     )
 }
 
@@ -9569,47 +9830,51 @@ mod tests {
             label: "Ask for changes".into(),
         }];
         assert_eq!(
-            permission_mode_label("opaque-mode", &choices).as_deref(),
-            Some("ask for changes")
+            permission_mode_label("opaque-mode", &choices).as_ref(),
+            "Ask for changes"
         );
         assert_eq!(
-            permission_mode_label("unknown", &choices).as_deref(),
-            Some("unknown")
+            permission_mode_label("unknown", &choices).as_ref(),
+            "Unknown"
         );
     }
 
-    /// C17: a mode id never renders raw — the known ids read as words, the
-    /// default is hidden, and nothing shown carries a capital or a hump.
+    /// C17: a mode id never renders raw — the known ids read as words in
+    /// sentence case, the default reads `Default`, and nothing shown
+    /// carries a hump.
     #[test]
     fn the_mode_word_is_never_a_raw_id() {
         let claude = vec![
             ferrite_core::PermissionModeChoice {
                 value: "acceptEdits".into(),
-                label: "Accept Edits".into(),
+                label: "Accept edits".into(),
             },
             ferrite_core::PermissionModeChoice {
                 value: "dontAsk".into(),
-                label: "Don't Ask".into(),
+                label: "Don't ask".into(),
             },
         ];
         assert_eq!(
-            permission_mode_label("acceptEdits", &[]).as_deref(),
-            Some("accept edits")
+            permission_mode_label("acceptEdits", &[]).as_ref(),
+            "Accept edits"
         );
         assert_eq!(
-            permission_mode_label("acceptEdits", &claude).as_deref(),
-            Some("accept edits")
+            permission_mode_label("acceptEdits", &claude).as_ref(),
+            "Accept edits"
         );
         assert_eq!(
-            permission_mode_label("bypassPermissions", &[]).as_deref(),
-            Some("bypass permissions")
+            permission_mode_label("bypassPermissions", &[]).as_ref(),
+            "Bypass permissions"
         );
-        assert_eq!(permission_mode_label("plan", &[]).as_deref(), Some("plan"));
-        assert_eq!(permission_mode_label("default", &claude), None);
-        assert_eq!(permission_mode_label("", &[]), None);
+        assert_eq!(permission_mode_label("plan", &[]).as_ref(), "Plan");
         assert_eq!(
-            permission_mode_label("someNewMode", &[]).as_deref(),
-            Some("some new mode")
+            permission_mode_label("default", &claude).as_ref(),
+            "Default"
+        );
+        assert_eq!(permission_mode_label("", &[]).as_ref(), "Default");
+        assert_eq!(
+            permission_mode_label("someNewMode", &[]).as_ref(),
+            "Some new mode"
         );
         for id in [
             "acceptEdits",
@@ -9620,12 +9885,12 @@ mod tests {
             "on-request",
         ] {
             for choices in [&claude[..], &[]] {
-                let word = permission_mode_label(id, choices).unwrap();
-                assert_eq!(word.to_lowercase(), word.as_ref(), "{word}");
-                if id.chars().any(char::is_uppercase) {
-                    assert_ne!(word.as_ref(), id, "never the raw camelCase id");
-                }
-                assert!(!word.chars().any(char::is_uppercase), "{word}");
+                let word = permission_mode_label(id, choices);
+                assert_ne!(word.as_ref(), id, "never the raw id");
+                assert!(
+                    !word.chars().skip(1).any(char::is_uppercase),
+                    "sentence case: {word}"
+                );
             }
         }
     }
@@ -10372,55 +10637,53 @@ mod tests {
 
     // ---- WP-D tests (append above the end line)
     /// The height budget counts exactly what the Composer draws around its
-    /// editor rows (terminal-native, WP-D): the band's padding, its two 1px
-    /// rules and 6px to the Pane's foot — at every level, focused or not.
+    /// editor rows, at every level, focused or not: Solo's box — the
+    /// input's 14 + 8, the 42px toolbar, the 14px inset — and a board's
+    /// band — its padding, its two 1px rules and 6px to the Pane's foot.
     #[test]
     fn the_fixed_height_follows_the_composer_tokens() {
+        assert_eq!(composer_fixed_height(false), 14. + 8. + 42. + 14.);
         let fixed =
             2. * theme::COMPOSER_PAD_Y + 2. * theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B;
         assert_eq!(theme::COMPOSER_RULE + theme::COMPOSER_STATUS_PAD_B, 7.);
-        assert_eq!(composer_fixed_height(), fixed);
+        assert_eq!(composer_fixed_height(true), fixed);
         // One band row is the old grid line's 32px: 6 + 20 + 6.
         assert_eq!(theme::COMPOSER_GRID_H, 32.);
         assert_eq!(
             theme::COMPOSER_GRID_H,
             2. * theme::COMPOSER_PAD_Y + theme::COMPOSER_ROW_H
         );
-        // The `❯` hangs in the transcript's 2-cell gutter, two cells in.
+        // The band's `❯` hangs in the transcript's 2-cell gutter.
         assert_eq!(theme::COMPOSER_PAD_L, theme::GLYPH_GUTTER);
         assert_eq!(theme::COMPOSER_GUTTER, theme::GLYPH_GUTTER);
-        // A tall Pane shows every editor row; a short one keeps its majority.
-        assert_eq!(
-            composer_row_limit(900., false, 0),
-            crate::composer::MAX_ROWS
-        );
-        let limit = composer_row_limit(300., false, 0) as f32;
-        assert!(
-            composer_fixed_height() + limit * theme::COMPOSER_ROW_H
-                <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
-        );
-        // Queued rows stack at the input's own pitch with no gap between
-        // them: three rows are exactly three lines.
+        for grid in [false, true] {
+            // A tall Pane shows every editor row; a short one keeps its
+            // majority.
+            assert_eq!(composer_row_limit(900., grid, 0), crate::composer::MAX_ROWS);
+            let limit = composer_row_limit(300., grid, 0) as f32;
+            assert!(
+                composer_fixed_height(grid) + limit * theme::COMPOSER_ROW_H
+                    <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
+            );
+        }
+        // Solo's queue is one 34px row and its hairline, however many wait.
+        assert_eq!(composer_queue_height(900., false, 0), 0.);
+        assert_eq!(composer_queue_height(900., false, 3), 35.);
+        // A band's queued rows stack at the input's own pitch: three rows
+        // are exactly three lines.
         assert_eq!(theme::QUEUE_ROW_H, theme::COMPOSER_ROW_H);
         assert_eq!(
-            composer_queue_height(900., false, 3),
-            3. * theme::COMPOSER_ROW_H
-        );
-        assert_eq!(
             composer_queue_height(900., true, 3),
-            theme::COMPOSER_COMPACT_QUEUE_ROWS as f32 * theme::COMPOSER_ROW_H
+            3. * theme::COMPOSER_ROW_H
         );
     }
 
-    /// The ctx meter fills green, then yellow, then red (the prototype's
-    /// status line); the model reads lowercase but for its context size.
+    /// The ctx meter fills green, then yellow, then red.
     #[test]
-    fn the_status_line_reads_like_a_terminal() {
+    fn the_ctx_meter_fills_by_state() {
         assert_eq!(ctx_meter_ink(0.32), RUNNING);
         assert_eq!(ctx_meter_ink(0.61), ATTENTION);
         assert_eq!(ctx_meter_ink(0.90), BLOCKED);
-        assert_eq!(status_model_word("Opus 5.5 (1M)").as_ref(), "opus 5.5 (1M)");
-        assert_eq!(status_model_word("GPT-6 Astra").as_ref(), "gpt-6 astra");
     }
 
     /// Usage is neutral until it runs tight: colour is state.

@@ -317,13 +317,12 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     view.read_with(cx, |view, _| {
         assert!(view.mode_picker.is_some(), "the menu survives a redraw");
     });
-    // Anchored BottomLeft, the menu rests above the bar, clear of the
-    // chip; its one item is the pick.
+    // Anchored BottomLeft, the menu rests above its chip (SPEC §5.5),
+    // clear of it; its one item is the pick.
     let item = cx
         .debug_bounds("choice-row-0")
         .expect("the mode menu's item is drawn");
-    let bar = cx.debug_bounds("bottom-bar").unwrap();
-    assert!(item.bottom() <= bar.top(), "{item:?} over {bar:?}");
+    assert!(item.bottom() <= chip.top(), "{item:?} over {chip:?}");
     cx.simulate_click(item.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(
@@ -384,14 +383,13 @@ fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
         chip.center().x > editor.center().x,
         "chips hang at the right edge of the prompt box, not the left"
     );
-    // Terminal-native (WP-D): the shelf ends where the band's text does,
-    // `COMPOSER_PAD_R` in from its right edge.
-    let band = cx.debug_bounds("composer-block").unwrap();
+    // SPEC §5.5: the shelf keeps to the box's own edges.
+    let field = cx.debug_bounds("composer-block").unwrap();
     assert!(
-        (shelf.right() - (band.right() - px(crate::theme::COMPOSER_PAD_R))).abs() <= px(2.),
-        "the shelf's right edge is the band's text edge: shelf {:?} vs band {:?}",
+        (shelf.right() - field.right()).abs() <= px(1.),
+        "the shelf's right edge is the box's: shelf {:?} vs box {:?}",
         shelf.right(),
-        band.right()
+        field.right()
     );
     let stop = cx.debug_bounds("background-chip-stop-0").unwrap();
     cx.simulate_click(stop.center(), gpui::Modifiers::none());

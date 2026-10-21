@@ -867,8 +867,8 @@ impl RenderOnce for ChoiceMenu {
         let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
             .appearance(false)
             .overlay_closable(false)
-            // Every trigger sits in the bar's status line, left of the
-            // room it opens into: the menu hangs right from it.
+            // Every trigger is a Composer toolbar chip, below the room it
+            // opens into: the menu hangs up and right from it.
             .anchor(gpui::Anchor::BottomLeft)
             .trigger(QuietTrigger(self.trigger))
             .open(self.open)

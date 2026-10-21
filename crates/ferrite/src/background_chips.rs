@@ -76,8 +76,8 @@ impl RenderOnce for BackgroundChips {
     }
 }
 
-/// One chip (theme WP-D): one row on `paint::BAND2`, a cell of padding each
-/// side — a still `RUNNING` dot, the task's own description cut to the
+/// One shelf chip (SPEC §5.5): `SHELF_CHIP_H` at `R_CHIP` on
+/// `paint::RAISED`, Geist `FS_META` — a still `RUNNING` dot, the task's own description cut to the
 /// chip's width, and a quiet `×` where stopping is wired. The whole
 /// description and the task's kind wait in the tooltip.
 fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoElement {
@@ -100,12 +100,13 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
         .gap(px(theme::CH))
         .min_w_0()
         .max_w(px(theme::BG_CHIP_MAX_W))
-        .h(px(theme::ROW))
-        .px(px(theme::CH))
-        .bg(theme::paint::BAND2)
+        .h(px(theme::SHELF_CHIP_H))
+        .px(px(theme::SPACE_2))
+        .rounded(px(theme::R_CHIP))
+        .bg(theme::paint::RAISED)
         .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
         .whitespace_nowrap()
         .text_color(rgb(theme::TEXT))
         .tooltip(crate::menu::tooltip(tooltip))
@@ -123,7 +124,7 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
                 .flex_shrink_0()
                 .items_center()
                 .justify_center()
-                .h(px(theme::ROW))
+                .h(px(theme::SHELF_CHIP_H))
                 .px(px(theme::SPACE_0_5))
                 .text_color(rgb(theme::TEXT_DIM))
                 .hover_carried(format!("background-chip-stop-{index}"))

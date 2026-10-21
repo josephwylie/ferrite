@@ -36,9 +36,10 @@ pub(crate) enum Part {
     Nav,
     /// One Pane's cell, wherever the board lays it out.
     Pane(PaneIdentity),
-    /// The focused Pane's status line, in the bottom bar (ADR 0014): its
-    /// pickers' arrows redraw it alone, and a stream reaching the focused
-    /// Thread redraws it with that Pane.
+    /// What is left of the focused Pane's status line in the bottom bar —
+    /// its `ctx` meter and changed files, until the panel takes them (SPEC
+    /// §5.6): a stream reaching the focused Thread redraws it with that
+    /// Pane.
     Status,
 }
 
@@ -156,8 +157,8 @@ impl CockpitView {
         self.mount_part(Part::Nav, frame, cx)
     }
 
-    /// The focused Pane's status line, in the bar's stretch: its cached
-    /// part, or the line itself without parts.
+    /// The bar's `ctx` and files items (`pane_status`), in its stretch:
+    /// their cached part, or the items themselves without parts.
     pub(super) fn status_slot(&self, level: Level, cx: &mut Context<Self>) -> Div {
         // The box the line has in the bar: the stretch before the usage.
         let frame = div().flex().flex_1().min_w_0().h_full();

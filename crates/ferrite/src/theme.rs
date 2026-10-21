@@ -366,6 +366,8 @@ pub mod paint {
         Paint::pick(super::SELECTION_HOVER_GLASS, solid(super::SELECTION_HOVER));
     /// Every press: the selected row's hover face.
     pub const PRESS: Paint = SELECTION_HOVER;
+    /// The send circle: a control, not a region, so opaque everywhere.
+    pub const SEND: Paint = Paint(solid(super::SEND));
     pub const FLOAT: Paint = Paint::pick(super::FLOAT_GLASS, solid(super::FLOAT));
     pub const NODIFF: Paint = Paint::pick(super::NODIFF_GLASS, solid(super::NODIFF));
     /// The hairlines: white overlays on every platform.
@@ -484,12 +486,12 @@ pub const BLOCKED_WASH: u32 = 0xef8a801f;
 /// check-circle, in this ink too: no hue, ADR 0033.)
 pub const IDLE: u32 = TEXT_DIM;
 
-/// A permission mode word's ink (`mode_word`): `ATTENTION` for the modes
-/// that skip asking (bypass permissions, Codex's full access), `TEXT_MUTED`
-/// for the rest (magenta is retired, ADR 0033).
-pub fn mode_ink(word: &str) -> u32 {
-    match word {
-        "bypass permissions" | "danger-full-access" => ATTENTION,
+/// A permission mode's ink, by its id: `ATTENTION` for one that lets
+/// everything run (Claude's bypass, Codex's full access), else
+/// `TEXT_MUTED` — the mode chip's (SPEC §5.5).
+pub fn mode_ink(mode: &str) -> u32 {
+    match mode {
+        "bypassPermissions" | "danger-full-access" => ATTENTION,
         _ => TEXT_MUTED,
     }
 }
@@ -571,10 +573,10 @@ pub fn known_mode(id: &str) -> Option<&'static str> {
     }
 }
 
-/// The word a permission mode wears in the status line, or `None` at the
-/// default (empty or `default`), which is hidden. An unknown id is split at
-/// its camelCase humps and lowercased (`dontAsk` → `dont ask`), so no raw id
-/// or capital ever shows.
+/// A permission mode's word (the mode chip's label, sentence-cased, when
+/// the Session lists none), or `None` at the default (empty or `default`).
+/// An unknown id is split at its camelCase humps and lowercased (`dontAsk`
+/// → `dont ask`), so no raw id ever shows.
 pub fn mode_word(id: &str) -> Option<gpui::SharedString> {
     if id.is_empty() || id == "default" {
         return None;
@@ -1823,43 +1825,39 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 // Owner: WP-D (the Composer, its pickers and usage meter, attachments, background chips, the draft.)
 // Edit values and append tokens only inside this section.
 
-/// **The Composer is an input band, not a box** (the prototype's `.comp`).
-/// No card, no radius, no shadow, no send button: `⏎` sends and `esc`
-/// interrupts, as in a terminal.
+/// **The Composer is a box in the card** (SPEC §5.5). In Solo it stands
+/// `COMPOSER_INSET` from the card's sides and foot: `paint::FIELD` at
+/// `R_PANE`, a 1px `FIELD_RING` laid outside it (it takes no layout).
 ///
-/// - **The input band** spans the Pane's width on `paint::INBAND`, padded
-///   `COMPOSER_PAD_Y` above and below and `COMPOSER_PAD_L` / `COMPOSER_PAD_R`
-///   at its sides, so its `❯` (the prompt mark) hangs in the 2-cell
-///   gutter at the transcript's own glyph column and the text starts two
-///   cells further in. Typed input is mono `TEXT`; a selected run takes
-///   `TEXT_STRONG` on `COMPOSER_SELECTION`. Queued prompts (dim `❯` lines)
-///   stand inside the band above the line.
-/// - **The caret is a block** one cell wide and one row high in `CARET`. In
-///   Solo and in the focused board Pane it is always the block, blinking
-///   softly (`MOTION_CARET_BLINK_MS`, `components::caret_blink`) whoever
-///   holds the keyboard — the transcript, an open float, an inactive
-///   window — and the character under it takes `ON_PRIMARY`; an unfocused
-///   board Pane draws a still, hollow 1px box in `CARET_HOLLOW`. Typing
-///   restarts the blink solid.
-/// - **The placeholder** sits after the caret cell and a space, `TEXT_DIM`,
-///   a couple of words and no keys (`?` lists them, ADR 0014): `Steer this
-///   thread`; while a turn runs `Queue a follow-up`; a Pane a Decision
-///   waits in `Answer above`; any other unfocused Pane nothing.
-/// - **The working line** (`pane::working_line`, the spinner, the caption
-///   and its facts) is the Composer's first row while a turn runs,
-///   `COMPOSER_WORKING_GAP` above the band's rule.
-/// - **The band** stands between two `COMPOSER_RULE` rules (transparent on
-///   the grey and glass themes, the prototype's `--rule`).
-/// - **Under the band** the lower rule and `COMPOSER_STATUS_PAD_B` to the
-///   Pane's foot, focused or not.
-/// - **The status line** is the focused Pane's, in the window's bottom bar
-///   (ADR 0014): `⏵⏵ accept edits` (the mode, `MODE_INK`) · the provider's
-///   logomark and `opus 5.5 (1M) · medium` (one control: the model and its
-///   effort, a `TEXT_DIM` `·` between) · `ctx`, an 8-cell meter and
-///   `32%` · `1 file +9 −4`. Every segment is a quiet control
-///   (`COMPOSER_SEG_PAD_X` padding, `paint::HOVER` under the pointer, no
-///   chevron) that opens what it always opened; segments are split by a
-///   `TEXT_FAINT` `·`.
+/// - **The shelf** stands above the box: pending files at left, background
+///   tasks at right, chips `SHELF_CHIP_H` high at `R_CHIP` on
+///   `paint::RAISED`, `FS_META`. Then the working line
+///   (`pane::working_line`), `COMPOSER_WORKING_GAP_SOLO` above the box.
+/// - **The queued row** (`QUEUED_ROW_H`, when anything is queued): `Queued`
+///   in `FS_META`/`W_LABEL` `TEXT_DIM`, the top of the pile in
+///   `TEXT_MUTED` on one cut line, `+N` in `TEXT_DIM`, and a
+///   `QUEUED_CLOSE` icon button that drops it. ↑ and ⌫ still act on it;
+///   they are not printed. A `HAIRLINE` follows.
+/// - **The input** is Geist `FS_COMPOSER` on `COMPOSER_ROW_H`, padded
+///   `COMPOSER_INPUT_PAD_T` / `COMPOSER_INPUT_PAD_X` / `COMPOSER_INPUT_PAD_B`,
+///   growing to `composer::MAX_ROWS` rows. No `❯`: the box says "type
+///   here". The placeholder (`TEXT_DIM`) overlays its first row.
+/// - **The caret is a bar** `CARET_W` wide and a row high at the cursor's
+///   shaped x, in `CARET`, blinking softly (`MOTION_CARET_BLINK_MS`,
+///   `components::caret_blink`) in Solo and the focused board Pane whoever
+///   holds the keyboard; an unfocused board Pane draws it still in
+///   `CARET_HOLLOW`. Typing restarts the blink solid.
+/// - **The toolbar** (`COMPOSER_TOOLBAR_H`, `COMPOSER_TOOLBAR_PAD_X`,
+///   `COMPOSER_TOOLBAR_GAP`): the `+` attach button (`COMPOSER_ATTACH`), a
+///   draft's Project and Workspace chips, the permission mode chip, a
+///   spacer, the model chip, the effort chip, and the send circle
+///   (`COMPOSER_SEND`, `paint::SEND`, `COMPOSER_SEND_GAP` after the chips).
+///   A chip is `TOOL_CHIP_H` high at `R_CHIP`, `TOOL_CHIP_PAD_X` each side,
+///   `FS_LABEL`, its parts `TOOL_CHIP_GAP` apart, `paint::RAISED` under the
+///   pointer; its menu rests above it.
+///
+/// A Group Pane's Composer is still the input band (`COMPOSER_PAD_*`, a
+/// `❯` in its gutter) until its own phase (SPEC §5.9).
 ///
 /// Any pad or line change here must update `pane::composer_fixed_height` in
 /// the same commit.
@@ -1869,12 +1867,7 @@ pub const COMPOSER_PAD_Y: f32 = 6.0;
 /// The `❯` cell: two cells, the transcript's glyph gutter.
 pub const COMPOSER_GUTTER: f32 = GLYPH_GUTTER;
 pub const COMPOSER_ROW_H: f32 = LH_UI;
-pub const COMPOSER_STATUS_H: f32 = LH_UI;
 pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
-/// A status segment's inline padding: one cell each side.
-pub const COMPOSER_SEG_PAD_X: f32 = CH;
-/// A segment's trailing cell.
-pub const COMPOSER_SEG_PAD_TAIL: f32 = CH;
 /// Legacy names other modules still read (the Subagent footer, the send
 /// controls' corner).
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
@@ -1906,6 +1899,10 @@ pub const CTX_METER_FULL: f32 = 0.85;
 pub const COMPOSER_RULE: f32 = 1.0;
 /// Under the working line, above the band's upper rule.
 pub const COMPOSER_WORKING_GAP: f32 = 6.0;
+/// Under the working line, above Solo's box: 15 (off the scale: the
+/// mockup's, the transcript line's half-leading over the box's 14px
+/// inset).
+pub const COMPOSER_WORKING_GAP_SOLO: f32 = 15.0;
 /// The provider's logomark in a status segment or a picker section.
 pub const STATUS_LOGO: f32 = 11.0;
 /// A logomark set inline in a status segment's line (the prototype's
@@ -1919,12 +1916,11 @@ pub const STATUS_LOGO_FOOT: f32 = 1.0;
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
 /// The queued-prompt viewport scrolls beyond these visible row budgets.
 pub const COMPOSER_QUEUE_ROWS: usize = 3;
-pub const COMPOSER_COMPACT_QUEUE_ROWS: usize = 1;
 /// Between the shelf (pending files, background chips) and the band.
 pub const SHELF_GAP: f32 = SPACE_1;
-/// The caret's block: one cell (`CODE_ADVANCE` of the line's size) wide and
-/// the row high. The hollow caret's edge is 1px.
-pub const CARET_CELLS: f32 = 1.0;
+/// The caret's bar: 2px wide (off the space scale: a caret is a hairline
+/// you can find), the row high.
+pub const CARET_W: f32 = 2.0;
 pub const CARET_HOLLOW: u32 = TEXT_FAINT;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
@@ -1972,21 +1968,61 @@ pub const CTX_CYCLE: [u32; 4] = [BLUE, RED, 0x8fb2b8, 0xb5b48e];
 /// 768px — the image preview sheet's widest reading; it otherwise takes
 /// 90% × 85% of its Pane.
 pub const PREVIEW_MAX_W: f32 = 768.0;
-/// A background task on the shelf above the Composer: one row on
-/// `paint::BAND2`, a cell of padding each side, the still `RUNNING` dot, the
-/// task cut at 32 cells, and a quiet `×` that stops it.
+/// A background task on the shelf above the Composer (a shelf chip): the
+/// still `RUNNING` dot, the task cut at 32 cells, and a quiet `×` that
+/// stops it.
 pub const BG_CHIP_MAX_W: f32 = 32.0 * CH;
-/// A pending file on the shelf: the prototype's `.att` — one row on
-/// `paint::BAND2`, a cell of padding each side, the image mark (or a 12px
+/// A pending file on the shelf (a shelf chip): the image mark (or a 12px
 /// thumbnail) and the name in `LINK_INK`, cut at 32 cells, then `×`.
-pub const ATTACH_CHIP_H: f32 = ROW;
+pub const ATTACH_CHIP_H: f32 = SHELF_CHIP_H;
 pub const ATTACH_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_THUMB: f32 = 12.0;
-/// The model picker (the prototype's `#picker`) hangs off the model
-/// segment: its left edge 8px left of the segment's (so its section logo
-/// sits 8px left of the status logo), its foot 5px over the input band.
+/// The model picker hangs off the model chip: its left edge 8px left of
+/// the chip's (so its section logo sits left of the chip's logo), its foot
+/// 5px over the chip.
 pub const MODEL_PICKER_NUDGE: f32 = 8.0;
 pub const MODEL_PICKER_GAP: f32 = 5.0;
+/// The Solo Composer's box: `COMPOSER_INSET` (14, off the scale: the
+/// mockup's inset, between `SPACE_3` and `SPACE_4`) from the card's sides
+/// and foot.
+pub const COMPOSER_INSET: f32 = 14.0;
+/// A shelf chip: 24 high.
+pub const SHELF_CHIP_H: f32 = SPACE_6;
+/// The queued row: 34 high (the mockup's; a 20px line in 7px of air), its
+/// words `QUEUED_PAD_L` in, its close button `QUEUED_PAD_R` from the end.
+pub const QUEUED_ROW_H: f32 = 34.0;
+pub const QUEUED_PAD_L: f32 = COMPOSER_INPUT_PAD_X;
+pub const QUEUED_PAD_R: f32 = SPACE_2;
+/// Between the queued row's parts: 10 (the mockup's).
+pub const QUEUED_GAP: f32 = 10.0;
+/// The queued row's close button, and its `close` icon.
+pub const QUEUED_CLOSE: f32 = SPACE_6;
+pub const QUEUED_CLOSE_ICON: f32 = SPACE_3;
+/// The input's padding: 14 above and at the sides (`COMPOSER_INSET`'s
+/// measure), 8 under.
+pub const COMPOSER_INPUT_PAD_T: f32 = COMPOSER_INSET;
+pub const COMPOSER_INPUT_PAD_X: f32 = COMPOSER_INSET;
+pub const COMPOSER_INPUT_PAD_B: f32 = SPACE_2;
+/// The toolbar row: 42 high (a 28px chip in 7px of air), 8 in from the
+/// box's sides, its controls 2 apart.
+pub const COMPOSER_TOOLBAR_H: f32 = 42.0;
+pub const COMPOSER_TOOLBAR_PAD_X: f32 = SPACE_2;
+pub const COMPOSER_TOOLBAR_GAP: f32 = SPACE_0_5;
+/// The `+` attach button (30, off the scale: the mockup's) and its icon.
+pub const COMPOSER_ATTACH: f32 = 30.0;
+pub const COMPOSER_ATTACH_ICON: f32 = SPACE_4;
+/// A toolbar chip: 28 high, 9 in at each side (the mockup's), its parts 6
+/// apart; its chevron 11, the mode's shield 14, the provider's logo 13.
+pub const TOOL_CHIP_H: f32 = 28.0;
+pub const TOOL_CHIP_PAD_X: f32 = 9.0;
+pub const TOOL_CHIP_GAP: f32 = SPACE_1_5;
+pub const TOOL_CHIP_CHEVRON: f32 = 11.0;
+pub const TOOL_CHIP_ICON: f32 = 14.0;
+pub const TOOL_CHIP_LOGO: f32 = 13.0;
+/// The send circle (28) and its arrow (14), 6 past the last chip.
+pub const COMPOSER_SEND: f32 = 28.0;
+pub const COMPOSER_SEND_ICON: f32 = 14.0;
+pub const COMPOSER_SEND_GAP: f32 = SPACE_1_5;
 // (end WP-D) — append above this line only
 
 // ======================================== WP-E · menus, popovers, sheets, notifications
@@ -2886,8 +2922,9 @@ mod tests {
         ] {
             assert_eq!(ink, TEXT_STRONG, "{name} is the strongest ink");
         }
-        assert_eq!(mode_ink("bypass permissions"), ATTENTION);
-        assert_eq!(mode_ink("accept edits"), TEXT_MUTED);
+        assert_eq!(mode_ink("bypassPermissions"), ATTENTION);
+        assert_eq!(mode_ink("danger-full-access"), ATTENTION);
+        assert_eq!(mode_ink("acceptEdits"), TEXT_MUTED);
         assert_eq!(IDLE, TEXT_DIM, "done and idle wear no hue");
     }
 

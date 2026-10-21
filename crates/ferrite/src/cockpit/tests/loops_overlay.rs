@@ -59,7 +59,7 @@ fn shown_at(draws: &[(std::time::Instant, Option<Caret>)], at: std::time::Instan
         .rev()
         .find(|(drawn, _)| *drawn <= at)
         .and_then(|(_, caret)| match caret {
-            Some(Caret::Block(alpha)) => Some(*alpha),
+            Some(Caret::Bar(alpha)) => Some(*alpha),
             _ => None,
         })
 }
@@ -127,7 +127,7 @@ fn typing_reaches_a_line_the_overlay_draws_the_caret_of(cx: &mut TestAppContext)
         assert_eq!(composer.text(), "héllo");
         assert_eq!(
             composer.caret_log().1.last().map(|(_, caret)| *caret),
-            Some(Some(Caret::Block(1.0))),
+            Some(Some(Caret::Bar(1.0))),
             "an edit lands on a solid block"
         );
     });
@@ -168,7 +168,7 @@ fn an_open_palettes_caret_blinks_in_the_overlay_over_its_float(cx: &mut TestAppC
     let alphas: std::collections::BTreeSet<u32> = draws
         .iter()
         .filter_map(|(_, caret)| match caret {
-            Some(Caret::Block(alpha)) => Some(alpha.to_bits()),
+            Some(Caret::Bar(alpha)) => Some(alpha.to_bits()),
             _ => None,
         })
         .collect();
@@ -233,7 +233,7 @@ fn deactivating_the_window_stills_the_overlays_caret(cx: &mut TestAppContext) {
     assert!(
         draws
             .iter()
-            .all(|(_, caret)| *caret == Some(Caret::Block(1.0))),
+            .all(|(_, caret)| *caret == Some(Caret::Bar(1.0))),
         "solid and still: {draws:?}"
     );
     // The blink's last declared wake may still come once; then the clock
