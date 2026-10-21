@@ -178,7 +178,15 @@ fn start_gated(name: &str) -> (Harness, Sender<()>) {
 
 /// A Server whose Projects run `projects`, when given, for their hooks.
 fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>, projects: Option<PathBuf>) -> Harness {
-    let dir = scratch(name);
+    serve_in(scratch(name), gate, projects)
+}
+
+/// `serve`, on the Store already in `dir`: a restart's successor.
+fn serve_in(
+    dir: PathBuf,
+    gate: Option<Arc<Mutex<Receiver<()>>>>,
+    projects: Option<PathBuf>,
+) -> Harness {
     let store = dir.join("threads");
     let projects = projects.map(|program| {
         let env = super::projects::environment(&store, Path::new("/bin/ferrite"), &program);
@@ -4733,4 +4741,80 @@ fn an_act_that_writes_reads_a_let_go_thread_back_first() {
     let said = said_in(&engine, thread);
     assert_eq!(said[..before.len()], before[..], "on its history");
     assert!(said.len() > before.len(), "{said:?}");
+}
+
+/// A window that asks for a restart sees it through: restarting, then
+/// restarted once it reaches the successor, with the version it runs.
+#[test]
+fn a_window_sees_its_restart_through() {
+    use crate::cockpit::ServerRestart;
+    let harness = start("restart-seen");
+    let mut window = cockpit(&harness);
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Attached { .. })
+        )
+    });
+
+    window.restart_server(When::Now).unwrap();
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    harness
+        .relaunched
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(harness.server.join().unwrap(), 0);
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Detached { .. })
+        )
+    });
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+
+    // `exec` closes the old Server's sockets; this thread's stay open.
+    std::fs::remove_file(&harness.address).unwrap();
+    std::fs::remove_file(&harness.api).unwrap();
+    let _successor = serve_in(harness.dir.clone(), None, None);
+    pump_until_within(&mut window, Duration::from_secs(10), |window| {
+        window.server_restart() != Some(&ServerRestart::Restarting)
+    });
+    assert_eq!(
+        window.server_restart(),
+        Some(&ServerRestart::Restarted {
+            version: "0.9.0".into()
+        })
+    );
+}
+
+/// A restart the window never sees come back reads as failed, with why,
+/// rather than as nothing at all.
+#[test]
+fn a_restart_that_never_comes_back_reads_failed() {
+    use crate::cockpit::ServerRestart;
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let harness = start("restart-lost");
+    let mut window = cockpit(&harness);
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Attached { .. })
+        )
+    });
+
+    window.restart_server(When::Now).unwrap();
+    harness
+        .relaunched
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    clock.advance(Duration::from_secs(29));
+    window.pump();
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    clock.advance(Duration::from_secs(1));
+    window.pump();
+    assert!(
+        matches!(window.server_restart(), Some(ServerRestart::Failed { .. })),
+        "{:?}",
+        window.server_restart()
+    );
 }

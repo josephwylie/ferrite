@@ -4,7 +4,7 @@
 //! A window on an Engine of its own (`--demo`, `--load`) has none of it.
 
 use super::*;
-use ferrite_core::cockpit::ServerState;
+use ferrite_core::cockpit::{ServerRestart, ServerState};
 use ferrite_core::machine::Failure;
 use ferrite_core::protocol::When;
 use ferrite_core::server::agent;
@@ -32,6 +32,9 @@ pub(crate) enum Gone {
 /// The offer to restart an older Server.
 struct Updating;
 
+/// A restart, as the window sees it through.
+struct Restarting;
+
 /// What the window has said about its Server this run.
 #[derive(Default)]
 pub(crate) struct ServerBands {
@@ -45,6 +48,8 @@ pub(crate) struct ServerBands {
     restart_asked: bool,
     /// The Server's state as the pump last saw it.
     seen: Option<ServerState>,
+    /// The restart the window last said something about.
+    restart: Option<ServerRestart>,
 }
 
 #[cfg(test)]
@@ -171,23 +176,113 @@ impl CockpitView {
                     Notification::new()
                         .id::<Updating>()
                         .title("Ferrite’s server is running an older build")
-                        .message("Click to open Server settings and restart when ready.")
+                        .message("Click to restart it on the installed build.")
                         .with_type(NotificationType::Info)
                         .autohide(false)
-                        .on_click(move |_, _window, cx| {
-                            view.update(cx, |view, cx| {
-                                if !view.settings_open {
-                                    view.toggle_settings(cx);
-                                }
-                                view.settings_page = prefs::PageKey::Server;
-                                cx.notify();
-                            })
-                            .ok();
+                        .on_click(move |_, window, cx| {
+                            view.update(cx, |view, cx| view.restart_server(window, cx))
+                                .ok();
                         }),
                     cx,
                 );
             }
         }
+    }
+
+    /// Say how a restart goes, as the window sees it through: restarting,
+    /// then restarted on the new build, or why not. The offer to restart is
+    /// taken down as soon as one is under way.
+    pub(super) fn present_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let restart = self.cockpit.server_restart().cloned();
+        if restart == self.server_bands.restart {
+            return;
+        }
+        self.server_bands.restart = restart.clone();
+        let Some(restart) = restart else {
+            return;
+        };
+        if std::mem::take(&mut self.server_bands.updating) {
+            window.remove_notification::<Updating>(cx);
+        }
+        window.remove_notification::<Restarting>(cx);
+        let (kind, title, message, stays) = match restart {
+            ServerRestart::Restarting => (
+                NotificationType::Info,
+                "Restarting Ferrite’s server…".to_string(),
+                "Your agents stop for a moment; their Threads resume.".to_string(),
+                true,
+            ),
+            ServerRestart::Restarted { version } => (
+                NotificationType::Success,
+                "Ferrite’s server restarted".to_string(),
+                format!("It runs {version}, the installed build. Every open Thread resumed."),
+                false,
+            ),
+            ServerRestart::Failed { reason } => (
+                NotificationType::Error,
+                "Ferrite’s server did not restart".to_string(),
+                format!("{reason}."),
+                true,
+            ),
+        };
+        window.push_notification(
+            Notification::new()
+                .id::<Restarting>()
+                .title(title)
+                .message(message)
+                .with_type(kind)
+                .autohide(!stays),
+            cx,
+        );
+    }
+
+    /// Where the Server stands, for Settings › About: up to date, an older
+    /// build with the restart that fixes it, restarting, or not running.
+    pub(super) fn server_status_row(&self, window: &Window, cx: &Context<Self>) -> prefs::Row {
+        let restarting = matches!(
+            self.cockpit.server_restart(),
+            Some(ServerRestart::Restarting)
+        );
+        let (status, older) = match self.cockpit.server() {
+            None => ("this window runs its agents itself".to_string(), false),
+            Some(_) if restarting => ("restarting…".to_string(), false),
+            Some(ServerState::Detached { reason, .. }) => (format!("not running: {reason}"), false),
+            Some(ServerState::Attached { server, since }) => {
+                if self.server_is_older(&server, since) {
+                    (
+                        format!(
+                            "{} · an older build: restart to run the installed one",
+                            server.version
+                        ),
+                        true,
+                    )
+                } else {
+                    (
+                        format!(
+                            "{} · up to date · up {}",
+                            server.version,
+                            uptime(since.elapsed())
+                        ),
+                        false,
+                    )
+                }
+            }
+        };
+        let handle = window.window_handle();
+        let view = cx.entity().downgrade();
+        prefs::action(
+            "settings-about-server",
+            "Server",
+            status.clone(),
+            status.into(),
+            older.then(|| "Restart".into()),
+            move |cx| {
+                let view = view.clone();
+                let _ = handle.update(cx, |_, window, cx| {
+                    view.update(cx, |view, cx| view.restart_server(window, cx))
+                });
+            },
+        )
     }
 
     /// Take down the bands this view put up: a window going to another
@@ -229,8 +324,11 @@ impl CockpitView {
     /// Restart the Server now, asking first while an agent works or a
     /// Decision waits: the turn is cut off, and reads interrupted after.
     pub(super) fn restart_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A refused restart is the restart's own notice (`present_restart`),
+        // not a second line beside it.
         self.server_act("Restart", window, cx, |view| {
-            view.cockpit.restart_server(When::Now)
+            let _ = view.cockpit.restart_server(When::Now);
+            Ok(())
         });
     }
 
@@ -249,6 +347,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
         act: impl FnOnce(&mut Self) -> std::io::Result<()> + 'static,
     ) {
+        ferrite_core::log!("asked the server to {verb}");
         let done = move |view: &mut Self, result: std::io::Result<()>| {
             if let Err(error) = result {
                 view.group_error = Some(format!("the server did not {verb}: {error}").into());
@@ -270,7 +369,9 @@ impl CockpitView {
             cx,
         );
         cx.spawn_in(window, async move |view, cx| {
-            if answer.await == Ok(0) {
+            let answer = answer.await;
+            ferrite_core::log!("the operator answered {verb} with {answer:?}");
+            if answer == Ok(0) {
                 let _ = view.update(cx, |view, cx| {
                     let result = act(view);
                     done(view, result);

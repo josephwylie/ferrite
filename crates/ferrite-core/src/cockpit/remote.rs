@@ -79,6 +79,22 @@ pub enum Endpoint {
     Machine(Arc<Bridge>),
 }
 
+/// A restart of the Server this window asked for or heard of, as far as
+/// the window has seen it through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerRestart {
+    /// Asked for, or the Server said it is restarting: not back yet.
+    Restarting,
+    /// The window reached the successor, a new boot running `version`.
+    Restarted { version: String },
+    /// Refused, or no successor within `RESTART_TIMEOUT`: why.
+    Failed { reason: String },
+}
+
+/// How long a restart is given to come back before the window says it
+/// did not.
+const RESTART_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// What a window knows of its Server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerState {
@@ -131,6 +147,9 @@ pub(crate) struct Remote {
     backoff: Duration,
     /// The boot the window's mirrors were built from.
     last_boot: Option<String>,
+    /// A restart being seen through, the boot it restarts away from, and
+    /// when it was asked for.
+    restart: Option<(ServerRestart, Option<String>, Instant)>,
     next_request: u64,
     /// What the Server said while an act waited for its reply.
     inbox: VecDeque<ServerMessage>,
@@ -165,6 +184,7 @@ impl Remote {
             retry_at: Instant::now(),
             backoff: RETRY_FIRST,
             last_boot: None,
+            restart: None,
             next_request: 0,
             inbox: VecDeque::new(),
             starting: BTreeMap::new(),
@@ -236,6 +256,7 @@ impl Remote {
     /// Everything that arrived since the last call, attaching again first
     /// when the Server is gone and it is time.
     pub(crate) fn poll(&mut self) -> Vec<Arrival> {
+        self.time_out_restart();
         let mut arrivals = Vec::new();
         if let Some(attaching) = &self.attaching {
             match attaching.try_recv() {
@@ -762,6 +783,14 @@ impl Remote {
             .checked_sub(Duration::from_millis(uptime_ms.unwrap_or(0)))
             .unwrap_or(now);
         let new_boot = self.last_boot.as_ref() != Some(&snapshot.boot_id);
+        if let Some((state @ ServerRestart::Restarting, from, _)) = &mut self.restart {
+            if from.as_ref() != Some(&snapshot.boot_id) {
+                *state = ServerRestart::Restarted {
+                    version: server.version.clone(),
+                };
+                crate::log!("the Ferrite server restarted: {}", server.version);
+            }
+        }
         self.last_boot = Some(snapshot.boot_id.clone());
         self.attachment = Some(Attachment {
             client,
@@ -856,6 +885,7 @@ impl Remote {
             }
             // The connection closes after either; attaching again follows.
             ServerMessage::Restarting { .. } => {
+                self.restarting();
                 self.detach("the Ferrite server is restarting");
                 self.retry_at = Instant::now() + RESTART_GRACE;
                 Vec::new()
@@ -866,6 +896,55 @@ impl Remote {
             }
             message => vec![Arrival::Message(message)],
         }
+    }
+
+    /// A restart is under way: seen through once the window reaches a new
+    /// boot. Asked for again while one is, it keeps the first's clock.
+    pub(crate) fn restarting(&mut self) {
+        if matches!(self.restart, Some((ServerRestart::Restarting, ..))) {
+            return;
+        }
+        let from = self
+            .attachment
+            .as_ref()
+            .map(|attachment| attachment.boot_id.clone())
+            .or_else(|| self.last_boot.clone());
+        crate::log!("the Ferrite server is restarting");
+        self.restart = Some((ServerRestart::Restarting, from, crate::clock::instant()));
+    }
+
+    /// The Server refused the restart.
+    pub(crate) fn restart_refused(&mut self, reason: String) {
+        crate::log!("the Ferrite server did not restart: {reason}");
+        self.restart = Some((
+            ServerRestart::Failed { reason },
+            None,
+            crate::clock::instant(),
+        ));
+    }
+
+    /// The restart as far as the window has seen it through.
+    pub(crate) fn restart(&self) -> Option<&ServerRestart> {
+        self.restart.as_ref().map(|(state, ..)| state)
+    }
+
+    /// A restart not back within `RESTART_TIMEOUT` did not happen, as far
+    /// as anyone can tell from here.
+    fn time_out_restart(&mut self) {
+        let Some((ServerRestart::Restarting, from, asked)) = &self.restart else {
+            return;
+        };
+        if crate::clock::instant().saturating_duration_since(*asked) < RESTART_TIMEOUT {
+            return;
+        }
+        let reason = match &self.attachment {
+            Some(attachment) if Some(&attachment.boot_id) == from.as_ref() => {
+                "the server is still the one from before: it did not restart".to_string()
+            }
+            Some(_) => return,
+            None => format!("the server did not come back: {}", self.detached),
+        };
+        self.restart_refused(reason);
     }
 
     /// First sends the Server will never answer now: each Draft hears it
