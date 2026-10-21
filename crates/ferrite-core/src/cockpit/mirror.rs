@@ -34,6 +34,9 @@ pub(crate) struct Mirror {
     /// Whether the Activity holds the stream: what a view reads first, the
     /// digest standing in until it does.
     loaded: bool,
+    /// A history on its way, held until the whole has arrived: the Pane
+    /// draws it at once, never its oldest pieces first.
+    arriving: Option<Vec<WireInput>>,
     /// Server identities survive a history rebuild; local replay counters do not.
     decision_handles: HashMap<String, DecisionHandle>,
 }
@@ -170,6 +173,7 @@ impl Mirror {
             digest: None,
             watched: true,
             loaded: false,
+            arriving: None,
             decision_handles: HashMap::new(),
         }
     }
@@ -241,18 +245,23 @@ impl Mirrors {
                 inputs,
             } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let arriving = mirror.arriving.get_or_insert_with(Vec::new);
                 if after == 0 {
-                    mirror.activity = Activity::default();
-                    mirror.generation = 0;
-                    self.restarted.push(thread);
+                    arriving.clear();
                 }
-                let update = updated(&mut self.updates, thread);
-                for input in &inputs {
-                    mirror.apply_wire(input, boot, update);
-                }
+                arriving.extend(inputs);
             }
             ServerMessage::HistoryEnd { thread, seq, live } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                if let Some(history) = mirror.arriving.take() {
+                    mirror.activity = Activity::default();
+                    mirror.generation = 0;
+                    self.restarted.push(thread);
+                    let update = updated(&mut self.updates, thread);
+                    for input in &history {
+                        mirror.apply_wire(input, boot, update);
+                    }
+                }
                 mirror.seq = seq;
                 mirror.loaded = true;
                 let update = updated(&mut self.updates, thread);
@@ -426,6 +435,7 @@ impl Mirrors {
                 mirror.generation = 0;
                 mirror.seq = 0;
                 mirror.loaded = false;
+                mirror.arriving = None;
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             mirror.watched = wanted;

@@ -815,13 +815,13 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
     let mut steady = attach(&harness.address);
     let (thread, provider) = open(&mut steady, &harness);
     steady.watch(thread, None);
-    let ends_with = |said: String| {
+    let shows = |said: String| {
         move |window: &Window| {
             window.mirrors.view(thread).is_some_and(|view| {
                 view.transcript()
                     .blocks()
-                    .last()
-                    .is_some_and(|block| format!("{:?}", block.body).contains(&said))
+                    .iter()
+                    .any(|block| format!("{:?}", block.body).contains(&said))
             })
         }
     };
@@ -836,7 +836,7 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
             })
             .unwrap();
         // One turn at a time, so the steady window never lags either.
-        steady.until(ends_with(format!("turn {nth}")));
+        steady.until(shows(format!("turn {nth}")));
     }
 
     let mut late = attach(&harness.address);
@@ -844,7 +844,7 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
     // Tens of megabytes through a debug build: seconds, more on a busy machine.
     late.until_within(
         Duration::from_secs(120),
-        ends_with(format!("turn {}", turns - 1)),
+        shows(format!("turn {}", turns - 1)),
     );
     assert!(late.replies.is_empty(), "{:?}", late.replies);
     let reply = late.command(4, Op::SettingsChanged);
@@ -4192,6 +4192,49 @@ fn a_window_mirrors_only_the_threads_it_draws() {
             .is_some_and(|open| open.pending().is_some()),
         "its Decision still reads"
     );
+}
+
+/// A window drawing a Thread it let go shows its transcript whole or not
+/// at all: a long history crossing the link in pieces never draws its
+/// oldest part on the way to the latest.
+#[test]
+fn a_thread_drawn_again_arrives_whole() {
+    let harness = start("arrives-whole");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    let mut window = cockpit(&harness);
+    window.send(thread, "go".into());
+    let long = "x".repeat(400 * 1024);
+    // Turns of their own, so the log holds them as inputs of their own.
+    provider.send(text(&format!("oldest {long}\n\n"))).unwrap();
+    for _ in 0..12 {
+        turn_ends(&provider);
+        provider.send(text(&format!("{long}\n\n"))).unwrap();
+    }
+    turn_ends(&provider);
+    provider.send(text("latest\n\n")).unwrap();
+    pump_until(&mut window, |window| {
+        window.thread(thread).is_some_and(|open| {
+            open.digest()
+                .wall
+                .lines
+                .iter()
+                .any(|line| line.text.contains("latest"))
+        })
+    });
+
+    // Drawn every frame as fast as the window can, as the app draws while
+    // the pieces cross.
+    window.draws_transcripts([thread]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !shows(&window, thread, "latest") {
+        assert!(Instant::now() < deadline, "timed out");
+        window.pump();
+        assert!(
+            !shows(&window, thread, "oldest") || shows(&window, thread, "latest"),
+            "drew part of its history"
+        );
+    }
 }
 
 /// A window that says what it draws before its first frame streams no
