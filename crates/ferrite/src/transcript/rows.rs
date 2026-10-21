@@ -6,6 +6,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    hash::Hash,
     ops::Range,
     rc::Rc,
 };
@@ -303,53 +304,7 @@ impl RowDelta {
     fn between(previous: &[Rc<TranscriptRow>], next: &[Rc<TranscriptRow>]) -> Self {
         let previous_ids: Vec<_> = previous.iter().map(|row| row.id.clone()).collect();
         let next_ids: Vec<_> = next.iter().map(|row| row.id.clone()).collect();
-        let mut splices = Vec::new();
-
-        let prefix = common_prefix(&previous_ids, &next_ids);
-        if prefix == 0 {
-            // History eviction commonly turns `[a, b, c]` into `[b, c, d]`.
-            // Delete the vanished head first, preserving the logical anchor
-            // within `b`/`c`, then reconcile the remaining tail.
-            let overlap = suffix_prefix_overlap(&previous_ids, &next_ids);
-            if overlap > 0 {
-                let removed = previous_ids.len() - overlap;
-                if removed > 0 {
-                    splices.push(RowSplice {
-                        old_range: 0..removed,
-                        new_count: 0,
-                    });
-                }
-                if overlap < next_ids.len() {
-                    splices.push(RowSplice {
-                        old_range: overlap..overlap,
-                        new_count: next_ids.len() - overlap,
-                    });
-                }
-            } else {
-                let suffix = common_suffix_after_prefix(&previous_ids, &next_ids, 0);
-                if suffix > 0 {
-                    splices.push(RowSplice {
-                        old_range: 0..previous_ids.len() - suffix,
-                        new_count: next_ids.len() - suffix,
-                    });
-                } else if previous_ids != next_ids {
-                    splices.push(RowSplice {
-                        old_range: 0..previous_ids.len(),
-                        new_count: next_ids.len(),
-                    });
-                }
-            }
-        } else {
-            let suffix = common_suffix_after_prefix(&previous_ids, &next_ids, prefix);
-            let old_end = previous_ids.len() - suffix;
-            let new_end = next_ids.len() - suffix;
-            if prefix != old_end || prefix != new_end {
-                splices.push(RowSplice {
-                    old_range: prefix..old_end,
-                    new_count: new_end - prefix,
-                });
-            }
-        }
+        let splices = splices(&previous_ids, &next_ids);
 
         let previous_by_id: HashMap<_, _> =
             previous.iter().map(|row| (row.id.clone(), row)).collect();
@@ -605,11 +560,43 @@ fn common_suffix_after_prefix<T: Eq>(left: &[T], right: &[T], prefix: usize) -> 
         .count()
 }
 
-fn suffix_prefix_overlap<T: Eq>(left: &[T], right: &[T]) -> usize {
-    (1..=left.len().min(right.len()))
-        .rev()
-        .find(|length| left[left.len() - length..] == right[..*length])
-        .unwrap_or(0)
+/// The splices that turn `previous` into `next`. Past their common start
+/// (the banner and any rows before the first change), they align on the first previous
+/// row `next` still holds: the head before it on either side is one splice
+/// — history evicted from the far end, rows prepended, or a group renamed
+/// for a new oldest call — and the rest a common prefix, one splice and a
+/// common suffix. So the rows between keep their place in the list,
+/// whatever changes at both ends in one update.
+fn splices<T: Eq + Hash>(previous: &[T], next: &[T]) -> Vec<RowSplice> {
+    let start = common_prefix(previous, next);
+    let (previous, next) = (&previous[start..], &next[start..]);
+    let at_in_next: HashMap<&T, usize> = next.iter().enumerate().map(|(at, id)| (id, at)).collect();
+    // With no previous row left, the whole remainder is the head.
+    let (kept, at) = previous
+        .iter()
+        .enumerate()
+        .find_map(|(index, id)| Some((index, *at_in_next.get(id)?)))
+        .unwrap_or((previous.len(), next.len()));
+    let mut splices = Vec::new();
+    if kept > 0 || at > 0 {
+        splices.push(RowSplice {
+            old_range: start..start + kept,
+            new_count: at,
+        });
+    }
+    // After the head splice, `previous[kept]` sits at `start + at`.
+    let (old, new) = (&previous[kept..], &next[at..]);
+    let prefix = common_prefix(old, new);
+    let suffix = common_suffix_after_prefix(old, new, prefix);
+    let (old_end, new_end) = (old.len() - suffix, new.len() - suffix);
+    if prefix != old_end || prefix != new_end {
+        let from = start + at;
+        splices.push(RowSplice {
+            old_range: from + prefix..from + old_end,
+            new_count: new_end - prefix,
+        });
+    }
+    splices
 }
 
 #[cfg(test)]
@@ -779,6 +766,52 @@ mod tests {
         assert_eq!(rows.get(0).unwrap().gap(), 0.);
         assert_eq!(delta.remeasure, vec![0]);
         assert!(Rc::ptr_eq(&old[3], rows.get(1).unwrap()));
+    }
+
+    /// A long transcript's oldest row is a group of calls named for its
+    /// oldest one: when that call falls off the far end while a row
+    /// arrives, the group takes a new name, and only it and the arrival
+    /// splice. The banner above and the rows between keep their place, so
+    /// the list never redraws whole.
+    #[test]
+    fn a_renamed_head_and_an_arrival_splice_only_themselves() {
+        let shape = RowShape {
+            banner: true,
+            ..shape()
+        };
+        let mut transcript = Transcript::default();
+        for id in ["r1", "r2", "r3"] {
+            tool(&mut transcript, id);
+        }
+        for text_part in ["a", "b"] {
+            prompt(&mut transcript, text_part);
+            text(&mut transcript, text_part);
+        }
+        let mut rows = TranscriptRows::new(transcript.blocks(), &shape, READING);
+        let old = rows.rows().to_vec();
+        assert_eq!(old[0].kind(), RowKind::Banner);
+
+        prompt(&mut transcript, "c");
+        let delta = rows.reconcile(&transcript.blocks()[1..], &shape, READING);
+        assert_ne!(
+            old[1].id(),
+            rows.get(1).unwrap().id(),
+            "the group took a new name"
+        );
+        assert_eq!(
+            delta.splices,
+            vec![
+                RowSplice {
+                    old_range: 1..2,
+                    new_count: 1
+                },
+                RowSplice {
+                    old_range: old.len()..old.len(),
+                    new_count: 1
+                }
+            ]
+        );
+        assert!(Rc::ptr_eq(&old[2], rows.get(2).unwrap()));
     }
 
     #[test]
