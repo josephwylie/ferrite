@@ -4261,6 +4261,72 @@ fn a_thread_at_work_stays_mirrored_off_screen() {
     assert!(!shows(&window, thread, "on it"), "let go");
 }
 
+/// A Thread another window opens is held here as one just off screen,
+/// but never drawn here its work keeps it no longer: the window mirrors
+/// only what it draws.
+#[test]
+fn a_thread_opened_elsewhere_is_not_kept_for_its_work() {
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let harness = start("opened-unseen");
+    let mut window = cockpit(&harness);
+    window.draws_transcripts([]);
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    other.command(
+        2,
+        Op::Send {
+            thread,
+            text: "go".into(),
+        },
+    );
+    provider.send(text("on it\n\n")).unwrap();
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+    pump_until(&mut window, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| open.digest().working)
+    });
+
+    clock.advance(Duration::from_secs(5 * 60));
+    window.pump();
+    assert!(!shows(&window, thread, "on it"), "let go though it works");
+}
+
+/// A window drawing a Thread it let go shows its transcript whole or not
+/// at all: a long history crossing the link in pieces never draws its
+/// oldest part on the way to the latest.
+#[test]
+fn a_thread_drawn_again_arrives_whole() {
+    let harness = start("arrives-whole");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    let mut window = cockpit(&harness);
+    window.send(thread, "go".into());
+    let long = "x".repeat(400 * 1024);
+    // Turns of their own, so the log holds them as inputs of their own.
+    provider.send(text(&format!("oldest {long}\n\n"))).unwrap();
+    for _ in 0..12 {
+        turn_ends(&provider);
+        provider.send(text(&format!("{long}\n\n"))).unwrap();
+    }
+    turn_ends(&provider);
+    provider.send(text("latest\n\n")).unwrap();
+    pump_until(&mut window, |window| digest_says(window, thread, "latest"));
+
+    // Drawn every frame as fast as the window can, as the app draws while
+    // the pieces cross.
+    window.draws_transcripts([thread]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !shows(&window, thread, "latest") {
+        assert!(Instant::now() < deadline, "timed out");
+        window.pump();
+        assert!(
+            !shows(&window, thread, "oldest") || shows(&window, thread, "latest"),
+            "drew part of its history"
+        );
+    }
+}
+
 /// A window that says what it draws before its first frame streams no
 /// Thread it does not draw: attaching to a Server with Threads open reads
 /// their digests, and none of their histories (ADR 0032).
