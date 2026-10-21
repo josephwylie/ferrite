@@ -80,6 +80,12 @@ pub struct Cockpit {
     /// The self-hosted forges a review's pull request is read from here,
     /// when this window runs its agents itself (`settings_changed`).
     forge: ferrite_reviewr::config::PluginConfig,
+    /// What a fixture world's forge says (`fixture_forge`), by checkout:
+    /// answered in place of its CLI. Empty outside fixtures.
+    forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
+    /// What a fixture world's disk says is free (`fixture_free_disk`):
+    /// answered in place of the volume. `None` outside fixtures.
+    free_disk_fixture: Option<u64>,
     /// What this window draws at Transcript level (`draws_transcripts`).
     /// `None` for an Engine in this process until its window first says:
     /// until then it streams every open Thread.
@@ -225,6 +231,8 @@ impl Cockpit {
             window_active: true,
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
+            forge_fixture: HashMap::new(),
+            free_disk_fixture: None,
             drawn: None,
             told: None,
         }
@@ -1556,6 +1564,11 @@ impl Cockpit {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
+        if let Some(view) = self.forge_fixture.get(path).cloned() {
+            return Ok(read_here(move || {
+                Ok(crate::protocol::ReviewPullRequest::of(view, "PR"))
+            }));
+        }
         match &mut self.link {
             Link::Server(server) => server.review_pull_request(path),
             Link::InProcess(_) => {
@@ -1626,6 +1639,10 @@ impl Cockpit {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<Option<crate::workspace::PullRequest>>>> {
+        if let Some(view) = self.forge_fixture.get(path) {
+            let reading = crate::workspace::PullRequest::of_view(view);
+            return Ok(read_here(move || Ok(reading)));
+        }
         match &mut self.link {
             Link::Server(server) => server.pull_request(path),
             Link::InProcess(_) => {
@@ -2112,6 +2129,31 @@ impl Cockpit {
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {
         self.in_process().fixture_backdate_notices(thread, at);
         self.settle();
+    }
+
+    /// A fixture world's forge: from now on both pull request reads of the
+    /// checkout at `path` — the Review's whole snapshot
+    /// (`review_pull_request`) and the nav label's (`pull_request`) — answer
+    /// `view`, as its forge's CLI would, without running one.
+    pub fn fixture_forge(&mut self, path: PathBuf, view: ferrite_reviewr::forge::PrView) {
+        self.forge_fixture.insert(path, view);
+    }
+
+    /// Whether a fixture world's forge answers for the checkout at `path`:
+    /// the one PR read tests and captures make, since they never run a CLI.
+    pub fn has_forge_fixture(&self, path: &Path) -> bool {
+        self.forge_fixture.contains_key(path)
+    }
+
+    /// A fixture world's free disk: from now on the bar's `N GB free`
+    /// reads `bytes` (`free_disk_fixture`) instead of the volume.
+    pub fn fixture_free_disk(&mut self, bytes: u64) {
+        self.free_disk_fixture = Some(bytes);
+    }
+
+    /// The free bytes a fixture world stands in for the volume, if any.
+    pub fn free_disk_fixture(&self) -> Option<u64> {
+        self.free_disk_fixture
     }
 
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {

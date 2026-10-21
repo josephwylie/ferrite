@@ -21,11 +21,12 @@ CLIs and shows you what they print.
 Everything works from the keyboard. The mouse works too — click, drag, select,
 right-click, resize.
 
-If an agent spawns **subagents**, they show up as tabs in that agent's Pane.
-Busy ones come first and have animated dots. Click a tab to read what it's
-doing and answer its questions. The "Main" tab takes you back to the parent
-conversation and whatever you'd typed. Opening a subagent tab just shows you
-the transcript; it doesn't start or restart anything.
+If an agent spawns **subagents**, the live ones show up as tabs in that
+agent's Pane, the ones waiting on you first. Finished ones move into the
+`N done` menu at the end of the strip. Click a tab (or pick from the menu) to
+read what it's doing and answer its questions. The "Main" tab takes you back
+to the parent conversation and whatever you'd typed. Opening a subagent tab
+just shows you the transcript; it doesn't start or restart anything.
 
 ## Requirements
 
@@ -96,8 +97,7 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
   worktree.
 - `cmd-shift-n` — new Thread in its own git worktree
 - `cmd-g` — open a Group: the command palette, scoped to Groups
-- `cmd-shift-g` — new Group: the focused Thread plus a new one beside it (the
-  titlebar's **New Group**, when the Thread is in no Group yet)
+- `cmd-shift-g` — new Group: the focused Thread plus a new one beside it
 - `escape` — interrupt whatever's running
 - `y` / `n` / `a` — answer a Decision: allow, deny, or always allow. Works from
   the focused Pane or from any Pane, however small.
@@ -111,7 +111,8 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
 - `cmd-=` / `cmd--` — bigger or smaller transcript text, 12–24px, in every Pane;
   `cmd-0` — back to 14px
 - `cmd-b` — hide the sidebar
-- `cmd-i` — the bell: everything that finished while you were looking elsewhere
+- `cmd-i` — Needs you: the Threads waiting on you, then everything that
+  finished while you were looking elsewhere
 - `cmd-w` — park a Thread; `cmd-o` — bring back the last one you parked
 - `cmd-,` — Settings: defaults for new Threads (provider, model, effort),
   Claude's permission mode, Codex's approval policy and sandbox, naming, and
@@ -172,7 +173,8 @@ TypeScript, Go, C/C++, Java, shell, TOML, YAML and JSON files are syntax
 highlighted. Markdown links resolve from
 the document's folder, and opening another file replaces that Thread's
 reader. Files edited by the Thread or its subagents stay listed in the
-**Files changed** row above the prompt for quick access.
+**panel** on the right, next to the branch's pull request and the context
+window.
 
 **Right-click** a Thread or Group in the sidebar for: rename, open or resume,
 fullscreen, new Thread in the same project, reveal in Finder, copy path, park,
@@ -187,15 +189,17 @@ low effort, one turn, no tools). If you rename it yourself, your name sticks.
 The title also goes to the agent — Codex's thread name, Claude's `--name`.
 
 **When an agent finishes** — its turn is done and no subagents are still
-running — the bell at the top of the sidebar counts it, a toast pops up in the
-top right, and if you can see the Pane its focus ring pulses. Click the toast,
-the bell, or the sidebar row to jump there. Once you land on it the pulse
-stops. Subagents finishing don't notify you, and neither does an interrupt or a
-turn that ends by sending a prompt you'd queued. Toasts are silent and stay
-inside the app.
+running — its sidebar row gets a check mark, a toast pops up in the top right,
+and it's listed under **Recent** in the sidebar's **Needs you** view. Click the
+toast, that entry, or the sidebar row to jump there. Once you land on it the
+mark clears. Threads waiting on you sit at the top of the same view, and the
+bottom bar counts them (`2 need you`). Subagents finishing don't notify you,
+and neither does an interrupt or a turn that ends by sending a prompt you'd
+queued. Toasts are silent and stay inside the app.
 
-**Status dots** in the sidebar: green working, amber waiting on you, red
-closed, dim idle, hollow parked.
+**Status marks** in the sidebar: a green spinner working, an amber dot
+waiting on you, a check finished, a red dot failed, a terminal icon idle
+(faded when parked).
 
 **In a Group**, drag the divider between two Panes to resize them. Drag a
 Pane's header onto another Pane to swap them (drop in the middle) or split that
@@ -204,9 +208,10 @@ arrangement. Drag a Thread from the sidebar onto a Pane to add it to the Group
 on that side; on a lone Thread, that starts a Group. Medium Panes keep their prompt box, so you can still tell a small
 Pane what to do.
 
-**The model picker** sits at the right edge of the prompt box and lists each
-provider's models by name ("Fable 5.1", "GPT-5.6 Sol"). You can switch models
-mid-conversation and the session resumes on the new one. Switching to the
+**The model picker** is the chip at the bottom right of the prompt box (the
+permission mode's chip sits at the left) and lists each provider's models by
+name ("Fable 5.1", "GPT-5.6 Sol"). You can switch models mid-conversation and
+the session resumes on the new one. Switching to the
 *other provider* after you've already sent a prompt hands the conversation
 over: it starts a fresh session there and sends a summary of what happened so
 far ahead of your next prompt. The **effort chip** next to it lists the

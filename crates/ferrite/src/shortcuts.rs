@@ -1,13 +1,12 @@
 //! The shortcuts sheet (`?`, FL-8): every key the cockpit binds, read from
 //! the bound key table (`keymap::active`, the operator's keys included)
-//! through one label table, in the float grammar at the palette's geometry
+//! through one label table, in the palette's dialog (`palette::dialog`)
 //! and over its veil.
 //!
-//! A head (`shortcuts`, `?` at its right), a filter line under it (`❯`, the
-//! palette's input row), sections by where a key acts —
-//! `threads`, `board`, `composer`, `decision`, `wall`, `transcript` — rows
-//! with the label at the left and the chord at the right, and the footer
-//! `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
+//! The palette's input row (the `search` icon, the filter, `esc`), its
+//! section headings by where a key acts — `Threads`, `Board`, `Composer`,
+//! `Decision`, `Wall`, `Transcript` — rows with the label at the left and
+//! the chord at the right, and the palette's footer, `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
 //! match, as the palette filters. The floats' own keys (the palette's, the
 //! list's, this sheet's) and the Review slot's are in their footers, so the
 //! sheet leaves them out; the label table still names them, so a key the
@@ -42,12 +41,12 @@ pub(crate) enum Place {
 impl Place {
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Place::Threads => "threads",
-            Place::Board => "board",
-            Place::Composer => "composer",
-            Place::Decision => "decision",
-            Place::Wall => "wall",
-            Place::Transcript => "transcript",
+            Place::Threads => "Threads",
+            Place::Board => "Board",
+            Place::Composer => "Composer",
+            Place::Decision => "Decision",
+            Place::Wall => "Wall",
+            Place::Transcript => "Transcript",
         }
     }
 }
@@ -68,26 +67,26 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
     let wall = context == Some("Wall");
     Some(match action {
         // Threads.
-        "cockpit::NewThread" => Row(Threads, "new thread"),
-        "cockpit::NewWorktreeThread" => Row(Threads, "new worktree thread"),
-        "cockpit::NewGroup" => Row(Threads, "new group"),
-        "palette::OpenGroups" => Row(Threads, "open a group"),
-        "palette::Toggle" => Row(Threads, "commands"),
-        "projects::Toggle" => Row(Threads, "tasks"),
-        "cockpit::CloseThread" => Row(Threads, "park thread"),
-        "cockpit::ReopenThread" => Row(Threads, "reopen last"),
-        "palette::ShowParked" => Row(Threads, "show parked"),
-        "palette::ReviewBranch" => Row(Threads, "review branch"),
-        "cockpit::NextDecision" => Row(Threads, "next request"),
-        "cockpit::ToggleNotifications" => Row(Threads, "notifications"),
-        "cockpit::OpenSettings" => Row(Threads, "settings"),
-        "cockpit::RefreshPrStatus" => Row(Threads, "refresh PR status"),
-        "cockpit::OpenPrInBrowser" => Row(Threads, "open PR in browser"),
-        "ferrite::Quit" => Row(Threads, "quit"),
+        "cockpit::NewThread" => Row(Threads, "New thread"),
+        "cockpit::NewWorktreeThread" => Row(Threads, "New worktree thread"),
+        "cockpit::NewGroup" => Row(Threads, "New group"),
+        "palette::OpenGroups" => Row(Threads, "Open a group"),
+        "palette::Toggle" => Row(Threads, "Commands"),
+        "projects::Toggle" => Row(Threads, "Tasks"),
+        "cockpit::CloseThread" => Row(Threads, "Park thread"),
+        "cockpit::ReopenThread" => Row(Threads, "Reopen last"),
+        "palette::ShowParked" => Row(Threads, "Show parked"),
+        "palette::ReviewBranch" => Row(Threads, "Review branch"),
+        "cockpit::NextDecision" => Row(Threads, "Next request"),
+        "cockpit::ToggleNotifications" => Row(Threads, "Needs you"),
+        "cockpit::OpenSettings" => Row(Threads, "Settings"),
+        "cockpit::RefreshPrStatus" => Row(Threads, "Refresh PR status"),
+        "cockpit::OpenPrInBrowser" => Row(Threads, "Open PR in browser"),
+        "ferrite::Quit" => Row(Threads, "Quit"),
         // The board.
-        "cockpit::NextPane" => Row(Board, "next pane"),
-        "cockpit::PreviousPane" => Row(Board, "previous pane"),
-        "cockpit::FocusThread1" => Row(Board, "focus pane 1\u{2013}9"),
+        "cockpit::NextPane" => Row(Board, "Next pane"),
+        "cockpit::PreviousPane" => Row(Board, "Previous pane"),
+        "cockpit::FocusThread1" => Row(Board, "Focus pane 1\u{2013}9"),
         "cockpit::FocusThread2"
         | "cockpit::FocusThread3"
         | "cockpit::FocusThread4"
@@ -96,79 +95,80 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "cockpit::FocusThread7"
         | "cockpit::FocusThread8"
         | "cockpit::FocusThread9" => Hidden,
-        "cockpit::ToggleFullscreen" => Row(Board, "fullscreen pane"),
-        "cockpit::ToggleNav" => Row(Board, "toggle sidebar"),
-        "cockpit::TextLarger" => Row(Board, "text larger"),
-        "cockpit::TextSmaller" => Row(Board, "text smaller"),
-        "cockpit::TextReset" => Row(Board, "text reset"),
-        "empty_board::Previous" => Row(Board, "empty board: previous"),
-        "empty_board::Next" => Row(Board, "empty board: next"),
-        "empty_board::Run" => Row(Board, "empty board: run"),
+        "cockpit::ToggleFullscreen" => Row(Board, "Fullscreen pane"),
+        "cockpit::ToggleNav" => Row(Board, "Toggle sidebar"),
+        "cockpit::TogglePanel" => Row(Board, "Toggle panel"),
+        "cockpit::TextLarger" => Row(Board, "Text larger"),
+        "cockpit::TextSmaller" => Row(Board, "Text smaller"),
+        "cockpit::TextReset" => Row(Board, "Text reset"),
+        "empty_board::Previous" => Row(Board, "Empty board: previous"),
+        "empty_board::Next" => Row(Board, "Empty board: next"),
+        "empty_board::Run" => Row(Board, "Empty board: run"),
         // A Decision row (and the wall's quick answers).
-        "cockpit::Allow" if wall => Row(Wall, "allow"),
-        "cockpit::Deny" if wall => Row(Wall, "deny"),
-        "cockpit::Always" if wall => Row(Wall, "always allow"),
-        "cockpit::PickOption1" if wall => Row(Wall, "answer 1\u{2013}3"),
+        "cockpit::Allow" if wall => Row(Wall, "Allow"),
+        "cockpit::Deny" if wall => Row(Wall, "Deny"),
+        "cockpit::Always" if wall => Row(Wall, "Always allow"),
+        "cockpit::PickOption1" if wall => Row(Wall, "Answer 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" if wall => Hidden,
-        "cockpit::Allow" => Row(Decision, "allow"),
-        "cockpit::Deny" => Row(Decision, "deny"),
-        "cockpit::Always" => Row(Decision, "always allow"),
-        "cockpit::PickOption1" => Row(Decision, "pick 1\u{2013}3"),
+        "cockpit::Allow" => Row(Decision, "Allow"),
+        "cockpit::Deny" => Row(Decision, "Deny"),
+        "cockpit::Always" => Row(Decision, "Always allow"),
+        "cockpit::PickOption1" => Row(Decision, "Pick 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" => Hidden,
-        "cockpit::PickOption4" => Row(Decision, "pick 4"),
-        "decision::SelectPrevious" => Row(Decision, "previous option"),
-        "decision::SelectNext" => Row(Decision, "next option"),
-        "decision::Confirm" => Row(Decision, "pick the selected option"),
-        "decision::Dismiss" => Row(Decision, "deny"),
-        "decision::Amend" => Row(Decision, "amend (a note with the answer)"),
+        "cockpit::PickOption4" => Row(Decision, "Pick 4"),
+        "decision::SelectPrevious" => Row(Decision, "Previous option"),
+        "decision::SelectNext" => Row(Decision, "Next option"),
+        "decision::Confirm" => Row(Decision, "Pick the selected option"),
+        "decision::Dismiss" => Row(Decision, "Deny"),
+        "decision::Amend" => Row(Decision, "Amend (a note with the answer)"),
         // The Composer.
-        "cockpit::Submit" => Row(Composer, "send"),
-        "composer::Newline" => Row(Composer, "new line"),
-        "cockpit::Interrupt" => Row(Composer, "interrupt"),
-        "status::CycleMode" => Row(Composer, "cycle permission mode"),
-        "shortcuts::Toggle" => Row(Composer, "shortcuts"),
-        "cockpit::BandCycle" => Row(Composer, "accept suggestion / next chip"),
-        "cockpit::HistoryOlder" => Row(Composer, "previous prompt"),
-        "cockpit::HistoryNewer" => Row(Composer, "next prompt"),
-        "composer::Up" => Row(Composer, "line up"),
-        "composer::Down" => Row(Composer, "line down"),
-        "composer::Paste" => Row(Composer, "paste"),
+        "cockpit::Submit" => Row(Composer, "Send"),
+        "composer::Newline" => Row(Composer, "New line"),
+        "cockpit::Interrupt" => Row(Composer, "Interrupt"),
+        "status::CycleMode" => Row(Composer, "Cycle permission mode"),
+        "shortcuts::Toggle" => Row(Composer, "Shortcuts"),
+        "cockpit::BandCycle" => Row(Composer, "Accept suggestion / next chip"),
+        "cockpit::HistoryOlder" => Row(Composer, "Previous prompt"),
+        "cockpit::HistoryNewer" => Row(Composer, "Next prompt"),
+        "composer::Up" => Row(Composer, "Line up"),
+        "composer::Down" => Row(Composer, "Line down"),
+        "composer::Paste" => Row(Composer, "Paste"),
         "cockpit::Paste" => Hidden,
-        "composer::Backspace" => Row(Composer, "delete back"),
-        "composer::Delete" => Row(Composer, "delete forward"),
-        "composer::Left" => Row(Composer, "left"),
-        "composer::Right" => Row(Composer, "right"),
-        "composer::Home" => Row(Composer, "line start"),
-        "composer::End" => Row(Composer, "line end"),
-        "composer::DeleteWordLeft" => Row(Composer, "delete word back"),
-        "composer::DeleteWordRight" => Row(Composer, "delete word forward"),
-        "composer::DeleteToStart" => Row(Composer, "delete to line start"),
-        "composer::DeleteToEnd" => Row(Composer, "delete to line end"),
-        "composer::WordLeft" => Row(Composer, "word left"),
-        "composer::WordRight" => Row(Composer, "word right"),
-        "composer::SelectLeft" => Row(Composer, "select left"),
-        "composer::SelectRight" => Row(Composer, "select right"),
-        "composer::SelectWordLeft" => Row(Composer, "select word left"),
-        "composer::SelectWordRight" => Row(Composer, "select word right"),
-        "composer::SelectHome" => Row(Composer, "select to line start"),
-        "composer::SelectEnd" => Row(Composer, "select to line end"),
-        "composer::SelectAll" => Row(Composer, "select all"),
-        "composer::Copy" => Row(Composer, "copy"),
-        "composer::Cut" => Row(Composer, "cut"),
-        "composer::Undo" => Row(Composer, "undo"),
-        "composer::Redo" => Row(Composer, "redo"),
-        "cockpit::MenuPrevious" => Row(Composer, "menu: previous"),
-        "cockpit::MenuNext" => Row(Composer, "menu: next"),
-        "cockpit::MenuPick" => Row(Composer, "menu: pick"),
-        "cockpit::MenuDismiss" => Row(Composer, "menu: close"),
+        "composer::Backspace" => Row(Composer, "Delete back"),
+        "composer::Delete" => Row(Composer, "Delete forward"),
+        "composer::Left" => Row(Composer, "Left"),
+        "composer::Right" => Row(Composer, "Right"),
+        "composer::Home" => Row(Composer, "Line start"),
+        "composer::End" => Row(Composer, "Line end"),
+        "composer::DeleteWordLeft" => Row(Composer, "Delete word back"),
+        "composer::DeleteWordRight" => Row(Composer, "Delete word forward"),
+        "composer::DeleteToStart" => Row(Composer, "Delete to line start"),
+        "composer::DeleteToEnd" => Row(Composer, "Delete to line end"),
+        "composer::WordLeft" => Row(Composer, "Word left"),
+        "composer::WordRight" => Row(Composer, "Word right"),
+        "composer::SelectLeft" => Row(Composer, "Select left"),
+        "composer::SelectRight" => Row(Composer, "Select right"),
+        "composer::SelectWordLeft" => Row(Composer, "Select word left"),
+        "composer::SelectWordRight" => Row(Composer, "Select word right"),
+        "composer::SelectHome" => Row(Composer, "Select to line start"),
+        "composer::SelectEnd" => Row(Composer, "Select to line end"),
+        "composer::SelectAll" => Row(Composer, "Select all"),
+        "composer::Copy" => Row(Composer, "Copy"),
+        "composer::Cut" => Row(Composer, "Cut"),
+        "composer::Undo" => Row(Composer, "Undo"),
+        "composer::Redo" => Row(Composer, "Redo"),
+        "cockpit::MenuPrevious" => Row(Composer, "Menu: previous"),
+        "cockpit::MenuNext" => Row(Composer, "Menu: next"),
+        "cockpit::MenuPick" => Row(Composer, "Menu: pick"),
+        "cockpit::MenuDismiss" => Row(Composer, "Menu: close"),
         // The transcript.
-        "cockpit::CopySelection" => Row(Transcript, "copy selection"),
-        "cockpit::ToggleTool" => Row(Transcript, "open or fold a tool call"),
-        "cockpit::ToolCyclePrevious" => Row(Transcript, "previous tool call"),
-        "find::Open" => Row(Transcript, "find"),
-        "find::Next" => Row(Transcript, "find: next"),
-        "find::Previous" => Row(Transcript, "find: previous"),
-        "find::Close" => Row(Transcript, "find: close"),
+        "cockpit::CopySelection" => Row(Transcript, "Copy selection"),
+        "cockpit::ToggleTool" => Row(Transcript, "Open or fold a tool call"),
+        "cockpit::ToolCyclePrevious" => Row(Transcript, "Previous tool call"),
+        "find::Open" => Row(Transcript, "Find"),
+        "find::Next" => Row(Transcript, "Find: next"),
+        "find::Previous" => Row(Transcript, "Find: previous"),
+        "find::Close" => Row(Transcript, "Find: close"),
         // The floats' own keys live in their footers.
         "palette::SelectNext"
         | "palette::SelectPrevious"
@@ -180,6 +180,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "notifications::Open"
         | "notifications::Dismiss"
         | "notifications::Close"
+        | "nav::CloseView"
         | "shortcuts::ScrollUp"
         | "shortcuts::ScrollDown"
         | "shortcuts::Dismiss"
@@ -301,7 +302,7 @@ impl Shortcuts {
     pub(crate) fn scroll_by(&mut self, rows: f32, cx: &mut Context<Self>) {
         let offset = self.scroll.offset();
         let max = f32::from(self.scroll.max_offset().y).max(0.0);
-        let y = (f32::from(offset.y) - rows * ROW).clamp(-max, 0.0);
+        let y = (f32::from(offset.y) - rows * PALETTE_ROW_H).clamp(-max, 0.0);
         self.scroll.set_offset(point(offset.x, px(y)));
         cx.notify();
     }
@@ -309,7 +310,13 @@ impl Shortcuts {
 
 impl Render for Shortcuts {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = crate::palette::input_row("shortcuts-input", self.input.clone());
+        let input = crate::palette::input_row("shortcuts-input", self.input.clone()).child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(FS_META))
+                .text_color(rgb(TEXT_DIM))
+                .child("esc"),
+        );
         let query = self.input.read(cx).text().to_string();
         let shown = filter(&self.rows, &query);
         let mut list = div()
@@ -319,12 +326,16 @@ impl Render for Shortcuts {
             .min_h_0()
             .max_h(px(PALETTE_MAX_H))
             .overflow_y_scroll()
-            .track_scroll(&self.scroll);
+            .track_scroll(&self.scroll)
+            .px(px(PALETTE_LIST_PAD))
+            .pt(px(PALETTE_LIST_PAD))
+            .pb(px(PALETTE_LIST_PAD_B));
         let mut place = None;
         for (index, (row, lit)) in shown.iter().enumerate() {
             if place != Some(row.place) {
+                let first = place.is_none();
                 place = Some(row.place);
-                list = list.child(crate::menu::section(row.place.title(), None, None));
+                list = list.child(crate::palette::section_heading(row.place.title(), first));
             }
             list = list.child(
                 components::text_ui()
@@ -333,9 +344,9 @@ impl Render for Shortcuts {
                     .flex_shrink_0()
                     .items_center()
                     .justify_between()
-                    .h(px(FLOAT_ROW_H))
-                    .pl(px(FLOAT_PAD_X + FLOAT_GUTTER))
-                    .pr(px(FLOAT_PAD_X))
+                    .gap(px(PALETTE_GAP))
+                    .h(px(PALETTE_ROW_H))
+                    .px(px(PALETTE_ROW_PAD_X))
                     .whitespace_nowrap()
                     .child(
                         div().min_w_0().truncate().text_color(rgb(TEXT)).child(
@@ -346,22 +357,28 @@ impl Render for Shortcuts {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .ml(px(FLOAT_DETAIL_GAP))
-                            .child(components::key_combo(&row.keys, TEXT_MUTED)),
+                            .text_size(px(FS_META))
+                            .child(components::key_combo(&row.keys, TEXT_DIM)),
                     ),
             );
         }
         if shown.is_empty() {
-            list = list.child(crate::menu::note("no matches").mt(px(FLOAT_SECTION_GAP)));
+            list = list.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(PALETTE_ROW_H))
+                    .px(px(PALETTE_ROW_PAD_X))
+                    .text_color(rgb(TEXT_DIM))
+                    .child(crate::palette::NO_MATCHES),
+            );
         }
-        crate::menu::float()
+        crate::palette::dialog()
             .debug_selector(|| "shortcuts-sheet".into())
-            .w(px(PALETTE_W))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(crate::menu::head("shortcuts").child("?"))
             .child(input)
             .child(list)
-            .child(crate::menu::footer_line(FOOTER))
+            .child(crate::palette::footer_row(FOOTER.into(), String::new()))
     }
 }
 
@@ -400,35 +417,35 @@ mod tests {
                 .keys
                 .clone()
         };
-        assert_eq!(find(Place::Threads, "commands"), "cmd-K");
-        assert_eq!(find(Place::Threads, "new thread"), "cmd-N");
+        assert_eq!(find(Place::Threads, "Commands"), "cmd-K");
+        assert_eq!(find(Place::Threads, "New thread"), "cmd-N");
         assert_eq!(
-            find(Place::Threads, "park thread"),
+            find(Place::Threads, "Park thread"),
             "cmd-\u{232b}",
             "the empty line's ⌘⌫ is the first spelling"
         );
         assert_eq!(
-            find(Place::Board, "focus pane 1\u{2013}9"),
+            find(Place::Board, "Focus pane 1\u{2013}9"),
             "cmd-1\u{2026}9"
         );
-        assert_eq!(find(Place::Decision, "allow"), "Y");
-        assert_eq!(find(Place::Decision, "pick 1\u{2013}3"), "1\u{2026}3");
+        assert_eq!(find(Place::Decision, "Allow"), "Y");
+        assert_eq!(find(Place::Decision, "Pick 1\u{2013}3"), "1\u{2026}3");
         assert_eq!(
-            find(Place::Decision, "amend (a note with the answer)"),
+            find(Place::Decision, "Amend (a note with the answer)"),
             "\u{21e5}"
         );
-        assert_eq!(find(Place::Wall, "answer 1\u{2013}3"), "1\u{2026}3");
+        assert_eq!(find(Place::Wall, "Answer 1\u{2013}3"), "1\u{2026}3");
         assert_eq!(
-            find(Place::Composer, "cycle permission mode"),
+            find(Place::Composer, "Cycle permission mode"),
             "shift-\u{21e5}"
         );
-        assert_eq!(find(Place::Composer, "shortcuts"), "?");
-        assert_eq!(find(Place::Composer, "delete word back"), "alt-\u{232b}");
-        assert_eq!(find(Place::Transcript, "copy selection"), "cmd-C");
-        assert_eq!(find(Place::Transcript, "find"), "cmd-F");
-        assert_eq!(find(Place::Transcript, "find: next"), "\u{23ce}");
-        assert_eq!(find(Place::Transcript, "find: previous"), "shift-\u{23ce}");
-        assert_eq!(find(Place::Transcript, "find: close"), "esc");
+        assert_eq!(find(Place::Composer, "Shortcuts"), "?");
+        assert_eq!(find(Place::Composer, "Delete word back"), "alt-\u{232b}");
+        assert_eq!(find(Place::Transcript, "Copy selection"), "cmd-C");
+        assert_eq!(find(Place::Transcript, "Find"), "cmd-F");
+        assert_eq!(find(Place::Transcript, "Find: next"), "\u{23ce}");
+        assert_eq!(find(Place::Transcript, "Find: previous"), "shift-\u{23ce}");
+        assert_eq!(find(Place::Transcript, "Find: close"), "esc");
         let places: Vec<Place> = rows.iter().map(|row| row.place).collect();
         let mut sorted = places.clone();
         sorted.sort();
@@ -450,12 +467,12 @@ mod tests {
                 .collect()
         };
         assert_eq!(labels("").len(), rows.len());
-        assert!(labels("park").starts_with(&["park thread"]));
+        assert!(labels("park").starts_with(&["Park thread"]));
         assert!(
-            labels("wall").contains(&"always allow"),
+            labels("wall").contains(&"Always allow"),
             "a section matches"
         );
-        assert!(labels("cmd-k").contains(&"commands"), "a chord matches");
+        assert!(labels("cmd-k").contains(&"Commands"), "a chord matches");
         assert!(labels("zzzz").is_empty());
         let (_, lit) = filter(&rows, "park").remove(0);
         assert_eq!(lit, vec![0..4]);
@@ -472,8 +489,8 @@ mod tests {
         let (table, refused) = keymap::with_user_keys(Platform::Mac, &keys);
         assert!(refused.is_empty(), "{refused:?}");
         let rows = rows(&table);
-        let commands = rows.iter().find(|row| row.label == "commands").unwrap();
+        let commands = rows.iter().find(|row| row.label == "Commands").unwrap();
         assert_eq!(commands.keys, "cmd-P");
-        assert!(rows.iter().all(|row| row.label != "toggle sidebar"));
+        assert!(rows.iter().all(|row| row.label != "Toggle sidebar"));
     }
 }

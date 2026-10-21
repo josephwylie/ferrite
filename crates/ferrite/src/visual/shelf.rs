@@ -196,6 +196,7 @@ impl Shelf {
         rows: &[(usize, &Visual)],
         height_of: &dyn Fn(usize) -> Option<f32>,
         reading: ReadingSize,
+        inset: f32,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -205,8 +206,7 @@ impl Shelf {
             return;
         }
         let grid = Grid::of(reading);
-        let content =
-            f32::from(viewport.size.width) - crate::theme::TX_PAD_L - crate::theme::TX_PAD_R;
+        let content = f32::from(viewport.size.width) - 2.0 * inset;
         let width = page_width(content, grid);
         let live_width = width >= MIN_LIVE_WIDTH;
         if live_width {

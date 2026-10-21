@@ -796,9 +796,9 @@ impl Node {
     }
 }
 
-/// The gap between two Panes on the board, both axes (px): the 1px seam
-/// the terminal-native board draws between flush Panes.
-pub const GRID_GAP: f32 = 1.0;
+/// The gap between two Panes on the board, both axes (px): the 8px gutter
+/// of frame between two cards (ADR 0033). A seam is its centre line.
+pub const GRID_GAP: f32 = 8.0;
 
 /// How far a seam drag can take its line, as shares of the board's length
 /// along the drag (the prototype's `.22`..`.78`).
@@ -853,20 +853,9 @@ pub fn grid_cell(bounds: Rect, columns: usize, rows: usize) -> Cell {
 /// gets `(length - (k - 1) * gap) / k`, so the head's ratio of what its split
 /// shares (`length - gap`) is that cell over it — not `1 / k`, which would
 /// hand the head the gaps the chain after it still has to give up. A pair
-/// is the prototype's halving instead (`--c1:50%`, `--r1:50%`): the first
-/// track half the length, the gap and the rest after it.
+/// is two equal cards either side of the gutter, as the mockups draw it.
 fn even_chain(mut nodes: Vec<Node>, axis: Axis, length: f32) -> Node {
     let count = nodes.len();
-    if count == 2 && length > GRID_GAP {
-        let second = nodes.pop().expect("a pair");
-        let first = nodes.pop().expect("a pair");
-        return Node::Split {
-            axis,
-            ratio: (length / 2.0) / (length - GRID_GAP),
-            first: Box::new(first),
-            second: Box::new(second),
-        };
-    }
     let cell = (length - (count.saturating_sub(1)) as f32 * GRID_GAP) / count.max(1) as f32;
     let mut node = nodes.pop().expect("a chain has at least one node");
     let mut tail = 1;
@@ -1154,10 +1143,8 @@ mod tests {
     fn grid_rows_align_their_seams_and_a_short_last_row_takes_full_cells() {
         let rects = Tree::grid(&ids(1..7), LAPTOP).rects(LAPTOP, GRID_GAP);
         let cell = grid_cell(LAPTOP, 3, 2);
-        // Three equal columns; the two rows halve the height as the
-        // prototype's grid does (`--r1:50%`): the first half of it, the
-        // gap, the rest.
-        let (first, second) = (LAPTOP.h / 2.0, LAPTOP.h / 2.0 - GRID_GAP);
+        // Three equal columns over two equal rows, the gutter between.
+        let (first, second) = (cell.height, cell.height);
         for (at, (_, found)) in rects.iter().enumerate() {
             let height = if at < 3 { first } else { second };
             assert!(
@@ -1179,12 +1166,11 @@ mod tests {
                 second
             )
         ));
-        // A short last row stretches across: 5 in 3 + 2, the pair halving
-        // the full width as the prototype's grid does (`--c1:50%`): the
-        // first half the width, the gap, the rest.
+        // A short last row stretches across: 5 in 3 + 2, the pair two
+        // equal cards across the full width, the gutter between.
         let five = Tree::grid(&ids(1..6), LAPTOP).rects(LAPTOP, GRID_GAP);
-        let half = LAPTOP.w / 2.0;
-        assert!(close(five[3].1.w, half) && close(five[4].1.w, half - GRID_GAP));
+        let half = (LAPTOP.w - GRID_GAP) / 2.0;
+        assert!(close(five[3].1.w, half) && close(five[4].1.w, half));
         assert!(close(five[3].1.x, 0.0));
         assert!(close(five[4].1.x + five[4].1.w, LAPTOP.w));
         // Every row of a full grid is an equal chain: 12 is never 5 over 7.
@@ -1797,7 +1783,7 @@ mod tests {
             tree.linked(&horizontal[0].id, LAPTOP, GRID_GAP),
             [horizontal[0].id.clone()]
         );
-        // The hit band is 9px, centred on the 1px line.
+        // The hit band is 9px, centred on the gutter.
         assert!(close(vertical[0].band.w, 9.0));
     }
 

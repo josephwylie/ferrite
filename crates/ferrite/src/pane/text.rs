@@ -463,7 +463,7 @@ fn collect_fold(block: BlockId, tool: &ToolBlock, rest: String, selection: &Text
 /// (`DiffRow::selectable`).
 fn collect_diff_text(block: BlockId, diff: &Diff, wide: bool, selection: &TextRuns) {
     let (cap, _) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
-    for row in preview_rows(diff, cap, wide) {
+    for row in diff_rows(diff, cap, wide) {
         for side in row.selectable() {
             let _ = selection.line(block, side.body.clone(), Vec::new());
         }

@@ -58,12 +58,13 @@ fn near(a: gpui::Pixels, b: gpui::Pixels) -> bool {
     (a - b).abs() <= px(0.5)
 }
 
-/// D-1, D-3: the row's grammar — the `◆` at the gutter's text origin on the
-/// head's line, half a row to the command band, half a row to the options
-/// (the first pre-selected: its `❯` in its own gutter), half a row to the
-/// hint; every option one row.
+/// D-1, D-3 (SPEC §5.9): the Decision box — the head one row with the
+/// `shield` at the box's content edge, 10px to the command well (a row and
+/// 6px above and below), 10px to the options (30px each, the first under
+/// the cursor), and the hint line 8px under the box; every section across
+/// the box's content column, 12px inside its edge.
 #[gpui::test]
-fn the_decision_row_reads_head_band_options_hint(cx: &mut TestAppContext) {
+fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     let (view, _fake, cx) = waiting(
         "parity-row",
         cx,
@@ -73,50 +74,57 @@ fn the_decision_row_reads_head_band_options_hint(cx: &mut TestAppContext) {
         let request = view.shown_request(0).unwrap();
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
+    let card = cx.debug_bounds("question-island").expect("the box");
     let head = cx.debug_bounds("decision-head").expect("the head");
-    let mark = cx.debug_bounds("decision-mark").expect("the ◆");
-    let well = cx.debug_bounds("approval-well").expect("the command band");
+    let mark = cx.debug_bounds("decision-mark").expect("the shield");
+    let well = cx.debug_bounds("approval-well").expect("the command well");
     let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
     let always = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
     let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
     let hints = cx.debug_bounds("decision-hints").expect("the hint");
     let line = px(crate::theme::LH_UI);
-    let half = px(crate::theme::LH_UI / 2.);
+    let gap = px(crate::theme::DECISION_GAP);
+    let pad = px(crate::theme::DECISION_PAD);
+    assert!(near(head.top() - card.top(), pad), "{card:?} / {head:?}");
+    assert!(near(head.left() - card.left(), pad), "{card:?} / {head:?}");
     assert!(
         near(head.size.height, line),
         "the head is one row: {head:?}"
     );
+    assert!(near(mark.left(), head.left()), "the shield leads the head");
+    assert!(near(well.top() - head.bottom(), gap), "{head:?} / {well:?}");
     assert!(
-        near(mark.left(), head.left()),
-        "◆ typed at the gutter's origin"
+        near(
+            well.size.height,
+            line + px(2. * crate::theme::DECISION_WELL_PAD_Y)
+        ),
+        "the well is a row and 6px above and below: {well:?}"
     );
     assert!(
-        near(well.top() - head.bottom(), half),
-        "{head:?} / {well:?}"
-    );
-    assert!(
-        near(well.size.height, line + half),
-        "the band is a row and two quarter rows: {well:?}"
-    );
-    assert!(
-        near(allow.top() - well.bottom(), half),
+        near(allow.top() - well.bottom(), gap),
         "{well:?} / {allow:?}"
     );
     for row in [allow, always, deny] {
-        assert!(near(row.size.height, line), "an option is one row: {row:?}");
+        assert!(
+            near(row.size.height, px(crate::theme::DECISION_OPTION_H)),
+            "an option is 30px: {row:?}"
+        );
     }
     assert!(near(always.top(), allow.bottom()) && near(deny.top(), always.bottom()));
     assert!(
-        near(hints.top() - deny.bottom(), half),
-        "{deny:?} / {hints:?}"
+        near(card.bottom() - deny.bottom(), pad),
+        "{deny:?} / {card:?}"
     );
-    // The band and the options run on the content column, after the gutter.
-    assert!(near(
-        well.left(),
-        head.left() + px(crate::theme::GLYPH_GUTTER)
-    ));
-    assert!(near(allow.left(), well.left()) && near(allow.right(), well.right()));
-    let cursor = cx.debug_bounds("decision-cursor").expect("the ❯");
+    assert!(
+        near(
+            hints.top() - card.bottom(),
+            px(crate::theme::DECISION_HINT_GAP)
+        ),
+        "the hint sits under the box: {card:?} / {hints:?}"
+    );
+    assert!(near(well.left(), head.left()) && near(allow.left(), well.left()));
+    assert!(near(allow.right(), well.right()));
+    let cursor = cx.debug_bounds("decision-cursor").expect("the cursor row");
     assert!(
         allow.contains(&cursor.center()),
         "the first option is pre-selected: {cursor:?} in {allow:?}"
@@ -238,8 +246,11 @@ fn the_cursor_moves_and_confirm_answers_its_option(cx: &mut TestAppContext) {
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
     let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
-    let mark = cx.debug_bounds("decision-cursor").expect("the ❯");
-    assert!(deny.contains(&mark.center()), "the ❯ follows the cursor");
+    let mark = cx.debug_bounds("decision-cursor").expect("the cursor row");
+    assert!(
+        deny.contains(&mark.center()),
+        "the cursor row follows the cursor"
+    );
     cx.dispatch_action(crate::decision::SelectNext);
     tick(cx);
     assert_eq!(cursor(&view, cx), Some(0), "it wraps");

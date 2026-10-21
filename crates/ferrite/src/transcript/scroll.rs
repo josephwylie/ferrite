@@ -22,8 +22,10 @@ pub(crate) struct TranscriptScroll {
 }
 
 impl TranscriptScroll {
-    /// Start at the live tail. A user scroll away suspends tail following until
-    /// they return to the end; GPUI owns that transition.
+    /// Start at the live tail, bottom-aligned: rows shorter than the
+    /// viewport sit on its foot, the empty space above them (SPEC §5.4). A
+    /// user scroll away suspends tail following until they return to the
+    /// end; GPUI owns that transition.
     pub(crate) fn new(row_count: usize) -> Self {
         let list = ListState::new(row_count, ListAlignment::Top, OVERDRAW);
         list.set_follow_mode(FollowMode::Tail);

@@ -2205,6 +2205,11 @@ impl<'a> AgentView<'a> {
     pub fn status(self) -> AgentStatus {
         self.agent.state.status
     }
+    /// When the agent was first seen, on the activity's own sequence: its
+    /// start order among its siblings (larger is newer).
+    pub fn discovered(self) -> u64 {
+        self.agent.discovered
+    }
     pub fn fresh(self) -> bool {
         self.agent.state.fresh
     }

@@ -23,16 +23,21 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
     }
 }
 
-/// Standard reads at 13px on a 20px line; a cell is 7.8px, so an image's
-/// frame is 374.4px.
+/// Standard reads at 13px on a 21px line in Solo, 12.5 on 20 in a Group
+/// Pane, its diffs and fences half a step smaller (SPEC §3.5); a cell is
+/// 7.8px, so an image's frame is 374.4px.
 #[test]
-fn standard_reads_at_13_on_a_20px_line() {
+fn standard_reads_at_13_on_a_21px_line() {
     use ferrite_core::settings::ReadingSize;
     assert_eq!(crate::theme::answer_text_size(ReadingSize::STANDARD), 13.);
-    assert_eq!(crate::theme::answer_line_height(ReadingSize::STANDARD), 20.);
+    assert_eq!(crate::theme::answer_line_height(ReadingSize::STANDARD), 21.);
     let grid = pane::Grid::of(ReadingSize::STANDARD);
     assert!((grid.cell() - 7.8).abs() < 1e-4);
     assert!((crate::theme::IMAGE_CELLS * grid.cell() - 374.4).abs() < 1e-3);
+    assert_eq!(pane::Grid::pane(ReadingSize::STANDARD, true), grid);
+    let group = pane::Grid::pane(ReadingSize::STANDARD, false);
+    assert_eq!((group.size, group.line), (12.5, 20.));
+    assert_eq!((grid.block().size, grid.block().line), (12.5, 20.));
 }
 
 /// `✻ Worked for 41s · 7:32 pm · ↑ 3.2k ↓ 1.1k`.
@@ -318,4 +323,83 @@ fn a_running_test_suite_shows_its_bar_and_count(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("tool-test-progress").is_some());
     let bar = cx.debug_bounds("test-bar").expect("the bar");
     assert_eq!(bar.size.height, px(crate::theme::TEST_BAR_H));
+}
+
+/// A long Edit's diff in a wide transcript draws side by side in its box,
+/// stops at `HUNK_MAX_ROWS` with `… +N lines`, and a later edit to the
+/// same file still folds behind `+ show diff` until it is opened.
+#[gpui::test]
+fn a_long_edit_diff_splits_caps_and_folds(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("ct-long-diff", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Rewrite the nav".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    // Forty one-line changes: 80 lines, so the cap lands mid-hunk.
+    let long: Vec<String> = (0..40)
+        .flat_map(|n| [format!("-old {n}"), format!("+new {n}")])
+        .collect();
+    for (id, lines) in [
+        ("long-1", long.clone()),
+        ("long-2", vec!["-again".into(), "+later".into()]),
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Edit".into(),
+                input: serde_json::json!({ "file_path": "src/nav.rs" }),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: String::new(),
+                is_error: false,
+                result: ferrite_core::ToolResult::FileEdit {
+                    path: "src/nav.rs".into(),
+                    hunks: vec![ferrite_core::Hunk {
+                        old_start: 1,
+                        old_lines: 40,
+                        new_start: 1,
+                        new_lines: 40,
+                        lines: lines.clone(),
+                        section: None,
+                    }],
+                },
+            })
+            .unwrap();
+    }
+    tick(cx);
+    assert!(
+        cx.debug_bounds("diff-box").is_some(),
+        "the diff sits in its box"
+    );
+    assert!(
+        cx.debug_bounds("diff-split").is_some(),
+        "side by side when wide"
+    );
+    assert!(
+        cx.debug_bounds("diff-omitted").is_some(),
+        "the cap names what it left out"
+    );
+    let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
+    let shown = |text: &str| runs.iter().any(|(_, _, _, run)| run == text);
+    assert!(shown("old 0") && shown("new 0"), "both sides of a change");
+    assert!(
+        !shown("old 20"),
+        "past HUNK_MAX_ROWS ({}) nothing draws",
+        crate::theme::HUNK_MAX_ROWS
+    );
+    assert!(!shown("later"), "a later edit to the file folds its diff");
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Diff("long-2".into()));
+        cx.notify();
+    });
+    tick(cx);
+    let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
+    assert!(
+        runs.iter().any(|(_, _, _, run)| run == "later"),
+        "`+ show diff` opens it"
+    );
 }

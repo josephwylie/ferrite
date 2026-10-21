@@ -386,8 +386,9 @@ impl Markdown {
 impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
-        // Prose sets its own face; the inherited style is the Pane's.
-        let face: SharedString = theme::FONT_UI.into();
+        // Prose sets its own face (the transcript's, Geist Mono); the
+        // inherited style is the Pane's.
+        let face: SharedString = theme::FONT_CODE.into();
         #[cfg(test)]
         testing::record(
             self.id.clone(),
@@ -404,12 +405,9 @@ impl gpui::RenderOnce for Markdown {
         let text_style = if self.muted {
             // A thought stays one step down the ink ladder, headings too.
             (1..=6).fold(
-                text_style.with_foreground(rgb(theme::TEXT_MUTED).into()),
+                text_style.with_foreground(rgb(theme::TEXT_DIM).into()),
                 |style, level| {
-                    style.with_heading(
-                        level,
-                        heading(level, base).text_color(rgb(theme::TEXT_MUTED)),
-                    )
+                    style.with_heading(level, heading(level, base).text_color(rgb(theme::TEXT_DIM)))
                 },
             )
         } else {
@@ -627,7 +625,7 @@ impl gpui::Render for CodeActions {
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
-            .text_color(rgb(theme::TEXT_MUTED));
+            .text_color(rgb(theme::TEXT_DIM));
         let mut hovered = gpui::div()
             .flex()
             .items_center()
@@ -703,16 +701,16 @@ impl gpui::Render for CodeActions {
     }
 }
 
-/// A quiet text action in a fence's overlay: `FS_UI` `TEXT_MUTED` with no
+/// A quiet text action in a fence's overlay: `FS_UI` `TEXT_DIM` with no
 /// ground, the hover overlay under the pointer (the one 150ms blend),
 /// pressed at once, a stable `CODE_ACTION_MIN_W` target one row high.
 fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
     crate::components::faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        theme::paint::HOVER.into(),
+        theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT_MUTED).into(),
+        rgb(theme::TEXT_DIM).into(),
         cx,
     )
     .h(px(theme::LH_UI))
@@ -744,14 +742,18 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
     let size = f32::from(base);
     let line = theme::prose_line_height(size);
     let cell = theme::tx_cell(size);
+    // A fence is set a half step under the prose, as a diff is.
+    let code_size = size - theme::TX_BLOCK_STEP;
+    let code_line = theme::prose_line_height(code_size);
+    let code_cell = theme::tx_cell(code_size);
     let mut style = TextViewStyle::default()
         .with_dark(true)
-        .with_foreground(rgb(theme::TEXT).into())
-        .with_muted_foreground(rgb(theme::TEXT_MUTED).into())
-        // Links and paths read cyan, with no underline at rest: a link
-        // underlines in its own ink only under the pointer.
-        .with_link(rgb(theme::PATH_INK).into())
-        .with_link_underline(Some(rgb(theme::PATH_INK).into()))
+        .with_foreground(rgb(theme::TEXT_PROSE).into())
+        .with_muted_foreground(rgb(theme::TEXT_DIM).into())
+        // Links and paths read `TEXT_STRONG`, with no underline at rest: a
+        // link underlines in its own ink only under the pointer.
+        .with_link(rgb(theme::LINK_INK).into())
+        .with_link_underline(Some(rgb(theme::LINK_INK).into()))
         .with_link_underline_on_hover(true)
         // A column of numbers reads right-aligned, as a terminal table does.
         .with_numeric_columns_right(true)
@@ -772,35 +774,37 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             font_weight: Some(theme::W_STRONG),
             ..Default::default()
         })
-        // A fence has no ground: a 1px `LINE2` rule on its left, the code
-        // two cells in, on the prose's own grid.
+        // A fence is the diff's block box (`pane::block_box`): `BAR`,
+        // `R_CONTROL` corners, a 1px `HAIRLINE`, `BLOCK_PAD_Y` above and
+        // below, the code two cells in, a half step under the prose.
         .with_code_background(gpui::transparent_black())
         .with_code_block(
             gpui::StyleRefinement::default()
-                .pl(px(2.0 * cell))
-                .pr(px(0.))
-                .py(px(0.))
-                // A fence holds to the measure too (the prototype's `.code`,
-                // `max-width: 108ch`): its language word sits at that edge.
+                .px(px(2.0 * code_cell))
+                .py(px(theme::BLOCK_PAD_Y))
+                // A fence holds to the measure too (`max-width: 108ch`): its
+                // language word sits at that edge.
                 .max_w(px(theme::MEASURE_CH * cell))
-                .border_l_1()
-                .border_color(theme::paint::LINE2)
-                .rounded(px(theme::R_BLOCK))
+                .bg(theme::paint::BAR)
+                .border_1()
+                .border_color(theme::paint::HAIRLINE)
+                .rounded(px(theme::R_CONTROL))
                 .font_family(theme::FONT_CODE)
                 .font_weight(theme::W_BODY)
-                .text_size(px(size))
-                .line_height(px(line))
+                .text_size(px(code_size))
+                .line_height(px(code_line))
                 .text_color(rgb(theme::SYN_PLAIN)),
         )
-        // Inline code is cyan ink at body weight whatever it sits in, with
-        // no chip.
+        // Inline code is a chip (SPEC §5.4): `TEXT_STRONG` at body weight
+        // on a `RAISED` wash, `R_INLINE` corners, `INLINE_CODE_PAD_X` of
+        // room either side.
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
             font_weight: Some(theme::W_BODY),
             ..Default::default()
         })
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
-        .with_inline_code_wash(None)
+        .with_inline_code_wash(Some(inline_code_wash()))
         // A table's row rules are the one `LINE`; its head's is `LINE2`.
         .with_border(theme::paint::LINE.into())
         .with_table({
@@ -838,7 +842,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             gpui::StyleRefinement::default()
                 .border_l(px(theme::QUOTE_RULE_W))
                 .border_color(theme::paint::LINE2)
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .not_italic()
                 .pl(px(2.0 * cell - theme::QUOTE_RULE_W))
                 .pr(px(0.)),
@@ -860,9 +864,9 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             gap: px(cell),
         }))
         .with_list_markers(
-            gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+            gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
             crate::components::tabular(
-                gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+                gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
             ),
         )
         // One blank line between blocks, as a terminal prints them; a
@@ -875,6 +879,19 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         style = style.with_heading(level, heading(level, base));
     }
     style
+}
+
+/// The inline-code chip's wash (SPEC §5.4's `padding: 1px 5px`): its
+/// horizontal padding laid out as room either side of the run, so the
+/// text after it moves along, and the ground painted over that room.
+pub(crate) fn inline_code_wash() -> gpui::base::text::InlineCodeWash {
+    gpui::base::text::InlineCodeWash {
+        color: theme::paint::RAISED.hsla(),
+        radius: px(theme::R_INLINE),
+        overhang: px(theme::INLINE_CODE_PAD_X),
+        pad: px(theme::INLINE_CODE_PAD_X),
+        inset_y: px(theme::INLINE_CODE_INSET_Y),
+    }
 }
 
 /// A heading's size at prose size `base`: the type table's ratio, rounded
@@ -1661,10 +1678,10 @@ mod file_link_tests {
         }
     }
 
-    /// A fence is its code on a rule (terminal-native: no padding above or
-    /// below): the actions overlay takes no layout, so a one-line block is
-    /// one prose line, and revealing the actions from the keyboard moves
-    /// nothing.
+    /// A fence is its code in the block box (SPEC §5.4): a line at the
+    /// block size, `BLOCK_PAD_Y` above and below, the 1px hairline round
+    /// it. The actions overlay takes no layout, and revealing the actions
+    /// from the keyboard moves nothing.
     #[gpui::test]
     fn a_fence_is_its_code_and_padding_and_its_actions_take_no_room(cx: &mut TestAppContext) {
         let (_, cx) = fixture(cx, "```rust\nfn main() {}\n```");
@@ -1673,8 +1690,12 @@ mod file_link_tests {
         let block = cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap());
         assert_eq!(
             block.size.height,
-            px(theme::prose_line_height(theme::FS_PROSE)),
-            "one line of code, no padding"
+            px(
+                theme::prose_line_height(theme::FS_PROSE - theme::TX_BLOCK_STEP)
+                    + 2. * theme::BLOCK_PAD_Y
+                    + 2.
+            ),
+            "one line of code in its box"
         );
         let actions = cx
             .debug_bounds("code-actions")
@@ -2714,6 +2735,7 @@ mod vendor_knob_tests {
                     color: rgba(0xffffff0f).into(),
                     radius: px(theme::R_CHIP),
                     overhang: px(2.),
+                    pad: px(0.),
                     inset_y: px(1.),
                 }))
         }
@@ -2725,6 +2747,28 @@ mod vendor_knob_tests {
             let before = height(cx, &source, 220., plain);
             let after = height(cx, &source, 220., code);
             assert_eq!(before, after, "{source:?}");
+        }
+    }
+
+    /// SPEC §5.4: a padded chip lays its room out either side of the code,
+    /// so the text after it moves along and wraps sooner — in a plain
+    /// paragraph and in one that flows a link's element.
+    #[gpui::test]
+    fn an_inline_code_chip_takes_its_padding_as_room(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        fn chip(style: TextViewStyle) -> TextViewStyle {
+            style
+                .with_inline_code_font(Some(theme::FONT_CODE.into()))
+                .with_inline_code_wash(Some(inline_code_wash()))
+        }
+        let chips = "`a` ".repeat(24);
+        for source in [
+            format!("{chips}end."),
+            format!("A [link](https://example.com) then {chips}end."),
+        ] {
+            let before = height(cx, &source, 220., plain);
+            let after = height(cx, &source, 220., chip);
+            assert!(after > before, "{source:?}: {before:?} → {after:?}");
         }
     }
 
@@ -2751,37 +2795,35 @@ mod style_tests {
         rgb(value).into()
     }
 
-    /// Terminal-native: prose `TEXT`, strong `W_STRONG` `TEXT_STRONG`,
-    /// links and paths cyan with no underline at rest, inline code cyan with
-    /// no chip, a fence with no ground.
+    /// SPEC §5.4: prose `TEXT_PROSE`, strong `W_STRONG` `TEXT_STRONG`,
+    /// links and paths `TEXT_STRONG` with no underline at rest, inline code
+    /// a `RAISED` chip, a fence in the block box.
     #[test]
-    fn prose_is_text_with_semibold_strong_and_cyan_links() {
+    fn prose_is_prose_ink_with_semibold_strong_and_strong_links() {
         let style = style(px(theme::FS_UI));
-        assert_eq!(style.foreground(), solid(theme::TEXT));
+        assert_eq!(style.foreground(), solid(theme::TEXT_PROSE));
+        assert_eq!(theme::LINK_INK, theme::TEXT_STRONG);
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
         assert_eq!(style.strong().color, Some(solid(theme::TEXT_STRONG)));
-        assert_eq!(style.link(), solid(theme::PATH_INK));
+        assert_eq!(style.link(), solid(theme::LINK_INK));
         // The underline is the link's own ink, painted only under the
         // pointer (`with_link_underline_on_hover`).
-        assert_eq!(style.link_underline(), Some(solid(theme::PATH_INK)));
+        assert_eq!(style.link_underline(), Some(solid(theme::LINK_INK)));
         assert!(style.link_underline_on_hover());
         assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
-        assert!(
-            style.inline_code_wash().is_none(),
-            "inline code has no chip"
-        );
+        assert_eq!(style.inline_code_wash(), Some(inline_code_wash()));
         assert_eq!(
             style.inline_code().color,
             Some(solid(theme::INLINE_CODE_INK))
         );
         assert!(
             style.code_background().is_transparent(),
-            "a fence has no ground"
+            "a fence's ground is its box's, not its runs'"
         );
         assert_eq!(
             style.code_block().border_color,
-            Some(theme::paint::LINE2.into()),
-            "a fence is its 1px rule"
+            Some(theme::paint::HAIRLINE.into()),
+            "a fence's box has the hairline"
         );
     }
 
@@ -2789,7 +2831,7 @@ mod style_tests {
     /// ink, on the reading size's own line.
     #[test]
     fn headings_follow_the_type_table_at_every_reading_size() {
-        for (base, h1_line) in [(14., 21.), (18., 27.)] {
+        for (base, h1_line) in [(14., 22.), (18., 29.)] {
             let style = style_at(px(theme::FS_UI), px(base));
             assert_eq!(style.heading_font_size(1), Some(px(base)));
             assert_eq!(style.heading_font_size(3), Some(px(base)));
@@ -2828,7 +2870,7 @@ mod style_tests {
         // Terminal-native: blocks sit one blank line apart at every
         // reading size, a heading too.
         let rem = px(theme::FS_UI);
-        for (base, gap) in [(14., 21.), (16., 24.), (18., 27.)] {
+        for (base, gap) in [(14., 22.), (16., 26.), (18., 29.)] {
             let style = style_at(rem, px(base));
             let near = |value: gpui::Rems, want: f32| {
                 (f32::from(value.to_pixels(rem)) - want).abs() < 0.01
@@ -2839,19 +2881,23 @@ mod style_tests {
         }
     }
 
-    /// Theme rule 6: inline code is cyan (`INLINE_CODE`), at body weight.
+    /// SPEC §5.4: inline code is `TEXT_STRONG` (`INLINE_CODE_INK`) at body
+    /// weight on its `RAISED` chip, `R_INLINE` round.
     #[test]
-    fn inline_code_is_cyan_at_body_weight() {
+    fn inline_code_is_a_strong_chip_at_body_weight() {
         use ferrite_core::settings::ReadingSize;
-        assert_eq!(theme::INLINE_CODE_INK, theme::INLINE_CODE);
-        // No chip at any reading size: the ink alone sets code apart.
+        assert_eq!(theme::INLINE_CODE_INK, theme::TEXT_STRONG);
+        let wash = inline_code_wash();
+        assert_eq!(wash.color, theme::paint::RAISED.hsla());
+        assert_eq!(wash.radius, px(theme::R_INLINE));
+        // The same chip at every reading size.
         for size in [
             ReadingSize::STANDARD,
             ReadingSize::nearest(16),
             ReadingSize::nearest(18),
         ] {
             let style = style_at(px(theme::FS_UI), px(theme::answer_text_size(size)));
-            assert!(style.inline_code_wash().is_none());
+            assert_eq!(style.inline_code_wash(), Some(wash));
         }
         // Code inside `# heading` or `**strong**` shapes at 400: the code
         // highlight is merged over the heading's or the strong run's weight.

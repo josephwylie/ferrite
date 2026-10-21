@@ -618,7 +618,7 @@ impl CockpitView {
     }
 
     /// A Pane's reader as its own board slot (F-14, F-15): the reader shell
-    /// (`Preview::reader` — its head the path in `PATH_INK` and `:line` dim,
+    /// (`Preview::reader` — its head the path in `LINK_INK` and `:line` dim,
     /// or `review · dev`, the slot's drag handle) over the body: the file's
     /// numbered lines in syntax colour with the target line marked,
     /// rendered Markdown, or the review. A press lands on the Pane that
@@ -651,7 +651,7 @@ impl CockpitView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&pane.reader_markdown_scroll)
-                    .px(px(crate::theme::TX_PAD_L))
+                    .px(px(crate::theme::TX_INSET_SOLO))
                     .pt(px(crate::theme::BODY_PAD_T))
                     .pb(px(crate::theme::HALF_ROW))
                     .child(crate::rich::document_body(
@@ -734,7 +734,7 @@ impl CockpitView {
 /// A file's lines, numbered (F-14): a `READER_NUMBER_W` column of numbers,
 /// right-aligned and dim, `READER_NUMBER_GAP` before the code, the code in
 /// its syntax colours (`highlight_tokens` for the path's language). The
-/// target line lies on `paint::SELECTION` with its number in `ACCENT`.
+/// target line lies on `paint::SELECTED` with its number in `TEXT_STRONG`.
 /// A line wider than the reader is cut at its edge; the one holding the
 /// find's occurrence starts further in when that would lie past it
 /// (`shown_from`). Virtualised: only the rows in view are laid out.
@@ -790,7 +790,7 @@ fn numbered_lines(
                         .w_full()
                         .h(px(LH_UI))
                         .whitespace_nowrap()
-                        .when(marked, |row| row.bg(paint::SELECTION))
+                        .when(marked, |row| row.bg(paint::SELECTED))
                         .child(
                             div()
                                 .flex()
@@ -798,7 +798,7 @@ fn numbered_lines(
                                 .justify_end()
                                 .w(px(READER_NUMBER_W))
                                 .pr(px(READER_NUMBER_GAP))
-                                .text_color(rgb(if marked { ACCENT } else { TEXT_MUTED }))
+                                .text_color(rgb(if marked { TEXT_STRONG } else { TEXT_DIM }))
                                 .child(SharedString::from(number.to_string())),
                         )
                         .child(

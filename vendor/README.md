@@ -179,8 +179,8 @@ unchanged except that `gpui-pre`'s example targets are dropped with the
 `examples/` tree (4.9MB of fixtures); registry cache markers and lockfiles are
 omitted.
 
-Ferrite renders to the approved prototype's pixels, which a browser lays out
-and paints. The patches make gpui place and round what it paints the way a
+Ferrite's design is drawn as HTML (`docs/design/ui-refresh/mockups/`), which
+a browser lays out and paints. The patches make gpui place and round what it paints the way a
 browser does, so the same CSS geometry lands on the same device pixels:
 
 - **Layout units** (`taffy.rs`, `elements/text.rs`). Authored lengths are held

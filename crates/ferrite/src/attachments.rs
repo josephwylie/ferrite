@@ -1,7 +1,6 @@
-//! The files a prompt carries, drawn the same way in the draft and in the
-//! delivered prompt: the prototype's `.att` chip (theme WP-D) — one row on
-//! `paint::BAND2`, a cell of padding each side, the image mark (or the file
-//! mark) and the name in `PATH_INK`. This module owns presentation and
+//! The files a draft carries, as shelf chips over the Composer (SPEC §5.5):
+//! `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, Geist `FS_META`,
+//! the image mark (or the file mark) and the name in `LINK_INK`. This module owns presentation and
 //! image preview; callers only supply paths and, for a draft, a removal
 //! callback. The prompt codec owns persistence. A draft's review comments
 //! (ADR 0021) ride the same shelf as one more chip.
@@ -71,10 +70,10 @@ impl Attachments {
     }
 }
 
-/// The files as `.att` chips, wrapping: one row on `paint::BAND2`, a cell of
-/// padding each side, a mark — an image's is a real button (a tab stop,
+/// The files as shelf chips, wrapping (`SHELF_CHIP_H` on `paint::RAISED`),
+/// a mark — an image's is a real button (a tab stop,
 /// Enter/Space) that opens the preview; any other file's the `FILE` mark —
-/// then the name in `PATH_INK` cut at `ATTACH_CHIP_MAX_W` (a file name is
+/// then the name in `LINK_INK` cut at `ATTACH_CHIP_MAX_W` (a file name is
 /// machine text), and, on a draft, a quiet `×` that removes it (a button
 /// too). The buttons sit in the `PromptAttachment` key context, so their
 /// Enter never sends. A click anywhere else on a chip opens the image
@@ -119,7 +118,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 .child(crate::icons::icon(
                     crate::icons::IMAGE,
                     theme::ATTACH_THUMB,
-                    theme::PATH_INK,
+                    theme::LINK_INK,
                 ))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
@@ -136,7 +135,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 .child(crate::icons::icon(
                     crate::icons::FILE,
                     theme::ATTACH_THUMB,
-                    theme::PATH_INK,
+                    theme::LINK_INK,
                 ))
                 .into_any_element()
         };
@@ -152,15 +151,16 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .h(px(theme::ATTACH_CHIP_H))
             .max_w(px(theme::ATTACH_CHIP_MAX_W))
             .min_w_0()
-            .px(px(theme::CH))
-            .bg(theme::paint::BAND2)
+            .px(px(theme::SPACE_2))
+            .rounded(px(theme::R_CHIP))
+            .bg(theme::paint::RAISED)
             .cursor_pointer()
             .hover_carried(format!("attachment-{index}-{}", open.display()))
-            .font_family(theme::FONT_CODE)
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
+            .font_family(theme::FONT_UI)
+            .text_size(px(theme::FS_META))
+            .line_height(px(theme::LH_META))
             .font_weight(theme::W_BODY)
-            .text_color(rgb(theme::PATH_INK))
+            .text_color(rgb(theme::LINK_INK))
             .whitespace_nowrap()
             .child(mark)
             .child(
@@ -182,7 +182,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                         .key_context("PromptAttachment")
                         .accessibility_label(format!("Remove {name}"))
                         .tooltip(format!("Remove {}", path.display()))
-                        .child(div().text_color(rgb(theme::TEXT_MUTED)).child("\u{d7}"))
+                        .child(div().text_color(rgb(theme::TEXT_DIM)).child("\u{d7}"))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             remove(&removed, window, cx);
@@ -220,7 +220,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
 }
 
 /// The draft's review comments as one `.att` chip: the pencil, `N review
-/// comments` in `PATH_INK`, and a quiet `×` that drops them all.
+/// comments` in `LINK_INK`, and a quiet `×` that drops them all.
 fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
     use crate::theme;
     use gpui::{div, rgb, SharedString};
@@ -235,18 +235,19 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
         .items_center()
         .gap(px(theme::CH))
         .h(px(theme::ATTACH_CHIP_H))
-        .px(px(theme::CH))
-        .bg(theme::paint::BAND2)
-        .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
+        .px(px(theme::SPACE_2))
+        .rounded(px(theme::R_CHIP))
+        .bg(theme::paint::RAISED)
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
         .font_weight(theme::W_BODY)
-        .text_color(rgb(theme::PATH_INK))
+        .text_color(rgb(theme::LINK_INK))
         .whitespace_nowrap()
         .child(crate::icons::icon(
             crate::icons::PENCIL,
             theme::ATTACH_THUMB,
-            theme::PATH_INK,
+            theme::LINK_INK,
         ))
         .child(SharedString::from(label))
         .when_some(on_drop, |chip, on_drop| {
@@ -262,7 +263,7 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
                     .key_context("PromptAttachment")
                     .accessibility_label("Remove the review comments")
                     .tooltip("Remove the review comments")
-                    .child(div().text_color(rgb(theme::TEXT_MUTED)).child("\u{d7}"))
+                    .child(div().text_color(rgb(theme::TEXT_DIM)).child("\u{d7}"))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         on_drop(window, cx);
@@ -280,8 +281,8 @@ impl RenderOnce for Attachments {
 }
 
 /// A file link in prose (the prototype's `.path`): the path as the prose
-/// wrote it in `PATH_INK` with no chip, a `:line` suffix in `TEXT_MUTED`. It
-/// is a path target (`file_links::wire_inline`): a `PATH_INK` underline only
+/// wrote it in `LINK_INK` with no chip, a `:line` suffix in `TEXT_DIM`. It
+/// is a path target (`file_links::wire_inline`): a `LINK_INK` underline only
 /// under the pointer, the hover card while it is there (hosted by `scope`,
 /// the transcript it sits in), ⌘-click to a reader beside the Thread; a
 /// plain click opens it in the Pane's preview. The native Markdown flow
@@ -391,14 +392,14 @@ pub fn inline_file(
                     gpui::div()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(theme::PATH_INK))
+                        .text_color(rgb(theme::LINK_INK))
                         .child(name),
                 )
                 .when(!location.is_empty(), |title| {
                     title.child(
                         gpui::div()
                             .flex_none()
-                            .text_color(rgb(theme::TEXT_MUTED))
+                            .text_color(rgb(theme::TEXT_DIM))
                             .child(location),
                     )
                 }),
@@ -409,7 +410,7 @@ pub fn inline_file(
     let button = crate::components::button("inline-file-action")
         .custom(crate::pointer::button_variant(
             clear,
-            rgb(theme::PATH_INK).into(),
+            rgb(theme::LINK_INK).into(),
             clear,
             cx,
         ))

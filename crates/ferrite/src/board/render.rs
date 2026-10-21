@@ -23,15 +23,15 @@ use sw_board::shown::ink::{Ink, Inked, Piece};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::{
-    ACCENT, BAND, BLUE, CH, CHROME, CYAN, GREEN, LINE, LINE2, MAGENTA, ORANGE, PLANE, RED, ROW,
-    SELECTION, TEXT, TEXT_MUTED, W_STRONG, YELLOW,
+    BLUE, CARD, CH, CYAN, FIELD, FRAME, GREEN, LINE, LINE2, MAGENTA, ORANGE, RED, ROW, SELECTED,
+    TEXT, TEXT_DIM, TEXT_STRONG, W_STRONG, YELLOW,
 };
 
 /// Ferrite's own theme's name, as `Theme::name` carries it.
 pub(crate) const FERRITE: &str = "ferrite";
 
 /// The brighter grey (herdr's `subtext0`): words that have to be read,
-/// between `TEXT_MUTED` and `TEXT`.
+/// between `TEXT_DIM` and `TEXT`.
 const SOFT: u32 = 0xb6b6bb;
 
 /// The theme `board.theme` is set to. Reads the settings file: off the UI
@@ -63,19 +63,19 @@ pub(crate) fn theme_named(want: &str) -> Theme {
 /// and the board's own colours picked beside them.
 pub(crate) fn ferrite_theme(plain: bool) -> Theme {
     let own = |rgb: u32| C::Rgb(rgb);
-    let ground = own(PLANE);
+    let ground = own(CARD);
     let text = own(TEXT);
     let mut pal = Pal {
-        accent: own(ACCENT),
+        accent: own(TEXT_STRONG),
         panel_bg: ground,
-        sidebar_bg: own(CHROME),
-        active_row_bg: own(SELECTION),
-        selection_bg: own(SELECTION),
-        surface0: own(BAND),
+        sidebar_bg: own(FRAME),
+        active_row_bg: own(SELECTED),
+        selection_bg: own(SELECTED),
+        surface0: own(FIELD),
         surface1: own(LINE2),
         surface_dim: own(LINE),
-        overlay0: own(TEXT_MUTED),
-        overlay1: own(TEXT_MUTED),
+        overlay0: own(TEXT_DIM),
+        overlay1: own(TEXT_DIM),
         text,
         subtext0: own(SOFT),
         mauve: own(MAGENTA),
@@ -141,7 +141,7 @@ pub(crate) fn ink(theme: &Theme, ink: Ink) -> u32 {
 /// quieter, or dim), its background ink, then reverse.
 fn colours(theme: &Theme, piece: &Piece) -> (u32, Option<u32>) {
     let text = ink(theme, Ink::Text);
-    let ground = theme.ground.drawn().unwrap_or(PLANE);
+    let ground = theme.ground.drawn().unwrap_or(CARD);
     let (mut fg, mut bg) = (text, None);
     if !theme.plain {
         fg = if piece.quiet {

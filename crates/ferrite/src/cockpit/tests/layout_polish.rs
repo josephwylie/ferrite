@@ -6,7 +6,9 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
     let (mut core, fake) = cockpit("polish-question-containment", 4);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    // 830 tall: a 2×2 under the 46px head row and the 30px bar still
+    // reads as transcripts (R12: 360 tall).
+    cx.simulate_resize(gpui::size(px(1200.), px(830.)));
     view.update(cx, |view, cx| {
         view.enter_group(group, cx);
         view.focus_pane(0);
@@ -157,7 +159,9 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
     let group = group_all(&mut core);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    // 830 tall: a 2×2 under the 46px head row and the 30px bar still
+    // reads as transcripts (R12: 360 tall).
+    cx.simulate_resize(gpui::size(px(1200.), px(830.)));
     view.update(cx, |view, cx| {
         view.enter_group(group, cx);
         view.focus_pane(0);
@@ -221,7 +225,7 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
     tick(cx);
     assert!(cx.debug_bounds("question-island").is_some());
     // Repeat geometry changes to catch stale collapsed state and feedback loops.
-    for height in [1000., 800., 1000., 800.] {
+    for height in [1000., 830., 1000., 830.] {
         cx.simulate_resize(gpui::size(px(1200.), px(height)));
         tick(cx);
         assert!(cx.debug_bounds("question-island").is_some());
@@ -306,6 +310,11 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
     cx.update(|window, cx| {
         let pane = &view.read(cx).panes[0];
         assert!(pane.composer.focus_handle(cx).is_focused(window));
+    });
+    // The transcript sits on its foot (SPEC §5.4): opening the group grew
+    // it upward, so the second click finds the row where it now is.
+    let at = view.read_with(cx, |view, _| {
+        view.panes[0].tool_bounds(group.clone()).unwrap().center()
     });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);

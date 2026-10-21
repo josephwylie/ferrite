@@ -11,16 +11,15 @@
 //! | Zeron | Spec | Ferrite surface |
 //! | --- | --- | --- |
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
-//! | selection move | none | the nav's one selection ground (`paint::SELECTION`) moves at once: selection is keyboard-rate, a high-frequency interaction |
+//! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
-//! | seam accent | [`SEAM_FADE`] 120ms | a board seam's accent line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
-//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
-//! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
+//! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
+//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
@@ -157,7 +156,6 @@ impl CubicBezier {
 pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
-pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -213,18 +211,14 @@ pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_O
 /// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
 /// (`cubic-bezier(.25,.1,.25,1)`), not `ease-out`.
 pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
-/// A board seam's accent line fading in under the pointer: the prototype's
+/// A board seam's strong line fading in under the pointer: the prototype's
 /// `.seam::before{transition: opacity .12s}`.
 pub const SEAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_SEAM_FADE_MS, EASE);
-pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
-/// A two-state control the pointer flipped (the Parked chevron, a switch
-/// thumb): 150ms on the standard curve. A keyboard flip lands at once.
-pub const TURN: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
 
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
@@ -1198,7 +1192,6 @@ mod tests {
         assert_eq!(RESIZE.duration_ms, 200);
         assert_eq!(RESIZE.curve, CubicBezier::new(0.25, 0.1, 0.25, 1.0));
         assert_eq!(SEAM_FADE.duration_ms, 120);
-        assert_eq!(COLLAPSE.duration_ms, 180);
         assert_eq!(FADE_QUICK.duration_ms, 150);
         assert_eq!(MENU_IN.duration_ms, 140);
         assert_eq!(DIALOG_IN.duration_ms, 180);
@@ -1272,7 +1265,7 @@ mod tests {
         close(ride.value(half, false), 280.8 * 0.1976, 0.5, "mid-ride");
     }
 
-    /// A seam's accent line fades over its own 120ms, not the hover 150ms.
+    /// A seam's strong line fades over its own 120ms, not the hover 150ms.
     #[test]
     fn a_seam_blend_runs_on_its_own_timeline() {
         let mut fades = HoverFades::default();
@@ -1372,8 +1365,8 @@ mod tests {
 
     #[test]
     fn mix_blends_in_premultiplied_srgb() {
-        let rest: Hsla = gpui::rgb(theme::CHROME).into();
-        let hover: Hsla = gpui::rgb(theme::HOVER).into();
+        let rest: Hsla = gpui::rgb(theme::FRAME).into();
+        let hover: Hsla = gpui::rgb(theme::RAISED).into();
         assert_eq!(mix(rest, hover, 0.0), rest);
         assert_eq!(mix(rest, hover, 1.0), hover);
         let wash = gpui::transparent_black();

@@ -182,33 +182,6 @@ fn a_tasks_space_is_named_for_the_task_with_its_numbers(cx: &mut TestAppContext)
     });
 }
 
-/// The bottom bar says the board header's tally while the board has tasks,
-/// and a press on it opens the board, as its key does.
-#[gpui::test]
-fn the_bottom_bar_says_the_boards_tally(cx: &mut TestAppContext) {
-    let tally = "3 need you \u{b7} 1 ready \u{b7} 2 working";
-    let (core, _fake) = cockpit("bar-board-tally", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    assert!(
-        cx.debug_bounds("bottom-bar-projects").is_none(),
-        "no tasks, no word"
-    );
-    assert_eq!(drawn::bar_tally(), None);
-
-    view.update(cx, |view, cx| {
-        view.projects.sidebar.tally = tally.into();
-        cx.notify();
-    });
-    tick(cx);
-    assert_eq!(drawn::bar_tally().as_deref(), Some(tally));
-    let word = cx.debug_bounds("bottom-bar-projects").expect("the word");
-    let toggles = drawn::projects_toggles();
-    cx.simulate_click(word.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(drawn::projects_toggles(), toggles + 1, "projects::Toggle");
-}
-
 /// The toasts the window shows now.
 fn toasts(cx: &mut gpui::VisualTestContext) -> usize {
     cx.update(|window, cx| {
@@ -498,17 +471,14 @@ fn the_board_key_refocuses_a_shown_board(cx: &mut TestAppContext) {
     cx.update(|window, _| assert!(elsewhere.is_focused(window)));
 }
 
-/// The bottom bar's board door sits after the bell, in the operator's
-/// window only, and a click does what the board key does.
+/// The board left the bar (SPEC §5.7: the nav's `Tasks` view takes its
+/// door and tally): with tasks on a live board the bar carries neither,
+/// and the board's key still opens it.
 #[gpui::test]
-fn the_board_door_sits_after_the_bell_and_opens_the_board(cx: &mut TestAppContext) {
+fn the_board_is_reached_by_its_key_not_the_bar(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("board-door", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    assert!(
-        cx.debug_bounds("projects-board-door").is_none(),
-        "no door where no board opens"
-    );
     let board = focused_board(&view, Placement::Tab, cx);
     view.update_in(cx, |view, window, cx| {
         let composer = view.panes[view.focused()]
@@ -517,23 +487,20 @@ fn the_board_door_sits_after_the_bell_and_opens_the_board(cx: &mut TestAppContex
             .focus_handle(cx);
         window.focus(&composer, cx);
         view.projects.live = true;
+        view.projects.sidebar.tally = "3 need you \u{b7} 1 ready".into();
         cx.notify();
     });
     tick(cx);
-    let bar = cx.debug_bounds("bottom-bar").unwrap();
-    let bell = cx.debug_bounds("notifications-bell").unwrap();
-    let door = cx.debug_bounds("projects-board-door").unwrap();
-    assert!(
-        bell.right() <= door.left() + px(0.5),
-        "bell, board: {bell:?} {door:?}"
-    );
-    assert!(door.top() >= bar.top() && door.bottom() <= bar.bottom());
-
-    cx.simulate_click(door.center(), gpui::Modifiers::none());
+    for gone in ["projects-board-door", "bottom-bar-projects"] {
+        assert!(cx.debug_bounds(gone).is_none(), "{gone} left the bar");
+    }
+    let toggles = drawn::projects_toggles();
+    cx.dispatch_action(crate::projects::Toggle);
     tick(cx);
+    assert_eq!(drawn::projects_toggles(), toggles + 1, "projects::Toggle");
     assert!(
         board_holds_the_keyboard(&board, cx),
-        "the click shows the board"
+        "the key shows the board"
     );
 }
 

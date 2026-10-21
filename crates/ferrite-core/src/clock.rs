@@ -83,6 +83,14 @@ pub fn system_time() -> SystemTime {
     fixed(|fixed| SystemTime::from(fixed.now())).unwrap_or_else(SystemTime::now)
 }
 
+/// A forge's RFC 3339 stamp (`2026-10-21T01:25:30Z`) as a wall time, for
+/// its age; `None` when malformed, so no age is invented.
+pub fn parse_stamp(stamp: &str) -> Option<SystemTime> {
+    DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(SystemTime::from)
+}
+
 /// A wall time as every stamp prints it: `7:31 pm`.
 pub fn label(at: DateTime<Local>) -> String {
     at.format("%-I:%M %P").to_string()

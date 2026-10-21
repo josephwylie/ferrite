@@ -50,6 +50,10 @@ pub struct Settings {
     pub codex_sandbox: Option<String>,
     /// Whether the navigation rail is collapsed. Default: false.
     pub nav_collapsed: bool,
+    /// Whether the Solo view's right panel (Changes, PR, Context) shows
+    /// where the window has room for it; ⌥⌘B and its own hide button
+    /// flip it. Default: true.
+    pub panel_shown: bool,
     /// How the navigation orders the rows inside each Project: creation
     /// order, or most recently used first. Changed from the ⌘K palette.
     pub thread_list_order: ThreadListOrder,
@@ -240,6 +244,7 @@ impl Default for Settings {
             codex_approval_policy: "on-request".to_string(),
             codex_sandbox: None,
             nav_collapsed: false,
+            panel_shown: true,
             thread_list_order: ThreadListOrder::Created,
             confirm_delete: true,
             auto_title: true,
@@ -419,6 +424,7 @@ mod tests {
             codex_approval_policy: "never".to_string(),
             codex_sandbox: Some("workspace-write".to_string()),
             nav_collapsed: true,
+            panel_shown: false,
             thread_list_order: ThreadListOrder::Recent,
             confirm_delete: false,
             auto_title: false,
@@ -525,6 +531,7 @@ mod tests {
         assert_eq!(settings.codex_approval_policy, "on-request");
         assert_eq!(settings.codex_sandbox, None);
         assert!(!settings.nav_collapsed);
+        assert!(settings.panel_shown);
         assert_eq!(settings.thread_list_order, ThreadListOrder::Created);
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);

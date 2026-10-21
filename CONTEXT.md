@@ -65,6 +65,20 @@ _Avoid_: dashboard, workspace (see Workspace binding).
 **Solo**
 The default Cockpit view: exactly the focused Thread's Pane.
 
+**Panel**
+The Solo view's right column, beside the board: the Thread's changes, its
+pull request and its context, one tab each. Hidden on a Group, when the
+window is narrow, and while something is open beside the Pane.
+_Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
+board).
+
+**Bar**
+The window's one strip at the bottom: the view tabs, the needs-you count,
+usage, free disk when it runs low, and the clock. It carries no status
+line: a Thread's mode, model and Effort are chips in its Composer, and its
+context and changes are the Panel's.
+_Avoid_: status bar, status line (both are gone).
+
 **Group**
 A durable, operator-ordered set of two or more Threads, which may span
 Projects. Each Thread retains its own Workspace binding. Opening the Group's
@@ -170,12 +184,12 @@ _Avoid_: compare (the read-only view it replaced), code review (a PR's).
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread
 until it is **seen** — its Thread on screen while the window has focus —
-or opened from the bell; shown by the bell, a toast, a chime, the Pane's
-pulsing ring, the Thread's done mark, and a system notification
+or opened from the Needs-you view; shown there, by a toast, a chime, the
+Thread's done mark, and a system notification
 (herdr-focus-notify's) unless it is seen first or its Thread is on the
 board while the window has focus. A Subagent finishing, an interrupt, or a held
 prompt going out is never a Notice.
-_Avoid_: alert, ping, notification (the bell's whole surface is that).
+_Avoid_: alert, ping, notification (the system's own surface is that).
 
 **Attention**
 Which of four states a Thread is in, most urgent first: **blocked** (a
@@ -184,6 +198,13 @@ only its Subagents or background tasks), **idle**. What the nav sorts and
 rolls up by and the palette filters by; Ferrite's finer states (failing,
 background, failed, parked) are faces within these.
 _Avoid_: status (too broad), unread (that is the Notice's).
+
+**Needs-you view**
+The nav's list of what wants the operator, shown in the tree's place: the
+blocked Threads oldest-first (the queue ⌘D walks), then the Notices under
+`Recent`. Opened from the nav's `Needs you` row, the Bar's count or ⌘I. It
+replaced the bell's list.
+_Avoid_: bell, inbox, needs-you strip (the strip in the tree is gone).
 
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its

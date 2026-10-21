@@ -496,6 +496,25 @@ pub struct WirePr {
     /// More checks or comments than one read fetches.
     #[serde(default)]
     pub truncated: bool,
+    /// Which of the two ran past the fetch (`truncated` is both, for a
+    /// window from before these): more checks, more comments.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checks_truncated: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub comments_truncated: bool,
+}
+
+impl WirePr {
+    /// Whether the forge holds more checks than were read. A Server from
+    /// before the split says only `truncated`: then either may have.
+    pub fn more_checks(&self) -> bool {
+        self.checks_truncated || (self.truncated && !self.comments_truncated)
+    }
+
+    /// Whether the forge holds more comments than were read.
+    pub fn more_comments(&self) -> bool {
+        self.comments_truncated || (self.truncated && !self.checks_truncated)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -658,6 +677,8 @@ impl From<forge::PrSnapshot> for WirePr {
                 })
                 .collect(),
             truncated: pr.comments_truncated || pr.checks_truncated,
+            checks_truncated: pr.checks_truncated,
+            comments_truncated: pr.comments_truncated,
         }
     }
 }
@@ -668,11 +689,50 @@ impl From<forge::PrSnapshot> for WirePr {
 pub struct ReviewPullRequest {
     pub noun: String,
     pub pr: Result<WirePr, String>,
+    /// With no pull request: why, where it is more than "the branch has
+    /// none". `None` beside a snapshot, and for a branch with no PR.
+    pub unread: Option<WirePrUnread>,
+}
+
+/// Why a `review_pull_request` brought no pull request back, beyond its
+/// note: what the panel's PR tab tells apart from a branch with none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WirePrUnread {
+    /// The forge's CLI is not installed (or lacks its extension), or not
+    /// signed in.
+    NoCli,
+    /// The read failed (offline, a rate limit, a git error): the last
+    /// snapshot still stands.
+    #[serde(other)]
+    Failed,
+}
+
+impl WirePrUnread {
+    /// What a forge read with no snapshot says of why; `None` for a branch
+    /// with no pull request to read.
+    fn of(view: &PrView) -> Option<Self> {
+        match view {
+            PrView::NoCli(_) | PrView::NoExtension(_) | PrView::NotAuthed(..) => Some(Self::NoCli),
+            PrView::Pending
+            | PrView::Loading
+            | PrView::Held
+            | PrView::GitError(_)
+            | PrView::Error(..) => Some(Self::Failed),
+            PrView::Pr(_)
+            | PrView::NoPr
+            | PrView::Detached
+            | PrView::NeedsForgeRemote
+            | PrView::UnsupportedHost(_)
+            | PrView::MalformedOrigin(_) => None,
+        }
+    }
 }
 
 impl ReviewPullRequest {
     /// What the forge read gave: the snapshot, else its note (`r` retries).
     pub fn of(view: PrView, noun: &str) -> Self {
+        let unread = WirePrUnread::of(&view);
         let pr = match view {
             PrView::Pr(snapshot) => Ok((*snapshot).into()),
             view => Err(ferrite_reviewr::ferrite::pr_note(
@@ -684,17 +744,23 @@ impl ReviewPullRequest {
         Self {
             noun: noun.to_string(),
             pr,
+            unread,
         }
     }
 }
 
 impl From<ReviewPullRequest> for Done {
-    fn from(ReviewPullRequest { noun, pr }: ReviewPullRequest) -> Self {
+    fn from(ReviewPullRequest { noun, pr, unread }: ReviewPullRequest) -> Self {
         let (pr, note) = match pr {
             Ok(pr) => (Some(pr), None),
             Err(note) => (None, Some(note)),
         };
-        Done::ReviewPullRequest { noun, pr, note }
+        Done::ReviewPullRequest {
+            noun,
+            pr,
+            note,
+            unread,
+        }
     }
 }
 
@@ -823,17 +889,30 @@ mod tests {
     fn a_pull_request_carries_its_snapshot_or_its_note() {
         let note = ReviewPullRequest::of(PrView::NoPr, "MR");
         assert_eq!(note.pr, Err("No MR yet. Ready to ship?".into()));
-        let Done::ReviewPullRequest { noun, pr, note } = note.into() else {
+        let Done::ReviewPullRequest {
+            noun,
+            pr,
+            note,
+            unread,
+        } = note.into()
+        else {
             panic!("a review_pull_request reply");
         };
         assert_eq!(
-            (noun.as_str(), pr, note.as_deref()),
-            ("MR", None, Some("No MR yet. Ready to ship?"))
+            (noun.as_str(), pr, note.as_deref(), unread),
+            ("MR", None, Some("No MR yet. Ready to ship?"), None),
+            "no PR is no unread"
         );
         let retry = ReviewPullRequest::of(PrView::NoCli(ferrite_reviewr::git::Forge::GitHub), "PR");
+        assert_eq!(retry.unread, Some(WirePrUnread::NoCli), "no gh");
         assert!(
             retry.pr.is_err_and(|note| note.contains("press r")),
             "the remedy names r"
         );
+        let failed = ReviewPullRequest::of(
+            PrView::Error(ferrite_reviewr::git::Forge::GitHub, "offline".into()),
+            "PR",
+        );
+        assert_eq!(failed.unread, Some(WirePrUnread::Failed));
     }
 }

@@ -573,9 +573,15 @@ impl Remote {
             path: path.to_path_buf(),
         };
         self.ask(op, |done| match done {
-            Done::ReviewPullRequest { noun, pr, note } => Some(ReviewPullRequest {
+            Done::ReviewPullRequest {
+                noun,
+                pr,
+                note,
+                unread,
+            } => Some(ReviewPullRequest {
                 noun,
                 pr: pr.ok_or_else(|| note.unwrap_or_default()),
+                unread,
             }),
             _ => None,
         })

@@ -265,30 +265,29 @@ fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
     assert_eq!(sent.matches("why?").count(), 1, "{sent}");
 }
 
-/// A shift-click stretches the pick to a range; the files-changed card's
-/// `review` opens the Review; the shelf chip's × drops every comment.
+/// A shift-click stretches the pick to a range; the panel's `Review
+/// changes` opens the Review beside the Pane (the panel giving way to it);
+/// the shelf chip's × drops every comment.
 #[gpui::test]
 fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     let (mut core, fake, repo) = edited("review-range");
     tidied(&mut core, &fake, &repo);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| {
-        view.changed_files_card = Some(thread);
-        cx.notify();
-    });
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     tick(cx);
     let review = cx
-        .debug_bounds("changed-files-review")
-        .expect("on the card's head");
+        .debug_bounds("panel-review-changes")
+        .expect("under the panel's changed files");
     cx.simulate_click(review.center(), gpui::Modifiers::none());
     until(cx, |cx| cx.debug_bounds("review-lines").is_some());
     assert!(
         view.read_with(cx, |view, _| view.panes[0].preview.review().is_some()),
-        "the card opens the Review"
+        "the button opens the Review"
+    );
+    assert!(
+        cx.debug_bounds("panel").is_none(),
+        "the panel never shows with the Beside slot open"
     );
     let first = cx.debug_bounds("review-line-0").expect("drawn");
     let last = cx.debug_bounds("review-line-2").expect("drawn");
@@ -477,4 +476,71 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
         assert_eq!(review.place(0), Some(("notes.md", 1)));
         assert_eq!(review.place(1), None, "only the turn's own change");
     });
+}
+
+/// The panel's file block unfolds to its hunks, read through the Review
+/// core's Uncommitted scope off the UI thread: right after the click the
+/// read is still out (it answers only when the executor's clock steps),
+/// and the next frames draw the edit with its line of context either side.
+#[gpui::test]
+fn unfolding_a_panel_file_reads_its_hunks_off_the_ui_thread(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::hunks::{Shown, Sign};
+    let (mut core, fake, repo) = edited("panel-hunks");
+    tidied(&mut core, &fake, &repo);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("panel-file-0").is_some(),
+        "the premise: nav.rs's block"
+    );
+    assert!(
+        cx.debug_bounds("panel-hunks-0").is_none(),
+        "folded by default"
+    );
+    let fold = cx
+        .debug_bounds("panel-file-fold-0")
+        .expect("the head's chevron");
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let path = view.read_with(cx, |view, _| {
+        view.facts.get(thread).unwrap().changed_files[0]
+            .path
+            .clone()
+    });
+    assert!(
+        view.read_with(cx, |view, _| view.panel_hunks(thread, &path).is_none()),
+        "the read is out on the background executor, not done in the click"
+    );
+    until(cx, |cx| cx.debug_bounds("panel-hunk-0-3").is_some());
+    let lines = view.read_with(cx, |view, _| match view.panel_hunks(thread, &path) {
+        Some(Shown::Hunks(hunks)) => hunks
+            .iter()
+            .flatten()
+            .map(|line| {
+                let sign = match line.sign {
+                    Sign::Context => ' ',
+                    Sign::Added => '+',
+                    Sign::Removed => '-',
+                };
+                format!("{sign}{}", line.text)
+            })
+            .collect::<Vec<_>>(),
+        other => panic!("hunks, not {other:?}"),
+    });
+    assert_eq!(
+        lines,
+        [
+            " fn row() {",
+            "-    let wide = 1;",
+            "+    let wide = 2;",
+            " }"
+        ]
+    );
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("panel-hunks-0").is_none(), "folded again");
 }

@@ -588,15 +588,15 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         "the window keeps no Store for the machine"
     );
 
-    let fold = cx
-        .debug_bounds("nav-parked")
-        .expect("the machine's parked Threads put the Parked section in the nav");
-    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    let door = cx
+        .debug_bounds("nav-view-parked")
+        .expect("the Parked view's row");
+    cx.simulate_click(door.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let row_id: &'static str = format!("nav-thread-{}", named.get()).leak();
     let row = cx
         .debug_bounds(row_id)
-        .expect("unfolded, the machine's parked Thread has a row");
+        .expect("shown, the machine's parked Thread has a row");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     until(cx, |cx| {
         view.read_with(cx, |view, _| {
@@ -667,7 +667,7 @@ fn box_request(thread: ThreadId, serial: u64) -> ferrite_core::protocol::WireNot
     }
 }
 
-/// What the bell calls box's Decision `serial` on `thread`.
+/// What the Needs-you view calls box's Decision `serial` on `thread`.
 fn box_asked(thread: ThreadId, serial: u64) -> crate::notifications::RowTarget {
     crate::notifications::RowTarget::Decision(ferrite_core::notifications::DecisionNoticeId {
         thread,
@@ -746,7 +746,7 @@ fn hear_box(
 /// chimes once, names its machine, and with the window in the background
 /// posts a system notification. What box held when first heard is not
 /// news. Clicking the notification puts the window on box, which opens
-/// the request once it is attached, and whose bell has heard box already.
+/// the request once it is attached, and whose Needs-you state has heard box already.
 #[gpui::test]
 fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut TestAppContext) {
     use crate::notifications::{Alert, Detail};
@@ -764,7 +764,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     );
     ring(cx);
     first.read_with(cx, |view, _| {
-        assert!(view.bell.toasts().is_empty(), "held when first heard");
+        assert!(view.needs_you.toasts().is_empty(), "held when first heard");
         assert!(view.chimed.is_empty());
     });
 
@@ -784,7 +784,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     );
     tick(cx);
     first.read_with(cx, |view, _| {
-        assert!(view.bell.toasts().is_empty(), "it waits its second")
+        assert!(view.needs_you.toasts().is_empty(), "it waits its second")
     });
     ring(cx);
     ring(cx);
@@ -797,10 +797,10 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     };
     first.read_with(cx, |view, cx| {
         assert_eq!(view.chimed, [Sound::NeedsYou], "once");
-        let toasts = view.bell.toasts();
+        let toasts = view.needs_you.toasts();
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].alert, alert);
-        let rows = view.bell_rows(cx);
+        let rows = view.needs_you_rows(cx);
         let row = rows.iter().find(|row| row.target == asked).unwrap();
         assert_eq!(
             row.title.as_ref(),
@@ -857,15 +857,15 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
             crate::notifications::RowTarget::Decision(id) => (id, false),
             _ => unreachable!(),
         });
-        view.bell.hear(None, [], held, now);
-        let ring = view.bell.ring(
+        view.needs_you.hear(None, [], held, now);
+        let ring = view.needs_you.ring(
             now + crate::notifications::ALERT_DELAY,
             &|_| Some(true),
             &|_| false,
         );
         assert!(ring.rang.is_empty(), "nothing rings twice");
         assert_eq!(
-            view.bell
+            view.needs_you
                 .toasts()
                 .iter()
                 .map(|toast| &toast.alert.away)
@@ -876,7 +876,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     });
 }
 
-/// The bell moves with the window: a system notification posted about
+/// The Needs-you view moves with the window: a system notification posted about
 /// this computer while the window was on it still opens, from box, on
 /// this computer's Thread.
 #[gpui::test]
@@ -977,7 +977,7 @@ fn a_toast_press_goes_to_its_machine(cx: &mut TestAppContext) {
     ring(cx);
     ring(cx);
     first.read_with(cx, |view, _| {
-        assert_eq!(view.bell.toasts().len(), 1, "it toasts");
+        assert_eq!(view.needs_you.toasts().len(), 1, "it toasts");
         assert!(view.chimed.is_empty(), "Claude is muted");
     });
 

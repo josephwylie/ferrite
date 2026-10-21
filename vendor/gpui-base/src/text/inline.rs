@@ -579,9 +579,14 @@ impl Inline {
                 continue;
             }
             for line in code_line_bounds(&self.text, text_layout, range.clone(), line_height) {
+                // A padded run's last glyph ends `pad` short of the next
+                // glyph, where the line's box ends.
                 let bounds = Bounds::from_corners(
                     point(line.left() - wash.overhang, line.top() + wash.inset_y),
-                    point(line.right() + wash.overhang, line.bottom() - wash.inset_y),
+                    point(
+                        line.right() - wash.pad + wash.overhang,
+                        line.bottom() - wash.inset_y,
+                    ),
                 );
                 window.paint_quad(quad(
                     bounds,
@@ -805,6 +810,10 @@ impl Element for Inline {
         let code_font = self.code_font.clone();
 
         let mut runs = Vec::new();
+        // Ferrite: a padded wash lays its room out either side of each code
+        // run (`RunPadding`).
+        let pad = self.code_wash.map_or(px(0.), |wash| wash.pad);
+        let mut pads = Vec::new();
         let mut ix = 0;
         self.underlines.clear();
         for (range, highlight) in self.highlights.iter() {
@@ -820,6 +829,12 @@ impl Element for Inline {
                 .filter(|_| highlight.fade_out == INLINE_CODE_MARK)
             {
                 run.font.family = family.clone();
+            }
+            if pad > px(0.) && highlight.fade_out == INLINE_CODE_MARK {
+                pads.push(gpui::RunPadding {
+                    range: range.clone(),
+                    pad,
+                });
             }
             // Ferrite: the underline is painted per line by `paint`, trimmed
             // of the whitespace a wrap leaves at a line's end.
@@ -839,7 +854,9 @@ impl Element for Inline {
             runs.push(text_style.to_run(self.text.len() - ix));
         }
 
-        self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
+        self.styled_text = StyledText::new(self.text.clone())
+            .with_runs(runs)
+            .with_padding(pads);
         let (layout_id, _) =
             self.styled_text
                 .request_layout(global_element_id, inspector_id, window, cx);

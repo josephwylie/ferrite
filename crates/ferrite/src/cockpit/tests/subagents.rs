@@ -129,8 +129,8 @@ fn a_status_reorder_between_pointer_down_and_up_cannot_select_the_new_occupant(
     let (core, fake) = cockpit("subagents-pointer", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
-    child(&fake, "Atlas", AgentStatus::Idle);
-    child(&fake, "Cedar", AgentStatus::Idle);
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Cedar", AgentStatus::Working);
     tick(cx);
     let pressed = tab(cx, "Atlas");
     cx.simulate_mouse_down(pressed, MouseButton::Left, gpui::Modifiers::none());
@@ -138,7 +138,7 @@ fn a_status_reorder_between_pointer_down_and_up_cannot_select_the_new_occupant(
         &fake,
         ActivityEvent::Status {
             key: key("Cedar"),
-            state: AgentStatus::Working,
+            state: AgentStatus::Waiting,
         },
     );
     tick(cx);
@@ -151,8 +151,8 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     let (core, fake) = cockpit("subagents-view-state", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
-    child(&fake, "Atlas", AgentStatus::Idle);
-    child(&fake, "Cedar", AgentStatus::Idle);
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Cedar", AgentStatus::Working);
     emit(
         &fake,
         ActivityEvent::Content {
@@ -388,8 +388,8 @@ fn keyboard_focus_and_a_held_space_press_follow_the_agent_across_status_reorder(
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
-    child(&fake, "Atlas", AgentStatus::Idle);
-    child(&fake, "Cedar", AgentStatus::Idle);
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Cedar", AgentStatus::Working);
     tick(cx);
     cx.simulate_keystrokes("tab tab");
     let keystroke = gpui::Keystroke::parse("space").unwrap();
@@ -402,7 +402,7 @@ fn keyboard_focus_and_a_held_space_press_follow_the_agent_across_status_reorder(
         &fake,
         ActivityEvent::Status {
             key: key("Cedar"),
-            state: AgentStatus::Working,
+            state: AgentStatus::Waiting,
         },
     );
     tick(cx);
@@ -431,8 +431,8 @@ fn native_selection_clears_on_subject_navigation_without_leaking_into_another_ag
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
-    child(&fake, "Atlas", AgentStatus::Idle);
-    child(&fake, "Cedar", AgentStatus::Idle);
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Cedar", AgentStatus::Working);
     tick(cx);
     click_child(cx, "Atlas");
     let from = caret(&view, cx, 0, 0);
@@ -501,7 +501,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
-        child(&fake, name, AgentStatus::Idle);
+        child(&fake, name, AgentStatus::Working);
     }
     tick(cx);
     for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
@@ -536,7 +536,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
             .text_system()
             .shape_line(
                 "Main".into(),
-                px(theme::FS_UI),
+                px(theme::FS_LABEL),
                 &[gpui::TextRun {
                     len: "Main".len(),
                     font: gpui::font(theme::FONT_UI),
@@ -562,14 +562,16 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
     let strip = cx.debug_bounds("subject-strip-1").unwrap();
     assert!(main.right() <= selected.left() && selected.right() <= overflow.left());
     assert!(
-        strip.contains(&main.origin) && strip.contains(&overflow.bottom_right()),
+        strip.contains(&main.origin)
+            && overflow.right() <= strip.right()
+            && overflow.bottom() <= strip.bottom(),
         "the strip holds Main and the overflow: {strip:?} / {main:?} / {overflow:?}"
     );
     emit(
         &fake,
         ActivityEvent::Status {
             key: key("Rowan"),
-            state: AgentStatus::Working,
+            state: AgentStatus::Waiting,
         },
     );
     tick(cx);
@@ -587,7 +589,7 @@ fn native_tab_press_cannot_jump_to_an_overflow_slot_after_resize(cx: &mut TestAp
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
-        child(&fake, name, AgentStatus::Idle);
+        child(&fake, name, AgentStatus::Working);
     }
     tick(cx);
     cx.simulate_keystrokes("cmd-shift-enter");
@@ -707,9 +709,7 @@ fn attention_and_global_navigation_visit_every_distinct_pending_subject_then_wra
 }
 
 #[gpui::test]
-fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
-    cx: &mut TestAppContext,
-) {
+fn an_open_done_menu_resolves_a_subject_alias_before_selecting_it(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("subagents-stale-menu-alias", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -717,19 +717,10 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
     cx.simulate_resize(gpui::size(px(640.), px(800.)));
     cx.simulate_keystrokes("cmd-shift-enter");
     cx.run_until_parked();
-    for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
+    // Rowan started first, so the done menu (newest first) lists it last.
+    for name in ["Rowan", "Atlas", "Cedar", "Finch", "Juniper"] {
         child(&fake, name, AgentStatus::Idle);
     }
-    let SessionEvent::DecisionRequested { decision } = decision("aliased-request") else {
-        unreachable!()
-    };
-    emit(
-        &fake,
-        ActivityEvent::Decision {
-            subject: Some(Subject::Subagent(key("Rowan"))),
-            decision,
-        },
-    );
     tick(cx);
     let overflow = cx.debug_bounds("subject-overflow-1").unwrap().center();
     cx.simulate_click(overflow, gpui::Modifiers::none());
@@ -752,19 +743,157 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
     cx.run_until_parked();
     cx.simulate_keystrokes("up enter");
     cx.run_until_parked();
-    let serial = view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.panes[0].selected,
-            Subject::Subagent(key("RowanCanonical"))
+    assert_eq!(
+        view.read_with(cx, |view, _| view.panes[0].selected.clone()),
+        Subject::Subagent(key("RowanCanonical"))
+    );
+    assert!(
+        debug_bounds(
+            cx,
+            format!("subject-agent-1-{}", key("RowanCanonical").as_str())
+        )
+        .is_some(),
+        "the picked Subagent shows as a tab"
+    );
+}
+
+/// SPEC §11 phase 4: a Thread with 3 running and 20 finished Subagents
+/// shows `Main`, the 3 live tabs and `20 done ▾`, whose menu lists the 20.
+#[gpui::test]
+fn three_running_and_twenty_finished_show_three_tabs_and_twenty_done(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-done-menu", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(960.)));
+    let finished: Vec<String> = (0..20).map(|at| format!("done-{at:02}")).collect();
+    for name in &finished {
+        child(&fake, name, AgentStatus::Idle);
+    }
+    for name in ["Atlas", "Cedar", "Finch"] {
+        child(&fake, name, AgentStatus::Working);
+    }
+    tick(cx);
+    tick(cx);
+    assert!(cx.debug_bounds("subject-main-1").is_some());
+    let mut last = cx.debug_bounds("subject-main-1").unwrap().right();
+    for name in ["Atlas", "Cedar", "Finch"] {
+        let tab = bounds(cx, format!("subject-agent-1-{}", key(name).as_str()));
+        assert!(tab.left() > last, "{name} follows in start order");
+        last = tab.right();
+    }
+    for name in &finished {
+        assert!(
+            debug_bounds(cx, format!("subject-agent-1-{}", key(name).as_str())).is_none(),
+            "{name} is in the menu, not on the strip"
         );
-        view.cockpit
-            .thread(view.panes[0].thread().unwrap())
+    }
+    let menu = cx
+        .debug_bounds("subject-overflow-1")
+        .expect("the done menu");
+    assert!(menu.left() > last);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let plan = crate::cockpit::subagents::drawn_plan(thread).unwrap();
+    assert_eq!(plan.tabs.len(), 3);
+    assert_eq!(plan.menu_label(), "20 done");
+    cx.simulate_click(menu.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("choice-row-19").is_some());
+    assert!(cx.debug_bounds("choice-row-20").is_none());
+}
+
+/// Picking a done Subagent from the menu opens its transcript, as a tab
+/// that stays while the operator reads it.
+#[gpui::test]
+fn picking_a_done_subagent_opens_it(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-pick-done", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Idle);
+    child(&fake, "Cedar", AgentStatus::Idle);
+    tick(cx);
+    let menu = cx.debug_bounds("subject-overflow-1").expect("2 done");
+    cx.simulate_click(menu.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    // Newest first: Cedar, then Atlas.
+    let atlas = cx
+        .debug_bounds("choice-row-1")
+        .expect("Atlas's row")
+        .center();
+    cx.simulate_click(atlas, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let thread = view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].selected, Subject::Subagent(key("Atlas")));
+        let thread = view.panes[0].thread().unwrap();
+        let subject = view
+            .cockpit
+            .thread(thread)
             .unwrap()
-            .pending_decisions()[0]
-            .handle
-            .serial
+            .activity()
+            .subject(&view.panes[0].selected)
+            .unwrap();
+        assert!(plain_text(subject.transcript().blocks()).contains("Atlas transcript"));
+        thread
     });
-    assert!(debug_bounds(cx, format!("request-allow-1-{serial}")).is_some());
+    let _ = tab(cx, "Atlas");
+    let plan = crate::cockpit::subagents::drawn_plan(thread).unwrap();
+    assert_eq!(
+        plan.menu_label(),
+        "1 done",
+        "Atlas left the menu for its tab"
+    );
+}
+
+/// SPEC §5.3: a Subagent that finishes failed is no longer live, so its
+/// tab leaves for the done menu, unless it is the selected tab, which
+/// stays until the operator leaves it.
+#[gpui::test]
+fn a_failed_subagent_leaves_the_strip_unless_selected(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-failed-leaves", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Cedar", AgentStatus::Working);
+    tick(cx);
+    click_child(cx, "Cedar");
+    for name in ["Atlas", "Cedar"] {
+        emit(
+            &fake,
+            ActivityEvent::Status {
+                key: key(name),
+                state: AgentStatus::Failed,
+            },
+        );
+    }
+    tick(cx);
+    assert!(
+        debug_bounds(cx, format!("subject-agent-1-{}", key("Atlas").as_str())).is_none(),
+        "the failed Atlas left the strip"
+    );
+    let _ = tab(cx, "Cedar");
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let plan = crate::cockpit::subagents::drawn_plan(thread).unwrap();
+    assert_eq!(plan.tabs.len(), 1, "only the selected Cedar stays");
+    assert_eq!(plan.menu_label(), "1 done");
+}
+
+/// Esc on a live Subagent's tab, picked on the strip, stops that Subagent
+/// and leaves Main's turn running.
+#[gpui::test]
+fn escape_on_a_picked_subagent_tab_stops_it(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-escape-tab", 1);
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Cedar", AgentStatus::Working);
+    tick(cx);
+    click_child(cx, "Cedar");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(*fake.stopped.borrow(), [key("Cedar")]);
+    assert_eq!(*fake.interrupts.borrow(), 0, "Main's turn runs on");
 }
 
 #[gpui::test]

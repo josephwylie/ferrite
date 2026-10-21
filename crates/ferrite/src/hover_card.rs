@@ -2,19 +2,19 @@
 //! transcript names shows the file around the line it points at, hung under
 //! the path, flipping above it near the window's foot (`hang`).
 //!
-//! `HOVER_CARD_CELLS` chrome cells wide on the float ground with its 1px
-//! `paint::LINE2` edge and the float shadow; it takes no pointer. Its head
-//! is the path in `PATH_INK` and `:211` in `TEXT_MUTED`, with `⌘-click opens
+//! `HOVER_CARD_CELLS` cells wide in the float's shell (`FLOAT_GROUND`,
+//! radius `R_BLOCK`, the `FLOAT_EDGE` ring, the float shadow); it takes no
+//! pointer. Its head
+//! is the path in `LINK_INK` and `:211` in `TEXT_DIM`, with `⌘-click opens
 //! in a reader pane` at its right; its body six numbered lines,
-//! `line-3..line+2`, the target line on `paint::SELECTION` with its number in
-//! `ACCENT`, the code syntax-coloured and cut with `…`; its foot, over a
-//! `paint::LINE` rule, `modified in this thread · +9−4 · 2 min ago` when
+//! `line-3..line+2`, the target line on `paint::SELECTED` with its number in
+//! `TEXT_STRONG`, the code syntax-coloured and cut with `…`; its foot, over a
+//! `FLOAT_RULE` hairline, `modified in this thread · +9−4 · 2 min ago` when
 //! the Thread changed the file.
 //!
 //! State is a window-wide global: a path target on enter names itself and
 //! its laid-out box; the transcript hosting it (by namespace) draws the
-//! card. `preview_path` asks for a card before the target has laid out; the
-//! first target matching it then opens it.
+//! card.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -41,9 +41,6 @@ pub(crate) struct HoverCards {
     /// The view that painted the target the card hangs from: the one that
     /// draws it. `None` when no hover opened the card (a scene's ask).
     host: Option<gpui::EntityId>,
-    /// `preview_path`'s ask: the target (its scope, path and line) to open
-    /// once a target naming the same file lays out.
-    pending: Option<PathTarget>,
 }
 
 impl gpui::Global for HoverCards {}
@@ -112,50 +109,6 @@ fn redraw_hosts(
     }
 }
 
-/// Ask for the card on the first target naming `target`'s file in its scope
-/// (a scene's `preview_path`): at once when one has laid out, else when one
-/// does.
-#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-pub(crate) fn request(target: PathTarget, window: &mut Window, cx: &mut App) {
-    let Some(scope) = target.scope.clone() else {
-        return;
-    };
-    match crate::file_links::laid_out(&scope, &target.path, cx) {
-        Some(anchor) => {
-            let cards = cx.default_global::<HoverCards>();
-            cards.current = Some(HoverTarget { target, anchor });
-            cards.host = None;
-        }
-        None => cx.default_global::<HoverCards>().pending = Some(target),
-    }
-    window.refresh();
-}
-
-/// A target laid out: if a scene asked for its card, open it now, anchored
-/// here and named as this target names the file.
-pub(crate) fn laid_out(target: &PathTarget, anchor: Bounds<Pixels>, cx: &mut App) {
-    let Some(pending) = cx
-        .try_global::<HoverCards>()
-        .and_then(|cards| cards.pending.clone())
-    else {
-        return;
-    };
-    let matches =
-        target.scope == pending.scope && crate::file_links::same_file(&target.path, &pending.path);
-    if matches {
-        let cards = cx.default_global::<HoverCards>();
-        cards.pending = None;
-        cards.host = None;
-        cards.current = Some(HoverTarget {
-            target: PathTarget {
-                line: pending.line.or(target.line),
-                ..target.clone()
-            },
-            anchor,
-        });
-    }
-}
-
 /// The card the transcript hosting `scope` draws now.
 pub(crate) fn current(scope: &str, cx: &App) -> Option<HoverTarget> {
     cx.try_global::<HoverCards>()?
@@ -164,17 +117,13 @@ pub(crate) fn current(scope: &str, cx: &App) -> Option<HoverTarget> {
         .filter(|current| current.target.scope.as_deref() == Some(scope))
 }
 
-/// Whether `scope` hosts the card now or a scene waits on one there.
+/// Whether `scope` hosts the card now.
 pub(crate) fn involves(scope: &str, cx: &App) -> bool {
     cx.try_global::<HoverCards>().is_some_and(|cards| {
         cards
             .current
             .as_ref()
             .is_some_and(|current| current.target.scope.as_deref() == Some(scope))
-            || cards
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.scope.as_deref() == Some(scope))
     })
 }
 
@@ -294,14 +243,14 @@ impl gpui::Render for HoverCard {
             (
                 0..path.len(),
                 gpui::HighlightStyle {
-                    color: Some(rgb(theme::PATH_INK).into()),
+                    color: Some(rgb(theme::LINK_INK).into()),
                     ..Default::default()
                 },
             ),
             (
                 path.len()..head_text.len(),
                 gpui::HighlightStyle {
-                    color: Some(rgb(theme::TEXT_MUTED).into()),
+                    color: Some(rgb(theme::TEXT_DIM).into()),
                     ..Default::default()
                 },
             ),
@@ -323,8 +272,8 @@ impl gpui::Render for HoverCard {
                     .flex_shrink_0()
                     .items_center()
                     .pl(px(2.0 * cell))
-                    .text_color(rgb(theme::TEXT_MUTED))
-                    .child(crate::components::key_combo("cmd", theme::TEXT_MUTED))
+                    .text_color(rgb(theme::TEXT_DIM))
+                    .child(crate::components::key_combo("cmd", theme::TEXT_DIM))
                     // Exactly its cells: the hint is right-aligned, and a
                     // measured run rounds up a pixel and would stand it
                     // that much left.
@@ -344,7 +293,7 @@ impl gpui::Render for HoverCard {
                 .h(px(theme::LH_UI))
                 .pl(px(inset_l))
                 .pr(px(inset_r))
-                .when(on, |row| row.bg(theme::paint::SELECTION))
+                .when(on, |row| row.bg(theme::paint::SELECTED))
                 .child(crate::components::tabular(
                     div()
                         .flex_shrink_0()
@@ -352,7 +301,11 @@ impl gpui::Render for HoverCard {
                         .pr(px(theme::HOVER_CARD_NUMBER_PAD_CELLS * cell))
                         .text_right()
                         .whitespace_nowrap()
-                        .text_color(rgb(if on { theme::ACCENT } else { theme::TEXT_MUTED }))
+                        .text_color(rgb(if on {
+                            theme::TEXT_STRONG
+                        } else {
+                            theme::TEXT_DIM
+                        }))
                         .child(SharedString::from(number.to_string())),
                 ))
                 .child(
@@ -376,9 +329,9 @@ impl gpui::Render for HoverCard {
                 .pl(px(inset_l))
                 .pr(px(inset_r))
                 .border_t_1()
-                .border_color(theme::paint::LINE)
+                .border_color(theme::FLOAT_RULE)
                 .whitespace_nowrap()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .child(StyledText::new(SharedString::from(text)).with_highlights(highlights))
         });
         div()
@@ -386,9 +339,11 @@ impl gpui::Render for HoverCard {
             .w(px(theme::HOVER_CARD_CELLS * cell))
             .flex()
             .flex_col()
-            .bg(theme::paint::FLOAT)
+            .bg(theme::FLOAT_GROUND)
+            .rounded(px(theme::R_BLOCK))
+            .overflow_hidden()
             .border_1()
-            .border_color(theme::paint::LINE2)
+            .border_color(theme::FLOAT_EDGE)
             .shadow(crate::components::float_shadow())
             .font_family(theme::FONT_CODE)
             .text_size(px(theme::FS_UI))

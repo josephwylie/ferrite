@@ -103,7 +103,7 @@ fn a_dragged_pane_dims_its_source_until_the_release(cx: &mut TestAppContext) {
 }
 
 /// Native files dragged over a Pane lay the drop sheet over that Pane and
-/// edge its Composer in the accent; the sheet follows the pointer to the
+/// edge its Composer in `TEXT_STRONG`; the sheet follows the pointer to the
 /// next Pane, and leaving the window or dropping clears both.
 #[gpui::test]
 fn files_over_a_pane_edge_its_composer_in_the_accent(cx: &mut TestAppContext) {
@@ -215,9 +215,8 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
     );
 }
 
-/// The Subject strip is Ferrite's own tab row: exactly one active pill,
-/// which follows the pick, on a row no taller than a chip (no kit rule
-/// hanging under it).
+/// The Subject strip is Ferrite's own tab row: exactly one active tab,
+/// which follows the pick, as high as a tab (no kit rule hanging under it).
 #[gpui::test]
 fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAppContext) {
     use ferrite_core::activity::{
@@ -235,7 +234,7 @@ fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAp
         ActivityEvent::Discovered(info),
         ActivityEvent::Status {
             key: key.clone(),
-            state: AgentStatus::Idle,
+            state: AgentStatus::Working,
         },
     ] {
         fake.streams.borrow()[0]
@@ -247,7 +246,7 @@ fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAp
     let pill = cx.debug_bounds("subject-tab-selected").expect("one pill");
     let main = cx.debug_bounds("subject-main-1").unwrap();
     assert_eq!(pill, main, "Main is active first");
-    assert_eq!(pill.size.height, px(crate::theme::CHIP_H));
+    assert_eq!(pill.size.height, px(crate::theme::SUBJECT_TAB_H));
     assert!(strip.size.height <= px(crate::theme::SUBJECT_STRIP_H));
 
     let atlas: &'static str =
@@ -285,7 +284,7 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     tick(cx);
     let rows = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().rows.len());
     assert!(
-        rows as f32 * crate::theme::MENU_ROW_H > crate::theme::MENU_MAX_H,
+        rows as f32 * crate::theme::FLOAT_ROW_H > crate::theme::MENU_MAX_H,
         "the premise: {rows} rows overflow the list"
     );
     let visible = |cx: &mut gpui::VisualTestContext| {
@@ -372,8 +371,9 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
 }
 
 /// The bottom-left toast card is gone (C8): with the nav open, finishes off
-/// the board toast nothing — the tree and the bell say it — so the Parked
-/// fold never moves and there is no `+N` bubble. The bell still lists them.
+/// the board toast nothing — the tree and the Needs-you view say it — so the Parked
+/// view's row never moves and there is no `+N` bubble. The Needs-you view still
+/// lists them.
 #[gpui::test]
 fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("toast-parked", 5);
@@ -387,7 +387,9 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let resting = cx.debug_bounds("nav-parked").expect("the Parked fold");
+    let resting = cx
+        .debug_bounds("nav-view-parked")
+        .expect("the Parked view's row");
 
     for stream in &fake.streams.borrow()[1..4] {
         stream
@@ -411,13 +413,13 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
         assert_eq!(
             window.notifications(cx).len(),
             0,
-            "the nav is open: the tree and the bell say it, nothing toasts"
+            "the nav is open: the tree and the Needs-you view say it, nothing toasts"
         );
     });
     assert_eq!(
         view.read_with(cx, |view, _| view.cockpit.notifications().unread()),
         3,
-        "the bell lists every finish"
+        "the Needs-you view lists every finish"
     );
     for thread in &threads[1..4] {
         let toast: &'static str = format!("toast-{}", thread.get()).leak();
@@ -425,9 +427,9 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     }
     assert!(cx.debug_bounds("toast-more").is_none(), "no `+N` bubble");
     assert_eq!(
-        cx.debug_bounds("nav-parked"),
+        cx.debug_bounds("nav-view-parked"),
         Some(resting),
-        "the fold never moves"
+        "the row never moves"
     );
 }
 
@@ -444,9 +446,7 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
         .unwrap();
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for name in [
-        // Short names: on a wide Pane the head spans the reading column
-        // (720), and the title at its cap, the checkout and all four tabs
-        // must fit there.
+        // Short names, all working: every live tab fits a wide strip.
         "nav", "cmp", "set", "tok",
     ] {
         let key = AgentKey::new(Provider::Claude, "ui-fixture", name);
@@ -458,7 +458,7 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
             ActivityEvent::Discovered(info),
             ActivityEvent::Status {
                 key,
-                state: AgentStatus::Idle,
+                state: AgentStatus::Working,
             },
         ] {
             fake.streams.borrow()[0]
@@ -466,7 +466,8 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
                 .unwrap();
         }
     }
-    // Solo has no head (C2): the tabs keep a strip of their own.
+    // Solo has no Pane head (the view head names it): the tabs keep a
+    // strip of their own.
     for width in [900., 1800., 2400.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));
         tick(cx);
@@ -597,20 +598,21 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
         .expect("the draft Composer");
     let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
     let model = cx.debug_bounds("draft-model-picker").expect("model");
-    // Terminal-native (WP-D): the pair rides the status line under the
-    // band, inside the band's width (there is no send control to clear).
+    // SPEC §5.5: the pair rides the box's toolbar, left of send, inside
+    // the box.
     assert!(
         effort.right() <= block.right() + px(0.5),
-        "effort {effort:?} stays inside the band {block:?}"
+        "effort {effort:?} stays inside the box {block:?}"
     );
     assert!(model.right() <= effort.left());
-    let band = cx.debug_bounds("draft-band").expect("the setup chips");
-    assert!(
-        band.top() >= block.bottom(),
-        "the setup chips ride the meta row under the box: {band:?} / {block:?}"
-    );
-    // The meter gives way first, so the setup chips keep their names.
-    assert!(cx.debug_bounds("usage-meter-draft-1").is_none());
+    let toolbar = cx.debug_bounds("composer-toolbar").expect("the toolbar");
+    for chip in ["band-chip-0", "band-chip-1"] {
+        let chip = cx.debug_bounds(chip).expect("a setup chip");
+        assert!(
+            toolbar.contains(&chip.center()) && chip.right() <= model.left(),
+            "the setup chips ride the toolbar's left: {chip:?} / {toolbar:?}"
+        );
+    }
     for chip in ["band-chip-0", "band-chip-1"] {
         let chip = cx.debug_bounds(chip).expect("a setup chip");
         assert!(
@@ -641,7 +643,7 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
         ActivityEvent::Discovered(info),
         ActivityEvent::Status {
             key: key.clone(),
-            state: AgentStatus::Idle,
+            state: AgentStatus::Working,
         },
     ] {
         fake.streams.borrow()[0]
@@ -664,6 +666,7 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
     // footer keeps its column until WP-F takes it onto the band, so only
     // its own placement is asserted here.
     assert!(main_block.size.width >= footer.size.width);
+    assert_eq!(footer.size.height, px(crate::theme::CHILD_FOOTER_H));
     assert!(
         (px(pane.y + pane.h) - footer.bottom() - px(crate::theme::COMPOSER_INSET_B)).abs()
             <= px(1.5),
@@ -699,9 +702,12 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
         .expect("the own-answer field");
     let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
     assert_eq!(field.size.height, px(crate::theme::QUESTION_OTHER_H));
-    // An option reads `❯ 1. label`: the `❯` gutter, then the ordinal's
-    // three cells, then the label.
-    let labels = choice.left() + px(crate::theme::GLYPH_GUTTER + 3.0 * crate::theme::CH);
+    // An option reads `1  label` (SPEC §5.9): its padding, the key's
+    // one mono cell, the gap, then the label.
+    let labels = choice.left()
+        + px(crate::theme::DECISION_OPTION_PAD_X
+            + crate::theme::FS_META * crate::theme::CODE_ADVANCE
+            + crate::theme::DECISION_OPTION_GAP);
     assert!(
         (field.left() - labels).abs() <= px(0.5),
         "the line's text starts on the labels' column: {:?} / {labels:?}",
@@ -800,27 +806,26 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
-    let check = |cx: &mut gpui::VisualTestContext, crosses: bool| {
+    let check = |cx: &mut gpui::VisualTestContext| {
         let board = view.read_with(cx, |view, _| view.board.get());
-        let plane = cx.debug_bounds("titlebar-plane");
-        if crosses {
-            assert_eq!(
-                board.y,
-                crate::theme::WIN_CHROME_H,
-                "the board starts under the band"
-            );
-            let plane = plane.expect("the band's plane");
-            assert!(
-                (plane.left() - px(board.x)).abs() < px(1.),
-                "{plane:?} / {board:?}"
-            );
-        } else {
-            assert_eq!(board.y, 0.0, "the board starts at the window's top");
-            assert!(plane.is_none(), "the band ends at the nav");
-        }
+        assert_eq!(
+            board.y,
+            crate::theme::WIN_CHROME_H,
+            "the cards start under the head row"
+        );
         if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
+            // Open, the nav's head drags the window over the nav; folded,
+            // the rail's head row is the traffic lights'.
+            if !view.read_with(cx, |view, _| view.nav_railed()) {
+                let head = cx
+                    .debug_bounds("nav-head-drag")
+                    .expect("the nav head's stretch");
+                assert!(
+                    head.top() == px(0.) && head.right() > px(crate::theme::NAV_HEAD_PAD_L),
+                    "the band over the nav drags: {head:?}"
+                );
+            }
             let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
-            assert_eq!(drag.left(), px(0.), "the band over the nav drags");
             assert!(
                 drag.contains(&gpui::point(px(600.), px(16.))),
                 "the middle of the window's top must drag: {drag:?}"
@@ -832,10 +837,10 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
             }
         }
     };
-    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
+    check(cx);
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
-    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
+    check(cx);
 }
 
 /// The checks card grows to its own tally: the counts line is never cut
@@ -914,9 +919,9 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
     });
 }
 
-/// Theme rule 6, sampled where each face is set: the app's own copy is in
-/// the UI face (Geist), and only code and machine text is in the code face
-/// (Geist Mono).
+/// Theme rule 1, sampled where each face is set: the chrome is in the UI
+/// face (Geist), and the transcript, code and machine text are in the code
+/// face (Geist Mono).
 #[gpui::test]
 fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     use crate::theme::{FONT_CODE, FONT_UI};
@@ -1025,8 +1030,8 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     let edit = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Edit"));
     let stamp = id_of(&|body| matches!(body, Body::TurnEnd(_)));
 
-    // UI: the prompt echo, a group summary, a tool call's line (its name;
-    // the arguments carry the code mark, `call_highlights`), the stamp.
+    // The transcript is code: the prompt echo, a group summary, a tool
+    // call's line, the stamp.
     for (what, prefix) in [
         ("prompt", format!("literal-{namespace}-{prompt:?}-0")),
         (
@@ -1036,7 +1041,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         ("call line", format!("literal-{namespace}-{edit:?}-0")),
         ("stamp", format!("literal-{namespace}-{stamp:?}-0")),
     ] {
-        assert_eq!(face(cx, prefix).as_ref(), FONT_UI, "{what} is UI text");
+        assert_eq!(face(cx, prefix).as_ref(), FONT_CODE, "{what} is code");
     }
     // Code: the diff's lines and the Composer's line.
     // A settled edit's diff shows once it is disclosed.
@@ -1069,8 +1074,8 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     assert_eq!(
         cx.update(|_, cx| crate::composer::testing::face(composer, cx))
             .as_deref(),
-        Some(FONT_CODE),
-        "the Composer's line is code"
+        Some(crate::theme::FONT_UI),
+        "the Solo Composer's line is chrome (SPEC §3.5)"
     );
     // Code in prose: fenced blocks and inline spans.
     let style = crate::rich::style(px(16.));
@@ -1103,7 +1108,6 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         assert_eq!(family.as_deref(), Some(FONT_UI), "{what} is UI text");
     }
     for (what, family) in [
-        ("keycap", ui(crate::components::kbd("y"))),
         (
             "keys",
             ui(crate::components::key_combo("cmd-F", crate::theme::TEXT)),
@@ -1167,12 +1171,11 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     );
 }
 
-/// Terminal-native (WP-D, FL-10): the Composer is one input row on its band
-/// — no box, no send control, no verb hint. Its status line is the
-/// window's, in the bottom bar (ADR 0014), and no key hint rides it: `?`
-/// is the one way in. Enter sends and Esc interrupts.
+/// SPEC §5.5: at rest the Solo Composer is a box of one input row over its
+/// toolbar, with no key hint; the bar carries no status line. Enter sends
+/// and Esc interrupts.
 #[gpui::test]
-fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext) {
+fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
     let thread = core.threads()[0];
     bind_production_keys(cx);
@@ -1180,24 +1183,24 @@ fn the_composer_is_one_row_and_its_status_rides_the_bar(cx: &mut TestAppContext)
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
     let block = cx.debug_bounds("composer-block").unwrap();
-    let meta = cx.debug_bounds("composer-meta").expect("the meta row");
-    let bar = cx.debug_bounds("bottom-bar").unwrap();
     assert_eq!(
         block.size.height,
-        px(2. * crate::theme::COMPOSER_PAD_Y + crate::theme::COMPOSER_ROW_H),
-        "one row on the band"
+        px(crate::theme::COMPOSER_INPUT_PAD_T
+            + crate::theme::COMPOSER_ROW_H
+            + crate::theme::COMPOSER_INPUT_PAD_B
+            + crate::theme::COMPOSER_TOOLBAR_H),
+        "one row over the toolbar"
     );
-    assert!(
-        meta.top() >= bar.top() && meta.bottom() <= bar.bottom(),
-        "the status line rides the bar: {meta:?} in {bar:?}"
-    );
+    assert!(cx.debug_bounds("composer-meta").is_none(), "no status line");
     assert!(
         cx.debug_bounds("prompt-placeholder").is_some(),
         "the resting line says what to do"
     );
     assert!(cx.debug_bounds("prompt-placeholder-hint").is_none());
     assert!(cx.debug_bounds("status-keys").is_none(), "no key hints");
-    assert!(cx.debug_bounds("bottom-bar-help").is_some(), "`?` instead");
+    // `?` left the bar (SPEC §5.7): the palette's `keyboard shortcuts`
+    // and the Help menu are the keys' doors now.
+    assert!(cx.debug_bounds("bottom-bar-help").is_none());
     for verb in ["send", "stop"] {
         let hint: &'static str = Box::leak(
             format!("composer-{verb}-{:?}", PaneIdentity::Thread(thread)).into_boxed_str(),
@@ -1277,8 +1280,8 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     // prompt is the turn step.
     assert_eq!(
         line(prompts[1]).top() - line(stamps[0]).bottom(),
-        px(crate::theme::LH_PROSE + crate::theme::tx_half(crate::theme::LH_PROSE)),
-        "turns sit a blank line and the band's half line apart"
+        px(crate::theme::LH_PROSE + crate::theme::PROMPT_BAND_PAD_Y),
+        "turns sit a blank line and the band's padding apart"
     );
 }
 
@@ -1302,11 +1305,10 @@ fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
     );
 }
 
-/// The Group head sits on the grid at every width (theme WP-C): its dot
-/// column a cell in from the Pane's inner edge (`HEAD_PAD_X`), two cells
-/// wide (`HEAD_DOT_W`), its title right after it — so every head on a
-/// board shares one vertical of dots. Solo has no head at all: the
-/// nav's selected row names the Thread.
+/// The Group head sits on one line at every width (SPEC §5.9): its mark
+/// `PANE_HEAD_PAD_L` in from the Pane's edge, its title `PANE_HEAD_GAP`
+/// after the mark — so every head on a board shares one vertical of
+/// marks. Solo has no head at all: the view head names the Thread.
 #[gpui::test]
 fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("head-on-column", 2);
@@ -1335,19 +1337,19 @@ fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
             // The edge is an overlay (F-1): the head starts at the Pane's
             // own left edge.
             let inner = px(rect.x);
-            let c1 = inner + px(crate::theme::HEAD_PAD_X + crate::theme::HEAD_DOT_W);
+            let c1 = dot.right() + px(crate::theme::PANE_HEAD_GAP);
             // gpui snaps every edge to a device pixel: up to a pixel off
             // the unsnapped split.
             assert!(
                 (title.left() - c1).abs() < px(1.),
-                "{width}: the title {title:?} starts after the dot column {c1:?}"
+                "{width}: the title {title:?} starts a gap after the mark {c1:?}"
             );
-            let axis = inner + px(crate::theme::HEAD_PAD_X);
+            let axis = inner + px(crate::theme::PANE_HEAD_PAD_L);
             assert!(
                 (dot.left() - axis).abs() < px(1.),
-                "{width}: the dot column {dot:?} sits a cell in {axis:?}"
+                "{width}: the mark {dot:?} sits 14 in {axis:?}"
             );
-            assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
+            assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
         }
     }
 }

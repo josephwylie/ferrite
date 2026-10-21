@@ -2,7 +2,7 @@ use crate::{
     ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
-    TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
+    RunPadding, TextRun, TextStyle, TooltipId, TruncateFrom, WhiteSpace, Window, WrappedLine,
     WrappedLineLayout, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
@@ -271,7 +271,7 @@ impl Element for &'static str {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextLayout::default();
-        let layout_id = state.layout(SharedString::from(*self), None, window, cx);
+        let layout_id = state.layout(SharedString::from(*self), None, Vec::new(), window, cx);
         (layout_id, state)
     }
 
@@ -345,7 +345,7 @@ impl Element for SharedString {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextLayout::default();
-        let layout_id = state.layout(self.clone(), None, window, cx);
+        let layout_id = state.layout(self.clone(), None, Vec::new(), window, cx);
         (layout_id, state)
     }
 
@@ -391,6 +391,8 @@ impl IntoElement for SharedString {
 pub struct StyledText {
     text: SharedString,
     runs: Option<Vec<TextRun>>,
+    /// Ferrite: room laid out either side of some ranges (`RunPadding`).
+    pads: Vec<RunPadding>,
     delayed_highlights: Option<Vec<(Range<usize>, HighlightStyle)>>,
     delayed_font_family_overrides: Option<Vec<(Range<usize>, SharedString)>>,
     layout: TextLayout,
@@ -402,6 +404,7 @@ impl StyledText {
         StyledText {
             text: text.into(),
             runs: None,
+            pads: Vec::new(),
             delayed_highlights: None,
             delayed_font_family_overrides: None,
             layout: TextLayout::default(),
@@ -522,6 +525,13 @@ impl StyledText {
         }
     }
 
+    /// Ferrite: lay out `pads` of room either side of their ranges, as CSS
+    /// inline padding does; the text is unchanged.
+    pub fn with_padding(mut self, pads: Vec<RunPadding>) -> Self {
+        self.pads = pads;
+        self
+    }
+
     /// Set the text runs for this piece of text.
     pub fn with_runs(mut self, runs: Vec<TextRun>) -> Self {
         let mut text = &*self.text;
@@ -571,7 +581,9 @@ impl Element for StyledText {
             Self::apply_font_family_overrides(runs, overrides);
         }
 
-        let layout_id = self.layout.layout(self.text.clone(), runs, window, cx);
+        let layout_id = self
+            .layout
+            .layout(self.text.clone(), runs, self.pads.clone(), window, cx);
         (layout_id, ())
     }
 
@@ -628,6 +640,7 @@ impl TextLayout {
         &self,
         text: SharedString,
         runs: Option<Vec<TextRun>>,
+        pads: Vec<RunPadding>,
         window: &mut Window,
         _: &mut App,
     ) -> LayoutId {
@@ -701,6 +714,9 @@ impl TextLayout {
                 }
 
                 let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
+                // A truncation rewrites the text: its paddings no longer
+                // name the same bytes, so a truncated line lays out without.
+                let pads: &[RunPadding] = if truncate_width.is_some() { &[] } else { &pads };
                 let (text, runs) = if let Some(truncate_width) = truncate_width {
                     if let Some(max_lines) = text_style.line_clamp
                         && let Some(wrap_width) = wrap_width
@@ -744,10 +760,11 @@ impl TextLayout {
 
                 let Some(lines) = window
                     .text_system()
-                    .shape_text(
+                    .shape_text_padded(
                         text,
                         font_size,
                         &runs,
+                        pads,
                         wrap_width,            // Wrap if we know the width.
                         text_style.line_clamp, // Limit the number of lines if line_clamp is set.
                     )

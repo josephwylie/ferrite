@@ -46,9 +46,9 @@ pub fn target(
 }
 
 /// The sheet a Pane wears while files hover it: the whole Pane, raised, with
-/// the accent's non-focus edge like a Pane drop's wash, saying what a
+/// `TEXT_STRONG`'s non-focus edge like a Pane drop's wash, saying what a
 /// release does. The Pane lays it just before its Composer, so the Composer
-/// paints above the sheet, edged in the same accent: that is where the
+/// paints above the sheet, edged in the same strong: that is where the
 /// files land.
 pub fn sheet() -> Div {
     div()
@@ -60,9 +60,9 @@ pub fn sheet() -> Div {
         .items_center()
         .justify_center()
         .rounded(px(theme::R_PANE))
-        .bg(theme::paint::BAND)
+        .bg(theme::paint::PROMPT_BAND)
         .border_1()
-        .border_color(rgba(theme::ACCENT_EDGE))
+        .border_color(rgba(theme::DROP_EDGE))
         .opacity(0.96)
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))

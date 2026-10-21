@@ -245,40 +245,31 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds(row(threads[2])).is_some());
 }
 
-/// N-8: the nav's one seam is its own 1px column right of the column, the
-/// board starting after it; nothing else draws a seam, and folded at rest
-/// the seam sits at x = 0 in the plane's colour.
+/// N-8 (SPEC §5.1): no seam beside the nav — the card's edge separates —
+/// so the board starts at the column's right edge, open and folded.
 #[gpui::test]
-fn one_seam_column_sits_right_of_the_nav(cx: &mut TestAppContext) {
+fn the_board_starts_at_the_nav_edge(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-one-seam", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let column = cx.debug_bounds("nav-column").expect("the column");
-    let seam = cx.debug_bounds("nav-seam").expect("the seam");
-    assert!(
-        (seam.left() - column.right()).abs() < px(0.5),
-        "{seam:?} {column:?}"
-    );
-    assert_eq!(seam.size.width, px(crate::theme::CHROME_SEAM_W));
-    assert!(
-        cx.debug_bounds("chrome-seam").is_none(),
-        "one seam, not two"
-    );
+    assert!(cx.debug_bounds("nav-seam").is_none(), "no seam");
+    assert!(cx.debug_bounds("chrome-seam").is_none(), "no seam");
     view.read_with(cx, |view, _| {
         assert!(
-            (view.board_left() - f32::from(seam.right())).abs() < 0.5,
-            "the board starts after it"
+            (view.board_left() - f32::from(column.right())).abs() < 0.5,
+            "the board starts at the column's edge"
         );
     });
-
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
-    let seam = cx.debug_bounds("nav-seam").expect("the seam");
-    assert!(
-        (seam.left() - px(nav::FOLDED_WIDTH)).abs() < px(0.5),
-        "folded, the seam is beside the rail: {seam:?}"
-    );
+    view.read_with(cx, |view, _| {
+        assert!(
+            (view.board_left() - nav::FOLDED_WIDTH).abs() < 0.5,
+            "folded, beside the rail"
+        );
+    });
 }
 
 /// N-15: folding fades the content 1 → 0 over 150ms (CSS `ease`) while the
@@ -380,7 +371,11 @@ fn sort_attention_lifts_what_needs_you_and_the_heading_rolls_it_up(cx: &mut Test
         );
         let state = view.nav_state();
         let section = &state.sections[0];
-        assert_eq!(section.status, nav::RowStatus::NeedsYou, "the roll-up");
+        assert_eq!(
+            section.roll_up.as_ref().map(|word| word.text.to_string()),
+            Some("1 needs you".to_string()),
+            "the roll-up"
+        );
     });
 }
 
@@ -469,11 +464,11 @@ fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) 
         let block = state.groups.iter().find(|block| block.id == group).unwrap();
         assert!(block.folded);
         assert_eq!(
-            block.status,
-            nav::RowStatus::Done,
+            nav::RowStatus::roll_up(&block.members),
+            Some(nav::RowStatus::Done),
             "a member finished unseen"
         );
-        assert_eq!(state.sections[0].status, nav::RowStatus::Done);
+        assert_eq!(block.members.len(), 2, "its count");
     });
     fake.streams.borrow()[1].send(decision("perm_2")).unwrap();
     tick(cx);
@@ -481,15 +476,28 @@ fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) 
         let state = view.nav_state();
         let block = state.groups.iter().find(|block| block.id == group).unwrap();
         assert_eq!(
-            block.status,
-            nav::RowStatus::NeedsYou,
+            nav::RowStatus::roll_up(&block.members),
+            Some(nav::RowStatus::NeedsYou),
             "blocked outranks done"
+        );
+        assert_eq!(
+            nav::RollUp::of(&block.members).map(|word| word.text.to_string()),
+            Some("1 needs you".to_string()),
+            "the row's word"
+        );
+        assert_eq!(
+            state.sections[0]
+                .roll_up
+                .as_ref()
+                .map(|word| word.text.to_string()),
+            Some("1 needs you".to_string()),
+            "a folded heading would say it"
         );
     });
 }
 
-/// Folded, the nav is the rail: one line per open Thread, each with its
-/// mark, beside the one seam; the board starts right of it, and a press on
+/// Folded, the nav is the rail (§5.1.7): one 32px cell per open Thread,
+/// each with its mark; the board starts right of it, and a press on
 /// a line lands on its Thread. A line's digit is the ⌘ key that focuses
 /// it: Solo, only the Solo Pane's `1`.
 #[gpui::test]
@@ -509,15 +517,13 @@ fn the_folded_nav_is_a_keyed_rail(cx: &mut TestAppContext) {
     for thread in &threads {
         let id: &'static str = format!("nav-rail-{}", thread.get()).leak();
         let line = cx.debug_bounds(id).expect("a line per open Thread");
-        assert_eq!(line.size.height, px(crate::theme::NAV_LINE));
+        assert_eq!(line.size.height, px(crate::theme::NAV_RAIL_CELL));
         assert!(line.top() >= above, "in the tree's order");
         above = line.bottom();
     }
-    let seam = cx.debug_bounds("nav-seam").expect("the seam beside it");
-    assert!((seam.left() - px(nav::FOLDED_WIDTH)).abs() <= px(0.5));
     let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
     assert!(
-        (board.x - (nav::FOLDED_WIDTH + crate::theme::CHROME_SEAM_W)).abs() <= 0.5,
+        (board.x - nav::FOLDED_WIDTH).abs() <= 0.5,
         "the board starts right of the rail: {board:?}"
     );
     let keyed = |cx: &mut gpui::VisualTestContext| {

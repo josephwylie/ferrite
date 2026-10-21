@@ -1055,6 +1055,9 @@ pub enum Done {
         pr: Option<WirePr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+        /// Why there is no pull request, past the branch having none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unread: Option<review::WirePrUnread>,
     },
     /// A `list_files`' entries in path order: every file, and each
     /// ignored directory whole.

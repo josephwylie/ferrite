@@ -515,7 +515,7 @@ async fn draw(
 /// The page's background as BGRA bytes' first three (what an undrawn pixel is).
 fn background() -> [u8; 3] {
     let hex = tokens::value("bg", Scheme::APP, ReadingSize::STANDARD).unwrap_or_default();
-    let rgb = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(theme::PLANE);
+    let rgb = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(theme::CARD);
     [rgb as u8, (rgb >> 8) as u8, (rgb >> 16) as u8]
 }
 

@@ -371,13 +371,13 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
     let start = caret(&view, cx, 0, 0);
     // Select through the last word, leaving the final period unselected. The
-    // native card has its own width and the flow reserves its trailing
-    // `INLINE_CODE_OVERHANG` margin, so measure the suffix from there.
+    // native card has its own width, so measure the suffix from a hair past
+    // its right edge.
     let end = cx.update(|window, cx| {
         let suffix_caret =
             crate::rich::testing::caret(&id, 0, 1, suffix, suffix.len() - 1, window, cx).unwrap();
         gpui::point(
-            card.right() + px(crate::theme::INLINE_CODE_OVERHANG) + suffix_caret.x - before.left(),
+            card.right() + px(crate::theme::SPACE_0_5) + suffix_caret.x - before.left(),
             card.center().y,
         )
     });
@@ -845,8 +845,11 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
     view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
     cx.update(|_, cx| {
-        // One size for every transcript: a Group reads at it too.
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
+        // A Group Pane reads half a step under it (SPEC §3.5).
+        assert_eq!(
+            crate::rich::testing::font_size(&prefix, cx),
+            Some(px(18. - crate::theme::TX_GROUP_STEP))
+        );
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)
@@ -1928,11 +1931,18 @@ fn an_open_palette_does_not_rebuild_the_cockpit(cx: &mut TestAppContext) {
 }
 
 /// The arrows in an open model picker move its cursor by rebuilding the
-/// status line it rides in the bottom bar (ADR 0014), not any Pane.
+/// Pane whose Composer chip it hangs from (SPEC §5.5) — once an arrow at
+/// most — and no other Pane. The chip is Solo's: the board's first Pane
+/// fills it.
 #[gpui::test]
-fn a_pickers_arrows_rebuild_the_status_line_and_no_pane(cx: &mut TestAppContext) {
+fn a_pickers_arrows_rebuild_only_its_own_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("picker-parts", &[], cx);
     bind_production_keys(cx);
+    view.update(cx, |view, cx| {
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    cockpit_renders_over(cx, 300);
     // The window moves from pointer to keyboard first (see the typing
     // test above).
     cx.simulate_keystrokes("left");
@@ -1940,7 +1950,6 @@ fn a_pickers_arrows_rebuild_the_status_line_and_no_pane(cx: &mut TestAppContext)
     view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
     cockpit_renders_over(cx, 1_000);
     let panes = pane_builds(&threads);
-    let status = crate::cockpit::drawn::status_renders();
     for key in ["down", "down", "up", "down"] {
         cx.simulate_keystrokes(key);
         cx.run_until_parked();
@@ -1950,8 +1959,10 @@ fn a_pickers_arrows_rebuild_the_status_line_and_no_pane(cx: &mut TestAppContext)
         .zip(&panes)
         .map(|(after, before)| after - before)
         .collect();
-    let status = crate::cockpit::drawn::status_renders() - status;
-    eprintln!("PICKER_ARROWS_4 pane_builds={built:?} status_builds={status}");
-    assert!(status >= 4, "the status line redraws the picker's cursor");
-    assert_eq!(built, [0, 0, 0, 0], "an arrow rebuilt a Pane");
+    eprintln!("PICKER_ARROWS_4 pane_builds={built:?}");
+    assert!(
+        (1..=4).contains(&built[0]),
+        "its Pane redraws the cursor: {built:?}"
+    );
+    assert_eq!(built[1..], [0, 0, 0], "an arrow rebuilt another Pane");
 }

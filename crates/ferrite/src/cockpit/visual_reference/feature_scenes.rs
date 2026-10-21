@@ -21,7 +21,6 @@ use gpui::{AppContext, Focusable};
 
 use super::{conversation, Scene, Setup};
 use crate::board::{fixture, Board, Placement};
-use crate::nav::NavFold;
 use crate::review::ReviewView;
 use crate::sidebar::{self, Sidebar};
 use ferrite_core::ThreadId;
@@ -317,14 +316,13 @@ fn projects(name: &str, board: Option<OnBoard>) -> (Scene, Setup) {
     let _ = scene.open(Provider::Claude, &checkout, "Checkout notes");
     scene.core.focus_thread(head);
     let setup: Setup = Box::new(move |view, window, cx| {
-        view.set_nav_fold(NavFold::Parked, false, cx);
         view.projects.sidebar = sidebar;
         view.projects.sidebar.coordinator = Some(head);
         view.projects.live = true;
         // The cart copy's request stood before the window opened: heard,
         // not toasted over the board.
-        view.ring_bell(cx);
-        view.bell.clear_toasts();
+        view.ring_alerts(cx);
+        view.needs_you.clear_toasts();
         if let Some(OnBoard { board, keys }) = board {
             sw_board::clock::set(Some(fixture::NOW));
             view.stage_board(board, Placement::Tab, window, cx);
@@ -420,7 +418,6 @@ fn review(staged: Staged) -> (Scene, Setup) {
     let scene = conversation("review");
     let workspace = scene.root.join("work").join("ferrite");
     let setup: Setup = Box::new(move |view, window, cx| {
-        view.set_nav_fold(NavFold::Parked, false, cx);
         let index = view.focused();
         let composer = view.panes[index].composer.clone();
         let reading = view.prefs.settings.reading_size;
@@ -609,7 +606,10 @@ fn pull_request() -> ReviewPullRequest {
                 },
             ],
             truncated: false,
+            checks_truncated: false,
+            comments_truncated: false,
         }),
+        unread: None,
     }
 }
 
@@ -658,7 +658,6 @@ fn search_results() -> SearchResults {
 fn find() -> (Scene, Setup) {
     let scene = conversation("find");
     let setup: Setup = Box::new(|view, window, cx| {
-        view.set_nav_fold(NavFold::Parked, false, cx);
         view.open_find(&crate::find::Open, window, cx);
         if let Some(transcript) = view.panes[view.focused()].transcript() {
             transcript.update(cx, |transcript, cx| transcript.type_find("nav", cx));
@@ -714,7 +713,6 @@ fn nav_states() -> (Scene, Setup) {
     done_feed.end(0.12);
 
     let setup: Setup = Box::new(move |view, _, cx| {
-        view.set_nav_fold(NavFold::Parked, false, cx);
         let pr = |number, state, checks| {
             Some(PullRequest {
                 number,

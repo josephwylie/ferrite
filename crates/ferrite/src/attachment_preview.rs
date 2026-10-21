@@ -258,7 +258,7 @@ impl Preview {
     /// that moves the slot) and whose body is the rendered `body`. The head
     /// is the Group head's twin — `PANE_HEAD_H`, its `paint::LINE` rule, a
     /// cell in from each side — reading the file's path (its `title`) in
-    /// `PATH_INK` and its `:line` in `TEXT_MUTED`, or `review` and the
+    /// `LINK_INK` and its `:line` in `TEXT_DIM`, or `review` and the
     /// workspace, with a dim × at the right. None while no document is open.
     pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
         use crate::theme::*;
@@ -267,7 +267,7 @@ impl Preview {
             Some(_) => div()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(format!("review \u{b7} {}", document.title)),
             None => div()
                 .flex()
@@ -277,13 +277,13 @@ impl Preview {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(PATH_INK))
+                        .text_color(rgb(LINK_INK))
                         .child(document.title.clone()),
                 )
                 .children(document.line.map(|line| {
                     div()
                         .flex_shrink_0()
-                        .text_color(rgb(TEXT_MUTED))
+                        .text_color(rgb(TEXT_DIM))
                         .child(format!(":{line}"))
                 })),
         };
@@ -318,11 +318,7 @@ impl Preview {
                         gpui::component::tooltip::Tooltip::new("Close the reader \u{b7} esc")
                             .build(window, cx)
                     })
-                    .child(crate::icons::icon(
-                        crate::icons::CLOSE,
-                        GLYPH_BOX,
-                        TEXT_MUTED,
-                    ))
+                    .child(crate::icons::icon(crate::icons::CLOSE, GLYPH_BOX, TEXT_DIM))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         close.close_document(window);
@@ -339,7 +335,7 @@ impl Preview {
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .bg(paint::PLANE)
+                .bg(paint::CARD)
                 .font_family(FONT_UI)
                 .text_size(px(FS_UI))
                 .line_height(px(LH_UI))
@@ -433,19 +429,19 @@ impl RenderOnce for PreviewLayer {
             f32::from(bounds.size.width),
             f32::from(bounds.size.height),
         );
-        // The sheet recipe (`prefs::sheet`): `paint::BAND`, a `paint::LINE2`
-        // edge, square, the float's one shadow; the 48px head with its title and the
-        // one close control over a hairline; then the image itself on the
+        // The sheet recipe (`prefs::sheet`): the float's shell at sheet
+        // size; the 48px head with its title and the one close control over
+        // a hairline; then the image itself on the
         // sheet, `MODAL_PAD` in from every edge. No well: nothing in a
         // sheet is darker than the sheet.
-        // A word on the head, `paint::HOVER` under the pointer.
+        // A word on the head, `paint::RAISED` under the pointer.
         let open = crate::components::form_button("open-original-attachment", cx)
             .flex_shrink_0()
             .h(px(crate::theme::ROW))
             .px(px(crate::theme::CH))
             .child(crate::components::form_label(
                 "open original",
-                crate::theme::TEXT_MUTED,
+                crate::theme::TEXT_DIM,
             ))
             .accessibility_label("Open original image in the default app")
             .tip("Open full-size image in the default app")

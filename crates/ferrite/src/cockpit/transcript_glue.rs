@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use ferrite_core::transcript::Transcript;
 use ferrite_core::ThreadId;
-use gpui::{App, ClipboardItem, Context, SharedString, Window};
+use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 
 use super::{home_relative, CockpitView};
 use crate::transcript::{BannerFacts, ScrollTarget, TranscriptTail};
@@ -55,6 +55,84 @@ impl CockpitView {
     /// Decision card's owner).
     pub(super) fn transcript_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
         self.decision_tail(index, cx)
+            .or_else(|| self.failure_tail(index))
+    }
+
+    /// The failure strip (SPEC §5.9 item 4) under Main's transcript when the
+    /// Thread's last turn failed: `Stopped <age> ago`, the age the nav row
+    /// reads (the Thread's last act), and `Retry`, which re-sends the
+    /// failed turn's prompt (`retry_failed_turn`) — none for a closed
+    /// Session, which has nothing to send to.
+    fn failure_tail(&self, index: usize) -> Option<TranscriptTail> {
+        use ferrite_core::transcript::Status;
+        let pane = self.panes.get(index)?;
+        if !pane.is_main() {
+            return None;
+        }
+        let thread = pane.thread()?;
+        let turn = self.cockpit.thread(thread)?.turn();
+        if turn.status == Status::Streaming
+            || !matches!(turn.outcome, Some(ferrite_core::TurnOutcome::Error(_)))
+        {
+            return None;
+        }
+        let closed = turn.status == Status::Closed;
+        let age = self
+            .facts
+            .last_used(thread)
+            .map(|at| crate::facts::since_label(at, ferrite_core::clock::system_time()))
+            .unwrap_or_default();
+        let words = SharedString::from(if age.is_empty() {
+            "Stopped just now".to_string()
+        } else {
+            format!("Stopped {age} ago")
+        });
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            ("failure", thread, words.as_ref(), closed).hash(&mut hasher);
+            hasher.finish()
+        };
+        let owner = self.decisions.owner();
+        Some(TranscriptTail {
+            key,
+            render: std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                let owner = owner.clone();
+                let retry = (!closed).then(|| {
+                    crate::pane::retry_button(thread.get(), cx)
+                        .on_click(move |_, _, cx| {
+                            let _ = owner.update(cx, |view, cx| view.retry_failed_turn(thread, cx));
+                        })
+                        .into_any_element()
+                });
+                crate::pane::failure_strip(thread.get(), words.clone(), retry).into_any_element()
+            }),
+        })
+    }
+
+    /// `Retry` on the failure strip: send the failed turn's prompt again,
+    /// attachments and all, through the one resend path. Whether it went.
+    pub(crate) fn retry_failed_turn(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.pane_for(thread) else {
+            return false;
+        };
+        let prompt = self.cockpit.thread(thread).and_then(|open| {
+            let main = open
+                .activity()
+                .subject(&ferrite_core::activity::Subject::Main)?;
+            main.transcript()
+                .blocks()
+                .iter()
+                .rev()
+                .find_map(|block| match &block.body {
+                    ferrite_core::transcript::Body::Prompt(line) => Some(line.clone()),
+                    _ => None,
+                })
+        });
+        match prompt {
+            Some(prompt) => self.send_again(index, thread, prompt, cx),
+            None => false,
+        }
     }
 
     /// ⌘-click on a path target: the file in a reader beside the Thread
@@ -116,6 +194,18 @@ impl CockpitView {
         let Some(prompt) = self.reading_prompt(index, cx) else {
             return false;
         };
+        self.send_again(index, thread, prompt, cx)
+    }
+
+    /// Send `prompt` to Pane `index`'s Thread again, queued behind a
+    /// running turn.
+    fn send_again(
+        &mut self,
+        index: usize,
+        thread: ThreadId,
+        prompt: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
         self.focus_pane(index);
         if self
             .cockpit
@@ -143,25 +233,6 @@ impl CockpitView {
     ) {
         if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.transcript()) {
             transcript.update(cx, |transcript, cx| transcript.scroll_to(target, cx));
-        }
-    }
-
-    /// Open the hover card on the first path target in Pane `index`'s
-    /// transcript that names `path`, at `line` or the Thread's latest
-    /// change to it (a scene's solo-hover view).
-    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-    pub(crate) fn preview_path(
-        &mut self,
-        index: usize,
-        path: &str,
-        line: Option<u32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.transcript()) {
-            transcript.update(cx, |transcript, cx| {
-                transcript.preview_path(path, line, window, cx)
-            });
         }
     }
 }

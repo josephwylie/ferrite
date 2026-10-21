@@ -12,7 +12,7 @@ use crate::palette::{
 };
 use crate::projects::{self, Command};
 use crate::sidebar::{self, Sidebar};
-use crate::theme::{paint, ICON_BUTTON, ICON_BUTTON_GLYPH, TEXT, TEXT_MUTED, TRANSPARENT};
+use crate::theme::TEXT_DIM;
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::Selectable;
 use gpui::component::WindowExt as _;
@@ -233,61 +233,6 @@ impl CockpitView {
             .map(|target| target.root.clone())
     }
 
-    /// The board's door in the bottom bar, after the bell: the board glyph,
-    /// lit while the board shows; a click does what the board key does.
-    /// None outside the operator's window, where no board opens.
-    pub(super) fn board_door(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.projects.live {
-            return None;
-        }
-        let shown = self
-            .projects
-            .board
-            .as_ref()
-            .is_some_and(|board| board.shown);
-        let id = gpui::ElementId::from("projects-board-door");
-        let key = crate::pointer::hover_key(&id);
-        let (rest, glyph): (gpui::Hsla, gpui::Hsla) = if shown {
-            (paint::HOVER.into(), rgb(TEXT).into())
-        } else {
-            (
-                gpui::rgba(TRANSPARENT).into(),
-                crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into()),
-            )
-        };
-        let door = crate::components::faded_button(
-            id,
-            rest,
-            paint::HOVER.into(),
-            paint::PRESS.into(),
-            rgb(TEXT_MUTED).into(),
-            cx,
-        )
-        .debug_selector(|| "projects-board-door".into())
-        .w(px(ICON_BUTTON))
-        .h_full()
-        .p_0()
-        .accessibility_label("Tasks")
-        .child(
-            crate::icons::icon(crate::icons::BOARD, ICON_BUTTON_GLYPH, TEXT_MUTED)
-                .text_color(glyph),
-        )
-        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            view.toggle_projects(window, cx);
-            cx.notify();
-        }));
-        Some(
-            div()
-                .id("projects-board-door-tip")
-                .flex_shrink_0()
-                .h_full()
-                .tooltip(crate::menu::action_tooltip("Tasks", "projects::Toggle"))
-                .child(door)
-                .into_any_element(),
-        )
-    }
-
     /// Whether the board shows and holds the keyboard: shown but left (a
     /// press in the nav), the board key takes you back to it.
     fn board_focused(&self, window: &Window, cx: &gpui::App) -> bool {
@@ -439,7 +384,7 @@ impl CockpitView {
 
     /// Shared navigation for the task list and the full conversation.
     fn tasks_header(&self, cx: &mut Context<Self>) -> Div {
-        use crate::theme::{CH, CHROME, CONTROL_H, LINE, TEXT_STRONG, W_STRONG};
+        use crate::theme::{CH, CONTROL_H, FRAME, LINE, TEXT_STRONG, W_STRONG};
         let chat = self.projects.coordinator_shown();
         let tab = |id: &'static str, label: &'static str, selected: bool| {
             crate::components::form_button(id, cx)
@@ -450,7 +395,7 @@ impl CockpitView {
                 .accessibility_label(label)
                 .child(
                     crate::components::text_ui()
-                        .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_MUTED }))
+                        .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_DIM }))
                         .font_weight(if selected {
                             W_STRONG
                         } else {
@@ -478,12 +423,12 @@ impl CockpitView {
             .h(px(TASKS_HEADER_H))
             .px(px(CH * 1.5))
             .gap(px(CH))
-            .bg(rgb(CHROME))
+            .bg(rgb(FRAME))
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .border_b_1()
             .border_color(rgb(LINE))
-            .child(crate::icons::icon(crate::icons::BOARD, 16., TEXT_MUTED))
+            .child(crate::icons::icon(crate::icons::BOARD, 16., TEXT_DIM))
             .child(
                 crate::components::text_ui()
                     .text_color(rgb(TEXT_STRONG))
@@ -532,7 +477,7 @@ impl CockpitView {
                     .items_start()
                     .gap(px(crate::theme::ROW))
                     .p(px(crate::theme::ROW))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(message)
                     .when(error.is_some(), |body| {
                         body.child(
@@ -803,25 +748,10 @@ impl CockpitView {
         vec![veil, float]
     }
 
-    /// The board header's tally (`3 need you · 1 ready · 2 working`), while
-    /// the board has tasks; a press opens the board.
-    pub(super) fn projects_bar_word(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The board's tally (`3 working · 1 review`), which the nav's `Tasks`
+    /// view says at its right; `None` while it says nothing.
+    pub(super) fn tasks_tally(&self) -> Option<SharedString> {
         let tally = &self.projects.sidebar.tally;
-        #[cfg(test)]
-        super::drawn::record_bar_tally((!tally.is_empty()).then(|| tally.clone()));
-        (!tally.is_empty()).then(|| {
-            div()
-                .id("bottom-bar-projects")
-                .debug_selector(|| "bottom-bar-projects".into())
-                .flex_shrink_0()
-                .text_color(rgb(crate::theme::CHROME_MUTED))
-                .cursor_pointer()
-                .child(SharedString::from(tally.clone()))
-                .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    window.dispatch_action(Box::new(projects::Toggle), cx);
-                }))
-                .into_any_element()
-        })
+        (!tally.is_empty()).then(|| SharedString::from(tally.clone()))
     }
 }

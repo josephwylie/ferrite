@@ -1,5 +1,5 @@
 //! Ferrite's shared primitives: the one way render code opens a text run,
-//! lays a plane or a floating surface, draws a status mark or a keycap,
+//! lays a plane or a floating surface, draws a status mark or a shortcut,
 //! builds a control or a menu row, and runs the few loops the terminal
 //! grammar allows (the braille and working spinners, the shimmer, the caret
 //! blink — theme rule 8). Longbridge owns the control mechanics; `theme.rs`
@@ -107,19 +107,19 @@ impl Tip for Button {
     }
 }
 
-/// A form action: nothing at rest, `paint::HOVER` under the pointer
+/// A form action: nothing at rest, `paint::RAISED` under the pointer
 /// (blended), `paint::PRESS` pressed.
 pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
-    form_button_on(id, rgba(theme::TRANSPARENT).into(), cx)
+    form_button_on(id, theme::Paint(theme::TRANSPARENT), cx)
 }
 
 /// `form_button` resting on its own `rest` ground (a filled field-like
 /// control): the same blend and press.
-pub fn form_button_on(id: impl Into<ElementId>, rest: Hsla, cx: &App) -> Button {
+pub fn form_button_on(id: impl Into<ElementId>, rest: theme::Paint, cx: &App) -> Button {
     faded_button(
         id,
-        rest,
-        theme::paint::HOVER.into(),
+        rest.into(),
+        theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
         cx,
@@ -127,20 +127,17 @@ pub fn form_button_on(id: impl Into<ElementId>, rest: Hsla, cx: &App) -> Button 
     .tab_stop(true)
 }
 
-/// The completing action: the accent as a fill (`ACCENT_STRONG`) with dark
-/// `ON_ACCENT` ink, hovering to `PRIMARY_HOVER` and pressing to
-/// `PRIMARY_ACTIVE`; disabled is `SELECTION` with `TEXT_MUTED` ink. Flat,
-/// square. On the filled face the focus outline is `TEXT_STRONG`.
+/// The completing action: the strongest ink as a fill (`PRIMARY`) with
+/// dark `ON_PRIMARY` ink, stepping down to `TEXT` under the pointer and
+/// pressed; disabled is `SELECTION` with `TEXT_DIM` ink. On the filled face
+/// the focus outline is `TEXT_STRONG`.
 pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> Button {
     use gpui::component::Disableable;
     let face: Hsla = rgb(primary_face(disabled)).into();
     let (hover, press) = if disabled {
         (face, face)
     } else {
-        (
-            rgb(theme::PRIMARY_HOVER).into(),
-            rgb(theme::PRIMARY_ACTIVE).into(),
-        )
+        (rgb(theme::TEXT).into(), rgb(theme::TEXT).into())
     };
     faded_button(
         id,
@@ -159,17 +156,17 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
 
 fn primary_face(disabled: bool) -> u32 {
     if disabled {
-        theme::SELECTION
+        theme::SELECTED
     } else {
-        theme::ACCENT_STRONG
+        theme::PRIMARY
     }
 }
 
 fn primary_ink(disabled: bool) -> u32 {
     if disabled {
-        theme::TEXT_MUTED
+        theme::TEXT_DIM
     } else {
-        theme::ON_ACCENT
+        theme::ON_PRIMARY
     }
 }
 
@@ -196,17 +193,17 @@ pub fn text_ui() -> Div {
         .text_color(rgb(theme::TEXT))
 }
 
-/// Metadata: the same grid line in `TEXT_MUTED` (one size per surface:
+/// Metadata: the same grid line in `TEXT_DIM` (one size per surface:
 /// metadata is ink, not a smaller size).
 pub fn text_meta() -> Div {
     div()
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::TEXT_DIM))
 }
 
-/// A group's title inside a surface: the grid's type, `W_LABEL` `TEXT_MUTED`,
+/// A group's title inside a surface: the grid's type, `W_LABEL` `TEXT_DIM`,
 /// written as-is (terminal case, no rule), 8px above what it heads.
 pub fn section_label(text: impl Into<SharedString>) -> Div {
     text_meta()
@@ -256,8 +253,6 @@ pub enum Elevation {
     /// The focused Pane of a board: flat (its border says focus).
     #[cfg_attr(not(test), allow(dead_code))]
     Lifted,
-    /// A control's face: flat.
-    Control,
     /// Menus, pickers, the palette, popovers, tooltips, a dragged ghost:
     /// the one float shadow.
     Float,
@@ -280,7 +275,7 @@ fn layer(color: u32, y: f32, blur: f32, spread: f32) -> BoxShadow {
 /// (`float_shadow`).
 pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
     match rung {
-        Elevation::Pane | Elevation::Lifted | Elevation::Control => Vec::new(),
+        Elevation::Pane | Elevation::Lifted => Vec::new(),
         Elevation::Float | Elevation::Sheet => float_shadow(),
     }
 }
@@ -298,7 +293,8 @@ pub fn float_shadow_faded(k: f32) -> Vec<BoxShadow> {
 }
 
 /// The one cast shadow (theme rule 2): CSS `0 6px 14px` at 50%, under
-/// every floating surface and nothing else.
+/// every floating surface but the palette's dialog (which deepens it,
+/// `palette::dialog`) and nothing else.
 pub fn float_shadow() -> Vec<BoxShadow> {
     vec![layer(
         theme::SHADOW_FLOAT,
@@ -308,11 +304,48 @@ pub fn float_shadow() -> Vec<BoxShadow> {
     )]
 }
 
-/// A floating surface (menu, picker, palette, popover, card, toast): the
-/// float's opaque ground (`FLOAT_GROUND`; floats cannot frost, theme WP-E
-/// FL-15), a 1px `FLOAT_EDGE`, square, the float shadow, `FLOAT_PAD`
-/// inside, the grid's type. It occludes what it covers and owns its cursor.
-/// The caller states its width and position.
+/// The palette's dialog's shadows (SPEC §5.8): its 1px `HAIRLINE_STRONG`
+/// ring as a spread, then the float's shadow deepened (`SHADOW_PALETTE_*`).
+/// The dialog clips its rows to its radius, which would clip an
+/// `outer_ring` overlay, so its ring is a shadow: the same 1px outside.
+pub fn dialog_shadow() -> Vec<BoxShadow> {
+    vec![
+        layer(theme::HAIRLINE_STRONG, 0., 0., theme::FOCUS_RING_W),
+        layer(
+            theme::SHADOW_PALETTE,
+            theme::SHADOW_PALETTE_Y,
+            theme::SHADOW_PALETTE_BLUR,
+            0.,
+        ),
+    ]
+}
+
+/// **The outer ring**: a 1px ring in `ink` just outside its parent's box of
+/// `radius` (the mockups' `box-shadow: 0 0 0 1px`), an overlay
+/// `FOCUS_RING_W` past every edge, rounded to match. It takes no layout and
+/// no pointer, so the box keeps its size and a state change moves nothing.
+/// The parent is `relative` and does not clip. A Pane's card
+/// (`pane::card_ring`), the Solo and the compact Composer wear it.
+pub fn outer_ring(radius: f32, ink: impl Into<Hsla>) -> Div {
+    let out = px(-theme::FOCUS_RING_W);
+    div()
+        .absolute()
+        .top(out)
+        .left(out)
+        .right(out)
+        .bottom(out)
+        .rounded(px(radius + theme::FOCUS_RING_W))
+        .border_1()
+        .border_color(ink.into())
+}
+
+/// A floating surface (menu, picker, popover, card, toast, sheet; SPEC
+/// §5.8's shell at the float's scale): the float's opaque ground
+/// (`FLOAT_GROUND`; floats cannot frost, theme WP-E FL-15), radius
+/// `R_BLOCK`, a 1px `FLOAT_EDGE` ring, the float shadow, `FLOAT_PAD`
+/// inside, the UI type. It occludes what it covers and owns its cursor.
+/// The caller states its width and position. (The palette's dialog is the
+/// same shell at its own scale, `palette::dialog`.)
 pub fn floating_surface() -> Div {
     text_ui()
         .cursor_default()
@@ -386,11 +419,6 @@ pub fn status_ring(ink: u32) -> Div {
     glyph("\u{25cb}", ink)
 }
 
-/// A status check (a finish not yet seen, `✓`), set as text.
-pub fn status_check(ink: u32) -> Div {
-    glyph("\u{2713}", ink)
-}
-
 // ------------------------------------------------------------------ loops
 //
 // The few loops the terminal grammar allows (theme rule 8). Each rides the
@@ -399,12 +427,10 @@ pub fn status_check(ink: u32) -> Div {
 // moves so the view that paints it is drawn only when it changes, and holds
 // a static end state under reduced motion that says the same thing.
 
-#[allow(unused_imports)] // until the builders call them
 pub use loops::*;
 
 /// The loops (see the section note above): re-exported, so callers name
 /// `components::braille_spinner` and friends.
-#[allow(dead_code)] // the builders' API: the sidebar, Pane heads, the working line, the Composer
 mod loops {
     use super::*;
 
@@ -739,6 +765,7 @@ mod loops {
     /// on the pulse clock through the blink's fades; full and still under
     /// reduced motion. An unfocused Composer draws no blinking caret (its
     /// caret is a faint outline, still).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn caret_opacity(window: &mut Window, cx: &mut App) -> f32 {
         if motion::reduced_motion(cx) {
             return 1.0;
@@ -765,31 +792,6 @@ pub fn embossed_mark(size: f32, body: u32) -> Div {
             .size(px(size))
             .text_color(rgb(body)),
     )
-}
-
-/// The one keycap: `KBD_H`, at least square, flat and square on
-/// `paint::BAND2`, the grid's type in `TEXT`, centred.
-#[cfg(test)]
-pub fn kbd(key: impl Into<SharedString>) -> Div {
-    kbd_face().child(key.into())
-}
-
-#[cfg(test)]
-fn kbd_face() -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .h(px(theme::KBD_H))
-        .min_w(px(theme::KBD_H))
-        .px(px(theme::KBD_PAD_X))
-        .rounded(px(theme::R_CHIP))
-        .bg(theme::paint::BAND2)
-        .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT))
 }
 
 /// A modifier's glyph as a key combination spells it: `cmd` ⌘, `shift` ⇧,
@@ -844,16 +846,7 @@ pub fn chord_parts(stroke: &str) -> Vec<&str> {
 /// space apart. The run names its modifier for the tests
 /// (`command-key`, …).
 pub fn key_combo(keys: &str, ink: u32) -> Div {
-    let text = keys
-        .split(' ')
-        .map(|stroke| {
-            chord_parts(stroke)
-                .into_iter()
-                .map(|part| key_glyph(part).map_or_else(|| part.to_string(), String::from))
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text = chord_text(keys);
     let selector = if text.contains('\u{2318}') {
         "command-key"
     } else if text.contains('\u{2325}') {
@@ -870,12 +863,25 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
         .debug_selector(move || selector.into())
 }
 
+/// A chord as its glyphs, one stroke after another: `cmd-k` → `⌘K`.
+pub fn chord_text(keys: &str) -> String {
+    keys.split(' ')
+        .map(|stroke| {
+            chord_parts(stroke)
+                .into_iter()
+                .map(|part| key_glyph(part).map_or_else(|| part.to_string(), String::from))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The prompt mark `❯` (Geist Mono lacks U+276F), set as text at the
 /// semibold weight in one character cell, as the prototype's `.g` sets it:
 /// the face the platform falls back to draws it (`glyph`). The transcript
 /// prompt, the Composer, the nav cursor and every selection bar share it;
-/// `ink` is `ACCENT` where it marks the live input or the selected row,
-/// `TEXT_MUTED` where it does not.
+/// `ink` is `TEXT_STRONG` where it marks the live input or the selected row,
+/// `TEXT_DIM` where it does not.
 pub fn prompt_mark(ink: u32) -> AnyElement {
     div()
         .flex_shrink_0()
@@ -1115,13 +1121,13 @@ pub fn key_word(key: &str) -> String {
 }
 
 /// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT`;
-/// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
+/// hover `paint::RAISED`, press `paint::PRESS`. A button is read like any
 /// row, so it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
     faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        theme::paint::HOVER.into(),
+        theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
         cx,
@@ -1136,34 +1142,47 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
     )
 }
 
-/// A text-only control with no ground at all (`Back to Main`): `CONTROL_H`,
-/// UI `FS_UI` `W_BODY` `TEXT_MUTED`, brightening to `TEXT` under the
-/// pointer. For a way out that must stay quieter than the line it ends.
-pub fn quiet_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
-    let none: gpui::Hsla = rgba(theme::TRANSPARENT).into();
-    button(id)
-        .custom(crate::pointer::button_variant(
-            none,
-            rgb(theme::TEXT_MUTED).into(),
-            none,
-            cx,
-        ))
-        .group(QUIET_BUTTON_GROUP)
-        .h(px(theme::CONTROL_H))
-        .px(px(theme::CONTROL_PAD_X))
-        .child(
-            text_ui()
-                .font_weight(theme::W_BODY)
-                .text_color(rgb(theme::TEXT_MUTED))
-                .group_hover(QUIET_BUTTON_GROUP, |style| {
-                    style.text_color(rgb(theme::TEXT))
-                })
-                .child(label.into()),
-        )
+/// A secondary button (SPEC §5.2, §5.3): `CONTROL_H` at `R_CONTROL` on
+/// `paint::RAISED`, stepping to `paint::SELECTED` under the pointer and
+/// `paint::PRESS` pressed; its label `FS_LABEL` at `W_LABEL` in
+/// `TEXT_STRONG`, led by a `CONTROL_CHIP_ICON` glyph when it has one (then
+/// padded 10 / 12, the icon `CONTROL_CHIP_GAP` before the label).
+pub fn secondary_button(
+    id: impl Into<ElementId>,
+    glyph: Option<&'static str>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> Button {
+    faded_button(
+        id,
+        theme::paint::RAISED.into(),
+        theme::paint::SELECTED.into(),
+        theme::paint::PRESS.into(),
+        rgb(theme::TEXT_STRONG).into(),
+        cx,
+    )
+    .h(px(theme::CONTROL_H))
+    .rounded(px(theme::R_CONTROL))
+    .pl(px(if glyph.is_some() {
+        theme::CONTROL_CHIP_PAD_X
+    } else {
+        theme::CONTROL_PAD_X
+    }))
+    .pr(px(theme::CONTROL_PAD_X))
+    .child(
+        text_ui()
+            .flex()
+            .items_center()
+            .gap(px(theme::CONTROL_CHIP_GAP))
+            .text_size(px(theme::FS_LABEL))
+            .font_weight(theme::W_LABEL)
+            .text_color(rgb(theme::TEXT_STRONG))
+            .children(
+                glyph.map(|glyph| icons::icon(glyph, theme::CONTROL_CHIP_ICON, theme::TEXT_STRONG)),
+            )
+            .child(label.into()),
+    )
 }
-
-/// `quiet_button`'s hover reaches its label through this group.
-const QUIET_BUTTON_GROUP: &str = "quiet-button";
 
 // ------------------------------------------------------------------ menus
 
@@ -1171,15 +1190,15 @@ const QUIET_BUTTON_GROUP: &str = "quiet-button";
 #[derive(Clone, Debug, Default)]
 pub struct MenuItem {
     pub label: SharedString,
-    /// Fuzzy-match runs in `label`, drawn in the accent at `W_STRONG`.
+    /// Fuzzy-match runs in `label`, drawn in `TEXT_STRONG` at `W_STRONG`.
     pub matched: Vec<Range<usize>>,
     /// An aligned name column's width, when the rows share one.
     pub label_w: Option<f32>,
     /// A 12px leading mark and its ink.
     pub leading: Option<(&'static str, u32)>,
-    /// A trailing detail: Ferrite's description of the row (`TEXT_MUTED` in
+    /// A trailing detail: Ferrite's description of the row (`TEXT_DIM` in
     /// every state), or — when `mono` — machine text such as an `@` path,
-    /// `TEXT_MUTED`, cut at its head so the useful tail survives.
+    /// `TEXT_DIM`, cut at its head so the useful tail survives.
     pub detail: Option<SharedString>,
     /// `detail` is machine text (rule 2.1.1): drawn in the code face.
     pub mono: bool,
@@ -1251,23 +1270,23 @@ pub struct RowInks {
 
 /// The row state table, as data: rest, cursor, disabled, armed. A
 /// destructive row reads like any other until it arms; armed, it holds the
-/// cursor's `paint::SELECTION` ground and its label alone turns `BLOCKED` —
+/// cursor's `paint::SELECTED` ground and its label alone turns `BLOCKED` —
 /// colour on the word, never a wash (rule 2.2.4).
 pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     if item.disabled {
         return RowInks {
-            label: theme::TEXT_MUTED,
-            detail: theme::TEXT_MUTED,
-            shortcut: theme::TEXT_MUTED,
+            label: theme::TEXT_DIM,
+            detail: theme::TEXT_DIM,
+            shortcut: theme::TEXT_DIM,
             ground: None,
         };
     }
     if armed {
         return RowInks {
             label: theme::BLOCKED,
-            detail: theme::TEXT_MUTED,
-            shortcut: theme::TEXT_MUTED,
-            ground: Some(theme::paint::SELECTION.rgba()),
+            detail: theme::TEXT_DIM,
+            shortcut: theme::TEXT_DIM,
+            ground: Some(theme::paint::SELECTED.rgba()),
         };
     }
     let label = if cursor {
@@ -1277,13 +1296,13 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     };
     RowInks {
         label,
-        detail: theme::TEXT_MUTED,
-        shortcut: theme::TEXT_MUTED,
-        ground: cursor.then_some(theme::paint::SELECTION.rgba()),
+        detail: theme::TEXT_DIM,
+        shortcut: theme::TEXT_DIM,
+        ground: cursor.then_some(theme::paint::SELECTED.rgba()),
     }
 }
 
-/// Fuzzy-match runs as highlights (the prototype's `.m`): the accent at
+/// Fuzzy-match runs as highlights (the prototype's `.m`): `TEXT_STRONG` at
 /// `W_STRONG`, in every float that filters — the palette, the `/` and `@`
 /// menus. One face, so the heavier run never moves a column. A disabled
 /// row paints none.
@@ -1300,7 +1319,7 @@ pub fn match_highlights(
             (
                 range.clone(),
                 HighlightStyle {
-                    color: Some(rgb(theme::ACCENT).into()),
+                    color: Some(rgb(theme::TEXT_STRONG).into()),
                     font_weight: Some(theme::W_STRONG),
                     ..Default::default()
                 },
@@ -1345,7 +1364,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
         .items_center()
         .gap(px(theme::MENU_ROW_GAP))
         .min_w_0()
-        .h(px(theme::MENU_ROW_H))
+        .h(px(theme::FLOAT_ROW_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .rounded(px(theme::R_MENU_ROW))
         .when_some(inks.ground, |row, ground| row.bg(rgba(ground)))
@@ -1371,7 +1390,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             let cell = if item.mono {
                 cell.font_family(theme::FONT_CODE)
                     .text_size(px(theme::FS_UI))
-                    .text_color(rgb(theme::TEXT_MUTED))
+                    .text_color(rgb(theme::TEXT_DIM))
                     .text_ellipsis_start()
             } else {
                 cell.font_family(theme::FONT_UI)
@@ -1391,7 +1410,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             )
         })
         .when(item.checked, |row| {
-            row.child(glyph("\u{2713}", theme::ACCENT))
+            row.child(glyph("\u{2713}", theme::TEXT_STRONG))
         })
 }
 
@@ -1418,7 +1437,7 @@ pub fn menu_row(
     }
 }
 
-/// A menu section title: the grid's type, `W_LABEL` `TEXT_MUTED`, an optional
+/// A menu section title: the grid's type, `W_LABEL` `TEXT_DIM`, an optional
 /// leading mark and an optional note after it. Its mark and title share the
 /// rows' leading edge. A section that follows rows is set apart from them
 /// by `.mt(MENU_GROUP_GAP)` (space), never a rule.
@@ -1433,7 +1452,7 @@ pub fn menu_section(
     text_meta()
         .flex()
         .items_end()
-        .h(px(theme::MENU_SECTION_H))
+        .h(px(theme::FLOAT_SECTION_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .pb(px(theme::SPACE_1))
         .cursor_default()
@@ -1445,11 +1464,66 @@ pub fn menu_section(
                 .h(px(theme::LH_UI))
                 .min_w_0()
                 .when_some(leading, |line, (path, ink)| {
-                    line.child(icons::icon(path, theme::MENU_SECTION_ICON, ink))
+                    line.child(icons::icon(path, theme::STATUS_LOGO, ink))
                 })
                 .child(div().font_weight(theme::W_LABEL).child(title.into()))
                 .children(note),
         )
+}
+
+/// The frame around a board's cards (theme WP-C, rules 2 and 4): one
+/// `paint::FRAME` path over its own box with a rounded hole per card (in
+/// window coordinates), the hole taking the card's ring too (`R_PANE` and
+/// `FOCUS_RING_W` past the card's edge). The column paints its gutters and
+/// head row with it, so the frame and the cards stay separate regions on
+/// glass; laid over the cards, it also covers whatever a card's children
+/// paint past its rounded corners, which gpui's square clip lets through.
+pub fn frame_around(cards: Vec<gpui::Bounds<gpui::Pixels>>) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            // Even-odd fill: the box, minus every card and its ring. A
+            // card's ring may stand past the box (a card flush with the
+            // nav), so the path spans a ring further and the box clips it.
+            let ring = theme::FOCUS_RING_W;
+            let mut path = gpui::PathBuilder::fill();
+            rounded_rect(&mut path, bounds.dilate(px(ring)), 0.0);
+            for card in &cards {
+                rounded_rect(&mut path, card.dilate(px(ring)), theme::R_PANE + ring);
+            }
+            if let Ok(path) = path.build() {
+                let mask = gpui::ContentMask { bounds };
+                window.with_content_mask(Some(mask), |window| {
+                    window.paint_path(path, theme::paint::FRAME.hsla())
+                });
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// One closed rounded-rect sub-path of `path` (a square one at radius 0).
+fn rounded_rect(path: &mut gpui::PathBuilder, at: gpui::Bounds<gpui::Pixels>, radius: f32) {
+    let (x0, y0) = (f32::from(at.left()), f32::from(at.top()));
+    let (x1, y1) = (f32::from(at.right()), f32::from(at.bottom()));
+    let r = radius.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0).max(0.0);
+    let at = |x: f32, y: f32| gpui::point(px(x), px(y));
+    let corner = |path: &mut gpui::PathBuilder, x: f32, y: f32| {
+        if r > 0.0 {
+            path.arc_to(at(r, r), px(0.), false, true, at(x, y));
+        }
+    };
+    path.move_to(at(x0 + r, y0));
+    path.line_to(at(x1 - r, y0));
+    corner(path, x1, y0 + r);
+    path.line_to(at(x1, y1 - r));
+    corner(path, x1 - r, y1);
+    path.line_to(at(x0 + r, y1));
+    corner(path, x0, y1 - r);
+    path.line_to(at(x0, y0 + r));
+    corner(path, x0 + r, y0);
+    path.close();
 }
 
 /// Reports `element`'s laid-out bounds, unrounded, to `record` in
@@ -1541,34 +1615,24 @@ impl gpui::Element for Measured {
     }
 }
 
-/// An inert status line (loading, empty, error) in a menu.
-pub fn menu_note(text: impl Into<SharedString>) -> Div {
-    text_meta()
-        .flex()
-        .items_center()
-        .h(px(theme::MENU_ROW_H))
-        .px(px(theme::MENU_ROW_PAD_X))
-        .cursor_default()
-        .child(text.into())
-}
-
 /// The same menu is opened by a chip or a slash command. PopupMenu owns
 /// keyboard navigation, focus, scrolling and dismissal; every row draws in
-/// the one menu grammar (`menu_row_content`, `menu_section`, `menu_note`).
+/// the one menu grammar (`menu_row_content`, `menu_section`).
 #[derive(Clone, Default)]
 pub struct Choice {
     pub label: SharedString,
     /// A section's mark, or a row's own when the menu has no sections.
     pub icon: Option<(&'static str, u32)>,
-    /// The accent check: the standing choice.
+    /// The strong check: the standing choice.
     pub checked: bool,
     pub disabled: bool,
     /// A section title: inert, skipped by the arrows, carrying `icon`.
     pub section: bool,
     /// A muted mono tag after the label (a section tag, a path).
     pub detail: Option<SharedString>,
-    /// An inert explanatory line (why the menu is short or locked).
-    pub note: bool,
+    /// Why a disabled row is dead for now (`Available when this turn
+    /// finishes`): its tooltip (SPEC §5.5).
+    pub why: Option<SharedString>,
 }
 
 impl Choice {
@@ -1672,7 +1736,7 @@ impl gpui::RenderOnce for ChoiceMenu {
                     .max_h(px(theme::MENU_MAX_H))
                     .scrollable(true);
                 for (index, choice) in self.choices.into_iter().enumerate() {
-                    // Sections and notes are disabled element items: the kit
+                    // Sections are disabled element items: the kit
                     // skips them on the arrows, so `steps` still counts only
                     // live rows.
                     if choice.section {
@@ -1692,17 +1756,10 @@ impl gpui::RenderOnce for ChoiceMenu {
                         );
                         continue;
                     }
-                    if choice.note {
-                        let text = choice.label.clone();
-                        menu = menu.item(
-                            PopupMenuItem::element(move |_, _| kit_row(menu_note(text.clone())))
-                                .disabled(true),
-                        );
-                        continue;
-                    }
-                    // Our accent check draws inside the row, so the kit's own
+                    // Our strong check draws inside the row, so the kit's own
                     // `.checked()` is never set and its check never doubles.
                     let item = choice.item(marked);
+                    let why = choice.why.clone();
                     let picked = pick.clone();
                     menu = menu.item(
                         PopupMenuItem::element(move |_, _| {
@@ -1712,6 +1769,10 @@ impl gpui::RenderOnce for ChoiceMenu {
                             kit_row(menu_row_content(&item, false, false))
                                 .max_w(px(theme::CHOICE_MENU_MAX_W - 2. * theme::FLOAT_PAD))
                                 .debug_selector(move || format!("choice-row-{index}"))
+                                .id(("choice-row", index))
+                                .when_some(why.clone(), |row, why| {
+                                    row.tooltip(crate::menu::tooltip(why))
+                                })
                         })
                         .disabled(choice.disabled)
                         .on_click(move |_, window, cx| picked(index, window, cx)),
@@ -1779,7 +1840,7 @@ impl gpui::RenderOnce for ChoiceMenu {
 /// the first live row). Every choice is one kit item; the first press
 /// selects item 0 whatever it is, each later one the next live item.
 fn cursor_steps(choices: &[Choice]) -> usize {
-    let live = |choice: &Choice| !choice.section && !choice.note && !choice.disabled;
+    let live = |choice: &Choice| !choice.section && !choice.disabled;
     let target = choices
         .iter()
         .position(|choice| live(choice) && choice.checked)
@@ -1796,7 +1857,7 @@ fn cursor_steps(choices: &[Choice]) -> usize {
 /// A menu grammar row inside a kit `PopupMenuItem`: the kit item already
 /// insets its content by the row's own inline padding, so the row takes it
 /// back and spans the item edge to edge. The kit draws the hover and cursor
-/// face (`tokens.accent` = `SELECTION`) on the item itself.
+/// face (`tokens.strong` = `SELECTION`) on the item itself.
 pub fn kit_row(row: Div) -> Div {
     row.flex_1().mx(px(-theme::MENU_ROW_PAD_X)).py(px(0.))
 }
@@ -1864,7 +1925,7 @@ mod tests {
     #[test]
     fn only_a_float_casts_and_nothing_is_lit() {
         use Elevation::*;
-        for rung in [Pane, Lifted, Control] {
+        for rung in [Pane, Lifted] {
             assert!(elevation(rung).is_empty(), "{rung:?} is flat");
         }
         for rung in [Float, Sheet] {
@@ -1881,7 +1942,7 @@ mod tests {
         assert_eq!(style.border_color, Some(theme::FLOAT_EDGE.into()));
         // Opaque until floats can frost (FL-15): never a glass overlay.
         assert!(theme::FLOAT_GROUND.is_opaque() && theme::FLOAT_SEL.is_opaque());
-        assert_eq!(style.corner_radii.top_left, Some(px(0.).into()));
+        assert_eq!(style.corner_radii.top_left, Some(px(theme::R_BLOCK).into()));
         assert_eq!(style.box_shadow, Some(float_shadow()));
         assert_eq!(style.text.font_family, Some(theme::FONT_UI.into()));
     }
@@ -1901,7 +1962,7 @@ mod tests {
                 theme::FONT_UI,
                 theme::FS_UI,
                 theme::LH_UI,
-                theme::TEXT_MUTED,
+                theme::TEXT_DIM,
             ),
         ] {
             let text = &run.style().text;
@@ -1924,14 +1985,14 @@ mod tests {
         assert_eq!(ringed.style().box_shadow, focus.box_shadow);
         let mut plain = focused(div(), false);
         assert_eq!(plain.style().box_shadow, None);
-        assert_eq!(primary_face(false), theme::ACCENT_STRONG);
-        assert_eq!(primary_ink(false), theme::ON_ACCENT);
-        assert_eq!(primary_face(true), theme::SELECTION);
-        assert_eq!(primary_ink(true), theme::TEXT_MUTED);
+        assert_eq!(primary_face(false), theme::PRIMARY);
+        assert_eq!(primary_ink(false), theme::ON_PRIMARY);
+        assert_eq!(primary_face(true), theme::SELECTED);
+        assert_eq!(primary_ink(true), theme::TEXT_DIM);
     }
 
     #[test]
-    fn marks_and_keycaps_hold_their_boxes() {
+    fn marks_hold_their_boxes() {
         // The dots are the face's own glyphs, typed in their ink.
         let mut dot = status_dot(theme::RUNNING);
         assert_eq!(
@@ -1942,13 +2003,6 @@ mod tests {
         assert_eq!(dot.style().background, None, "typed, not painted");
         let mut ring = status_ring(theme::TEXT_FAINT);
         assert_eq!(ring.style().text.color, Some(rgb(theme::TEXT_FAINT).into()));
-        let mut key = kbd("y");
-        assert_eq!(key.style().size.height, Some(px(theme::KBD_H).into()));
-        assert_eq!(
-            key.style().background,
-            Some(Fill::from(theme::paint::BAND2))
-        );
-        assert_eq!(key.style().box_shadow, None, "a keycap is flat");
         let mut gutter = gutter(div(), theme::LH_UI);
         assert_eq!(gutter.style().size.width, Some(px(theme::GUTTER_W).into()));
     }
@@ -1956,13 +2010,13 @@ mod tests {
     #[test]
     fn menu_rows_follow_the_state_table() {
         let rest = MenuItem::new("Rename");
-        let fill = theme::paint::SELECTION.rgba();
+        let fill = theme::paint::SELECTED.rgba();
         assert_eq!(
             row_inks(&rest, false, false),
             RowInks {
                 label: theme::TEXT,
-                detail: theme::TEXT_MUTED,
-                shortcut: theme::TEXT_MUTED,
+                detail: theme::TEXT_DIM,
+                shortcut: theme::TEXT_DIM,
                 ground: None
             }
         );
@@ -1978,7 +2032,7 @@ mod tests {
         assert_eq!((armed.label, armed.ground), (theme::BLOCKED, Some(fill)));
         let dead = MenuItem::new("Reveal").disabled(true);
         let inks = row_inks(&dead, true, false);
-        assert_eq!((inks.label, inks.ground), (theme::TEXT_MUTED, None));
+        assert_eq!((inks.label, inks.ground), (theme::TEXT_DIM, None));
         // TEXT_FAINT is never text, in any state.
         for inks in [row_inks(&rest, false, false), cursor, armed, inks] {
             assert!(![inks.label, inks.detail, inks.shortcut].contains(&theme::TEXT_FAINT));
@@ -1987,13 +2041,13 @@ mod tests {
         assert!(match_highlights(std::slice::from_ref(&(0..2)), true).is_empty());
         let lit = match_highlights(std::slice::from_ref(&(0..2)), false);
         assert_eq!(lit[0].1.font_weight, Some(theme::W_STRONG));
-        assert_eq!(lit[0].1.color, Some(rgb(theme::ACCENT).into()));
+        assert_eq!(lit[0].1.color, Some(rgb(theme::TEXT_STRONG).into()));
     }
 
     #[test]
     fn a_menu_row_is_one_row_high_and_only_live_rows_point() {
         let mut row = menu_row("r", &MenuItem::new("Rename"), false, false);
-        assert_eq!(row.style().size.height, Some(px(theme::MENU_ROW_H).into()));
+        assert_eq!(row.style().size.height, Some(px(theme::FLOAT_ROW_H).into()));
         assert_eq!(
             row.style().mouse_cursor,
             Some(gpui::CursorStyle::PointingHand)
@@ -2028,7 +2082,7 @@ mod tests {
         };
         assert_eq!(
             row_inks(&dead.item(true), false, false).label,
-            theme::TEXT_MUTED
+            theme::TEXT_DIM
         );
     }
 

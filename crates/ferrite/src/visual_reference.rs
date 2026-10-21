@@ -6,13 +6,14 @@
 //! would, and saves `{state}-{size}.png`. `FERRITE_REF_STATES` and
 //! `FERRITE_REF_SIZES` (comma lists) narrow a run to a subset.
 //!
-//! The `parity-*` states rebuild the approved terminal-native prototype's
-//! views on one shared world (`parity_scenes.rs`); run them with
+//! The `refresh-*` states rebuild the UI refresh's mockups
+//! (`docs/design/ui-refresh/mockups/`) on their one world
+//! (`mockup_scenes.rs`, at size `refresh`); run them with
 //! `--features visual-reference,opaque` so paints are the opaque greys the
-//! prototype's shots use.
+//! shots use.
 
-#[path = "cockpit/visual_reference/parity_scenes.rs"]
-mod parity_scenes;
+#[path = "cockpit/visual_reference/mockup_scenes.rs"]
+mod mockup_scenes;
 
 #[path = "cockpit/visual_reference/feature_scenes.rs"]
 mod feature_scenes;
@@ -22,7 +23,6 @@ mod live;
 pub(crate) use live::capture as live_capture;
 
 use super::{CockpitView, DraftTarget, MenuTarget};
-use crate::nav::NavFold;
 use crate::palette::PaletteScope;
 use ferrite_core::{
     activity::TranscriptCoverage,
@@ -257,6 +257,23 @@ impl Drop for Home {
     }
 }
 
+/// The animation loops held at one instant for a capture
+/// (`motion::hold_loops`), let run again when the scene is dropped.
+struct HeldLoops;
+
+impl HeldLoops {
+    fn hold(at: crate::motion::HeldLoops) -> Self {
+        crate::motion::hold_loops(Some(at));
+        HeldLoops
+    }
+}
+
+impl Drop for HeldLoops {
+    fn drop(&mut self) {
+        crate::motion::hold_loops(None);
+    }
+}
+
 impl Scene {
     fn new(tag: &str) -> Self {
         let root =
@@ -344,11 +361,12 @@ impl Scene {
 }
 
 /// Sizes by label: the two transcript widths the references began with,
-/// and the real default window.
-const SIZES: [(&str, f32, f32); 3] = [
+/// the real default window, and the UI refresh mockups' window.
+const SIZES: [(&str, f32, f32); 4] = [
     ("narrow", 720., 1400.),
     ("wide", 1000., 1400.),
     ("app", 1440., 900.),
+    ("refresh", 1600., 960.),
 ];
 
 /// Every state, with the sizes it renders at by default.
@@ -399,8 +417,6 @@ const STATES: &[(&str, &[&str])] = &[
     // (end WP-C)
 
     // ---- WP-D states (append above the end line)
-    ("usagecard", &["app"]),
-    ("filescard", &["app"]),
     ("sessioncard", &["app"]),
     ("preview", &["app"]),
     // (end WP-D)
@@ -432,21 +448,15 @@ const STATES: &[(&str, &[&str])] = &[
     ("palettefilter", &["app"]),
     // (end WP-G)
 
-    // ---- parity: the approved prototype's views, one shared world
-    // (`parity_scenes.rs`); compared against /tmp/ferrite-tn-proto/<view>.png
-    ("parity-solo", &["app"]),
-    ("parity-solo-top", &["app"]),
-    ("parity-solo-hover", &["app"]),
-    ("parity-solo-picker", &["app"]),
-    ("parity-group", &["app"]),
-    ("parity-group-toast", &["app"]),
-    ("parity-group-notes", &["app"]),
-    ("parity-palette", &["app"]),
-    ("parity-wall", &["app"]),
-    ("parity-empty", &["app"]),
-    ("parity-collapsed", &["app"]),
-    ("parity-collapsed-ride", &["app"]),
-    // (end parity)
+    // The UI refresh's mockups on their one world (`mockup_scenes.rs`);
+    // compared against docs/design/ui-refresh/mockups/<view>.png.
+    ("refresh-solo", &["refresh"]),
+    ("refresh-solo-changes", &["refresh"]),
+    ("refresh-group", &["refresh"]),
+    ("refresh-pr-failing", &["refresh"]),
+    ("refresh-pr-merged", &["refresh"]),
+    ("refresh-pr-none", &["refresh"]),
+    ("refresh-palette", &["refresh"]),
 ];
 
 /// Every state: the table's, then the feature scenes' at the app size.
@@ -583,6 +593,9 @@ fn render(
     // gpui's `with_animation` runs on the wall clock, not the executor's:
     // a toast's entrance fade is only settled once real time has passed.
     std::thread::sleep(std::time::Duration::from_millis(500));
+    // A read off the UI thread (git, for the panel's hunks) answered on the
+    // wall clock meanwhile: step the executor's clock so its poll lands.
+    cx.advance_clock(std::time::Duration::from_millis(150));
     cx.run_until_parked();
     cx.update_window(window.into(), |_, window, cx| {
         // Two frames: toasts and anchored popovers land on the second.
@@ -624,13 +637,28 @@ fn render(
     drop(feeds);
     drop(hold);
     // Only our fresh disposable root; never the operator's store.
+    remove_root(&root);
+}
+
+/// Remove a scene's disposable root. A git read still out off the UI thread
+/// (a checkout's status refreshes its index) can write into it while it
+/// goes, so a root that is not yet empty is asked again.
+fn remove_root(root: &Path) {
+    for _ in 0..20 {
+        match std::fs::remove_dir_all(root) {
+            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            done => return done.expect("remove disposable reference store"),
+        }
+    }
     std::fs::remove_dir_all(root).expect("remove disposable reference store");
 }
 
 fn build(state: &str, label: &str) -> (Scene, Setup) {
     let none: Setup = Box::new(|_, _, _| {});
     match state {
-        state if parity_scenes::handles(state) => parity_scenes::build(state),
+        state if mockup_scenes::handles(state) => mockup_scenes::build(state),
         state if feature_scenes::handles(state) => feature_scenes::build(state),
         "conversation" => (conversation(label), none),
         "toolgroups" => (tool_groups(label), none),
@@ -926,22 +954,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-C)
 
         // ---- WP-D scene arms (append above the end line)
-        "usagecard" => {
-            let scene = conversation(label);
-            let setup: Setup = Box::new(|view, _, _| {
-                let thread = view.panes[0].thread().expect("a Thread Pane");
-                view.context_usage = Some(ferrite_core::roster::PaneIdentity::Thread(thread));
-            });
-            (scene, setup)
-        }
-        "filescard" => {
-            let scene = conversation(label);
-            let setup: Setup = Box::new(|view, _, _| {
-                let thread = view.panes[0].thread().expect("a Thread Pane");
-                view.changed_files_card = Some(thread);
-            });
-            (scene, setup)
-        }
         "preview" => {
             let (scene, compose) = composer();
             let setup: Setup = Box::new(move |view, window, cx| {
@@ -1018,7 +1030,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "navrail" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {
-                view.set_nav_fold(NavFold::Parked, false, cx);
                 view.set_nav_collapsed(true, cx);
             });
             (scene, setup)
@@ -1388,7 +1399,6 @@ fn nav() -> (Scene, Setup) {
     // Worktree branches and subagent counts beside titles long and short:
     // the title keeps its floor, the branch and then the count give way.
     let setup: Setup = Box::new(move |view, _, cx| {
-        view.set_nav_fold(NavFold::Parked, false, cx);
         let branch = |name: &str| {
             Some(ferrite_core::workspace::BranchStatus {
                 branch: Some(name.into()),
@@ -2215,7 +2225,7 @@ fn loops_frames(
 ) -> Vec<usize> {
     // One frozen wall clock and one store path for both passes: the clock
     // text and the checkout's path read the same in each.
-    let clock = crate::demo::parity::Fixture::install(
+    let clock = crate::demo::world::Fixture::install(
         std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_791_400_000),
     );
     let mut scene = Scene::new("loops-parity");

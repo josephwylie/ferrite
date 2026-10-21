@@ -523,6 +523,54 @@ impl PullRequest {
         }
         tally
     }
+
+    /// The label's reading of a forge read's snapshot: what `gh pr view`
+    /// would have said of the same pull request. `None` without one.
+    pub fn of_view(view: &ferrite_reviewr::forge::PrView) -> Option<Self> {
+        let ferrite_reviewr::forge::PrView::Pr(pr) = view else {
+            return None;
+        };
+        Some(Self::of_wire(&(**pr).clone().into()))
+    }
+
+    /// The label's reading of the Review's whole snapshot (the panel's PR
+    /// tab): its number, state and checks. The snapshot names no check's
+    /// page, so no run has a url.
+    pub fn of_wire(pr: &crate::protocol::WirePr) -> Self {
+        use crate::protocol::{WireCheckStatus as Status, WirePrState as Wire};
+        let runs: Vec<Check> = pr
+            .checks
+            .iter()
+            .map(|check| {
+                let (state, detail) = match check.status {
+                    Status::Success => (CheckState::Passing, "success"),
+                    Status::Failure => (CheckState::Failing, "failure"),
+                    Status::Running => (CheckState::Pending, "in_progress"),
+                    Status::Pending | Status::Unknown => (CheckState::Pending, "queued"),
+                    Status::Skipped => (CheckState::Skipped, "skipped"),
+                };
+                Check {
+                    name: check.name.clone(),
+                    workflow: None,
+                    state,
+                    detail: detail.into(),
+                    url: None,
+                }
+            })
+            .collect();
+        Self {
+            number: pr.number,
+            state: match pr.state {
+                Wire::Merged => PrState::Merged,
+                Wire::Closed => PrState::Closed,
+                Wire::Open | Wire::Unknown => PrState::Open,
+            },
+            draft: pr.draft,
+            url: (!pr.url.is_empty()).then(|| pr.url.clone()),
+            checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
+            runs,
+        }
+    }
 }
 
 /// The run counts by state. A skipped run is neither a pass nor a failure
@@ -914,6 +962,46 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A fixture forge's snapshot reads as `gh pr view` would label it:
+    /// running checks are pending, and the worst check is the rollup.
+    #[test]
+    fn a_snapshot_reads_as_the_label_would() {
+        use ferrite_reviewr::forge::{self, PrView};
+        let check = |name: &str, status| forge::Check {
+            name: name.into(),
+            status,
+        };
+        let snapshot = forge::PrSnapshot {
+            number: 146,
+            title: "t".into(),
+            url: String::new(),
+            body: String::new(),
+            state: forge::PrState::Open,
+            is_draft: false,
+            head_ref: "h".into(),
+            head_is_fork: false,
+            head_oid: String::new(),
+            base_ref: "main".into(),
+            merge: forge::Merge::Clean,
+            sync: forge::Sync::InSync,
+            checks: vec![
+                check("a", forge::CheckStatus::Running),
+                check("b", forge::CheckStatus::Success),
+            ],
+            comments: Vec::new(),
+            comments_truncated: false,
+            checks_truncated: false,
+        };
+        let pr = super::PullRequest::of_view(&PrView::Pr(Box::new(snapshot))).unwrap();
+        assert_eq!(
+            (pr.number, pr.state, pr.url),
+            (146, super::PrState::Open, None)
+        );
+        assert_eq!(pr.checks, Some(super::CheckState::Pending));
+        assert_eq!(pr.runs[0].detail, "in_progress");
+        assert_eq!(super::PullRequest::of_view(&PrView::NoPr), None);
+    }
 
     /// `gh`'s JSON is read for the PR's own facts, and a failing check
     /// anywhere in the rollup is what the label must say.

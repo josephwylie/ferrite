@@ -6,11 +6,12 @@
 //! in view. Every pointer and caret question goes through one `Layout`
 //! table of visual rows, so wrapped and hard-broken lines read alike.
 //!
-//! The caret is a terminal's block (theme WP-D): one cell wide, one row
-//! high, in the accent, blinking softly while this line holds the keyboard
-//! (the character under it turns `ON_ACCENT`), a still hollow box when it
-//! does not. A line the cockpit keeps lit (`set_caret_lit`: Solo's, and the
-//! focused board Pane's) draws its block whoever holds the keyboard.
+//! The caret is a bar (theme WP-D): `CARET_W` wide at the cursor's shaped
+//! x, one row high, in `TEXT_STRONG`, blinking softly while this line holds
+//! the keyboard, and not drawn at all when it does not. A line the cockpit
+//! keeps lit (`set_caret_lit`: Solo's, and the focused board Pane's) draws
+//! its bar whoever holds the keyboard; an unfocused board Pane's box shows
+//! no caret (SPEC §5.9).
 //!
 //! An empty prompt line adds `ComposerEmpty` to its key context: where the
 //! Decision keys, `?` and ⌘⌫'s park live (`keymap`). A one-line field
@@ -25,12 +26,12 @@ use ferrite_reviewr::model::{Comment as ReviewComment, CommentStore};
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, fill, outline, point, px, relative, rgb, rgba, size, App, AvailableSpace,
-    BorderStyle, Bounds, ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase,
-    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, GlobalElementId, Hsla, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, SharedString, Style, TextAlign, TextRun, TextStyle,
-    UTF16Selection, UnderlineStyle, Window, WrappedLine,
+    actions, div, fill, point, px, relative, rgb, rgba, size, App, AvailableSpace, Bounds,
+    ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, Hsla, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PaintQuad, Pixels, SharedString, Style, TextAlign, TextRun, TextStyle, UTF16Selection,
+    UnderlineStyle, Window, WrappedLine,
 };
 
 use crate::line::Line;
@@ -77,13 +78,13 @@ actions!(
     ]
 );
 
-/// How the caret was last drawn: the soft block at an opacity (this line
-/// holds the keyboard), or the still hollow box (it does not). `None` while
-/// a selection stands in its place.
+/// How the caret was last drawn: the soft bar at an opacity (this line
+/// is lit), or not at all (it is not). `None` while a selection stands in
+/// its place.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Caret {
-    Block(f32),
-    Hollow,
+    Bar(f32),
+    Hidden,
 }
 
 /// The block caret's opacity `since` its blink last restarted (a focus or
@@ -964,19 +965,16 @@ fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
 }
 
 /// The line's text runs: the base style, a picked mention in `MENTION_INK`
-/// (a path's cyan, no ground) over `pills`, the selection's own
-/// `TEXT_STRONG` ink over `selected` — the selection quad is the app's one
-/// translucent selection wash, painted under the shaped line — the IME
-/// underline (`TEXT_MUTED`, 1px) over `marked`, and the character under the
-/// block caret in the caret's own `ink` (toward `ON_ACCENT` as the block
-/// comes up). Split at every boundary so each run wears exactly its styles.
+/// over `pills`, the selection's own `TEXT_STRONG` ink over `selected` —
+/// the selection quad is the app's one translucent selection wash, painted
+/// under the shaped line — and the IME underline (`TEXT_DIM`, 1px) over
+/// `marked`. Split at every boundary so each run wears exactly its styles.
 fn runs_for(
     base: &TextRun,
     len: usize,
     marked: Option<Range<usize>>,
     pills: &[Range<usize>],
     selected: Option<Range<usize>>,
-    caret: Option<(Range<usize>, Hsla)>,
 ) -> Vec<TextRun> {
     let mut cuts = vec![0, len];
     if let Some(marked) = &marked {
@@ -984,9 +982,6 @@ fn runs_for(
     }
     if let Some(selected) = &selected {
         cuts.extend([selected.start, selected.end]);
-    }
-    if let Some((under, _)) = &caret {
-        cuts.extend([under.start, under.end]);
     }
     for pill in pills {
         cuts.extend([pill.start, pill.end]);
@@ -1015,18 +1010,12 @@ fn runs_for(
         {
             run.color = rgb(crate::theme::TEXT_STRONG).into();
         }
-        if let Some((_, ink)) = caret
-            .as_ref()
-            .filter(|(under, _)| under.start <= from && to <= under.end)
-        {
-            run.color = *ink;
-        }
         if marked
             .as_ref()
             .is_some_and(|marked| marked.start <= from && to <= marked.end)
         {
             run.underline = Some(UnderlineStyle {
-                color: Some(rgb(crate::theme::TEXT_MUTED).into()),
+                color: Some(rgb(crate::theme::TEXT_DIM).into()),
                 thickness: px(1.),
                 wavy: false,
             });
@@ -1071,7 +1060,6 @@ impl Layout {
         style: &TextStyle,
         line_height: Pixels,
         wrap_width: Option<Pixels>,
-        caret_ink: Option<Hsla>,
         window: &Window,
     ) -> Self {
         let content = SharedString::from(composer.line.text().to_string());
@@ -1085,20 +1073,12 @@ impl Layout {
             underline: None,
             strikethrough: None,
         };
-        // The character the block caret stands on, if it stands on one (not
-        // past the end, not on a line break).
-        let cursor = composer.line.cursor();
-        let caret = caret_ink.and_then(|ink| {
-            let next = content[cursor..].chars().next().filter(|c| *c != '\n')?;
-            Some((cursor..cursor + next.len_utf8(), ink))
-        });
         let runs = runs_for(
             &run,
             content.len(),
             composer.line.marked(),
             &pills,
             (!selected.is_empty()).then(|| selected.clone()),
-            caret,
         );
         let font_size = style.font_size.to_pixels(window.rem_size());
         let lines: Vec<WrappedLine> = window
@@ -1282,14 +1262,8 @@ impl Element for LineElement {
                     AvailableSpace::Definite(width) => Some(width),
                     _ => None,
                 });
-                let layout = Layout::shape(
-                    composer.read(cx),
-                    &text_style,
-                    line_height,
-                    width,
-                    None,
-                    window,
-                );
+                let layout =
+                    Layout::shape(composer.read(cx), &text_style, line_height, width, window);
                 size(
                     width.unwrap_or_else(|| layout.width()),
                     line_height * layout.rows().min(composer.read(cx).visible_row_limit),
@@ -1311,7 +1285,7 @@ impl Element for LineElement {
         // The block blinks only while this line holds focus *and* the window
         // is active. Prepaint is the seam that sees both every drawn frame,
         // so a click that lands anywhere else — or on another app — turns
-        // the caret hollow on that same frame: nothing typed would land here
+        // the caret off on that same frame: nothing typed would land here
         // until it comes back.
         let focused =
             self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
@@ -1354,26 +1328,11 @@ impl Element for LineElement {
             caret_blink_now(origin, window, cx)
         });
         let text_style = window.text_style();
-        let font_size = text_style.font_size.to_pixels(window.rem_size());
-        // A cell wide, up to the device pixel: the browser antialiases the
-        // block's fractional edges, so it covers whole pixels from the one
-        // its left edge lands in to the one its right edge does — a 7.8px
-        // block reads 16 device pixels wherever it falls. A quad snaps each
-        // edge, so 7.8 would read 15 or 16 by where it stands.
+        // `CARET_W` wide, up to the device pixel, so the bar covers whole
+        // pixels wherever it stands. Its x is the cursor's in the shaped
+        // text (`Layout::position`), never cell arithmetic.
         let scale = window.scale_factor();
-        let cell = px((f32::from(font_size)
-            * crate::theme::CODE_ADVANCE
-            * crate::theme::CARET_CELLS
-            * scale)
-            .ceil()
-            / scale);
-        let caret_ink = alpha.map(|alpha| {
-            crate::motion::mix(
-                rgb(crate::theme::TEXT).into(),
-                rgb(crate::theme::ON_ACCENT).into(),
-                alpha,
-            )
-        });
+        let cell = px((crate::theme::CARET_W * scale).ceil() / scale);
         let composer = self.composer.read(cx);
         let cursor = composer.line.cursor();
         let layout = Layout::shape(
@@ -1381,7 +1340,6 @@ impl Element for LineElement {
             &text_style,
             line_height,
             Some(bounds.size.width),
-            caret_ink,
             window,
         );
 
@@ -1399,9 +1357,9 @@ impl Element for LineElement {
 
         let (selection, cursor, caret) = if selected.is_empty() {
             let at = layout.position(cursor);
-            // The caret: a block one cell wide and one row high, square. The
-            // line that holds the keyboard paints it in `CARET` at the blink's
-            // opacity; any other paints a still 1px hollow box.
+            // The caret: a bar `CARET_W` wide and one row high. A lit line
+            // paints it in `CARET` at the blink's opacity; any other paints
+            // none.
             let block = Bounds::new(
                 point(bounds.left() + at.x, row_top(caret_row)),
                 size(cell, line_height),
@@ -1413,17 +1371,9 @@ impl Element for LineElement {
                         block,
                         Hsla::from(rgb(crate::theme::CARET)).opacity(alpha),
                     )),
-                    Some(Caret::Block(alpha)),
+                    Some(Caret::Bar(alpha)),
                 ),
-                None => (
-                    Vec::new(),
-                    Some(outline(
-                        block,
-                        rgb(crate::theme::CARET_HOLLOW),
-                        BorderStyle::Solid,
-                    )),
-                    Some(Caret::Hollow),
-                ),
+                None => (Vec::new(), None, Some(Caret::Hidden)),
             }
         } else {
             // One quad per row the selection crosses, from where it enters
@@ -1578,8 +1528,7 @@ fn paint_text(
 ) {
     let line_height = layout.line_height;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        // The block goes under the glyphs, so the character it stands on
-        // reads in its own (`ON_ACCENT`) ink over it, as a terminal's does.
+        // The selection wash and the caret go under the glyphs.
         for quad in quads {
             window.paint_quad(quad);
         }
@@ -1676,11 +1625,6 @@ impl Element for CaretOverlay {
         cx: &mut App,
     ) {
         let alpha = caret_blink_now(self.origin, window, cx);
-        let ink = crate::motion::mix(
-            rgb(crate::theme::TEXT).into(),
-            rgb(crate::theme::ON_ACCENT).into(),
-            alpha,
-        );
         let line_height = window.line_height();
         let text_style = window.text_style();
         let bounds = self.bounds;
@@ -1691,7 +1635,6 @@ impl Element for CaretOverlay {
             &text_style,
             line_height,
             Some(bounds.size.width),
-            Some(ink),
             window,
         );
         let at = layout.position(cursor);
@@ -1709,8 +1652,8 @@ impl Element for CaretOverlay {
         {
             let now = cx.background_executor().now();
             self.composer.update(cx, |composer, _| {
-                composer.last_caret = Some(Caret::Block(alpha));
-                composer.caret_draws.push((now, Some(Caret::Block(alpha))));
+                composer.last_caret = Some(Caret::Bar(alpha));
+                composer.caret_draws.push((now, Some(Caret::Bar(alpha))));
             });
         }
     }
@@ -1833,43 +1776,21 @@ mod tests {
             strikethrough: None,
         };
         let text = "read @a now";
-        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], None, None);
+        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], None);
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
         // A picked mention is a path: the terminal's cyan, on no ground —
-        // never the accent, never a chip (theme WP-D).
+        // never `TEXT_STRONG`, never a chip (theme WP-D).
         assert_eq!(runs[1].color, rgb(crate::theme::MENTION_INK).into());
-        assert_eq!(crate::theme::MENTION_INK, crate::theme::PATH_INK);
+        assert_eq!(crate::theme::MENTION_INK, crate::theme::LINK_INK);
         assert!(runs[1].background_color.is_none());
         assert!(runs[0].background_color.is_none());
         assert!(runs[3].underline.is_some(), "the mark wears the underline");
         assert!(runs[2].underline.is_none());
 
         // An empty line still hands the shaper one (empty) run.
-        assert_eq!(runs_for(&base, 0, None, &[], None, None).len(), 1);
-    }
-
-    /// The character under the block caret takes the caret's ink, and only
-    /// that character.
-    #[test]
-    #[allow(clippy::single_range_in_vec_init)]
-    fn the_character_under_the_block_takes_the_caret_ink() {
-        let base = TextRun {
-            len: 0,
-            font: gpui::font(crate::theme::FONT_CODE),
-            color: rgb(crate::theme::TEXT).into(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let ink: Hsla = rgb(crate::theme::ON_ACCENT).into();
-        let runs = runs_for(&base, 5, None, &[], None, Some((2..3, ink)));
-        let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
-        assert_eq!(lens, [2, 1, 2]);
-        assert_eq!(runs[1].color, ink);
-        assert_eq!(runs[0].color, base.color);
-        assert_eq!(runs[2].color, base.color);
+        assert_eq!(runs_for(&base, 0, None, &[], None).len(), 1);
     }
 
     /// The block's soft blink (the prototype's keyframes): solid from its
@@ -1903,7 +1824,7 @@ mod tests {
             underline: None,
             strikethrough: None,
         };
-        let runs = runs_for(&base, 11, None, &[], Some(5..7), None);
+        let runs = runs_for(&base, 11, None, &[], Some(5..7));
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens, [5, 2, 4]);
         assert_eq!(runs[1].color, rgb(crate::theme::TEXT_STRONG).into());
@@ -2089,12 +2010,12 @@ mod tests {
 
     /// The box is one row tall while the text fits and grows a row per
     /// wrapped line, to `MAX_ROWS`; past that it scrolls to the caret.
-    /// The caret is a block in the line that holds the keyboard and a still
-    /// hollow box anywhere else; a selection stands in its place. (The motion
+    /// The caret is a bar in the line that holds the keyboard and nothing
+    /// anywhere else; a selection stands in its place. (The motion
     /// kit rests in unit tests, so the block reads solid: its blink is
     /// `the_block_blinks_softly_from_a_solid_start`.)
     #[gpui::test]
-    fn the_caret_is_a_block_in_the_focused_line_and_hollow_elsewhere(cx: &mut TestAppContext) {
+    fn the_caret_is_a_bar_in_the_focused_line_and_hidden_elsewhere(cx: &mut TestAppContext) {
         let (host, cx) = host(cx);
         let composer = composer(&host, cx);
         cx.run_until_parked();
@@ -2102,11 +2023,11 @@ mod tests {
 
         // A background window holds no keyboard: nothing typed would land
         // here until it comes forward. Test windows open inactive.
-        assert_eq!(caret(cx), Some(Caret::Hollow));
+        assert_eq!(caret(cx), Some(Caret::Hidden));
 
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
-        assert_eq!(caret(cx), Some(Caret::Block(1.0)), "focus shows the block");
+        assert_eq!(caret(cx), Some(Caret::Bar(1.0)), "focus shows the block");
         let restarted = composer.read_with(cx, |c, _| c.blink_from);
         assert!(
             restarted.is_some(),
@@ -2119,7 +2040,7 @@ mod tests {
         cx.run_until_parked();
         let typed = composer.read_with(cx, |c, _| c.blink_from);
         assert!(typed > restarted, "an edit restarts the blink");
-        assert_eq!(caret(cx), Some(Caret::Block(1.0)));
+        assert_eq!(caret(cx), Some(Caret::Bar(1.0)));
 
         // A selection takes the caret's place.
         composer.update(cx, |composer, cx| {
@@ -2129,14 +2050,14 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(caret(cx), None);
 
-        // Losing focus leaves a still hollow box.
+        // Losing focus hides it.
         composer.update(cx, |composer, cx| {
             composer.line.move_end();
             cx.notify();
         });
         cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
         cx.run_until_parked();
-        assert_eq!(caret(cx), Some(Caret::Hollow));
+        assert_eq!(caret(cx), Some(Caret::Hidden));
     }
 
     /// The block's alpha on screen at `at`: the last draw at or before it.
@@ -2146,7 +2067,7 @@ mod tests {
             .rev()
             .find(|(drawn, _)| *drawn <= at)
             .and_then(|(_, caret)| match caret {
-                Some(Caret::Block(alpha)) => Some(*alpha),
+                Some(Caret::Bar(alpha)) => Some(*alpha),
                 _ => None,
             })
     }
@@ -2201,7 +2122,7 @@ mod tests {
         let alphas: Vec<(Instant, f32)> = draws
             .iter()
             .filter_map(|(at, caret)| match caret {
-                Some(Caret::Block(alpha)) => Some((*at, *alpha)),
+                Some(Caret::Bar(alpha)) => Some((*at, *alpha)),
                 _ => None,
             })
             .collect();
@@ -2251,7 +2172,7 @@ mod tests {
         assert!(
             draws
                 .iter()
-                .all(|(_, caret)| *caret == Some(Caret::Block(1.0))),
+                .all(|(_, caret)| *caret == Some(Caret::Bar(1.0))),
             "solid and still: {draws:?}"
         );
     }

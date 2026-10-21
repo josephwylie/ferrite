@@ -88,19 +88,24 @@ fn keep_mouse_cursor_visible(cx: &mut App) {
     cx.set_cursor_hide_mode(CursorHideMode::Never);
 }
 
-/// The bundled face, compiled in: Geist Mono, the one face on every surface
-/// (theme rule 1). gpui has no variation-axis support, so each weight is its
-/// own static file. Every weight shares the typographic family name
-/// (`theme::FONT_UI` = `theme::FONT_CODE` = Geist Mono), and CoreText /
-/// DirectWrite resolve the right one from `.font_weight(..)` — never reach a
-/// weight by family name. (Geist, the proportional face, is no longer
-/// registered: nothing may fall back to it.)
-pub(crate) static FONTS: [&[u8]; 5] = [
+/// The bundled faces, compiled in: Geist Mono for the transcript and code,
+/// Geist for the chrome (theme rule 1). gpui has no variation-axis support,
+/// so each weight is its own static file. A face's weights share its
+/// typographic family name (`theme::FONT_CODE` = Geist Mono,
+/// `theme::FONT_UI` = Geist), and CoreText / DirectWrite resolve the right
+/// one from `.font_weight(..)` — never reach a weight by family name.
+/// Geist Mono comes first: the baseline correction is measured on it.
+pub(crate) static FONTS: [&[u8]; 10] = [
     include_bytes!("../assets/fonts/GeistMono.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Italic.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Medium.ttf"),
     include_bytes!("../assets/fonts/GeistMono-SemiBold.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Bold.ttf"),
+    include_bytes!("../assets/fonts/Geist.ttf"),
+    include_bytes!("../assets/fonts/Geist-Italic.ttf"),
+    include_bytes!("../assets/fonts/Geist-Medium.ttf"),
+    include_bytes!("../assets/fonts/Geist-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/Geist-Bold.ttf"),
 ];
 
 /// Registers the bundled faces. Call it before anything lays out text:
@@ -221,7 +226,7 @@ fn main() {
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = ferrite_core::login_shell::adopt_login_environment();
-    // `--demo parity`: the approved prototype's world, on its own store.
+    // `--demo parity`: the UI refresh mockups' world, on its own store.
     let parity = flag(&args, "--demo") == Some("parity");
     let (settings, unreadable) = match Settings::load(&settings_dir) {
         Ok(settings) => (settings, None),
@@ -292,7 +297,7 @@ fn main() {
             // spawns the real provider CLIs and keeps them when it goes
             // (ADR 0025).
             let (mut core, machines) = if parity {
-                (demo::parity_world(), None)
+                (demo::mockup_world(), None)
             } else if demo {
                 let store = Store::open(store_dir()).unwrap_or_else(|e| {
                     ferrite_core::log!("cannot open the Thread store: {e}");
@@ -697,20 +702,25 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Review Branch", palette::ReviewBranch),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
-                MenuItem::action("Notifications", ToggleNotifications),
+                MenuItem::action("Needs You", ToggleNotifications),
                 MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
                 MenuItem::separator(),
                 MenuItem::action("Next Pane", NextPane),
                 MenuItem::action("Previous Pane", PreviousPane),
                 MenuItem::action("Next Decision", NextDecision),
-                MenuItem::separator(),
-                MenuItem::action("Keyboard Shortcuts", shortcuts::Toggle),
             ],
         },
         Menu {
             disabled: false,
             name: "Window".into(),
             items: vec![],
+        },
+        // The keys' door off the bar (SPEC §5.7), beside the palette's
+        // `keyboard shortcuts`.
+        Menu {
+            disabled: false,
+            name: "Help".into(),
+            items: vec![MenuItem::action("Keyboard Shortcuts", shortcuts::Toggle)],
         },
     ]
 }
@@ -721,7 +731,7 @@ mod tests {
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{
         adopt, app_menus, bind_keys, demo, dock_launch_dir, find, keep_mouse_cursor_visible,
-        keymap, load_bindings, KEY_TABLE,
+        keymap, load_bindings, shortcuts, KEY_TABLE,
     };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
@@ -791,6 +801,20 @@ mod tests {
             item,
             gpui::MenuItem::Action { name, action, .. }
                 if name == "Find\u{2026}" && action.partial_eq(&find::Open)
+        )));
+    }
+
+    /// `?` left the bar (SPEC §5.7): the Help menu opens the keys.
+    #[test]
+    fn the_help_menu_opens_the_keys() {
+        let help = app_menus()
+            .into_iter()
+            .find(|menu| menu.name == "Help")
+            .expect("a Help menu");
+        assert!(help.items.iter().any(|item| matches!(
+            item,
+            gpui::MenuItem::Action { name, action, .. }
+                if name == "Keyboard Shortcuts" && action.partial_eq(&shortcuts::Toggle)
         )));
     }
 

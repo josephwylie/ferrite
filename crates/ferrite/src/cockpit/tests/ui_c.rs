@@ -2,11 +2,11 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Solo has no head (C2), and the titlebar does not name the Thread either
-/// (ADR 0014): the nav's row does. The plan's meter and the PR/CI chip are
-/// palette commands (F-11), not chrome.
+/// Solo has no Pane head: the view head in the head row names the Thread
+/// (SPEC §5.2), as the nav's row does. The plan's meter sits at the tab
+/// strip's right (SPEC §5.3); the PR/CI chip is not chrome (F-11).
 #[gpui::test]
-fn the_solo_thread_wears_no_chrome(cx: &mut TestAppContext) {
+fn the_solo_thread_is_named_by_the_view_head_and_meters_its_plan(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("head-one-row", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -35,10 +35,16 @@ fn the_solo_thread_wears_no_chrome(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("titlebar-location").is_none());
     let row: &'static str = format!("nav-thread-{}", thread.get()).leak();
     assert!(cx.debug_bounds(row).is_some(), "the nav's row names it");
+    let head = cx
+        .debug_bounds("view-title")
+        .expect("the view head names it");
     assert!(
-        cx.debug_bounds("tasks-meter-1").is_none(),
-        "no meter in the chrome"
+        head.bottom() <= px(crate::theme::WIN_CHROME_H),
+        "in the head row"
     );
+    let meter = cx.debug_bounds("tasks-meter-1").expect("the plan's meter");
+    let strip = cx.debug_bounds("pane-tabs-1").expect("the tab strip");
+    assert!(strip.contains(&meter.center()), "on the tab strip");
     assert!(
         cx.debug_bounds("ci-mark-1").is_none(),
         "no PR/CI chip in the chrome"
@@ -351,7 +357,7 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     let key = thread.get();
     let head = bounds(cx, format!("pane-head-{key}"));
     let body = bounds(cx, format!("pane-body-{key}"));
-    assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
+    assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
     assert!(body.top() >= head.bottom(), "{body:?} under {head:?}");
     for row in ["transcript-prompt", "transcript-answer"] {
         let row = cx.debug_bounds(row).expect("the row paints");
@@ -362,12 +368,12 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     }
 }
 
-/// Terminal-native (WP-A, WP-D): the Composer's `❯` hangs in the
-/// prototype's 2-cell gutter, `COMPOSER_PAD_L` in from the Pane's own edge
-/// (the edge is an overlay, F-1), on the same axis as the transcript's
-/// prompt `❯`.
+/// SPEC §5.4: the transcript column sits `tx_inset` in from the Pane's
+/// edge (Solo's 28px), the prompt band's box `PROMPT_BAND_PAD_X` outside it,
+/// so the band's `❯` keeps the column every other row's mark is on. (The
+/// Composer's `❯` leaves with its box, SPEC §5.5.)
 #[gpui::test]
-fn the_composer_mark_shares_the_transcript_mark_axis(cx: &mut TestAppContext) {
+fn the_prompt_mark_keeps_the_transcript_column(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
     let thread = core.threads()[0];
     core.send(thread, "Line the marks up".into());
@@ -380,26 +386,23 @@ fn the_composer_mark_shares_the_transcript_mark_axis(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    // The Composer's `❯` hangs `COMPOSER_PAD_L` in from the Pane's edge
-    // (`.comp{padding-left:2ch}`), and the transcript's `❯` two chrome
-    // cells in from the body's left edge (`TX_PAD_L`): one axis.
-    let composer = cx.debug_bounds("composer-mark").unwrap();
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert!(
-        (composer.left() - px(rect.x + crate::theme::COMPOSER_PAD_L)).abs() <= px(1.),
-        "L1: {composer:?} / {rect:?}"
-    );
+    let column = px(rect.x + crate::theme::TX_INSET_SOLO);
     let mark = cx.debug_bounds("prompt-mark").unwrap();
-    let body = cx.debug_bounds("transcript-prompt").unwrap();
+    let band = cx.debug_bounds("transcript-prompt").unwrap();
     assert!(
-        (mark.left() - (body.left() + px(crate::theme::TX_PAD_L))).abs() <= px(1.),
-        "L1: {mark:?} / {body:?}"
+        (band.left() - (column - px(crate::theme::PROMPT_BAND_PAD_X))).abs() <= px(1.),
+        "the band reaches past the column: {band:?} / {rect:?}"
     );
     assert!(
-        (mark.left() - composer.left()).abs() <= px(1.),
-        "the transcript's ❯ {mark:?} and the Composer's {composer:?} share an axis"
+        (mark.left() - column).abs() <= px(1.),
+        "the band's ❯ {mark:?} is on the column {column:?}"
     );
-    let _ = thread;
+    let answer = cx.debug_bounds("answer-mark").unwrap();
+    assert!(
+        (answer.left() - mark.left()).abs() <= px(1.),
+        "the answer's ● {answer:?} and the ❯ {mark:?} share an axis"
+    );
 }
 
 /// The expand and approve keys still reach a board cell once the head's
@@ -650,14 +653,16 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
 }
 
 /// A nav title truncates against what its row leaves it. At the nav's own
-/// width, a Group member on a long worktree branch that runs five
-/// subagents is one line: its tree glyph, its dot, its title pinned to the
-/// row's text width less its cells and its word, and the word ending on the
-/// row's text edge. The branch and the count are the tooltip's, never marks
-/// on the line, so a long branch can never squeeze the title.
+/// width, a member of the shown Group on a long worktree branch that runs
+/// five subagents is one line: its mark, its title pinned to the row's
+/// text width less its word, and the word ending on the row's text edge.
+/// The branch and the count are never marks on the line, so a long branch
+/// can never squeeze the title.
 #[gpui::test]
 fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
-    use crate::theme::{CH, NAV_CELL, NAV_LINE, NAV_PAD_X, NAV_TEXT_W, NAV_WORD_GAP};
+    use crate::theme::{
+        FS_META, NAV_COL_PAD, NAV_MEMBER_X, NAV_ROW_H, NAV_ROW_PAD_X, NAV_WORD_GAP, W_BODY,
+    };
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -712,29 +717,32 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
         assert_eq!(subagents, 5);
         assert_eq!(branch.as_deref(), Some(long_branch));
         let title = bounds(cx, format!("nav-title-{id}"));
-        let word = bounds(cx, format!("nav-since-{id}"));
         let whole_row = bounds(cx, format!("nav-thread-{id}"));
-        assert_eq!(whole_row.size.height, px(NAV_LINE), "one line");
-        // A member: its tree glyph, its dot, then the title.
-        let cells = 3.0;
-        let text = row
-            .tail
-            .text()
-            .map_or(0.0, |text| text.chars().count() as f32 * CH + NAV_WORD_GAP);
-        let expected = NAV_TEXT_W - cells * NAV_CELL - text;
+        assert_eq!(whole_row.size.height, px(NAV_ROW_H), "one line");
+        let word = row.tail.member_word().map(|(text, _)| text);
+        let word_w = cx.update(|_, cx| {
+            word.as_deref().map_or(0.0, |word| {
+                crate::nav::Measure::Text(cx).ui(word, FS_META, W_BODY) + NAV_WORD_GAP
+            })
+        });
+        let expected =
+            crate::nav::WIDTH - 2.0 * NAV_COL_PAD - NAV_MEMBER_X - NAV_ROW_PAD_X - word_w;
         assert!(
             (title.size.width - px(expected)).abs() < px(0.5),
-            "the title takes what its cells and word leave: {title:?}, {expected}"
+            "the title takes what its word leaves: {title:?}, {expected}"
         );
         assert!(
-            (title.left() - (whole_row.left() + px(NAV_PAD_X + cells * NAV_CELL))).abs() < px(0.5),
-            "the title starts after the tree glyph and the dot"
+            (title.left() - (whole_row.left() + px(NAV_MEMBER_X))).abs() < px(0.5),
+            "the title starts after the mark"
         );
-        assert!(title.right() <= word.left() + px(0.5));
-        assert!(
-            (word.right() - (whole_row.right() - px(NAV_PAD_X))).abs() < px(0.5),
-            "the word ends on the row's text edge"
-        );
+        if word.is_some() {
+            let word = bounds(cx, format!("nav-since-{id}"));
+            assert!(title.right() <= word.left() + px(0.5));
+            assert!(
+                (word.right() - (whole_row.right() - px(NAV_ROW_PAD_X))).abs() < px(0.5),
+                "the word ends on the row's text edge"
+            );
+        }
         for gone in ["nav-branch", "nav-subagents", "nav-mark"] {
             assert!(
                 debug_bounds(cx, format!("{gone}-{id}")).is_none(),
@@ -769,7 +777,7 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
         let row = view.thread_row(thread);
         assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
         assert_eq!(
-            row.status.face().ink,
+            row.status.ink(),
             crate::theme::BLOCKED,
             "and the nav and rail mark say it too"
         );
@@ -782,15 +790,15 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
 }
 
 /// F-2: one attention edge. On a board every waiting cell draws
-/// `ATTENTION_EDGE` (ochre at 75%) on all four sides — the one it would
+/// `WAIT_RING` (ochre at 35%) on all four sides — the one it would
 /// answer included, so no cell wears full ink — and in Solo no state
 /// recolours the edge.
 #[gpui::test]
 fn every_waiting_cell_wears_one_attention_edge_and_solo_none(cx: &mut TestAppContext) {
     assert_eq!(
-        crate::theme::ATTENTION_EDGE,
-        (crate::theme::ATTENTION << 8) | 0xbf,
-        "the waiting edge is ATTENTION itself, at 75%"
+        crate::theme::WAIT_RING,
+        (crate::theme::ATTENTION << 8) | 0x59,
+        "the waiting edge is ATTENTION itself, at 35%"
     );
     let (view, fake, cx, _group) = board("edge-answer-target", 4, cx);
     fake.streams.borrow()[1].send(decision("edge-1")).unwrap();

@@ -335,6 +335,7 @@ impl Element for InlineFlow {
         let layout_state = InlineFlowLayoutState::default();
         let layout_ref = layout_state.layout.clone();
         let code_font = self.code_font.clone();
+        let code_pad = self.code_wash.map_or(Pixels::ZERO, |wash| wash.pad);
         // The measure closure runs during layout computation, outside this
         // element's text-style stack: capture the inherited style here.
         let text_style = window.text_style();
@@ -366,6 +367,7 @@ impl Element for InlineFlow {
                         &text_style,
                         wrap_width,
                         code_font.as_ref(),
+                        code_pad,
                         window,
                     )
                 });
@@ -656,6 +658,7 @@ fn layout_flow(
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
     code_font: Option<&SharedString>,
+    code_pad: Pixels,
     window: &mut Window,
 ) -> InlineFlowLayout {
     let rem_size = window.rem_size();
@@ -665,7 +668,7 @@ fn layout_flow(
         return InlineFlowLayout::default();
     }
 
-    let line_ranges = line_ranges(items, image_sizes, text_style, wrap_width, window);
+    let line_ranges = line_ranges(items, image_sizes, text_style, wrap_width, code_pad, window);
     let font_size = text_style.font_size.to_pixels(rem_size);
     let mut fragments = Vec::new();
     let mut max_width = Pixels::ZERO;
@@ -711,7 +714,13 @@ fn layout_flow(
                             code_font,
                         );
                         let shaped_line = shape_line(subtext.clone(), font_size, &runs, window);
-                        let width = layout_unit(shaped_line.width());
+                        // Each code run in the fragment lays its padding
+                        // out either side, as its `Inline` will.
+                        let pads = highlights
+                            .iter()
+                            .filter(|(_, style)| is_code(style))
+                            .count() as f32;
+                        let width = layout_unit(shaped_line.width() + code_pad * 2. * pads);
                         line_width += width;
                         line_fragments.push(LineFragmentLayout {
                             item_ix,
@@ -789,11 +798,50 @@ fn layout_unit(width: Pixels) -> Pixels {
     px((f32::from(width) * 64.0).ceil() / 64.0)
 }
 
+/// Ferrite: whether a highlight marks inline code (`INLINE_CODE_MARK`).
+fn is_code(style: &HighlightStyle) -> bool {
+    style.fade_out == crate::text::style::INLINE_CODE_MARK
+}
+
+/// A text item's slice as wrap fragments: its text, with a zero-length
+/// `code_pad` element either side of each code run in it.
+fn text_wrap_fragments<'a>(
+    text: &'a str,
+    highlights: &[(Range<usize>, HighlightStyle)],
+    range: Range<usize>,
+    code_pad: Pixels,
+) -> Vec<WrapLineFragment<'a>> {
+    let mut cuts: Vec<usize> = Vec::new();
+    if code_pad > Pixels::ZERO {
+        for (code, _) in highlights.iter().filter(|(_, style)| is_code(style)) {
+            for cut in [code.start, code.end] {
+                if range.start <= cut && cut <= range.end && text.is_char_boundary(cut) {
+                    cuts.push(cut);
+                }
+            }
+        }
+    }
+    let mut fragments = Vec::new();
+    let mut at = range.start;
+    for cut in cuts {
+        if at < cut {
+            fragments.push(WrapLineFragment::text(&text[at..cut]));
+        }
+        fragments.push(WrapLineFragment::element(code_pad, 0));
+        at = cut.max(at);
+    }
+    if at < range.end {
+        fragments.push(WrapLineFragment::text(&text[at..range.end]));
+    }
+    fragments
+}
+
 fn line_ranges(
     items: &[MeasureItem],
     image_sizes: &[Option<Size<Pixels>>],
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
+    code_pad: Pixels,
     window: &mut Window,
 ) -> Vec<Range<usize>> {
     let total_len = items.iter().map(MeasureItem::len).sum::<usize>();
@@ -828,33 +876,39 @@ fn line_ranges(
         let wrap_fragments = items
             .iter()
             .enumerate()
-            .filter_map(|(ix, item)| {
+            .flat_map(|(ix, item)| {
                 let item_end = item_start + item.len();
-                let fragment = if item_end <= hard_line.start || item_start >= hard_line.end {
-                    None
+                let fragments = if item_end <= hard_line.start || item_start >= hard_line.end {
+                    Vec::new()
                 } else {
                     match item {
-                        MeasureItem::Text { text, .. } => {
+                        MeasureItem::Text {
+                            text, highlights, ..
+                        } => {
                             let start = hard_line.start.max(item_start) - item_start;
                             let end = hard_line.end.min(item_end) - item_start;
-                            (start < end).then(|| WrapLineFragment::text(&text[start..end]))
+                            if start < end {
+                                text_wrap_fragments(text, highlights, start..end, code_pad)
+                            } else {
+                                Vec::new()
+                            }
                         }
                         MeasureItem::Image { .. } | MeasureItem::Element { .. } => {
-                            (hard_line.start <= item_start && item_end <= hard_line.end).then(
-                                || {
-                                    WrapLineFragment::element(
-                                        image_sizes[ix]
-                                            .expect("image size should be measured before wrapping")
-                                            .width,
-                                        IMAGE_LEN,
-                                    )
-                                },
-                            )
+                            if hard_line.start <= item_start && item_end <= hard_line.end {
+                                vec![WrapLineFragment::element(
+                                    image_sizes[ix]
+                                        .expect("image size should be measured before wrapping")
+                                        .width,
+                                    IMAGE_LEN,
+                                )]
+                            } else {
+                                Vec::new()
+                            }
                         }
                     }
                 };
                 item_start = item_end;
-                fragment
+                fragments
             })
             .collect::<Vec<_>>();
 

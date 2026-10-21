@@ -81,3 +81,22 @@ and stay under a filter.
 
 Herdr's own "idle ○" and its yellow working dot were considered and
 declined for the reasons above; its screen detection was never an option.
+
+## Amendment (2026-10-21): the done face, the rail and the Needs-you view
+
+The UI refresh ([ADR 0033](0033-sans-chrome-and-card-panes.md), SPEC §5.1
+and §6) changes three things here.
+
+- **Done is a shape, not a hue.** Its mark is a `check-circle` in
+  `TEXT_DIM`; the teal `theme::FINISHED` no longer colours it. An unseen
+  finish's title stays `TEXT_STRONG`. Idle and parked lose the muted dot
+  too: a `terminal` icon, at 50% when parked. Background keeps its green
+  ring.
+- **The rail is 52px**, not 6ch: one 32px cell per open Thread, holding its
+  mark and, under it, its ⌘ digit where that key focuses it.
+- **The Needs-you queue is a view.** The nav's `Needs you` row (with its
+  count, hidden at 0), the bar's `N need you` and ⌘I show, in the tree's
+  place, the blocked Threads oldest-first and then the Notices under
+  `Recent`. It replaces the bell's list. It is not the strip this ADR
+  removed: the tree still carries no queue, and ⌘D still walks
+  `Cockpit::needs_you`.

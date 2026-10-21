@@ -340,8 +340,7 @@ fn underline(key: &str, ink: u32, size: f32, line: f32) -> gpui::Div {
 }
 
 /// Wire `element` as a path target: the pointer cursor, the hover card while
-/// the pointer is on it, ⌘-click to the reader, and its laid-out box kept
-/// for `preview_path`.
+/// the pointer is on it, ⌘-click to the reader, and its laid-out box kept.
 fn wire_target(
     element: gpui::Stateful<gpui::Div>,
     target: PathTarget,
@@ -362,7 +361,6 @@ fn wire_target(
                 .or_default()
                 .entry(recorded.path.clone())
                 .or_insert(laid);
-            crate::hover_card::laid_out(&recorded, laid, cx);
         }
     })
     .cursor_pointer()
@@ -384,7 +382,7 @@ fn wire_target(
 }
 
 /// A path in its own run (`path_text`, the Phase-0 seam the banner and the
-/// empty board share): the label in `PATH_INK`, underlined under the
+/// empty board share): the label in `LINK_INK`, underlined under the
 /// pointer, the hover card, ⌘-click to a reader. It inherits the face and
 /// size it sits in.
 pub(crate) fn path_text(label: SharedString, target: PathTarget) -> AnyElement {
@@ -417,9 +415,9 @@ impl gpui::RenderOnce for PathText {
             .relative()
             .flex_shrink_0()
             .whitespace_nowrap()
-            .text_color(gpui::rgb(theme::PATH_INK))
+            .text_color(gpui::rgb(theme::LINK_INK))
             .child(self.label)
-            .child(underline(&self.fade, theme::PATH_INK, size, line));
+            .child(underline(&self.fade, theme::LINK_INK, size, line));
         wire_target(element, self.target, self.fade)
     }
 }
@@ -444,7 +442,7 @@ pub(crate) fn path_overlay(
         .left(px(start as f32 * cell))
         .w(px(width as f32 * cell))
         .h(px(line))
-        .child(underline(&key, theme::PATH_INK, size, line));
+        .child(underline(&key, theme::LINK_INK, size, line));
     wire_target(element, target, key).into_any_element()
 }
 
@@ -458,7 +456,7 @@ pub(crate) fn wire_inline(
 ) -> gpui::Stateful<gpui::Div> {
     let key = target.key("inline");
     wire_target(
-        element.child(underline(&key, theme::PATH_INK, size, line)),
+        element.child(underline(&key, theme::LINK_INK, size, line)),
         target,
         key,
     )

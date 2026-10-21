@@ -144,7 +144,7 @@ pub(crate) enum ScrollTarget {
 
 /// The paths a call names, read from the Thread's checkout: inside it,
 /// relative (`Read(src/stats.rs)`, `Update(src/stats.rs)`), as Claude Code
-/// prints them and the approved transcript reads — Claude reports every
+/// prints them — Claude reports every
 /// path absolute. A path outside the checkout stays whole.
 fn relative_paths(input: &mut TranscriptInput) {
     let Some(root) = input.workspace.clone() else {
@@ -327,6 +327,10 @@ pub(crate) struct TranscriptView {
     /// of a transcript shorter than that (a board Pane with its banner
     /// scrolled away, R2): see `Runway`.
     runway: Rc<Cell<Runway>>,
+    /// The room over the first row while the rows are shorter than the
+    /// viewport: it sets them on the viewport's foot (SPEC §5.4's bottom
+    /// alignment), and is zero once they fill it.
+    lift: Rc<Cell<f32>>,
     /// The agents' visuals in these rows: their live pages (ADR 0013).
     visuals: crate::visual::Shelf,
     /// The list's width as of the last layout (rows can't ask the list
@@ -404,7 +408,7 @@ impl TranscriptView {
         let rows = TranscriptRows::new(
             &input.blocks,
             &input.shape(),
-            theme::answer_text_size(input.reading_size),
+            Grid::pane(input.reading_size, input.solo).size,
         );
         let scroll = TranscriptScroll::new(rows.len());
         scroll.scroll_to_bottom();
@@ -454,6 +458,7 @@ impl TranscriptView {
             hover_card: None,
             glide: None,
             runway: Rc::default(),
+            lift: Rc::default(),
             visuals,
             list_w: Rc::default(),
             texts: Vec::new(),
@@ -537,11 +542,9 @@ impl TranscriptView {
         // opening or the banner and tail changing re-project them too.
         if content_changed || reading_changed || shape_changed {
             let tail = self.rows.rows().last().map(|row| row.id().clone());
-            let delta = self.rows.reconcile(
-                &self.input.blocks,
-                &self.input.shape(),
-                theme::answer_text_size(self.input.reading_size),
-            );
+            let delta =
+                self.rows
+                    .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
             self.scroll.reconcile(&delta);
             self.note_arrivals(tail, cx);
             let live: HashSet<&str> = self
@@ -772,28 +775,6 @@ impl TranscriptView {
         self.input.namespace.clone()
     }
 
-    /// Open the hover card on the first target naming `path` (a scene's
-    /// solo-hover view), at `line` or the Thread's latest change to it.
-    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-    pub(crate) fn preview_path(
-        &mut self,
-        path: &str,
-        line: Option<u32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let resolved = match &self.input.workspace {
-            Some(root) if !std::path::Path::new(path).is_absolute() => root.join(path),
-            _ => PathBuf::from(path),
-        };
-        let target = PathTarget::new(resolved)
-            .at_line(line)
-            .shown(SharedString::from(path.to_string()))
-            .in_scope(self.input.namespace.clone());
-        crate::hover_card::request(target, window, cx);
-        cx.notify();
-    }
-
     fn text_runs(&self) -> TextRuns {
         self.selection_source
             .clone()
@@ -909,7 +890,8 @@ impl TranscriptView {
             timings: Some(&self.input.timings),
             provider: self.input.provider,
             preview: &self.input.preview,
-            reading: self.input.reading_size,
+            grid: self.grid(),
+            solo: self.input.solo,
             wide: self.wide.get(),
             focused: self.input.focused,
             scope: &self.input.namespace,
@@ -953,7 +935,7 @@ impl TranscriptView {
                 .expect("markdown row has a block")
                 .markdown_run
                 .unwrap_or(blocks[0].id);
-            let grid = Grid::of(self.input.reading_size);
+            let grid = self.grid();
             let marked = row.answer_mark();
             // The prototype's `.r` with `.g-prose`: the bright `●` in the
             // gutter on the first prose after a speaker change, the answer on
@@ -1039,7 +1021,13 @@ impl TranscriptView {
     /// A row's width (the list's, less the row insets), once laid out.
     fn content_width(&self) -> Option<f32> {
         let width = self.list_w.get();
-        (width > 0.).then_some(width - theme::TX_PAD_L - theme::TX_PAD_R)
+        (width > 0.).then_some(width - 2. * theme::tx_inset(self.input.solo))
+    }
+
+    /// The transcript's grid: the reading size in Solo, a half step under
+    /// it in a Group Pane (`theme::tx_size`).
+    fn grid(&self) -> Grid {
+        Grid::pane(self.input.reading_size, self.input.solo)
     }
 
     /// A visual's page changed height: the list re-measures its row (off
@@ -1194,7 +1182,7 @@ impl TranscriptView {
     /// The banner (ADR 0014): one muted line — the checkout, a path target,
     /// on its branch, and when the Thread started. Its text is selectable.
     fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
-        let grid = Grid::of(self.input.reading_size);
+        let grid = self.grid();
         let line = banner_line(facts);
         let highlights = line
             .path
@@ -1207,7 +1195,7 @@ impl TranscriptView {
                 vec![(
                     0..to,
                     gpui::HighlightStyle {
-                        color: Some(gpui::rgb(theme::PATH_INK).into()),
+                        color: Some(gpui::rgb(theme::LINK_INK).into()),
                         ..Default::default()
                     },
                 )]
@@ -1231,7 +1219,7 @@ impl TranscriptView {
             .min_w_0()
             .flex_shrink_0()
             .truncate()
-            .text_color(gpui::rgb(theme::TEXT_MUTED))
+            .text_color(gpui::rgb(theme::TEXT_DIM))
             .child(selection.line(BlockId::BANNER, line.text, highlights))
             .children(overlay)
             .into_any_element()
@@ -1264,7 +1252,7 @@ impl TranscriptView {
         let targeted = self.tool_targeted(call);
         let toggle = self.toggle(call.clone(), view);
         let overlay = details.then(|| {
-            let grid = Grid::of(self.input.reading_size);
+            let grid = self.grid();
             let clicked = toggle.clone();
             let control = div()
                 .absolute()
@@ -1333,7 +1321,7 @@ impl TranscriptView {
             expanded,
             targeted,
             &self.input.disclosure_focus,
-            Grid::of(self.input.reading_size).gutter(),
+            self.grid().gutter(),
         )
         // The disclosure overlay fills the rendered header. Keep the handler
         // on it so the chevron, label, and trailing row text share one target.
@@ -1500,7 +1488,7 @@ pub(crate) enum Mark {
 impl Mark {
     fn ink(self) -> u32 {
         match self {
-            Self::Prompt => theme::ACCENT,
+            Self::Prompt => theme::TEXT_STRONG,
             Self::Failure => theme::BLOCKED,
             Self::Decision => theme::ATTENTION,
             Self::Pass => theme::RUNNING,
@@ -1557,7 +1545,7 @@ impl TranscriptView {
             return None;
         };
         let selection = self.text_runs();
-        let line_height = Grid::of(self.input.reading_size).line;
+        let line_height = self.grid().line;
         let available = f32::from(self.scroll.list_state().viewport_bounds().size.height) / 3.;
         // Reserve a line for the band's padding, then keep whole text lines.
         let lines = ((available / line_height) as usize)
@@ -1585,9 +1573,10 @@ impl TranscriptView {
                         .block_mouse_except_scroll()
                         .cursor_default()
                         .w_full()
+                        .px(px(row_inset(RowKind::Prompt, self.input.solo)))
                         // The band over an opaque plane: together they hide
                         // the rows scrolling under it, glass or not.
-                        .bg(gpui::rgb(theme::PLANE))
+                        .bg(gpui::rgb(theme::CARD))
                         .child(band),
                 )
                 .into_any_element(),
@@ -1605,7 +1594,7 @@ impl TranscriptView {
             .filter_map(|row| heights.get(row.id()).copied())
             .collect();
         let fallback = if known.is_empty() {
-            3.0 * Grid::of(self.input.reading_size).line
+            3.0 * self.grid().line
         } else {
             known.iter().sum::<f32>() / known.len() as f32
         };
@@ -1615,7 +1604,7 @@ impl TranscriptView {
             tops.push(at);
             at += heights.get(row.id()).copied().unwrap_or(fallback);
         }
-        (tops, at + theme::BODY_PAD_B)
+        (tops, at + theme::body_pad_b(self.input.solo))
     }
 
     /// Where the viewport's top is, in the estimated tops' space.
@@ -1844,6 +1833,18 @@ fn pinned_of(
     Some((prompt, shift))
 }
 
+/// A row's inset from the list's edges: the transcript column's
+/// (`tx_inset`), less `PROMPT_BAND_PAD_X` for a prompt band, whose box
+/// reaches past the column so its text keeps it.
+fn row_inset(kind: RowKind, solo: bool) -> f32 {
+    let inset = theme::tx_inset(solo);
+    if kind == RowKind::Prompt {
+        inset - theme::PROMPT_BAND_PAD_X
+    } else {
+        inset
+    }
+}
+
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.arm_second_tick(cx);
@@ -1863,7 +1864,8 @@ impl Render for TranscriptView {
         if self.scroll.is_following_tail() {
             self.scroll.scroll_to_bottom();
         }
-        let grid = Grid::of(self.input.reading_size);
+        let grid = self.grid();
+        let solo = self.input.solo;
         let list = list(
             self.scroll.list_state().clone(),
             move |index, window, cx| {
@@ -1883,15 +1885,16 @@ impl Render for TranscriptView {
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
                 // resolve against and shrinks to its text. The wrapper holds
-                // the row's inset (two cells left, three right; a prompt band
-                // runs full width and insets its own text) and the row's own
-                // gap above it (the first row's is the body's top padding:
-                // the list's own top padding flickers mid-scroll).
+                // the row's inset (`tx_inset`; a prompt band's box reaches
+                // `PROMPT_BAND_PAD_X` past it and insets its own text by as
+                // much) and the row's own gap above it (the first row's is
+                // the body's top padding: the list's own top padding
+                // flickers mid-scroll).
                 let gap = row.gap();
-                let band = row.kind() == RowKind::Prompt;
-                let wrapper = div().w_full().pt(px(gap)).when(!band, |wrapper| {
-                    wrapper.pl(px(theme::TX_PAD_L)).pr(px(theme::TX_PAD_R))
-                });
+                let wrapper = div()
+                    .w_full()
+                    .pt(px(gap))
+                    .px(px(row_inset(row.kind(), solo)));
                 // A row appended live rises into place; its gap does not
                 // move, so the rows above it hold still.
                 let wrapper = match arrival {
@@ -1906,7 +1909,10 @@ impl Render for TranscriptView {
         )
         // The bottom padding is the list's own: it counts in the scroll
         // extent and the tail follow. A band jump's room rides it.
-        .pb(px(theme::BODY_PAD_B + self.runway.get().room))
+        .pb(px(
+            theme::body_pad_b(self.input.solo) + self.runway.get().room
+        ))
+        .pt(px(self.lift.get()))
         .size_full()
         .min_h_0();
         let scroll = self.scroll.clone();
@@ -1918,11 +1924,14 @@ impl Render for TranscriptView {
         let pinned_asked = self.pinned_asked.clone();
         let pinned_h = self.pinned_h.clone();
         let runway = self.runway.clone();
+        let lift = self.lift.clone();
         let shelf = self.visuals.clone();
         let list_w = self.list_w.clone();
         let reading = self.input.reading_size;
+        let inset = theme::tx_inset(solo);
         let line = grid.line;
-        let half = grid.half();
+        let band_pad = theme::prompt_band_pad_y(solo);
+        let pad_b = theme::body_pad_b(solo);
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
@@ -1944,9 +1953,8 @@ impl Render for TranscriptView {
                     if let Some(into) = now.jump {
                         let measured = below(now.index);
                         let view_h = f32::from(state.viewport_bounds().size.height);
-                        let room = measured.map_or(0.0, |below| {
-                            (into + view_h - below - theme::BODY_PAD_B).max(0.0)
-                        });
+                        let room =
+                            measured.map_or(0.0, |below| (into + view_h - below - pad_b).max(0.0));
                         let settled = (room - now.room).abs() < 0.5;
                         now = Runway {
                             jump: (!settled).then_some(into),
@@ -1978,6 +1986,33 @@ impl Render for TranscriptView {
                         }
                     }
                 }
+                // Bottom alignment: while every row fits, the space left
+                // under the last one moves over the first; once they
+                // overflow, none. The list reports a row's bounds without
+                // its top padding, so they read as if the lift were zero.
+                {
+                    let state = scroll.list_state();
+                    let viewport = state.viewport_bounds();
+                    let first = state.bounds_for_item(0);
+                    let last = gaps
+                        .len()
+                        .checked_sub(1)
+                        .and_then(|at| state.bounds_for_item(at));
+                    let now = lift.get();
+                    let next = match (first, last) {
+                        (Some(first), Some(last)) if first.top() >= viewport.top() - px(0.5) => {
+                            (f32::from(viewport.bottom() - last.bottom()) - pad_b).max(0.0)
+                        }
+                        _ => 0.0,
+                    };
+                    if (next - now).abs() >= 0.5 {
+                        lift.set(next);
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.notify());
+                        });
+                    }
+                }
                 // A pinned band hides the list's top down to its foot, and
                 // the row passing under the foot down to its next whole
                 // line.
@@ -1989,7 +2024,7 @@ impl Render for TranscriptView {
                         gaps.get(index).map_or(0., |row| {
                             row.gap()
                                 + if row.kind() == RowKind::Prompt {
-                                    half
+                                    band_pad
                                 } else {
                                     0.
                                 }
@@ -2037,7 +2072,7 @@ impl Render for TranscriptView {
                                 crate::visual::visual_of(block).map(|visual| (index, visual))
                             })
                             .collect();
-                        shelf.reach(&state, &visuals, &height_of, reading, window, cx);
+                        shelf.reach(&state, &visuals, &height_of, reading, inset, window, cx);
                     });
                 }
                 // The band pinned at render came from the previous layout:
@@ -2096,9 +2131,9 @@ impl Render for TranscriptView {
             .min_w_0()
             .w_full()
             .min_h_0()
-            // One grid for the whole transcript (theme rule 1): the reading
-            // size on its 1.5x line, every row inheriting it.
-            .font_family(theme::FONT_UI)
+            // One grid for the whole transcript (theme rule 1): Geist Mono
+            // at the reading size on its 1.5x line, every row inheriting it.
+            .font_family(theme::FONT_CODE)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .text_color(gpui::rgb(theme::TEXT))
@@ -2129,7 +2164,7 @@ impl Render for TranscriptView {
             .min_w_0()
             .size_full()
             .min_h_0()
-            .font_family(theme::FONT_UI)
+            .font_family(theme::FONT_CODE)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .child(list)
@@ -2145,7 +2180,7 @@ impl Render for TranscriptView {
                     .left_0()
                     .right_0()
                     .h(self.scroll.top_mask())
-                    .bg(gpui::rgb(theme::PLANE))
+                    .bg(gpui::rgb(theme::CARD))
             }))
             .children(pinned)
             .children(minimap)

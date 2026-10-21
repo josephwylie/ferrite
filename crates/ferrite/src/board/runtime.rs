@@ -33,7 +33,7 @@ use sw_board::shown::ink::{Ink, Inked};
 
 use super::{aim, controls, keys, machines, mouse, render};
 use crate::components;
-use crate::theme::{CH, PLANE, ROW};
+use crate::theme::{CARD, CH, ROW};
 
 /// How often the board ticks and the loader looks again.
 const BEAT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -433,7 +433,7 @@ impl Render for BoardView {
         let theme = self.board.as_ref().map(|board| &board.theme);
         // The reading plane under the board, popup too: its greys are held
         // readable on it; a named theme paints its own ground.
-        let ground = theme.and_then(render::ground).unwrap_or(PLANE);
+        let ground = theme.and_then(render::ground).unwrap_or(CARD);
         let rows = theme
             .map(|theme| render::lines(&lines, theme))
             .unwrap_or_default();

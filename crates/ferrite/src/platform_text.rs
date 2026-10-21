@@ -1,7 +1,7 @@
 //! How the platform rasterises Ferrite's text, set once before the first
 //! glyph is drawn.
 //!
-//! **Why** (F-17). The approved prototype is drawn by a browser with
+//! **Why** (F-17). The design's pictures are drawn by a browser with
 //! `-webkit-font-smoothing: antialiased`: greyscale coverage, no stem
 //! darkening. gpui-pre-macos 0.3.3 thickens every glyph instead
 //! (`MacTextSystem::glyph_dilation_for_color`, up to four steps by the
@@ -161,7 +161,8 @@ pub fn browser_baseline(face: &[u8]) -> Vec<u8> {
     face
 }
 
-/// Geist Mono's ascender plus descender, in font units.
+/// Geist Mono's ascender plus descender, in font units (Geist's are the
+/// same, so both faces take the correction).
 const BASELINE_UNITS: i32 = 1300;
 /// The ascender that puts gpui's centred baseline on the browser's at the
 /// grid size (`browser_baseline`): `10 + 13 × (958 − 342) / 2000` = 14.004px.

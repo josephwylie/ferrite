@@ -57,18 +57,19 @@ fn hex(rgb: u32) -> String {
 fn colour(name: &str, scheme: Scheme) -> Option<String> {
     use Scheme::*;
     let rgb = match (name, scheme) {
-        // The opaque ladder (theme rule 3): pages paint the reading plane.
-        ("bg", Dark) => theme::PLANE,
-        ("band", Dark) => theme::CHROME,
-        ("band2", Dark) => theme::BAND,
+        // The opaque ladder (theme rule 3): pages paint the card.
+        ("bg", Dark) => theme::CARD,
+        ("band", Dark) => theme::FRAME,
+        ("band2", Dark) => theme::FIELD,
         ("fg", Dark) => theme::TEXT,
         ("strong", Dark) => theme::TEXT_STRONG,
-        ("muted", Dark) => theme::TEXT_MUTED,
+        ("muted", Dark) => theme::TEXT_DIM,
         ("faint", Dark) => theme::TEXT_FAINT,
         ("border", Dark) => theme::LINE,
         ("border2", Dark) => theme::LINE2,
-        ("accent", Dark) => theme::ACCENT,
-        ("on-accent", Dark) => theme::ON_ACCENT,
+        // No accent hue (ADR 0033): the interactive ink is the strongest.
+        ("accent", Dark) => theme::TEXT_STRONG,
+        ("on-accent", Dark) => theme::ON_PRIMARY,
         ("float", Dark) => theme::FLOAT,
         ("red", Dark) => theme::RED,
         ("green", Dark) => theme::GREEN,
@@ -88,7 +89,7 @@ fn colour(name: &str, scheme: Scheme) -> Option<String> {
         // for lightness band, chroma floor and colour-vision separation of
         // adjacent pairs against `bg` (spikes/inline-cef NOTES-host.md).
         // Ferrite's pastel terminal hues fail those checks, so they stay
-        // text and accent colours.
+        // text and strong colours.
         ("chart-1", Dark) => 0x3987e5,
         ("chart-2", Dark) => 0xd95926,
         ("chart-3", Dark) => 0x199e70,
@@ -203,10 +204,10 @@ mod tests {
     #[test]
     fn the_dark_palette_is_the_app_theme() {
         let reading = ReadingSize::default();
-        assert_eq!(value("bg", Scheme::Dark, reading).unwrap(), "#1b1b1c");
+        assert_eq!(value("bg", Scheme::Dark, reading).unwrap(), "#181818");
         assert_eq!(
             value("accent", Scheme::Dark, reading).unwrap(),
-            hex(theme::ACCENT)
+            hex(theme::TEXT_STRONG)
         );
         assert_eq!(
             value("fg", Scheme::Dark, reading).unwrap(),
@@ -226,7 +227,7 @@ mod tests {
             let decl = format!("--ferrite-{name}:");
             assert_eq!(css.matches(&decl).count(), 3, "{name}: root, dark, light");
         }
-        assert!(css.starts_with(":root{--ferrite-bg:#1b1b1c;"));
+        assert!(css.starts_with(":root{--ferrite-bg:#181818;"));
         assert!(!css.contains("url("), "the theme fetches nothing");
     }
 
@@ -235,11 +236,11 @@ mod tests {
         let small = theme_css(Scheme::Dark, ReadingSize::SMALLEST);
         let large = theme_css(Scheme::Dark, ReadingSize::LARGEST);
         assert!(
-            small.contains("--ferrite-font-size:12px;--ferrite-line:18px;"),
+            small.contains("--ferrite-font-size:12px;--ferrite-line:19px;"),
             "{small}"
         );
         assert!(
-            large.contains("--ferrite-font-size:24px;--ferrite-line:36px;"),
+            large.contains("--ferrite-font-size:24px;--ferrite-line:38px;"),
             "{large}"
         );
         fn strip(css: &str) -> Vec<&str> {

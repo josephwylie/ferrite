@@ -28,9 +28,9 @@ fn board_of<'a>(
 }
 
 /// F-1: the Pane's edge is an overlay, so its content starts at the Pane's
-/// own edges — the head at the Pane's left and top, its title 23.4px (a
-/// cell of padding and the 2-cell dot column) in — and every Pane root is
-/// the `PANE_GROUP` hover group.
+/// own edges — the head at the Pane's left and top, its mark 14px in and
+/// its title a gap after it (SPEC §5.9) — and every Pane root is the
+/// `PANE_GROUP` hover group.
 #[gpui::test]
 fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
     let (view, _fake, cx, _group) = board_of("frame-edge-overlay", 4, cx);
@@ -45,11 +45,17 @@ fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
             (head.left() - px(rect.x)).abs() < px(1.) && (head.top() - px(rect.y)).abs() < px(1.),
             "the head starts at the Pane's corner: {head:?} / {rect:?}"
         );
-        assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
+        // The 38px row and its hairline under it.
+        assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
+        let mark = bounds(cx, format!("pane-head-dot-{key}"));
+        assert!(
+            (mark.left() - px(rect.x + crate::theme::PANE_HEAD_PAD_L)).abs() < px(1.),
+            "the mark 14px in: {mark:?} / {rect:?}"
+        );
         let title = bounds(cx, format!("pane-head-title-{key}"));
         assert!(
-            (title.left() - px(rect.x + 3.0 * crate::theme::CH)).abs() < px(1.),
-            "the title 23.4px in: {title:?} / {rect:?}"
+            (title.left() - (mark.right() + px(crate::theme::PANE_HEAD_GAP))).abs() < px(1.),
+            "the title a gap after the mark: {title:?} / {mark:?}"
         );
         let root = bounds(cx, format!("pane-root-{key}"));
         assert!((root.left() - px(rect.x)).abs() < px(1.));
@@ -58,7 +64,7 @@ fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
 }
 
 /// F-2: a waiting Pane wears the one attention edge whether it holds focus
-/// or not — no focus ring inside it — and a calm focused Pane the accent.
+/// or not — no focus ring inside it — and a calm focused Pane `TEXT_STRONG`.
 #[gpui::test]
 fn a_focused_waiting_pane_wears_only_the_attention_edge(cx: &mut TestAppContext) {
     let (view, fake, cx, _group) = board_of("frame-one-edge", 4, cx);
@@ -174,12 +180,11 @@ fn a_three_by_three_is_tiles_and_a_two_by_two_transcripts(cx: &mut TestAppContex
     assert!(cx.debug_bounds("wall-tile").is_none());
 }
 
-/// F-7: a quick answer is 22px outside (a line and its two borders) and as
-/// wide as its words and a cell of padding each side — `1 allow` is 72px —
-/// its first box two cells in from the tile's edge, its row half a row
-/// above the tile's foot.
+/// F-7: a quick answer is 22px tall and as wide as its words and a cell
+/// of padding each side, edgeless; its first button two cells in from the
+/// tile's edge, its row half a row above the tile's foot.
 #[gpui::test]
-fn a_quick_answer_box_is_one_line_and_its_borders(cx: &mut TestAppContext) {
+fn a_quick_answer_is_22px_and_as_wide_as_its_words(cx: &mut TestAppContext) {
     let (view, fake, cx, _group) = board_of("frame-quick-box", 9, cx);
     fake.streams.borrow()[1]
         .send(decision("quick-box"))
@@ -198,7 +203,7 @@ fn a_quick_answer_box_is_one_line_and_its_borders(cx: &mut TestAppContext) {
     });
     let allow = bounds(cx, format!("wall-answer-{key}-allow"));
     assert_eq!(allow.size.height, px(crate::theme::QUICK_ANSWER_H));
-    let width = 7.0 * crate::theme::CH + 2.0 * crate::theme::QUICK_ANSWER_PAD_X + 2.0;
+    let width = 7.0 * crate::theme::CH + 2.0 * crate::theme::QUICK_ANSWER_PAD_X;
     assert!(
         (allow.size.width - px(width)).abs() <= px(1.),
         "`1 allow` is {width}px: {allow:?}"
@@ -311,7 +316,7 @@ fn a_parked_member_is_its_tile_until_enter_wakes_it(cx: &mut TestAppContext) {
 }
 
 /// F-12: the board rides cmd-B with the column, every frame: mid-ride its
-/// left edge is the column's width this frame and the seam, and the Pane
+/// left edge is the column's width this frame, and the Pane
 /// widths change from frame to frame — in Solo and on a 4-up board.
 #[gpui::test]
 fn the_board_rides_the_sidebar_every_frame(cx: &mut TestAppContext) {
@@ -341,8 +346,8 @@ fn the_board_rides_the_sidebar_every_frame(cx: &mut TestAppContext) {
                 (left, column, width)
             });
             assert!(
-                (left - (column + crate::theme::CHROME_SEAM_W)).abs() < 0.01,
-                "{count}: the board starts at the column + 1: {left} / {column}"
+                (left - column).abs() < 0.01,
+                "{count}: the board starts at the column: {left} / {column}"
             );
             widths.push(width);
         }
@@ -411,9 +416,9 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 
-/// F-9: the bottom bar always shows `1 solo` and a tab per Group, open or
-/// not; a press on a Group's tab enters it, and on `1 solo` with no loose
-/// Thread it shows the empty board.
+/// SPEC §5.7: the bottom bar always shows `1 Solo` and a tab per Group,
+/// open or not; a press on a Group's tab enters it, and on `Solo` with no
+/// loose Thread it shows the empty board.
 #[gpui::test]
 fn the_bottom_bar_has_solo_and_every_group(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("frame-bottom-bar", 2);
@@ -433,12 +438,89 @@ fn the_bottom_bar_has_solo_and_every_group(cx: &mut TestAppContext) {
     tick(cx);
     assert!(
         cx.debug_bounds("empty-board").is_some(),
-        "no loose Thread: `1 solo` is the empty board"
+        "no loose Thread: `Solo` is the empty board"
     );
 }
 
-/// F-14: a reader opens beside the Solo Pane at a line — half and half —
-/// and closing it gives the Pane its board back.
+/// SPEC §5.7: the bar is 30 high and full width, 14px in at each end:
+/// the views' tabs (22 high) at its left, the vitals at its right ending in
+/// the clock. `N need you` shows only while a Thread waits, and opens the
+/// nav's Needs-you view; free disk only under
+/// 20 GB, and never while unknown.
+#[gpui::test]
+fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
+    let (view, fake, cx, group) = board_of("frame-bar-vitals", 2, cx);
+    let bar = cx.debug_bounds("bottom-bar").unwrap();
+    let window = cx.update(|window, _| window.viewport_size());
+    assert_eq!(bar.size.height, px(crate::theme::STATUS_BAR_H));
+    assert_eq!(crate::theme::STATUS_BAR_H, 30.0);
+    assert_eq!(
+        (bar.left(), bar.right()),
+        (px(0.), window.width),
+        "full width"
+    );
+    assert_eq!(bar.bottom(), window.height);
+    let tabs = cx.debug_bounds("bottom-bar-tabs").unwrap();
+    assert_eq!(tabs.left(), bar.left() + px(14.));
+    let solo = bounds(cx, "bottom-bar-tab-solo".to_string());
+    let work = bounds(cx, format!("bottom-bar-tab-{}", group.get()));
+    assert_eq!(solo.size.height, px(22.));
+    assert_eq!(work.left() - solo.right(), px(2.), "tabs 2px apart");
+    let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
+    let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
+    assert_eq!(vitals.right(), bar.right() - px(14.));
+    assert_eq!(clock.right(), vitals.right(), "the clock ends the bar");
+
+    assert!(
+        cx.debug_bounds("bottom-bar-needs-you").is_none(),
+        "none waits"
+    );
+    fake.streams.borrow()[0]
+        .send(SessionEvent::DecisionRequested {
+            decision: Decision {
+                delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
+                id: "req0".into(),
+                tool_use_id: "toolu_req0".into(),
+                tool_name: "Bash".into(),
+                description: "ls".into(),
+                input: serde_json::json!({ "command": "ls" }),
+                suggestions: vec![],
+            },
+        })
+        .unwrap();
+    tick(cx);
+    let needs = cx
+        .debug_bounds("bottom-bar-needs-you")
+        .expect("one waits: `1 need you`");
+    let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
+    let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
+    assert!(needs.left() >= vitals.left() && needs.right() <= clock.left());
+    cx.simulate_click(needs.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.needs_you_shown()),
+        "the Needs-you view is up"
+    );
+
+    for (free, shown) in [
+        (None, false),
+        (Some(30_000_000_000), false),
+        (Some(7_500_000_000), true),
+    ] {
+        view.update(cx, |view, cx| view.free_disk_landed(free, cx));
+        tick(cx);
+        assert_eq!(
+            cx.debug_bounds("bottom-bar-disk").is_some(),
+            shown,
+            "{free:?} free"
+        );
+    }
+}
+
+/// F-14: a reader opens beside the Solo Pane at a line — half and half,
+/// the panel giving way — and closing it gives the Pane its board back.
 #[gpui::test]
 fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
     let dir = scratch("frame-reader");
@@ -476,9 +558,12 @@ fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
         )
     });
     assert_eq!(line, Some(3));
+    // The reader takes the panel's place (SPEC §5.6): the board it halves
+    // runs to the window's gutter.
+    let board = whole + crate::theme::PANEL_W - crate::theme::BOARD_PAD;
     assert!(
-        (half - (whole - crate::theme::BOARD_SEAM) / 2.0).abs() <= 1.0,
-        "half and half: {half} of {whole}"
+        (half - (board - crate::theme::BOARD_SEAM) / 2.0).abs() <= 1.0,
+        "half and half: {half} of {board}"
     );
     assert!(cx.debug_bounds("reader-head").is_some());
     view.update(cx, |view, cx| view.close_reader(0, cx));
@@ -556,4 +641,252 @@ fn dragging_the_vertical_seam_moves_both_rows(cx: &mut TestAppContext) {
         (width(&after, 2) - width(&after, 0)).abs() <= 0.5,
         "and the bottom row's moves with it: {after:?}"
     );
+}
+
+/// SPEC §4: Solo's card sits on the frame flush right of the nav, under
+/// the 46px head row, `BOARD_PAD` short of the 30px bar and flush with the
+/// panel's column (§5.6), which runs from the window's top to the bar —
+/// the mockups' frame at their 1600×960.
+#[gpui::test]
+fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
+    use crate::theme::{BOARD_PAD, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
+    let (core, _fake) = cockpit("frame-solo-card", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(960.)));
+    tick(cx);
+    let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
+    let card = rects[0].1;
+    assert_eq!((card.x, card.y), (nav::WIDTH, WIN_CHROME_H));
+    assert_eq!(card.x + card.w, 1600. - PANEL_W);
+    assert_eq!(card.y + card.h, 960. - STATUS_BAR_H - BOARD_PAD);
+    assert_eq!((card.x, card.y, card.w, card.h), (264., 46., 1032., 876.));
+    let panel = cx.debug_bounds("panel").expect("the panel");
+    assert_eq!(
+        panel,
+        gpui::Bounds::new(
+            gpui::point(px(1296.), px(0.)),
+            gpui::size(px(PANEL_W), px(960. - STATUS_BAR_H))
+        )
+    );
+    let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
+    let root = bounds(cx, format!("pane-root-{key}"));
+    assert!((root.left() - px(card.x)).abs() < px(1.) && (root.top() - px(card.y)).abs() < px(1.));
+    let bar = cx.debug_bounds("bottom-bar").expect("the bar");
+    assert_eq!(bar.size.height, px(STATUS_BAR_H));
+    assert_eq!(bar.size.width, px(1600.), "full width");
+}
+
+/// SPEC §5.9: a 2×2 Group is four equal cards `GRID_GAP` apart on the
+/// frame, its seams the gutters' centre lines: a 9px grab band and a
+/// `SEAM_LINE_W` line, both centred in the 8px gutter.
+#[gpui::test]
+fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
+    use crate::theme::{BOARD_PAD, GRID_GAP, SEAM_LINE_W, STATUS_BAR_H, WIN_CHROME_H};
+    let (view, _fake, cx, _group) = board_of("frame-group-cards", 4, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(960.)));
+    tick(cx);
+    let mut rects: Vec<layout::Rect> = cx
+        .update(|window, cx| view.read(cx).pane_rects(window))
+        .into_iter()
+        .map(|(_, rect)| rect)
+        .collect();
+    rects.sort_by(|a, b| (a.y, a.x).partial_cmp(&(b.y, b.x)).unwrap());
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let [tl, tr, bl, br] = rects[..] else {
+        panic!("four cards: {rects:?}")
+    };
+    assert!(near(tl.x, nav::WIDTH) && near(tl.y, WIN_CHROME_H), "{tl:?}");
+    assert!(near(tr.x - (tl.x + tl.w), GRID_GAP), "{tl:?} {tr:?}");
+    assert!(near(bl.y - (tl.y + tl.h), GRID_GAP), "{tl:?} {bl:?}");
+    assert!(near(br.x + br.w, 1600. - BOARD_PAD), "{br:?}");
+    assert!(near(br.y + br.h, 960. - STATUS_BAR_H - BOARD_PAD), "{br:?}");
+    assert!(
+        near(tl.w, tr.w) && near(tl.h, bl.h),
+        "equal cards: {rects:?}"
+    );
+    let gutter = tl.x + tl.w + GRID_GAP / 2.;
+    let band = bounds(cx, "board-seam-0-band-0".to_string());
+    assert_eq!(band.size.width, px(9.));
+    // gpui snaps the half-pixel band to the device pixel.
+    assert!((band.center().x - px(gutter)).abs() <= px(0.5), "{band:?}");
+    let line = bounds(cx, "board-seam-0".to_string());
+    assert_eq!(line.size.width, px(SEAM_LINE_W));
+    assert!((line.center().x - px(gutter)).abs() <= px(0.5), "{line:?}");
+}
+
+/// SPEC §5.9: a Group Pane's head says `done` only while the finish is
+/// unseen — on screen while the window is away — and the seen rule clears
+/// it the moment the window comes back.
+#[gpui::test]
+fn the_seen_rule_clears_a_heads_done(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board_of("frame-head-done", 2, cx);
+    let key = view.read_with(cx, |view, _| view.panes[1].thread().unwrap().get());
+    let word = move |cx: &mut gpui::VisualTestContext| {
+        debug_bounds(cx, format!("pane-head-word-{key}")).is_some()
+    };
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.deactivate_window();
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(word(cx), "on the board, but the window is away: `done`");
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    tick(cx);
+    assert!(!word(cx), "seen on return: an idle head says nothing");
+}
+
+/// SPEC §5.9: the quick answers work on a Group Pane's Decision box — the
+/// digit on the Pane that holds the keyboard, a press on any Pane's — and
+/// a Group Pane's box says no keys under it (Solo's does), so focus moves
+/// nothing in it.
+#[gpui::test]
+fn a_group_panes_decision_box_answers_by_digit_and_press(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board_of("frame-box-answers", 2, cx);
+    fake.streams.borrow()[1]
+        .send(decision("box-digit"))
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("question-island").is_some(),
+        "the box shows"
+    );
+    assert!(
+        cx.debug_bounds("decision-hints").is_none(),
+        "a Group Pane's box says no keys"
+    );
+    view.update(cx, |view, cx| {
+        view.focus_pane(1);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("decision-hints").is_none());
+    cx.simulate_keystrokes("1");
+    tick(cx);
+    assert!(
+        matches!(
+            fake.answered.borrow().last(),
+            Some((id, DecisionAnswer::Allow { .. })) if id == "box-digit"
+        ),
+        "{:?}",
+        fake.answered.borrow()
+    );
+
+    // A press answers a box on a Pane that does not hold the keyboard.
+    fake.streams.borrow()[1]
+        .send(decision("box-press"))
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    let (thread, serial) = view.read_with(cx, |view, _| {
+        let request = view.shown_request(1).unwrap();
+        (view.panes[1].thread().unwrap(), request.handle.serial)
+    });
+    let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
+    cx.simulate_click(deny.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        matches!(
+            fake.answered.borrow().last(),
+            Some((id, DecisionAnswer::Deny { .. })) if id == "box-press"
+        ),
+        "{:?}",
+        fake.answered.borrow()
+    );
+}
+
+/// SPEC §5.9: a turn that failed leaves the failure strip under it, and
+/// its `Retry` sends the failed turn's prompt again.
+#[gpui::test]
+fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board_of("frame-retry", 2, cx);
+    let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.cockpit.send(thread, "build the range sheet".into());
+        cx.notify();
+    });
+    tick(cx);
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Error("boom".into()),
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let sent = |fake: &Fake| {
+        fake.sent
+            .borrow()
+            .iter()
+            .filter(|prompt| prompt.contains("build the range sheet"))
+            .count()
+    };
+    assert_eq!(sent(&fake), 1);
+    let key = thread.get();
+    assert!(
+        debug_bounds(cx, format!("failure-strip-{key}")).is_some(),
+        "the strip stands under the failed turn"
+    );
+    let retry = bounds(cx, format!("failure-retry-{key}"));
+    cx.simulate_click(retry.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(sent(&fake), 2, "Retry sent the prompt again");
+}
+
+/// SPEC §5.4: a transcript shorter than its viewport sits at the bottom,
+/// on the Composer, with the empty space above it — in a Group Pane and
+/// in Solo alike.
+#[gpui::test]
+fn a_short_transcript_sits_at_the_bottom(cx: &mut TestAppContext) {
+    for grouped in [true, false] {
+        let (mut core, fake) = cockpit(
+            if grouped {
+                "frame-bottom-group"
+            } else {
+                "frame-bottom-solo"
+            },
+            2,
+        );
+        let thread = core.threads()[0];
+        core.send(thread, "Explain the board".into());
+        if grouped {
+            let group = group_all(&mut core);
+            core.enter_group(group).unwrap();
+        }
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "One regression in the board.".into(),
+            })
+            .unwrap();
+        tick(cx);
+        let key = thread.get();
+        let body = bounds(cx, format!("pane-body-{key}"));
+        let prompt = cx.debug_bounds("transcript-prompt").expect("the prompt");
+        let answer = cx.debug_bounds("transcript-answer").expect("the answer");
+        let pad = px(crate::theme::body_pad_b(!grouped));
+        assert!(
+            (body.bottom() - pad - answer.bottom()).abs() <= px(2.),
+            "grouped {grouped}: the last row sits on the body's foot: {answer:?} / {body:?}"
+        );
+        assert!(
+            prompt.top() - body.top() > px(100.),
+            "grouped {grouped}: the empty space is above the rows: {prompt:?} / {body:?}"
+        );
+    }
 }

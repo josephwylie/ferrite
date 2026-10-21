@@ -2,12 +2,11 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Terminal-native (WP-D): the Composer's input band spans the Pane's
-/// width — no reading column, no box — its `❯` hanging in the 2-cell gutter
-/// `COMPOSER_PAD_L` in, its editor starting two cells after that; under it
-/// the status line, then the stack's own air to the Pane's foot.
+/// SPEC §5.5: Solo's Composer is a box `COMPOSER_INSET` inside the card's
+/// sides, its editor `COMPOSER_INPUT_PAD_X` in from the box's edge; the bar
+/// carries no status line.
 #[gpui::test]
-fn the_composer_block_shares_the_reading_column(cx: &mut TestAppContext) {
+fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("composer-reading-column", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for (width, height) in [(1600., 900.), (700., 700.)] {
@@ -19,24 +18,21 @@ fn the_composer_block_shares_the_reading_column(cx: &mut TestAppContext) {
             .or_else(|| cx.debug_bounds("prompt-editor"))
             .unwrap();
         let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-        // Inside the Pane's 1px border, edge to edge.
+        let inset = crate::theme::COMPOSER_INSET;
         assert!(
-            (block.left() - px(pane.x + 1.)).abs() <= px(1.)
-                && (block.right() - px(pane.x + pane.w - 1.)).abs() <= px(1.),
+            (block.left() - px(pane.x + inset)).abs() <= px(1.)
+                && (block.right() - px(pane.x + pane.w - inset)).abs() <= px(1.),
             "{block:?} / {pane:?}"
         );
         assert!(
-            (editor.left()
-                - block.left()
-                - px(crate::theme::COMPOSER_PAD_L + crate::theme::COMPOSER_GUTTER))
-            .abs()
+            (block.bottom() - px(pane.y + pane.h - inset)).abs() <= px(1.),
+            "{block:?} / {pane:?}"
+        );
+        assert!(
+            (editor.left() - block.left() - px(crate::theme::COMPOSER_INPUT_PAD_X)).abs()
                 <= px(0.5),
             "{editor:?} / {block:?}"
         );
-        let meta = cx.debug_bounds("composer-meta").expect("the status line");
-        assert!(
-            meta.top() >= px(pane.y + pane.h),
-            "the status line rides the bar, under the Pane (ADR 0014)"
-        );
+        assert!(cx.debug_bounds("composer-meta").is_none(), "no status line");
     }
 }

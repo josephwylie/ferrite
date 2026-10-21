@@ -13,8 +13,8 @@ use sw_board::json::*;
 use super::BoardView;
 use crate::components::{self, Tip};
 use crate::theme::{
-    BAND2, CH, CHROME, CONTROL_H, ICON_CHEVRON, LINE, ON_ACCENT, PLANE, ROW, TEXT, TEXT_MUTED,
-    TEXT_STRONG, W_STRONG,
+    paint, CH, CONTROL_H, ICON_CHEVRON, ON_PRIMARY, ROW, SPACE_3, TEXT, TEXT_DIM, TEXT_STRONG,
+    W_STRONG,
 };
 
 pub(super) const HEIGHT: f32 = ROW * 3.;
@@ -37,7 +37,7 @@ impl BoardView {
         } else {
             "board-project-all"
         };
-        components::form_button_on(id, rgb(if selected { BAND2 } else { PLANE }).into(), cx)
+        components::form_button_on(id, if selected { paint::RAISED } else { paint::CARD }, cx)
             .tab_stop(false)
             .h(px(CONTROL_H))
             .px(px(CH))
@@ -45,7 +45,7 @@ impl BoardView {
             .accessibility_label(label)
             .child(
                 components::text_ui()
-                    .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_MUTED }))
+                    .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_DIM }))
                     .child(label),
             )
             .on_click(cx.listener(move |view, _, _, cx| {
@@ -89,7 +89,7 @@ impl BoardView {
         let button = if primary {
             components::primary_button(id, disabled, cx)
         } else {
-            components::form_button_on(id, rgb(CHROME).into(), cx).disabled(disabled)
+            components::form_button_on(id, paint::FRAME, cx).disabled(disabled)
         };
         button
             .tab_stop(false)
@@ -101,9 +101,9 @@ impl BoardView {
             .child(
                 components::text_ui()
                     .text_color(rgb(if disabled {
-                        TEXT_MUTED
+                        TEXT_DIM
                     } else if primary {
-                        ON_ACCENT
+                        ON_PRIMARY
                     } else {
                         TEXT
                     }))
@@ -188,9 +188,9 @@ impl BoardView {
             .flex_shrink_0()
             .h(px(HEIGHT))
             .text_color(rgb(TEXT))
-            .px(px(CH * 1.5))
+            .px(px(SPACE_3))
             .border_b_1()
-            .border_color(rgb(LINE))
+            .border_color(paint::LINE)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -284,7 +284,7 @@ impl BoardView {
         components::ChoiceMenu {
             id: "board-more".into(),
             anchor: gpui::Anchor::TopLeft,
-            trigger: components::form_button_on("board-more", rgb(CHROME).into(), cx)
+            trigger: components::form_button_on("board-more", paint::FRAME, cx)
                 .tab_stop(false)
                 .h(px(CONTROL_H))
                 .px(px(CH))
@@ -292,7 +292,7 @@ impl BoardView {
                 .child(crate::icons::icon(
                     crate::icons::CHEVRON_DOWN,
                     ICON_CHEVRON,
-                    TEXT_MUTED,
+                    TEXT_DIM,
                 )),
             choices,
             open: self.controls.open == Some("more"),
@@ -383,13 +383,13 @@ impl BoardView {
                 .child(
                     components::text_ui()
                         .truncate()
-                        .text_color(rgb(if disabled { TEXT_MUTED } else { TEXT }))
+                        .text_color(rgb(if disabled { TEXT_DIM } else { TEXT }))
                         .child(shown.to_owned()),
                 )
                 .child(crate::icons::icon(
                     crate::icons::CHEVRON_DOWN,
                     ICON_CHEVRON,
-                    TEXT_MUTED,
+                    TEXT_DIM,
                 )),
             choices,
             open: self.controls.open == Some(name),

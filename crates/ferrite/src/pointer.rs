@@ -2,7 +2,7 @@
 //! clickable surface, and a render site only says which role a thing is —
 //! the trait owns the tokens, the cursor, and the pairing between them.
 //! Hover is achromatic: it answers "would a click here land?" and never
-//! borrows the accent (keyboard position) or amber/red (attention).
+//! borrows `TEXT_STRONG` (keyboard position) or amber/red (attention).
 //!
 //! Only widget constructors call these (`menu_row`, `keycap`, nav's row
 //! frames, the cell shell …) — render sites never write a hover refinement
@@ -24,7 +24,7 @@
 //! equal to rest so the kit's own hover never snaps over it.
 //!
 //! **One ladder on every ground** (theme rules 3 and 4): rest nothing;
-//! hover `paint::HOVER`; the cursor or a selected row `paint::SELECTION`;
+//! hover `paint::RAISED`; the cursor or a selected row `paint::SELECTED`;
 //! that row under the pointer `paint::SELECTION_HOVER`; press
 //! `paint::PRESS`. On glass (macOS) every face is a white overlay, so it
 //! reads on chrome, the plane or a band alike; elsewhere each is its opaque
@@ -87,7 +87,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
     /// row is a keyboard change.
     fn hover_carried(self, key: impl Into<SharedString>) -> Self {
         let key = key.into();
-        let ground = motion::hover_blend(&key, paint::SELECTION.into(), carried_face());
+        let ground = motion::hover_blend(&key, paint::SELECTED.into(), carried_face());
         let mut element = self.cursor_pointer().bg(ground);
         listen(&mut element, key);
         element
@@ -214,15 +214,15 @@ pub fn button_variant(ground: Hsla, ink: Hsla, press: Hsla, cx: &App) -> ButtonC
 // Each role's hover face, named so the tokens are assertable as data.
 
 fn row_face() -> Hsla {
-    paint::HOVER.into()
+    paint::RAISED.into()
 }
 
 fn control_face() -> Hsla {
-    paint::HOVER.into()
+    paint::RAISED.into()
 }
 
 fn raised_face() -> Hsla {
-    paint::HOVER.into()
+    paint::RAISED.into()
 }
 
 fn carried_face() -> Hsla {
@@ -271,10 +271,10 @@ mod tests {
     /// retired with the glass frame.)
     #[test]
     fn each_role_pairs_its_token_with_the_pointer() {
-        assert_eq!(row_face(), Hsla::from(paint::HOVER));
-        assert_eq!(control_face(), Hsla::from(paint::HOVER));
-        assert_eq!(raised_face(), Hsla::from(paint::HOVER));
-        assert_ne!(raised_face(), Hsla::from(paint::SELECTION));
+        assert_eq!(row_face(), Hsla::from(paint::RAISED));
+        assert_eq!(control_face(), Hsla::from(paint::RAISED));
+        assert_eq!(raised_face(), Hsla::from(paint::RAISED));
+        assert_ne!(raised_face(), Hsla::from(paint::SELECTED));
         for press in [row_press, control_press, raised_press] {
             assert_eq!(
                 background(&press(StyleRefinement::default())),
@@ -323,7 +323,7 @@ mod tests {
         let mut carried = div().id("armed").hover_carried("pointer-test-armed");
         assert_eq!(
             background(carried.style()),
-            Some(&Fill::from(Hsla::from(paint::SELECTION)))
+            Some(&Fill::from(Hsla::from(paint::SELECTED)))
         );
 
         // The text role speaks the I-beam, not the pointer: characters are

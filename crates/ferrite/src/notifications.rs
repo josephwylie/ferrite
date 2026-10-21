@@ -1,12 +1,13 @@
-//! The bell: every request that waits on the operator and every Thread that
-//! finished while they looked elsewhere.
+//! Needs you: every request that waits on the operator and every Thread
+//! that finished while they looked elsewhere (CONTEXT.md's Needs-you view,
+//! its alerts and toasts).
 //!
 //! Drawing and toasts only. What counts as waiting or finished is decided
 //! headless in `ferrite_core::notifications` — the rows this module draws
 //! are read from there, worded by the cockpit (`Row`), and every click or
 //! key comes back as one `Verb`. Ferrite draws all of it in the float
-//! grammar (theme WP-E): the bell's door and its badge (FL-17), the list
-//! that hangs from it (FL-16), and the toasts (FL-18).
+//! grammar (theme WP-E): the bar's need-you door and its badge (FL-17), the
+//! Needs-you view's rows (FL-16), and the toasts (FL-18).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -18,7 +19,6 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful, Window};
 
 use crate::components;
-use crate::icons;
 use crate::machines::MachineKey;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
@@ -35,7 +35,7 @@ pub enum QuickAnswer {
     Deny,
 }
 
-/// What a click or a key on the bell's surfaces means. The cockpit answers
+/// What a click or a key on the Needs-you view's surfaces means. The cockpit answers
 /// each against the core and repaints.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verb {
@@ -58,7 +58,7 @@ pub enum Verb {
 
 pub type Handle = Rc<dyn Fn(Verb, &mut Window, &mut App)>;
 
-/// A Bell row has one actionable target, independent of provider wire data.
+/// A NeedsYou row has one actionable target, independent of provider wire data.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowTarget {
     Notice(NoticeId),
@@ -295,7 +295,7 @@ pub fn done_words(
 /// cell of padding each side, the mark (2), the word (10) and the age (5).
 pub const ROW_TEXT_CELLS: usize = 76 - 2 - 2 - 10 - 5;
 
-// ----------------------------------------------------------------- Bell
+// ----------------------------------------------------------------- NeedsYou
 
 /// How long an event waits before it alerts: a request answered, or a
 /// finish read, within it never interrupts anyone (ADR 0017).
@@ -353,7 +353,7 @@ pub struct Toast {
     until: Instant,
 }
 
-/// What one `Bell::ring` did: the events that rang (each owes its sound and
+/// What one `NeedsYou::ring` did: the events that rang (each owes its sound and
 /// its system notification), and whether the toasts changed.
 #[derive(Debug, Default)]
 pub struct Ring {
@@ -361,7 +361,7 @@ pub struct Ring {
     pub redraw: bool,
 }
 
-/// What the bell has heard of one machine: the Notice watermark (Notices
+/// What the Needs-you view has heard of one machine: the Notice watermark (Notices
 /// at or below it were heard) and the live requests.
 #[derive(Default)]
 struct Heard {
@@ -369,7 +369,7 @@ struct Heard {
     requests: BTreeSet<DecisionNoticeId>,
 }
 
-/// The window's side of the bell: whether its list is down and where its
+/// The window's side of the Needs-you view: whether its list is down and where its
 /// cursor stands, which Notices and requests it has heard of each machine,
 /// the events waiting out `ALERT_DELAY`, the toasts standing (oldest
 /// first; the newest draws), and the system notifications posted.
@@ -386,14 +386,14 @@ struct Heard {
 /// (the window just left it, or met it already waiting); what it says
 /// after rings like the rest. Nobody looks at a machine off screen, so its
 /// alerts are never in view. When the window goes to another machine, the
-/// bell moves with it (`moved`): an alert rings once, off screen or on, and
+/// Needs-you view moves with it (`moved`): an alert rings once, off screen or on, and
 /// what waits or stands goes on doing so. A machine not heard from yet (the
 /// one just left, or the one arrived at before it answers) cannot say
 /// whether its alerts still stand: they wait for it, no longer than a
 /// toast would stand.
-pub struct Bell {
-    pub open: bool,
-    /// The list's cursor row (`SELECTION`), first on open.
+pub struct NeedsYou {
+    /// The list's cursor row in the Needs-you view (`nav::NavView`),
+    /// first on open.
     pub cursor: usize,
     /// Per machine; `None` is the one on screen.
     heard: HashMap<Option<MachineKey>, Heard>,
@@ -403,24 +403,20 @@ pub struct Bell {
     /// The system notifications standing, by tag (one per Thread on each
     /// machine), and what each opens when clicked.
     pub posted: BTreeMap<String, Alert>,
-    /// The bell's door as last laid out: what the list hangs from.
-    pub door: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 
-impl Bell {
+impl NeedsYou {
     pub fn new() -> Self {
         Self {
-            open: false,
             cursor: 0,
             heard: HashMap::new(),
             pending: Vec::new(),
             toasts: Vec::new(),
             posted: BTreeMap::new(),
-            door: Rc::new(std::cell::Cell::new(None)),
         }
     }
 
-    /// The bell of a window that went from machine `left` to `arrived`:
+    /// The Needs-you view of a window that went from machine `left` to `arrived`:
     /// all it holds of each re-keyed (the one left is off screen now, the
     /// one arrived at on screen), so neither rings again for what it rang
     /// already, and what waits, stands or is posted goes on. A system
@@ -545,7 +541,7 @@ impl Bell {
         }
     }
 
-    /// Bring the bell up to `now`. A standing toast goes once it expired,
+    /// Bring the Needs-you view up to `now`. A standing toast goes once it expired,
     /// is no longer `live` (read, resolved, dismissed) or is `in_view`. A
     /// waiting event whose delay is up is checked again: still live and
     /// not in view, it rings — toasting in place of its Thread's toast.
@@ -589,84 +585,17 @@ impl Bell {
     }
 }
 
-impl Default for Bell {
+impl Default for NeedsYou {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// --------------------------------------------------------------- the door
-
-/// The bell's door in the bottom bar (the prototype's `.ib`, FL-17):
-/// `ICON_BUTTON` wide and the bar's full height, the bell at `ICON_BUTTON_GLYPH` in
-/// `TEXT_MUTED`, `paint::HOVER` and `TEXT` under the pointer (and while the
-/// list is down), and the badge: the unread waiting requests as a bare
-/// `BADGE_FS` digit in `ATTENTION` at its top-right corner — hidden at
-/// zero, never tinted by a failure.
-pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::Button {
-    let id = gpui::ElementId::from("notifications-bell");
-    let key = crate::pointer::hover_key(&id);
-    let rest: gpui::Hsla = if open {
-        paint::HOVER.into()
-    } else {
-        gpui::rgba(TRANSPARENT).into()
-    };
-    let glyph = if open {
-        rgb(TEXT).into()
-    } else {
-        crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into())
-    };
-    components::faded_button(
-        id,
-        rest,
-        paint::HOVER.into(),
-        paint::PRESS.into(),
-        rgb(TEXT_MUTED).into(),
-        cx,
-    )
-    .debug_selector(|| "notifications-bell".into())
-    .relative()
-    .w(px(ICON_BUTTON))
-    .h_full()
-    .p_0()
-    .accessibility_label("Notifications")
-    .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
-    .when(requests > 0, |door| door.child(badge(requests)))
-}
-
-/// The badge: the prototype's superscript — `BADGE_FS` `W_STRONG` tabular
-/// digits in `ATTENTION` on no ground at the door's top-right, `99+` past
-/// two digits, its right edge 1px in from the door's (the prototype's
-/// `right:1px`).
-fn badge(requests: usize) -> Div {
-    let count: SharedString = if requests > 99 {
-        "99+".into()
-    } else {
-        requests.to_string().into()
-    };
-    components::tabular(
-        div()
-            .debug_selector(|| "notifications-badge".into())
-            .absolute()
-            .top(px(0.))
-            .right(px(1.))
-            .font_family(FONT_UI)
-            .text_size(px(BADGE_FS))
-            .line_height(px(BADGE_LH))
-            .font_weight(W_STRONG)
-            .text_color(rgb(BADGE_INK))
-            .child(count),
-    )
-}
-
-/// The badge's one ink: what waits on the operator.
-pub const BADGE_INK: u32 = ATTENTION;
-
 // ---------------------------------------------------------- marks, words
 
 /// A row's or toast's mark, typed in its 2-cell column: `◆` for an
 /// approval and `?` for a question, both `ATTENTION`; `✗` `BLOCKED` for a
-/// failure; `✓` `TEXT_MUTED` for a turn that finished.
+/// failure; `✓` `TEXT_DIM` for a turn that finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Mark(&'static str, u32);
 
@@ -675,20 +604,8 @@ fn mark(state: State) -> Mark {
         State::NeedsYou(RequestKind::Permission) => Mark("\u{25c6}", ATTENTION),
         State::NeedsYou(RequestKind::Question) => Mark("?", ATTENTION),
         State::Failed => Mark("\u{2717}", BLOCKED),
-        State::Done => Mark("\u{2713}", TEXT_MUTED),
+        State::Done => Mark("\u{2713}", TEXT_DIM),
     }
-}
-
-/// The mark typed at the start of its 2-cell column, one row high.
-fn mark_cell(state: State) -> Div {
-    let Mark(glyph, ink) = mark(state);
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .w(px(NOTICE_MARK_W))
-        .h(px(LH_UI))
-        .child(components::glyph(glyph, ink))
 }
 
 /// Folds each Thread's completions into its newest (`rows` are newest
@@ -718,165 +635,12 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
     kept
 }
 
-// ------------------------------------------------------------------ list
-
-/// The list's footer, word for word (the prototype's `#notes .ffoot`).
-pub const LIST_FOOTER: &str =
-    "\u{2191}\u{2193} select \u{b7} \u{23ce} open \u{b7} \u{232b} dismiss \u{b7} esc";
-
-/// The list under the bell (the prototype's `#notes`, FL-16): the float,
-/// its head `notifications` with `mark all read` at its right (always),
-/// one row per notice — the live requests first, in the order the answer
-/// keys take them, then finished turns, each Thread folded to its newest —
-/// the cursor's row on `FLOAT_SEL`, and the footer of its keys. Its keys
-/// ride `focus` (`Notifications` context).
-pub fn list(rows: &[Row], cursor: usize, focus: &gpui::FocusHandle, handle: Handle) -> Div {
-    let mark_read = handle.clone();
-    let head = crate::menu::head("notifications").child(
-        div()
-            .id("notifications-mark-read")
-            .debug_selector(|| "notifications-mark-read".into())
-            .flex_shrink_0()
-            .px(px(CH))
-            .mr(px(-CH))
-            .text_color(rgb(TEXT_MUTED))
-            .hover_float("notifications-mark-read")
-            .press_float()
-            .child("mark all read")
-            .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                mark_read(Verb::MarkAllRead, window, cx)
-            }),
-    );
-    let panel = crate::menu::float()
-        .debug_selector(|| "notifications-panel".into())
-        .w(px(NOTICE_PANEL_W))
-        .max_h(px(MENU_MAX_H))
-        .track_focus(focus)
-        .key_context("Notifications")
-        .child(head);
-    if rows.is_empty() {
-        return panel
-            .child(crate::menu::note("nothing waits, nothing finished"))
-            .child(crate::menu::footer_line(LIST_FOOTER));
-    }
-    let list = div()
-        .id("notifications-list")
-        .flex()
-        .flex_col()
-        .min_h_0()
-        .overflow_y_scroll()
-        .children(
-            rows.iter()
-                .enumerate()
-                .map(|(index, row)| row_element(index, row, index == cursor, handle.clone())),
-        );
-    panel
-        .child(list)
-        .child(crate::menu::footer_line(LIST_FOOTER))
-}
-
-/// One notice (the prototype's `.nt`): one row in four columns — the mark,
-/// the state word in its colour, the title (`TEXT_STRONG` while unread)
-/// with ` · <detail>` muted after it, and the age right-aligned. Under the
-/// pointer only `FLOAT_HOVER`; its whole text stays reachable to assistive
-/// technology.
-fn row_element(index: usize, row: &Row, cursor: bool, handle: Handle) -> Stateful<Div> {
-    let verb = row.open_verb();
-    let key: SharedString = format!("notice-row-{index}").into();
-    let detail = row.detail.text();
-    let word_color = word_ink(row.word());
-    let element = components::text_ui()
-        .id(("notice-row", index))
-        .debug_selector(move || format!("notice-row-{index}"))
-        .flex()
-        .items_center()
-        .w_full()
-        .flex_shrink_0()
-        .h(px(FLOAT_ROW_H))
-        .px(px(FLOAT_PAD_X))
-        .whitespace_nowrap()
-        .aria_label(SharedString::from(format!(
-            "{} \u{b7} {} \u{b7} {} \u{b7} {}",
-            row.word(),
-            row.title,
-            detail,
-            row.when
-        )))
-        .on_click(move |_, window, cx| {
-            cx.stop_propagation();
-            handle(verb.clone(), window, cx)
-        })
-        .child(mark_cell(row.state))
-        .child(
-            div()
-                .flex_shrink_0()
-                .w(px(NOTICE_STATE_W))
-                .text_color(rgb(word_color))
-                .child(row.word()),
-        )
-        .child({
-            // The title and its detail are one run, cut as the prototype's
-            // cell cuts it: its `…` in the cell's own `TEXT`, whatever it
-            // hides (the detail's dim, mostly).
-            let title_ink = rgb(if row.read { TEXT } else { TEXT_STRONG });
-            let line = if detail.is_empty() {
-                row.title.to_string()
-            } else {
-                format!("{} \u{b7} {detail}", row.title)
-            };
-            let highlights = vec![
-                (
-                    0..row.title.len(),
-                    gpui::HighlightStyle {
-                        color: Some(title_ink.into()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    row.title.len()..line.len(),
-                    gpui::HighlightStyle {
-                        color: Some(rgb(TEXT_MUTED).into()),
-                        ..Default::default()
-                    },
-                ),
-            ];
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_color(rgb(TEXT))
-                .child(
-                    crate::pane::CellCut::plain(line.clone(), rgb(TEXT).into(), CH).child(
-                        gpui::StyledText::new(line)
-                            .with_highlights(highlights)
-                            .into_any_element(),
-                    ),
-                )
-        })
-        .child(components::tabular(
-            div()
-                .flex_shrink_0()
-                .w(px(NOTICE_AGE_W))
-                .flex()
-                .justify_end()
-                .text_color(rgb(TEXT_MUTED))
-                .child(row.when.clone()),
-        ));
-    if cursor {
-        element.float_cursor().press_float()
-    } else {
-        element.hover_float(key).press_float()
-    }
-}
-
 // ---------------------------------------------------------------- toasts
 
-/// A quick answer in a toast (the prototype's `.qa button`): the key in
-/// `TEXT_MUTED` and the word in `TEXT`, in a 1px `FLOAT_EDGE` box a cell
-/// of padding wide, `TOAST_BUTTON_H` tall; under the pointer the float's
-/// band (`FLOAT_BAND2`) and the word `TEXT_STRONG`, over the one blend.
+/// A quick answer in a toast: the key in `TEXT_DIM` and the word in
+/// `TEXT`, on a `TOKEN_H` pill of the float's raised fill (`FLOAT_BAND2`),
+/// radius `R_SMALL`; under the pointer the word `TEXT_STRONG`, over the one
+/// blend.
 fn quick_button(
     id: impl Into<gpui::ElementId>,
     key: &'static str,
@@ -885,23 +649,21 @@ fn quick_button(
     let id = id.into();
     let blend = crate::pointer::hover_key(&id);
     let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
-    // Its cells, a cell of padding each side and its edge.
-    let width = components::run_width(key) + components::run_width(word) + 2.0 * CH + 2.0;
     div()
         .id(id)
         .flex()
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .h(px(TOAST_BUTTON_H))
-        .w(px(width))
-        .border_1()
-        .border_color(FLOAT_EDGE)
+        .h(px(TOKEN_H))
+        .px(px(TOKEN_PAD_X))
+        .rounded(px(R_SMALL))
+        .bg(FLOAT_BAND2)
         .whitespace_nowrap()
         .hover_quick(blend)
         .press_float()
-        .child(components::cells(key).text_color(rgb(TEXT_MUTED)))
-        .child(components::cells(word).text_color(ink))
+        .child(div().text_color(rgb(TEXT_DIM)).child(key))
+        .child(div().text_color(ink).child(word))
 }
 
 /// A toast (the prototype's `.toast`, FL-18), in the float grammar with no
@@ -919,12 +681,18 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
             .flex()
             .min_w_0()
             .overflow_hidden()
-            .child(components::cells(format!("{tool} wants to run ")).text_color(rgb(TEXT)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .text_color(rgb(TEXT))
+                    .child(format!("{tool} wants to run\u{a0}")),
+            )
             .child(
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(INLINE_CODE))
+                    .text_color(rgb(INLINE_CODE_INK))
                     .child(command.clone()),
             )
             .into_any_element(),
@@ -977,7 +745,7 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
     );
     crate::menu::float()
         .debug_selector(move || format!("toast-{thread}"))
-        .w(px(TOAST_BOX_W))
+        .w(px(TOAST_W))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
@@ -1003,14 +771,14 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_color(rgb(TEXT_MUTED))
+                                .text_color(rgb(TEXT_DIM))
                                 .child(SharedString::from(format!(" \u{b7} {}", row.title))),
                         ),
                 )
                 .when(request, |head| {
                     head.children(
                         components::bound_chord("cockpit::NextDecision").map(|keys| {
-                            components::key_combo(&keys, TEXT_MUTED)
+                            components::key_combo(&keys, TEXT_DIM)
                                 .flex_shrink_0()
                                 .ml(px(FLOAT_DETAIL_GAP))
                         }),
@@ -1029,9 +797,8 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
         .child(
             div()
                 .flex()
-                .gap(px(CH))
+                .gap(px(SPACE_1_5))
                 .px(px(FLOAT_PAD_X))
-                .pt(px(TOAST_QUICK_GAP))
                 .pb(px(TOAST_QUICK_GAP))
                 .children(buttons),
         )
@@ -1143,10 +910,9 @@ mod tests {
         let done = row(State::Done, Detail::None);
         assert_eq!(
             (done.word(), word_ink(done.word())),
-            (words::DONE, TEXT_MUTED)
+            (words::DONE, TEXT_DIM)
         );
-        assert_eq!(mark(State::Done), Mark("\u{2713}", TEXT_MUTED));
-        assert_eq!(BADGE_INK, ATTENTION);
+        assert_eq!(mark(State::Done), Mark("\u{2713}", TEXT_DIM));
         const { assert!(ROW_TEXT_CELLS >= 40) };
     }
 
@@ -1187,22 +953,25 @@ mod tests {
     /// or as soon as it is read.
     #[test]
     fn an_event_rings_after_its_delay_if_it_still_stands() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let waiting = request(2, 1);
         let here = request(1, 2);
         let in_view = |alert: &Alert| alert.thread == ThreadId::new(1);
-        bell.hear(
+        needs_you.hear(
             None,
             [],
             [(waiting.clone(), false), (here.clone(), false)],
             start,
         );
-        let ring = bell.ring(start, &|_| Some(true), &in_view);
-        assert!(ring.rang.is_empty() && bell.toasts().is_empty(), "not yet");
+        let ring = needs_you.ring(start, &|_| Some(true), &in_view);
+        assert!(
+            ring.rang.is_empty() && needs_you.toasts().is_empty(),
+            "not yet"
+        );
 
         let due = start + ALERT_DELAY;
-        let ring = bell.ring(due, &|_| Some(true), &in_view);
+        let ring = needs_you.ring(due, &|_| Some(true), &in_view);
         let toast = Alert {
             away: None,
             target: RowTarget::Decision(waiting.clone()),
@@ -1210,26 +979,29 @@ mod tests {
         };
         assert_eq!(ring.rang, [toast], "the one in view stays quiet");
         assert!(ring.redraw);
-        assert_eq!(bell.toasts().len(), 1);
+        assert_eq!(needs_you.toasts().len(), 1);
         // Heard once: hearing the same requests again adds nothing.
-        bell.hear(
+        needs_you.hear(
             None,
             [],
             [(waiting.clone(), false), (here.clone(), false)],
             due,
         );
         let later = due + ALERT_DELAY;
-        assert!(bell.ring(later, &|_| Some(true), &in_view).rang.is_empty());
-        assert_eq!(bell.toasts().len(), 1);
+        assert!(needs_you
+            .ring(later, &|_| Some(true), &in_view)
+            .rang
+            .is_empty());
+        assert_eq!(needs_you.toasts().len(), 1);
         // Read (opened, or its Thread landed on): it goes.
-        let ring = bell.ring(later, &|_| Some(false), &in_view);
-        assert!(ring.redraw && bell.toasts().is_empty());
+        let ring = needs_you.ring(later, &|_| Some(false), &in_view);
+        assert!(ring.redraw && needs_you.toasts().is_empty());
 
         // A read Notice never waits; an unread one does, and one read
         // during its delay never rings.
         let read = NoticeId::from_u64(4);
         let unread = NoticeId::from_u64(5);
-        bell.hear(
+        needs_you.hear(
             None,
             [
                 (read, ThreadId::new(5), true),
@@ -1238,63 +1010,70 @@ mod tests {
             [],
             later,
         );
-        assert_eq!(bell.presented(None), Some(unread));
-        let ring = bell.ring(later + ALERT_DELAY, &|_| Some(false), &|_| false);
-        assert!(ring.rang.is_empty() && bell.toasts().is_empty());
+        assert_eq!(needs_you.presented(None), Some(unread));
+        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(false), &|_| false);
+        assert!(ring.rang.is_empty() && needs_you.toasts().is_empty());
     }
 
     /// A toast goes on its own: a request's after 8s, a finish's after 5s.
     #[test]
     fn toasts_expire_by_kind() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let asking = request(2, 1);
-        bell.hear(
+        needs_you.hear(
             None,
             [(NoticeId::from_u64(1), ThreadId::new(1), false)],
             [(asking, false)],
             start,
         );
         let shown = start + ALERT_DELAY;
-        assert_eq!(bell.ring(shown, &|_| Some(true), &|_| false).rang.len(), 2);
-        let ring = bell.ring(shown + DONE_TOAST, &|_| Some(true), &|_| false);
+        assert_eq!(
+            needs_you
+                .ring(shown, &|_| Some(true), &|_| false)
+                .rang
+                .len(),
+            2
+        );
+        let ring = needs_you.ring(shown + DONE_TOAST, &|_| Some(true), &|_| false);
         assert!(ring.redraw);
-        assert_eq!(bell.toasts().len(), 1);
+        assert_eq!(needs_you.toasts().len(), 1);
         assert!(
-            bell.toasts()[0].alert.needs_you(),
+            needs_you.toasts()[0].alert.needs_you(),
             "the request stands longer"
         );
-        bell.ring(shown + NEEDS_YOU_TOAST, &|_| Some(true), &|_| false);
-        assert!(bell.toasts().is_empty() && !bell.busy());
+        needs_you.ring(shown + NEEDS_YOU_TOAST, &|_| Some(true), &|_| false);
+        assert!(needs_you.toasts().is_empty() && !needs_you.busy());
     }
 
     /// A Thread has one voice: a new event for it displaces what it had
     /// waiting, and its toast replaces the one it had standing.
     #[test]
     fn a_new_event_for_a_thread_replaces_its_toast() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let thread = ThreadId::new(3);
         let start = Instant::now();
-        bell.hear(None, [(NoticeId::from_u64(1), thread, false)], [], start);
-        bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(None, [(NoticeId::from_u64(1), thread, false)], [], start);
+        needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         // Two requests in the same second: only the newer rings.
         let at = start + DONE_TOAST / 2;
         let (first, second) = (request(3, 1), request(3, 2));
-        bell.hear(None, [], [(first.clone(), false)], at);
-        bell.hear(None, [], [(first, false), (second.clone(), false)], at);
-        let ring = bell.ring(at + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(None, [], [(first.clone(), false)], at);
+        needs_you.hear(None, [], [(first, false), (second.clone(), false)], at);
+        let ring = needs_you.ring(at + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(ring.rang.len(), 1);
         assert_eq!(
-            bell.toasts()
+            needs_you
+                .toasts()
                 .iter()
                 .map(|t| &t.alert.target)
                 .collect::<Vec<_>>(),
             [&RowTarget::Decision(second)]
         );
         // A button that acted takes its toast down.
-        let target = bell.toasts()[0].alert.target.clone();
-        bell.drop_toast(&target);
-        assert!(bell.toasts().is_empty());
+        let target = needs_you.toasts()[0].alert.target.clone();
+        needs_you.drop_toast(&target);
+        assert!(needs_you.toasts().is_empty());
     }
 
     /// ADR 0026: a machine off screen is heard quietly the first time —
@@ -1302,22 +1081,25 @@ mod tests {
     /// its Threads apart from the same ids on screen.
     #[test]
     fn a_machine_off_screen_rings_only_for_what_is_new() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let away = Some(MachineKey(Some("me@box".into())));
         let held = request(3, 1);
-        bell.hear(away.clone(), [], [(held.clone(), false)], start);
-        assert!(!bell.busy(), "what it held when first heard is not news");
+        needs_you.hear(away.clone(), [], [(held.clone(), false)], start);
+        assert!(
+            !needs_you.busy(),
+            "what it held when first heard is not news"
+        );
 
         let asked = request(3, 2);
-        bell.hear(
+        needs_you.hear(
             away.clone(),
             [],
             [(held, false), (asked.clone(), false)],
             start,
         );
-        bell.hear(None, [], [(request(3, 1), false)], start);
-        let ring = bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(None, [], [(request(3, 1), false)], start);
+        let ring = needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(
             ring.rang,
             [
@@ -1334,10 +1116,10 @@ mod tests {
             ],
             "Thread 3 here and Thread 3 on box are two Threads"
         );
-        assert_eq!(bell.toasts().len(), 2);
-        bell.drop_toast(&RowTarget::Decision(request(3, 1)));
-        assert_eq!(bell.toasts().len(), 1, "only the one on screen went");
-        assert_eq!(bell.toasts()[0].alert.away, away);
+        assert_eq!(needs_you.toasts().len(), 2);
+        needs_you.drop_toast(&RowTarget::Decision(request(3, 1)));
+        assert_eq!(needs_you.toasts().len(), 1, "only the one on screen went");
+        assert_eq!(needs_you.toasts()[0].alert.away, away);
     }
 
     /// What was heard moves with the window: arriving at box, what rang
@@ -1345,40 +1127,40 @@ mod tests {
     /// is heard already. What either says after still rings.
     #[test]
     fn what_rang_off_screen_does_not_ring_again_on_arrival() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let home = MachineKey(None);
         let on_box = MachineKey(Some("me@box".into()));
         let finished = NoticeId::from_u64(7);
-        bell.hear(None, [(finished, ThreadId::new(1), false)], [], start);
-        bell.hear(Some(on_box.clone()), [], [], start);
+        needs_you.hear(None, [(finished, ThreadId::new(1), false)], [], start);
+        needs_you.hear(Some(on_box.clone()), [], [], start);
         let (one, two) = (request(1, 1), request(2, 1));
-        bell.hear(
+        needs_you.hear(
             Some(on_box.clone()),
             [],
             [(one, false), (two.clone(), false)],
             start,
         );
-        let ring = bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        let ring = needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(ring.rang.len(), 3, "box's two and the finish here");
 
-        let mut bell = bell.moved(&home, &on_box);
+        let mut needs_you = needs_you.moved(&home, &on_box);
         let later = start + 2 * ALERT_DELAY;
-        assert_eq!(bell.presented(Some(&home)), Some(finished));
-        assert_eq!(bell.presented(None), None, "box had no Notice");
-        bell.hear(None, [], [(two, false)], later);
-        bell.hear(Some(home.clone()), [], [], later);
-        let ring = bell.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
+        assert_eq!(needs_you.presented(Some(&home)), Some(finished));
+        assert_eq!(needs_you.presented(None), None, "box had no Notice");
+        needs_you.hear(None, [], [(two, false)], later);
+        needs_you.hear(Some(home.clone()), [], [], later);
+        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert!(ring.rang.is_empty(), "nothing heard rings twice");
 
         let (later, newer) = (later + ALERT_DELAY, NoticeId::from_u64(8));
-        bell.hear(
+        needs_you.hear(
             Some(home.clone()),
             [(newer, ThreadId::new(1), false)],
             [],
             later,
         );
-        let ring = bell.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
+        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(
             ring.rang,
             [Alert {
@@ -1396,18 +1178,18 @@ mod tests {
     /// is about the same Thread, re-keyed.
     #[test]
     fn what_waits_or_stands_moves_with_the_window() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let home = MachineKey(None);
         let (on_box, box3) = (
             MachineKey(Some("me@box".into())),
             MachineKey(Some("me@box3".into())),
         );
-        bell.hear(Some(box3.clone()), [], [], start);
-        bell.hear(Some(box3.clone()), [], [(request(4, 1), false)], start);
-        bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(Some(box3.clone()), [], [], start);
+        needs_you.hear(Some(box3.clone()), [], [(request(4, 1), false)], start);
+        needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         let finished = NoticeId::from_u64(2);
-        bell.posted.insert(
+        needs_you.posted.insert(
             "here".into(),
             Alert {
                 away: None,
@@ -1417,19 +1199,23 @@ mod tests {
         );
         let asking = request(3, 1);
         let at = start + ALERT_DELAY;
-        bell.hear(Some(on_box.clone()), [], [], at);
-        bell.hear(Some(on_box.clone()), [], [(asking.clone(), false)], at);
+        needs_you.hear(Some(on_box.clone()), [], [], at);
+        needs_you.hear(Some(on_box.clone()), [], [(asking.clone(), false)], at);
 
-        let mut bell = bell.moved(&home, &on_box);
-        assert_eq!(bell.toasts().len(), 1, "box3's toast stands on");
-        assert_eq!(bell.toasts()[0].alert.away, Some(box3));
-        assert_eq!(bell.posted["here"].away, Some(home), "same tag, re-keyed");
+        let mut needs_you = needs_you.moved(&home, &on_box);
+        assert_eq!(needs_you.toasts().len(), 1, "box3's toast stands on");
+        assert_eq!(needs_you.toasts()[0].alert.away, Some(box3));
+        assert_eq!(
+            needs_you.posted["here"].away,
+            Some(home),
+            "same tag, re-keyed"
+        );
         let due = at + ALERT_DELAY;
-        let ring = bell.ring(due, &|alert| alert.away.is_some().then_some(true), &|_| {
+        let ring = needs_you.ring(due, &|alert| alert.away.is_some().then_some(true), &|_| {
             false
         });
         assert!(ring.rang.is_empty(), "box has not answered yet");
-        let ring = bell.ring(due + ALERT_DELAY, &|_| Some(true), &|_| false);
+        let ring = needs_you.ring(due + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(
             ring.rang,
             [Alert {
@@ -1442,10 +1228,10 @@ mod tests {
         // A machine that never answers is waited for no longer than the
         // toast would have stood.
         let late = request(3, 2);
-        bell.hear(None, [], [(late, false)], due);
-        bell.ring(due + ALERT_DELAY, &|_| None, &|_| false);
-        bell.ring(due + ALERT_DELAY + NEEDS_YOU_TOAST, &|_| None, &|_| false);
-        let ring = bell.ring(
+        needs_you.hear(None, [], [(late, false)], due);
+        needs_you.ring(due + ALERT_DELAY, &|_| None, &|_| false);
+        needs_you.ring(due + ALERT_DELAY + NEEDS_YOU_TOAST, &|_| None, &|_| false);
+        let ring = needs_you.ring(
             due + ALERT_DELAY + NEEDS_YOU_TOAST,
             &|_| Some(true),
             &|_| false,

@@ -1,6 +1,6 @@
 //! The window's machines (ADR 0026): their headings and their Threads in
 //! the nav, the window going to another one, what a machine that went
-//! looks like, what the bell says of the machines off screen, and Settings
+//! looks like, what the Needs-you view says of the machines off screen, and Settings
 //! › Machines. A window with only this computer draws none of it.
 
 use std::rc::Rc;
@@ -171,7 +171,7 @@ impl CockpitView {
         }
     }
 
-    /// The bell's rows for the machines off screen: their live requests,
+    /// The Needs-you view's rows for the machines off screen: their live requests,
     /// then their finished turns with when each finished, each named by
     /// its machine.
     pub(super) fn away_rows(
@@ -200,18 +200,6 @@ impl CockpitView {
             }));
         }
         (requests, finished)
-    }
-
-    /// The unread live requests on the machines off screen: what the
-    /// bell's badge adds to the ones here.
-    pub(super) fn away_unread_requests(&self, cx: &App) -> usize {
-        self.machines.as_ref().map_or(0, |machines| {
-            machines
-                .read(cx)
-                .off_screen()
-                .map(|away| away.notifications.unread_requests())
-                .sum()
-        })
     }
 
     fn fold_machine(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -698,7 +686,7 @@ fn connection_hint(target: &str, connection: Connection) -> String {
 
 /// Whether an alert's record still wants the operator, on its machine:
 /// `here` (once attached), or the machine off screen it is on. `None`
-/// while that machine has not been heard from (`Bell::ring`).
+/// while that machine has not been heard from (`NeedsYou::ring`).
 pub(super) fn wanted(
     alert: &Alert,
     here: Option<&Notifications>,

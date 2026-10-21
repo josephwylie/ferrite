@@ -49,6 +49,29 @@ impl PrWatch {
         moved
     }
 
+    /// Adopt the panel's PR tab's fuller read of the same branch
+    /// (`PullRequest::of_wire`), so its checks and state move the label
+    /// too. The snapshot names no check's page: a run keeps the one `gh`
+    /// last gave it. An answer still on its way stays so. Whether the label
+    /// moved.
+    pub fn adopt(&mut self, mut reading: PullRequest) -> bool {
+        if let Some(old) = &self.reading {
+            for run in &mut reading.runs {
+                run.url = old
+                    .runs
+                    .iter()
+                    .find(|known| known.name == run.name)
+                    .and_then(|known| known.url.clone());
+            }
+            if reading.url.is_none() {
+                reading.url = old.url.clone();
+            }
+        }
+        let moved = self.reading.as_ref() != Some(&reading);
+        self.reading = Some(reading);
+        moved
+    }
+
     /// The row's label (`#123 ✓`, `#123 ⟳`), or nothing without a PR.
     pub fn label(&self) -> Option<String> {
         let pr = self.reading.as_ref()?;

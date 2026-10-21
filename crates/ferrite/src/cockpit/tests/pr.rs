@@ -117,12 +117,12 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
         assert!(menu(view).contains(&refresh));
         assert!(!menu(view).contains(&open), "no PR to open yet");
     });
-    assert!(palette(cx).contains(&"refresh PR status".to_string()));
-    assert!(!palette(cx).contains(&"open PR in browser".to_string()));
+    assert!(palette(cx).contains(&refresh));
+    assert!(!palette(cx).contains(&open));
 
     land(&view, thread, Some(pr_with_checks()), cx);
     view.read_with(cx, |view, _| assert!(menu(view).contains(&open)));
-    assert!(palette(cx).contains(&"open PR in browser".to_string()));
+    assert!(palette(cx).contains(&open));
 
     asked(&view, cx);
     cx.update(|window, cx| {

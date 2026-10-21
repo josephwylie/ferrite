@@ -17,6 +17,9 @@ use crate::shortcuts::Shortcuts;
 /// while they are up, and the focus the notifications list's keys ride.
 pub(super) struct Floats {
     pub palette: Option<Entity<Palette>>,
+    /// The palette is open to pick a Thread to open beside (the tab
+    /// strip's split button): ⏎ on a Thread row does what ⇥ does.
+    pub beside: bool,
     pub shortcuts: Option<Entity<Shortcuts>>,
     pub notice_focus: FocusHandle,
 }
@@ -25,6 +28,7 @@ impl Floats {
     pub(super) fn new(cx: &mut Context<CockpitView>) -> Self {
         Self {
             palette: None,
+            beside: false,
             shortcuts: None,
             notice_focus: cx.focus_handle(),
         }
@@ -113,7 +117,7 @@ impl CockpitView {
     /// The floats' hook on the cockpit's root: the palette's, the shortcuts
     /// sheet's, the status line's and the notifications list's actions.
     pub(super) fn register_palette_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
-        use crate::{notifications as bell, palette, shortcuts, status};
+        use crate::{notifications, palette, shortcuts, status};
         root.on_action(
             cx.listener(|view, _: &palette::Toggle, window, cx| view.toggle_palette(window, cx)),
         )
@@ -159,16 +163,22 @@ impl CockpitView {
         .on_action(
             cx.listener(|view, _: &status::CycleMode, window, cx| view.cycle_mode(window, cx)),
         )
-        .on_action(cx.listener(|view, _: &bell::SelectNext, _, cx| view.step_notices(1, cx)))
-        .on_action(cx.listener(|view, _: &bell::SelectPrevious, _, cx| view.step_notices(-1, cx)))
-        .on_action(cx.listener(|view, _: &bell::Open, _, cx| view.open_notice_at_cursor(cx)))
-        .on_action(cx.listener(|view, _: &bell::Dismiss, _, cx| view.dismiss_notice_at_cursor(cx)))
-        .on_action(cx.listener(|view, _: &bell::Close, _, cx| {
-            if view.bell.open {
-                view.bell.open = false;
-                cx.notify();
-            }
-        }))
+        .on_action(
+            cx.listener(|view, _: &notifications::SelectNext, _, cx| view.step_notices(1, cx)),
+        )
+        .on_action(
+            cx.listener(|view, _: &notifications::SelectPrevious, _, cx| view.step_notices(-1, cx)),
+        )
+        .on_action(
+            cx.listener(|view, _: &notifications::Open, _, cx| view.open_notice_at_cursor(cx)),
+        )
+        .on_action(
+            cx.listener(|view, _: &notifications::Dismiss, _, cx| {
+                view.dismiss_notice_at_cursor(cx)
+            }),
+        )
+        .on_action(cx.listener(|view, _: &notifications::Close, _, cx| view.close_nav_view(cx)))
+        .on_action(cx.listener(|view, _: &crate::nav::CloseView, _, cx| view.close_nav_view(cx)))
     }
 
     /// Whether a float holds the keyboard this frame (the palette's line,
@@ -178,7 +188,6 @@ impl CockpitView {
         self.floats.palette.is_some()
             || self.floats.shortcuts.is_some()
             || self.projects.board_shown()
-            || self.bell.open
     }
 
     /// Whether the palette or the shortcuts sheet is up (the veil is).
@@ -194,10 +203,7 @@ impl CockpitView {
         self.context_menu = None;
         self.session_controls = None;
         self.mode_picker = None;
-        self.context_usage = None;
         self.context_checks = None;
-        self.changed_files_card = None;
-        self.bell.open = false;
         self.floats.shortcuts = None;
         self.projects.drop_popup();
     }
@@ -239,8 +245,16 @@ impl CockpitView {
         let palette = cx.new(|cx| Palette::new(scope, rows, query, cx));
         let focus = palette.read(cx).input.focus_handle(cx);
         self.floats.palette = Some(palette);
+        self.floats.beside = false;
         window.focus(&focus, cx);
         cx.notify();
+    }
+
+    /// The palette, to pick a Thread to open beside the focused Pane (the
+    /// tab strip's split-right button, `Beside::Thread`).
+    pub(super) fn open_palette_beside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette(PaletteScope::All, "", window, cx);
+        self.floats.beside = true;
     }
 
     /// Shut the palette without touching anything else (esc, the veil): a
@@ -270,6 +284,7 @@ impl CockpitView {
         if preview && !matches!(row.act, Act::Thread(_)) {
             return;
         }
+        let preview = preview || self.floats.beside;
         self.floats.palette = None;
         self.run_palette_act(row.act, preview, window, cx);
         cx.notify();
@@ -385,13 +400,13 @@ impl CockpitView {
                     .collect();
                 self.show_sessions(
                     rows,
-                    format!("no CLI sessions found under {roots}").into(),
+                    format!("No CLI sessions found under {roots}").into(),
                     cx,
                 );
             }
             Err(error) => self.show_sessions(
                 Vec::new(),
-                format!("could not list sessions: {error}").into(),
+                format!("Could not list sessions: {error}").into(),
                 cx,
             ),
         }
@@ -446,7 +461,7 @@ impl CockpitView {
                 .cockpit
                 .groups()
                 .get(group)
-                .map(|group| SharedString::from(group.display_title().to_lowercase())),
+                .map(|group| SharedString::from(group.display_title())),
             View::Solo => None,
         };
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
@@ -556,8 +571,7 @@ impl CockpitView {
                     _ => self
                         .facts
                         .get(thread)
-                        .and_then(|facts| facts.project_label.clone())
-                        .map(|label| SharedString::from(label.to_lowercase())),
+                        .and_then(|facts| facts.project_label.clone()),
                 };
                 let name = if row.status == nav::RowStatus::Parked {
                     SharedString::from(format!("Parked \u{b7} {}", row.name))
@@ -599,7 +613,7 @@ impl CockpitView {
                 let noun = if count == 1 { "thread" } else { "threads" };
                 Some(PaletteRow {
                     section: PaletteSection::Projects,
-                    name: project.title.to_lowercase().into(),
+                    name: project.title.clone().into(),
                     context: format!("{count} {noun}").into(),
                     status: Some(status),
                     detail: None,
@@ -651,11 +665,7 @@ impl CockpitView {
                     })
                     .collect();
                 let scope: SharedString = if projects.len() == 1 {
-                    projects
-                        .into_iter()
-                        .next()
-                        .map(|label| SharedString::from(label.to_lowercase()))
-                        .unwrap_or_default()
+                    projects.into_iter().next().unwrap_or_default()
                 } else {
                     "all projects".into()
                 };
@@ -712,7 +722,9 @@ impl CockpitView {
             .is_empty()
         });
         let facts = focused.and_then(|thread| self.facts.get(thread));
-        let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty());
+        // The changes show in the Solo panel, so only where it can show.
+        let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty())
+            && self.panel_candidate().is_some();
         let pr = facts.and_then(|facts| facts.pr.reading.as_ref());
         let checks = pr.is_some_and(|pr| pr.checks.is_some());
         let plan = open.is_some_and(|open| open.transcript().todos().is_some());
@@ -740,77 +752,77 @@ impl CockpitView {
             .map(|(keys, _, _)| crate::components::spell_chord(&keys));
         add(
             focused.is_some(),
-            "park thread".into(),
+            "Park thread".into(),
             "",
             bound_chord_in("cockpit::CloseThread", Some("ComposerEmpty")),
             Command::ParkThread,
         );
         add(
             parked,
-            "show parked".into(),
+            "Show parked".into(),
             "",
             bound_chord("palette::ShowParked"),
             Command::ShowParked,
         );
         add(
             focused.is_some_and(|thread| self.thread_path(thread).is_some()),
-            "review branch".into(),
+            "Review branch".into(),
             "against the default branch",
             bound_chord("palette::ReviewBranch"),
             Command::ReviewBranch,
         );
         add(
             focused.is_some_and(|thread| self.thread_path(thread).is_some()),
-            "review changes".into(),
+            "Review changes".into(),
             "comment on the diff",
             None,
             Command::ReviewChanges,
         );
         add(
             true,
-            "new thread".into(),
+            "New thread".into(),
             "",
             bound_chord("cockpit::NewThread"),
             Command::NewThread,
         );
         add(
             true,
-            "new worktree thread".into(),
+            "New worktree thread".into(),
             "",
             bound_chord("cockpit::NewWorktreeThread"),
             Command::NewWorktreeThread,
         );
         add(
             true,
-            "import a session".into(),
+            "Import a session".into(),
             "/import",
             None,
             Command::ImportSession,
         );
         add(
             in_group,
-            "new thread in this group".into(),
+            "New thread in this group".into(),
             "",
             new_thread_in_group,
             Command::NewThreadInGroup,
         );
         add(
             focused.is_some_and(|thread| self.cockpit.groups().of(thread).is_none()),
-            "new group".into(),
+            "New group".into(),
             "",
             bound_chord("cockpit::NewGroup"),
             Command::NewGroup,
         );
         add(
             self.cockpit.groups().iter().next().is_some(),
-            "open a group".into(),
+            "Open a group".into(),
             "",
             bound_chord("palette::OpenGroups"),
             Command::OpenGroup,
         );
         add(
             parked,
-            "reopen last".into(),
+            "Reopen last".into(),
             "",
             bound_chord("cockpit::ReopenThread"),
             Command::ReopenLast,
@@ -825,7 +837,7 @@ impl CockpitView {
         for (project, title) in &projects {
             add(
                 true,
-                format!("new thread in {}", title.to_lowercase()),
+                format!("New thread in {title}"),
                 "",
                 None,
                 Command::NewThreadIn(*project),
@@ -833,7 +845,7 @@ impl CockpitView {
         }
         add(
             self.nav_filter.is_some(),
-            "filter: all projects".into(),
+            "Filter: all projects".into(),
             "",
             None,
             Command::FilterAll,
@@ -841,7 +853,7 @@ impl CockpitView {
         for (project, title) in &projects {
             add(
                 self.nav_filter != Some(*project),
-                format!("filter: {}", title.to_lowercase()),
+                format!("Filter: {title}"),
                 "",
                 None,
                 Command::FilterProject(*project),
@@ -850,30 +862,30 @@ impl CockpitView {
         let order = self.prefs.settings.thread_list_order;
         add(
             order != ThreadListOrder::Created,
-            "sort: created".into(),
+            "Sort: created".into(),
             "",
             None,
             Command::SortCreated,
         );
         add(
             order != ThreadListOrder::Recent,
-            "sort: recent".into(),
+            "Sort: recent".into(),
             "",
             None,
             Command::SortRecent,
         );
         add(
             order != ThreadListOrder::Attention,
-            "sort: attention".into(),
+            "Sort: attention".into(),
             "what needs you first",
             None,
             Command::SortAttention,
         );
-        add(true, "new project".into(), "", None, Command::NewProject);
+        add(true, "New project".into(), "", None, Command::NewProject);
         for (project, title) in &projects {
             add(
                 true,
-                format!("edit project {}", title.to_lowercase()),
+                format!("Edit project {title}"),
                 "",
                 None,
                 Command::EditProject(*project),
@@ -881,59 +893,59 @@ impl CockpitView {
         }
         add(
             true,
-            "settings".into(),
+            "Settings".into(),
             "",
             bound_chord("cockpit::OpenSettings"),
             Command::Settings,
         );
         add(
             true,
-            "toggle sidebar".into(),
+            "Toggle sidebar".into(),
             "",
             bound_chord("cockpit::ToggleNav"),
             Command::ToggleSidebar,
         );
         add(
             !self.panes.is_empty(),
-            "fullscreen pane".into(),
+            "Fullscreen pane".into(),
             "",
             bound_chord("cockpit::ToggleFullscreen"),
             Command::FullscreenPane,
         );
         add(
             size.step(1) != size,
-            "text larger".into(),
+            "Text larger".into(),
             "",
             bound_chord("cockpit::TextLarger"),
             Command::TextLarger,
         );
         add(
             size.step(-1) != size,
-            "text smaller".into(),
+            "Text smaller".into(),
             "",
             bound_chord("cockpit::TextSmaller"),
             Command::TextSmaller,
         );
         add(
             size != ferrite_core::settings::ReadingSize::STANDARD,
-            "text reset".into(),
+            "Text reset".into(),
             "",
             bound_chord("cockpit::TextReset"),
             Command::TextReset,
         );
-        // The model's thinking is off the approved transcript; these put
+        // The model's thinking is off the transcript by default; these put
         // its `∴` rows back, and take them away again.
         let thinking = self.prefs.settings.show_thinking;
         add(
             !thinking,
-            "show thinking".into(),
+            "Show thinking".into(),
             "",
             None,
             Command::ShowThinking,
         );
         add(
             thinking,
-            "hide thinking".into(),
+            "Hide thinking".into(),
             "",
             None,
             Command::HideThinking,
@@ -942,72 +954,74 @@ impl CockpitView {
         let smart = self.prefs.settings.smart_filtering;
         add(
             !smart,
-            "smart filtering on".into(),
+            "Smart filtering on".into(),
             "",
             None,
             Command::SmartFilteringOn,
         );
         add(
             smart,
-            "smart filtering off".into(),
+            "Smart filtering off".into(),
             "",
             None,
             Command::SmartFilteringOff,
         );
         add(
             true,
-            "notifications".into(),
+            "Needs you".into(),
             "",
             bound_chord("cockpit::ToggleNotifications"),
             Command::Notifications,
         );
+        // The keys' one door now that `?` has left the bar (SPEC §5.7),
+        // beside the Help menu's `Keyboard Shortcuts`.
         add(
             true,
-            "shortcuts".into(),
+            "Keyboard shortcuts".into(),
             "",
             bound_chord_in("shortcuts::Toggle", Some("ComposerEmpty")),
             Command::Shortcuts,
         );
         add(
             !self.cockpit.needs_you().is_empty(),
-            "next request".into(),
+            "Next request".into(),
             "",
             bound_chord("cockpit::NextDecision"),
             Command::NextRequest,
         );
         add(
             has_prompt,
-            "copy prompt".into(),
+            "Copy prompt".into(),
             "",
             None,
             Command::CopyPrompt,
         );
         add(
             has_prompt,
-            "resend prompt".into(),
+            "Resend prompt".into(),
             "",
             None,
             Command::ResendPrompt,
         );
         add(
             open.is_some(),
-            "model".into(),
+            "Model".into(),
             "/model",
             None,
             Command::Model,
         );
-        add(ladder, "effort".into(), "/effort", None, Command::Effort);
+        add(ladder, "Effort".into(), "/effort", None, Command::Effort);
         add(
             supports(ferrite_core::ControlKind::SetPermissionMode)
                 && open.is_some_and(|open| !open.permission_modes().is_empty()),
-            "permission mode".into(),
+            "Permission mode".into(),
             "",
             bound_chord("status::CycleMode"),
             Command::PermissionMode,
         );
         add(
             supports(ferrite_core::ControlKind::RefreshMcp),
-            "refresh MCP".into(),
+            "Refresh MCP".into(),
             "",
             None,
             Command::RefreshMcp,
@@ -1015,7 +1029,7 @@ impl CockpitView {
         add(
             supports(ferrite_core::ControlKind::ReconnectMcp)
                 && open.is_some_and(|open| !open.transcript().mcp_servers().is_empty()),
-            "reconnect MCP".into(),
+            "Reconnect MCP".into(),
             "",
             None,
             Command::ReconnectMcp,
@@ -1025,58 +1039,58 @@ impl CockpitView {
                 open.supports_control(ferrite_core::ControlKind::BackgroundTasks)
                     || !open.transcript().progress().background().is_empty()
             }),
-            "background tasks".into(),
+            "Background tasks".into(),
             "",
             None,
             Command::BackgroundTasks,
         );
         add(
             changed,
-            "show changes".into(),
+            "Show changes".into(),
             "",
             None,
             Command::ShowChanges,
         );
-        add(checks, "show checks".into(), "", None, Command::ShowChecks);
+        add(checks, "Show checks".into(), "", None, Command::ShowChecks);
         add(
             focused.is_some(),
-            "refresh PR status".into(),
+            "Refresh PR status".into(),
             "",
             bound_chord("cockpit::RefreshPrStatus"),
             Command::RefreshPr,
         );
         add(
             pr.is_some_and(|pr| pr.url.is_some()),
-            "open PR in browser".into(),
+            "Open PR in browser".into(),
             "",
             bound_chord("cockpit::OpenPrInBrowser"),
             Command::OpenPr,
         );
-        add(plan, "show plan".into(), "", None, Command::ShowPlan);
+        add(plan, "Show plan".into(), "", None, Command::ShowPlan);
         add(
             !self.cli_updates.ready().is_empty(),
-            "update CLIs".into(),
+            "Update CLIs".into(),
             "",
             None,
             Command::UpdateClis,
         );
         add(
             self.ferrite_update.restart_offered(),
-            "restart to update Ferrite".into(),
+            "Restart to update Ferrite".into(),
             "",
             None,
             Command::UpdateFerrite,
         );
         add(
             draft,
-            "discard draft".into(),
+            "Discard draft".into(),
             "",
             bound_chord("cockpit::CloseThread"),
             Command::DiscardDraft,
         );
         add(
             !self.prefs.settings.keys.is_empty(),
-            "reset keys".into(),
+            "Reset keys".into(),
             "forget the keys in settings.json",
             None,
             Command::ResetKeys,
@@ -1213,7 +1227,7 @@ impl CockpitView {
             }
             Command::ShowChanges => {
                 if let Some(thread) = thread {
-                    self.changed_files_card = Some(thread);
+                    self.open_panel_tab(thread, super::panel::PanelTab::Changes, cx);
                 }
             }
             Command::ShowChecks => self.open_checks(window, cx),
@@ -1325,33 +1339,32 @@ impl CockpitView {
     // --------------------------------------------------- the notifications
 
     fn step_notices(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.bell_rows(cx).len();
-        if count == 0 || !self.bell.open {
+        let count = self.needs_you_rows(cx).len();
+        if count == 0 || !self.needs_you_shown() {
             return;
         }
-        self.bell.cursor =
-            (self.bell.cursor.min(count - 1) as isize + delta).rem_euclid(count as isize) as usize;
+        self.needs_you.cursor = (self.needs_you.cursor.min(count - 1) as isize + delta)
+            .rem_euclid(count as isize) as usize;
         cx.notify();
     }
 
     /// ⏎ on the list: open the cursor's Thread (its request), and close.
     fn open_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.bell_rows(cx);
-        let Some(row) = rows.get(self.bell.cursor.min(rows.len().saturating_sub(1))) else {
+        let rows = self.needs_you_rows(cx);
+        let Some(row) = rows.get(self.needs_you.cursor.min(rows.len().saturating_sub(1))) else {
             return;
         };
         let verb = row.open_verb();
         self.notice_verb(verb, cx);
-        self.bell.open = false;
-        cx.notify();
+        self.close_nav_view(cx);
     }
 
     /// ⌫ on the list: dismiss the cursor's row (a request until it changes,
     /// a finished turn with every one folded under it); the cursor stays on
     /// the row that takes its place.
     fn dismiss_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.bell_rows(cx);
-        let Some(row) = rows.get(self.bell.cursor.min(rows.len().saturating_sub(1))) else {
+        let rows = self.needs_you_rows(cx);
+        let Some(row) = rows.get(self.needs_you.cursor.min(rows.len().saturating_sub(1))) else {
             return;
         };
         let Some(verb) = row.dismiss_verb() else {
@@ -1362,8 +1375,8 @@ impl CockpitView {
         for id in folded {
             self.notice_verb(crate::notifications::Verb::Dismiss(id), cx);
         }
-        let left = self.bell_rows(cx).len();
-        self.bell.cursor = self.bell.cursor.min(left.saturating_sub(1));
+        let left = self.needs_you_rows(cx).len();
+        self.needs_you.cursor = self.needs_you.cursor.min(left.saturating_sub(1));
         cx.notify();
     }
 
@@ -1371,7 +1384,7 @@ impl CockpitView {
 
     /// The palette's veil (the board only: the sidebar, the titlebar and
     /// the bottom bar stay as they are) and the palette or the shortcuts
-    /// sheet over it, at the palette's geometry: 84 cells, centred on the
+    /// sheet over it, at the palette's geometry: 640 wide, centred on the
     /// board, 56px under its top. A press on the veil closes the float and
     /// nothing else.
     pub(super) fn sheet_floats(
@@ -1434,56 +1447,22 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let alert = &self.bell.toasts().last()?.alert;
+        let alert = &self.needs_you.toasts().last()?.alert;
         let machines = self.machines.as_ref().map(|machines| machines.read(cx));
         let row = self.alert_row(alert, machines, ferrite_core::clock::system_time())?;
         let viewport = window.viewport_size();
         let anchor = gpui::Bounds::new(
             gpui::point(
-                viewport.width - px(crate::theme::TOAST_BOX_RIGHT + crate::theme::TOAST_BOX_W),
+                viewport.width - px(crate::theme::TOAST_BOX_RIGHT + crate::theme::TOAST_W),
                 viewport.height - px(crate::theme::STATUS_BAR_H + crate::theme::TOAST_BOTTOM),
             ),
-            gpui::size(px(crate::theme::TOAST_BOX_W), px(0.)),
+            gpui::size(px(crate::theme::TOAST_W), px(0.)),
         );
         let handle = self.notice_handle(cx);
         Some(float::hang_element(
             crate::notifications::toast(&row, handle).into_any_element(),
             anchor,
             FloatPlace::Above { gap: 0. },
-        ))
-    }
-
-    /// The notifications list under the bell (FL-16): its left on the
-    /// bell's, 4px under it; a press anywhere but the list or the bell
-    /// closes it.
-    pub(super) fn notices_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.bell.open {
-            return None;
-        }
-        let door = self.bell.door.get()?;
-        let rows = self.bell_rows(cx);
-        let cursor = self.bell.cursor.min(rows.len().saturating_sub(1));
-        let handle = self.notice_handle(cx);
-        let bell = self.bell.door.clone();
-        let list = crate::notifications::list(&rows, cursor, &self.floats.notice_focus, handle)
-            .on_mouse_down_out(cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                if bell
-                    .get()
-                    .is_some_and(|door| door.contains(&event.position))
-                {
-                    return;
-                }
-                if view.bell.open {
-                    view.bell.open = false;
-                    cx.notify();
-                }
-            }));
-        Some(float::hang_element(
-            list.into_any_element(),
-            door,
-            FloatPlace::Above {
-                gap: crate::theme::NOTICE_PANEL_GAP,
-            },
         ))
     }
 }

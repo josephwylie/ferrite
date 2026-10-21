@@ -62,10 +62,15 @@ fn told(rows: &[Obj], thread: u64) -> Option<Told> {
     sidebar(rows).agents.get(&ThreadId::new(thread)).cloned()
 }
 
+/// A root row's room for its lines, in characters (the old 30 cells).
+fn fits(text: &str) -> bool {
+    text.chars().count() <= 30
+}
+
 /// The nav's lines under a root row: row 2, then row 3 where it says
 /// something.
 fn lines(told: &Told) -> Vec<String> {
-    task_lines(&told.rows(), 2.0)
+    task_lines(&told.rows(), fits)
         .into_iter()
         .map(|(text, _)| text.to_string())
         .collect()
@@ -593,9 +598,9 @@ Both tasks are added.",
 #[test]
 fn only_the_coordinators_message_is_dim() {
     let told = coordinator_told(coordinator_entry("idle", 0, "Done."), &ferrite());
-    let inks: Vec<u32> = task_lines(&told.rows(), 2.0)
+    let inks: Vec<u32> = task_lines(&told.rows(), fits)
         .into_iter()
         .map(|(_, ink)| ink)
         .collect();
-    assert_eq!(inks, [theme::TEXT, theme::CHROME_MUTED]);
+    assert_eq!(inks, [theme::TEXT, theme::TEXT_DIM]);
 }

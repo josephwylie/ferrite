@@ -2,7 +2,7 @@
 
 Build spec for the redesign drawn on the design canvas (October 2026),
 written for the agent that implements it. Its decisions are recorded in
-[ADR 0033](../../adr/0033-sans-chrome-and-card-panes.md) (proposed).
+[ADR 0033](../../adr/0033-sans-chrome-and-card-panes.md) (accepted).
 
 How to use this document:
 - Read it once, top to bottom.

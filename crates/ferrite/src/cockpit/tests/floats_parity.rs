@@ -1,6 +1,6 @@
 //! The floats package's cockpit-level tests (FL-1…FL-19): the palette, its
 //! keys and commands, ⌘G, the shortcuts sheet, ⇧⇥, ⌘⌫, ⌘1…⌘9, the
-//! notifications list, the bell's badge, the toasts and the key contexts
+//! notifications list, the Needs-you view's badge, the toasts and the key contexts
 //! an empty Composer line adds.
 #[allow(unused_imports)]
 use super::*;
@@ -40,10 +40,11 @@ fn palette_open(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) ->
     view.read_with(cx, |view, _| view.floats.palette.is_some())
 }
 
-/// FL-1: ⌘K opens the palette, 84 cells wide, centred on the board, its
-/// head 56px under the board's top, over a veil that covers the board and
-/// nothing else; esc closes it without interrupting the running turn, and
-/// ⌘K toggles it.
+/// FL-1: ⌘K opens the palette, 640 wide, centred on the board, its head
+/// 56px under the board's top, over a veil that covers the board and
+/// nothing else, its input row 50 over a hairline, its rows 36, the
+/// footer 36 under a hairline counting the results (SPEC §5.8); esc closes
+/// it without interrupting the running turn, and ⌘K toggles it.
 #[gpui::test]
 fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("palette-open", 1);
@@ -60,7 +61,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
     assert!(
         (palette.size.width - px(crate::theme::PALETTE_W)).abs() <= px(1.),
-        "84 cells: {palette:?}"
+        "640 wide: {palette:?}"
     );
     assert!(
         (palette.center().x - px(board.x + board.w / 2.)).abs() <= px(1.),
@@ -80,8 +81,31 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     );
     let input = cx.debug_bounds("palette-input").expect("the input row");
     assert!(
-        (input.size.height - px(crate::theme::PALETTE_INPUT_H)).abs() <= px(1.),
-        "a row and 12px: {input:?}"
+        (input.size.height - px(crate::theme::PALETTE_INPUT_H + 1.)).abs() < px(0.5),
+        "50 and its hairline: {input:?}"
+    );
+    let row = cx.debug_bounds("palette-row-0").expect("a row");
+    assert!(
+        (row.size.height - px(crate::theme::PALETTE_ROW_H)).abs() < px(0.5),
+        "rows are 36: {row:?}"
+    );
+    assert!(
+        (row.left() - (palette.left() + px(crate::theme::PALETTE_LIST_PAD))).abs() < px(0.5),
+        "6 in from the dialog: {row:?} / {palette:?}"
+    );
+    let section = cx.debug_bounds("palette-section-0").expect("a heading");
+    assert!(
+        (section.top() - (input.bottom() + px(crate::theme::PALETTE_LIST_PAD))).abs() < px(0.5)
+            && (section.size.height - px(crate::theme::PALETTE_SECTION_H)).abs() < px(0.5),
+        "the first heading 32 high, 6 under the input: {section:?}"
+    );
+    let results = cx
+        .debug_bounds("palette-results")
+        .expect("the result count");
+    assert!(
+        (palette.bottom() - results.center().y - px(crate::theme::PALETTE_FOOT_H / 2.)).abs()
+            <= px(1.),
+        "the count centred in the 36px footer: {results:?} / {palette:?}"
     );
     cx.simulate_keystrokes("escape");
     tick(cx);
@@ -133,7 +157,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
             .filter(|row| row.section == Section::Commands)
             .map(|row| row.name.as_ref())
             .collect();
-        assert_eq!(commands, ["park thread", "show parked"]);
+        assert_eq!(commands, ["Park thread", "Show parked"]);
         let threads: Vec<&str> = survivors
             .iter()
             .filter(|row| row.section == Section::Threads)
@@ -143,7 +167,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
         assert_eq!(palette.lit(0), Some(&[0..3][..]), "`Par` lit");
         let park = survivors
             .iter()
-            .find(|row| row.name.as_ref() == "park thread")
+            .find(|row| row.name.as_ref() == "Park thread")
             .unwrap();
         assert_eq!(park.keys.as_deref(), Some("cmd-\u{232b}"), "⌘⌫");
     });
@@ -267,7 +291,7 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
             Some(format!("cmd-{}", at + 1).as_str())
         );
         assert!(
-            row.context.starts_with("perf sweep"),
+            row.context.starts_with("Perf sweep"),
             "the shown Group names its Threads: {:?}",
             row.context
         );
@@ -276,7 +300,7 @@ fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
         .iter()
         .find(|row| row.act == Act::Thread(threads[0]))
         .unwrap();
-    assert_eq!(working.context.as_ref(), "perf sweep \u{b7} working");
+    assert_eq!(working.context.as_ref(), "Perf sweep \u{b7} working");
     assert_eq!(working.status, Some(nav::RowStatus::Working));
 }
 
@@ -420,9 +444,9 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
         })
     };
     let shown = labels(cx);
-    assert_eq!(shown.first(), Some(&"park thread"), "{shown:?}");
-    assert!(shown.contains(&"show parked"));
-    assert!(!shown.contains(&"new thread"));
+    assert_eq!(shown.first(), Some(&"Park thread"), "{shown:?}");
+    assert!(shown.contains(&"Show parked"));
+    assert!(!shown.contains(&"New thread"));
     assert_eq!(resolves("down", cx), Some("shortcuts::ScrollDown"));
     // Through key dispatch: no binding claims `?` in the filter, so it is
     // text there.
@@ -470,13 +494,13 @@ fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {
         }));
 }
 
-/// FL-16 / FL-17: the list hangs 4px under the bell with its first row
-/// selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
+/// FL-16 / FL-17: the Needs-you view is the nav's (§5.1.2),
+/// its first row selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
 /// interrupting, `mark all read` reads everything and removes nothing; the
-/// badge counts the unread waiting requests only.
+/// unread count is the waiting requests only.
 #[gpui::test]
 fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("bell-list", 6);
+    let (mut core, fake) = cockpit("needs-you-list", 6);
     let threads = core.threads();
     for thread in &threads[3..6] {
         core.send(*thread, "go".into());
@@ -518,45 +542,49 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
             "2 waiting; 3 unread completions never count"
         );
     });
-    assert!(cx.debug_bounds("notifications-badge").is_some());
+    assert!(cx.debug_bounds("bottom-bar-needs-you").is_some());
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
-    let door = cx.debug_bounds("notifications-bell").unwrap();
-    let panel = cx
-        .debug_bounds("notifications-panel")
-        .expect("the list is up");
+    let column = cx.debug_bounds("nav-column").unwrap();
+    let list = cx
+        .debug_bounds("nav-view-needs-you-list")
+        .expect("the Needs-you view is up");
     assert!(
-        (panel.bottom() - (door.top() - px(crate::theme::NOTICE_PANEL_GAP))).abs() <= px(1.),
-        "4px over the bell: {panel:?} / {door:?}"
+        column.contains(&list.origin),
+        "in the nav, in the tree's place: {list:?} / {column:?}"
     );
-    assert!(
-        (panel.left() - door.left()).abs() <= px(1.),
-        "on the bell's left"
-    );
-    let rows = view.read_with(cx, |view, cx| view.bell_rows(cx));
+    let rows = view.read_with(cx, |view, cx| view.needs_you_rows(cx));
     assert_eq!(rows.len(), 5);
     assert!(rows[0].request() && rows[1].request(), "requests first");
     assert_eq!(
         rows[0].detail.text(),
         "Bash wants to run gh issue close 212"
     );
-    assert_eq!(view.read_with(cx, |view, _| view.bell.cursor), 0);
+    assert_eq!(view.read_with(cx, |view, _| view.needs_you.cursor), 0);
     cx.simulate_keystrokes("up");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.bell.cursor), 4, "↑ wraps");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.needs_you.cursor),
+        4,
+        "↑ wraps"
+    );
     cx.simulate_keystrokes("down");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.bell.cursor), 0, "↓ wraps");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.needs_you.cursor),
+        0,
+        "↓ wraps"
+    );
     cx.simulate_keystrokes("backspace");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.bell_rows(cx).len()),
+        view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
         4,
         "⌫ dismisses"
     );
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.bell.open));
+    assert!(!view.read_with(cx, |view, _| view.needs_you_shown()));
     assert_eq!(*fake.interrupts.borrow(), 0);
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
@@ -569,7 +597,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         let notifications = view.cockpit.notifications();
         assert_eq!(notifications.unread(), 0);
         assert_eq!(notifications.unread_requests(), 0);
-        assert_eq!(view.bell_rows(cx).len(), 4, "nothing is removed");
+        assert_eq!(view.needs_you_rows(cx).len(), 4, "nothing is removed");
     });
     assert!(
         cx.debug_bounds("notifications-badge").is_none(),
@@ -608,7 +636,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .borrow()
         .iter()
         .any(|(id, answer)| id == "one" && matches!(answer, DecisionAnswer::Allow { .. })));
-    view.read_with(cx, |view, _| assert!(view.bell.toasts().is_empty()));
+    view.read_with(cx, |view, _| assert!(view.needs_you.toasts().is_empty()));
 
     fake.streams.borrow()[at]
         .send(bash("two", "rm -rf target"))
@@ -624,7 +652,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .borrow()
         .iter()
         .any(|(id, answer)| id == "two" && matches!(answer, DecisionAnswer::Deny { .. })));
-    view.read_with(cx, |view, _| assert!(view.bell.toasts().is_empty()));
+    view.read_with(cx, |view, _| assert!(view.needs_you.toasts().is_empty()));
 }
 
 /// FL-19 / FL-12: an empty Composer line under a Decision resolves the

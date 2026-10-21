@@ -29,7 +29,7 @@ use super::{Visual, VisualStatus};
 use crate::components;
 use crate::pane::{self, Grid};
 use crate::select::TextRuns;
-use crate::theme::{self, BLOCKED, RUNNING, TEXT, TEXT_FAINT, TEXT_MUTED, TEXT_STRONG};
+use crate::theme::{self, BLOCKED, RUNNING, TEXT, TEXT_DIM, TEXT_FAINT, TEXT_STRONG};
 
 /// The call line's name for every visual.
 pub(crate) const NAME: &str = "Visual";
@@ -141,7 +141,7 @@ pub(crate) fn render(
             .items_center()
             .child(components::braille_spinner(RUNNING))
             .debug_selector(|| "visual-spinner".into()),
-        VisualStatus::Shown => pane::glyph_gutter(grid, pane::BULLET, TEXT_MUTED),
+        VisualStatus::Shown => pane::glyph_gutter(grid, pane::BULLET, TEXT_DIM),
         VisualStatus::Failed(_) => pane::glyph_gutter(grid, pane::BULLET, BLOCKED),
     };
     let name_len = NAME.len();
@@ -190,7 +190,7 @@ pub(crate) fn render(
         .child(line);
     if let Some(caption) = caption(visual) {
         row = row.child(
-            pane::elbow_line(grid, TEXT_MUTED).child(
+            pane::elbow_line(grid, TEXT_DIM).child(
                 div()
                     .flex_1()
                     .min_w_0()
@@ -202,19 +202,17 @@ pub(crate) fn render(
     if let Some(failure) = failure(visual) {
         let lead = theme::words::FAILED.len();
         row = row.child(
-            pane::elbow_line(grid, TEXT_MUTED).child(div().flex_1().min_w_0().child(
-                selection.line(
-                    block,
-                    failure,
-                    vec![(
-                        0..lead,
-                        gpui::HighlightStyle {
-                            color: Some(rgb(BLOCKED).into()),
-                            ..Default::default()
-                        },
-                    )],
-                ),
-            )),
+            pane::elbow_line(grid, TEXT_DIM).child(div().flex_1().min_w_0().child(selection.line(
+                block,
+                failure,
+                vec![(
+                    0..lead,
+                    gpui::HighlightStyle {
+                        color: Some(rgb(BLOCKED).into()),
+                        ..Default::default()
+                    },
+                )],
+            ))),
         );
     }
     let replaced = matches!(stage, Stage::Replaced);
@@ -255,7 +253,7 @@ fn frame(grid: Grid) -> Div {
 /// A line where the page would be, saying why it isn't (muted, on the
 /// content column).
 fn note(grid: Grid, words: impl Into<SharedString>) -> AnyElement {
-    pane::elbow_line(grid, TEXT_MUTED)
+    pane::elbow_line(grid, TEXT_DIM)
         .debug_selector(|| "visual-note".into())
         .child(div().flex_1().min_w_0().child(words.into()))
         .into_any_element()
@@ -274,7 +272,7 @@ fn action_line(id: &str, actions: Actions, grid: Grid) -> Div {
             .flex_shrink_0()
             .whitespace_nowrap()
             .cursor_pointer()
-            .text_color(rgb(TEXT_MUTED))
+            .text_color(rgb(TEXT_DIM))
             .group_hover(id, |style| style.text_color(rgb(TEXT)))
             .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                 cx.stop_propagation();
