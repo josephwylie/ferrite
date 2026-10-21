@@ -1,6 +1,6 @@
 //! The floats package's cockpit-level tests (FL-1…FL-19): the palette, its
 //! keys and commands, ⌘G, the shortcuts sheet, ⇧⇥, ⌘⌫, ⌘1…⌘9, the
-//! notifications list, the bell's badge, the toasts and the key contexts
+//! notifications list, the Needs-you view's badge, the toasts and the key contexts
 //! an empty Composer line adds.
 #[allow(unused_imports)]
 use super::*;
@@ -494,13 +494,13 @@ fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {
         }));
 }
 
-/// FL-16 / FL-17: the bell's list is the nav's Needs-you view (§5.1.2),
+/// FL-16 / FL-17: the Needs-you view is the nav's (§5.1.2),
 /// its first row selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
 /// interrupting, `mark all read` reads everything and removes nothing; the
 /// unread count is the waiting requests only.
 #[gpui::test]
 fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("bell-list", 6);
+    let (mut core, fake) = cockpit("needs-you-list", 6);
     let threads = core.threads();
     for thread in &threads[3..6] {
         core.send(*thread, "go".into());
@@ -553,24 +553,32 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         column.contains(&list.origin),
         "in the nav, in the tree's place: {list:?} / {column:?}"
     );
-    let rows = view.read_with(cx, |view, cx| view.bell_rows(cx));
+    let rows = view.read_with(cx, |view, cx| view.needs_you_rows(cx));
     assert_eq!(rows.len(), 5);
     assert!(rows[0].request() && rows[1].request(), "requests first");
     assert_eq!(
         rows[0].detail.text(),
         "Bash wants to run gh issue close 212"
     );
-    assert_eq!(view.read_with(cx, |view, _| view.bell.cursor), 0);
+    assert_eq!(view.read_with(cx, |view, _| view.needs_you.cursor), 0);
     cx.simulate_keystrokes("up");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.bell.cursor), 4, "↑ wraps");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.needs_you.cursor),
+        4,
+        "↑ wraps"
+    );
     cx.simulate_keystrokes("down");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.bell.cursor), 0, "↓ wraps");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.needs_you.cursor),
+        0,
+        "↓ wraps"
+    );
     cx.simulate_keystrokes("backspace");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.bell_rows(cx).len()),
+        view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
         4,
         "⌫ dismisses"
     );
@@ -589,7 +597,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         let notifications = view.cockpit.notifications();
         assert_eq!(notifications.unread(), 0);
         assert_eq!(notifications.unread_requests(), 0);
-        assert_eq!(view.bell_rows(cx).len(), 4, "nothing is removed");
+        assert_eq!(view.needs_you_rows(cx).len(), 4, "nothing is removed");
     });
     assert!(
         cx.debug_bounds("notifications-badge").is_none(),
@@ -628,7 +636,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .borrow()
         .iter()
         .any(|(id, answer)| id == "one" && matches!(answer, DecisionAnswer::Allow { .. })));
-    view.read_with(cx, |view, _| assert!(view.bell.toasts().is_empty()));
+    view.read_with(cx, |view, _| assert!(view.needs_you.toasts().is_empty()));
 
     fake.streams.borrow()[at]
         .send(bash("two", "rm -rf target"))
@@ -644,7 +652,7 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
         .borrow()
         .iter()
         .any(|(id, answer)| id == "two" && matches!(answer, DecisionAnswer::Deny { .. })));
-    view.read_with(cx, |view, _| assert!(view.bell.toasts().is_empty()));
+    view.read_with(cx, |view, _| assert!(view.needs_you.toasts().is_empty()));
 }
 
 /// FL-19 / FL-12: an empty Composer line under a Decision resolves the

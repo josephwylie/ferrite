@@ -777,7 +777,7 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
         let row = view.thread_row(thread);
         assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
         assert_eq!(
-            row.status.face().ink,
+            row.status.ink(),
             crate::theme::BLOCKED,
             "and the nav and rail mark say it too"
         );

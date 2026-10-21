@@ -60,7 +60,7 @@ struct Entry {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MachineKey(pub(crate) Option<String>);
 
-/// A machine off screen whose Server has been heard from: what the bell
+/// A machine off screen whose Server has been heard from: what the Needs-you view
 /// hears of it.
 pub struct OffScreen<'a> {
     pub key: MachineKey,
@@ -187,7 +187,7 @@ impl Machines {
         })
     }
 
-    /// The bell's `mark all read` on every machine off screen.
+    /// The Needs-you view's `mark all read` on every machine off screen.
     pub fn mark_notices_read(&mut self) {
         for status in self
             .entries

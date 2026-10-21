@@ -942,7 +942,7 @@ fn scenario(
         live.dump(codex, "codex after turn 4");
     }
 
-    // ---- the bell's list: its rows, keys and `mark all read`
+    // ---- the Needs-you view: its rows, keys and `mark all read`
     focus_thread(live, claude);
     live.key("cmd-i");
     live.shot("notifications");

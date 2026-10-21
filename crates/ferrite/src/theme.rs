@@ -232,11 +232,9 @@ pub const SUNKEN_GLASS: u32 = 0x00000014;
 /// `#181818` — the card: a Pane's body, the transcript's surface.
 pub const CARD: u32 = 0x181818;
 /// The card as glass: 94%, a terminal's background opacity.
-#[allow(dead_code)]
 pub const CARD_GLASS: u32 = 0x181818f0;
 /// `#1e1e1e` — the bottom bar; diff and code-fence blocks.
 pub const BAR: u32 = 0x1e1e1e;
-#[allow(dead_code)]
 pub const BAR_GLASS: u32 = 0x1e1e1ee0;
 /// `#1f1f1f` — the Decision box.
 pub const DECISION: u32 = 0x1f1f1f;
@@ -253,7 +251,6 @@ pub const FRAME: u32 = 0x222222;
 /// Ferrite — other windows included — so a bright window behind turned a
 /// 72% sidebar light grey and its dim ink fell to 2.8:1. At 88% the frame
 /// stays dark over pure white and still takes a tint of what is behind.
-#[allow(dead_code)]
 pub const FRAME_GLASS: u32 = 0x222222e0;
 /// `#222222` — a field on the card: the Solo Composer's box, the prompt
 /// band. The frame's value, a step over the card.
@@ -286,9 +283,7 @@ pub const SELECTION_HOVER_GLASS: u32 = 0xffffff24;
 pub const SEND: u32 = 0x3a3a3a;
 /// `#141414` — the empty side of a split diff (a row with no partner),
 /// below the card.
-#[allow(dead_code)]
 pub const NODIFF: u32 = 0x141414;
-#[allow(dead_code)]
 pub const NODIFF_GLASS: u32 = 0x00000033;
 /// `#f2f2f2` / `#161616` — the primary button (`primary_button`, dialogs
 /// and settings) and its ink. No hue: the primary is the strongest ink.
@@ -305,15 +300,12 @@ pub const ON_PRIMARY: u32 = 0x161616;
 /// foot, panel sections.
 pub const HAIRLINE: u32 = 0xffffff0f;
 /// 7% — the 1px ring around a card.
-#[allow(dead_code)]
 pub const CARD_RING: u32 = 0xffffff12;
 /// 8% — the 1px ring around the Composer.
-#[allow(dead_code)]
 pub const FIELD_RING: u32 = 0xffffff14;
 /// 10% — a float's edge.
 pub const HAIRLINE_STRONG: u32 = 0xffffff1a;
 /// 6% — the inset ring on the selected nav row.
-#[allow(dead_code)]
 pub const ROW_RING: u32 = 0xffffff0f;
 /// 5% — the bottom bar's top edge.
 pub const BAR_TOP: u32 = 0xffffff0d;
@@ -344,17 +336,12 @@ pub const LINE_GLASS: u32 = 0xffffff14;
 /// rail, an image's frame.
 pub const LINE2: u32 = 0x3a3a3a;
 pub const LINE2_GLASS: u32 = 0xffffff24;
-/// The column between the sidebar and the content: nothing on the opaque
-/// greys (the value step separates them), a dark seam on glass.
-#[allow(dead_code)]
-pub const CHROME_SEAM_GLASS: u32 = 0x0000004d;
 /// Fully transparent — an edge that is always in layout and only changes
 /// colour, so nothing reflows when a Decision or a blocker arrives.
 pub const TRANSPARENT: u32 = 0x00000000;
 
 /// **The paints** (rule 4): what a region lays down, glass on macOS and
 /// opaque grey elsewhere. Every fill and line is painted from here.
-#[allow(dead_code)] // the builders' API: each paint is one region's
 pub mod paint {
     use super::{solid, Paint, TRANSPARENT};
 
@@ -376,8 +363,11 @@ pub mod paint {
         Paint::pick(super::SELECTION_HOVER_GLASS, solid(super::SELECTION_HOVER));
     /// Every press: the selected row's hover face.
     pub const PRESS: Paint = SELECTION_HOVER;
-    /// The send circle: a control, not a region, so opaque everywhere.
+    /// The send circle: a control, not a region, so opaque everywhere (a
+    /// PR comment's avatar wears it too).
     pub const SEND: Paint = Paint(solid(super::SEND));
+    /// An open pull request's pill: a hue overlay on every platform.
+    pub const PR_OPEN_PILL: Paint = Paint(super::PR_OPEN_PILL);
     pub const FLOAT: Paint = Paint::pick(super::FLOAT_GLASS, solid(super::FLOAT));
     pub const NODIFF: Paint = Paint::pick(super::NODIFF_GLASS, solid(super::NODIFF));
     /// The hairlines: white overlays on every platform.
@@ -386,7 +376,6 @@ pub mod paint {
     pub const BAR_TOP: Paint = Paint(super::BAR_TOP);
     pub const LINE: Paint = Paint::pick(super::LINE_GLASS, solid(super::LINE));
     pub const LINE2: Paint = Paint::pick(super::LINE2_GLASS, solid(super::LINE2));
-    pub const CHROME_SEAM: Paint = Paint::pick(super::CHROME_SEAM_GLASS, TRANSPARENT);
 
     /// The prompt band: a field that must occlude what scrolls under it, so
     /// on glass it is 80% over the card (composing to ~99%), not an overlay.
@@ -414,15 +403,12 @@ pub const VEIL: u32 = if GLASS { 0x00000033 } else { 0x00000059 };
 /// the caret, focus, links and paths in prose, inline code.
 pub const TEXT_STRONG: u32 = 0xf2f2f2;
 /// `#e6e6e6` — assistant prose.
-#[allow(dead_code)]
 pub const TEXT_PROSE: u32 = 0xe6e6e6;
 /// `#d0d0d0` — default chrome text, nav titles, tool output.
 pub const TEXT: u32 = 0xd0d0d0;
 /// `#c0c0c0` — emphasised bar items.
-#[allow(dead_code)]
 pub const TEXT_BAR: u32 = 0xc0c0c0;
 /// `#a0a0a0` — unselected tabs and nav views, chips.
-#[allow(dead_code)]
 pub const TEXT_MUTED: u32 = 0xa0a0a0;
 /// `#8c8c8c` — metadata: times, icons, section headings, tool arguments
 /// and results, hints, placeholders. **The floor for readable text**:
@@ -435,9 +421,6 @@ pub const TEXT_FAINT: u32 = 0x5e5e5e;
 /// see-through ground the opaque `TEXT_DIM` loses its contrast against a
 /// bright desktop, so on glass it lifts a step; opaque builds keep it.
 pub const CHROME_MUTED: u32 = if GLASS { 0xb6b6b6 } else { TEXT_DIM };
-/// The faint (structure-only) ink on the frame's glass, lifted likewise.
-#[allow(dead_code)]
-pub const CHROME_FAINT: u32 = if GLASS { 0x7e7e7e } else { TEXT_FAINT };
 
 // --------------------------------------------------------------- palette
 //
@@ -612,9 +595,6 @@ pub const SYN_TYPE: u32 = YELLOW;
 pub const SYN_STRING: u32 = GREEN;
 /// Number literals: orange.
 pub const SYN_NUMBER: u32 = ORANGE;
-/// Constants (`true`, `None`, `SCREAMING_CASE`): orange, with the numbers.
-#[allow(dead_code)]
-pub const SYN_CONST: u32 = ORANGE;
 /// Comments are read, not decoration: `TEXT_DIM`, set italic.
 pub const SYN_COMMENT: u32 = TEXT_DIM;
 /// Punctuation: the plain ink (the prototype leaves `::`, `(`, `;` unclassed).
@@ -632,9 +612,7 @@ pub const DROP_EDGE: u32 = FOCUS_RING;
 /// A diff row's changed words: the row's hue at 24% (added) and 28%
 /// (removed), over the row's own wash (`DIFF_ADDED_WASH`,
 /// `DIFF_REMOVED_WASH`).
-#[allow(dead_code)]
 pub const DIFF_ADDED_WORD: u32 = 0x93cf8c3d;
-#[allow(dead_code)]
 pub const DIFF_REMOVED_WORD: u32 = 0xef8a8047;
 /// The alphas the changed words' washes paint with: the prototype's 24% and
 /// 28%, as gpui's blend must take them to land on the browser's 8-bit ink
@@ -643,13 +621,10 @@ pub const DIFF_REMOVED_WORD: u32 = 0xef8a8047;
 pub const DIFF_ADDED_WORD_ALPHA: f32 = 0.237;
 pub const DIFF_REMOVED_WORD_ALPHA: f32 = 0.2765;
 /// A diff row's sign: the only hued glyph on the row.
-#[allow(dead_code)]
 pub const DIFF_ADDED_SIGN: u32 = GREEN;
-#[allow(dead_code)]
 pub const DIFF_REMOVED_SIGN: u32 = RED;
 /// How far the working caption's shimmer lifts its colour toward white at
 /// the crest (`components::shimmer`): Claude's clay crests near `#ffe1d3`.
-#[allow(dead_code)]
 pub const SHIMMER_LIFT: f32 = 0.75;
 /// Claude's shimmer crest: the prototype's gradient's middle stop.
 pub const SHIMMER_CREST_CLAUDE: u32 = 0xffe1d3;
@@ -704,33 +679,23 @@ pub const FS_PROSE: f32 = 13.0;
 /// 13/21; `prose_line_height`).
 pub const LH_PROSE: f32 = 21.0;
 /// 13.5 on 20 — a view title (the Solo and Group heads), at `W_STRONG`.
-#[allow(dead_code)]
 pub const FS_TITLE: f32 = 13.5;
 /// 12.5 — tabs, buttons, Pane titles, panel tabs, at `W_LABEL` on `LH_UI`.
-#[allow(dead_code)]
 pub const FS_LABEL: f32 = 12.5;
 /// 12 on 16 (or `LH_UI`) — metadata, section headings, the bar, a row's
 /// second line.
-#[allow(dead_code)]
 pub const FS_META: f32 = 12.0;
-#[allow(dead_code)]
 pub const LH_META: f32 = 16.0;
-/// 11 on 18 — a badge's count, at `W_STRONG`.
-#[allow(dead_code)]
+/// 11 — a badge's count, at `W_STRONG`.
 pub const FS_BADGE: f32 = 11.0;
-#[allow(dead_code)]
-pub const LH_BADGE: f32 = 18.0;
 /// 13.5 on 20 — the Solo Composer's input (a Group's is `FS_UI`).
-#[allow(dead_code)]
 pub const FS_COMPOSER: f32 = 13.5;
 /// 14.5 — the palette's query.
-#[allow(dead_code)]
 pub const FS_PALETTE: f32 = 14.5;
 /// 11 on 19 — the panel's diff, in Geist Mono.
 pub const FS_PANEL_DIFF: f32 = 11.0;
 pub const LH_PANEL_DIFF: f32 = 19.0;
 /// 11.5 — a diffstat, a spinner or a `#N` set in Geist Mono inside chrome.
-#[allow(dead_code)]
 pub const FS_CHROME_CODE: f32 = 11.5;
 
 /// Weights (see the type notes above): 400 body; 500 a title, a tool's
@@ -788,22 +753,17 @@ pub const CODE_ADVANCE: f32 = 0.6;
 pub const CODE_CELL: f32 = FS_UI * CODE_ADVANCE;
 /// One cell at the grid size: every horizontal metric on the grid is a
 /// whole number of these (the 2-cell glyph gutter, a 36-cell sidebar).
-#[allow(dead_code)]
 pub const CH: f32 = CODE_CELL;
 /// One row of the grid, and half of one: every vertical metric on the grid
 /// is a whole number of half rows.
-#[allow(dead_code)]
 pub const ROW: f32 = LH_UI;
-#[allow(dead_code)]
 pub const HALF_ROW: f32 = LH_UI / 2.0;
 /// The 2-cell glyph gutter the prototype hangs every mark in (`❯`, `●`,
 /// `└`, the spinner) at the grid size; a transcript's gutter is two cells
 /// at its own reading size.
-#[allow(dead_code)]
 pub const GLYPH_GUTTER: f32 = 2.0 * CH;
 /// 108 cells — the prose measure: the most a paragraph, a code block or a
 /// table runs before it wraps, at any reading size.
-#[allow(dead_code)]
 pub const MEASURE_CH: f32 = 108.0;
 /// A floor under the face's advance for laying out against text width
 /// estimates (a title's floor). With one monospace face every advance is
@@ -853,19 +813,16 @@ pub const SPACE_6: f32 = 24.0;
 // round for dots, pills and the send circle (`rounded_full`).
 
 /// 4px — the inline code chip.
-#[allow(dead_code)]
 pub const R_INLINE: f32 = 4.0;
 /// 5px — a view tab in the bar, a 22px icon button.
-#[allow(dead_code)]
 pub const R_SMALL: f32 = 5.0;
 /// 6px — a 28px icon button, a tab in a card, a Decision option, the
 /// command well.
-#[allow(dead_code)]
 pub const R_TAB: f32 = 6.0;
 /// 7px — controls: nav rows, buttons, fields, the prompt band, diff and
 /// fence blocks. The kit's `radius`.
 pub const R_CONTROL: f32 = 7.0;
-/// 7px — chips (and a menu's rows, keycaps).
+/// 7px — chips (and a menu's rows).
 pub const R_CHIP: f32 = R_CONTROL;
 /// 8px — blocks: floats, the Group Composer, the Decision box, the failure
 /// strip, the panel's file block. The kit's `radius_lg`.
@@ -873,7 +830,6 @@ pub const R_BLOCK: f32 = 8.0;
 /// 10px — the Pane card, the Solo Composer.
 pub const R_PANE: f32 = 10.0;
 /// 12px — the palette.
-#[allow(dead_code)]
 pub const R_PALETTE: f32 = 12.0;
 /// 2px — meter segments and other tiny marks.
 pub const R_TIGHT: f32 = 2.0;
@@ -966,35 +922,61 @@ pub const PANEL_HUNK_INSET_CELLS: f32 = 1.0;
 pub const PANEL_HUNK_SIGN_CELLS: f32 = 2.5;
 /// The foot's context meter: 6px high, 2px between segments, radius 2,
 /// over an empty track of `PANEL_METER_TRACK`; the foot's padding is
-/// 14 10 4 with 10px between its line and the meter.
+/// 14 10 4 with 10px between its line and the meter (off the scale: the
+/// mockup's foot).
 pub const PANEL_METER_H: f32 = 6.0;
 pub const PANEL_METER_TRACK: u32 = 0x333333;
 pub const PANEL_FOOT_PAD_T: f32 = 14.0;
+pub const PANEL_FOOT_GAP: f32 = 10.0;
 pub const PANEL_FOOT_PAD_B: f32 = SPACE_1;
 
 // ------------------------------------------------------------ PR tab
+
+//
+// Off the space scale where the mockup's PR tab is (`pr-states.html`): its
+// 10px row gaps and paddings, the pill's 5 · 7 · 9, the empty state's 18
+// and 36.
 
 /// 14px — between the PR tab's sections (SPEC §5.6.2), and under its head.
 pub const PR_SECTION_GAP: f32 = 14.0;
 /// The state pill: 22 high, round (r11), padding 0 9 0 7, a 13px icon 5px
 /// from its word.
 pub const PR_PILL_H: f32 = 22.0;
-/// `RUNNING` at 14% — an open pull request's pill.
+pub const PR_PILL_PAD_L: f32 = 7.0;
+pub const PR_PILL_PAD_R: f32 = 9.0;
+pub const PR_PILL_GAP: f32 = 5.0;
+pub const PR_PILL_ICON: f32 = 13.0;
+/// `RUNNING` at 14% — an open pull request's pill (`paint::PR_OPEN_PILL`).
 pub const PR_OPEN_PILL: u32 = 0x93cf8c24;
-/// The pull request's title: 14/20 600, at most three lines.
+/// The pull request's title: 14/20 600, at most three lines, 10px under
+/// the head's line.
 pub const FS_PR_TITLE: f32 = 14.0;
+pub const PR_TITLE_GAP: f32 = 10.0;
+/// 10px — a check or readiness row's mark to its text.
+pub const PR_ROW_GAP: f32 = 10.0;
+/// 10px — a comment card's block padding (12px inline, `SPACE_3`).
+pub const PR_COMMENT_PAD_Y: f32 = 10.0;
+/// The empty state (no pull request, no `gh`): 18px down, its parts 10px
+/// apart; a 36px badge (r10, `RAISED`) holding a 17px icon.
+pub const PR_EMPTY_PAD_T: f32 = 18.0;
+pub const PR_EMPTY_GAP: f32 = 10.0;
+pub const PR_EMPTY_BADGE: f32 = 36.0;
+pub const PR_EMPTY_ICON: f32 = 17.0;
 /// 26px — the head's `refresh` and `external` buttons (r6), a 14px icon.
 pub const PR_ICON_BUTTON: f32 = 26.0;
 pub const ICON_PR_BUTTON_GLYPH: f32 = 14.0;
-/// 15px — a readiness or check row's mark.
+/// 15px — a readiness or check row's mark; a pending or skipped check's
+/// hollow ring is 11 inside it.
 pub const PR_MARK: f32 = 15.0;
+pub const PR_MARK_RING: f32 = 11.0;
 /// 40px — a readiness row (icon 15, padding 0 12, 10px gaps).
 pub const PR_READY_ROW_H: f32 = 40.0;
 /// The checks listed before `Show N more`.
 pub const PR_CHECKS_SHOWN: usize = 8;
-/// A comment card's avatar: an 18px circle on `#3a3a3a` (`SEND`'s grey).
+/// A comment card's avatar: an 18px circle on `paint::SEND`'s grey, its
+/// initial at 10px.
 pub const PR_AVATAR: f32 = 18.0;
-pub const PR_AVATAR_FILL: u32 = SEND;
+pub const FS_PR_AVATAR: f32 = 10.0;
 /// Inline code in a comment card, a step over the card's `RAISED`.
 pub const PR_CODE_CHIP: u32 = 0x333333;
 /// 18px — a comment body's line (12.5 type).
@@ -1075,11 +1057,6 @@ pub const ICON_CHEVRON: f32 = 12.0;
 /// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
 pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
-/// A keycap: 18px high (it fits inside a 20px row), 5px inline padding.
-#[cfg_attr(not(test), allow(dead_code))]
-pub const KBD_H: f32 = 18.0;
-#[cfg_attr(not(test), allow(dead_code))]
-pub const KBD_PAD_X: f32 = 5.0;
 /// **The float's shell** (SPEC §5.8 "Other floats": the palette's at a
 /// smaller scale): radius `R_BLOCK`, rows `FLOAT_ROW_H` (`LH_UI` and 5px
 /// above and below), each inset `FLOAT_PAD` from the float's edge with its
@@ -1280,8 +1257,8 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
     // A toast is the rail's voice only (C8): with the nav open its rows'
     // marks are the queue, and a toast shows only while the nav is
-    // collapsed and its Thread is off the board (`Bell::present`). It
-    // stands BottomRight, above the Composer, one at a time; the bell
+    // collapsed and its Thread is off the board (`NeedsYou::present`). It
+    // stands BottomRight, above the Composer, one at a time; the Needs-you view
     // holds the rest.
     theme.notification.placement = gpui::Anchor::BottomRight;
     theme.notification.margins = gpui::base::Edges {
@@ -1393,7 +1370,7 @@ pub fn init_components(cx: &mut gpui::App) {
 /// A prose-relative vertical step at answer size `size`: em-proportional to
 /// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
 /// Markdown gaps go through it; UI-row steps do not.
-#[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
+#[cfg(test)] // the previous grammar, now read only by tests
 pub fn reading_step(step: f32, size: f32) -> f32 {
     (step * size / FS_PROSE).round()
 }
@@ -1613,7 +1590,7 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
 /// sizes scale them with `reading_step`.
-#[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
+#[cfg(test)] // the previous grammar, now read only by tests
 pub const PROSE_GAP: f32 = SPACE_3;
 /// Inline code's ink: `TEXT_STRONG` on its chip (cyan is retired, ADR
 /// 0033). The Markdown path paints both; the plain-text fallback carries
@@ -1783,6 +1760,10 @@ pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
 pub const PANE_HEAD_GAP: f32 = SPACE_2;
 /// 13px — the provider's logo and a mark's icon in the Group head.
 pub const PANE_HEAD_ICON: f32 = 13.0;
+/// The width a dot mark lays out at in the Group head: the dot and a pixel
+/// each side, as the mockup's box (a halo overflows it, as a CSS
+/// `box-shadow` does).
+pub const PANE_HEAD_DOT_W: f32 = NAV_DOT + 2.0;
 /// 14px — the fill button's `maximize` glyph.
 pub const PANE_HEAD_FILL_GLYPH: f32 = 14.0;
 
@@ -2146,7 +2127,7 @@ pub const FORM_BUTTON_PAD_X: f32 = CH;
 pub const TOOLTIP_PAD_X: f32 = FLOAT_PAD_X;
 pub const TOOLTIP_PAD_Y: f32 = (FLOAT_ROW_H - LH_UI) / 2.0;
 pub const TOOLTIP_MAX_W: f32 = 320.0;
-/// The kit's own toast stack (unused by the bell, kept for the kit's
+/// The kit's own toast stack (unused by the Needs-you view, kept for the kit's
 /// margins in `init_components`): this far up from the window's foot.
 pub const TOAST_ABOVE_COMPOSER: f32 =
     GRID_PAD + 1.0 + 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H + COMPOSER_STATUS_PAD_B + HALF_ROW;
@@ -2186,7 +2167,7 @@ pub const PALETTE_TOP: f32 = 56.0;
 /// a bare 4 levels over its ground and all but vanish (a deliberate
 /// departure from SPEC §5.8's `FLOAT ground`). Opaque on every platform,
 /// as every float is (FL-15).
-pub const PALETTE_GROUND: u32 = FRAME;
+pub const PALETTE_GROUND: Paint = Paint(solid(FRAME));
 pub const PALETTE_INPUT_H: f32 = 50.0;
 pub const PALETTE_PAD_X: f32 = SPACE_4;
 /// 10 — between a row's parts, and the input row's (off the space scale,
@@ -2514,11 +2495,23 @@ pub const NAV_WORD_GAP: f32 = SPACE_2;
 pub const NAV_SECTION_GAP: f32 = SPACE_1_5;
 /// A Thread row's marks (§6): 7px dots (6 on a member row) with the
 /// blocked one's 3px halo, 14px icons (13 on a member row), the spinner's
-/// Geist Mono 12. Offsets are from the mark column's left and the row's
-/// top, as the mockups place them.
+/// Geist Mono 12.
 pub const NAV_DOT: f32 = 7.0;
 pub const NAV_DOT_SMALL: f32 = 6.0;
 pub const NAV_HALO: f32 = 3.0;
+/// The blocked dot's halo box: the dot and `NAV_HALO` out on each side.
+pub fn nav_halo_box(dot: f32) -> f32 {
+    dot + 2.0 * NAV_HALO
+}
+/// Where a mark sits, `(x, y)` from its mark column's left and its row's
+/// top, as the mockups place them (measured, so off the scale): on line 1
+/// of a two-line row, centred on a one-line (member) row (`_SMALL`). The
+/// blocked dot sits where a dot does, its halo `NAV_HALO` out round it.
+pub const NAV_SPINNER_AT: (f32, f32) = (2.0, 6.0);
+pub const NAV_SPINNER_AT_SMALL: (f32, f32) = (1.0, (NAV_ROW_H - NAV_LINE) / 2.0);
+pub const NAV_DOT_AT: (f32, f32) = (4.0, 13.0);
+pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
+pub const NAV_ICON_AT: (f32, f32) = (0.0, 8.0);
 pub const NAV_MARK_ICON: f32 = 14.0;
 pub const NAV_MARK_ICON_SMALL: f32 = 13.0;
 pub const NAV_SPINNER_FS: f32 = 12.0;
@@ -2653,25 +2646,19 @@ pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
 pub const MOTION_PULSE_TICK_MS: u64 = 33;
 /// 80ms — one frame of the braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, ten frames, an
 /// 800ms turn) that stands in a working Thread's dot.
-#[allow(dead_code)]
 pub const MOTION_BRAILLE_FRAME_MS: u64 = 80;
 /// 120ms — one frame of the working line's spinner (`· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`,
 /// ten frames, 1.2s), Claude Code's own cadence.
-#[allow(dead_code)]
 pub const MOTION_WORKING_FRAME_MS: u64 = 120;
 /// 2.4s — one sweep of the shimmer's crest across the working caption,
 /// left to right.
-#[allow(dead_code)]
 pub const MOTION_SHIMMER_MS: u64 = 2_400;
 /// The crest's half-width, as a fraction of the caption's width (the
 /// prototype's 35%–50%–65% stops over a 300% gradient).
-#[allow(dead_code)]
 pub const SHIMMER_HALF_WIDTH: f32 = 0.45;
 /// 1.1s — the focused Composer's soft block caret: full for 45% of the
 /// period, eased down to `CARET_BLINK_MIN` and held, eased back up.
-#[allow(dead_code)]
 pub const MOTION_CARET_BLINK_MS: u64 = 1_100;
-#[allow(dead_code)]
 pub const CARET_BLINK_MIN: f32 = 0.12;
 // (end motion) — append above this line only
 
@@ -2845,7 +2832,6 @@ mod tests {
                 ("SYN_TYPE", SYN_TYPE),
                 ("SYN_STRING", SYN_STRING),
                 ("SYN_NUMBER", SYN_NUMBER),
-                ("SYN_CONST", SYN_CONST),
                 ("SYN_PUNCT", SYN_PUNCT),
                 ("SYN_PLAIN", SYN_PLAIN),
                 ("INLINE_CODE_INK", INLINE_CODE_INK),
@@ -3096,14 +3082,12 @@ mod tests {
         );
         if GLASS {
             assert_eq!(paint::WINDOW.rgba(), TRANSPARENT, "the root paints nothing");
-            assert_eq!(paint::CHROME_SEAM.rgba(), CHROME_SEAM_GLASS);
             assert_eq!(
                 window_background(),
                 gpui::WindowBackgroundAppearance::Blurred
             );
         } else {
             assert_eq!(paint::WINDOW.rgba(), solid(CARD));
-            assert_eq!(paint::CHROME_SEAM.rgba(), TRANSPARENT);
             assert_eq!(
                 window_background(),
                 gpui::WindowBackgroundAppearance::Opaque
@@ -3166,7 +3150,7 @@ mod tests {
             ],
             [13.5, 12.5, 12.0, 11.0, 13.5, 14.5]
         );
-        for line in [LH_META, LH_BADGE, LH_PANEL_DIFF] {
+        for line in [LH_META, LH_PANEL_DIFF] {
             assert_eq!(line, line.round());
         }
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;

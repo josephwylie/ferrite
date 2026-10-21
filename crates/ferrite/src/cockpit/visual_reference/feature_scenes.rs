@@ -321,8 +321,8 @@ fn projects(name: &str, board: Option<OnBoard>) -> (Scene, Setup) {
         view.projects.live = true;
         // The cart copy's request stood before the window opened: heard,
         // not toasted over the board.
-        view.ring_bell(cx);
-        view.bell.clear_toasts();
+        view.ring_alerts(cx);
+        view.needs_you.clear_toasts();
         if let Some(OnBoard { board, keys }) = board {
             sw_board::clock::set(Some(fixture::NOW));
             view.stage_board(board, Placement::Tab, window, cx);

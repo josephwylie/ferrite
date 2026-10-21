@@ -688,7 +688,7 @@ impl CockpitView {
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
-                .gap(px(10.))
+                .gap(px(PANEL_FOOT_GAP))
                 .pt(px(PANEL_FOOT_PAD_T))
                 .pb(px(PANEL_FOOT_PAD_B))
                 .px(px(PANEL_ROW_ICON_X))

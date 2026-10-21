@@ -117,7 +117,7 @@ impl CockpitView {
     /// The floats' hook on the cockpit's root: the palette's, the shortcuts
     /// sheet's, the status line's and the notifications list's actions.
     pub(super) fn register_palette_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
-        use crate::{notifications as bell, palette, shortcuts, status};
+        use crate::{notifications, palette, shortcuts, status};
         root.on_action(
             cx.listener(|view, _: &palette::Toggle, window, cx| view.toggle_palette(window, cx)),
         )
@@ -163,11 +163,21 @@ impl CockpitView {
         .on_action(
             cx.listener(|view, _: &status::CycleMode, window, cx| view.cycle_mode(window, cx)),
         )
-        .on_action(cx.listener(|view, _: &bell::SelectNext, _, cx| view.step_notices(1, cx)))
-        .on_action(cx.listener(|view, _: &bell::SelectPrevious, _, cx| view.step_notices(-1, cx)))
-        .on_action(cx.listener(|view, _: &bell::Open, _, cx| view.open_notice_at_cursor(cx)))
-        .on_action(cx.listener(|view, _: &bell::Dismiss, _, cx| view.dismiss_notice_at_cursor(cx)))
-        .on_action(cx.listener(|view, _: &bell::Close, _, cx| view.close_nav_view(cx)))
+        .on_action(
+            cx.listener(|view, _: &notifications::SelectNext, _, cx| view.step_notices(1, cx)),
+        )
+        .on_action(
+            cx.listener(|view, _: &notifications::SelectPrevious, _, cx| view.step_notices(-1, cx)),
+        )
+        .on_action(
+            cx.listener(|view, _: &notifications::Open, _, cx| view.open_notice_at_cursor(cx)),
+        )
+        .on_action(
+            cx.listener(|view, _: &notifications::Dismiss, _, cx| {
+                view.dismiss_notice_at_cursor(cx)
+            }),
+        )
+        .on_action(cx.listener(|view, _: &notifications::Close, _, cx| view.close_nav_view(cx)))
         .on_action(cx.listener(|view, _: &crate::nav::CloseView, _, cx| view.close_nav_view(cx)))
     }
 
@@ -1334,19 +1344,19 @@ impl CockpitView {
     // --------------------------------------------------- the notifications
 
     fn step_notices(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.bell_rows(cx).len();
+        let count = self.needs_you_rows(cx).len();
         if count == 0 || !self.needs_you_shown() {
             return;
         }
-        self.bell.cursor =
-            (self.bell.cursor.min(count - 1) as isize + delta).rem_euclid(count as isize) as usize;
+        self.needs_you.cursor = (self.needs_you.cursor.min(count - 1) as isize + delta)
+            .rem_euclid(count as isize) as usize;
         cx.notify();
     }
 
     /// ⏎ on the list: open the cursor's Thread (its request), and close.
     fn open_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.bell_rows(cx);
-        let Some(row) = rows.get(self.bell.cursor.min(rows.len().saturating_sub(1))) else {
+        let rows = self.needs_you_rows(cx);
+        let Some(row) = rows.get(self.needs_you.cursor.min(rows.len().saturating_sub(1))) else {
             return;
         };
         let verb = row.open_verb();
@@ -1358,8 +1368,8 @@ impl CockpitView {
     /// a finished turn with every one folded under it); the cursor stays on
     /// the row that takes its place.
     fn dismiss_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.bell_rows(cx);
-        let Some(row) = rows.get(self.bell.cursor.min(rows.len().saturating_sub(1))) else {
+        let rows = self.needs_you_rows(cx);
+        let Some(row) = rows.get(self.needs_you.cursor.min(rows.len().saturating_sub(1))) else {
             return;
         };
         let Some(verb) = row.dismiss_verb() else {
@@ -1370,8 +1380,8 @@ impl CockpitView {
         for id in folded {
             self.notice_verb(crate::notifications::Verb::Dismiss(id), cx);
         }
-        let left = self.bell_rows(cx).len();
-        self.bell.cursor = self.bell.cursor.min(left.saturating_sub(1));
+        let left = self.needs_you_rows(cx).len();
+        self.needs_you.cursor = self.needs_you.cursor.min(left.saturating_sub(1));
         cx.notify();
     }
 
@@ -1442,7 +1452,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let alert = &self.bell.toasts().last()?.alert;
+        let alert = &self.needs_you.toasts().last()?.alert;
         let machines = self.machines.as_ref().map(|machines| machines.read(cx));
         let row = self.alert_row(alert, machines, ferrite_core::clock::system_time())?;
         let viewport = window.viewport_size();

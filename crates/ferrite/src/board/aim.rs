@@ -9,7 +9,9 @@ use gpui::{div, px, rgb, AnyElement, Context, SharedString};
 
 use super::BoardView;
 use crate::components;
-use crate::theme::{CH, CONTROL_H, FRAME, FS_UI, ICON_CHEVRON, LH_UI, LINE, ROW, TEXT, TEXT_DIM};
+use crate::theme::{
+    paint, CH, CONTROL_H, FS_UI, ICON_CHEVRON, LH_UI, ROW, SPACE_3, TEXT, TEXT_DIM,
+};
 
 /// A nav Project new tasks can go to.
 #[derive(Clone, Debug, PartialEq)]
@@ -175,11 +177,11 @@ impl BoardView {
                 .flex_shrink_0()
                 .items_center()
                 .h(px(self.aim.height()))
-                .px(px(CH * 1.5))
+                .px(px(SPACE_3))
                 .gap(px(CH))
-                .bg(rgb(FRAME))
+                .bg(paint::FRAME)
                 .border_b_1()
-                .border_color(rgb(LINE))
+                .border_color(paint::LINE)
                 .text_color(rgb(TEXT_DIM))
                 .whitespace_nowrap()
                 // Its presses are its own, not a click on the board's cells.
@@ -190,7 +192,7 @@ impl BoardView {
                     div()
                         .flex()
                         .border_1()
-                        .border_color(rgb(LINE))
+                        .border_color(paint::LINE)
                         .child(self.project_scope_button(true, cx))
                         .child(self.project_scope_button(false, cx)),
                 )

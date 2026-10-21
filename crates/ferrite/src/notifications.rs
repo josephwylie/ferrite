@@ -1,12 +1,13 @@
-//! The bell: every request that waits on the operator and every Thread that
-//! finished while they looked elsewhere.
+//! Needs you: every request that waits on the operator and every Thread
+//! that finished while they looked elsewhere (CONTEXT.md's Needs-you view,
+//! its alerts and toasts).
 //!
 //! Drawing and toasts only. What counts as waiting or finished is decided
 //! headless in `ferrite_core::notifications` — the rows this module draws
 //! are read from there, worded by the cockpit (`Row`), and every click or
 //! key comes back as one `Verb`. Ferrite draws all of it in the float
-//! grammar (theme WP-E): the bell's door and its badge (FL-17), the list
-//! that hangs from it (FL-16), and the toasts (FL-18).
+//! grammar (theme WP-E): the bar's need-you door and its badge (FL-17), the
+//! Needs-you view's rows (FL-16), and the toasts (FL-18).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -34,7 +35,7 @@ pub enum QuickAnswer {
     Deny,
 }
 
-/// What a click or a key on the bell's surfaces means. The cockpit answers
+/// What a click or a key on the Needs-you view's surfaces means. The cockpit answers
 /// each against the core and repaints.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verb {
@@ -57,7 +58,7 @@ pub enum Verb {
 
 pub type Handle = Rc<dyn Fn(Verb, &mut Window, &mut App)>;
 
-/// A Bell row has one actionable target, independent of provider wire data.
+/// A NeedsYou row has one actionable target, independent of provider wire data.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowTarget {
     Notice(NoticeId),
@@ -294,7 +295,7 @@ pub fn done_words(
 /// cell of padding each side, the mark (2), the word (10) and the age (5).
 pub const ROW_TEXT_CELLS: usize = 76 - 2 - 2 - 10 - 5;
 
-// ----------------------------------------------------------------- Bell
+// ----------------------------------------------------------------- NeedsYou
 
 /// How long an event waits before it alerts: a request answered, or a
 /// finish read, within it never interrupts anyone (ADR 0017).
@@ -352,7 +353,7 @@ pub struct Toast {
     until: Instant,
 }
 
-/// What one `Bell::ring` did: the events that rang (each owes its sound and
+/// What one `NeedsYou::ring` did: the events that rang (each owes its sound and
 /// its system notification), and whether the toasts changed.
 #[derive(Debug, Default)]
 pub struct Ring {
@@ -360,7 +361,7 @@ pub struct Ring {
     pub redraw: bool,
 }
 
-/// What the bell has heard of one machine: the Notice watermark (Notices
+/// What the Needs-you view has heard of one machine: the Notice watermark (Notices
 /// at or below it were heard) and the live requests.
 #[derive(Default)]
 struct Heard {
@@ -368,7 +369,7 @@ struct Heard {
     requests: BTreeSet<DecisionNoticeId>,
 }
 
-/// The window's side of the bell: whether its list is down and where its
+/// The window's side of the Needs-you view: whether its list is down and where its
 /// cursor stands, which Notices and requests it has heard of each machine,
 /// the events waiting out `ALERT_DELAY`, the toasts standing (oldest
 /// first; the newest draws), and the system notifications posted.
@@ -385,12 +386,12 @@ struct Heard {
 /// (the window just left it, or met it already waiting); what it says
 /// after rings like the rest. Nobody looks at a machine off screen, so its
 /// alerts are never in view. When the window goes to another machine, the
-/// bell moves with it (`moved`): an alert rings once, off screen or on, and
+/// Needs-you view moves with it (`moved`): an alert rings once, off screen or on, and
 /// what waits or stands goes on doing so. A machine not heard from yet (the
 /// one just left, or the one arrived at before it answers) cannot say
 /// whether its alerts still stand: they wait for it, no longer than a
 /// toast would stand.
-pub struct Bell {
+pub struct NeedsYou {
     /// The list's cursor row in the Needs-you view (`nav::NavView`),
     /// first on open.
     pub cursor: usize,
@@ -404,7 +405,7 @@ pub struct Bell {
     pub posted: BTreeMap<String, Alert>,
 }
 
-impl Bell {
+impl NeedsYou {
     pub fn new() -> Self {
         Self {
             cursor: 0,
@@ -415,7 +416,7 @@ impl Bell {
         }
     }
 
-    /// The bell of a window that went from machine `left` to `arrived`:
+    /// The Needs-you view of a window that went from machine `left` to `arrived`:
     /// all it holds of each re-keyed (the one left is off screen now, the
     /// one arrived at on screen), so neither rings again for what it rang
     /// already, and what waits, stands or is posted goes on. A system
@@ -540,7 +541,7 @@ impl Bell {
         }
     }
 
-    /// Bring the bell up to `now`. A standing toast goes once it expired,
+    /// Bring the Needs-you view up to `now`. A standing toast goes once it expired,
     /// is no longer `live` (read, resolved, dismissed) or is `in_view`. A
     /// waiting event whose delay is up is checked again: still live and
     /// not in view, it rings — toasting in place of its Thread's toast.
@@ -584,7 +585,7 @@ impl Bell {
     }
 }
 
-impl Default for Bell {
+impl Default for NeedsYou {
     fn default() -> Self {
         Self::new()
     }
@@ -952,22 +953,25 @@ mod tests {
     /// or as soon as it is read.
     #[test]
     fn an_event_rings_after_its_delay_if_it_still_stands() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let waiting = request(2, 1);
         let here = request(1, 2);
         let in_view = |alert: &Alert| alert.thread == ThreadId::new(1);
-        bell.hear(
+        needs_you.hear(
             None,
             [],
             [(waiting.clone(), false), (here.clone(), false)],
             start,
         );
-        let ring = bell.ring(start, &|_| Some(true), &in_view);
-        assert!(ring.rang.is_empty() && bell.toasts().is_empty(), "not yet");
+        let ring = needs_you.ring(start, &|_| Some(true), &in_view);
+        assert!(
+            ring.rang.is_empty() && needs_you.toasts().is_empty(),
+            "not yet"
+        );
 
         let due = start + ALERT_DELAY;
-        let ring = bell.ring(due, &|_| Some(true), &in_view);
+        let ring = needs_you.ring(due, &|_| Some(true), &in_view);
         let toast = Alert {
             away: None,
             target: RowTarget::Decision(waiting.clone()),
@@ -975,26 +979,29 @@ mod tests {
         };
         assert_eq!(ring.rang, [toast], "the one in view stays quiet");
         assert!(ring.redraw);
-        assert_eq!(bell.toasts().len(), 1);
+        assert_eq!(needs_you.toasts().len(), 1);
         // Heard once: hearing the same requests again adds nothing.
-        bell.hear(
+        needs_you.hear(
             None,
             [],
             [(waiting.clone(), false), (here.clone(), false)],
             due,
         );
         let later = due + ALERT_DELAY;
-        assert!(bell.ring(later, &|_| Some(true), &in_view).rang.is_empty());
-        assert_eq!(bell.toasts().len(), 1);
+        assert!(needs_you
+            .ring(later, &|_| Some(true), &in_view)
+            .rang
+            .is_empty());
+        assert_eq!(needs_you.toasts().len(), 1);
         // Read (opened, or its Thread landed on): it goes.
-        let ring = bell.ring(later, &|_| Some(false), &in_view);
-        assert!(ring.redraw && bell.toasts().is_empty());
+        let ring = needs_you.ring(later, &|_| Some(false), &in_view);
+        assert!(ring.redraw && needs_you.toasts().is_empty());
 
         // A read Notice never waits; an unread one does, and one read
         // during its delay never rings.
         let read = NoticeId::from_u64(4);
         let unread = NoticeId::from_u64(5);
-        bell.hear(
+        needs_you.hear(
             None,
             [
                 (read, ThreadId::new(5), true),
@@ -1003,63 +1010,70 @@ mod tests {
             [],
             later,
         );
-        assert_eq!(bell.presented(None), Some(unread));
-        let ring = bell.ring(later + ALERT_DELAY, &|_| Some(false), &|_| false);
-        assert!(ring.rang.is_empty() && bell.toasts().is_empty());
+        assert_eq!(needs_you.presented(None), Some(unread));
+        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(false), &|_| false);
+        assert!(ring.rang.is_empty() && needs_you.toasts().is_empty());
     }
 
     /// A toast goes on its own: a request's after 8s, a finish's after 5s.
     #[test]
     fn toasts_expire_by_kind() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let asking = request(2, 1);
-        bell.hear(
+        needs_you.hear(
             None,
             [(NoticeId::from_u64(1), ThreadId::new(1), false)],
             [(asking, false)],
             start,
         );
         let shown = start + ALERT_DELAY;
-        assert_eq!(bell.ring(shown, &|_| Some(true), &|_| false).rang.len(), 2);
-        let ring = bell.ring(shown + DONE_TOAST, &|_| Some(true), &|_| false);
+        assert_eq!(
+            needs_you
+                .ring(shown, &|_| Some(true), &|_| false)
+                .rang
+                .len(),
+            2
+        );
+        let ring = needs_you.ring(shown + DONE_TOAST, &|_| Some(true), &|_| false);
         assert!(ring.redraw);
-        assert_eq!(bell.toasts().len(), 1);
+        assert_eq!(needs_you.toasts().len(), 1);
         assert!(
-            bell.toasts()[0].alert.needs_you(),
+            needs_you.toasts()[0].alert.needs_you(),
             "the request stands longer"
         );
-        bell.ring(shown + NEEDS_YOU_TOAST, &|_| Some(true), &|_| false);
-        assert!(bell.toasts().is_empty() && !bell.busy());
+        needs_you.ring(shown + NEEDS_YOU_TOAST, &|_| Some(true), &|_| false);
+        assert!(needs_you.toasts().is_empty() && !needs_you.busy());
     }
 
     /// A Thread has one voice: a new event for it displaces what it had
     /// waiting, and its toast replaces the one it had standing.
     #[test]
     fn a_new_event_for_a_thread_replaces_its_toast() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let thread = ThreadId::new(3);
         let start = Instant::now();
-        bell.hear(None, [(NoticeId::from_u64(1), thread, false)], [], start);
-        bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(None, [(NoticeId::from_u64(1), thread, false)], [], start);
+        needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         // Two requests in the same second: only the newer rings.
         let at = start + DONE_TOAST / 2;
         let (first, second) = (request(3, 1), request(3, 2));
-        bell.hear(None, [], [(first.clone(), false)], at);
-        bell.hear(None, [], [(first, false), (second.clone(), false)], at);
-        let ring = bell.ring(at + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(None, [], [(first.clone(), false)], at);
+        needs_you.hear(None, [], [(first, false), (second.clone(), false)], at);
+        let ring = needs_you.ring(at + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(ring.rang.len(), 1);
         assert_eq!(
-            bell.toasts()
+            needs_you
+                .toasts()
                 .iter()
                 .map(|t| &t.alert.target)
                 .collect::<Vec<_>>(),
             [&RowTarget::Decision(second)]
         );
         // A button that acted takes its toast down.
-        let target = bell.toasts()[0].alert.target.clone();
-        bell.drop_toast(&target);
-        assert!(bell.toasts().is_empty());
+        let target = needs_you.toasts()[0].alert.target.clone();
+        needs_you.drop_toast(&target);
+        assert!(needs_you.toasts().is_empty());
     }
 
     /// ADR 0026: a machine off screen is heard quietly the first time —
@@ -1067,22 +1081,25 @@ mod tests {
     /// its Threads apart from the same ids on screen.
     #[test]
     fn a_machine_off_screen_rings_only_for_what_is_new() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let away = Some(MachineKey(Some("me@box".into())));
         let held = request(3, 1);
-        bell.hear(away.clone(), [], [(held.clone(), false)], start);
-        assert!(!bell.busy(), "what it held when first heard is not news");
+        needs_you.hear(away.clone(), [], [(held.clone(), false)], start);
+        assert!(
+            !needs_you.busy(),
+            "what it held when first heard is not news"
+        );
 
         let asked = request(3, 2);
-        bell.hear(
+        needs_you.hear(
             away.clone(),
             [],
             [(held, false), (asked.clone(), false)],
             start,
         );
-        bell.hear(None, [], [(request(3, 1), false)], start);
-        let ring = bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(None, [], [(request(3, 1), false)], start);
+        let ring = needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(
             ring.rang,
             [
@@ -1099,10 +1116,10 @@ mod tests {
             ],
             "Thread 3 here and Thread 3 on box are two Threads"
         );
-        assert_eq!(bell.toasts().len(), 2);
-        bell.drop_toast(&RowTarget::Decision(request(3, 1)));
-        assert_eq!(bell.toasts().len(), 1, "only the one on screen went");
-        assert_eq!(bell.toasts()[0].alert.away, away);
+        assert_eq!(needs_you.toasts().len(), 2);
+        needs_you.drop_toast(&RowTarget::Decision(request(3, 1)));
+        assert_eq!(needs_you.toasts().len(), 1, "only the one on screen went");
+        assert_eq!(needs_you.toasts()[0].alert.away, away);
     }
 
     /// What was heard moves with the window: arriving at box, what rang
@@ -1110,40 +1127,40 @@ mod tests {
     /// is heard already. What either says after still rings.
     #[test]
     fn what_rang_off_screen_does_not_ring_again_on_arrival() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let home = MachineKey(None);
         let on_box = MachineKey(Some("me@box".into()));
         let finished = NoticeId::from_u64(7);
-        bell.hear(None, [(finished, ThreadId::new(1), false)], [], start);
-        bell.hear(Some(on_box.clone()), [], [], start);
+        needs_you.hear(None, [(finished, ThreadId::new(1), false)], [], start);
+        needs_you.hear(Some(on_box.clone()), [], [], start);
         let (one, two) = (request(1, 1), request(2, 1));
-        bell.hear(
+        needs_you.hear(
             Some(on_box.clone()),
             [],
             [(one, false), (two.clone(), false)],
             start,
         );
-        let ring = bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        let ring = needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(ring.rang.len(), 3, "box's two and the finish here");
 
-        let mut bell = bell.moved(&home, &on_box);
+        let mut needs_you = needs_you.moved(&home, &on_box);
         let later = start + 2 * ALERT_DELAY;
-        assert_eq!(bell.presented(Some(&home)), Some(finished));
-        assert_eq!(bell.presented(None), None, "box had no Notice");
-        bell.hear(None, [], [(two, false)], later);
-        bell.hear(Some(home.clone()), [], [], later);
-        let ring = bell.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
+        assert_eq!(needs_you.presented(Some(&home)), Some(finished));
+        assert_eq!(needs_you.presented(None), None, "box had no Notice");
+        needs_you.hear(None, [], [(two, false)], later);
+        needs_you.hear(Some(home.clone()), [], [], later);
+        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert!(ring.rang.is_empty(), "nothing heard rings twice");
 
         let (later, newer) = (later + ALERT_DELAY, NoticeId::from_u64(8));
-        bell.hear(
+        needs_you.hear(
             Some(home.clone()),
             [(newer, ThreadId::new(1), false)],
             [],
             later,
         );
-        let ring = bell.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
+        let ring = needs_you.ring(later + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(
             ring.rang,
             [Alert {
@@ -1161,18 +1178,18 @@ mod tests {
     /// is about the same Thread, re-keyed.
     #[test]
     fn what_waits_or_stands_moves_with_the_window() {
-        let mut bell = Bell::new();
+        let mut needs_you = NeedsYou::new();
         let start = Instant::now();
         let home = MachineKey(None);
         let (on_box, box3) = (
             MachineKey(Some("me@box".into())),
             MachineKey(Some("me@box3".into())),
         );
-        bell.hear(Some(box3.clone()), [], [], start);
-        bell.hear(Some(box3.clone()), [], [(request(4, 1), false)], start);
-        bell.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
+        needs_you.hear(Some(box3.clone()), [], [], start);
+        needs_you.hear(Some(box3.clone()), [], [(request(4, 1), false)], start);
+        needs_you.ring(start + ALERT_DELAY, &|_| Some(true), &|_| false);
         let finished = NoticeId::from_u64(2);
-        bell.posted.insert(
+        needs_you.posted.insert(
             "here".into(),
             Alert {
                 away: None,
@@ -1182,19 +1199,23 @@ mod tests {
         );
         let asking = request(3, 1);
         let at = start + ALERT_DELAY;
-        bell.hear(Some(on_box.clone()), [], [], at);
-        bell.hear(Some(on_box.clone()), [], [(asking.clone(), false)], at);
+        needs_you.hear(Some(on_box.clone()), [], [], at);
+        needs_you.hear(Some(on_box.clone()), [], [(asking.clone(), false)], at);
 
-        let mut bell = bell.moved(&home, &on_box);
-        assert_eq!(bell.toasts().len(), 1, "box3's toast stands on");
-        assert_eq!(bell.toasts()[0].alert.away, Some(box3));
-        assert_eq!(bell.posted["here"].away, Some(home), "same tag, re-keyed");
+        let mut needs_you = needs_you.moved(&home, &on_box);
+        assert_eq!(needs_you.toasts().len(), 1, "box3's toast stands on");
+        assert_eq!(needs_you.toasts()[0].alert.away, Some(box3));
+        assert_eq!(
+            needs_you.posted["here"].away,
+            Some(home),
+            "same tag, re-keyed"
+        );
         let due = at + ALERT_DELAY;
-        let ring = bell.ring(due, &|alert| alert.away.is_some().then_some(true), &|_| {
+        let ring = needs_you.ring(due, &|alert| alert.away.is_some().then_some(true), &|_| {
             false
         });
         assert!(ring.rang.is_empty(), "box has not answered yet");
-        let ring = bell.ring(due + ALERT_DELAY, &|_| Some(true), &|_| false);
+        let ring = needs_you.ring(due + ALERT_DELAY, &|_| Some(true), &|_| false);
         assert_eq!(
             ring.rang,
             [Alert {
@@ -1207,10 +1228,10 @@ mod tests {
         // A machine that never answers is waited for no longer than the
         // toast would have stood.
         let late = request(3, 2);
-        bell.hear(None, [], [(late, false)], due);
-        bell.ring(due + ALERT_DELAY, &|_| None, &|_| false);
-        bell.ring(due + ALERT_DELAY + NEEDS_YOU_TOAST, &|_| None, &|_| false);
-        let ring = bell.ring(
+        needs_you.hear(None, [], [(late, false)], due);
+        needs_you.ring(due + ALERT_DELAY, &|_| None, &|_| false);
+        needs_you.ring(due + ALERT_DELAY + NEEDS_YOU_TOAST, &|_| None, &|_| false);
+        let ring = needs_you.ring(
             due + ALERT_DELAY + NEEDS_YOU_TOAST,
             &|_| Some(true),
             &|_| false,

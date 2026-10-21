@@ -1,5 +1,5 @@
 //! Ferrite's shared primitives: the one way render code opens a text run,
-//! lays a plane or a floating surface, draws a status mark or a keycap,
+//! lays a plane or a floating surface, draws a status mark or a shortcut,
 //! builds a control or a menu row, and runs the few loops the terminal
 //! grammar allows (the braille and working spinners, the shimmer, the caret
 //! blink — theme rule 8). Longbridge owns the control mechanics; `theme.rs`
@@ -110,15 +110,15 @@ impl Tip for Button {
 /// A form action: nothing at rest, `paint::RAISED` under the pointer
 /// (blended), `paint::PRESS` pressed.
 pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
-    form_button_on(id, rgba(theme::TRANSPARENT).into(), cx)
+    form_button_on(id, theme::Paint(theme::TRANSPARENT), cx)
 }
 
 /// `form_button` resting on its own `rest` ground (a filled field-like
 /// control): the same blend and press.
-pub fn form_button_on(id: impl Into<ElementId>, rest: Hsla, cx: &App) -> Button {
+pub fn form_button_on(id: impl Into<ElementId>, rest: theme::Paint, cx: &App) -> Button {
     faded_button(
         id,
-        rest,
+        rest.into(),
         theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
@@ -304,6 +304,41 @@ pub fn float_shadow() -> Vec<BoxShadow> {
     )]
 }
 
+/// The palette's dialog's shadows (SPEC §5.8): its 1px `HAIRLINE_STRONG`
+/// ring as a spread, then the float's shadow deepened (`SHADOW_PALETTE_*`).
+/// The dialog clips its rows to its radius, which would clip an
+/// `outer_ring` overlay, so its ring is a shadow: the same 1px outside.
+pub fn dialog_shadow() -> Vec<BoxShadow> {
+    vec![
+        layer(theme::HAIRLINE_STRONG, 0., 0., theme::FOCUS_RING_W),
+        layer(
+            theme::SHADOW_PALETTE,
+            theme::SHADOW_PALETTE_Y,
+            theme::SHADOW_PALETTE_BLUR,
+            0.,
+        ),
+    ]
+}
+
+/// **The outer ring**: a 1px ring in `ink` just outside its parent's box of
+/// `radius` (the mockups' `box-shadow: 0 0 0 1px`), an overlay
+/// `FOCUS_RING_W` past every edge, rounded to match. It takes no layout and
+/// no pointer, so the box keeps its size and a state change moves nothing.
+/// The parent is `relative` and does not clip. A Pane's card
+/// (`pane::card_ring`), the Solo and the compact Composer wear it.
+pub fn outer_ring(radius: f32, ink: impl Into<Hsla>) -> Div {
+    let out = px(-theme::FOCUS_RING_W);
+    div()
+        .absolute()
+        .top(out)
+        .left(out)
+        .right(out)
+        .bottom(out)
+        .rounded(px(radius + theme::FOCUS_RING_W))
+        .border_1()
+        .border_color(ink.into())
+}
+
 /// A floating surface (menu, picker, popover, card, toast, sheet; SPEC
 /// §5.8's shell at the float's scale): the float's opaque ground
 /// (`FLOAT_GROUND`; floats cannot frost, theme WP-E FL-15), radius
@@ -384,11 +419,6 @@ pub fn status_ring(ink: u32) -> Div {
     glyph("\u{25cb}", ink)
 }
 
-/// A status check (a finish not yet seen, `✓`), set as text.
-pub fn status_check(ink: u32) -> Div {
-    glyph("\u{2713}", ink)
-}
-
 // ------------------------------------------------------------------ loops
 //
 // The few loops the terminal grammar allows (theme rule 8). Each rides the
@@ -397,12 +427,10 @@ pub fn status_check(ink: u32) -> Div {
 // moves so the view that paints it is drawn only when it changes, and holds
 // a static end state under reduced motion that says the same thing.
 
-#[allow(unused_imports)] // until the builders call them
 pub use loops::*;
 
 /// The loops (see the section note above): re-exported, so callers name
 /// `components::braille_spinner` and friends.
-#[allow(dead_code)] // the builders' API: the sidebar, Pane heads, the working line, the Composer
 mod loops {
     use super::*;
 
@@ -737,6 +765,7 @@ mod loops {
     /// on the pulse clock through the blink's fades; full and still under
     /// reduced motion. An unfocused Composer draws no blinking caret (its
     /// caret is a faint outline, still).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn caret_opacity(window: &mut Window, cx: &mut App) -> f32 {
         if motion::reduced_motion(cx) {
             return 1.0;
@@ -763,31 +792,6 @@ pub fn embossed_mark(size: f32, body: u32) -> Div {
             .size(px(size))
             .text_color(rgb(body)),
     )
-}
-
-/// The one keycap: `KBD_H`, at least square, flat and square on
-/// `paint::RAISED`, the grid's type in `TEXT`, centred.
-#[cfg(test)]
-pub fn kbd(key: impl Into<SharedString>) -> Div {
-    kbd_face().child(key.into())
-}
-
-#[cfg(test)]
-fn kbd_face() -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .h(px(theme::KBD_H))
-        .min_w(px(theme::KBD_H))
-        .px(px(theme::KBD_PAD_X))
-        .rounded(px(theme::R_CHIP))
-        .bg(theme::paint::RAISED)
-        .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT))
 }
 
 /// A modifier's glyph as a key combination spells it: `cmd` ⌘, `shift` ⇧,
@@ -2001,7 +2005,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_and_keycaps_hold_their_boxes() {
+    fn marks_hold_their_boxes() {
         // The dots are the face's own glyphs, typed in their ink.
         let mut dot = status_dot(theme::RUNNING);
         assert_eq!(
@@ -2012,13 +2016,6 @@ mod tests {
         assert_eq!(dot.style().background, None, "typed, not painted");
         let mut ring = status_ring(theme::TEXT_FAINT);
         assert_eq!(ring.style().text.color, Some(rgb(theme::TEXT_FAINT).into()));
-        let mut key = kbd("y");
-        assert_eq!(key.style().size.height, Some(px(theme::KBD_H).into()));
-        assert_eq!(
-            key.style().background,
-            Some(Fill::from(theme::paint::RAISED))
-        );
-        assert_eq!(key.style().box_shadow, None, "a keycap is flat");
         let mut gutter = gutter(div(), theme::LH_UI);
         assert_eq!(gutter.style().size.width, Some(px(theme::GUTTER_W).into()));
     }

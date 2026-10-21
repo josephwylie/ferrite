@@ -636,7 +636,7 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A Bell request already focused its Thread in core. Select its owning
+    /// A NeedsYou request already focused its Thread in core. Select its owning
     /// Subject without synthesizing a window input event or answering it.
     pub(super) fn select_subject_from_notice(
         &mut self,

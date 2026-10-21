@@ -94,84 +94,8 @@ pub(crate) fn focus_rail_action(ordinal: usize) -> Option<&'static str> {
     .copied()
 }
 
-/// A status mark's shape: filled for a live Thread, hollow for a parked one
-/// or for work still running behind an idle Main, and a check for a finish
-/// the operator has not yet seen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DotShape {
-    Solid,
-    Ring,
-    Check,
-}
-
-/// What a Thread's state looks like wherever it is drawn: the mark's shape
-/// and ink, and its lexicon word (`theme::words`) when the state has one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ThreadStatus {
-    pub shape: DotShape,
-    pub ink: u32,
-    pub word: Option<&'static str>,
-}
-
-impl ThreadStatus {
-    /// Main is idle while its Subagents or background tasks still work
-    /// (`nav::RowStatus::Background`): the running ink, hollow.
-    pub fn background() -> Self {
-        ThreadStatus {
-            shape: DotShape::Ring,
-            ink: crate::theme::RUNNING,
-            word: Some(crate::theme::words::BACKGROUND),
-        }
-    }
-
-    /// The still mark: the face every surface draws (motion is layered on
-    /// by the surface that needs it, never by changing the ink).
-    pub fn dot(self) -> Div {
-        match self.shape {
-            DotShape::Solid => crate::components::status_dot(self.ink),
-            DotShape::Ring => crate::components::status_ring(self.ink),
-            DotShape::Check => crate::components::status_check(self.ink),
-        }
-    }
-}
-
 pub(crate) use ferrite_core::Attention;
 
-/// **The one status truth.** The nav row, the Pane head, the L2 cell, the
-/// wall cell, the palette and the bottom bar all read a Thread's face from
-/// here, so no two surfaces can disagree about a Thread.
-///
-/// `unread` is whether the Thread holds a Notice the operator has not seen
-/// (on screen while the window had focus): a quiet Thread that finished
-/// unseen is **done**, a teal check, until it is seen and settles to idle.
-pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatus {
-    use crate::theme::{words, ATTENTION, BLOCKED, IDLE, RUNNING, TEXT_DIM, TEXT_FAINT};
-    use pane::WallState;
-    let solid = |ink, word| ThreadStatus {
-        shape: DotShape::Solid,
-        ink,
-        word,
-    };
-    match state {
-        WallState::Working => solid(RUNNING, Some(words::WORKING)),
-        WallState::Failing => solid(BLOCKED, Some(words::FAILING)),
-        WallState::Decision => solid(ATTENTION, Some(words::NEEDS_YOU)),
-        WallState::Blocked => solid(BLOCKED, Some(words::FAILED)),
-        WallState::Done | WallState::Idle if unread => ThreadStatus {
-            shape: DotShape::Check,
-            ink: TEXT_DIM,
-            word: Some(words::DONE),
-        },
-        WallState::Done | WallState::Idle => solid(IDLE, None),
-        // A parked Thread is a faint ring, in the nav and on the board
-        // alike (F-4): structure, not state.
-        WallState::Parked => ThreadStatus {
-            shape: DotShape::Ring,
-            ink: TEXT_FAINT,
-            word: None,
-        },
-    }
-}
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::plain_text;
 use ferrite_core::workspace::registry::ProjectId;
@@ -188,12 +112,11 @@ use gpui::{
 };
 
 use crate::composer::{Composer, Edited};
-#[allow(unused_imports)]
 use crate::decision;
 use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
-use crate::notifications::{Bell, Handle, Row as NoticeRow, RowTarget, Verb};
+use crate::notifications::{Handle, NeedsYou, Row as NoticeRow, RowTarget, Verb};
 use crate::pane::{self, PaneView};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
@@ -289,7 +212,7 @@ fn system_tag(machine: &crate::machines::MachineKey, thread: ThreadId) -> String
 type FreshNotice = (ferrite_core::notifications::NoticeId, ThreadId, bool);
 type LiveRequest = (ferrite_core::notifications::DecisionNoticeId, bool);
 
-/// What a machine's bell may not have heard yet: its Notices born after
+/// What a machine's Needs-you state may not have heard yet: its Notices born after
 /// `after` (id, Thread, read) and its live requests (id, read).
 fn news(
     notifications: &ferrite_core::notifications::Notifications,
@@ -445,7 +368,7 @@ pub struct CockpitView {
     /// list in its place. The tree on every launch.
     pub(crate) nav_view: nav::NavView,
     /// The keyboard of a view's list other than the Needs-you one (whose
-    /// keys are the bell's, `Floats::notice_focus`): Esc returns to the
+    /// keys are the Needs-you view's, `Floats::notice_focus`): Esc returns to the
     /// tree.
     nav_view_focus: FocusHandle,
     /// The rail's own scroll (cmd-B folded).
@@ -588,9 +511,9 @@ pub struct CockpitView {
     /// Whether "Quit Ferrite?" is on screen (`leaving`).
     leave_asked: bool,
     group_error: Option<SharedString>,
-    /// The bell: whether its list is down, its cursor, and which Notices
+    /// The Needs-you view: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
-    pub(crate) bell: Bell,
+    pub(crate) needs_you: NeedsYou,
     /// What to open once the Cockpit is attached: what the window came
     /// to this machine for (ADR 0026), and until when it waits.
     landing: Option<(Landing, std::time::Instant)>,
@@ -1652,7 +1575,7 @@ impl CockpitView {
             projects: projects::ProjectsState::new(board),
             leave_asked: false,
             group_error: None,
-            bell: Bell::new(),
+            needs_you: NeedsYou::new(),
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
@@ -1724,9 +1647,9 @@ impl CockpitView {
         self
     }
 
-    /// The bell of the Cockpit the window left (`Bell::moved`).
-    pub fn with_bell(mut self, bell: Bell) -> Self {
-        self.bell = bell;
+    /// The Needs-you state of the Cockpit the window left (`NeedsYou::moved`).
+    pub fn with_needs_you(mut self, needs_you: NeedsYou) -> Self {
+        self.needs_you = needs_you;
         self
     }
 
@@ -2218,7 +2141,7 @@ impl CockpitView {
         }
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
-        self.ring_bell(cx);
+        self.ring_alerts(cx);
         for pane in &self.panes {
             if let Some(thread) = pane.thread() {
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
@@ -2436,7 +2359,7 @@ impl CockpitView {
     /// What a stream can change that more than its own Pane and nav row
     /// draw: the account's usage windows (every Pane's meter), the Threads
     /// waiting on the operator (every wall tile's answer keys), the unread
-    /// notices and attention (the bell, each
+    /// notices and attention (the Needs-you view, each
     /// Pane's head).
     fn shared_chrome(&self) -> String {
         let notifications = self.cockpit.notifications();
@@ -4515,7 +4438,7 @@ impl CockpitView {
         .detach();
     }
 
-    /// The updater's toasts. Like the bell's, they wait for render, the
+    /// The updater's toasts. Like the Needs-you view's, they wait for render, the
     /// one place with a Window in hand.
     fn present_cli_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::cli_updates::{name, Toast};
@@ -7498,7 +7421,7 @@ impl CockpitView {
     /// Show `view` in the tree's place (§5.1.2): the nav unfolds if it is
     /// folded away, the list starts at its top, and its keys take the
     /// keyboard when there is a window to hand it to — the Needs-you list
-    /// the bell's (`notice_focus`, the cursor on its first row), any other
+    /// the Needs-you view's (`notice_focus`, the cursor on its first row), any other
     /// list Esc's way back to the tree. The tree hands the keyboard back.
     pub(crate) fn show_nav_view(
         &mut self,
@@ -7514,7 +7437,7 @@ impl CockpitView {
         }
         self.nav_view = view;
         if view == nav::NavView::NeedsYou {
-            self.bell.cursor = 0;
+            self.needs_you.cursor = 0;
         }
         if let Some(window) = window {
             match view {
@@ -9916,7 +9839,7 @@ impl CockpitView {
         let wall = ferrite_core::clock::system_time();
         // Every age the Cockpit can show: a Thread's (the nav, a parked
         // tile, the palette), a notice's and a waiting request's (the
-        // bell, its toasts).
+        // Needs-you view, its toasts).
         let notifications = self.cockpit.notifications();
         let notices = notifications
             .notices()
@@ -10317,7 +10240,7 @@ impl CockpitView {
             || find_focused
             || pane_control_focused
         {
-            // Native text, dialogs, and the bell keep their own keyboard focus.
+            // Native text, dialogs, and the Needs-you view keep their own keyboard focus.
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
             if !self.settings_focus.contains_focused(window, cx) {
@@ -11124,9 +11047,9 @@ impl CockpitView {
         }
     }
 
-    /// A bound action's first keystroke as a keycap reads it, from this
-    /// platform's key table: `cmd-shift-n` → `cmd-shift-N`, which a keycap
-    /// draws tight with glyph modifiers, `⌘⇧N` (`components::kbd_keys`).
+    /// A bound action's first keystroke as a shortcut spells it, from this
+    /// platform's key table: `cmd-shift-n` → `cmd-shift-N`, which
+    /// `components::key_combo` draws tight with glyph modifiers, `⌘⇧N`.
     fn key_label(action: &str) -> Option<SharedString> {
         crate::components::bound_chord(action).map(SharedString::from)
     }
@@ -12676,7 +12599,7 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// cmd-i, the bell: the Needs-you view, shown or back to the tree
+    /// cmd-i: the Needs-you view, shown or back to the tree
     /// (§5.1.2, FL-16). Showing it closes the floats over it, puts its
     /// cursor on the first row and hands it the keyboard (its keys ride
     /// the `Notifications` context).
@@ -12695,7 +12618,7 @@ impl CockpitView {
         self.toggle_nav_view(nav::NavView::NeedsYou, Some(window), cx);
     }
 
-    /// Whether the Needs-you view is shown: the bell's list is open.
+    /// Whether the Needs-you view is shown.
     pub(crate) fn needs_you_shown(&self) -> bool {
         self.nav_view == nav::NavView::NeedsYou
     }
@@ -12709,7 +12632,7 @@ impl CockpitView {
         }
     }
 
-    /// Every click or key on the bell's surfaces — a toast's `⏎ open`, a
+    /// Every click or key on the Needs-you view's surfaces — a toast's `⏎ open`, a
     /// row, ⏎ and ⌫ on the list, `mark all read` — lands here and is
     /// answered against core. Opening lands the operator on the Notice's
     /// Pane: the core's one focus door, so a fullscreen re-aims and a
@@ -12718,7 +12641,7 @@ impl CockpitView {
     pub(crate) fn notice_verb(&mut self, verb: Verb, cx: &mut Context<Self>) {
         match verb {
             Verb::Open(id) => {
-                self.bell
+                self.needs_you
                     .drop_toast(&crate::notifications::RowTarget::Notice(id));
                 if self.cockpit.open_notice(id).is_some() {
                     self.sync_panes(cx);
@@ -12729,7 +12652,7 @@ impl CockpitView {
                 self.cockpit.dismiss_notice(id);
             }
             Verb::OpenDecision(id) => {
-                self.bell
+                self.needs_you
                     .drop_toast(&crate::notifications::RowTarget::Decision(id.clone()));
                 let subject = self
                     .cockpit
@@ -12778,13 +12701,13 @@ impl CockpitView {
                 crate::decision::ApprovalChoice::DenyAndSteer
             }
         };
-        self.bell
+        self.needs_you
             .drop_toast(&crate::notifications::RowTarget::Decision(id.clone()));
         self.answer_approval(id.thread, choice, None, window, cx);
         cx.notify();
     }
 
-    /// The bell's verbs, as a closure the surfaces can hold.
+    /// The Needs-you view's verbs, as a closure the surfaces can hold.
     fn notice_handle(&self, cx: &mut Context<Self>) -> Handle {
         let view = cx.entity().downgrade();
         std::rc::Rc::new(move |verb, window, cx| {
@@ -12846,7 +12769,7 @@ impl CockpitView {
         }
     }
 
-    /// Keep the bell up with the Notices and requests (FL-18, ADR 0017),
+    /// Keep the Needs-you view up with the Notices and requests (FL-18, ADR 0017),
     /// on every pump: hear what arrived here and on the machines off
     /// screen (ADR 0026), and ring what waited out its delay and still
     /// stands — a toast, a sound, and a system notification unless its
@@ -12856,7 +12779,7 @@ impl CockpitView {
     /// The operator is looking at an event, and nothing rings for it — no
     /// system notification either — while the window has focus and its
     /// Thread is on the board. Nobody looks at a machine off screen.
-    fn ring_bell(&mut self, cx: &mut Context<Self>) {
+    fn ring_alerts(&mut self, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let entity = self.machines.clone();
         let machines = entity.as_ref().map(|machines| machines.read(cx));
@@ -12866,25 +12789,28 @@ impl CockpitView {
         // its alerts by them would drop the ones the window brought along.
         let here = self.attached().then_some(notifications);
         if let Some(here) = here {
-            let (fresh, requests) = news(here, self.bell.presented(None));
-            self.bell.hear(None, fresh, requests, now);
+            let (fresh, requests) = news(here, self.needs_you.presented(None));
+            self.needs_you.hear(None, fresh, requests, now);
         }
         for away in machines.iter().flat_map(|machines| machines.off_screen()) {
-            let (fresh, requests) = news(away.notifications, self.bell.presented(Some(&away.key)));
-            self.bell.hear(Some(away.key), fresh, requests, now);
+            let (fresh, requests) = news(
+                away.notifications,
+                self.needs_you.presented(Some(&away.key)),
+            );
+            self.needs_you.hear(Some(away.key), fresh, requests, now);
         }
         let live = |alert: &crate::notifications::Alert| machines::wanted(alert, here, machines);
         // A system notification the operator has since read, or whose
         // request resolved, is taken back out of the notification centre.
         let stale: Vec<String> = self
-            .bell
+            .needs_you
             .posted
             .iter()
             .filter(|(_, alert)| live(alert) == Some(false))
             .map(|(tag, _)| tag.clone())
             .collect();
         let (mut redraw, mut sound, mut posts) = (false, None, Vec::new());
-        if self.bell.busy() {
+        if self.needs_you.busy() {
             let present = self.cockpit.window_active();
             let on_board: std::collections::HashSet<ThreadId> = self
                 .visible_indices()
@@ -12894,7 +12820,7 @@ impl CockpitView {
             let in_view = |alert: &crate::notifications::Alert| {
                 present && alert.away.is_none() && on_board.contains(&alert.thread)
             };
-            let ring = self.bell.ring(now, &live, &in_view);
+            let ring = self.needs_you.ring(now, &live, &in_view);
             redraw = ring.redraw;
             // Alerts that ring together chime once, needs-you over done.
             let settings = &self.prefs.settings;
@@ -12928,14 +12854,14 @@ impl CockpitView {
             }
         }
         for tag in stale {
-            self.bell.posted.remove(&tag);
+            self.needs_you.posted.remove(&tag);
             crate::system_notifications::withdraw(&tag, cx);
         }
         if let Some(sound) = sound {
             self.chime(sound);
         }
         for (posting, alert) in posts {
-            self.bell.posted.insert(posting.tag.clone(), alert);
+            self.needs_you.posted.insert(posting.tag.clone(), alert);
             crate::system_notifications::post(posting, cx);
         }
         if redraw {
@@ -13012,7 +12938,7 @@ impl CockpitView {
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
-        if let Some(alert) = self.bell.posted.get(tag).cloned() {
+        if let Some(alert) = self.needs_you.posted.get(tag).cloned() {
             self.notice_verb(alert.open_verb(), cx);
         }
     }
@@ -13099,7 +13025,7 @@ impl CockpitView {
     /// answer keys take them (the Needs-you queue), then the machines off
     /// screen's, then finished turns newest first on every machine, each
     /// Thread folded to its newest.
-    pub(super) fn bell_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
+    pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
         let notifications = self.cockpit.notifications();
         let queue = self.cockpit.needs_you();
@@ -13287,11 +13213,11 @@ impl CockpitView {
     }
 
     /// A view's list in the tree's place (§5.1.2), scrolling as the tree
-    /// does and holding its own keys. The Needs-you list is the bell's
-    /// (`bell_rows`, its cursor `bell.cursor` while it has the keyboard):
+    /// does and holding its own keys. The Needs-you list is
+    /// (`needs_you_rows`, its cursor `needs_you.cursor` while it has the keyboard):
     /// the blocked Threads oldest-first as their two-line rows, a machine
     /// off screen's requests, then `Recent`, the Notices. A row's press
-    /// opens what it stands for, as the bell's did. The other views list
+    /// opens what it stands for, as the Needs-you view's did. The other views list
     /// their Threads as the tree draws them.
     fn nav_view_list(
         &self,
@@ -13303,12 +13229,12 @@ impl CockpitView {
         let tree = nav::nav_tree(&self.nav_scroll);
         match view {
             nav::NavView::NeedsYou => {
-                let rows = self.bell_rows(cx);
+                let rows = self.needs_you_rows(cx);
                 let cursor = self
                     .floats
                     .notice_focus
                     .is_focused(window)
-                    .then(|| self.bell.cursor.min(rows.len().saturating_sub(1)));
+                    .then(|| self.needs_you.cursor.min(rows.len().saturating_sub(1)));
                 let mut list = nav::view_list("nav-view-needs-you-list");
                 if rows.is_empty() {
                     list = list.child(nav::note("nav-needs-you-empty", "Nothing needs you"));
@@ -15251,7 +15177,7 @@ mod tests {
         });
     }
 
-    /// §5.1.2: the Needs-you view is the bell's list in the tree's place —
+    /// §5.1.2: the Needs-you view stands in the tree's place —
     /// the blocked Threads oldest-first as their two-line rows, then
     /// `Recent` — counted by the view row's pill. Esc and a click on the
     /// active view return to the tree, and ⌘D still walks the queue.
@@ -15874,7 +15800,7 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// Pump past the bell's delay: whatever still stands has rung (ADR
+    /// Pump past the alerts' delay: whatever still stands has rung (ADR
     /// 0017).
     fn ring(cx: &mut gpui::VisualTestContext) {
         cx.executor()
@@ -24962,8 +24888,8 @@ mod tests {
     }
 
     #[gpui::test]
-    fn notifications_keep_focus_until_escape_dismisses_the_bell(cx: &mut TestAppContext) {
-        let (mut core, fake) = cockpit("bell-escape", 1);
+    fn notifications_keep_focus_until_escape_closes_the_needs_you_view(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("needs-you-escape", 1);
         core.send(core.threads()[0], "keep working".into());
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -24979,7 +24905,7 @@ mod tests {
         assert_eq!(
             *fake.interrupts.borrow(),
             0,
-            "Escape only dismisses the bell"
+            "Escape only dismisses the Needs-you view"
         );
         view.read_with(cx, |view, _| assert!(!view.needs_you_shown()));
         cx.simulate_keystrokes("escape");
@@ -24995,7 +24921,7 @@ mod tests {
         // One finish per Thread: a Thread's repeats fold into one row, so
         // a long list is many Threads.
         const THREADS: usize = 24;
-        let (mut core, fake) = cockpit("bell-scroll", THREADS);
+        let (mut core, fake) = cockpit("needs-you-scroll", THREADS);
         for index in 0..THREADS {
             core.send(core.threads()[index], "go".into());
             fake.streams.borrow()[index]
@@ -25034,12 +24960,12 @@ mod tests {
         });
     }
 
-    /// A Thread that finishes off the screen rings the bell: an unread
+    /// A Thread that finishes off the screen needs you: an unread
     /// Notice until the operator lands on it — which reads it. The nav is
     /// open, so nothing toasts (C8): the tree says it.
     #[gpui::test]
-    fn a_finished_thread_rings_the_bell_until_it_is_seen(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("finished-bell", 2);
+    fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("finished-needs-you", 2);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let threads = view.read_with(cx, |view, _| view.cockpit.threads());
         view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
@@ -25061,7 +24987,7 @@ mod tests {
             assert!(notifications.attention(threads[1]), "off the screen");
             assert!(!notifications.attention(threads[0]));
             assert!(
-                view.bell.toasts().is_empty(),
+                view.needs_you.toasts().is_empty(),
                 "with the nav open, a finish toasts nothing"
             );
         });
@@ -25075,7 +25001,7 @@ mod tests {
             assert_eq!(
                 notifications.notices().count(),
                 1,
-                "the bell still lists it"
+                "the Needs-you view still lists it"
             );
         });
     }
@@ -25105,9 +25031,11 @@ mod tests {
             let finished = view.thread_row(threads[1]);
             assert_eq!(finished.status, nav::RowStatus::Done, "off the screen");
             assert_eq!(finished.tail, nav::NavTail::Done);
-            let face = finished.status.face();
-            assert_eq!(face.shape, DotShape::Check);
-            assert_eq!(face.ink, crate::theme::TEXT_DIM, "teal, never ochre");
+            assert_eq!(
+                finished.status.ink(),
+                crate::theme::TEXT_DIM,
+                "a dim check, never ochre"
+            );
             assert_eq!(view.thread_row(threads[0]).status, nav::RowStatus::Idle);
         });
 
@@ -25163,7 +25091,7 @@ mod tests {
     }
 
     /// A finish on the Pane the operator is already on is read as it is
-    /// born: it joins the bell's list, but nothing shouts.
+    /// born: it joins the Needs-you view, but nothing shouts.
     #[gpui::test]
     fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("finished-focused", 1);
@@ -25182,13 +25110,13 @@ mod tests {
         });
         view.read_with(cx, |view, _| {
             assert!(
-                view.bell.toasts().is_empty(),
+                view.needs_you.toasts().is_empty(),
                 "no toast for the Pane in view"
             );
         });
     }
 
-    /// Opening a Notice — a toast, or a row of the bell — lands the
+    /// Opening a Notice — a toast, or a row of the Needs-you view — lands the
     /// operator on its Pane and closes the panel.
     #[gpui::test]
     fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
@@ -25233,7 +25161,7 @@ mod tests {
         let (core, fake) = cockpit("request-toast-contract", 2);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let toasts = |cx: &mut gpui::VisualTestContext| {
-            view.read_with(cx, |view, _| view.bell.toasts().len())
+            view.read_with(cx, |view, _| view.needs_you.toasts().len())
         };
         let request = |name: &str| SessionEvent::DecisionRequested {
             decision: ferrite_core::Decision {
@@ -25283,7 +25211,7 @@ mod tests {
         ring(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.notifications().unread(), 2);
-            assert_eq!(view.bell.toasts().len(), 1, "one toast per Thread");
+            assert_eq!(view.needs_you.toasts().len(), 1, "one toast per Thread");
         });
         for name in ["AskUserQuestion", "Bash"] {
             fake.streams.borrow()[off].send(cancelled(name)).unwrap();
@@ -25317,16 +25245,19 @@ mod tests {
         fake.streams.borrow()[off].send(decision("waits")).unwrap();
         tick(cx);
         ring(cx);
-        assert_eq!(view.read_with(cx, |view, _| view.bell.toasts().len()), 1);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.needs_you.toasts().len()),
+            1
+        );
         cx.executor()
             .advance_clock(crate::notifications::NEEDS_YOU_TOAST);
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.bell.toasts().is_empty(), "it went on its own");
+            assert!(view.needs_you.toasts().is_empty(), "it went on its own");
             assert_eq!(
                 view.cockpit.notifications().unread(),
                 1,
-                "the request still waits in the bell"
+                "the request still waits in the Needs-you view"
             );
         });
     }
@@ -25351,7 +25282,7 @@ mod tests {
         ring(cx);
         view.read_with(cx, |view, _| {
             assert!(view.cockpit.window_active());
-            assert_eq!(view.bell.toasts().len(), 1);
+            assert_eq!(view.needs_you.toasts().len(), 1);
         });
         assert_eq!(
             cx.delivered_system_notifications()
@@ -25403,7 +25334,7 @@ mod tests {
                 [Sound::Done],
                 "ringing together, they chime once"
             );
-            assert_eq!(view.bell.toasts().len(), 2);
+            assert_eq!(view.needs_you.toasts().len(), 2);
         });
 
         cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
@@ -25414,7 +25345,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused(), 1, "the click landed on its Thread");
             assert!(!view.cockpit.notifications().attention(threads[1]));
-            assert!(view.bell.toasts().is_empty(), "both are in view now");
+            assert!(view.needs_you.toasts().is_empty(), "both are in view now");
         });
         assert!(
             tags(cx).is_empty(),
@@ -25456,7 +25387,7 @@ mod tests {
             assert_eq!(view.focused(), 1, "the click landed on its Thread");
             let request = view.cockpit.notifications().decisions().next().unwrap();
             assert!(request.read);
-            assert!(view.bell.toasts().is_empty());
+            assert!(view.needs_you.toasts().is_empty());
         });
         assert!(
             tags(cx).is_empty(),
@@ -25485,14 +25416,14 @@ mod tests {
         ring(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(view.chimed, [Sound::NeedsYou]);
-            assert_eq!(view.bell.toasts().len(), 2);
+            assert_eq!(view.needs_you.toasts().len(), 2);
         });
 
         cx.update(|window, _| window.activate_window());
         view.update(cx, |view, _| view.chimed.clear());
         tick(cx);
         let unfocused = view.read_with(cx, |view, _| {
-            assert!(view.bell.toasts().is_empty(), "both are in view now");
+            assert!(view.needs_you.toasts().is_empty(), "both are in view now");
             view.cockpit
                 .threads()
                 .into_iter()
@@ -25505,7 +25436,7 @@ mod tests {
         tick(cx);
         ring(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.bell.toasts().is_empty());
+            assert!(view.needs_you.toasts().is_empty());
             assert!(view.chimed.is_empty());
         });
     }
@@ -25595,7 +25526,7 @@ mod tests {
         tick(cx);
         ring(cx);
         view.read_with(cx, |view, _| {
-            assert_eq!(view.bell.toasts().len(), 1);
+            assert_eq!(view.needs_you.toasts().len(), 1);
             assert!(view.chimed.is_empty(), "Claude is muted");
         });
         assert!(cx.delivered_system_notifications().is_empty());

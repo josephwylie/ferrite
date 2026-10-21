@@ -13,8 +13,8 @@ use sw_board::json::*;
 use super::BoardView;
 use crate::components::{self, Tip};
 use crate::theme::{
-    CARD, CH, CONTROL_H, FRAME, ICON_CHEVRON, LINE, ON_PRIMARY, RAISED, ROW, TEXT, TEXT_DIM,
-    TEXT_STRONG, W_STRONG,
+    paint, CH, CONTROL_H, ICON_CHEVRON, ON_PRIMARY, ROW, SPACE_3, TEXT, TEXT_DIM, TEXT_STRONG,
+    W_STRONG,
 };
 
 pub(super) const HEIGHT: f32 = ROW * 3.;
@@ -37,7 +37,7 @@ impl BoardView {
         } else {
             "board-project-all"
         };
-        components::form_button_on(id, rgb(if selected { RAISED } else { CARD }).into(), cx)
+        components::form_button_on(id, if selected { paint::RAISED } else { paint::CARD }, cx)
             .tab_stop(false)
             .h(px(CONTROL_H))
             .px(px(CH))
@@ -89,7 +89,7 @@ impl BoardView {
         let button = if primary {
             components::primary_button(id, disabled, cx)
         } else {
-            components::form_button_on(id, rgb(FRAME).into(), cx).disabled(disabled)
+            components::form_button_on(id, paint::FRAME, cx).disabled(disabled)
         };
         button
             .tab_stop(false)
@@ -188,9 +188,9 @@ impl BoardView {
             .flex_shrink_0()
             .h(px(HEIGHT))
             .text_color(rgb(TEXT))
-            .px(px(CH * 1.5))
+            .px(px(SPACE_3))
             .border_b_1()
-            .border_color(rgb(LINE))
+            .border_color(paint::LINE)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -284,7 +284,7 @@ impl BoardView {
         components::ChoiceMenu {
             id: "board-more".into(),
             anchor: gpui::Anchor::TopLeft,
-            trigger: components::form_button_on("board-more", rgb(FRAME).into(), cx)
+            trigger: components::form_button_on("board-more", paint::FRAME, cx)
                 .tab_stop(false)
                 .h(px(CONTROL_H))
                 .px(px(CH))

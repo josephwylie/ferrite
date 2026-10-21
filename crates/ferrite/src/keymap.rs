@@ -254,7 +254,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("alt-b"), "cockpit::TogglePanel", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
-        // The bell: what finished while the operator looked elsewhere.
+        // The Needs-you view: what finished while the operator looked elsewhere.
         (with_primary("i"), "cockpit::ToggleNotifications", None),
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.

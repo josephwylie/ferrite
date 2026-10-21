@@ -303,7 +303,6 @@ impl CockpitView {
             .items_start();
         for thread in recent.iter().copied() {
             let row = self.thread_row(thread);
-            let face = row.status.face();
             let open = self.pane_for(thread).is_some();
             let age = self
                 .facts
@@ -320,7 +319,7 @@ impl CockpitView {
                     .hover_row(format!("empty-board-recent-{}", thread.get()))
                     .press_row()
                     .child(div().flex_shrink_0().w(px(GLYPH_GUTTER)))
-                    // The face's `●`, typed at its column's start.
+                    // The row's mark (`nav::mark`), at its column's start.
                     .child(
                         div()
                             .flex()
@@ -328,7 +327,7 @@ impl CockpitView {
                             .flex_shrink_0()
                             .w(px(GLYPH_GUTTER))
                             .h(px(ROW))
-                            .child(face.dot()),
+                            .child(nav::mark(row.status, false)),
                     )
                     .child(
                         div()

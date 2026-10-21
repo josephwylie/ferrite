@@ -536,13 +536,12 @@ fn filter_ink(filter: Attention) -> u32 {
     }
 }
 
-/// The dialog's shell (SPEC §5.8): `PALETTE_W` on `PALETTE_GROUND`, radius
-/// `R_PALETTE`, clipped to it, the 1px `HAIRLINE_STRONG` ring drawn
-/// *outside* the box (a spread shadow, as the mockup's `0 0 0 1px`, so the
-/// box keeps its full 640 inside), and the deep shadow under it. The
+/// The dialog's shell (SPEC §5.8): `PALETTE_W` on `PALETTE_GROUND`,
+/// radius `R_PALETTE`, clipped to it, the 1px `HAIRLINE_STRONG` ring drawn
+/// *outside* the box (so it keeps its full 640 inside) and the deep shadow
+/// under it (`components::dialog_shadow`). The
 /// shortcuts sheet wears it too.
 pub(crate) fn dialog() -> gpui::Div {
-    use gpui::{point, BoxShadow};
     components::text_ui()
         .cursor_default()
         .occlude()
@@ -551,23 +550,8 @@ pub(crate) fn dialog() -> gpui::Div {
         .w(px(PALETTE_W))
         .overflow_hidden()
         .rounded(px(R_PALETTE))
-        .bg(rgb(PALETTE_GROUND))
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: gpui::rgba(HAIRLINE_STRONG).into(),
-                offset: point(px(0.), px(0.)),
-                blur_radius: px(0.),
-                spread_radius: px(1.),
-            },
-            BoxShadow {
-                inset: false,
-                color: gpui::rgba(SHADOW_PALETTE).into(),
-                offset: point(px(0.), px(SHADOW_PALETTE_Y)),
-                blur_radius: px(SHADOW_PALETTE_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+        .bg(PALETTE_GROUND)
+        .shadow(components::dialog_shadow())
 }
 
 /// The dialog's input row (the palette's, the shortcuts sheet's filter):

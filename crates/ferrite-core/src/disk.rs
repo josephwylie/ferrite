@@ -33,6 +33,7 @@ mod imp {
         if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
             return None;
         }
+        // SAFETY: `statvfs` returned 0, so it wrote the whole struct.
         let stat = unsafe { stat.assume_init() };
         #[allow(clippy::unnecessary_cast)] // the field widths differ by platform
         Some(stat.f_bavail as u64 * stat.f_frsize as u64)

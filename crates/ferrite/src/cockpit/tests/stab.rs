@@ -371,8 +371,8 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
 }
 
 /// The bottom-left toast card is gone (C8): with the nav open, finishes off
-/// the board toast nothing — the tree and the bell say it — so the Parked
-/// view's row never moves and there is no `+N` bubble. The bell still
+/// the board toast nothing — the tree and the Needs-you view say it — so the Parked
+/// view's row never moves and there is no `+N` bubble. The Needs-you view still
 /// lists them.
 #[gpui::test]
 fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
@@ -413,13 +413,13 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
         assert_eq!(
             window.notifications(cx).len(),
             0,
-            "the nav is open: the tree and the bell say it, nothing toasts"
+            "the nav is open: the tree and the Needs-you view say it, nothing toasts"
         );
     });
     assert_eq!(
         view.read_with(cx, |view, _| view.cockpit.notifications().unread()),
         3,
-        "the bell lists every finish"
+        "the Needs-you view lists every finish"
     );
     for thread in &threads[1..4] {
         let toast: &'static str = format!("toast-{}", thread.get()).leak();
@@ -1108,7 +1108,6 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         assert_eq!(family.as_deref(), Some(FONT_UI), "{what} is UI text");
     }
     for (what, family) in [
-        ("keycap", ui(crate::components::kbd("y"))),
         (
             "keys",
             ui(crate::components::key_combo("cmd-F", crate::theme::TEXT)),

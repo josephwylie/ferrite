@@ -43,7 +43,7 @@ use gpui::{
     div, px, rgb, rgba, AnyElement, App, Div, FontWeight, ScrollHandle, SharedString, Stateful,
 };
 
-use crate::cockpit::{thread_status, Attention, ThreadStatus};
+use crate::cockpit::Attention;
 use crate::components;
 use crate::icons::{self, icon};
 use crate::machines::{Connection, MachineRow};
@@ -104,7 +104,7 @@ pub enum NavView {
     #[default]
     Tree,
     /// The Needs-you list: the blocked Threads oldest-first, then the
-    /// Notices under `Recent`. It is the bell's list.
+    /// Notices under `Recent`. (`notifications::NeedsYou` holds its cursor.)
     NeedsYou,
     /// The parked Threads no Group claims.
     Parked,
@@ -448,9 +448,10 @@ impl NavTail {
     }
 }
 
-/// A Thread row's state, for its mark, least urgent first: the order a
-/// roll-up takes its `max` in, consistent with `Attention`. The face comes
-/// from `cockpit::thread_status`, the one status truth the Panes share.
+/// A Thread's state, for its mark, least urgent first: the order a
+/// roll-up takes its `max` in, consistent with `Attention`. Every surface
+/// reads a Thread's state as one of these (`RowStatus::of`) and draws it
+/// with `mark`, so no two can disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum RowStatus {
     Parked,
@@ -498,19 +499,15 @@ impl RowStatus {
         }
     }
 
-    /// The still face: the one status truth's (`thread_status`), and the
-    /// hollow running ring of background work.
-    pub fn face(self) -> ThreadStatus {
-        let wall = match self {
-            RowStatus::Background => return ThreadStatus::background(),
-            RowStatus::Working => WallState::Working,
-            RowStatus::Failing => WallState::Failing,
-            RowStatus::NeedsYou => WallState::Decision,
-            RowStatus::Failed => WallState::Blocked,
-            RowStatus::Done | RowStatus::Idle => WallState::Idle,
-            RowStatus::Parked => WallState::Parked,
-        };
-        thread_status(wall, self == RowStatus::Done)
+    /// The ink its mark (`mark`) wears: hue for state (running, failing or
+    /// failed, needs you), `IDLE` at rest — done is a shape, not a hue.
+    pub fn ink(self) -> u32 {
+        match self {
+            RowStatus::Working | RowStatus::Background => RUNNING,
+            RowStatus::Failing | RowStatus::Failed => BLOCKED,
+            RowStatus::NeedsYou => ATTENTION,
+            RowStatus::Done | RowStatus::Idle | RowStatus::Parked => IDLE,
+        }
     }
 
     /// What a set of rows rolls up to: the most urgent of them. `None` for
@@ -729,9 +726,9 @@ pub fn mark(status: RowStatus, small: bool) -> AnyElement {
 }
 
 /// A Group Pane head's mark (SPEC §5.9): the row's face with its 7px dots
-/// and 13px icons, laid out at the width the mockup's box takes — a dot
-/// keeps a pixel each side and its halo overflows the box, as a CSS
-/// `box-shadow` does, so the title starts where it is drawn.
+/// and 13px icons, laid out at the width the mockup's box takes
+/// (`PANE_HEAD_DOT_W`: a dot's halo overflows it), so the title starts
+/// where it is drawn.
 pub fn head_mark(status: RowStatus) -> AnyElement {
     let face = mark_sized(status, NAV_DOT, crate::theme::PANE_HEAD_ICON);
     match status {
@@ -740,71 +737,72 @@ pub fn head_mark(status: RowStatus) -> AnyElement {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .w(px(NAV_DOT + 2.0))
+            .w(px(crate::theme::PANE_HEAD_DOT_W))
             .child(face)
             .into_any_element(),
         _ => div().flex().flex_shrink_0().child(face).into_any_element(),
     }
 }
 
+/// **The one status truth**: a state's mark, drawn here for every surface
+/// that shows a Thread's state (the nav row, the rail, the Pane head, the
+/// palette, a subagent's tab, the empty board's recent rows), in
+/// `RowStatus::ink`. `dot` and `glyph` are the surface's sizes.
 fn mark_sized(status: RowStatus, dot: f32, glyph: f32) -> AnyElement {
-    let solid = |ink: u32| div().size(px(dot)).rounded_full().bg(rgb(ink));
+    let ink = status.ink();
+    let solid = || div().size(px(dot)).rounded_full().bg(rgb(ink));
     match status {
         RowStatus::Working | RowStatus::Failing => div()
             .font_family(FONT_CODE)
             .text_size(px(NAV_SPINNER_FS))
             .line_height(px(NAV_LINE))
-            .child(components::braille_spinner(
-                if status == RowStatus::Working {
-                    RUNNING
-                } else {
-                    BLOCKED
-                },
-            ))
+            .child(components::braille_spinner(ink))
             .into_any_element(),
         RowStatus::NeedsYou => div()
             .flex()
             .items_center()
             .justify_center()
-            .size(px(dot + 2.0 * NAV_HALO))
+            .size(px(nav_halo_box(dot)))
             .rounded_full()
             .bg(rgba(NAV_HALO_FILL))
-            .child(solid(ATTENTION))
+            .child(solid())
             .into_any_element(),
-        RowStatus::Failed => solid(BLOCKED).into_any_element(),
+        RowStatus::Failed => solid().into_any_element(),
         RowStatus::Background => div()
             .size(px(dot))
             .rounded_full()
             .border_1()
-            .border_color(rgb(RUNNING))
+            .border_color(rgb(ink))
             .into_any_element(),
-        RowStatus::Done => icon(icons::CHECK_CIRCLE, glyph, TEXT_DIM).into_any_element(),
-        RowStatus::Idle => icon(icons::TERMINAL, glyph, TEXT_DIM).into_any_element(),
+        RowStatus::Done => icon(icons::CHECK_CIRCLE, glyph, ink).into_any_element(),
+        RowStatus::Idle => icon(icons::TERMINAL, glyph, ink).into_any_element(),
         RowStatus::Parked => div()
             .opacity(NAV_PARKED_OPACITY)
-            .child(icon(icons::TERMINAL, glyph, TEXT_DIM))
+            .child(icon(icons::TERMINAL, glyph, ink))
             .into_any_element(),
     }
 }
 
-/// A row's mark where the mockups place it, from its mark column's left
-/// (`x`) and its row's top: on line 1 of a two-line row, centred on a
-/// one-line row.
+/// A row's mark where the mockups place it (`NAV_*_AT`), from its mark
+/// column's left (`x`) and its row's top: on line 1 of a two-line row,
+/// centred on a one-line row.
 fn mark_at(status: RowStatus, x: f32, small: bool) -> Div {
     let (left, top) = match (status, small) {
-        (RowStatus::Working | RowStatus::Failing, false) => (2.0, 6.0),
-        (RowStatus::Working | RowStatus::Failing, true) => (1.0, 5.0),
-        (RowStatus::NeedsYou, false) => (4.0 - NAV_HALO, 13.0 - NAV_HALO),
-        (RowStatus::NeedsYou, true) => (3.0 - NAV_HALO, 12.0 - NAV_HALO),
-        (RowStatus::Failed | RowStatus::Background, false) => (4.0, 13.0),
-        (RowStatus::Failed | RowStatus::Background, true) => (3.0, 12.0),
-        (_, false) => (0.0, 8.0),
-        (_, true) => (0.0, 8.0),
+        (RowStatus::Working | RowStatus::Failing, false) => NAV_SPINNER_AT,
+        (RowStatus::Working | RowStatus::Failing, true) => NAV_SPINNER_AT_SMALL,
+        (RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background, false) => NAV_DOT_AT,
+        (RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background, true) => NAV_DOT_AT_SMALL,
+        _ => NAV_ICON_AT,
+    };
+    let halo = if status == RowStatus::NeedsYou {
+        NAV_HALO
+    } else {
+        0.0
     };
     div()
         .absolute()
-        .left(px(x + left))
-        .top(px(top))
+        .left(px(x + left - halo))
+        .top(px(top - halo))
         .child(mark(status, small))
 }
 
@@ -2507,14 +2505,14 @@ mod tests {
     /// dot for a failure, a ring for background work, icons at rest.
     #[test]
     fn status_marks_say_state_and_green_only_means_live() {
-        let ink = |status: RowStatus| status.face().dot().style().text.color;
-        assert_eq!(ink(RowStatus::Working), Some(rgb(RUNNING).into()));
-        assert_eq!(ink(RowStatus::Background), Some(rgb(RUNNING).into()));
-        assert_eq!(ink(RowStatus::Failing), Some(rgb(BLOCKED).into()));
-        assert_eq!(ink(RowStatus::Failed), Some(rgb(BLOCKED).into()));
-        assert_eq!(ink(RowStatus::NeedsYou), Some(rgb(ATTENTION).into()));
-        assert_eq!(ink(RowStatus::Done), Some(rgb(TEXT_DIM).into()));
-        assert_eq!(ink(RowStatus::Idle), Some(rgb(IDLE).into()));
+        assert_eq!(RowStatus::Working.ink(), RUNNING);
+        assert_eq!(RowStatus::Background.ink(), RUNNING);
+        assert_eq!(RowStatus::Failing.ink(), BLOCKED);
+        assert_eq!(RowStatus::Failed.ink(), BLOCKED);
+        assert_eq!(RowStatus::NeedsYou.ink(), ATTENTION);
+        assert_eq!(RowStatus::Done.ink(), TEXT_DIM);
+        assert_eq!(RowStatus::Idle.ink(), IDLE);
+        assert_eq!(RowStatus::Parked.ink(), TEXT_DIM);
         let mut halo = mark_at(RowStatus::NeedsYou, NAV_ROW_PAD_X, false);
         assert_eq!(
             halo.style().inset.left,
@@ -2550,21 +2548,27 @@ mod tests {
         }
     }
 
-    /// One status truth: for every Pane state and either side of unread,
-    /// the nav row's still face is the Pane's own.
+    /// For every Pane state and either side of unread, the row's mark says
+    /// what the Pane says: green only while it works, ochre while it waits,
+    /// red when it failed, a dim check for an unseen finish.
     #[test]
-    fn the_nav_mark_is_the_panes_mark() {
+    fn every_pane_state_reads_as_one_mark() {
         use WallState::*;
-        let paint = |mut dot: Div| dot.style().text.color;
-        for state in [Working, Failing, Decision, Blocked, Done, Idle] {
-            for unread in [false, true] {
-                let status = RowStatus::of(state, unread, false);
-                assert_eq!(
-                    paint(status.face().dot()),
-                    paint(crate::pane::cell_dot(state, unread)),
-                    "{state:?} unread={unread}"
-                );
-            }
+        for (state, unread, ink) in [
+            (Working, false, RUNNING),
+            (Failing, false, BLOCKED),
+            (Decision, false, ATTENTION),
+            (Blocked, false, BLOCKED),
+            (Done, false, TEXT_DIM),
+            (Done, true, TEXT_DIM),
+            (Idle, false, TEXT_DIM),
+            (Parked, false, TEXT_DIM),
+        ] {
+            assert_eq!(
+                RowStatus::of(state, unread, false).ink(),
+                ink,
+                "{state:?} unread={unread}"
+            );
         }
     }
 

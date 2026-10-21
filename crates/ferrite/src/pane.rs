@@ -49,7 +49,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::components;
 use crate::components::Tip as _;
 use crate::composer::Composer;
-#[allow(unused_imports)]
 use crate::decision;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
@@ -786,7 +785,6 @@ fn wrap_once(text: &str, columns: usize) -> (String, Option<String>) {
 /// slot named in their doc `take()`s.
 pub(crate) struct PaneCtx<'a> {
     pub view: &'a PaneView,
-    #[allow(dead_code)]
     pub thread: Option<ThreadView<'a>>,
     /// The selected Subject's transcript; `None` for a parked Pane.
     pub transcript: Option<&'a Transcript>,
@@ -805,7 +803,6 @@ pub(crate) struct PaneCtx<'a> {
     pub received_reasoning_visible: bool,
     // ---- pre-plumbed for the work packages: wired, not read yet
     /// The operator asked the system for reduced motion.
-    #[allow(dead_code)]
     pub reduce_motion: bool,
     /// The Composer itself holds the keyboard in the active window.
     #[allow(dead_code)]
@@ -813,7 +810,6 @@ pub(crate) struct PaneCtx<'a> {
     /// Native files hover this Pane (`PaneFacts::drop_target`).
     pub drop_target: bool,
     /// The Session is starting or being replaced; nothing committed yet.
-    #[allow(dead_code)]
     pub starting: bool,
     /// Finished while the operator looked elsewhere (an unread Notice).
     #[allow(dead_code)]
@@ -1361,30 +1357,17 @@ fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
         .child(overlay)
 }
 
-/// A card's 1px ring in `ink`, just outside its box (the mockups'
-/// `box-shadow: 0 0 0 1px`): an overlay `FOCUS_RING_W` past every edge,
-/// rounded to match, in the band the board's frame leaves around the card
-/// (`components::frame_around`). The band is frame, so the ring lays
+/// A card's 1px ring in `ink`, just outside its box
+/// (`components::outer_ring`), in the band the board's frame leaves around
+/// the card (`components::frame_around`). The band is frame, so the ring lays
 /// `paint::FRAME` under its ink there: the hairline reads over the frame,
 /// as drawn. The cockpit rings a reader's card with it.
 pub(crate) fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
-    let out = px(-theme::FOCUS_RING_W);
-    let ring = |color: gpui::Hsla| {
-        div()
-            .absolute()
-            .inset_0()
-            .rounded(px(theme::R_PANE + theme::FOCUS_RING_W))
-            .border_1()
-            .border_color(color)
-    };
     div()
         .absolute()
-        .top(out)
-        .left(out)
-        .right(out)
-        .bottom(out)
-        .child(ring(theme::paint::FRAME.hsla()))
-        .child(ring(ink.into()))
+        .inset_0()
+        .child(components::outer_ring(theme::R_PANE, theme::paint::FRAME))
+        .child(components::outer_ring(theme::R_PANE, ink))
 }
 
 // ------------------------------------------------------------------ drafts
@@ -1404,7 +1387,6 @@ pub struct DraftState<'a> {
     /// A failed bootstrap's words, shown where the band is.
     pub error: Option<&'a SharedString>,
     /// The operator asked for reduced motion.
-    #[allow(dead_code)]
     pub reduce_motion: bool,
     /// Native files hover the draft (`PaneFacts::drop_target`).
     pub drop_target: bool,
@@ -1829,15 +1811,6 @@ pub(crate) fn quick_answer(
         .on_hover(crate::motion::hover_listener(hover))
         .child(components::cells(key).text_color(rgb(TEXT_DIM)))
         .child(components::cells(label).text_color(word))
-}
-
-/// A cell's status dot, one recipe for the wall, the Pane head and the
-/// nav (`cockpit::thread_status`): running green, a Decision ochre, a
-/// failing suite or a closed Session red, done and idle the idle ink —
-/// green never means finished — and a parked Thread a faint ring.
-#[cfg(test)]
-pub(crate) fn cell_dot(state: WallState, unread: bool) -> Div {
-    crate::cockpit::thread_status(state, unread).dot()
 }
 
 /// The Pane head's mark: the main Thread's is its nav row's
@@ -3125,19 +3098,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     } = stack;
     let geometry = view.geometry.clone();
     let namespace = view.text_namespace();
-    let ring = |ink: u32| {
-        // Outside the box, as the mockup's `box-shadow: 0 0 0 1px`: it
-        // takes no layout.
-        div()
-            .absolute()
-            .top(px(-1.))
-            .left(px(-1.))
-            .right(px(-1.))
-            .bottom(px(-1.))
-            .rounded(px(theme::R_PANE + 1.))
-            .border_1()
-            .border_color(rgba(ink))
-    };
+    let ring = |ink: u32| components::outer_ring(theme::R_PANE, rgba(ink));
     let field = div()
         .debug_selector(|| "composer-block".into())
         .when(drop_target, |field| {

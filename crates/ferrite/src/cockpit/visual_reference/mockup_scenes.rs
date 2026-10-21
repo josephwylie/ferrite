@@ -216,8 +216,8 @@ fn prepare(
     }
     use gpui::component::WindowExt as _;
     window.clear_notifications(cx);
-    view.ring_bell(cx);
-    view.bell.clear_toasts();
+    view.ring_alerts(cx);
+    view.needs_you.clear_toasts();
     if active {
         window.activate_window();
     }

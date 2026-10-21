@@ -113,7 +113,8 @@ pub(super) fn compact_composer(
         .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT))
         .when(decision.is_some(), |field| field.key_context("Decision"))
-        .child(outer_ring(ring))
+        // Its ring takes no layout, so the box keeps its 38.
+        .child(components::outer_ring(theme::R_BLOCK, rgba(ring)))
         .child(input)
         // The send circle, wired in the cockpit: the focused Pane's only.
         // It rides a row-high slot (overflowing it), so focus never
@@ -164,19 +165,4 @@ pub(super) fn compact_composer(
         }))
         .pb(px(theme::COMPACT_COMPOSER_INSET))
         .child(field)
-}
-
-/// The box's 1px ring in `ink`, just outside it (the mockup's `box-shadow:
-/// 0 0 0 1px`): it takes no layout, so the box keeps its 38.
-fn outer_ring(ink: u32) -> Div {
-    let out = px(-1.0);
-    div()
-        .absolute()
-        .top(out)
-        .left(out)
-        .right(out)
-        .bottom(out)
-        .rounded(px(theme::R_BLOCK + 1.0))
-        .border_1()
-        .border_color(rgba(ink))
 }

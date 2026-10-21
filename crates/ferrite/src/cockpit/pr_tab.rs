@@ -385,7 +385,7 @@ impl CockpitView {
             .children(pr.map(|pr| {
                 div()
                     .debug_selector(|| "pr-title".into())
-                    .mt(px(10.))
+                    .mt(px(PR_TITLE_GAP))
                     // A line's trailing space hangs past the edge, as CSS
                     // lets it: GPUI counts it when wrapping.
                     .mr(px(-SPACE_1))
@@ -458,7 +458,7 @@ impl CockpitView {
                     .debug_selector(move || format!("pr-check-{index}"))
                     .flex()
                     .items_center()
-                    .gap(px(10.))
+                    .gap(px(PR_ROW_GAP))
                     .h(px(PANEL_SECTION_H))
                     .px(px(SPACE_0_5))
                     .cursor_pointer()
@@ -624,7 +624,7 @@ impl CockpitView {
             .flex_col()
             .flex_shrink_0()
             .gap(px(SPACE_1_5))
-            .py(px(10.))
+            .py(px(PR_COMMENT_PAD_Y))
             .px(px(SPACE_3))
             .rounded(px(R_BLOCK))
             .bg(paint::RAISED)
@@ -768,18 +768,18 @@ impl CockpitView {
             .flex()
             .flex_col()
             .items_start()
-            .gap(px(10.))
-            .pt(px(18.))
+            .gap(px(PR_EMPTY_GAP))
+            .pt(px(PR_EMPTY_PAD_T))
             .px(px(SPACE_1))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(36.))
+                    .size(px(PR_EMPTY_BADGE))
                     .rounded(px(R_PANE))
                     .bg(paint::RAISED)
-                    .child(icon(icons::GIT_PULL_REQUEST, 17., TEXT_MUTED)),
+                    .child(icon(icons::GIT_PULL_REQUEST, PR_EMPTY_ICON, TEXT_MUTED)),
             )
             .child(
                 div()
@@ -836,19 +836,19 @@ impl Pill {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(5.))
+            .gap(px(PR_PILL_GAP))
             .h(px(PR_PILL_H))
-            .pl(px(7.))
-            .pr(px(9.))
+            .pl(px(PR_PILL_PAD_L))
+            .pr(px(PR_PILL_PAD_R))
             .rounded_full()
             .map(|pill| match self {
-                Pill::Open => pill.bg(gpui::rgba(PR_OPEN_PILL)),
+                Pill::Open => pill.bg(paint::PR_OPEN_PILL),
                 Pill::Draft | Pill::Merged | Pill::Closed => pill.bg(paint::SELECTED),
             })
             .text_size(px(FS_META))
             .font_weight(W_LABEL)
             .text_color(rgb(ink))
-            .child(icon(glyph, 13., ink))
+            .child(icon(glyph, PR_PILL_ICON, ink))
             .child(word)
     }
 }
@@ -961,7 +961,7 @@ fn hollow_ring() -> AnyElement {
         .size(px(PR_MARK))
         .child(
             div()
-                .size(px(11.))
+                .size(px(PR_MARK_RING))
                 .rounded_full()
                 .border_1()
                 .border_color(rgb(TEXT_FAINT)),
@@ -1158,7 +1158,7 @@ fn readiness_group(pr: &WirePr) -> Option<Div> {
                     .debug_selector(move || format!("pr-ready-{key}"))
                     .flex()
                     .items_center()
-                    .gap(px(10.))
+                    .gap(px(PR_ROW_GAP))
                     .h(px(PR_READY_ROW_H))
                     .px(px(SPACE_3))
                     .child(mark(row.glyph, row.ink))
@@ -1230,8 +1230,8 @@ fn avatar(author: &str) -> Div {
         .justify_center()
         .size(px(PR_AVATAR))
         .rounded_full()
-        .bg(rgb(PR_AVATAR_FILL))
-        .text_size(px(10.))
+        .bg(paint::SEND)
+        .text_size(px(FS_PR_AVATAR))
         .font_weight(W_STRONG)
         .text_color(rgb(TEXT_STRONG))
         .child(SharedString::from(initial))
