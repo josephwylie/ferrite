@@ -163,12 +163,8 @@ impl CockpitView {
         .on_action(cx.listener(|view, _: &bell::SelectPrevious, _, cx| view.step_notices(-1, cx)))
         .on_action(cx.listener(|view, _: &bell::Open, _, cx| view.open_notice_at_cursor(cx)))
         .on_action(cx.listener(|view, _: &bell::Dismiss, _, cx| view.dismiss_notice_at_cursor(cx)))
-        .on_action(cx.listener(|view, _: &bell::Close, _, cx| {
-            if view.bell.open {
-                view.bell.open = false;
-                cx.notify();
-            }
-        }))
+        .on_action(cx.listener(|view, _: &bell::Close, _, cx| view.close_nav_view(cx)))
+        .on_action(cx.listener(|view, _: &crate::nav::CloseView, _, cx| view.close_nav_view(cx)))
     }
 
     /// Whether a float holds the keyboard this frame (the palette's line,
@@ -178,7 +174,6 @@ impl CockpitView {
         self.floats.palette.is_some()
             || self.floats.shortcuts.is_some()
             || self.projects.board_shown()
-            || self.bell.open
     }
 
     /// Whether the palette or the shortcuts sheet is up (the veil is).
@@ -197,7 +192,6 @@ impl CockpitView {
         self.context_usage = None;
         self.context_checks = None;
         self.changed_files_card = None;
-        self.bell.open = false;
         self.floats.shortcuts = None;
         self.projects.drop_popup();
     }
@@ -1326,7 +1320,7 @@ impl CockpitView {
 
     fn step_notices(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.bell_rows(cx).len();
-        if count == 0 || !self.bell.open {
+        if count == 0 || !self.needs_you_shown() {
             return;
         }
         self.bell.cursor =
@@ -1342,8 +1336,7 @@ impl CockpitView {
         };
         let verb = row.open_verb();
         self.notice_verb(verb, cx);
-        self.bell.open = false;
-        cx.notify();
+        self.close_nav_view(cx);
     }
 
     /// ⌫ on the list: dismiss the cursor's row (a request until it changes,
@@ -1450,40 +1443,6 @@ impl CockpitView {
             crate::notifications::toast(&row, handle).into_any_element(),
             anchor,
             FloatPlace::Above { gap: 0. },
-        ))
-    }
-
-    /// The notifications list under the bell (FL-16): its left on the
-    /// bell's, 4px under it; a press anywhere but the list or the bell
-    /// closes it.
-    pub(super) fn notices_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.bell.open {
-            return None;
-        }
-        let door = self.bell.door.get()?;
-        let rows = self.bell_rows(cx);
-        let cursor = self.bell.cursor.min(rows.len().saturating_sub(1));
-        let handle = self.notice_handle(cx);
-        let bell = self.bell.door.clone();
-        let list = crate::notifications::list(&rows, cursor, &self.floats.notice_focus, handle)
-            .on_mouse_down_out(cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                if bell
-                    .get()
-                    .is_some_and(|door| door.contains(&event.position))
-                {
-                    return;
-                }
-                if view.bell.open {
-                    view.bell.open = false;
-                    cx.notify();
-                }
-            }));
-        Some(float::hang_element(
-            list.into_any_element(),
-            door,
-            FloatPlace::Above {
-                gap: crate::theme::NOTICE_PANEL_GAP,
-            },
         ))
     }
 }

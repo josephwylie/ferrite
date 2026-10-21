@@ -26,7 +26,6 @@ mod live;
 pub(crate) use live::capture as live_capture;
 
 use super::{CockpitView, DraftTarget, MenuTarget};
-use crate::nav::NavFold;
 use crate::palette::PaletteScope;
 use ferrite_core::{
     activity::TranscriptCoverage,
@@ -1073,7 +1072,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "navrail" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {
-                view.set_nav_fold(NavFold::Parked, false, cx);
                 view.set_nav_collapsed(true, cx);
             });
             (scene, setup)
@@ -1443,7 +1441,6 @@ fn nav() -> (Scene, Setup) {
     // Worktree branches and subagent counts beside titles long and short:
     // the title keeps its floor, the branch and then the count give way.
     let setup: Setup = Box::new(move |view, _, cx| {
-        view.set_nav_fold(NavFold::Parked, false, cx);
         let branch = |name: &str| {
             Some(ferrite_core::workspace::BranchStatus {
                 branch: Some(name.into()),

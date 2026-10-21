@@ -588,15 +588,15 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         "the window keeps no Store for the machine"
     );
 
-    let fold = cx
-        .debug_bounds("nav-parked")
-        .expect("the machine's parked Threads put the Parked section in the nav");
-    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    let door = cx
+        .debug_bounds("nav-view-parked")
+        .expect("the Parked view's row");
+    cx.simulate_click(door.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let row_id: &'static str = format!("nav-thread-{}", named.get()).leak();
     let row = cx
         .debug_bounds(row_id)
-        .expect("unfolded, the machine's parked Thread has a row");
+        .expect("shown, the machine's parked Thread has a row");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     until(cx, |cx| {
         view.read_with(cx, |view, _| {

@@ -804,6 +804,13 @@ impl CockpitView {
 
     /// The board header's tally (`3 need you · 1 ready · 2 working`), while
     /// the board has tasks; a press opens the board.
+    /// The board's tally (`3 working · 1 review`), which the nav's `Tasks`
+    /// view says at its right; `None` while it says nothing.
+    pub(super) fn tasks_tally(&self) -> Option<SharedString> {
+        let tally = &self.projects.sidebar.tally;
+        (!tally.is_empty()).then(|| SharedString::from(tally.clone()))
+    }
+
     pub(super) fn projects_bar_word(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let tally = &self.projects.sidebar.tally;
         #[cfg(test)]

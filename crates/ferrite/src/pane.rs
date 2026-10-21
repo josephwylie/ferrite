@@ -8101,12 +8101,6 @@ impl CellCut {
         x + (at - from) as f32 * self.cell
     }
 
-    /// A run of one face cut with `…` in `ink` (its line's own colour, as
-    /// the browser draws an ellipsis whatever the run it hides): no wash.
-    pub(crate) fn plain(text: String, ink: gpui::Hsla, cell: f32) -> Self {
-        Self::new(text, None, ink, cell)
-    }
-
     pub(crate) fn child(mut self, child: AnyElement) -> Self {
         self.child = Some(child);
         self

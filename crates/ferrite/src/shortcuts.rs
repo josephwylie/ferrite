@@ -180,6 +180,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "notifications::Open"
         | "notifications::Dismiss"
         | "notifications::Close"
+        | "nav::CloseView"
         | "shortcuts::ScrollUp"
         | "shortcuts::ScrollDown"
         | "shortcuts::Dismiss"

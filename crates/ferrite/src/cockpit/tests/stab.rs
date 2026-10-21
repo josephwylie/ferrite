@@ -373,7 +373,8 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
 
 /// The bottom-left toast card is gone (C8): with the nav open, finishes off
 /// the board toast nothing — the tree and the bell say it — so the Parked
-/// fold never moves and there is no `+N` bubble. The bell still lists them.
+/// view's row never moves and there is no `+N` bubble. The bell still
+/// lists them.
 #[gpui::test]
 fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("toast-parked", 5);
@@ -387,7 +388,9 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let resting = cx.debug_bounds("nav-parked").expect("the Parked fold");
+    let resting = cx
+        .debug_bounds("nav-view-parked")
+        .expect("the Parked view's row");
 
     for stream in &fake.streams.borrow()[1..4] {
         stream
@@ -425,9 +428,9 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     }
     assert!(cx.debug_bounds("toast-more").is_none(), "no `+N` bubble");
     assert_eq!(
-        cx.debug_bounds("nav-parked"),
+        cx.debug_bounds("nav-view-parked"),
         Some(resting),
-        "the fold never moves"
+        "the row never moves"
     );
 }
 
@@ -808,8 +811,18 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
             "the cards start under the head row"
         );
         if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
+            // Open, the nav's head drags the window over the nav; folded,
+            // the rail's head row is the traffic lights'.
+            if !view.read_with(cx, |view, _| view.nav_railed()) {
+                let head = cx
+                    .debug_bounds("nav-head-drag")
+                    .expect("the nav head's stretch");
+                assert!(
+                    head.top() == px(0.) && head.right() > px(crate::theme::NAV_HEAD_PAD_L),
+                    "the band over the nav drags: {head:?}"
+                );
+            }
             let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
-            assert_eq!(drag.left(), px(0.), "the band over the nav drags");
             assert!(
                 drag.contains(&gpui::point(px(600.), px(16.))),
                 "the middle of the window's top must drag: {drag:?}"

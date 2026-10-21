@@ -155,6 +155,21 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     };
     let setup: Setup = Box::new(move |view, window, cx| {
         prepare(view, launch, branches, &folded, window, cx);
+        // The Groups the mockups draw folded: InvoiceMate Business, and
+        // WORK wherever it is not the view.
+        let shut: Vec<_> = view
+            .cockpit
+            .groups()
+            .iter()
+            .filter(|group| {
+                let title = group.display_title();
+                title == "InvoiceMate Business" || (title == "WORK" && shot.look() == Look::Solo)
+            })
+            .map(|group| group.id)
+            .collect();
+        for group in shut {
+            view.set_nav_fold(NavFold::Group(group), true, cx);
+        }
         if let Some(tab) = shot.panel() {
             open_panel(view, cast.memory, tab, cx);
         }

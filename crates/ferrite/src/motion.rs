@@ -19,8 +19,7 @@
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
-//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
-//! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
+//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
@@ -157,7 +156,6 @@ impl CubicBezier {
 pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
-pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -216,15 +214,11 @@ pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
 /// A board seam's strong line fading in under the pointer: the prototype's
 /// `.seam::before{transition: opacity .12s}`.
 pub const SEAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_SEAM_FADE_MS, EASE);
-pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
-/// A two-state control the pointer flipped (the Parked chevron, a switch
-/// thumb): 150ms on the standard curve. A keyboard flip lands at once.
-pub const TURN: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
 
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
@@ -1198,7 +1192,6 @@ mod tests {
         assert_eq!(RESIZE.duration_ms, 200);
         assert_eq!(RESIZE.curve, CubicBezier::new(0.25, 0.1, 0.25, 1.0));
         assert_eq!(SEAM_FADE.duration_ms, 120);
-        assert_eq!(COLLAPSE.duration_ms, 180);
         assert_eq!(FADE_QUICK.duration_ms, 150);
         assert_eq!(MENU_IN.duration_ms, 140);
         assert_eq!(DIALOG_IN.duration_ms, 180);

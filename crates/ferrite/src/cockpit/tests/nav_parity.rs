@@ -262,7 +262,6 @@ fn the_board_starts_at_the_nav_edge(cx: &mut TestAppContext) {
             "the board starts at the column's edge"
         );
     });
-
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     view.read_with(cx, |view, _| {
@@ -372,7 +371,11 @@ fn sort_attention_lifts_what_needs_you_and_the_heading_rolls_it_up(cx: &mut Test
         );
         let state = view.nav_state();
         let section = &state.sections[0];
-        assert_eq!(section.status, nav::RowStatus::NeedsYou, "the roll-up");
+        assert_eq!(
+            section.roll_up.as_ref().map(|word| word.text.to_string()),
+            Some("1 needs you".to_string()),
+            "the roll-up"
+        );
     });
 }
 
@@ -461,11 +464,11 @@ fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) 
         let block = state.groups.iter().find(|block| block.id == group).unwrap();
         assert!(block.folded);
         assert_eq!(
-            block.status,
-            nav::RowStatus::Done,
+            nav::RowStatus::roll_up(&block.members),
+            Some(nav::RowStatus::Done),
             "a member finished unseen"
         );
-        assert_eq!(state.sections[0].status, nav::RowStatus::Done);
+        assert_eq!(block.members.len(), 2, "its count");
     });
     fake.streams.borrow()[1].send(decision("perm_2")).unwrap();
     tick(cx);
@@ -473,15 +476,28 @@ fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) 
         let state = view.nav_state();
         let block = state.groups.iter().find(|block| block.id == group).unwrap();
         assert_eq!(
-            block.status,
-            nav::RowStatus::NeedsYou,
+            nav::RowStatus::roll_up(&block.members),
+            Some(nav::RowStatus::NeedsYou),
             "blocked outranks done"
+        );
+        assert_eq!(
+            nav::RollUp::of(&block.members).map(|word| word.text.to_string()),
+            Some("1 needs you".to_string()),
+            "the row's word"
+        );
+        assert_eq!(
+            state.sections[0]
+                .roll_up
+                .as_ref()
+                .map(|word| word.text.to_string()),
+            Some("1 needs you".to_string()),
+            "a folded heading would say it"
         );
     });
 }
 
-/// Folded, the nav is the rail: one line per open Thread, each with its
-/// mark, beside the one seam; the board starts right of it, and a press on
+/// Folded, the nav is the rail (§5.1.7): one 32px cell per open Thread,
+/// each with its mark; the board starts right of it, and a press on
 /// a line lands on its Thread. A line's digit is the ⌘ key that focuses
 /// it: Solo, only the Solo Pane's `1`.
 #[gpui::test]
@@ -501,7 +517,7 @@ fn the_folded_nav_is_a_keyed_rail(cx: &mut TestAppContext) {
     for thread in &threads {
         let id: &'static str = format!("nav-rail-{}", thread.get()).leak();
         let line = cx.debug_bounds(id).expect("a line per open Thread");
-        assert_eq!(line.size.height, px(crate::theme::NAV_LINE));
+        assert_eq!(line.size.height, px(crate::theme::NAV_RAIL_CELL));
         assert!(line.top() >= above, "in the tree's order");
         above = line.bottom();
     }

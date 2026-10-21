@@ -650,14 +650,16 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
 }
 
 /// A nav title truncates against what its row leaves it. At the nav's own
-/// width, a Group member on a long worktree branch that runs five
-/// subagents is one line: its tree glyph, its dot, its title pinned to the
-/// row's text width less its cells and its word, and the word ending on the
-/// row's text edge. The branch and the count are the tooltip's, never marks
-/// on the line, so a long branch can never squeeze the title.
+/// width, a member of the shown Group on a long worktree branch that runs
+/// five subagents is one line: its mark, its title pinned to the row's
+/// text width less its word, and the word ending on the row's text edge.
+/// The branch and the count are never marks on the line, so a long branch
+/// can never squeeze the title.
 #[gpui::test]
 fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
-    use crate::theme::{CH, NAV_CELL, NAV_LINE, NAV_PAD_X, NAV_TEXT_W, NAV_WORD_GAP};
+    use crate::theme::{
+        FS_META, NAV_COL_PAD, NAV_MEMBER_X, NAV_ROW_H, NAV_ROW_PAD_X, NAV_WORD_GAP, W_BODY,
+    };
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -712,29 +714,32 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
         assert_eq!(subagents, 5);
         assert_eq!(branch.as_deref(), Some(long_branch));
         let title = bounds(cx, format!("nav-title-{id}"));
-        let word = bounds(cx, format!("nav-since-{id}"));
         let whole_row = bounds(cx, format!("nav-thread-{id}"));
-        assert_eq!(whole_row.size.height, px(NAV_LINE), "one line");
-        // A member: its tree glyph, its dot, then the title.
-        let cells = 3.0;
-        let text = row
-            .tail
-            .text()
-            .map_or(0.0, |text| text.chars().count() as f32 * CH + NAV_WORD_GAP);
-        let expected = NAV_TEXT_W - cells * NAV_CELL - text;
+        assert_eq!(whole_row.size.height, px(NAV_ROW_H), "one line");
+        let word = row.tail.member_word().map(|(text, _)| text);
+        let word_w = cx.update(|_, cx| {
+            word.as_deref().map_or(0.0, |word| {
+                crate::nav::Measure::Text(cx).ui(word, FS_META, W_BODY) + NAV_WORD_GAP
+            })
+        });
+        let expected =
+            crate::nav::WIDTH - 2.0 * NAV_COL_PAD - NAV_MEMBER_X - NAV_ROW_PAD_X - word_w;
         assert!(
             (title.size.width - px(expected)).abs() < px(0.5),
-            "the title takes what its cells and word leave: {title:?}, {expected}"
+            "the title takes what its word leaves: {title:?}, {expected}"
         );
         assert!(
-            (title.left() - (whole_row.left() + px(NAV_PAD_X + cells * NAV_CELL))).abs() < px(0.5),
-            "the title starts after the tree glyph and the dot"
+            (title.left() - (whole_row.left() + px(NAV_MEMBER_X))).abs() < px(0.5),
+            "the title starts after the mark"
         );
-        assert!(title.right() <= word.left() + px(0.5));
-        assert!(
-            (word.right() - (whole_row.right() - px(NAV_PAD_X))).abs() < px(0.5),
-            "the word ends on the row's text edge"
-        );
+        if word.is_some() {
+            let word = bounds(cx, format!("nav-since-{id}"));
+            assert!(title.right() <= word.left() + px(0.5));
+            assert!(
+                (word.right() - (whole_row.right() - px(NAV_ROW_PAD_X))).abs() < px(0.5),
+                "the word ends on the row's text edge"
+            );
+        }
         for gone in ["nav-branch", "nav-subagents", "nav-mark"] {
             assert!(
                 debug_bounds(cx, format!("{gone}-{id}")).is_none(),

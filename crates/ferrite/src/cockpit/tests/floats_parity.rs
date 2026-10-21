@@ -470,8 +470,8 @@ fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {
         }));
 }
 
-/// FL-16 / FL-17: the list hangs 4px under the bell with its first row
-/// selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
+/// FL-16 / FL-17: the bell's list is the nav's Needs-you view (§5.1.2),
+/// its first row selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
 /// interrupting, `mark all read` reads everything and removes nothing; the
 /// badge counts the unread waiting requests only.
 #[gpui::test]
@@ -521,17 +521,13 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     assert!(cx.debug_bounds("notifications-badge").is_some());
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
-    let door = cx.debug_bounds("notifications-bell").unwrap();
-    let panel = cx
-        .debug_bounds("notifications-panel")
-        .expect("the list is up");
+    let column = cx.debug_bounds("nav-column").unwrap();
+    let list = cx
+        .debug_bounds("nav-view-needs-you-list")
+        .expect("the Needs-you view is up");
     assert!(
-        (panel.bottom() - (door.top() - px(crate::theme::NOTICE_PANEL_GAP))).abs() <= px(1.),
-        "4px over the bell: {panel:?} / {door:?}"
-    );
-    assert!(
-        (panel.left() - door.left()).abs() <= px(1.),
-        "on the bell's left"
+        column.contains(&list.origin),
+        "in the nav, in the tree's place: {list:?} / {column:?}"
     );
     let rows = view.read_with(cx, |view, cx| view.bell_rows(cx));
     assert_eq!(rows.len(), 5);
@@ -556,7 +552,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     );
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.bell.open));
+    assert!(!view.read_with(cx, |view, _| view.needs_you_shown()));
     assert_eq!(*fake.interrupts.borrow(), 0);
     cx.simulate_keystrokes("cmd-i");
     tick(cx);

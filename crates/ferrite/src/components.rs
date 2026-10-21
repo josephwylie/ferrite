@@ -841,16 +841,7 @@ pub fn chord_parts(stroke: &str) -> Vec<&str> {
 /// space apart. The run names its modifier for the tests
 /// (`command-key`, …).
 pub fn key_combo(keys: &str, ink: u32) -> Div {
-    let text = keys
-        .split(' ')
-        .map(|stroke| {
-            chord_parts(stroke)
-                .into_iter()
-                .map(|part| key_glyph(part).map_or_else(|| part.to_string(), String::from))
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text = chord_text(keys);
     let selector = if text.contains('\u{2318}') {
         "command-key"
     } else if text.contains('\u{2325}') {
@@ -865,6 +856,19 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
     glyph(SharedString::from(text), ink)
         .font_family(theme::FONT_CODE)
         .debug_selector(move || selector.into())
+}
+
+/// A chord as its glyphs, one stroke after another: `cmd-k` → `⌘K`.
+pub fn chord_text(keys: &str) -> String {
+    keys.split(' ')
+        .map(|stroke| {
+            chord_parts(stroke)
+                .into_iter()
+                .map(|part| key_glyph(part).map_or_else(|| part.to_string(), String::from))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The prompt mark `❯` (Geist Mono lacks U+276F), set as text at the

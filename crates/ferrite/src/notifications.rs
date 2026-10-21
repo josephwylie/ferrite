@@ -392,8 +392,8 @@ struct Heard {
 /// whether its alerts still stand: they wait for it, no longer than a
 /// toast would stand.
 pub struct Bell {
-    pub open: bool,
-    /// The list's cursor row (`SELECTION`), first on open.
+    /// The list's cursor row in the Needs-you view (`nav::NavView`),
+    /// first on open.
     pub cursor: usize,
     /// Per machine; `None` is the one on screen.
     heard: HashMap<Option<MachineKey>, Heard>,
@@ -403,20 +403,16 @@ pub struct Bell {
     /// The system notifications standing, by tag (one per Thread on each
     /// machine), and what each opens when clicked.
     pub posted: BTreeMap<String, Alert>,
-    /// The bell's door as last laid out: what the list hangs from.
-    pub door: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 
 impl Bell {
     pub fn new() -> Self {
         Self {
-            open: false,
             cursor: 0,
             heard: HashMap::new(),
             pending: Vec::new(),
             toasts: Vec::new(),
             posted: BTreeMap::new(),
-            door: Rc::new(std::cell::Cell::new(None)),
         }
     }
 
@@ -679,18 +675,6 @@ fn mark(state: State) -> Mark {
     }
 }
 
-/// The mark typed at the start of its 2-cell column, one row high.
-fn mark_cell(state: State) -> Div {
-    let Mark(glyph, ink) = mark(state);
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .w(px(NOTICE_MARK_W))
-        .h(px(LH_UI))
-        .child(components::glyph(glyph, ink))
-}
-
 /// Folds each Thread's completions into its newest (`rows` are newest
 /// first; a Thread is per machine): the survivor carries the older ids in
 /// `folded`, unread if any of them is. Requests are never folded — each is
@@ -716,159 +700,6 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
         }
     }
     kept
-}
-
-// ------------------------------------------------------------------ list
-
-/// The list's footer, word for word (the prototype's `#notes .ffoot`).
-pub const LIST_FOOTER: &str =
-    "\u{2191}\u{2193} select \u{b7} \u{23ce} open \u{b7} \u{232b} dismiss \u{b7} esc";
-
-/// The list under the bell (the prototype's `#notes`, FL-16): the float,
-/// its head `notifications` with `mark all read` at its right (always),
-/// one row per notice — the live requests first, in the order the answer
-/// keys take them, then finished turns, each Thread folded to its newest —
-/// the cursor's row on `FLOAT_SEL`, and the footer of its keys. Its keys
-/// ride `focus` (`Notifications` context).
-pub fn list(rows: &[Row], cursor: usize, focus: &gpui::FocusHandle, handle: Handle) -> Div {
-    let mark_read = handle.clone();
-    let head = crate::menu::head("notifications").child(
-        div()
-            .id("notifications-mark-read")
-            .debug_selector(|| "notifications-mark-read".into())
-            .flex_shrink_0()
-            .px(px(CH))
-            .mr(px(-CH))
-            .text_color(rgb(TEXT_DIM))
-            .hover_float("notifications-mark-read")
-            .press_float()
-            .child("mark all read")
-            .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                mark_read(Verb::MarkAllRead, window, cx)
-            }),
-    );
-    let panel = crate::menu::float()
-        .debug_selector(|| "notifications-panel".into())
-        .w(px(NOTICE_PANEL_W))
-        .max_h(px(MENU_MAX_H))
-        .track_focus(focus)
-        .key_context("Notifications")
-        .child(head);
-    if rows.is_empty() {
-        return panel
-            .child(crate::menu::note("nothing waits, nothing finished"))
-            .child(crate::menu::footer_line(LIST_FOOTER));
-    }
-    let list = div()
-        .id("notifications-list")
-        .flex()
-        .flex_col()
-        .min_h_0()
-        .overflow_y_scroll()
-        .children(
-            rows.iter()
-                .enumerate()
-                .map(|(index, row)| row_element(index, row, index == cursor, handle.clone())),
-        );
-    panel
-        .child(list)
-        .child(crate::menu::footer_line(LIST_FOOTER))
-}
-
-/// One notice (the prototype's `.nt`): one row in four columns — the mark,
-/// the state word in its colour, the title (`TEXT_STRONG` while unread)
-/// with ` · <detail>` muted after it, and the age right-aligned. Under the
-/// pointer only `FLOAT_HOVER`; its whole text stays reachable to assistive
-/// technology.
-fn row_element(index: usize, row: &Row, cursor: bool, handle: Handle) -> Stateful<Div> {
-    let verb = row.open_verb();
-    let key: SharedString = format!("notice-row-{index}").into();
-    let detail = row.detail.text();
-    let word_color = word_ink(row.word());
-    let element = components::text_ui()
-        .id(("notice-row", index))
-        .debug_selector(move || format!("notice-row-{index}"))
-        .flex()
-        .items_center()
-        .w_full()
-        .flex_shrink_0()
-        .h(px(FLOAT_ROW_H))
-        .px(px(FLOAT_PAD_X))
-        .whitespace_nowrap()
-        .aria_label(SharedString::from(format!(
-            "{} \u{b7} {} \u{b7} {} \u{b7} {}",
-            row.word(),
-            row.title,
-            detail,
-            row.when
-        )))
-        .on_click(move |_, window, cx| {
-            cx.stop_propagation();
-            handle(verb.clone(), window, cx)
-        })
-        .child(mark_cell(row.state))
-        .child(
-            div()
-                .flex_shrink_0()
-                .w(px(NOTICE_STATE_W))
-                .text_color(rgb(word_color))
-                .child(row.word()),
-        )
-        .child({
-            // The title and its detail are one run, cut as the prototype's
-            // cell cuts it: its `…` in the cell's own `TEXT`, whatever it
-            // hides (the detail's dim, mostly).
-            let title_ink = rgb(if row.read { TEXT } else { TEXT_STRONG });
-            let line = if detail.is_empty() {
-                row.title.to_string()
-            } else {
-                format!("{} \u{b7} {detail}", row.title)
-            };
-            let highlights = vec![
-                (
-                    0..row.title.len(),
-                    gpui::HighlightStyle {
-                        color: Some(title_ink.into()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    row.title.len()..line.len(),
-                    gpui::HighlightStyle {
-                        color: Some(rgb(TEXT_DIM).into()),
-                        ..Default::default()
-                    },
-                ),
-            ];
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_color(rgb(TEXT))
-                .child(
-                    crate::pane::CellCut::plain(line.clone(), rgb(TEXT).into(), CH).child(
-                        gpui::StyledText::new(line)
-                            .with_highlights(highlights)
-                            .into_any_element(),
-                    ),
-                )
-        })
-        .child(components::tabular(
-            div()
-                .flex_shrink_0()
-                .w(px(NOTICE_AGE_W))
-                .flex()
-                .justify_end()
-                .text_color(rgb(TEXT_DIM))
-                .child(row.when.clone()),
-        ));
-    if cursor {
-        element.float_cursor().press_float()
-    } else {
-        element.hover_float(key).press_float()
-    }
 }
 
 // ---------------------------------------------------------------- toasts

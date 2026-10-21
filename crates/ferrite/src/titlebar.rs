@@ -62,11 +62,12 @@ pub fn board_top() -> f32 {
     WIN_CHROME_H
 }
 
-/// The head row's drag strip, as an overlay: the nav leaves its top
-/// `WIN_CHROME_H` empty (`nav::content`) and the cards start at
-/// `board_top`, so this adds no layout and paints nothing — it claims what
-/// the window already left empty, whose frame the nav and the board column
-/// paint (`components::frame_around`).
+/// The head row's drag strip over the board, as an overlay: the cards
+/// start at `board_top`, so this adds no layout and paints nothing — it
+/// claims what the window already left empty, from `board_left`, whose
+/// frame the board column paints (`components::frame_around`). Over the
+/// nav, the nav's own head drags the window (`nav::head`, its stretch
+/// `head_drag`) around its sidebar toggle.
 ///
 /// It is the window's titlebar and no more: the strip the window drags by
 /// and, on Windows, the caption buttons at its right end.
@@ -74,8 +75,25 @@ pub fn board_top() -> f32 {
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and the drag would take
 /// the press meant for the row under the pointer.
-pub fn strip(draggable: bool, maximized: bool) -> Div {
-    let stretch = if !draggable {
+pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
+    let stretch = head_drag(draggable, maximized);
+    div()
+        .absolute()
+        .top_0()
+        .left(px(board_left))
+        .right_0()
+        .h(px(WIN_CHROME_H))
+        .flex()
+        .flex_row()
+        .child(stretch)
+        .children(CUSTOM.then(|| caption_buttons(maximized)))
+}
+
+/// The nav head's empty stretch (SPEC §5.1.1): what the window drags by
+/// over the nav, the traffic lights over it on macOS — the platform's
+/// stretch, as `strip` lays it over the board. `draggable` is `strip`'s.
+pub fn head_drag(draggable: bool, maximized: bool) -> Div {
+    if !draggable {
         div().flex_1().h_full()
     } else if CUSTOM {
         drag_region(maximized)
@@ -83,17 +101,7 @@ pub fn strip(draggable: bool, maximized: bool) -> Div {
         mac_drag_region()
     } else {
         div().flex_1().h_full()
-    };
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .h(px(WIN_CHROME_H))
-        .flex()
-        .flex_row()
-        .child(stretch)
-        .children(CUSTOM.then(|| caption_buttons(maximized)))
+    }
 }
 
 /// The empty stretch macOS drags the window by: a press starts AppKit's
@@ -462,7 +470,7 @@ mod tests {
     fn the_strip_is_an_overlay_of_the_band(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init_components(cx);
-            let mut strip = strip(true, false);
+            let mut strip = strip(crate::theme::NAV_WIDTH, true, false);
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });

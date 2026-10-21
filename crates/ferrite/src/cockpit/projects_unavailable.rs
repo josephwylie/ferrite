@@ -76,6 +76,9 @@ impl CockpitView {
     pub(super) fn board_door(&self, _: &mut Context<Self>) -> Option<AnyElement> {
         None
     }
+    pub(super) fn tasks_tally(&self) -> Option<gpui::SharedString> {
+        None
+    }
     pub(super) fn projects_bar_word(&self, _: &mut Context<Self>) -> Option<AnyElement> {
         None
     }

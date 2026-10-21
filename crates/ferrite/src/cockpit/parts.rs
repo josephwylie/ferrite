@@ -140,11 +140,12 @@ impl CockpitView {
         &self,
         opacity: f32,
         state: &std::cell::OnceCell<nav::NavState>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         if !self.parts.borrow().on {
             let state = state.get_or_init(|| self.nav_state());
-            return self.nav_content(state, cx).opacity(opacity);
+            return self.nav_content(state, window, cx).opacity(opacity);
         }
         // The box `nav::content` has in the column.
         let frame = div()
@@ -186,7 +187,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match part {
-            Part::Nav => self.nav_content(&self.nav_state(), cx).into_any_element(),
+            Part::Nav => self
+                .nav_content(&self.nav_state(), window, cx)
+                .into_any_element(),
             Part::Status => {
                 let level = self.parts.borrow().status_level;
                 div()

@@ -167,12 +167,11 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     });
 }
 
-/// Folded (cmd-B), the column draws nothing and the board takes the width;
-/// the bottom bar keeps the sidebar toggle, the bell and (off macOS, whose
-/// app menu lists it) Settings at its left in that order, each the bar's
-/// full height, and the toggle opens the column again (ADR 0014).
+/// Folded (cmd-B), the column is the rail and the board takes the width;
+/// the rail keeps the sidebar toggle at its top, under the head row
+/// (§5.1.7), and the toggle opens the column again.
 #[gpui::test]
-fn a_folded_nav_keeps_its_doors_in_the_bottom_bar(cx: &mut TestAppContext) {
+fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
@@ -188,31 +187,14 @@ fn a_folded_nav_keeps_its_doors_in_the_bottom_bar(cx: &mut TestAppContext) {
     assert!(
         (cx.debug_bounds("nav-column").unwrap().size.width - px(nav::FOLDED_WIDTH)).abs() < px(0.5)
     );
-    let bar = cx.debug_bounds("bottom-bar").unwrap();
-    let toggle = bounds(cx, "nav-collapse".to_string());
-    let bell = cx.debug_bounds("notifications-bell").unwrap();
-    assert_eq!(toggle.left(), bar.left(), "the bar's first door");
-    assert!(
-        toggle.right() <= bell.left() + px(0.5),
-        "toggle, bell: {toggle:?} {bell:?}"
-    );
+    let toggle = bounds(cx, "nav-rail-collapse".to_string());
+    assert!(toggle.top() >= px(crate::theme::WIN_CHROME_H) - px(0.5));
+    assert!(toggle.right() <= px(nav::FOLDED_WIDTH));
     assert_eq!(toggle.size.width, px(crate::theme::ICON_BUTTON));
-    let mut doors = vec![toggle, bell];
-    if cfg!(target_os = "macos") {
-        assert!(cx.debug_bounds("settings-gear").is_none());
-    } else {
-        let settings = cx.debug_bounds("settings-gear").unwrap();
-        assert!(
-            bell.right() <= settings.left() + px(0.5),
-            "bell, Settings: {bell:?} {settings:?}"
-        );
-        doors.push(settings);
-    }
-    let session = cx.debug_bounds("bottom-bar-session").unwrap();
-    for door in doors {
-        assert!(door.top() >= bar.top() && door.bottom() <= bar.bottom());
-        assert!(door.right() <= session.left() + px(0.5), "before `ferrite`");
-    }
+    assert!(
+        cx.debug_bounds("nav-collapse").is_none(),
+        "the bar no longer carries it"
+    );
 
     cx.simulate_click(toggle.center(), gpui::Modifiers::none());
     tick(cx);
