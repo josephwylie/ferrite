@@ -5,8 +5,8 @@
 //! pump the same `Receiver<SessionEvent>`, so the demo exercises the real
 //! render path. Nothing here may reach a store an operator keeps work in.
 //!
-//! `--demo parity` opens the approved prototype's world instead (`parity`),
-//! the same one the visual reference's parity scenes capture.
+//! `--demo parity` opens the UI refresh mockups' world instead (`mockup`),
+//! the same one the visual reference's `refresh-*` scenes capture.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,45 +28,54 @@ use ferrite_core::{
 
 use crate::cockpit::here;
 
-/// The prototype's world: its Projects, Threads, Groups and clock. It lives
-/// beside the visual reference's scenes, which capture it; it is declared
-/// here because the live demo is always built and the reference is not.
+/// The kit the scripted worlds are built with: the fixture clock, scripted
+/// Sessions, the timeline and git checkouts. These live beside the visual
+/// reference's scenes, which capture them; they are declared here because
+/// the live demo is always built and the reference is not.
+#[path = "cockpit/visual_reference/world.rs"]
+pub(crate) mod world;
+
+/// The approved prototype's world, behind the `parity-*` scenes (retired
+/// with the UI refresh's last phase).
 #[path = "cockpit/visual_reference/parity.rs"]
 pub(crate) mod parity;
 
-/// `--demo parity`: the prototype's roster, live, on a disposable store and
-/// HOME — never the operator's. The fixture clock stays at the prototype's
-/// 7:41 pm for the run, so every stamp, age and duration reads as the
-/// prototype prints it; HOME and the working directory point into the
-/// disposable root so paths read `~/ferrite` and `~/Desktop/Projects`.
-pub fn parity_world() -> Cockpit {
+/// The UI refresh's mockup world, behind `--demo parity` and the
+/// `refresh-*` scenes.
+#[path = "cockpit/visual_reference/mockup.rs"]
+pub(crate) mod mockup;
+
+/// `--demo parity`: the UI refresh mockups' world, live, on a disposable
+/// store and HOME — never the operator's. The fixture clock stays at the
+/// mockups' 12:31 pm for the run, so every stamp, age and duration reads as
+/// the mockups print them; HOME and the working directory point into the
+/// disposable root so paths read `~/Desktop/Projects/…`.
+pub fn mockup_world() -> Cockpit {
     let root = std::env::temp_dir().join("ferrite-parity-demo");
     // Only our own disposable directory; never the operator's store.
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("create the parity demo root");
-    let midnight = parity::midnight();
-    let at = parity::Clock {
+    std::fs::create_dir_all(&root).expect("create the demo world's root");
+    let midnight = world::midnight();
+    let at = world::Clock {
         midnight,
         fixture: None,
     }
-    .instant(parity::CAPTURE);
-    let fixture: &'static parity::Fixture = Box::leak(Box::new(parity::Fixture::install(at)));
-    let world = parity::build(
+    .instant(mockup::CAPTURE);
+    let fixture: &'static world::Fixture = Box::leak(Box::new(world::Fixture::install(at)));
+    let built = mockup::build(
         &root,
-        parity::Look::Solo,
-        parity::Clock {
+        mockup::Look::Solo,
+        mockup::Pr::Open,
+        world::Clock {
             midnight,
             fixture: Some(fixture),
         },
     );
-    std::env::set_var("HOME", &world.home);
-    // The changed tokens the prototype marks by hand, on its world's diffs
-    // (the UI thread draws them; this runs on it, before the app starts).
-    crate::pane::set_word_marks(parity::word_marks());
-    if let Err(e) = std::env::set_current_dir(&world.launch) {
-        ferrite_core::log!("cannot stand in the parity launch directory: {e}");
+    std::env::set_var("HOME", &built.home);
+    if let Err(e) = std::env::set_current_dir(&built.launch) {
+        ferrite_core::log!("cannot stand in the demo world's launch directory: {e}");
     }
-    world.core
+    built.core
 }
 
 /// A scripted event stream: no process, same channel, same pump.

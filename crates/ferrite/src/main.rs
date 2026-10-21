@@ -226,7 +226,7 @@ fn main() {
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = ferrite_core::login_shell::adopt_login_environment();
-    // `--demo parity`: the approved prototype's world, on its own store.
+    // `--demo parity`: the UI refresh mockups' world, on its own store.
     let parity = flag(&args, "--demo") == Some("parity");
     let (settings, unreadable) = match Settings::load(&settings_dir) {
         Ok(settings) => (settings, None),
@@ -297,7 +297,7 @@ fn main() {
             // spawns the real provider CLIs and keeps them when it goes
             // (ADR 0025).
             let (mut core, machines) = if parity {
-                (demo::parity_world(), None)
+                (demo::mockup_world(), None)
             } else if demo {
                 let store = Store::open(store_dir()).unwrap_or_else(|e| {
                     ferrite_core::log!("cannot open the Thread store: {e}");

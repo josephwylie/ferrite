@@ -14,8 +14,9 @@ use ferrite_core::workspace::BranchStatus;
 use ferrite_core::ThreadId;
 use gpui::{Context, Window};
 
-use super::{CockpitView, Home, Scene, Setup};
-use crate::demo::parity::{self, Cast, Clock, Fixture, Look, World, CAPTURE};
+use super::{pane_of, CockpitView, HeldLoops, Home, Scene, Setup};
+use crate::demo::parity::{self, Cast, Look, World, CAPTURE};
+use crate::demo::world::{self, Clock, Fixture};
 use crate::motion;
 use crate::nav::NavFold;
 use crate::palette::PaletteScope;
@@ -118,16 +119,6 @@ impl Shot {
     }
 }
 
-/// The loops held for the capture (`Shot::held`), let run again when the
-/// scene is dropped.
-struct Held;
-
-impl Drop for Held {
-    fn drop(&mut self) {
-        motion::hold_loops(None);
-    }
-}
-
 /// The parity scene `state` (one of `SHOTS`) and its setup.
 pub(super) fn build(state: &str) -> (Scene, Setup) {
     let shot = SHOTS
@@ -137,7 +128,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         .expect("a parity state");
     // The prototype's shots are grayscale-antialiased.
     disable_font_smoothing();
-    motion::hold_loops(Some(shot.held()));
+    let held_loops = HeldLoops::hold(shot.held());
     // The changed tokens the prototype marks by hand, on its world's diffs.
     crate::pane::set_word_marks(parity::word_marks());
     let root =
@@ -146,7 +137,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("create disposable reference root");
     // Midnight is read off the real clock, before the fixture replaces it.
-    let midnight = parity::midnight();
+    let midnight = world::midnight();
     let capture = Clock {
         midnight,
         fixture: None,
@@ -181,7 +172,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         hold: vec![
             Box::new(fixture) as Box<dyn std::any::Any>,
             Box::new(home) as Box<dyn std::any::Any>,
-            Box::new(Held) as Box<dyn std::any::Any>,
+            Box::new(held_loops) as Box<dyn std::any::Any>,
         ],
     };
     let setup: Setup = Box::new(move |view, window, cx| {
@@ -302,14 +293,6 @@ fn prepare(
     // The prototype's window has the keyboard: the focused Composer's caret
     // is the solid block, not the hollow one an inactive window draws.
     window.activate_window();
-}
-
-/// The Pane showing `thread`.
-fn pane_of(view: &CockpitView, thread: ThreadId) -> usize {
-    view.panes
-        .iter()
-        .position(|pane| pane.thread() == Some(thread))
-        .expect("a parity Thread has a Pane")
 }
 
 /// Solo as solo.png scrolls it: the prototype's own call, turn two's band

@@ -7,12 +7,16 @@
 //! `FERRITE_REF_SIZES` (comma lists) narrow a run to a subset.
 //!
 //! The `parity-*` states rebuild the approved terminal-native prototype's
-//! views on one shared world (`parity_scenes.rs`); run them with
-//! `--features visual-reference,opaque` so paints are the opaque greys the
-//! prototype's shots use.
+//! views on one shared world (`parity_scenes.rs`), and the `refresh-*`
+//! states the UI refresh's mockups on theirs (`mockup_scenes.rs`, at size
+//! `refresh`); run them with `--features visual-reference,opaque` so paints
+//! are the opaque greys the shots use.
 
 #[path = "cockpit/visual_reference/parity_scenes.rs"]
 mod parity_scenes;
+
+#[path = "cockpit/visual_reference/mockup_scenes.rs"]
+mod mockup_scenes;
 
 #[path = "cockpit/visual_reference/feature_scenes.rs"]
 mod feature_scenes;
@@ -257,6 +261,31 @@ impl Drop for Home {
     }
 }
 
+/// The animation loops held at one instant for a capture
+/// (`motion::hold_loops`), let run again when the scene is dropped.
+struct HeldLoops;
+
+impl HeldLoops {
+    fn hold(at: crate::motion::HeldLoops) -> Self {
+        crate::motion::hold_loops(Some(at));
+        HeldLoops
+    }
+}
+
+impl Drop for HeldLoops {
+    fn drop(&mut self) {
+        crate::motion::hold_loops(None);
+    }
+}
+
+/// The Pane showing `thread`.
+fn pane_of(view: &CockpitView, thread: ThreadId) -> usize {
+    view.panes
+        .iter()
+        .position(|pane| pane.thread() == Some(thread))
+        .expect("a scene's Thread has a Pane")
+}
+
 impl Scene {
     fn new(tag: &str) -> Self {
         let root =
@@ -344,11 +373,12 @@ impl Scene {
 }
 
 /// Sizes by label: the two transcript widths the references began with,
-/// and the real default window.
-const SIZES: [(&str, f32, f32); 3] = [
+/// the real default window, and the UI refresh mockups' window.
+const SIZES: [(&str, f32, f32); 4] = [
     ("narrow", 720., 1400.),
     ("wide", 1000., 1400.),
     ("app", 1440., 900.),
+    ("refresh", 1600., 960.),
 ];
 
 /// Every state, with the sizes it renders at by default.
@@ -447,6 +477,15 @@ const STATES: &[(&str, &[&str])] = &[
     ("parity-collapsed", &["app"]),
     ("parity-collapsed-ride", &["app"]),
     // (end parity)
+    // The UI refresh's mockups on their one world (`mockup_scenes.rs`);
+    // compared against docs/design/ui-refresh/mockups/<view>.png.
+    ("refresh-solo", &["refresh"]),
+    ("refresh-solo-changes", &["refresh"]),
+    ("refresh-group", &["refresh"]),
+    ("refresh-pr-failing", &["refresh"]),
+    ("refresh-pr-merged", &["refresh"]),
+    ("refresh-pr-none", &["refresh"]),
+    ("refresh-palette", &["refresh"]),
 ];
 
 /// Every state: the table's, then the feature scenes' at the app size.
@@ -624,6 +663,21 @@ fn render(
     drop(feeds);
     drop(hold);
     // Only our fresh disposable root; never the operator's store.
+    remove_root(&root);
+}
+
+/// Remove a scene's disposable root. A git read still out off the UI thread
+/// (a checkout's status refreshes its index) can write into it while it
+/// goes, so a root that is not yet empty is asked again.
+fn remove_root(root: &Path) {
+    for _ in 0..20 {
+        match std::fs::remove_dir_all(root) {
+            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            done => return done.expect("remove disposable reference store"),
+        }
+    }
     std::fs::remove_dir_all(root).expect("remove disposable reference store");
 }
 
@@ -631,6 +685,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
     let none: Setup = Box::new(|_, _, _| {});
     match state {
         state if parity_scenes::handles(state) => parity_scenes::build(state),
+        state if mockup_scenes::handles(state) => mockup_scenes::build(state),
         state if feature_scenes::handles(state) => feature_scenes::build(state),
         "conversation" => (conversation(label), none),
         "toolgroups" => (tool_groups(label), none),
@@ -2215,7 +2270,7 @@ fn loops_frames(
 ) -> Vec<usize> {
     // One frozen wall clock and one store path for both passes: the clock
     // text and the checkout's path read the same in each.
-    let clock = crate::demo::parity::Fixture::install(
+    let clock = crate::demo::world::Fixture::install(
         std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_791_400_000),
     );
     let mut scene = Scene::new("loops-parity");
