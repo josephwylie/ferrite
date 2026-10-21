@@ -39,7 +39,9 @@ decided independently:
   other surface (nav rows, Wall cards, the bell, toasts, needs-you) reads a
   per-Thread digest the Server computes and sends to every window; Decisions
   already go to every window. Open no longer means mirrored. A window
-  unwatches what it stops drawing.
+  unwatches what it stops drawing five minutes after it stops, and never
+  while that Thread is at work (a turn, Subagents or background tasks): the
+  operator comes back to a Thread as it is, never to a reload.
 
 Ending and restarting a Session is invisible. Waking adds no transcript row
 and changes no status, unlike a revive or a Session that closed. A prompt sent

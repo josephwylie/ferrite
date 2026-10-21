@@ -86,9 +86,10 @@ pub struct Cockpit {
     drawn: Option<Drawn>,
 }
 
-/// How long a Thread off screen stays streamed whole: flipping between
-/// Threads reads none of their history again (ADR 0032).
-const UNWATCH_AFTER: Duration = Duration::from_secs(30);
+/// How long a settled Thread off screen stays streamed whole: coming back
+/// to one within it reads none of its history again (ADR 0032). One at
+/// work stays however long it works, and this long after.
+const UNWATCH_AFTER: Duration = Duration::from_secs(5 * 60);
 
 /// The Threads a window draws at Transcript level, and when each it no
 /// longer draws left the screen.
@@ -124,6 +125,13 @@ impl Drawn {
                 .left
                 .get(&thread)
                 .is_some_and(|left| at.saturating_duration_since(*left) < UNWATCH_AFTER)
+    }
+
+    /// `thread` is still at work off screen: its time away starts again.
+    fn keep(&mut self, thread: ThreadId, at: Instant) {
+        if let Some(left) = self.left.get_mut(&thread) {
+            *left = at;
+        }
     }
 
     fn retain(&mut self, open: &[ThreadId]) {
@@ -444,6 +452,12 @@ impl Cockpit {
 
     /// Stream what the window draws, and let the rest go.
     fn follow_attention(&mut self) {
+        if let Some(drawn) = &mut self.drawn {
+            let now = crate::clock::instant();
+            for thread in self.mirrors.watched_at_work() {
+                drawn.keep(thread, now);
+            }
+        }
         let watched = self.watched();
         if let Some(drawn) = &mut self.drawn {
             drawn.retain(&self.shared.open);

@@ -422,6 +422,20 @@ impl Mirrors {
         }
     }
 
+    /// The Threads this window streams whose digest says they are at work.
+    pub(crate) fn watched_at_work(&self) -> impl Iterator<Item = ThreadId> + '_ {
+        self.threads
+            .iter()
+            .filter(|(_, mirror)| {
+                mirror.watched
+                    && mirror
+                        .digest
+                        .as_ref()
+                        .is_some_and(|held| held.digest.at_work())
+            })
+            .map(|(&thread, _)| thread)
+    }
+
     /// Whether this window streams `thread` (`Mirrors::watch_only`).
     pub(crate) fn watched(&self, thread: ThreadId) -> bool {
         self.threads
