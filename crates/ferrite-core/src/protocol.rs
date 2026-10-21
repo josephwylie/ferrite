@@ -386,6 +386,65 @@ pub enum Op {
     Unknown,
 }
 
+impl Op {
+    /// The Thread this act is on, if it names one. Every act is listed, so
+    /// a new one is placed here on purpose.
+    pub fn thread(&self) -> Option<ThreadId> {
+        match self {
+            Op::Send { thread, .. }
+            | Op::Queue { thread, .. }
+            | Op::Unqueue { thread, .. }
+            | Op::CancelQueued { thread, .. }
+            | Op::TakeRecovered { thread, .. }
+            | Op::Recall { thread, .. }
+            | Op::Interrupt { thread, .. }
+            | Op::StopSubagent { thread, .. }
+            | Op::Answer { thread, .. }
+            | Op::Control { thread, .. }
+            | Op::SetModel { thread, .. }
+            | Op::SetEffort { thread, .. }
+            | Op::SetProvider { thread, .. }
+            | Op::Rename { thread, .. }
+            | Op::Park { thread, .. }
+            | Op::Revive { thread, .. }
+            | Op::Delete { thread, .. }
+            | Op::WorktreesListed { thread, .. }
+            | Op::LoadSubject { thread, .. }
+            | Op::ShowSubject { thread, .. }
+            | Op::Say { thread, .. }
+            | Op::SearchFiles { thread, .. }
+            | Op::Composing { thread, .. } => Some(*thread),
+            Op::Open { .. }
+            | Op::Bootstrap { .. }
+            | Op::CancelBootstrap { .. }
+            | Op::ReviveGroup { .. }
+            | Op::Import { .. }
+            | Op::Group { .. }
+            | Op::Layout { .. }
+            | Op::Project { .. }
+            | Op::Notice { .. }
+            | Op::SettingsChanged
+            | Op::CliReplaced { .. }
+            | Op::Focused { .. }
+            | Op::ListDir { .. }
+            | Op::ListRepo { .. }
+            | Op::ReviewDiff { .. }
+            | Op::ReviewRead { .. }
+            | Op::ListCommits { .. }
+            | Op::SearchRepo { .. }
+            | Op::ReadFile { .. }
+            | Op::ReviewPullRequest { .. }
+            | Op::ListFiles { .. }
+            | Op::ListBases { .. }
+            | Op::PickBase { .. }
+            | Op::PullRequest { .. }
+            | Op::Restart { .. }
+            | Op::Stop { .. }
+            | Op::Unknown => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WireDirection {

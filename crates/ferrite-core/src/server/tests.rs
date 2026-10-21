@@ -4400,7 +4400,8 @@ fn a_thread_let_go_reads_back_whole_for_the_api_and_a_watch() {
     );
 }
 
-/// A Thread let go to its digest, as `a_thread_nobody_uses…` leaves one:
+/// A Thread let go to its digest, as
+/// `a_thread_nobody_uses_holds_only_its_digest_until_used` leaves one:
 /// the Engine, the Thread, what its transcript reads and the clock.
 fn let_go(
     name: &str,
@@ -4487,4 +4488,22 @@ fn a_thread_read_back_stays_held_a_minute() {
     engine.pump();
     engine.take_messages();
     assert!(said_in(&engine, thread).is_empty(), "let go again");
+}
+
+/// An act that writes to a let-go Thread reads it back first, so what it
+/// writes lands on its history and stays: an effort change says so.
+#[test]
+fn an_act_that_writes_reads_a_let_go_thread_back_first() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("writes-read-back");
+
+    engine
+        .execute(&Op::SetEffort {
+            thread,
+            effort: Some("high".into()),
+        })
+        .unwrap();
+
+    let said = said_in(&engine, thread);
+    assert_eq!(said[..before.len()], before[..], "on its history");
+    assert!(said.len() > before.len(), "{said:?}");
 }

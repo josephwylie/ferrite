@@ -764,7 +764,7 @@ struct Published {
 }
 
 /// How long a Thread read back from its log is held before it may be let
-/// go again: whatever reads it often reads its log once a minute at most.
+/// go again, so a Thread read often reads its log at most once a minute.
 const HOLD_AT_LEAST: Duration = Duration::from_secs(60);
 
 /// How often a streaming Thread's digest may refold: four times a second.

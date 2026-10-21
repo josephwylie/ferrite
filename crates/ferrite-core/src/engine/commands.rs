@@ -29,14 +29,23 @@ fn unknown() -> WireError {
 
 impl Engine {
     pub fn execute(&mut self, op: &Op) -> Executed {
-        // The acts that read a let-go Thread's transcript read it back first;
-        // starting its agent does so itself (`start_session`). A window's
-        // routine acts (its worktree listing, the Subject it shows) never do.
-        if let Op::SetProvider { thread, .. }
-        | Op::Park { thread }
-        | Op::LoadSubject { thread, .. } = op
-        {
-            self.hold(*thread);
+        // An act on a let-go Thread reads it back first, so a new act does
+        // by default. A window's routine acts never touch its transcript
+        // (ADR 0032): its worktree listing on every tick, the Subject it
+        // shows, a rename, and the operator's own prompts held aside.
+        let routine = matches!(
+            op,
+            Op::WorktreesListed { .. }
+                | Op::ShowSubject { .. }
+                | Op::Rename { .. }
+                | Op::Delete { .. }
+                | Op::Unqueue { .. }
+                | Op::CancelQueued { .. }
+                | Op::TakeRecovered { .. }
+                | Op::Recall { .. }
+        );
+        if let Some(thread) = op.thread().filter(|_| !routine) {
+            self.hold(thread);
         }
         match op {
             Op::Open {
