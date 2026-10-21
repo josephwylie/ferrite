@@ -148,7 +148,12 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         ],
     };
     let setup: Setup = Box::new(move |view, window, cx| {
-        prepare(view, launch, branches, &folded, window, cx);
+        // group.png draws Complete BB supplier list `done`: a finish that
+        // is on screen while the window has the operator's focus is seen at
+        // once (ADR 0015's seen rule), so the operator reads that word only
+        // while the window is in the background. The shot is taken so.
+        let active = shot != Shot::Group;
+        prepare(view, launch, branches, &folded, active, window, cx);
         // The Groups the mockups draw folded: InvoiceMate Business, and
         // WORK wherever it is not the view.
         let shut: Vec<_> = view
@@ -181,12 +186,13 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 /// What every refresh view shares: where Ferrite was launched, the CLIs it
 /// found, the checkouts' branches (before git's own reads land), workmate
 /// and tempo folded, no toast for a request that was standing when the
-/// window opened, and a window that has the keyboard.
+/// window opened, and a window that has the keyboard when `active`.
 fn prepare(
     view: &mut CockpitView,
     launch: std::path::PathBuf,
     branches: Vec<(ThreadId, BranchStatus)>,
     folded: &[ProjectId],
+    active: bool,
     window: &mut Window,
     cx: &mut Context<CockpitView>,
 ) {
@@ -212,7 +218,9 @@ fn prepare(
     window.clear_notifications(cx);
     view.ring_bell(cx);
     view.bell.clear_toasts();
-    window.activate_window();
+    if active {
+        window.activate_window();
+    }
 }
 
 /// The Solo panel on `tab` for `thread` (SPEC §5.6): the Changes tab, or

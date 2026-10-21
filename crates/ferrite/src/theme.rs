@@ -230,8 +230,9 @@ impl From<Paint> for gpui::Fill {
 
 /// `#161616` — sunk below the card: a Decision's command well, the
 /// palette scrim's base.
-#[allow(dead_code)]
 pub const SUNKEN: u32 = 0x161616;
+/// Sunk as glass: a black overlay on the card.
+pub const SUNKEN_GLASS: u32 = 0x00000014;
 /// `#181818` — the card: a Pane's body, the transcript's surface.
 pub const CARD: u32 = 0x181818;
 /// The card as glass: 94%, a terminal's background opacity.
@@ -242,11 +243,13 @@ pub const BAR: u32 = 0x1e1e1e;
 #[allow(dead_code)]
 pub const BAR_GLASS: u32 = 0x1e1e1ee0;
 /// `#1f1f1f` — the Decision box.
-#[allow(dead_code)]
 pub const DECISION: u32 = 0x1f1f1f;
+/// The Decision box as glass: a white overlay on the card.
+pub const DECISION_GLASS: u32 = 0xffffff08;
 /// `#202020` — the compact Composer in a Group Pane.
-#[allow(dead_code)]
 pub const FIELD_COMPACT: u32 = 0x202020;
+/// The compact Composer as glass: a white overlay on the card.
+pub const FIELD_COMPACT_GLASS: u32 = 0xffffff09;
 /// `#222222` — the frame behind the cards: the nav, the heads, the right
 /// panel, a Group's gutter.
 pub const FRAME: u32 = 0x222222;
@@ -284,7 +287,6 @@ pub const SELECTED_GLASS: u32 = 0xffffff1c;
 pub const SELECTION_HOVER: u32 = 0x363636;
 pub const SELECTION_HOVER_GLASS: u32 = 0xffffff24;
 /// `#3a3a3a` — the send button's circle (and a comment's avatar).
-#[allow(dead_code)]
 pub const SEND: u32 = 0x3a3a3a;
 /// `#141414` — the empty side of a split diff (a row with no partner),
 /// below the card.
@@ -325,6 +327,13 @@ pub const FOCUS_RING: u32 = 0xffffff38;
 /// `ATTENTION` at 35% — the ring of a Pane whose Thread is blocked,
 /// focused or not.
 pub const WAIT_RING: u32 = 0xe6c47c59;
+/// `ATTENTION` at 22% — the Decision box's inset ring.
+pub const DECISION_RING: u32 = 0xe6c47c38;
+/// 6% — the compact Composer's ring at rest; 12% on the focused Pane.
+pub const COMPACT_RING: u32 = 0xffffff0f;
+pub const COMPACT_RING_FOCUSED: u32 = 0xffffff1f;
+/// `BLOCKED` at 7% — the failure strip's fill.
+pub const FAILURE_WASH: u32 = 0xef8a8012;
 
 // ------------------------------------------------- legacy line greys
 //
@@ -361,6 +370,10 @@ pub mod paint {
     pub const FIELD: Paint = Paint::pick(super::FIELD_GLASS, solid(super::FIELD));
     pub const RAISED: Paint = Paint::pick(super::RAISED_GLASS, solid(super::RAISED));
     pub const SELECTED: Paint = Paint::pick(super::SELECTED_GLASS, solid(super::SELECTED));
+    pub const SUNKEN: Paint = Paint::pick(super::SUNKEN_GLASS, solid(super::SUNKEN));
+    pub const DECISION: Paint = Paint::pick(super::DECISION_GLASS, solid(super::DECISION));
+    pub const FIELD_COMPACT: Paint =
+        Paint::pick(super::FIELD_COMPACT_GLASS, solid(super::FIELD_COMPACT));
     pub const TAB_ACTIVE: Paint = Paint::pick(super::TAB_ACTIVE_GLASS, solid(super::TAB_ACTIVE));
     pub const SELECTION_HOVER: Paint =
         Paint::pick(super::SELECTION_HOVER_GLASS, solid(super::SELECTION_HOVER));
@@ -1019,6 +1032,20 @@ pub const PANE_PAD_X: f32 = SPACE_4;
 /// in the Composer's stack and pushes the transcript up while it shows.
 pub const BODY_PAD_T: f32 = SPACE_4;
 pub const BODY_PAD_B: f32 = LH_UI / 2.0;
+/// A Group Pane's body ends 14px over its compact Composer (SPEC §5.9, the
+/// mockup's `padding-bottom: 14px`), so a Decision or failure strip at the
+/// tail sits where it is drawn.
+pub const BODY_PAD_B_GROUP: f32 = 14.0;
+
+/// The Pane body's bottom padding: Solo's `BODY_PAD_B`, a Group Pane's
+/// `BODY_PAD_B_GROUP`.
+pub fn body_pad_b(solo: bool) -> f32 {
+    if solo {
+        BODY_PAD_B
+    } else {
+        BODY_PAD_B_GROUP
+    }
+}
 /// 12px — the glyph box every transcript and Composer row hangs its mark in
 /// (`❯`, a tool dot, the answer mark, an elbow).
 pub const GLYPH_BOX: f32 = 12.0;
@@ -1092,11 +1119,6 @@ pub const MENU_NAME_MAX_W: f32 = 220.0;
 /// The folder and branch marks on the Project and checkout lines (12px), and
 /// the 5px gap to their labels.
 pub const ROW_ICON: f32 = 12.0;
-/// 11px — the provider logomark in a Pane head, a picker row and the status
-/// line (the prototype's `svg.logo`).
-pub const PROVIDER_MARK_SM: f32 = 11.0;
-/// 20px — one queued prompt's row pitch in the Composer's queue viewport.
-pub const QUEUE_ROW_H: f32 = COMPOSER_ROW_H;
 
 // ------------------------------------------------------- status and motion
 
@@ -1706,15 +1728,13 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // **Solo has no head**: the nav's selected row names the Thread and the
 // body starts at the plane's top edge.
 //
-// **The Group head is one row** (`PANE_HEAD_H`, a row and 4px, its rule
-// inside it) at every size: the state dot the size of the face's `●` in
-// the first cell of a 2-cell column (`HEAD_DOT_W`; a working Thread's is
-// the braille spinner), the title at `W_LABEL` —
-// `TEXT`, `TEXT_STRONG` on the focused Pane only — and the provider's
-// `PROVIDER_MARK_SM` mark a cell after it, a cell in from the edge. **No
-// state word and no number rides a head** (rule 7): state reads at the
-// Pane's foot. The focused Pane's head lays the `paint::HEAD` band. A
-// draft carries its × at the right instead.
+// **The Group head** (`pane::group_head`, SPEC §5.9) is one 38px row
+// (`PANE_HEAD_H`) closed by a `HAIRLINE`, on every board Pane: the row's
+// mark (`nav::head_mark`), the title at `W_LABEL` — `TEXT_STRONG` on the
+// focused Pane only — its state word in 12 (`needs you` `ATTENTION`,
+// `failed` `BLOCKED`, the elapsed time and an unseen `done` `TEXT_DIM`),
+// then the provider's 13px logo and the fill button. No band on the
+// focused head: the ring says focus. A draft carries its × instead.
 //
 // **Two altitudes** (R12): a Pane reads its transcript from 300px wide and
 // 360px tall (`docview::Level::for_cell`); smaller, it is a wall tile. One
@@ -1783,14 +1803,45 @@ pub const BOARD_SEAM: f32 = GRID_GAP;
 /// held (`SEAM_HOVER`); at rest the gutter alone separates the cards.
 pub const SEAM_LINE_W: f32 = 2.0;
 
-/// 24px — the Group head (and the subagent strip, a reader's head): one row
-/// and 4px, closed by a `paint::LINE` rule.
-pub const PANE_HEAD_H: f32 = ROW + SPACE_1;
-/// A head's inline inset: one cell.
+/// 38px — the Group head (SPEC §5.9; a reader's head is its twin): the
+/// card's tab strip height, its `HAIRLINE` inside it.
+pub const PANE_HEAD_H: f32 = 38.0;
+/// A head's inline inset: one cell (the reader's twin head).
 pub const HEAD_PAD_X: f32 = CH;
-/// The head's dot column: two cells, the dot centred in the first (where
-/// the face's `●` would sit).
-pub const HEAD_DOT_W: f32 = 2.0 * CH;
+/// The Group head's insets and gap: 14 before the mark, 6 after the fill
+/// button (its 28px hit box carries the rest of the visual inset), 8
+/// between items.
+pub const PANE_HEAD_PAD_L: f32 = 14.0;
+pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
+pub const PANE_HEAD_GAP: f32 = SPACE_2;
+/// 13px — the provider's logo and a mark's icon in the Group head.
+pub const PANE_HEAD_ICON: f32 = 13.0;
+/// 14px — the fill button's `maximize` glyph.
+pub const PANE_HEAD_FILL_GLYPH: f32 = 14.0;
+
+/// The compact Composer (SPEC §5.9 item 5, `pane::compact_composer`): a
+/// 38px box `COMPACT_COMPOSER_INSET` in from the card's sides and foot,
+/// padded 12 before the input and 7 after the send circle (24, its
+/// `arrow-up` 12), `COMPACT_WORKING_GAP` under the working line.
+pub const COMPACT_COMPOSER_H: f32 = 38.0;
+pub const COMPACT_COMPOSER_INSET: f32 = 10.0;
+pub const COMPACT_COMPOSER_PAD_L: f32 = SPACE_3;
+/// Off the space scale: centres the 24px circle 7px from the box's edge,
+/// as the mockup draws it.
+pub const COMPACT_COMPOSER_PAD_R: f32 = 7.0;
+pub const COMPACT_WORKING_GAP: f32 = 14.0;
+pub const SEND_CIRCLE_SM: f32 = SPACE_6;
+pub const SEND_GLYPH_SM: f32 = SPACE_3;
+
+/// The failure strip (SPEC §5.9 item 4): 36 high at `R_BLOCK` on
+/// `FAILURE_WASH`, padded 12 / 6, its `x-circle` 14, its `Retry` 26 high
+/// at `R_TAB`, padded 10.
+pub const FAILURE_STRIP_H: f32 = 36.0;
+pub const FAILURE_STRIP_PAD_L: f32 = SPACE_3;
+pub const FAILURE_STRIP_PAD_R: f32 = SPACE_1_5;
+pub const FAILURE_STRIP_ICON: f32 = 14.0;
+pub const RETRY_H: f32 = 26.0;
+pub const RETRY_PAD_X: f32 = 10.0;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
@@ -1925,8 +1976,8 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 /// - **The caret is a bar** `CARET_W` wide and a row high at the cursor's
 ///   shaped x, in `CARET`, blinking softly (`MOTION_CARET_BLINK_MS`,
 ///   `components::caret_blink`) in Solo and the focused board Pane whoever
-///   holds the keyboard; an unfocused board Pane draws it still in
-///   `CARET_HOLLOW`. Typing restarts the blink solid.
+///   holds the keyboard; an unfocused board Pane draws none (SPEC §5.9).
+///   Typing restarts the blink solid.
 /// - **The toolbar** (`COMPOSER_TOOLBAR_H`, `COMPOSER_TOOLBAR_PAD_X`,
 ///   `COMPOSER_TOOLBAR_GAP`): the `+` attach button (`COMPOSER_ATTACH`), a
 ///   draft's Project and Workspace chips, the permission mode chip, a
@@ -1936,25 +1987,20 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 ///   `FS_LABEL`, its parts `TOOL_CHIP_GAP` apart, `paint::RAISED` under the
 ///   pointer; its menu rests above it.
 ///
-/// A Group Pane's Composer is still the input band (`COMPOSER_PAD_*`, a
-/// `❯` in its gutter) until its own phase (SPEC §5.9).
+/// A Group Pane's Composer is the compact box (`COMPACT_COMPOSER_*`, SPEC
+/// §5.9).
 ///
 /// Any pad or line change here must update `pane::composer_fixed_height` in
 /// the same commit.
-pub const COMPOSER_PAD_L: f32 = GLYPH_GUTTER;
-pub const COMPOSER_PAD_R: f32 = 3.0 * CH;
+/// The old board band's padding, kept for the kit's toast margin
+/// (`TOAST_ABOVE_COMPOSER`).
 pub const COMPOSER_PAD_Y: f32 = 6.0;
-/// The `❯` cell: two cells, the transcript's glyph gutter.
-pub const COMPOSER_GUTTER: f32 = GLYPH_GUTTER;
 pub const COMPOSER_ROW_H: f32 = LH_UI;
 pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
 /// Legacy names other modules still read (the Subagent footer, the send
 /// controls' corner).
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
 pub const COMPOSER_INSET_B: f32 = SPACE_2;
-/// One band row: what an unfocused board cell's band measures.
-#[cfg_attr(not(test), allow(dead_code))]
-pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H;
 /// How far a table cell's text sits under the cell's top (`rich::style`):
 /// the prototype's 19px line centred in its 20px cell, rounded down to the
 /// whole pixel.
@@ -1963,12 +2009,6 @@ pub const TABLE_TEXT_DROP: f32 = 1.0;
 /// `ATTENTION` from `CTX_METER_WARN`, `BLOCKED` from `CTX_METER_FULL`.
 pub const CTX_METER_WARN: f32 = 0.60;
 pub const CTX_METER_FULL: f32 = 0.85;
-/// The Composer's band sits between two 1px rules (the prototype's
-/// `.comp .rule`, transparent on these themes): the room is real, the ink
-/// is none.
-pub const COMPOSER_RULE: f32 = 1.0;
-/// Under the working line, above the band's upper rule.
-pub const COMPOSER_WORKING_GAP: f32 = 6.0;
 /// Under the working line, above Solo's box: 15 (off the scale: the
 /// mockup's, the transcript line's half-leading over the box's 14px
 /// inset).
@@ -1984,14 +2024,11 @@ pub const STATUS_LOGO_FOOT: f32 = 1.0;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
-/// The queued-prompt viewport scrolls beyond these visible row budgets.
-pub const COMPOSER_QUEUE_ROWS: usize = 3;
 /// Between the shelf (pending files, background chips) and the band.
 pub const SHELF_GAP: f32 = SPACE_1;
 /// The caret's bar: 2px wide (off the space scale: a caret is a hairline
 /// you can find), the row high.
 pub const CARET_W: f32 = 2.0;
-pub const CARET_HOLLOW: u32 = TEXT_FAINT;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
@@ -2305,38 +2342,42 @@ pub const SETTINGS_FIELD_W: f32 = 24.0 * CH;
 // Edit values and append tokens only inside this section.
 
 /// The Decision (approvals, questions, forms, links — Main's and a
-/// Subagent's alike, rule 2.8) is a transcript row in the provider CLIs'
-/// own grammar (the prototype's `.r` holding a `.dec`, clean): no box, no
-/// ground, no rule. `◆ Bash needs approval · codex · read-only sandbox`
-/// heads it — the typed `◆` at the gutter's start,
-/// the lead in `ATTENTION`, every detail and its `·` in `TEXT_DIM` — and
-/// every other section sits on the content column after the 2-cell gutter,
-/// `DECISION_GAP` (half a row) below the one above: the command on a
-/// `paint::BAND` behind a faint `$ `, the three options as one-row lines
-/// (`❯ 1. Allow`: the `TEXT_STRONG` `❯` and a `paint::SELECTION` bar across the
-/// content column on the cursor's row, its label `TEXT_STRONG`; the
-/// ordinal dim; a pattern in `INLINE_CODE_INK`; the pointer's row on
-/// `paint::HOVER`), and, half a row down, the dim hint line (`↑↓ select ·
-/// 1–3 pick · esc deny · tab amend`). No keycaps, no pills, no `↵`, no
-/// `✓`. Deny is not red. Head 20 · gap 10 · band 30 · gap 10 · options
-/// 3 × 20 · gap 10 · hint 20.
+/// Subagent's alike, rule 2.8) is the transcript's tail row, drawn as a box
+/// (SPEC §5.9 item 3) across the transcript column, Solo's and a Group
+/// Pane's alike: `DECISION` ground at `R_BLOCK`, an inset 1px
+/// `DECISION_RING`, padded `DECISION_PAD`, its sections `DECISION_GAP`
+/// apart, in Geist. The head (`DECISION_HEAD_ICON` `shield` in
+/// `ATTENTION`, a question's `?`; the lead 13 at `W_LABEL` `TEXT_STRONG`;
+/// the context at the right in 12 `TEXT_DIM`), the command well (`SUNKEN`
+/// at `R_TAB`, Geist Mono 12.5, a `TEXT_DIM` `$ `), then the options:
+/// `DECISION_OPTION_H` rows at `R_TAB`, the key in Geist Mono 12 `TEXT_DIM`,
+/// the label in Geist 13, the cursor's row `SELECTED` and `TEXT_STRONG`.
+/// The hint line (`↑↓ select · 1–3 pick · esc deny · tab amend`, 12
+/// `TEXT_DIM`) sits `DECISION_HINT_GAP` under the box, on the Pane that
+/// holds the keyboard only. Head 20 · gap 10 · well 32 · gap 10 · options
+/// 3 × 30, inside 12 of padding.
 ///
 /// Where a card still docks over the transcript's foot (the requests
 /// overlay) it lies on the plane, `DECISION_PAD_Y` inside.
 pub const DECISION_PAD_Y: f32 = HALF_ROW;
-pub const DECISION_GAP: f32 = HALF_ROW;
-/// Option rows sit flush, one `LH_UI` row each; a description adds a line
-/// under the label.
+pub const DECISION_PAD: f32 = SPACE_3;
+pub const DECISION_GAP: f32 = 10.0;
+pub const DECISION_HINT_GAP: f32 = SPACE_2;
+pub const DECISION_HEAD_ICON: f32 = 14.0;
+pub const DECISION_OPTION_H: f32 = 30.0;
+pub const DECISION_OPTION_PAD_X: f32 = 10.0;
+/// The key's column to its label.
+pub const DECISION_OPTION_GAP: f32 = 10.0;
+/// Option rows sit flush; a description adds a line under the label.
 pub const DECISION_ROW_GAP: f32 = 0.0;
 /// A question's text to its rows, and one question to the next.
 pub const DECISION_QUESTION_GAP: f32 = HALF_ROW;
 pub const DECISION_QUESTIONS_GAP: f32 = ROW;
-/// The command band (C5): one cell inside, a quarter row above and below,
-/// mono `TEXT_STRONG`, a shell command after a `TEXT_FAINT` `$ ` that copy
-/// leaves out. It scrolls past 160px, and when the Pane is short it is the
-/// one section that shrinks, never below one line (`DECISION_WELL_MIN_H`).
-pub const DECISION_WELL_PAD_X: f32 = CH;
-pub const DECISION_WELL_PAD_Y: f32 = ROW / 4.0;
+/// The command well: 10 in, 6 above and below. It scrolls past 160px, and
+/// when the Pane is short it is the one section that shrinks, never below
+/// one line (`DECISION_WELL_MIN_H`).
+pub const DECISION_WELL_PAD_X: f32 = 10.0;
+pub const DECISION_WELL_PAD_Y: f32 = SPACE_1_5;
 pub const DECISION_WELL_MIN_H: f32 = LH_UI + 2.0 * DECISION_WELL_PAD_Y;
 pub const DECISION_INPUT_MAX_H: f32 = 160.0;
 /// A question body's scroll cap inside the card (head and footer stay
@@ -2345,7 +2386,7 @@ pub const DECISION_BODY_MAX_H: f32 = 320.0;
 /// Below a 360px Pane the body caps at two described option rows and
 /// scrolls, so the head and the answer row always stay in reach.
 pub const DECISION_SHORT_PANE_H: f32 = 360.0;
-pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (LH_UI + LH_UI) + DECISION_ROW_GAP;
+pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (DECISION_OPTION_H + LH_UI) + DECISION_ROW_GAP;
 /// The scroll gutter a body keeps free for its thumb.
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
 /// A question's own answer (rule 2.8.6) is not a second field: it is one

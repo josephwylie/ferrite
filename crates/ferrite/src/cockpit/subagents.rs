@@ -227,7 +227,7 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
 /// on the plane, inset on the transcript's axes, so the rows it docks over
 /// do not show through. For a question this frame is the island
 /// `QuestionFit` measures.
-fn request_frame(card: impl IntoElement, overlay: bool) -> Div {
+fn request_frame(card: impl IntoElement, overlay: bool, solo: bool) -> Div {
     native_keys(
         div()
             .w_full()
@@ -239,9 +239,9 @@ fn request_frame(card: impl IntoElement, overlay: bool) -> Div {
             .when(overlay, |frame| {
                 frame
                     .bg(theme::paint::PLANE)
-                    // The transcript column's inset (Solo's; a Group
-                    // Pane's overlay is the Decision phase's to fit).
-                    .px(px(theme::TX_INSET_SOLO))
+                    // The transcript column's inset, Solo's or a Group
+                    // Pane's.
+                    .px(px(theme::tx_inset(solo)))
                     .py(px(theme::DECISION_PAD_Y))
             })
             .child(card),
@@ -677,7 +677,10 @@ impl CockpitView {
         let thread = pane.thread()?;
         let activity = self.cockpit.thread(thread)?.activity();
         let children = activity.children();
-        if children.is_empty() && self.grid_board() {
+        // On a board the strip shows only on the focused Pane, and only
+        // when it has Subagents, live or done (SPEC §5.9); otherwise the
+        // head stands alone.
+        if self.grid_board() && (children.is_empty() || index != self.focused()) {
             return None;
         }
         let measure = |text: &str| {
@@ -1415,6 +1418,7 @@ impl CockpitView {
             request_error: pane.request_error.clone(),
             short,
             overlay,
+            solo: !self.grid_board(),
             requests,
         })
     }
@@ -1772,6 +1776,9 @@ pub(super) struct Cards {
     /// Drawn in the requests overlay, on the plane, rather than in the
     /// transcript.
     pub(super) overlay: bool,
+    /// The Pane is Solo's: the transcript column's inset, and the hint line
+    /// under the box.
+    pub(super) solo: bool,
     /// The requests shown, each with whether its agent works on meanwhile.
     pub(super) requests: Vec<(PendingDecision, bool)>,
 }
@@ -1798,6 +1805,7 @@ impl Cards {
             (diff.added, diff.removed).hash(&mut hasher);
         }
         self.request_error.hash(&mut hasher);
+        self.solo.hash(&mut hasher);
         let cursors = self.forms.1.borrow();
         let forms = self.forms.0.borrow();
         for (request, working) in &self.requests {
@@ -2085,11 +2093,19 @@ impl Cards {
         if let Some(note) = self.forms.note(&handle) {
             children.push(self.note_field(&handle, note));
         }
-        children.push(
-            decision::section(decision::hint_line(&decision::APPROVAL_HINTS[..]))
-                .into_any_element(),
-        );
-        request_frame(decision::card(serial, children), self.overlay).into_any_element()
+        // The keys are said under the box in Solo, where they always act.
+        // A Group Pane says none: its keys act only while it holds the
+        // keyboard, and a line that came and went with focus would move
+        // the bottom-aligned box under the pointer pressing it.
+        let hint = self
+            .solo
+            .then(|| decision::hint_line(&decision::APPROVAL_HINTS[..]));
+        request_frame(
+            decision::with_hint(decision::card(serial, children), hint),
+            self.overlay,
+            self.solo,
+        )
+        .into_any_element()
     }
 
     /// The amend note (⇥, D-6): the one-line field under the options. ⏎
@@ -2409,7 +2425,12 @@ impl Cards {
             ))
             .into_any_element(),
         );
-        request_frame(decision::card(handle.serial, children), self.overlay).into_any_element()
+        request_frame(
+            decision::card(handle.serial, children),
+            self.overlay,
+            self.solo,
+        )
+        .into_any_element()
     }
 
     /// A request finished outside Ferrite (`External`), or one it cannot
@@ -2481,7 +2502,12 @@ impl Cards {
             decision::section(decision::error_line("could not send", error)).into_any_element()
         }));
         children.push(decision::section(decision::footer::<&str>(&[], actions)).into_any_element());
-        request_frame(decision::card(handle.serial, children), self.overlay).into_any_element()
+        request_frame(
+            decision::card(handle.serial, children),
+            self.overlay,
+            self.solo,
+        )
+        .into_any_element()
     }
 
     /// A question (D-8): the form, in the Decision's row grammar — the `?`
@@ -2640,16 +2666,16 @@ impl Cards {
                         .min_w_0()
                         .flex()
                         .items_center()
-                        .child(div().flex_shrink_0().w(px(theme::GLYPH_GUTTER)))
+                        .gap(px(theme::DECISION_OPTION_GAP))
+                        .px(px(theme::DECISION_OPTION_PAD_X))
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .w(px(3.0 * theme::CH))
+                                .w(px(theme::FS_META * theme::CODE_ADVANCE))
+                                .font_family(theme::FONT_CODE)
+                                .text_size(px(theme::FS_META))
                                 .text_color(rgb(theme::TEXT_DIM))
-                                .children(
-                                    digit(question.options.len())
-                                        .map(|key| SharedString::from(decision::key_label(&key))),
-                                ),
+                                .children(digit(question.options.len())),
                         )
                         .child(
                             div()
@@ -2783,7 +2809,7 @@ impl Cards {
         // The frame is the island QuestionFit measures: it carries the dock
         // gap as well as the card, so `required` counts every pixel the
         // overlay must hold.
-        request_frame(decision::card(handle.serial, children), overlay)
+        request_frame(decision::card(handle.serial, children), overlay, self.solo)
             .when(overlay, |frame| {
                 frame.on_prepaint(measure(QuestionMeasure::Island))
             })

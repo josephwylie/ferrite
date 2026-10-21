@@ -327,6 +327,10 @@ pub(crate) struct TranscriptView {
     /// of a transcript shorter than that (a board Pane with its banner
     /// scrolled away, R2): see `Runway`.
     runway: Rc<Cell<Runway>>,
+    /// The room over the first row while the rows are shorter than the
+    /// viewport: it sets them on the viewport's foot (SPEC §5.4's bottom
+    /// alignment), and is zero once they fill it.
+    lift: Rc<Cell<f32>>,
     /// The agents' visuals in these rows: their live pages (ADR 0013).
     visuals: crate::visual::Shelf,
     /// The list's width as of the last layout (rows can't ask the list
@@ -454,6 +458,7 @@ impl TranscriptView {
             hover_card: None,
             glide: None,
             runway: Rc::default(),
+            lift: Rc::default(),
             visuals,
             list_w: Rc::default(),
             texts: Vec::new(),
@@ -1621,7 +1626,7 @@ impl TranscriptView {
             tops.push(at);
             at += heights.get(row.id()).copied().unwrap_or(fallback);
         }
-        (tops, at + theme::BODY_PAD_B)
+        (tops, at + theme::body_pad_b(self.input.solo))
     }
 
     /// Where the viewport's top is, in the estimated tops' space.
@@ -1926,7 +1931,10 @@ impl Render for TranscriptView {
         )
         // The bottom padding is the list's own: it counts in the scroll
         // extent and the tail follow. A band jump's room rides it.
-        .pb(px(theme::BODY_PAD_B + self.runway.get().room))
+        .pb(px(
+            theme::body_pad_b(self.input.solo) + self.runway.get().room
+        ))
+        .pt(px(self.lift.get()))
         .size_full()
         .min_h_0();
         let scroll = self.scroll.clone();
@@ -1938,12 +1946,14 @@ impl Render for TranscriptView {
         let pinned_asked = self.pinned_asked.clone();
         let pinned_h = self.pinned_h.clone();
         let runway = self.runway.clone();
+        let lift = self.lift.clone();
         let shelf = self.visuals.clone();
         let list_w = self.list_w.clone();
         let reading = self.input.reading_size;
         let inset = theme::tx_inset(solo);
         let line = grid.line;
         let band_pad = theme::prompt_band_pad_y(solo);
+        let pad_b = theme::body_pad_b(solo);
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
@@ -1965,9 +1975,8 @@ impl Render for TranscriptView {
                     if let Some(into) = now.jump {
                         let measured = below(now.index);
                         let view_h = f32::from(state.viewport_bounds().size.height);
-                        let room = measured.map_or(0.0, |below| {
-                            (into + view_h - below - theme::BODY_PAD_B).max(0.0)
-                        });
+                        let room =
+                            measured.map_or(0.0, |below| (into + view_h - below - pad_b).max(0.0));
                         let settled = (room - now.room).abs() < 0.5;
                         now = Runway {
                             jump: (!settled).then_some(into),
@@ -1997,6 +2006,33 @@ impl Render for TranscriptView {
                             // The rows under it outgrew the viewport.
                             None => runway.set(Runway::default()),
                         }
+                    }
+                }
+                // Bottom alignment: while every row fits, the space left
+                // under the last one moves over the first; once they
+                // overflow, none. The list reports a row's bounds without
+                // its top padding, so they read as if the lift were zero.
+                {
+                    let state = scroll.list_state();
+                    let viewport = state.viewport_bounds();
+                    let first = state.bounds_for_item(0);
+                    let last = gaps
+                        .len()
+                        .checked_sub(1)
+                        .and_then(|at| state.bounds_for_item(at));
+                    let now = lift.get();
+                    let next = match (first, last) {
+                        (Some(first), Some(last)) if first.top() >= viewport.top() - px(0.5) => {
+                            (f32::from(viewport.bottom() - last.bottom()) - pad_b).max(0.0)
+                        }
+                        _ => 0.0,
+                    };
+                    if (next - now).abs() >= 0.5 {
+                        lift.set(next);
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.notify());
+                        });
                     }
                 }
                 // A pinned band hides the list's top down to its foot, and

@@ -28,9 +28,9 @@ fn board_of<'a>(
 }
 
 /// F-1: the Pane's edge is an overlay, so its content starts at the Pane's
-/// own edges — the head at the Pane's left and top, its title 23.4px (a
-/// cell of padding and the 2-cell dot column) in — and every Pane root is
-/// the `PANE_GROUP` hover group.
+/// own edges — the head at the Pane's left and top, its mark 14px in and
+/// its title a gap after it (SPEC §5.9) — and every Pane root is the
+/// `PANE_GROUP` hover group.
 #[gpui::test]
 fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
     let (view, _fake, cx, _group) = board_of("frame-edge-overlay", 4, cx);
@@ -45,11 +45,17 @@ fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
             (head.left() - px(rect.x)).abs() < px(1.) && (head.top() - px(rect.y)).abs() < px(1.),
             "the head starts at the Pane's corner: {head:?} / {rect:?}"
         );
-        assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
+        // The 38px row and its hairline under it.
+        assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
+        let mark = bounds(cx, format!("pane-head-dot-{key}"));
+        assert!(
+            (mark.left() - px(rect.x + crate::theme::PANE_HEAD_PAD_L)).abs() < px(1.),
+            "the mark 14px in: {mark:?} / {rect:?}"
+        );
         let title = bounds(cx, format!("pane-head-title-{key}"));
         assert!(
-            (title.left() - px(rect.x + 3.0 * crate::theme::CH)).abs() < px(1.),
-            "the title 23.4px in: {title:?} / {rect:?}"
+            (title.left() - (mark.right() + px(crate::theme::PANE_HEAD_GAP))).abs() < px(1.),
+            "the title a gap after the mark: {title:?} / {mark:?}"
         );
         let root = bounds(cx, format!("pane-root-{key}"));
         assert!((root.left() - px(rect.x)).abs() < px(1.));
@@ -708,4 +714,180 @@ fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
     let line = bounds(cx, "board-seam-0".to_string());
     assert_eq!(line.size.width, px(SEAM_LINE_W));
     assert!((line.center().x - px(gutter)).abs() <= px(0.5), "{line:?}");
+}
+
+/// SPEC §5.9: a Group Pane's head says `done` only while the finish is
+/// unseen — on screen while the window is away — and the seen rule clears
+/// it the moment the window comes back.
+#[gpui::test]
+fn the_seen_rule_clears_a_heads_done(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board_of("frame-head-done", 2, cx);
+    let key = view.read_with(cx, |view, _| view.panes[1].thread().unwrap().get());
+    let word = move |cx: &mut gpui::VisualTestContext| {
+        debug_bounds(cx, format!("pane-head-word-{key}")).is_some()
+    };
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.deactivate_window();
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(word(cx), "on the board, but the window is away: `done`");
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    tick(cx);
+    assert!(!word(cx), "seen on return: an idle head says nothing");
+}
+
+/// SPEC §5.9: the quick answers work on a Group Pane's Decision box — the
+/// digit on the Pane that holds the keyboard, a press on any Pane's — and
+/// a Group Pane's box says no keys under it (Solo's does), so focus moves
+/// nothing in it.
+#[gpui::test]
+fn a_group_panes_decision_box_answers_by_digit_and_press(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board_of("frame-box-answers", 2, cx);
+    fake.streams.borrow()[1]
+        .send(decision("box-digit"))
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("question-island").is_some(),
+        "the box shows"
+    );
+    assert!(
+        cx.debug_bounds("decision-hints").is_none(),
+        "a Group Pane's box says no keys"
+    );
+    view.update(cx, |view, cx| {
+        view.focus_pane(1);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("decision-hints").is_none());
+    cx.simulate_keystrokes("1");
+    tick(cx);
+    assert!(
+        matches!(
+            fake.answered.borrow().last(),
+            Some((id, DecisionAnswer::Allow { .. })) if id == "box-digit"
+        ),
+        "{:?}",
+        fake.answered.borrow()
+    );
+
+    // A press answers a box on a Pane that does not hold the keyboard.
+    fake.streams.borrow()[1]
+        .send(decision("box-press"))
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    let (thread, serial) = view.read_with(cx, |view, _| {
+        let request = view.shown_request(1).unwrap();
+        (view.panes[1].thread().unwrap(), request.handle.serial)
+    });
+    let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
+    cx.simulate_click(deny.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        matches!(
+            fake.answered.borrow().last(),
+            Some((id, DecisionAnswer::Deny { .. })) if id == "box-press"
+        ),
+        "{:?}",
+        fake.answered.borrow()
+    );
+}
+
+/// SPEC §5.9: a turn that failed leaves the failure strip under it, and
+/// its `Retry` sends the failed turn's prompt again.
+#[gpui::test]
+fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board_of("frame-retry", 2, cx);
+    let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.cockpit.send(thread, "build the range sheet".into());
+        cx.notify();
+    });
+    tick(cx);
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Error("boom".into()),
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let sent = |fake: &Fake| {
+        fake.sent
+            .borrow()
+            .iter()
+            .filter(|prompt| prompt.contains("build the range sheet"))
+            .count()
+    };
+    assert_eq!(sent(&fake), 1);
+    let key = thread.get();
+    assert!(
+        debug_bounds(cx, format!("failure-strip-{key}")).is_some(),
+        "the strip stands under the failed turn"
+    );
+    let retry = bounds(cx, format!("failure-retry-{key}"));
+    cx.simulate_click(retry.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(sent(&fake), 2, "Retry sent the prompt again");
+}
+
+/// SPEC §5.4: a transcript shorter than its viewport sits at the bottom,
+/// on the Composer, with the empty space above it — in a Group Pane and
+/// in Solo alike.
+#[gpui::test]
+fn a_short_transcript_sits_at_the_bottom(cx: &mut TestAppContext) {
+    for grouped in [true, false] {
+        let (mut core, fake) = cockpit(
+            if grouped {
+                "frame-bottom-group"
+            } else {
+                "frame-bottom-solo"
+            },
+            2,
+        );
+        let thread = core.threads()[0];
+        core.send(thread, "Explain the board".into());
+        if grouped {
+            let group = group_all(&mut core);
+            core.enter_group(group).unwrap();
+        }
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "One regression in the board.".into(),
+            })
+            .unwrap();
+        tick(cx);
+        let key = thread.get();
+        let body = bounds(cx, format!("pane-body-{key}"));
+        let prompt = cx.debug_bounds("transcript-prompt").expect("the prompt");
+        let answer = cx.debug_bounds("transcript-answer").expect("the answer");
+        let pad = px(crate::theme::body_pad_b(!grouped));
+        assert!(
+            (body.bottom() - pad - answer.bottom()).abs() <= px(2.),
+            "grouped {grouped}: the last row sits on the body's foot: {answer:?} / {body:?}"
+        );
+        assert!(
+            prompt.top() - body.top() > px(100.),
+            "grouped {grouped}: the empty space is above the rows: {prompt:?} / {body:?}"
+        );
+    }
 }

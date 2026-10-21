@@ -702,9 +702,12 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
         .expect("the own-answer field");
     let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
     assert_eq!(field.size.height, px(crate::theme::QUESTION_OTHER_H));
-    // An option reads `❯ 1. label`: the `❯` gutter, then the ordinal's
-    // three cells, then the label.
-    let labels = choice.left() + px(crate::theme::GLYPH_GUTTER + 3.0 * crate::theme::CH);
+    // An option reads `1  label` (SPEC §5.9): its padding, the key's
+    // one mono cell, the gap, then the label.
+    let labels = choice.left()
+        + px(crate::theme::DECISION_OPTION_PAD_X
+            + crate::theme::FS_META * crate::theme::CODE_ADVANCE
+            + crate::theme::DECISION_OPTION_GAP);
     assert!(
         (field.left() - labels).abs() <= px(0.5),
         "the line's text starts on the labels' column: {:?} / {labels:?}",
@@ -1303,11 +1306,10 @@ fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
     );
 }
 
-/// The Group head sits on the grid at every width (theme WP-C): its dot
-/// column a cell in from the Pane's inner edge (`HEAD_PAD_X`), two cells
-/// wide (`HEAD_DOT_W`), its title right after it — so every head on a
-/// board shares one vertical of dots. Solo has no head at all: the
-/// nav's selected row names the Thread.
+/// The Group head sits on one line at every width (SPEC §5.9): its mark
+/// `PANE_HEAD_PAD_L` in from the Pane's edge, its title `PANE_HEAD_GAP`
+/// after the mark — so every head on a board shares one vertical of
+/// marks. Solo has no head at all: the view head names the Thread.
 #[gpui::test]
 fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("head-on-column", 2);
@@ -1336,19 +1338,19 @@ fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
             // The edge is an overlay (F-1): the head starts at the Pane's
             // own left edge.
             let inner = px(rect.x);
-            let c1 = inner + px(crate::theme::HEAD_PAD_X + crate::theme::HEAD_DOT_W);
+            let c1 = dot.right() + px(crate::theme::PANE_HEAD_GAP);
             // gpui snaps every edge to a device pixel: up to a pixel off
             // the unsnapped split.
             assert!(
                 (title.left() - c1).abs() < px(1.),
-                "{width}: the title {title:?} starts after the dot column {c1:?}"
+                "{width}: the title {title:?} starts a gap after the mark {c1:?}"
             );
-            let axis = inner + px(crate::theme::HEAD_PAD_X);
+            let axis = inner + px(crate::theme::PANE_HEAD_PAD_L);
             assert!(
                 (dot.left() - axis).abs() < px(1.),
-                "{width}: the dot column {dot:?} sits a cell in {axis:?}"
+                "{width}: the mark {dot:?} sits 14 in {axis:?}"
             );
-            assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
+            assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
         }
     }
 }

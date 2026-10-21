@@ -357,7 +357,7 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     let key = thread.get();
     let head = bounds(cx, format!("pane-head-{key}"));
     let body = bounds(cx, format!("pane-body-{key}"));
-    assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H));
+    assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
     assert!(body.top() >= head.bottom(), "{body:?} under {head:?}");
     for row in ["transcript-prompt", "transcript-answer"] {
         let row = cx.debug_bounds(row).expect("the row paints");

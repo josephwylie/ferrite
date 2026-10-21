@@ -213,7 +213,11 @@ impl CockpitView {
             .text_size(px(theme::FS_TITLE))
             .font_weight(theme::W_STRONG)
             .text_color(rgb(theme::TEXT_STRONG))
-            .child(SharedString::from(found.title.clone()))
+            // Sentence case, as the bar's tab names it (`WORK` reads
+            // `Work`); the nav keeps the title as typed.
+            .child(SharedString::from(crate::titlebar::tab_name(
+                &found.display_title(),
+            )))
             .into_any_element();
         let new = control(
             components::secondary_button(

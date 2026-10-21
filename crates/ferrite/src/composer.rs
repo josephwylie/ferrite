@@ -8,9 +8,10 @@
 //!
 //! The caret is a bar (theme WP-D): `CARET_W` wide at the cursor's shaped
 //! x, one row high, in `TEXT_STRONG`, blinking softly while this line holds
-//! the keyboard, still in `CARET_HOLLOW` when it does not. A line the
-//! cockpit keeps lit (`set_caret_lit`: Solo's, and the focused board
-//! Pane's) draws its bar whoever holds the keyboard.
+//! the keyboard, and not drawn at all when it does not. A line the cockpit
+//! keeps lit (`set_caret_lit`: Solo's, and the focused board Pane's) draws
+//! its bar whoever holds the keyboard; an unfocused board Pane's box shows
+//! no caret (SPEC §5.9).
 //!
 //! An empty prompt line adds `ComposerEmpty` to its key context: where the
 //! Decision keys, `?` and ⌘⌫'s park live (`keymap`). A one-line field
@@ -78,12 +79,12 @@ actions!(
 );
 
 /// How the caret was last drawn: the soft bar at an opacity (this line
-/// is lit), or the still dim bar (it is not). `None` while a selection
-/// stands in its place.
+/// is lit), or not at all (it is not). `None` while a selection stands in
+/// its place.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Caret {
     Bar(f32),
-    Hollow,
+    Hidden,
 }
 
 /// The block caret's opacity `since` its blink last restarted (a focus or
@@ -1284,7 +1285,7 @@ impl Element for LineElement {
         // The block blinks only while this line holds focus *and* the window
         // is active. Prepaint is the seam that sees both every drawn frame,
         // so a click that lands anywhere else — or on another app — turns
-        // the caret hollow on that same frame: nothing typed would land here
+        // the caret off on that same frame: nothing typed would land here
         // until it comes back.
         let focused =
             self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
@@ -1358,7 +1359,7 @@ impl Element for LineElement {
             let at = layout.position(cursor);
             // The caret: a bar `CARET_W` wide and one row high. A lit line
             // paints it in `CARET` at the blink's opacity; any other paints
-            // it still in `CARET_HOLLOW`.
+            // none.
             let block = Bounds::new(
                 point(bounds.left() + at.x, row_top(caret_row)),
                 size(cell, line_height),
@@ -1372,11 +1373,7 @@ impl Element for LineElement {
                     )),
                     Some(Caret::Bar(alpha)),
                 ),
-                None => (
-                    Vec::new(),
-                    Some(fill(block, rgb(crate::theme::CARET_HOLLOW))),
-                    Some(Caret::Hollow),
-                ),
+                None => (Vec::new(), None, Some(Caret::Hidden)),
             }
         } else {
             // One quad per row the selection crosses, from where it enters
@@ -2013,12 +2010,12 @@ mod tests {
 
     /// The box is one row tall while the text fits and grows a row per
     /// wrapped line, to `MAX_ROWS`; past that it scrolls to the caret.
-    /// The caret is a block in the line that holds the keyboard and a still
-    /// hollow box anywhere else; a selection stands in its place. (The motion
+    /// The caret is a bar in the line that holds the keyboard and nothing
+    /// anywhere else; a selection stands in its place. (The motion
     /// kit rests in unit tests, so the block reads solid: its blink is
     /// `the_block_blinks_softly_from_a_solid_start`.)
     #[gpui::test]
-    fn the_caret_is_a_block_in_the_focused_line_and_hollow_elsewhere(cx: &mut TestAppContext) {
+    fn the_caret_is_a_bar_in_the_focused_line_and_hidden_elsewhere(cx: &mut TestAppContext) {
         let (host, cx) = host(cx);
         let composer = composer(&host, cx);
         cx.run_until_parked();
@@ -2026,7 +2023,7 @@ mod tests {
 
         // A background window holds no keyboard: nothing typed would land
         // here until it comes forward. Test windows open inactive.
-        assert_eq!(caret(cx), Some(Caret::Hollow));
+        assert_eq!(caret(cx), Some(Caret::Hidden));
 
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
@@ -2053,14 +2050,14 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(caret(cx), None);
 
-        // Losing focus leaves a still hollow box.
+        // Losing focus hides it.
         composer.update(cx, |composer, cx| {
             composer.line.move_end();
             cx.notify();
         });
         cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
         cx.run_until_parked();
-        assert_eq!(caret(cx), Some(Caret::Hollow));
+        assert_eq!(caret(cx), Some(Caret::Hidden));
     }
 
     /// The block's alpha on screen at `at`: the last draw at or before it.

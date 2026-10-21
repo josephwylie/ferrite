@@ -340,6 +340,11 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
             core.focus_thread(memory);
         }
         Look::Group => {
+            // The operator has stepped away: the window is in the
+            // background, so the supplier list's finish, on screen in
+            // WORK, stays unseen and its head says `done` (ADR 0015's
+            // seen rule reads only what a focused window shows).
+            core.set_window_active(false);
             core.focus_thread(supplier);
             core.enter_group(work).expect("enter WORK");
         }

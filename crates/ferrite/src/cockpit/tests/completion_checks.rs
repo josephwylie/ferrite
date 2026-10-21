@@ -720,7 +720,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             gap >= px(0.) && gap <= px(16.),
             "the command-to-Allow gap must stay near the well's design gap: {gap:?}"
         );
-        let row_h = crate::theme::MENU_ROW_H;
+        let row_h = crate::theme::DECISION_OPTION_H;
         assert!(
             allow.size.height <= px(row_h + 1.),
             "an approval row is one line: {allow:?}"
@@ -728,7 +728,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         // Three options, flush: option 2 is the one row between them.
         let step = deny.top() - allow.bottom();
         assert!(
-            step >= px(crate::theme::LH_UI - 1.) && step <= px(crate::theme::LH_UI + 1.),
+            step >= px(row_h - 1.) && step <= px(row_h + 1.),
             "Deny sits one option under Allow: {step:?}"
         );
         if let Some((previous_width, previous_island)) = previous {

@@ -311,6 +311,11 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
         let pane = &view.read(cx).panes[0];
         assert!(pane.composer.focus_handle(cx).is_focused(window));
     });
+    // The transcript sits on its foot (SPEC §5.4): opening the group grew
+    // it upward, so the second click finds the row where it now is.
+    let at = view.read_with(cx, |view, _| {
+        view.panes[0].tool_bounds(group.clone()).unwrap().center()
+    });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {

@@ -432,9 +432,10 @@ impl NavTail {
         }
     }
 
-    /// The word a shown Group's member row says at its right (§5.1.6): the
-    /// state words and a working Thread's elapsed time, nothing for an age
-    /// or for background work, with the ink the state takes.
+    /// The word a shown Group's member row says at its right (§5.1.6), and
+    /// a Group Pane's head after its title (§5.9): the state words and a
+    /// working Thread's elapsed time, nothing for an age or for background
+    /// work, with the ink the state takes.
     pub fn member_word(&self) -> Option<(SharedString, u32)> {
         match self {
             NavTail::Waiting(_) => Some((words::NEEDS_YOU.into(), ATTENTION)),
@@ -720,12 +721,33 @@ fn line_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool)
 /// finish not yet seen `check-circle`, idle `terminal`, parked `terminal`
 /// at half ink. `small` is a member row's: 6px dots, 13px icons.
 pub fn mark(status: RowStatus, small: bool) -> AnyElement {
-    let dot = if small { NAV_DOT_SMALL } else { NAV_DOT };
-    let glyph = if small {
-        NAV_MARK_ICON_SMALL
+    if small {
+        mark_sized(status, NAV_DOT_SMALL, NAV_MARK_ICON_SMALL)
     } else {
-        NAV_MARK_ICON
-    };
+        mark_sized(status, NAV_DOT, NAV_MARK_ICON)
+    }
+}
+
+/// A Group Pane head's mark (SPEC §5.9): the row's face with its 7px dots
+/// and 13px icons, laid out at the width the mockup's box takes — a dot
+/// keeps a pixel each side and its halo overflows the box, as a CSS
+/// `box-shadow` does, so the title starts where it is drawn.
+pub fn head_mark(status: RowStatus) -> AnyElement {
+    let face = mark_sized(status, NAV_DOT, crate::theme::PANE_HEAD_ICON);
+    match status {
+        RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background => div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .w(px(NAV_DOT + 2.0))
+            .child(face)
+            .into_any_element(),
+        _ => div().flex().flex_shrink_0().child(face).into_any_element(),
+    }
+}
+
+fn mark_sized(status: RowStatus, dot: f32, glyph: f32) -> AnyElement {
     let solid = |ink: u32| div().size(px(dot)).rounded_full().bg(rgb(ink));
     match status {
         RowStatus::Working | RowStatus::Failing => div()

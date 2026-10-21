@@ -6381,6 +6381,20 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A Group Pane head's fill button (SPEC §5.9): its press fills the
+    /// board with that Pane — focusing it first, so the one act
+    /// (`ToggleFullscreen`, ⌘⇧⏎) fills the board with the Pane pressed.
+    fn fill_button(&self, index: usize, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+        pane::fill_button(thread.get())
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                view.focus_pane(index);
+                view.cockpit.toggle_fullscreen();
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
     /// ⌘F: find in the focused Pane's transcript — or in its reader, when
     /// the reader took the last press or holds the keyboard (`crate::find`).
     /// A wall tile draws no transcript to search.
@@ -8402,8 +8416,13 @@ impl CockpitView {
     /// only, SPEC §5.9) and on a Subagent's tab, whose footer stands in.
     fn composer_toolbar(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pane = &self.panes[index];
-        if self.grid_board() || !pane.is_main() {
+        if !pane.is_main() {
             return None;
+        }
+        // A board Pane's compact Composer (SPEC §5.9) has no toolbar: its
+        // one control is the send circle, on the focused Pane only.
+        if self.grid_board() {
+            return (index == self.focused()).then(|| self.send_button(index, true, cx));
         }
         let attach = pane::attach_button(cx)
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -8422,20 +8441,22 @@ impl CockpitView {
                 self.model_chips(index, cx)
             }
         };
-        trail.push(self.send_button(index, cx));
+        trail.push(self.send_button(index, false, cx));
         Some(pane::composer_toolbar(lead, trail).into_any_element())
     }
 
     /// The send circle: Enter's act — or, while Main is busy (a turn runs
-    /// or its Session starts) and the line is empty, `stop`, Esc's.
-    fn send_button(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// or its Session starts) and the line is empty, `stop`, Esc's. The
+    /// `compact` Composer's always sends (queued behind a running turn):
+    /// its Pane says `Queue a follow-up`.
+    fn send_button(&self, index: usize, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let pane = &self.panes[index];
         let running = pane
             .thread()
             .and_then(|thread| self.cockpit.thread(thread))
             .is_some_and(|open| open.busy());
-        let stop = running && pane.composer.read(cx).is_empty();
-        pane::send_button(stop, cx)
+        let stop = !compact && running && pane.composer.read(cx).is_empty();
+        pane::send_button(stop, compact, cx)
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 view.focus_pane(index);
@@ -10833,9 +10854,6 @@ impl CockpitView {
                     composer_files: pane.composer.read(cx).attachment_count(),
                     focused,
                     error: draft.error.as_ref(),
-                    editing: focused
-                        && window.is_window_active()
-                        && pane.composer.read(cx).focus_handle(cx).is_focused(window),
                     reduce_motion: cx.reduce_motion(),
                     drop_target: self.drop_target(index, cx),
                     show_focus: self.grid_board(),
@@ -10889,11 +10907,6 @@ impl CockpitView {
             thread: open,
             composer_empty: pane.composer.read(cx).is_empty(),
             composer_files: pane.composer.read(cx).attachment_count(),
-            composer_queue_height: pane::composer_queue_height(
-                rect.map_or(self.cell(window).height, |rect| rect.h),
-                self.grid_board(),
-                open.map_or(0, |thread| thread.queued_all().len()),
-            ),
             focused,
             unread: self.cockpit.notifications().attention(thread),
             wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
@@ -10992,6 +11005,9 @@ impl CockpitView {
                     }))
                     .into_any_element()
             }),
+            fill: self
+                .grid_board()
+                .then(|| self.fill_button(index, thread, cx)),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -16353,7 +16369,8 @@ mod tests {
         assert!(choice.right() <= island.right());
         assert!(
             first_row_visible && island.top() - transcript_bounds.top() > px(100.),
-            "the pending question must leave the transcript mounted and readable above it"
+            "the pending question must leave the transcript mounted and readable above it: \
+             {first_row_visible} {island:?} / {transcript_bounds:?}"
         );
         assert!(
             island.bottom() <= composer.top(),
