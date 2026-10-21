@@ -1896,12 +1896,38 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             server: server.clone(),
             url: url.clone(),
         },
-        // Queue acknowledgements are the Thread's state, not its Activity's;
-        // the highlighter is each side's own; `Answered` is Activity's.
-        Input::Event(SessionEvent::Queue(_))
+        // Queue acknowledgements and scheduled work are the Thread's state,
+        // not its Activity's; the highlighter is each side's own; `Answered`
+        // is Activity's.
+        Input::Event(SessionEvent::Queue(_) | SessionEvent::ScheduledWork { .. })
         | Input::Highlighted { .. }
         | Input::Answered { .. } => return Outgoing::Local,
-        Input::Event(_)
+        // Named, not caught: an event added to `SessionEvent` must be
+        // placed here, kept by the log, live or local, before it builds.
+        Input::Event(
+            SessionEvent::Activity(_)
+            | SessionEvent::Init { .. }
+            | SessionEvent::ModelChanged { .. }
+            | SessionEvent::ConversationReset { .. }
+            | SessionEvent::TextDelta { .. }
+            | SessionEvent::ThinkingDelta { .. }
+            | SessionEvent::ToolStarted { .. }
+            | SessionEvent::ToolCompleted { .. }
+            | SessionEvent::ReasoningSummaryPart { .. }
+            | SessionEvent::ReasoningSummaryDelta { .. }
+            | SessionEvent::Progress { .. }
+            | SessionEvent::ToolOutputDelta { .. }
+            | SessionEvent::FileChanges { .. }
+            | SessionEvent::TurnDiff { .. }
+            | SessionEvent::ContentBoundary { .. }
+            | SessionEvent::TurnEnded { .. }
+            | SessionEvent::RunState { .. }
+            | SessionEvent::TokenUsage { .. }
+            | SessionEvent::ContextUsage { .. }
+            | SessionEvent::UsageDetails { .. }
+            | SessionEvent::ContextDetails { .. }
+            | SessionEvent::Closed { .. },
+        )
         | Input::Prompt(_)
         | Input::PromptObservation { .. }
         | Input::CompletionObservation { .. } => unreachable!("the log keeps {input:?}"),
