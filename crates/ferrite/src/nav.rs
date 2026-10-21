@@ -18,7 +18,7 @@
 //! content: its one edge is the seam column right of it (`seam`). Every
 //! item is one 20px line of Geist Mono laid out in character cells (the
 //! WP-G section of `theme.rs` draws the grid): a 2ch cursor cell (`❯` in
-//! the accent on the selected row), a 2ch mark cell (the status dot, a
+//! `TEXT_STRONG` on the selected row), a 2ch mark cell (the status dot, a
 //! working Thread's braille spinner, a faint disclosure triangle), the
 //! title, its checkout's facts (`RowDetails`) and one dim word at the
 //! right. A Group's members hang under it on faint tree glyphs (`├ ` /
@@ -526,10 +526,10 @@ fn blank_cell() -> Div {
     div().flex_shrink_0().w(px(NAV_CELL)).h(px(NAV_LINE))
 }
 
-/// The cursor cell: `❯` in the accent on the selected row, blank otherwise.
+/// The cursor cell: `❯` in `TEXT_STRONG` on the selected row, blank otherwise.
 fn cursor_cell(selected: bool) -> Div {
     if selected {
-        cell(components::prompt_mark(ACCENT))
+        cell(components::prompt_mark(TEXT_STRONG))
     } else {
         blank_cell()
     }
@@ -1593,7 +1593,7 @@ mod tests {
             TEXT_STRONG,
             "the selection outranks the step-down"
         );
-        assert_eq!(TEXT, 0xd7d7d9, "the prototype's --fg");
+        assert_eq!(TEXT, 0xd0d0d0, "the refresh's default chrome ink");
     }
 
     /// N-13: a nav line is a terminal line — the pointer stays the arrow
@@ -2029,7 +2029,7 @@ mod tests {
         assert_eq!(ink(RowStatus::Failing), Some(rgb(BLOCKED).into()));
         assert_eq!(ink(RowStatus::Failed), Some(rgb(BLOCKED).into()));
         assert_eq!(ink(RowStatus::NeedsYou), Some(rgb(ATTENTION).into()));
-        assert_eq!(ink(RowStatus::Done), Some(rgb(FINISHED).into()));
+        assert_eq!(ink(RowStatus::Done), Some(rgb(TEXT_DIM).into()));
         assert_eq!(ink(RowStatus::Idle), Some(rgb(IDLE).into()));
         use crate::cockpit::DotShape;
         let shape = |status: RowStatus| status.face().shape;

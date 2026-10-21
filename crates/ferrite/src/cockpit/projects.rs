@@ -12,7 +12,7 @@ use crate::palette::{
 };
 use crate::projects::{self, Command};
 use crate::sidebar::{self, Sidebar};
-use crate::theme::{paint, ICON_BUTTON, ICON_BUTTON_GLYPH, TEXT, TEXT_MUTED, TRANSPARENT};
+use crate::theme::{paint, ICON_BUTTON, ICON_BUTTON_GLYPH, TEXT, TEXT_DIM, TRANSPARENT};
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::Selectable;
 use gpui::component::WindowExt as _;
@@ -252,7 +252,7 @@ impl CockpitView {
         } else {
             (
                 gpui::rgba(TRANSPARENT).into(),
-                crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into()),
+                crate::motion::hover_blend(&key, rgb(TEXT_DIM).into(), rgb(TEXT).into()),
             )
         };
         let door = crate::components::faded_button(
@@ -260,7 +260,7 @@ impl CockpitView {
             rest,
             paint::HOVER.into(),
             paint::PRESS.into(),
-            rgb(TEXT_MUTED).into(),
+            rgb(TEXT_DIM).into(),
             cx,
         )
         .debug_selector(|| "projects-board-door".into())
@@ -269,8 +269,7 @@ impl CockpitView {
         .p_0()
         .accessibility_label("Tasks")
         .child(
-            crate::icons::icon(crate::icons::BOARD, ICON_BUTTON_GLYPH, TEXT_MUTED)
-                .text_color(glyph),
+            crate::icons::icon(crate::icons::BOARD, ICON_BUTTON_GLYPH, TEXT_DIM).text_color(glyph),
         )
         .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
             cx.stop_propagation();
@@ -450,7 +449,7 @@ impl CockpitView {
                 .accessibility_label(label)
                 .child(
                     crate::components::text_ui()
-                        .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_MUTED }))
+                        .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_DIM }))
                         .font_weight(if selected {
                             W_STRONG
                         } else {
@@ -483,7 +482,7 @@ impl CockpitView {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .border_b_1()
             .border_color(rgb(LINE))
-            .child(crate::icons::icon(crate::icons::BOARD, 16., TEXT_MUTED))
+            .child(crate::icons::icon(crate::icons::BOARD, 16., TEXT_DIM))
             .child(
                 crate::components::text_ui()
                     .text_color(rgb(TEXT_STRONG))
@@ -532,7 +531,7 @@ impl CockpitView {
                     .items_start()
                     .gap(px(crate::theme::ROW))
                     .p(px(crate::theme::ROW))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(message)
                     .when(error.is_some(), |body| {
                         body.child(

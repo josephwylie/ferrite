@@ -599,7 +599,7 @@ impl Default for Bell {
 
 /// The bell's door in the bottom bar (the prototype's `.ib`, FL-17):
 /// `ICON_BUTTON` wide and the bar's full height, the bell at `ICON_BUTTON_GLYPH` in
-/// `TEXT_MUTED`, `paint::HOVER` and `TEXT` under the pointer (and while the
+/// `TEXT_DIM`, `paint::HOVER` and `TEXT` under the pointer (and while the
 /// list is down), and the badge: the unread waiting requests as a bare
 /// `BADGE_FS` digit in `ATTENTION` at its top-right corner — hidden at
 /// zero, never tinted by a failure.
@@ -614,14 +614,14 @@ pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::B
     let glyph = if open {
         rgb(TEXT).into()
     } else {
-        crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into())
+        crate::motion::hover_blend(&key, rgb(TEXT_DIM).into(), rgb(TEXT).into())
     };
     components::faded_button(
         id,
         rest,
         paint::HOVER.into(),
         paint::PRESS.into(),
-        rgb(TEXT_MUTED).into(),
+        rgb(TEXT_DIM).into(),
         cx,
     )
     .debug_selector(|| "notifications-bell".into())
@@ -630,7 +630,7 @@ pub fn door(requests: usize, open: bool, cx: &App) -> gpui::component::button::B
     .h_full()
     .p_0()
     .accessibility_label("Notifications")
-    .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
+    .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_DIM).text_color(glyph))
     .when(requests > 0, |door| door.child(badge(requests)))
 }
 
@@ -666,7 +666,7 @@ pub const BADGE_INK: u32 = ATTENTION;
 
 /// A row's or toast's mark, typed in its 2-cell column: `◆` for an
 /// approval and `?` for a question, both `ATTENTION`; `✗` `BLOCKED` for a
-/// failure; `✓` `TEXT_MUTED` for a turn that finished.
+/// failure; `✓` `TEXT_DIM` for a turn that finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Mark(&'static str, u32);
 
@@ -675,7 +675,7 @@ fn mark(state: State) -> Mark {
         State::NeedsYou(RequestKind::Permission) => Mark("\u{25c6}", ATTENTION),
         State::NeedsYou(RequestKind::Question) => Mark("?", ATTENTION),
         State::Failed => Mark("\u{2717}", BLOCKED),
-        State::Done => Mark("\u{2713}", TEXT_MUTED),
+        State::Done => Mark("\u{2713}", TEXT_DIM),
     }
 }
 
@@ -739,7 +739,7 @@ pub fn list(rows: &[Row], cursor: usize, focus: &gpui::FocusHandle, handle: Hand
             .flex_shrink_0()
             .px(px(CH))
             .mr(px(-CH))
-            .text_color(rgb(TEXT_MUTED))
+            .text_color(rgb(TEXT_DIM))
             .hover_float("notifications-mark-read")
             .press_float()
             .child("mark all read")
@@ -836,7 +836,7 @@ fn row_element(index: usize, row: &Row, cursor: bool, handle: Handle) -> Statefu
                 (
                     row.title.len()..line.len(),
                     gpui::HighlightStyle {
-                        color: Some(rgb(TEXT_MUTED).into()),
+                        color: Some(rgb(TEXT_DIM).into()),
                         ..Default::default()
                     },
                 ),
@@ -861,7 +861,7 @@ fn row_element(index: usize, row: &Row, cursor: bool, handle: Handle) -> Statefu
                 .w(px(NOTICE_AGE_W))
                 .flex()
                 .justify_end()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(row.when.clone()),
         ));
     if cursor {
@@ -874,7 +874,7 @@ fn row_element(index: usize, row: &Row, cursor: bool, handle: Handle) -> Statefu
 // ---------------------------------------------------------------- toasts
 
 /// A quick answer in a toast (the prototype's `.qa button`): the key in
-/// `TEXT_MUTED` and the word in `TEXT`, in a 1px `FLOAT_EDGE` box a cell
+/// `TEXT_DIM` and the word in `TEXT`, in a 1px `FLOAT_EDGE` box a cell
 /// of padding wide, `TOAST_BUTTON_H` tall; under the pointer the float's
 /// band (`FLOAT_BAND2`) and the word `TEXT_STRONG`, over the one blend.
 fn quick_button(
@@ -900,7 +900,7 @@ fn quick_button(
         .whitespace_nowrap()
         .hover_quick(blend)
         .press_float()
-        .child(components::cells(key).text_color(rgb(TEXT_MUTED)))
+        .child(components::cells(key).text_color(rgb(TEXT_DIM)))
         .child(components::cells(word).text_color(ink))
 }
 
@@ -924,7 +924,7 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(INLINE_CODE))
+                    .text_color(rgb(INLINE_CODE_INK))
                     .child(command.clone()),
             )
             .into_any_element(),
@@ -1003,14 +1003,14 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_color(rgb(TEXT_MUTED))
+                                .text_color(rgb(TEXT_DIM))
                                 .child(SharedString::from(format!(" \u{b7} {}", row.title))),
                         ),
                 )
                 .when(request, |head| {
                     head.children(
                         components::bound_chord("cockpit::NextDecision").map(|keys| {
-                            components::key_combo(&keys, TEXT_MUTED)
+                            components::key_combo(&keys, TEXT_DIM)
                                 .flex_shrink_0()
                                 .ml(px(FLOAT_DETAIL_GAP))
                         }),
@@ -1143,9 +1143,9 @@ mod tests {
         let done = row(State::Done, Detail::None);
         assert_eq!(
             (done.word(), word_ink(done.word())),
-            (words::DONE, TEXT_MUTED)
+            (words::DONE, TEXT_DIM)
         );
-        assert_eq!(mark(State::Done), Mark("\u{2713}", TEXT_MUTED));
+        assert_eq!(mark(State::Done), Mark("\u{2713}", TEXT_DIM));
         assert_eq!(BADGE_INK, ATTENTION);
         const { assert!(ROW_TEXT_CELLS >= 40) };
     }

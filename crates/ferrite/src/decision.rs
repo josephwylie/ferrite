@@ -7,7 +7,7 @@
 //! on the content column, with no ground and no rule of its own. Every
 //! approval offers exactly three options — `1. Allow`, `2. Allow <pattern>
 //! for this thread`, `3. Deny, and tell <Provider> what to do instead` —
-//! and the first is pre-selected: the accent `❯` in the option's gutter and
+//! and the first is pre-selected: the strong `❯` in the option's gutter and
 //! a `paint::SELECTION` bar across the content column.
 //!
 //! Presentation and pure rules only — no cockpit state. The cockpit's
@@ -190,7 +190,7 @@ pub fn split_recommended(label: &str) -> (&str, bool) {
     }
 }
 
-/// The approval hint, every word `TEXT_MUTED`.
+/// The approval hint, every word `TEXT_DIM`.
 pub const APPROVAL_HINTS: [&str; 4] = [
     "\u{2191}\u{2193} select",
     "1\u{2013}3 pick",
@@ -738,7 +738,7 @@ enum Mark {
 
 /// The approval head (`◆ Bash needs approval · codex · read-only
 /// sandbox`): the typed `◆` at the gutter's start, the lead in
-/// `ATTENTION`, every detail and its `·` in `TEXT_MUTED`, a status on the
+/// `ATTENTION`, every detail and its `·` in `TEXT_DIM`, a status on the
 /// right. One line; a long detail ends in an ellipsis.
 pub fn head(
     lead: impl Into<SharedString>,
@@ -812,7 +812,7 @@ fn head_line(
             div()
                 .flex_1()
                 .min_w_0()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .when(!question, |line| line.truncate())
                 .child(StyledText::new(text).with_highlights(vec![(0..lead.len(), lead_style)])),
         )
@@ -824,11 +824,11 @@ pub fn status(text: impl Into<SharedString>) -> Div {
     div()
         .debug_selector(|| "decision-status".into())
         .flex_shrink_0()
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::TEXT_DIM))
         .child(text.into())
 }
 
-/// An answer in flight: a still `RUNNING` dot and `sending`, `TEXT_MUTED`.
+/// An answer in flight: a still `RUNNING` dot and `sending`, `TEXT_DIM`.
 /// Nothing on it moves — a Decision is static (rule 2.10.4).
 pub fn sending() -> Div {
     div()
@@ -837,7 +837,7 @@ pub fn sending() -> Div {
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::CH))
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::TEXT_DIM))
         .child(components::status_dot(theme::RUNNING))
         .child(theme::words::SENDING)
 }
@@ -871,7 +871,7 @@ pub fn prose(text: impl Into<SharedString>) -> Div {
 pub fn note(text: impl Into<SharedString>) -> Div {
     div()
         .flex_shrink_0()
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::TEXT_DIM))
         .child(text.into())
 }
 
@@ -924,16 +924,16 @@ pub struct Row {
     /// `None` leaves no key.
     pub key: Option<SharedString>,
     pub label: SharedString,
-    /// A byte range of `label` drawn as inline code (`INLINE_CODE`).
+    /// A byte range of `label` drawn as inline code (`INLINE_CODE_INK`).
     pub code: Option<Range<usize>>,
     pub description: Option<SharedString>,
     pub recommended: bool,
-    /// The row under the cursor: the accent `❯` in its gutter, the
+    /// The row under the cursor: the strong `❯` in its gutter, the
     /// `paint::SELECTION` bar across the content column, its label
     /// `TEXT_STRONG`.
     pub cursor: bool,
     /// A question's pick (a multi-select's checked option): a trailing
-    /// accent check.
+    /// strong check.
     pub picked: bool,
     pub enabled: bool,
 }
@@ -950,14 +950,14 @@ pub fn key_label(key: &str) -> String {
 
 /// One option row (the prototype's `.opt`) on `gpui_base::Button` (tab
 /// stop, Enter/Space, focus ring): `[❯ ][1. label]`, one row high, square.
-/// The digit `TEXT_MUTED`, the label `TEXT` (`TEXT_STRONG` under the
-/// cursor, `TEXT_MUTED` disabled), a pattern in `INLINE_CODE`; under the
+/// The digit `TEXT_DIM`, the label `TEXT` (`TEXT_STRONG` under the
+/// cursor, `TEXT_DIM` disabled), a pattern in `INLINE_CODE_INK`; under the
 /// pointer `paint::HOVER`. No `↵`, no keycaps.
 pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     let id = id.into();
     let hover = crate::pointer::hover_key(&id);
     let ink = match (row.enabled, row.cursor) {
-        (false, _) => theme::TEXT_MUTED,
+        (false, _) => theme::TEXT_DIM,
         (true, true) => theme::TEXT_STRONG,
         (true, false) => theme::TEXT,
     };
@@ -977,7 +977,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         highlights.push((
             0..lead,
             HighlightStyle {
-                color: Some(rgb(theme::TEXT_MUTED).into()),
+                color: Some(rgb(theme::TEXT_DIM).into()),
                 ..Default::default()
             },
         ));
@@ -989,7 +989,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         highlights.push((
             lead + code.start..lead + code.end,
             HighlightStyle {
-                color: Some(rgb(theme::INLINE_CODE).into()),
+                color: Some(rgb(theme::INLINE_CODE_INK).into()),
                 ..Default::default()
             },
         ));
@@ -1036,7 +1036,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                     gutter.child(
                         div()
                             .debug_selector(|| "decision-cursor".into())
-                            .child(components::prompt_mark(theme::ACCENT)),
+                            .child(components::prompt_mark(theme::TEXT_STRONG)),
                     )
                 }),
         )
@@ -1050,19 +1050,19 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                 .children(row.description.filter(|text| !text.is_empty()).map(|text| {
                     div()
                         .pl(px(lead as f32 * theme::CH))
-                        .text_color(rgb(theme::TEXT_MUTED))
+                        .text_color(rgb(theme::TEXT_DIM))
                         .child(text)
                 })),
         )
         .when(row.recommended, |button| {
             button.child(
                 trailing()
-                    .text_color(rgb(theme::TEXT_MUTED))
+                    .text_color(rgb(theme::TEXT_DIM))
                     .child("recommended"),
             )
         })
         .when(row.picked, |button| {
-            button.child(trailing().child(components::glyph("\u{2713}", theme::ACCENT)))
+            button.child(trailing().child(components::glyph("\u{2713}", theme::TEXT_STRONG)))
         })
 }
 
@@ -1082,7 +1082,7 @@ pub fn note_row(field: impl IntoElement) -> Div {
             div()
                 .flex_shrink_0()
                 .pr(px(theme::CH))
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .child("note"),
         )
         .child(
@@ -1098,7 +1098,7 @@ pub fn note_row(field: impl IntoElement) -> Div {
 // ---------------------------------------------------------------- footer
 
 /// The one error line: the typed `✗` and `lead` in `BLOCKED` (only that
-/// phrase carries the hue), then `· detail` in `TEXT_MUTED`.
+/// phrase carries the hue), then `· detail` in `TEXT_DIM`.
 pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
     div()
         .flex()
@@ -1123,13 +1123,13 @@ pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
         .child(
             div()
                 .min_w_0()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .child(SharedString::from(format!("\u{b7} {}", detail.into()))),
         )
 }
 
 /// The hint line (the prototype's `↑↓ select · 1–3 pick · esc deny · tab
-/// amend`): one dim run, its `·` seams the same `TEXT_MUTED`, no keycaps.
+/// amend`): one dim run, its `·` seams the same `TEXT_DIM`, no keycaps.
 pub fn hint_line<S: AsRef<str>>(parts: &[S]) -> Div {
     div()
         .debug_selector(|| "decision-hints".into())
@@ -1137,7 +1137,7 @@ pub fn hint_line<S: AsRef<str>>(parts: &[S]) -> Div {
         .min_w_0()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::TEXT_DIM))
         .child(SharedString::from(hint_text(parts)))
 }
 
@@ -1162,7 +1162,7 @@ pub fn footer<S: AsRef<str>>(parts: &[S], actions: impl IntoIterator<Item = AnyE
 
 /// The completing action (`Send`, `Complete`): the steel primary, its label
 /// at `W_BODY`. `enter` adds the key that sends — a mono `↵` at
-/// `ON_ACCENT` 70% — so the key lives on the button, not in the hints.
+/// `ON_PRIMARY` 70% — so the key lives on the button, not in the hints.
 pub fn send_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -1171,9 +1171,9 @@ pub fn send_button(
     cx: &App,
 ) -> gpui::component::button::Button {
     let ink = if disabled {
-        theme::TEXT_MUTED
+        theme::TEXT_DIM
     } else {
-        theme::ON_ACCENT
+        theme::ON_PRIMARY
     };
     components::primary_button(id, disabled, cx)
         .h(px(theme::CONTROL_H))
@@ -1191,7 +1191,7 @@ pub fn send_button(
                             .font_family(theme::FONT_CODE)
                             .map(|key| {
                                 if disabled {
-                                    key.text_color(rgb(theme::TEXT_MUTED))
+                                    key.text_color(rgb(theme::TEXT_DIM))
                                 } else {
                                     key.text_color(rgba(theme::SEND_KEY_INK))
                                 }
@@ -1241,7 +1241,7 @@ pub fn key_action(
         .text_color(rgb(theme::TEXT))
         .hover_raised(id)
         .press_row()
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(key))
+        .child(div().text_color(rgb(theme::TEXT_DIM)).child(key))
         .when(with_verb, |pair| {
             pair.child(
                 div()

@@ -103,7 +103,7 @@ fn a_dragged_pane_dims_its_source_until_the_release(cx: &mut TestAppContext) {
 }
 
 /// Native files dragged over a Pane lay the drop sheet over that Pane and
-/// edge its Composer in the accent; the sheet follows the pointer to the
+/// edge its Composer in `TEXT_STRONG`; the sheet follows the pointer to the
 /// next Pane, and leaving the window or dropping clears both.
 #[gpui::test]
 fn files_over_a_pane_edge_its_composer_in_the_accent(cx: &mut TestAppContext) {
@@ -914,9 +914,9 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
     });
 }
 
-/// Theme rule 6, sampled where each face is set: the app's own copy is in
-/// the UI face (Geist), and only code and machine text is in the code face
-/// (Geist Mono).
+/// Theme rule 1, sampled where each face is set: the chrome is in the UI
+/// face (Geist), and the transcript, code and machine text are in the code
+/// face (Geist Mono).
 #[gpui::test]
 fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     use crate::theme::{FONT_CODE, FONT_UI};
@@ -1025,8 +1025,8 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     let edit = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Edit"));
     let stamp = id_of(&|body| matches!(body, Body::TurnEnd(_)));
 
-    // UI: the prompt echo, a group summary, a tool call's line (its name;
-    // the arguments carry the code mark, `call_highlights`), the stamp.
+    // The transcript is code: the prompt echo, a group summary, a tool
+    // call's line, the stamp.
     for (what, prefix) in [
         ("prompt", format!("literal-{namespace}-{prompt:?}-0")),
         (
@@ -1036,7 +1036,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         ("call line", format!("literal-{namespace}-{edit:?}-0")),
         ("stamp", format!("literal-{namespace}-{stamp:?}-0")),
     ] {
-        assert_eq!(face(cx, prefix).as_ref(), FONT_UI, "{what} is UI text");
+        assert_eq!(face(cx, prefix).as_ref(), FONT_CODE, "{what} is code");
     }
     // Code: the diff's lines and the Composer's line.
     // A settled edit's diff shows once it is disclosed.

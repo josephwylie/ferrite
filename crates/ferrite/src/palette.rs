@@ -8,7 +8,7 @@
 //! in `TEXT_STRONG`, the block caret, the status filter's name at the
 //! right), section rows (`threads`, `projects`, `groups`, `commands`), rows
 //! (the cursor's `❯` on its `FLOAT_SEL` bar, a still state mark, the name
-//! with its matches in the accent at `W_STRONG`, the context muted after
+//! with its matches in `TEXT_STRONG` at `W_STRONG`, the context muted after
 //! it, the key at the right), and the footer — the cursor row's detail (a
 //! Thread's working directory) where it has one, else the keys. The
 //! cockpit builds the rows (`cockpit::palette`) and runs them: every key
@@ -424,7 +424,7 @@ impl Render for Palette {
                         .debug_selector(|| "palette-filter".into())
                         .flex_shrink_0()
                         .ml(px(FLOAT_DETAIL_GAP))
-                        .text_color(rgb(TEXT_MUTED))
+                        .text_color(rgb(TEXT_DIM))
                         .child(filter_word(filter))
                 }),
         );
@@ -485,7 +485,7 @@ impl Render for Palette {
 }
 
 /// A float's input row (the palette's, the shortcuts sheet's filter): `❯`
-/// in its 2-cell gutter (the accent, the typed prompt mark), the line in
+/// in its 2-cell gutter (`TEXT_STRONG`, the typed prompt mark), the line in
 /// `TEXT_STRONG` with the block caret, a row and 12px tall over the float's
 /// rule.
 pub(crate) fn input_row(selector: &'static str, input: Entity<Composer>) -> gpui::Div {
@@ -506,7 +506,7 @@ pub(crate) fn input_row(selector: &'static str, input: Entity<Composer>) -> gpui
                 .flex_shrink_0()
                 .items_center()
                 .w(px(FLOAT_GUTTER))
-                .child(components::prompt_mark(ACCENT)),
+                .child(components::prompt_mark(TEXT_STRONG)),
         )
         .child(
             div()
@@ -561,7 +561,7 @@ fn row_element(
                 .min_w_0()
                 .ml(px(row.context_gap()))
                 .truncate()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(row.context.clone()),
         )
         .when_some(row.keys.clone(), |element, keys| {
@@ -570,7 +570,7 @@ fn row_element(
                     .flex()
                     .flex_shrink_0()
                     .ml(px(FLOAT_DETAIL_GAP))
-                    .child(components::key_combo(&keys, TEXT_MUTED)),
+                    .child(components::key_combo(&keys, TEXT_DIM)),
             )
         });
     if cursor {

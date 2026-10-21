@@ -18,7 +18,7 @@
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
-//! | seam accent | [`SEAM_FADE`] 120ms | a board seam's accent line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
+//! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
@@ -213,7 +213,7 @@ pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_O
 /// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
 /// (`cubic-bezier(.25,.1,.25,1)`), not `ease-out`.
 pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
-/// A board seam's accent line fading in under the pointer: the prototype's
+/// A board seam's strong line fading in under the pointer: the prototype's
 /// `.seam::before{transition: opacity .12s}`.
 pub const SEAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_SEAM_FADE_MS, EASE);
 pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
@@ -1272,7 +1272,7 @@ mod tests {
         close(ride.value(half, false), 280.8 * 0.1976, 0.5, "mid-ride");
     }
 
-    /// A seam's accent line fades over its own 120ms, not the hover 150ms.
+    /// A seam's strong line fades over its own 120ms, not the hover 150ms.
     #[test]
     fn a_seam_blend_runs_on_its_own_timeline() {
         let mut fades = HoverFades::default();
@@ -1373,7 +1373,7 @@ mod tests {
     #[test]
     fn mix_blends_in_premultiplied_srgb() {
         let rest: Hsla = gpui::rgb(theme::CHROME).into();
-        let hover: Hsla = gpui::rgb(theme::HOVER).into();
+        let hover: Hsla = gpui::rgb(theme::RAISED).into();
         assert_eq!(mix(rest, hover, 0.0), rest);
         assert_eq!(mix(rest, hover, 1.0), hover);
         let wash = gpui::transparent_black();

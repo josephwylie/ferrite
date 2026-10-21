@@ -7,7 +7,7 @@
 //! and flat on the reading plane (`paint::PLANE`); its content starts at
 //! the Pane's own edges, and its 1px edge is an overlay laid over them
 //! (the prototype's `.pane::after`) that only changes colour — transparent
-//! at rest, the accent when focused on a board, `ATTENTION_EDGE` on every
+//! at rest, `TEXT_STRONG` when focused on a board, `WAIT_RING` on every
 //! side while it waits (a focused waiting Pane shows only the yellow; its
 //! focus reads in the head ground and title). On a board it wears one head
 //! row — the dot (a working Thread's braille spinner), the title, the
@@ -610,7 +610,7 @@ pub struct PaneFacts<'a> {
     /// The Composer's own focus handle holds focus in the active window.
     pub editing: bool,
     /// Native files are dragged over this Pane: the drop sheet covers it
-    /// and the Composer, drawn above the sheet, wears the accent edge.
+    /// and the Composer, drawn above the sheet, wears the strong edge.
     pub drop_target: bool,
     /// More than one Pane is on the board, so which one holds the keyboard
     /// needs showing: only then does focus draw the `FOCUS_RING` edge.
@@ -897,7 +897,7 @@ pub fn render_pane(
     // Attention and focus are two channels on one edge (F-2): the edge is
     // an overlay over the Pane's own content (`pane_frame`), recoloured
     // only, so nothing reflows when a Decision arrives. A waiting Pane
-    // draws `ATTENTION_EDGE` on every side — focused or not; a focused one
+    // draws `WAIT_RING` on every side — focused or not; a focused one
     // says so in its head ground and title instead of a second ring.
     let pending = thread.map(|thread| thread.pending_decisions());
     let attention_pending =
@@ -1056,7 +1056,7 @@ pub fn render_pane(
             // Pane's foot says so, where its state reads (theme rule 7).
             pane = pane.children(expand_question.then(|| question_door(key)));
             // The drop sheet covers the Pane beneath the Composer, which
-            // paints after it and so stays in view, edged in the accent.
+            // paints after it and so stays in view, edged in `TEXT_STRONG`.
             pane = pane.children(drop_target.then(crate::prompt_drop::sheet));
             pane = pane.children(l1_composer(&mut cx));
         }
@@ -1137,7 +1137,7 @@ pub(crate) fn working_line(
 /// The working line's shape while a Session starts: nothing the provider
 /// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
 /// the focused Pane, assembled and still elsewhere and under reduced motion
-/// — and `Starting` in `TEXT_MUTED`. Its element id is a constant: the
+/// — and `Starting` in `TEXT_DIM`. Its element id is a constant: the
 /// timeline has to survive every re-render of the line.
 fn starting_line(still: bool, _ink: u32) -> Div {
     let mark = if still {
@@ -1161,10 +1161,10 @@ fn starting_line(still: bool, _ink: u32) -> Div {
         .w_full()
         .min_w_0()
         .h(px(theme::LH_UI))
-        .font_family(theme::FONT_UI)
+        .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .flex()
@@ -1293,7 +1293,7 @@ fn pane_shell() -> Div {
         .overflow_hidden()
 }
 
-/// What a Pane's 1px edge says (F-2): a waiting Pane (`ATTENTION_EDGE`, on
+/// What a Pane's 1px edge says (F-2): a waiting Pane (`WAIT_RING`, on
 /// every side, focused or not) beats focus (`FOCUS_RING`), and a Pane with
 /// neither rests on a transparent edge — the seams separate Panes. Solo
 /// never recolours the frame (rule 2.2.5): the Decision carries the signal.
@@ -1317,8 +1317,8 @@ impl PaneEdge {
 
     pub(crate) fn ink(self) -> gpui::Hsla {
         match self {
-            PaneEdge::Attention => rgba(ATTENTION_EDGE).into(),
-            PaneEdge::Focused => rgb(FOCUS_RING).into(),
+            PaneEdge::Attention => rgba(WAIT_RING).into(),
+            PaneEdge::Focused => rgba(FOCUS_RING).into(),
             PaneEdge::Rest => rgba(TRANSPARENT).into(),
         }
     }
@@ -1488,7 +1488,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 }
 
 /// A Draft is disposable state, so its Pane advertises the same close action
-/// as cmd-w: an `ICON_BUTTON` × in `TEXT_MUTED` — the Group head's slot on a
+/// as cmd-w: an `ICON_BUTTON` × in `TEXT_DIM` — the Group head's slot on a
 /// board (Solo has no head: cmd-w alone). Its tooltip names the key
 /// only where one is bound. Live Threads deliberately keep keyboard and
 /// context-menu closure instead of adding this control to every Pane.
@@ -1500,7 +1500,7 @@ pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
         .h(px(theme::ICON_BUTTON))
         .p_0()
         .accessibility_label("Discard draft")
-        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, TEXT_MUTED))
+        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, TEXT_DIM))
 }
 
 /// The × with its tooltip: `Discard draft`, and the key after it only where
@@ -1547,7 +1547,7 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
         .hover_raised(format!("band-chip-{slot}"))
         .press_raised()
         .child(
-            status_seg(if accent { TEXT } else { TEXT_MUTED })
+            status_seg(if accent { TEXT } else { TEXT_DIM })
                 .flex_shrink(1.)
                 .min_w_0()
                 .child(div().min_w_0().truncate().child(label)),
@@ -1737,13 +1737,13 @@ fn wall_word(word: &HeadSlot, card: &WallCard) -> Div {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(rest)
             })),
     )
 }
 
-/// One of a tile's rows: one `TEXT_MUTED` run, its glyph included, on one
+/// One of a tile's rows: one `TEXT_DIM` run, its glyph included, on one
 /// line that truncates with `…` at the tile's edge.
 fn wall_line(row: SharedString) -> Div {
     div()
@@ -1752,7 +1752,7 @@ fn wall_line(row: SharedString) -> Div {
         .w_full()
         .min_w_0()
         .h(px(theme::LH_UI))
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .truncate()
         .child(row)
 }
@@ -1774,7 +1774,7 @@ pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
 
 /// One quick answer (F-7): `1 allow` in a 1px `paint::LINE2` box,
 /// `QUICK_ANSWER_H` (22px) outer — one line and its two borders — 1ch in
-/// from each side. The digit is `TEXT_MUTED` on every waiting tile, the
+/// from each side. The digit is `TEXT_DIM` on every waiting tile, the
 /// word `TEXT`; under the pointer the face blends to `paint::BAND2` and the
 /// word to `TEXT_STRONG` over the one 150ms hover blend, the digit staying
 /// dim.
@@ -1809,7 +1809,7 @@ pub(crate) fn quick_answer(
         .cursor_pointer()
         .whitespace_nowrap()
         .on_hover(crate::motion::hover_listener(hover))
-        .child(components::cells(key).text_color(rgb(TEXT_MUTED)))
+        .child(components::cells(key).text_color(rgb(TEXT_DIM)))
         .child(components::cells(label).text_color(word))
 }
 
@@ -1904,7 +1904,7 @@ impl HeadSlot {
     pub(crate) fn ink(&self) -> u32 {
         match self {
             HeadSlot::Failing(_) | HeadSlot::Failed => BLOCKED,
-            _ => TEXT_MUTED,
+            _ => TEXT_DIM,
         }
     }
 }
@@ -2004,7 +2004,7 @@ fn question_door(key: u64) -> AnyElement {
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .flex()
@@ -2033,7 +2033,7 @@ fn question_door(key: u64) -> AnyElement {
                 .items_center()
                 .gap(px(theme::CH))
                 .child(div().text_color(rgb(TEXT_FAINT)).child("\u{b7}"))
-                .child(components::key_combo(&keys, TEXT_MUTED))
+                .child(components::key_combo(&keys, TEXT_DIM))
                 .child("answers in full")
         }));
     div()
@@ -2219,7 +2219,7 @@ fn tab_strip(key: u64, agents: AnyElement, tasks: Option<AnyElement>, column: bo
         .border_color(theme::paint::LINE)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_MUTED));
+        .text_color(rgb(TEXT_DIM));
     let inset = div()
         .h_full()
         .w_full()
@@ -2245,12 +2245,12 @@ fn title_floor(name: &str) -> f32 {
 
 /// A check's ink (rule 2.2.2 — colour means something needs you): a run
 /// still going is `RUNNING`, a failure `BLOCKED`, a pass settles to
-/// `TEXT_MUTED` and a skip is the faintest ink (drawn as a ring,
+/// `TEXT_DIM` and a skip is the faintest ink (drawn as a ring,
 /// `check_dot`). Never the ochre that means an agent waits on you.
 pub fn check_ink(state: CheckState) -> u32 {
     match state {
         CheckState::Pending => RUNNING,
-        CheckState::Passing => TEXT_MUTED,
+        CheckState::Passing => TEXT_DIM,
         CheckState::Failing => BLOCKED,
         CheckState::Skipped => TEXT_FAINT,
     }
@@ -2270,7 +2270,7 @@ pub fn check_dot(state: CheckState) -> Div {
 pub fn check_detail_ink(state: CheckState) -> u32 {
     match state {
         CheckState::Failing => BLOCKED,
-        _ => TEXT_MUTED,
+        _ => TEXT_DIM,
     }
 }
 
@@ -2320,9 +2320,9 @@ pub fn checks_head(pr: &PullRequest) -> Div {
     let tally = pr.tally();
     let parts: Vec<(String, u32)> = [
         (tally.failing, "failed", BLOCKED),
-        (tally.pending, "running", TEXT_MUTED),
-        (tally.passing, "passed", TEXT_MUTED),
-        (tally.skipped, "skipped", TEXT_MUTED),
+        (tally.pending, "running", TEXT_DIM),
+        (tally.passing, "passed", TEXT_DIM),
+        (tally.skipped, "skipped", TEXT_DIM),
     ]
     .into_iter()
     .filter(|(count, _, _)| *count > 0)
@@ -2340,7 +2340,7 @@ pub fn checks_head(pr: &PullRequest) -> Div {
         }
         let at = text.len();
         text.push_str(&part);
-        if ink != TEXT_MUTED {
+        if ink != TEXT_DIM {
             runs.push((at..text.len(), ink));
         }
     }
@@ -2360,7 +2360,7 @@ pub fn checks_head(pr: &PullRequest) -> Div {
         .debug_selector(|| "checks-tally".into())
         .min_w_0()
         .truncate()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(StyledText::new(text).with_highlights(runs));
     let tally_line = components::tabular(tally_line);
     div()
@@ -2383,7 +2383,7 @@ pub fn checks_head(pr: &PullRequest) -> Div {
                         .text_color(rgb(TEXT_STRONG))
                         .child(SharedString::from(format!("#{}", pr.number))),
                 )
-                .child(div().text_color(rgb(TEXT_MUTED)).child("checks")),
+                .child(div().text_color(rgb(TEXT_DIM)).child("checks")),
         )
         .child(tally_line)
 }
@@ -2435,7 +2435,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .text_color(rgb(if openable { TEXT } else { TEXT_MUTED }))
+                .text_color(rgb(if openable { TEXT } else { TEXT_DIM }))
                 .child(name),
         )
         .child(
@@ -2479,10 +2479,10 @@ pub(crate) fn meter_layout(done: usize, total: usize) -> MeterLayout {
 }
 
 /// The painted plan meter beside the subagent tabs (neither face has
-/// `▰▱`): done steps in `TEXT_MUTED`, the rest unlit. `live` lights the
+/// `▰▱`): done steps in `TEXT_DIM`, the rest unlit. `live` lights the
 /// step being run in `RUNNING` — the one colour on a meter, because a step
 /// in progress is live state. Finishing a plan is not a status: a full
-/// meter is all `TEXT_MUTED`, no check and no green.
+/// meter is all `TEXT_DIM`, no check and no green.
 fn meter_bar(done: usize, total: usize, live: bool) -> Div {
     let segment = |ink: gpui::Hsla| {
         div()
@@ -2500,7 +2500,7 @@ fn meter_bar(done: usize, total: usize, live: bool) -> Div {
             .gap(px(theme::METER_SEG_GAP))
             .children((0..total).map(|index| {
                 segment(if index < done {
-                    rgb(TEXT_MUTED).into()
+                    rgb(TEXT_DIM).into()
                 } else if index == done && live {
                     rgb(RUNNING).into()
                 } else {
@@ -2518,7 +2518,7 @@ fn meter_bar(done: usize, total: usize, live: bool) -> Div {
                     .h_full()
                     .w(px(theme::METER_TRACK_W * fraction))
                     .rounded(px(theme::METER_SEG_R))
-                    .bg(rgb(TEXT_MUTED)),
+                    .bg(rgb(TEXT_DIM)),
             ),
     }
 }
@@ -2535,7 +2535,7 @@ fn meter(done: usize, total: usize, live: bool) -> Div {
         .child(components::tabular(
             div()
                 .flex_shrink_0()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(format!("{done}/{total}"))),
         ))
 }
@@ -2594,7 +2594,7 @@ pub fn model_picker(
         Some(effort) => format!("{word} \u{b7} {effort}").into(),
         None => word,
     };
-    status_seg(TEXT_MUTED)
+    status_seg(TEXT_DIM)
         .children(mark)
         .child(components::cells(text))
 }
@@ -2622,7 +2622,7 @@ pub(crate) fn status_model_word(label: &str) -> SharedString {
 /// The effort segment after the model: the level in force, lowercase (the
 /// menu rows keep their titles).
 pub fn effort_picker(label: SharedString, _busy: bool) -> Div {
-    status_seg(TEXT_MUTED).child(div().flex_shrink_0().child(label))
+    status_seg(TEXT_DIM).child(div().flex_shrink_0().child(label))
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -2663,7 +2663,7 @@ fn working_mark(ink: u32, live: bool) -> AnyElement {
 }
 
 /// The working line with no provider known: the spinner and caption in
-/// `TEXT_MUTED` (the L2 cell's, retired with it; kept for the tests).
+/// `TEXT_DIM` (the L2 cell's, retired with it; kept for the tests).
 #[cfg(test)]
 fn working_row(
     transcript: &Transcript,
@@ -2688,7 +2688,7 @@ fn working_row(
 /// colour — the turn's spinner verb (`Reticulating…`,
 /// `progress::spinner_verb`, held for the whole turn) unless the provider
 /// has something better to say (R16) — and then `(1m04s · ↑ 4.1k tokens ·
-/// esc to interrupt)` in `TEXT_MUTED`. Every working line's spinner cycles,
+/// esc to interrupt)` in `TEXT_DIM`. Every working line's spinner cycles,
 /// on the one shared clock, so all of them show the same frame (the
 /// prototype's `.spin`); only the focused Pane's caption shimmers. The seconds
 /// are whole (`progress::live_seconds`), tabular, so the text changes once a
@@ -2758,7 +2758,7 @@ fn working_line_for(
         .w_full()
         .min_w_0()
         .h(px(theme::LH_UI))
-        .font_family(theme::FONT_UI)
+        .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI));
     if let Some((selector, caption)) = caption {
@@ -2806,7 +2806,7 @@ fn working_line_for(
                         .flex_shrink_0()
                         .w(px(metadata_w))
                         .whitespace_nowrap()
-                        .text_color(rgb(TEXT_MUTED))
+                        .text_color(rgb(TEXT_DIM))
                         .child(StyledText::new(metadata).with_highlights(highlights)),
                 ))
             });
@@ -2876,7 +2876,7 @@ struct ComposerStack<'a> {
     /// The Composer itself holds the keyboard in the active window: the
     /// queue's keys act only then.
     editing: bool,
-    /// Native files hover the Pane: the band's edge is `ACCENT_EDGE`,
+    /// Native files hover the Pane: the band's edge is `DROP_EDGE`,
     /// saying where they will land.
     drop_target: bool,
     /// A docked Decision sits flush on top. The band is a band either way
@@ -2951,6 +2951,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .pr(px(theme::COMPOSER_PAD_R))
         .py(px(theme::COMPOSER_PAD_Y))
         .bg(theme::paint::INBAND)
+        // The input stays in the code face until the Composer's own phase:
+        // its block caret is a mono cell (`CODE_ADVANCE × CARET_CELLS`).
+        .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT))
@@ -2961,7 +2964,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             ..geometry.get()
         })
     });
-    // Files hovering the Pane: the band's edge in `ACCENT_EDGE`, laid over
+    // Files hovering the Pane: the band's edge in `DROP_EDGE`, laid over
     // it so nothing reflows.
     if drop_target {
         band = band.child(
@@ -2969,7 +2972,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .absolute()
                 .inset_0()
                 .border_1()
-                .border_color(rgba(theme::ACCENT_EDGE)),
+                .border_color(rgba(theme::DROP_EDGE)),
         );
     }
     if let Some(error) = draft_error {
@@ -3048,7 +3051,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         line = line.child(ghost_row(ghost));
     }
 
-    // The `❯` is always in layout and always the accent (the prompt's own
+    // The `❯` is always in layout and always `TEXT_STRONG` (the prompt's own
     // colour), hanging in its 2-cell gutter on the first row.
     let line_selector = format!(
         "composer-{}-{}",
@@ -3069,7 +3072,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .items_center()
                 .w(px(theme::COMPOSER_GUTTER))
                 .h(px(theme::COMPOSER_ROW_H))
-                .child(components::prompt_mark(ACCENT)),
+                .child(components::prompt_mark(TEXT_STRONG)),
         )
         // A flat line's facts come straight after its `❯`, before any
         // draft text it holds.
@@ -3141,7 +3144,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
 /// The focused Pane's status line (the prototype's `.status`), laid in the
 /// window's bottom bar (ADR 0014): its segments — a draft's setup chips,
 /// the mode, the model with its effort, `ctx`, the changed files — split by
-/// a faint `·`, in `TEXT_MUTED`, a cell after the view tabs. It gives way
+/// a faint `·`, in `TEXT_DIM`, a cell after the view tabs. It gives way
 /// to the bar's own segments, clipping at its right.
 pub fn status_line(segments: Vec<AnyElement>) -> Div {
     let mut line = div()
@@ -3156,7 +3159,7 @@ pub fn status_line(segments: Vec<AnyElement>) -> Div {
         .whitespace_nowrap()
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_MUTED));
+        .text_color(rgb(TEXT_DIM));
     for (index, segment) in segments.into_iter().enumerate() {
         if index > 0 {
             line = line.child(status_seam());
@@ -3207,7 +3210,7 @@ fn status_seg(ink: u32) -> Div {
         .text_color(rgb(ink))
 }
 
-/// The status line's mode segment, one run of text in `MODE_INK`: the
+/// The status line's mode segment, one run of text in its `mode_ink`: the
 /// marker (`⏵⏵` for a mode that lets edits run, `⏸` for plan, `⏵` for any
 /// other, in the face the platform falls back to), a space, the mode word.
 /// Hidden at the default: the mode stays reachable through ⇧⇥ and the
@@ -3218,7 +3221,8 @@ pub fn mode_chip(mode: &str, _menu: bool) -> Div {
         "plan" => "\u{23f8}",
         _ => "\u{23f5}",
     };
-    status_seg(theme::MODE_INK).child(components::glyph(format!("{mark} {mode}"), theme::MODE_INK))
+    let ink = theme::mode_ink(mode);
+    status_seg(ink).child(components::glyph(format!("{mark} {mode}"), ink))
 }
 
 /// The button a status segment rides in (model, effort, mode, files, the
@@ -3242,7 +3246,7 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
         gpui::rgba(theme::TRANSPARENT).into(),
         theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(TEXT_MUTED).into(),
+        rgb(TEXT_DIM).into(),
         cx,
     )
 }
@@ -3252,7 +3256,7 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
 /// opens the changed-files card.
 pub fn files_chip(count: usize, added: usize, removed: usize) -> Div {
     let word = if count == 1 { "file" } else { "files" };
-    status_seg(TEXT_MUTED)
+    status_seg(TEXT_DIM)
         .debug_selector(move || format!("changed-files-{count}"))
         .child(components::tabular(components::cells(format!(
             "{count} {word}"
@@ -3290,7 +3294,7 @@ pub fn changed_file_row(
                 .flex_shrink(1.)
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(theme::PATH_INK))
+                .text_color(rgb(theme::LINK_INK))
                 .child(name),
         )
         .child(
@@ -3299,7 +3303,7 @@ pub fn changed_file_row(
                 .min_w_0()
                 .ml(px(theme::FLOAT_DETAIL_GAP))
                 .truncate()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .children(dir),
         )
         .child(
@@ -3310,7 +3314,7 @@ pub fn changed_file_row(
         )
 }
 
-/// The idle line's placeholder: a couple of words in `TEXT_MUTED` after
+/// The idle line's placeholder: a couple of words in `TEXT_DIM` after
 /// the caret cell and a space, cut at their end only where even they do not
 /// fit. The keys live behind `?` (ADR 0014), not on the line.
 ///
@@ -3377,7 +3381,7 @@ fn placeholder(
 
 /// What an unfocused board cell's flat line says in place of the shelf and
 /// the queue it keeps for the live Composer: `1 attachment`, `3
-/// attachments`, `2 queued`, joined by a faint `·`, in `TEXT_MUTED` with
+/// attachments`, `2 queued`, joined by a faint `·`, in `TEXT_DIM` with
 /// tabular digits — words, no chip and no ×. Nothing when the draft holds
 /// neither.
 fn flat_facts(files: usize, queued: usize) -> Option<Div> {
@@ -3394,7 +3398,7 @@ fn flat_facts(files: usize, queued: usize) -> Option<Div> {
                 .whitespace_nowrap()
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_UI))
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(StyledText::new(text).with_highlights(seams)),
         )
     })
@@ -3429,7 +3433,7 @@ fn ghost_row(ghost: Ghost) -> Div {
         .flex()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .flex_shrink(1.)
@@ -3496,7 +3500,7 @@ pub struct MenuRow {
     pub insert: SharedString,
     /// The row's leading text: `/name`, or the file's name.
     pub name: SharedString,
-    /// Matched byte ranges inside `name`, painted `ACCENT` at `W_STRONG`
+    /// Matched byte ranges inside `name`, painted `TEXT_STRONG` at `W_STRONG`
     /// (`components::match_highlights`; one face, so nothing reflows).
     pub matched: Vec<std::ops::Range<usize>>,
     /// The dimmer text after it: a command's description, or the file's
@@ -3519,7 +3523,7 @@ pub fn menu_popover() -> Div {
 }
 
 /// A `/` or `@` row in the float grammar: the cursor's `❯`, the name with
-/// its matches in the accent, the detail muted in its own column
+/// its matches in `TEXT_STRONG`, the detail muted in its own column
 /// (`label_w` aligns the slash commands' descriptions), `↵` on the cursor
 /// row.
 pub fn menu_row(
@@ -3647,7 +3651,7 @@ fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoE
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(queued_preview(held))),
         )
         .when(latest, |row| {
@@ -3656,7 +3660,7 @@ fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoE
                     .flex_shrink_0()
                     .ml(px(theme::FLOAT_DETAIL_GAP))
                     .whitespace_nowrap()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(StyledText::new(hints).with_highlights(seams)),
             ))
         })
@@ -3836,7 +3840,7 @@ pub(crate) fn diff_stat(added: usize, removed: usize) -> Div {
             .items_center()
             .w(px(components::run_width(&text)))
             .text_size(px(theme::FS_UI))
-            .text_color(rgb(TEXT_MUTED))
+            .text_color(rgb(TEXT_DIM))
             .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
     )
 }
@@ -4028,7 +4032,7 @@ pub fn context_usage(
                 .id(SharedString::from(format!("reset-{key}")))
                 .text_size(px(theme::FS_UI))
                 .debug_selector(move || format!("context-usage-{key}-reset-reported"))
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(label)
                 .into_any_element()
         })
@@ -4084,7 +4088,7 @@ pub fn context_usage(
             .items_center()
             .gap(px(theme::SPACE_1))
             .text_size(px(theme::FS_UI))
-            .text_color(rgb(TEXT_MUTED))
+            .text_color(rgb(TEXT_DIM))
             .debug_selector(move || match maximum {
                 Some(maximum) => format!("context-usage-maximum-{maximum}"),
                 None => "context-usage-maximum-unknown".into(),
@@ -4155,7 +4159,7 @@ pub fn context_usage(
                     expanded,
                     crate::motion::CHEVRON,
                     |turn| {
-                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_MUTED)
+                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_DIM)
                             .with_transformation(gpui::Transformation::rotate(gpui::radians(
                                 std::f32::consts::FRAC_PI_2 * turn,
                             )))
@@ -4216,12 +4220,7 @@ pub fn context_usage(
                         .text_color(rgb(TEXT))
                         .child(label),
                 )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(count),
-                )
+                .child(div().flex_shrink_0().text_color(rgb(TEXT_DIM)).child(count))
                 .child(
                     div()
                         .flex()
@@ -4328,7 +4327,7 @@ pub fn context_usage(
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(key),
             )
             .child(components::tabular(div().flex_shrink_0().child(value)))
@@ -4419,14 +4418,14 @@ pub fn usage_ink(fraction: f32) -> u32 {
     }
 }
 
-/// A usage token's ink: `TEXT_MUTED` like every value word, the whole
+/// A usage token's ink: `TEXT_DIM` like every value word, the whole
 /// token turning `ATTENTION` once its window runs tight
 /// (`USAGE_TIGHT`), the same step as the card behind it (`usage_ink`).
 pub fn readout_ink(fraction: f32) -> u32 {
     if fraction >= theme::USAGE_TIGHT {
         ATTENTION
     } else {
-        TEXT_MUTED
+        TEXT_DIM
     }
 }
 
@@ -4499,7 +4498,7 @@ fn ctx_meter(fraction: f32) -> Div {
 }
 
 /// The status line's usage segment (the prototype's `ctx ▬▬▭▭ 32%`): `ctx`,
-/// the 8-cell meter and the percentage, tabular `TEXT_MUTED`, then a tight
+/// the 8-cell meter and the percentage, tabular `TEXT_DIM`, then a tight
 /// account window (`5h 91%`, `ATTENTION`) — inside the segment that opens
 /// the usage card. `None` when there is nothing to read: no reading is ever
 /// invented (no `ctx —`).
@@ -4516,7 +4515,7 @@ pub fn usage_meter_body(
         |used| ((used.clamp(0., 1.) * 100.).round() as u32).to_string(),
     );
     Some(
-        status_seg(TEXT_MUTED).child(components::tabular(
+        status_seg(TEXT_DIM).child(components::tabular(
             div()
                 .debug_selector(move || format!("usage-readout-{key}"))
                 .flex()
@@ -4571,7 +4570,7 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
 // text now.
 
 /// The ✓-row the pickers share — the band popovers (#29) — so "what this
-/// Pane is on right now" can never be spelled two ways: the accent check on
+/// Pane is on right now" can never be spelled two ways: the strong check on
 /// the standing choice, the muted tag ("checked out", "worktree · dir")
 /// after the label.
 pub fn picker_row(
@@ -4713,12 +4712,12 @@ impl Grid {
 const RING: &str = "\u{25cb}";
 
 /// A provider's brand colour, for its `✻` and its working spinner;
-/// `TEXT_MUTED` when the provider is not known.
+/// `TEXT_DIM` when the provider is not known.
 pub(crate) fn provider_ink(provider: Option<Provider>) -> u32 {
     match provider {
         Some(Provider::Claude) => theme::PROVIDER_CLAUDE,
         Some(Provider::Codex) => theme::PROVIDER_CODEX,
-        None => TEXT_MUTED,
+        None => TEXT_DIM,
     }
 }
 
@@ -4902,7 +4901,7 @@ pub(crate) fn render_block(
                         div()
                             .flex_shrink_0()
                             .w(px(2.0 * grid.cell()))
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .child("\u{2022}"),
                     )
                     .child(
@@ -4917,7 +4916,7 @@ pub(crate) fn render_block(
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
         // Reasoning is agent prose one ink down, under the drawn `∴`,
-        // `TEXT_MUTED`, never italic. A short thought shows whole; a long one
+        // `TEXT_DIM`, never italic. A short thought shows whole; a long one
         // is its first line with the rest disclosed.
         Body::Thinking(thought) => {
             let (summary, details) = reasoning_text(thought);
@@ -4927,7 +4926,7 @@ pub(crate) fn render_block(
                 // visible, wrapped and selectable without a false disclosure.
                 return row
                     .child(
-                        grid_row(mark()).text_color(rgb(TEXT_MUTED)).child(
+                        grid_row(mark()).text_color(rgb(TEXT_DIM)).child(
                             div().flex_1().min_w_0().child(
                                 selection
                                     .markdown(block.id, thought.trim().to_owned())
@@ -4966,11 +4965,9 @@ pub(crate) fn render_block(
                     ),
                 );
             }
-            row.text_color(rgb(TEXT_MUTED))
-                .child(body)
-                .into_any_element()
+            row.text_color(rgb(TEXT_DIM)).child(body).into_any_element()
         }
-        // A notice: a faint dot and one line in `TEXT_MUTED`, cut by width at
+        // A notice: a faint dot and one line in `TEXT_DIM`, cut by width at
         // the column's edge with the whole of it one hover away. A Decision
         // never leaves one (it is its own row, at the tail).
         Body::Notice(text) => {
@@ -4978,7 +4975,7 @@ pub(crate) fn render_block(
             let text = SharedString::from(text.clone());
             row.child(
                 grid_row(glyph_gutter(grid, BULLET, TEXT_FAINT))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(
                         div()
                             .id(SharedString::from(format!("notice-{:?}", block.id)))
@@ -4998,7 +4995,7 @@ pub(crate) fn render_block(
         // A decision record (`allowed Write`) or a revival note hangs under
         // the row it answers.
         Body::Meta(text) => row
-            .child(elbow_line(grid, TEXT_MUTED).child(
+            .child(elbow_line(grid, TEXT_DIM).child(
                 div().flex_1().min_w_0().child(selection.line(
                     block.id,
                     text.clone(),
@@ -5114,10 +5111,10 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
 }
 
 /// The prompt echo (the prototype's `.prompt`): a full-width
-/// `paint::BAND` with half a line above and below, the accent `❯` in the
+/// `paint::BAND` with half a line above and below, the strong `❯` in the
 /// gutter, the operator's words in `TEXT_STRONG` at body weight with its
 /// files' chips flowing inline after them, and its send time (`7:31 pm`,
-/// `TEXT_MUTED`) in its own right-aligned column on the first line — so a
+/// `TEXT_DIM`) in its own right-aligned column on the first line — so a
 /// wrapping prompt keeps the time beside its first line. An image hangs
 /// under the band in its 1px frame with its caption. Nothing on the band
 /// answers the pointer. `pinned` draws exactly the band again for the top
@@ -5205,7 +5202,7 @@ pub(crate) fn prompt_row(
             grid,
             div()
                 .debug_selector(|| "prompt-mark".into())
-                .child(components::prompt_mark(ACCENT)),
+                .child(components::prompt_mark(TEXT_STRONG)),
         ))
         .child(
             div()
@@ -5224,7 +5221,7 @@ pub(crate) fn prompt_row(
                 .flex_shrink_0()
                 .pl(px(theme::PROMPT_TIME_PAD_CELLS * grid.cell()))
                 .whitespace_nowrap()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(time))
         }));
     if pinned {
@@ -5292,7 +5289,7 @@ fn open_file(
 }
 
 /// A prompt's file as its band's inline chip (the prototype's `.att`): the
-/// 12px image mark (or the file mark), a cell, the name in `PATH_INK`, on
+/// 12px image mark (or the file mark), a cell, the name in `LINK_INK`, on
 /// `paint::BAND2` with a cell of padding each side. A click opens it (an
 /// image in the Pane's preview). Sized for the Markdown flow that places
 /// it: monospace cells at the size it is drawn in.
@@ -5329,11 +5326,11 @@ pub(crate) fn prompt_chip(
         .cursor_pointer()
         .whitespace_nowrap()
         .font_weight(theme::W_BODY)
-        .text_color(rgb(theme::PATH_INK))
+        .text_color(rgb(theme::LINK_INK))
         .child(icon(
             if image { icons::IMAGE } else { icons::FILE },
             theme::GLYPH_BOX,
-            theme::PATH_INK,
+            theme::LINK_INK,
         ))
         // The chip is sized in whole cells; the label never cuts (a
         // measured run rounds up past its cells by a fraction of a pixel).
@@ -5361,7 +5358,7 @@ pub(crate) fn prompt_chip(
 /// frame `IMAGE_CELLS` wide at the reading size, its 1px `paint::LINE2`
 /// border included (374.4px at Standard, drawn 374), the picture filling
 /// it at its own proportions; under it `name · W×H · 41 KB`, all of it
-/// `TEXT_MUTED`. A click opens the preview.
+/// `TEXT_DIM`. A click opens the preview.
 fn inline_image(
     block: BlockId,
     index: usize,
@@ -5423,7 +5420,7 @@ fn inline_image(
                 .debug_selector(|| "sent-image-caption".into())
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(caption)),
         )
         .into_any_element()
@@ -5562,7 +5559,7 @@ pub(crate) const DISCLOSURE_ROW: &str = "disclosure-row";
 /// What a row of output omitted, under the output it belongs to.
 pub(crate) fn omitted_line(bytes: usize, grid: Grid) -> Div {
     after_elbow(grid)
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(div().min_w_0().truncate().child(SharedString::from(format!(
             "\u{2026} {} not kept",
             text::byte_size(bytes)
@@ -5571,7 +5568,7 @@ pub(crate) fn omitted_line(bytes: usize, grid: Grid) -> Div {
 
 /// How a turn ended. A completed turn is `✻ Worked for 41s · 7:32 pm · ↑
 /// 3.2k ↓ 1.1k`: the typed `✻` in the provider's colour in the gutter, the
-/// words and their `·` seams `TEXT_MUTED`. An interrupted or failed one
+/// words and their `·` seams `TEXT_DIM`. An interrupted or failed one
 /// hangs under the turn's last row in the failure-line grammar
 /// (`failure_line`): `└ failed · 0.1s · API Error: 529 overloaded`, its lead
 /// word the only coloured one — `interrupted` in `TEXT` (the operator did
@@ -5594,7 +5591,7 @@ fn turn_end(
                         .debug_selector(|| "turn-stamp-mark".into()),
                 ))
                 .debug_selector(|| "turn-stamp".into())
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(div().flex_1().min_w_0().child(selection.line(
                     block,
                     text.clone(),
@@ -5627,7 +5624,7 @@ pub(super) fn turn_end_message(end: &ferrite_core::transcript::TurnEnd) -> Optio
     }
 }
 
-/// The `·` seams in a transcript line: `TEXT_MUTED`, at body weight
+/// The `·` seams in a transcript line: `TEXT_DIM`, at body weight
 /// (CT-23: a seam inside the transcript reads as the words around it — the
 /// status line's faint seams are the Composer's). Highlighted in place so
 /// the line stays one run and copies back exactly as written.
@@ -5637,7 +5634,7 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
             (
                 at..at + dot.len(),
                 HighlightStyle {
-                    color: Some(rgb(TEXT_MUTED).into()),
+                    color: Some(rgb(TEXT_DIM).into()),
                     font_weight: Some(theme::W_BODY),
                     ..Default::default()
                 },
@@ -5647,13 +5644,13 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
 }
 
 /// A tool call's bullet: state is the bullet, never the name. Settled work
-/// is `TEXT_MUTED`, live work a still green `●` (no pulse: the working line
+/// is `TEXT_DIM`, live work a still green `●` (no pulse: the working line
 /// is the one live thing), a failure `BLOCKED`, a call whose result never
 /// came a hollow `○`. Green never means finished.
 fn tool_dot_ink(state: &ToolState) -> (u32, DotShape) {
     match state {
         ToolState::Running => (RUNNING, DotShape::Solid),
-        ToolState::Ok => (TEXT_MUTED, DotShape::Solid),
+        ToolState::Ok => (TEXT_DIM, DotShape::Solid),
         ToolState::Failed(_) => (BLOCKED, DotShape::Solid),
         ToolState::Unavailable => (TEXT_FAINT, DotShape::Ring),
     }
@@ -5675,7 +5672,7 @@ impl DotShape {
 }
 
 /// Whether a call's argument is a file path (`Read(crates/x.rs)`), which
-/// reads in `PATH_INK` like every path in the transcript and is a path
+/// reads in `LINK_INK` like every path in the transcript and is a path
 /// target.
 pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
     const PATH_TOOLS: &[&str] = &[
@@ -5697,7 +5694,8 @@ pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
 /// A call line `Name(args)`, one CLI token on the grid (the prototype's
 /// `.name` and `.args`): the name — as Claude Code prints it (`Update`,
 /// `Bash`) — in `TEXT_STRONG` at `W_LABEL`, the parens and arguments in the
-/// line's `TEXT_MUTED`, a path argument in `PATH_INK`; one selectable line
+/// line's `TEXT_DIM`, a path argument too (a hover target, never cyan:
+/// ADR 0033); one selectable line
 /// that copies back exactly as it reads.
 fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     let label = tool.label();
@@ -5716,7 +5714,7 @@ fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightSt
         highlights.push((
             name + 1..label.len() - 1,
             HighlightStyle {
-                color: Some(rgb(theme::PATH_INK).into()),
+                color: Some(rgb(theme::TEXT_DIM).into()),
                 ..Default::default()
             },
         ));
@@ -5775,9 +5773,9 @@ pub(crate) fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
 /// One failure-line grammar, for a failed call and a failed or interrupted
 /// turn alike: `└ failed · 0.1s · API Error: 529 overloaded`. The head —
 /// the lead word in its state ink (`BLOCKED` failed, `TEXT` interrupted),
-/// the rest and its seams `TEXT_MUTED` — is one selectable run with its
+/// the rest and its seams `TEXT_DIM` — is one selectable run with its
 /// trailing seam; the excerpt the machine printed is its own run,
-/// `TEXT_MUTED`, soft-wrapping and never cut.
+/// `TEXT_DIM`, soft-wrapping and never cut.
 fn failure_line(
     block: BlockId,
     head: String,
@@ -5798,7 +5796,7 @@ fn failure_line(
             },
         ),
     );
-    elbow_line(grid, TEXT_MUTED).child(
+    elbow_line(grid, TEXT_DIM).child(
         div()
             .flex()
             .items_start()
@@ -6099,7 +6097,7 @@ fn fold_label(id: SharedString, label: String, toggle: Option<DisclosureToggle>)
         .flex_shrink_0()
         .whitespace_nowrap()
         .cursor_pointer()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .group_hover(group, |style| style.text_color(rgb(TEXT)))
         .child(SharedString::from(label))
         .when_some(toggle, |line, toggle| {
@@ -6146,12 +6144,12 @@ fn eased_fold(
 }
 
 /// Lines of output under the elbow (one non-wrapping run, cut at the
-/// column's edge like a terminal's), in `TEXT_MUTED` with only their verdict
+/// column's edge like a terminal's), in `TEXT_DIM` with only their verdict
 /// words coloured.
 fn output_lines_run(block: BlockId, text: String, selection: &TextRuns, grid: Grid) -> Div {
     after_elbow(grid)
         .debug_selector(|| "tool-fold-preview".into())
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .flex_1()
@@ -6179,7 +6177,7 @@ fn fold_open(
     if text::output_scrolls(full) {
         let lines = text::output_lines(full).min(theme::OUTPUT_MAX_LINES);
         let viewer = after_elbow(grid)
-            .text_color(rgb(TEXT_MUTED))
+            .text_color(rgb(TEXT_DIM))
             .child(
                 div()
                     .flex_1()
@@ -6197,12 +6195,12 @@ fn fold_open(
 }
 
 /// A running test's elbow (CT-25): `└ running 357 tests`, its bar, and
-/// `212/357` in tabular `TEXT_MUTED`.
+/// `212/357` in tabular `TEXT_DIM`.
 fn running_tests(call: &str, progress: ferrite_core::transcript::TestProgress, grid: Grid) -> Div {
     // The runner's total unheard (`TestProgress::known`): the count alone,
     // where `212/357` would stand, and no bar to fill against nothing.
     if !progress.known() {
-        return elbow_line(grid, TEXT_MUTED)
+        return elbow_line(grid, TEXT_DIM)
             .debug_selector(|| "tool-test-progress".into())
             .items_center()
             .child(
@@ -6221,7 +6219,7 @@ fn running_tests(call: &str, progress: ferrite_core::transcript::TestProgress, g
     }
     let total = progress.total.max(1);
     let fraction = (progress.done as f32 / total as f32).clamp(0., 1.);
-    elbow_line(grid, TEXT_MUTED)
+    elbow_line(grid, TEXT_DIM)
         .debug_selector(|| "tool-test-progress".into())
         .items_center()
         .child(
@@ -6373,7 +6371,7 @@ pub(crate) fn render_tool(
             .items_center()
             .gap(px(grid.cell()))
             .whitespace_nowrap()
-            .text_color(rgb(TEXT_MUTED)),
+            .text_color(rgb(TEXT_DIM)),
     );
     let mut trailing = false;
     if let Some(ToolVerdict::Diff(added, removed)) = tool_verdicts(tool).into_iter().next() {
@@ -6405,7 +6403,7 @@ pub(crate) fn render_tool(
     }
     let (ink, shape) = match tool_dot_ink(&tool.state) {
         // Its own report failed it, whatever the pipe exited with.
-        (TEXT_MUTED, shape)
+        (TEXT_DIM, shape)
             if test_elbow(tool).is_some_and(|elbow| elbow.lead == theme::words::FAILED) =>
         {
             (BLOCKED, shape)
@@ -6418,7 +6416,7 @@ pub(crate) fn render_tool(
             .id(SharedString::from(row_selector.clone()))
             .debug_selector(move || row_selector.clone())
             .relative()
-            .text_color(rgb(TEXT_MUTED))
+            .text_color(rgb(TEXT_DIM))
             .child(call)
             .child(div().flex_1())
             .when(trailing, |line| line.child(trail.pl(px(2.0 * grid.cell()))))
@@ -6452,7 +6450,7 @@ pub(crate) fn render_tool(
             if let Some(progress) = tool.progress {
                 card = card.child(running_tests(&tool.call, progress, grid));
             } else if let Some(result) = &tool.result_line {
-                card = card.child(elbow_line(grid, TEXT_MUTED).child(
+                card = card.child(elbow_line(grid, TEXT_DIM).child(
                     div().flex_1().min_w_0().truncate().child(selection.line(
                         block,
                         result.clone(),
@@ -6467,7 +6465,7 @@ pub(crate) fn render_tool(
             }
         }
         ToolState::Unavailable => {
-            card = card.child(elbow_line(grid, TEXT_MUTED).child(text::NO_RESULT));
+            card = card.child(elbow_line(grid, TEXT_DIM).child(text::NO_RESULT));
         }
         ToolState::Failed(_) => {
             if let Some(elbow) = test_elbow(tool) {
@@ -6573,7 +6571,7 @@ pub(crate) fn render_tool(
                 // up a pixel and would push the fold's words off the grid.
                 let first_w = first.chars().count() as f32 * grid.cell();
                 card = card.child(
-                    elbow_line(grid, TEXT_MUTED)
+                    elbow_line(grid, TEXT_DIM)
                         .child(
                             div()
                                 .flex_shrink_0()
@@ -6590,7 +6588,7 @@ pub(crate) fn render_tool(
                                 .flex_shrink_0()
                                 .w(px(3.0 * grid.cell()))
                                 .whitespace_nowrap()
-                                .text_color(rgb(TEXT_MUTED))
+                                .text_color(rgb(TEXT_DIM))
                                 .child(" \u{b7} "),
                         )
                         .child(fold_label(
@@ -6615,7 +6613,7 @@ pub(crate) fn render_tool(
                 ));
             } else if tool.diffs.is_empty() {
                 if let Some(result) = &tool.result_line {
-                    card = card.child(elbow_line(grid, TEXT_MUTED).child(
+                    card = card.child(elbow_line(grid, TEXT_DIM).child(
                         div().flex_1().min_w_0().truncate().child(selection.line(
                             block,
                             result.clone(),
@@ -6693,7 +6691,7 @@ fn group_dot_ink(members: &[Block]) -> (u32, DotShape) {
     {
         (TEXT_FAINT, DotShape::Ring)
     } else {
-        (TEXT_MUTED, DotShape::Solid)
+        (TEXT_DIM, DotShape::Solid)
     }
 }
 
@@ -6793,7 +6791,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                     .flex_shrink_0()
                     .w(px(cells * grid.cell()))
                     .whitespace_nowrap()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(duration)),
             )
         });
@@ -6892,7 +6890,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         .w_full()
         .min_w_0()
         .flex_shrink_0()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(header)
         .child(body)
         .into_any_element()
@@ -6902,7 +6900,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
 /// tests` — the lead word alone in its state ink.
 fn test_elbow_row(block: BlockId, elbow: &TestElbow, selection: &TextRuns, grid: Grid) -> Div {
     let text = elbow.line();
-    elbow_line(grid, TEXT_MUTED).child(
+    elbow_line(grid, TEXT_DIM).child(
         div()
             .debug_selector(|| "tool-test-elbow".into())
             .flex_1()
@@ -7017,7 +7015,7 @@ fn tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRuns, grid: Gr
     let mut details = div().flex().flex_col().min_w_0();
     let mut first = true;
     let mut part = |details: Div, name: &str, text: &str| {
-        let block = output_block(block, name, text, TEXT_MUTED, false, first, selection, grid);
+        let block = output_block(block, name, text, TEXT_DIM, false, first, selection, grid);
         first = false;
         details.child(block)
     };
@@ -7040,7 +7038,7 @@ fn tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRuns, grid: Gr
 }
 
 /// A result's verdict words in their state ink, the rest in the line's
-/// `TEXT_MUTED` (CT-15): a line's lead `ok` (`RUNNING`) or `failed`
+/// `TEXT_DIM` (CT-15): a line's lead `ok` (`RUNNING`) or `failed`
 /// (`BLOCKED`); a test line's trailing `... ok` / `... FAILED`; and the
 /// verdict of a `test result:` line. `24 passed`, `357 passed; 2 failed`
 /// and every other `passed` or `failed` stay muted.
@@ -7074,7 +7072,7 @@ fn result_highlights(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)
                 let start = offset + indent;
                 highlights.push(ink(
                     start..start + word.len(),
-                    verdict_ink(word).unwrap_or(TEXT_MUTED),
+                    verdict_ink(word).unwrap_or(TEXT_DIM),
                 ));
             }
         }
@@ -7093,7 +7091,7 @@ fn result_highlights(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)
                     let start = offset + indent + "test result: ".len();
                     highlights.push(ink(
                         start..start + word.len(),
-                        verdict_ink(word).unwrap_or(TEXT_MUTED),
+                        verdict_ink(word).unwrap_or(TEXT_DIM),
                     ));
                 }
             }
@@ -7155,7 +7153,7 @@ pub(crate) fn output_block(
             .child(output)
             .child(
                 after_elbow(grid)
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(format!("\u{2026} +{hidden} lines"))),
             );
     }
@@ -7283,14 +7281,14 @@ pub fn tool_disclosure_control(
 
 /// A reasoning row's trailing chevron: `ICON_CHEVRON` in `TEXT_FAINT`, its
 /// box always reserved so nothing moves when it shows. It shows while the
-/// pointer is on the row (lifting to `TEXT_MUTED`) or while the keyboard
+/// pointer is on the row (lifting to `TEXT_DIM`) or while the keyboard
 /// targets the row, and it turns a quarter when open. The turn eases over
 /// `motion::CHEVRON` only when the pointer flipped it (`eased`); a keyboard
 /// toggle, reduced motion and a row drawn already open are simply turned.
 pub fn disclosure_chevron(expanded: bool, targeted: bool, eased: bool) -> AnyElement {
     let chevron = |turn: f32| {
         icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_FAINT)
-            .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT_MUTED)))
+            .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT_DIM)))
             .with_transformation(gpui::Transformation::rotate(gpui::radians(
                 std::f32::consts::FRAC_PI_2 * turn,
             )))
@@ -7831,9 +7829,9 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
 }
 
 /// A diff under its call (the prototype's `.diff`, clean): no box, half a
-/// line under the call, on the content column. A `TEXT_MUTED` hunk header opens a hunk that names a
+/// line under the call, on the content column. A `TEXT_DIM` hunk header opens a hunk that names a
 /// section (none otherwise); each row is `[number][sign][code]` (unified
-/// carries the old and the new number), the numbers `TEXT_MUTED`
+/// carries the old and the new number), the numbers `TEXT_DIM`
 /// right-aligned in `DIFF_NUMBER_CELLS`, the sign in its hue, the code in
 /// full syntax colour with its indentation intact — exactly one line tall,
 /// cut with `…` at the column's edge. Removed and added rows wear their
@@ -7867,7 +7865,7 @@ fn render_diff(
                 .pr(px(grid.cell()))
                 .text_right()
                 .whitespace_nowrap()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .children(number.map(|number| SharedString::from(number.to_string()))),
         )
     };
@@ -7957,7 +7955,7 @@ fn render_diff(
                 .min_w_0()
                 .h(px(grid.line))
                 .truncate()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(header.clone())),
             DiffRow::Unified { old, new, side } => {
                 let (sign, code, wash) = cell(side, true);
@@ -7999,7 +7997,7 @@ fn render_diff(
                 .w_full()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(format!("\u{2026} +{omitted} lines"))),
         );
     }
@@ -8343,7 +8341,7 @@ impl DiffKind {
             },
             Self::Context => DiffPaint {
                 sign: "",
-                sign_color: TEXT_MUTED,
+                sign_color: TEXT_DIM,
                 code_color: theme::SYN_PLAIN,
                 wash: None,
             },
@@ -8387,7 +8385,7 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
         // A link or a path reads cyan, like every path in the transcript,
         // with no underline at rest. Inert — paths render, nothing opens.
         Style::Link => Some(HighlightStyle {
-            color: Some(rgb(theme::PATH_INK).into()),
+            color: Some(rgb(theme::LINK_INK).into()),
             ..Default::default()
         }),
     }
@@ -9636,7 +9634,7 @@ mod tests {
             DiffKind::Context.paint(),
             DiffPaint {
                 sign: "",
-                sign_color: TEXT_MUTED,
+                sign_color: TEXT_DIM,
                 code_color: theme::SYN_PLAIN,
                 wash: None,
             }
@@ -9711,7 +9709,7 @@ mod tests {
         // Terminal-native: a link reads cyan like every path, with no
         // underline at rest.
         let link = span_style(Style::Link).unwrap();
-        assert_eq!(link.color, Some(rgb(theme::PATH_INK).into()));
+        assert_eq!(link.color, Some(rgb(theme::LINK_INK).into()));
         assert_eq!(link.underline, None);
         assert!(span_style(Style::Plain).is_none());
     }
@@ -9722,7 +9720,7 @@ mod tests {
         // Terminal-native: settled work is a dim `●`; live work a still
         // green one (only the working line moves); a failure the blocked
         // one; a lost result the hollow `○`. Green never means finished.
-        assert_eq!(tool_dot_ink(&ToolState::Ok), (TEXT_MUTED, DotShape::Solid));
+        assert_eq!(tool_dot_ink(&ToolState::Ok), (TEXT_DIM, DotShape::Solid));
         assert_eq!(
             tool_dot_ink(&ToolState::Running),
             (RUNNING, DotShape::Solid)
@@ -9781,7 +9779,7 @@ mod tests {
         let highlights = call_highlights(&read);
         assert_eq!(highlights.len(), 2);
         assert_eq!(highlights[1].0, 5..30);
-        assert_eq!(highlights[1].1.color, Some(rgb(theme::PATH_INK).into()));
+        assert_eq!(highlights[1].1.color, Some(rgb(theme::TEXT_DIM).into()));
         // Verdict words in a result take their state ink, whole words only.
         let runs = result_highlights("test nav::a ... ok\ntest nav::b ... FAILED\nbook");
         let inks: Vec<_> = runs
@@ -10080,10 +10078,10 @@ mod tests {
         assert_eq!(meter_layout(30, 20), MeterLayout::Track { fraction: 1.0 });
     }
 
-    /// F-2: one attention edge. A waiting Pane draws `ATTENTION_EDGE` on a
+    /// F-2: one attention edge. A waiting Pane draws `WAIT_RING` on a
     /// board whether it holds focus or not — no inner ring, no full-ink
     /// answer target, no red blocked edge; a calm focused Pane draws the
-    /// accent; at rest the edge is transparent and the seams separate
+    /// strong; at rest the edge is transparent and the seams separate
     /// Panes. Solo never recolours the frame.
     #[test]
     fn pane_edge_ranks_state_over_focus() {
@@ -10092,8 +10090,8 @@ mod tests {
         assert_eq!(PaneEdge::of(true, false, false), PaneEdge::Focused);
         assert_eq!(PaneEdge::of(false, false, false), PaneEdge::Rest);
         assert_eq!(PaneEdge::Rest.ink(), rgba(TRANSPARENT).into());
-        assert_eq!(PaneEdge::Focused.ink(), rgb(FOCUS_RING).into());
-        assert_eq!(PaneEdge::Attention.ink(), rgba(ATTENTION_EDGE).into());
+        assert_eq!(PaneEdge::Focused.ink(), rgba(FOCUS_RING).into());
+        assert_eq!(PaneEdge::Attention.ink(), rgba(WAIT_RING).into());
         for focused in [false, true] {
             for attention in [false, true] {
                 let edge = PaneEdge::of(focused, attention, true);
@@ -10115,11 +10113,11 @@ mod tests {
             CheckState::Pending,
             CheckState::Skipped,
         ] {
-            assert_eq!(check_detail_ink(state), TEXT_MUTED);
+            assert_eq!(check_detail_ink(state), TEXT_DIM);
         }
         // CI dots are never the ochre that means an agent waits on you.
         assert_eq!(check_ink(CheckState::Pending), RUNNING);
-        assert_eq!(check_ink(CheckState::Passing), TEXT_MUTED);
+        assert_eq!(check_ink(CheckState::Passing), TEXT_DIM);
         assert_eq!(check_ink(CheckState::Failing), BLOCKED);
         assert_eq!(check_ink(CheckState::Skipped), TEXT_FAINT);
         for state in [
@@ -10406,7 +10404,7 @@ mod tests {
         // The status line's readout: muted, then attention at 80% as a
         // whole token, and never blocked.
         assert_eq!(theme::USAGE_TIGHT, 0.80);
-        assert_eq!(readout_ink(0.79), TEXT_MUTED);
+        assert_eq!(readout_ink(0.79), TEXT_DIM);
         assert_eq!(readout_ink(theme::USAGE_TIGHT), ATTENTION);
         assert_eq!(readout_ink(1.0), ATTENTION);
     }

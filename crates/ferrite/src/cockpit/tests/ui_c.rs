@@ -782,15 +782,15 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
 }
 
 /// F-2: one attention edge. On a board every waiting cell draws
-/// `ATTENTION_EDGE` (ochre at 75%) on all four sides — the one it would
+/// `WAIT_RING` (ochre at 35%) on all four sides — the one it would
 /// answer included, so no cell wears full ink — and in Solo no state
 /// recolours the edge.
 #[gpui::test]
 fn every_waiting_cell_wears_one_attention_edge_and_solo_none(cx: &mut TestAppContext) {
     assert_eq!(
-        crate::theme::ATTENTION_EDGE,
-        (crate::theme::ATTENTION << 8) | 0xbf,
-        "the waiting edge is ATTENTION itself, at 75%"
+        crate::theme::WAIT_RING,
+        (crate::theme::ATTENTION << 8) | 0x59,
+        "the waiting edge is ATTENTION itself, at 35%"
     );
     let (view, fake, cx, _group) = board("edge-answer-target", 4, cx);
     fake.streams.borrow()[1].send(decision("edge-1")).unwrap();

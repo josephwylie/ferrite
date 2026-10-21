@@ -93,6 +93,28 @@ icons![
     // ---- WP-G icons (append names above the end line)
     // (end WP-G)
     "update",
+    // ---- UI refresh icons (SPEC §3.7): Lucide's shapes on a 24 grid,
+    // stroked 2.25 — the family's 1.5px at 16px.
+    "panel-right",
+    "search",
+    "inbox",
+    "archive",
+    "plus",
+    "terminal",
+    "split-right",
+    "split-down",
+    "check-circle",
+    "x-circle",
+    "shield",
+    "arrow-up",
+    "arrow-down",
+    "corner-down-left",
+    "git-pull-request",
+    "git-merge",
+    "refresh",
+    "external",
+    "maximize",
+    // (end UI refresh)
 ];
 
 #[allow(dead_code)]
@@ -177,6 +199,66 @@ pub const BOARD: &str = "icons/board.svg";
 
 // ---- WP-G icon names (append consts above the end line)
 // (end WP-G)
+
+// ---- UI refresh icon names (SPEC §3.7; the phases after 0 draw them)
+/// The right panel's toggle.
+#[allow(dead_code)]
+pub const PANEL_RIGHT: &str = "icons/panel-right.svg";
+/// The nav's `Search` view and the palette's input.
+#[allow(dead_code)]
+pub const SEARCH: &str = "icons/search.svg";
+/// The nav's `Needs you` view.
+#[allow(dead_code)]
+pub const INBOX: &str = "icons/inbox.svg";
+/// The nav's `Parked` view.
+#[allow(dead_code)]
+pub const ARCHIVE: &str = "icons/archive.svg";
+/// Add: a new Project, a new Thread, attach.
+#[allow(dead_code)]
+pub const PLUS: &str = "icons/plus.svg";
+/// An idle Thread's mark, and `Main`'s tab: a square holding `>_`.
+#[allow(dead_code)]
+pub const TERMINAL: &str = "icons/terminal.svg";
+/// Open the Beside slot to the right.
+#[allow(dead_code)]
+pub const SPLIT_RIGHT: &str = "icons/split-right.svg";
+/// Open the Beside slot below.
+#[allow(dead_code)]
+pub const SPLIT_DOWN: &str = "icons/split-down.svg";
+/// Done: a check in a ring (a shape, never a hue).
+#[allow(dead_code)]
+pub const CHECK_CIRCLE: &str = "icons/check-circle.svg";
+/// Failed: a cross in a ring.
+#[allow(dead_code)]
+pub const X_CIRCLE: &str = "icons/x-circle.svg";
+/// The permission mode.
+#[allow(dead_code)]
+pub const SHIELD: &str = "icons/shield.svg";
+/// Send; a commit not pushed.
+#[allow(dead_code)]
+pub const ARROW_UP: &str = "icons/arrow-up.svg";
+/// A commit to pull.
+#[allow(dead_code)]
+pub const ARROW_DOWN: &str = "icons/arrow-down.svg";
+/// The palette cursor row's enter hint.
+#[allow(dead_code)]
+pub const CORNER_DOWN_LEFT: &str = "icons/corner-down-left.svg";
+/// An open, draft or closed pull request.
+#[allow(dead_code)]
+pub const GIT_PULL_REQUEST: &str = "icons/git-pull-request.svg";
+/// A merged pull request.
+#[allow(dead_code)]
+pub const GIT_MERGE: &str = "icons/git-merge.svg";
+/// Read the pull request again.
+#[allow(dead_code)]
+pub const REFRESH: &str = "icons/refresh.svg";
+/// Open on GitHub.
+#[allow(dead_code)]
+pub const EXTERNAL: &str = "icons/external.svg";
+/// Fill the board with a Pane.
+#[allow(dead_code)]
+pub const MAXIMIZE: &str = "icons/maximize.svg";
+// (end UI refresh)
 
 pub struct Assets;
 
@@ -391,7 +473,10 @@ mod tests {
             REASONING,
             IMAGE,
             BOARD,
-        ] {
+        ]
+        .into_iter()
+        .chain(REFRESH_ICONS)
+        {
             let bytes = Assets
                 .load(key)
                 .expect("the asset source never errors")
@@ -402,7 +487,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            29,
+            29 + REFRESH_ICONS.len(),
             "the prototype and app controls, including close, the four \
              Windows caption glyphs, the image mark, the CLI update mark and the board door; every glyph \
              Geist Mono lacks is typed in the face the platform falls back to (theme rule 10)"
@@ -447,7 +532,10 @@ mod tests {
             SUBAGENTS,
             COPY,
             RESEND,
-        ] {
+        ]
+        .into_iter()
+        .chain(REFRESH_ICONS)
+        {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
             assert!(svg.contains(r#"fill="none""#), "{key} does not fill");
@@ -482,6 +570,29 @@ mod tests {
             assert!(!svg.contains("stroke"), "{key} is a fill logomark");
         }
     }
+
+    /// The UI refresh's line icons (SPEC §3.7), all in the family.
+    const REFRESH_ICONS: [&str; 19] = [
+        PANEL_RIGHT,
+        SEARCH,
+        INBOX,
+        ARCHIVE,
+        PLUS,
+        TERMINAL,
+        SPLIT_RIGHT,
+        SPLIT_DOWN,
+        CHECK_CIRCLE,
+        X_CIRCLE,
+        SHIELD,
+        ARROW_UP,
+        ARROW_DOWN,
+        CORNER_DOWN_LEFT,
+        GIT_PULL_REQUEST,
+        GIT_MERGE,
+        REFRESH,
+        EXTERNAL,
+        MAXIMIZE,
+    ];
 
     /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.
     fn effective_stroke(svg: &str) -> f32 {

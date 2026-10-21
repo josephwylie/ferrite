@@ -1207,7 +1207,7 @@ impl TranscriptView {
                 vec![(
                     0..to,
                     gpui::HighlightStyle {
-                        color: Some(gpui::rgb(theme::PATH_INK).into()),
+                        color: Some(gpui::rgb(theme::LINK_INK).into()),
                         ..Default::default()
                     },
                 )]
@@ -1231,7 +1231,7 @@ impl TranscriptView {
             .min_w_0()
             .flex_shrink_0()
             .truncate()
-            .text_color(gpui::rgb(theme::TEXT_MUTED))
+            .text_color(gpui::rgb(theme::TEXT_DIM))
             .child(selection.line(BlockId::BANNER, line.text, highlights))
             .children(overlay)
             .into_any_element()
@@ -1500,7 +1500,7 @@ pub(crate) enum Mark {
 impl Mark {
     fn ink(self) -> u32 {
         match self {
-            Self::Prompt => theme::ACCENT,
+            Self::Prompt => theme::TEXT_STRONG,
             Self::Failure => theme::BLOCKED,
             Self::Decision => theme::ATTENTION,
             Self::Pass => theme::RUNNING,
@@ -2096,9 +2096,9 @@ impl Render for TranscriptView {
             .min_w_0()
             .w_full()
             .min_h_0()
-            // One grid for the whole transcript (theme rule 1): the reading
-            // size on its 1.5x line, every row inheriting it.
-            .font_family(theme::FONT_UI)
+            // One grid for the whole transcript (theme rule 1): Geist Mono
+            // at the reading size on its 1.5x line, every row inheriting it.
+            .font_family(theme::FONT_CODE)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .text_color(gpui::rgb(theme::TEXT))
@@ -2129,7 +2129,7 @@ impl Render for TranscriptView {
             .min_w_0()
             .size_full()
             .min_h_0()
-            .font_family(theme::FONT_UI)
+            .font_family(theme::FONT_CODE)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .child(list)

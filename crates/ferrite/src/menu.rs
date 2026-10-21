@@ -6,9 +6,9 @@
 //! Every menu, picker, popover and card draws in this one grammar: the
 //! float (`float`: `FLOAT_GROUND`, a 1px `FLOAT_EDGE`, square, the float
 //! shadow, no inset), a head row (`head`), section rows (`section`), rows
-//! on the 20px grid with a 2-cell gutter that holds the accent `❯` on the
+//! on the 20px grid with a 2-cell gutter that holds the strong `❯` on the
 //! cursor row (`row`, `item_row`), and a footer of key hints under a
-//! `FLOAT_RULE` (`footer`), every word of it `TEXT_MUTED`. A short ladder's
+//! `FLOAT_RULE` (`footer`), every word of it `TEXT_DIM`. A short ladder's
 //! chosen step is an inverse token (`token`). Floats are opaque (theme
 //! WP-E, FL-15), so their rows wear the float inks (`FLOAT_SEL` on the
 //! cursor row, `FLOAT_HOVER` under the pointer) and never a glass overlay.
@@ -42,7 +42,7 @@ pub fn float() -> Div {
 }
 
 /// A float's head row: its title in `TEXT_STRONG` at `W_STRONG`, and at the
-/// right whatever the caller adds (its command, a verb), in `TEXT_MUTED`.
+/// right whatever the caller adds (its command, a verb), in `TEXT_DIM`.
 pub fn head(title: impl Into<SharedString>) -> Div {
     components::text_ui()
         .flex()
@@ -53,7 +53,7 @@ pub fn head(title: impl Into<SharedString>) -> Div {
         .h(px(FLOAT_ROW_H))
         .px(px(FLOAT_PAD_X))
         .whitespace_nowrap()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .min_w_0()
@@ -64,7 +64,7 @@ pub fn head(title: impl Into<SharedString>) -> Div {
         )
 }
 
-/// A section row: its title in `TEXT_MUTED`, half a row above it, led by a
+/// A section row: its title in `TEXT_DIM`, half a row above it, led by a
 /// provider's logomark in its brand colour, an optional note after a `·`.
 pub fn section(
     title: impl Into<SharedString>,
@@ -81,7 +81,7 @@ pub fn section(
         .px(px(FLOAT_PAD_X))
         .whitespace_nowrap()
         .cursor_default()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .when_some(logo, |line, (path, ink)| {
             line.child(icons::icon(path, STATUS_LOGO, ink))
         })
@@ -97,7 +97,7 @@ pub fn section(
         })
 }
 
-/// The 2-cell gutter every row opens with: the accent `❯` (`W_STRONG`, the
+/// The 2-cell gutter every row opens with: the strong `❯` (`W_STRONG`, the
 /// drawn prompt mark) on the cursor row, empty on the rest.
 pub fn gutter(cursor: bool) -> Div {
     div()
@@ -108,7 +108,7 @@ pub fn gutter(cursor: bool) -> Div {
         .h(px(FLOAT_ROW_H))
         .when(cursor, |cell| {
             cell.debug_selector(|| "float-cursor".into())
-                .child(components::prompt_mark(ACCENT))
+                .child(components::prompt_mark(TEXT_STRONG))
         })
 }
 
@@ -117,10 +117,10 @@ const ARMED_SEAM: &str = " \u{b7} ";
 const ARMED_ASK: &str = "press again";
 
 /// A row's inks: its label, and the ground (`FLOAT_SEL` on the cursor and
-/// an armed row). Its description and key are always `TEXT_MUTED`.
+/// an armed row). Its description and key are always `TEXT_DIM`.
 fn label_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
     if item.disabled {
-        TEXT_MUTED
+        TEXT_DIM
     } else if armed {
         BLOCKED
     } else if cursor {
@@ -148,7 +148,7 @@ pub fn key_label(keys: &str, ink: u32) -> AnyElement {
 }
 
 /// A row's face with no id and no pointer role, for kit hosts that own the
-/// row's interaction: the gutter, the label (accent on its fuzzy matches,
+/// row's interaction: the gutter, the label (strong on its fuzzy matches,
 /// never a weight), the description two cells after it, the key hard
 /// right, and a green `✓` on the standing choice.
 pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
@@ -206,7 +206,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
                     .min_w_0()
                     .ml(px(FLOAT_DETAIL_GAP))
                     .truncate()
-                    .text_color(rgb(TEXT_MUTED));
+                    .text_color(rgb(TEXT_DIM));
                 row.child(if item.mono {
                     cell.text_ellipsis_start().child(detail)
                 } else {
@@ -221,7 +221,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
                     .flex()
                     .flex_shrink_0()
                     .ml(px(FLOAT_DETAIL_GAP))
-                    .child(key_label(&keys, TEXT_MUTED)),
+                    .child(key_label(&keys, TEXT_DIM)),
             )
         })
         .when(item.checked, |row| {
@@ -255,7 +255,7 @@ pub fn item_row(id: impl Into<ElementId>, item: &Item, cursor: bool, armed: bool
 }
 
 /// An inert line in a float (loading, empty, a refusal): one row in
-/// `TEXT_MUTED` on the rows' text edge.
+/// `TEXT_DIM` on the rows' text edge.
 pub fn note(text: impl Into<SharedString>) -> Div {
     components::text_ui()
         .flex()
@@ -265,12 +265,12 @@ pub fn note(text: impl Into<SharedString>) -> Div {
         .pl(px(FLOAT_PAD_X + FLOAT_GUTTER))
         .pr(px(FLOAT_PAD_X))
         .cursor_default()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(text.into())
 }
 
 /// A float's footer: a `FLOAT_RULE` rule, then one row of key hints —
-/// `↑↓ select · ⏎ open · esc` — all `TEXT_MUTED`, its `·` too (FL-14).
+/// `↑↓ select · ⏎ open · esc` — all `TEXT_DIM`, its `·` too (FL-14).
 pub fn footer(hints: &[(&str, &str)]) -> Div {
     let text = hints
         .iter()
@@ -286,7 +286,7 @@ pub fn footer(hints: &[(&str, &str)]) -> Div {
     footer_line(text)
 }
 
-/// A footer row of already-joined words, all `TEXT_MUTED`: cut with an
+/// A footer row of already-joined words, all `TEXT_DIM`: cut with an
 /// ellipsis where the row is narrower than its hints.
 pub fn footer_line(text: impl Into<SharedString>) -> Div {
     let text: SharedString = text.into();
@@ -294,7 +294,7 @@ pub fn footer_line(text: impl Into<SharedString>) -> Div {
 }
 
 /// The footer's row with nothing in it yet: the `FLOAT_RULE` rule, half a
-/// row above it, one row of `TEXT_MUTED`. For a footer whose keys are set
+/// row above it, one row of `TEXT_DIM`. For a footer whose keys are set
 /// as key combinations (`⌘`, `components::key_combo`).
 pub fn footer_shell() -> Div {
     components::text_ui()
@@ -308,12 +308,12 @@ pub fn footer_shell() -> Div {
         .border_color(FLOAT_RULE)
         .whitespace_nowrap()
         .overflow_hidden()
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
 }
 
 /// One step of a short ladder (an effort level, a two-way setting): the
-/// chosen one inverse — `ACCENT_STRONG` with `ON_ACCENT` at `W_STRONG` — the
-/// rest `TEXT_MUTED`, `FLOAT_HOVER` under the pointer.
+/// chosen one inverse — `PRIMARY` with `ON_PRIMARY` at `W_STRONG` — the
+/// rest `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
 pub fn token(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -336,12 +336,12 @@ pub fn token(
         .child(components::cells(label));
     if chosen {
         token
-            .bg(rgb(ACCENT_STRONG))
-            .text_color(rgb(ON_ACCENT))
+            .bg(rgb(PRIMARY))
+            .text_color(rgb(ON_PRIMARY))
             .font_weight(W_STRONG)
     } else {
         token
-            .text_color(rgb(TEXT_MUTED))
+            .text_color(rgb(TEXT_DIM))
             .cursor_pointer()
             .hover_float(key)
             .press_float()
@@ -379,7 +379,7 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
                     .flex()
                     .flex_shrink_0()
                     .ml(px(FLOAT_DETAIL_GAP))
-                    .child(key_label(&keys, TEXT_MUTED)),
+                    .child(key_label(&keys, TEXT_DIM)),
             )
         },
     )
@@ -408,7 +408,7 @@ pub fn tooltip(
 }
 
 /// A tooltip that names a verb and its key (`Toggle sidebar ⌘B`,
-/// `Close esc`, `Send ↵`): the label, then the key in `TEXT_MUTED`,
+/// `Close esc`, `Send ↵`): the label, then the key in `TEXT_DIM`,
 /// modifiers drawn as glyphs (`components::key_combo`). No parentheses,
 /// and no suffix when `key` is `None` — a key is read from the key table
 /// (`components::bound_chord`), never typed, so a tooltip never names a
@@ -432,7 +432,7 @@ pub fn tooltip_with_key(
                 .child(gpui::div().min_w_0().child(label.clone()))
                 .children(
                     key.as_ref()
-                        .map(|key| components::key_combo(key, TEXT_MUTED).flex_shrink_0()),
+                        .map(|key| components::key_combo(key, TEXT_DIM).flex_shrink_0()),
                 )
         })
         .font_family(FONT_UI)
@@ -735,7 +735,7 @@ impl ChoiceContent {
                         .flex_shrink_0()
                         .w(px(components::run_width(&ladder.label) + TOKEN_PAD_X))
                         .whitespace_nowrap()
-                        .text_color(rgb(TEXT_MUTED))
+                        .text_color(rgb(TEXT_DIM))
                         .child(ladder.label.clone()),
                 );
             for (at, step) in ladder.steps.iter().enumerate() {
@@ -973,7 +973,7 @@ mod tests {
         assert_eq!(drawn.style().mouse_cursor, None);
     }
 
-    /// FL-14: a footer's words and seams are all `TEXT_MUTED` (no faint
+    /// FL-14: a footer's words and seams are all `TEXT_DIM` (no faint
     /// `·`), under the float's own rule.
     #[test]
     fn a_footer_is_one_muted_line_under_the_float_rule() {
@@ -982,7 +982,7 @@ mod tests {
             ("\u{23ce}", "apply"),
             ("esc", ""),
         ]);
-        assert_eq!(drawn.style().text.color, Some(rgb(TEXT_MUTED).into()));
+        assert_eq!(drawn.style().text.color, Some(rgb(TEXT_DIM).into()));
         assert_eq!(drawn.style().border_color, Some(FLOAT_RULE.into()));
         // The cursor row keeps its bar under the pointer; another row only
         // takes the float's hover ink.

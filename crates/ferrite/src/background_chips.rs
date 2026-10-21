@@ -125,7 +125,7 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
                 .justify_center()
                 .h(px(theme::ROW))
                 .px(px(theme::SPACE_0_5))
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .hover_carried(format!("background-chip-stop-{index}"))
                 .child("\u{d7}")
                 .on_click(move |_: &ClickEvent, window, cx| {

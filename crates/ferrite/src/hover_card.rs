@@ -4,10 +4,10 @@
 //!
 //! `HOVER_CARD_CELLS` chrome cells wide on the float ground with its 1px
 //! `paint::LINE2` edge and the float shadow; it takes no pointer. Its head
-//! is the path in `PATH_INK` and `:211` in `TEXT_MUTED`, with `⌘-click opens
+//! is the path in `LINK_INK` and `:211` in `TEXT_DIM`, with `⌘-click opens
 //! in a reader pane` at its right; its body six numbered lines,
 //! `line-3..line+2`, the target line on `paint::SELECTION` with its number in
-//! `ACCENT`, the code syntax-coloured and cut with `…`; its foot, over a
+//! `TEXT_STRONG`, the code syntax-coloured and cut with `…`; its foot, over a
 //! `paint::LINE` rule, `modified in this thread · +9−4 · 2 min ago` when
 //! the Thread changed the file.
 //!
@@ -294,14 +294,14 @@ impl gpui::Render for HoverCard {
             (
                 0..path.len(),
                 gpui::HighlightStyle {
-                    color: Some(rgb(theme::PATH_INK).into()),
+                    color: Some(rgb(theme::LINK_INK).into()),
                     ..Default::default()
                 },
             ),
             (
                 path.len()..head_text.len(),
                 gpui::HighlightStyle {
-                    color: Some(rgb(theme::TEXT_MUTED).into()),
+                    color: Some(rgb(theme::TEXT_DIM).into()),
                     ..Default::default()
                 },
             ),
@@ -323,8 +323,8 @@ impl gpui::Render for HoverCard {
                     .flex_shrink_0()
                     .items_center()
                     .pl(px(2.0 * cell))
-                    .text_color(rgb(theme::TEXT_MUTED))
-                    .child(crate::components::key_combo("cmd", theme::TEXT_MUTED))
+                    .text_color(rgb(theme::TEXT_DIM))
+                    .child(crate::components::key_combo("cmd", theme::TEXT_DIM))
                     // Exactly its cells: the hint is right-aligned, and a
                     // measured run rounds up a pixel and would stand it
                     // that much left.
@@ -352,7 +352,11 @@ impl gpui::Render for HoverCard {
                         .pr(px(theme::HOVER_CARD_NUMBER_PAD_CELLS * cell))
                         .text_right()
                         .whitespace_nowrap()
-                        .text_color(rgb(if on { theme::ACCENT } else { theme::TEXT_MUTED }))
+                        .text_color(rgb(if on {
+                            theme::TEXT_STRONG
+                        } else {
+                            theme::TEXT_DIM
+                        }))
                         .child(SharedString::from(number.to_string())),
                 ))
                 .child(
@@ -378,7 +382,7 @@ impl gpui::Render for HoverCard {
                 .border_t_1()
                 .border_color(theme::paint::LINE)
                 .whitespace_nowrap()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .child(StyledText::new(SharedString::from(text)).with_highlights(highlights))
         });
         div()

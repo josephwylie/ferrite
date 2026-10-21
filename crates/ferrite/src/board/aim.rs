@@ -9,9 +9,7 @@ use gpui::{div, px, rgb, AnyElement, Context, SharedString};
 
 use super::BoardView;
 use crate::components;
-use crate::theme::{
-    CH, CHROME, CONTROL_H, FS_UI, ICON_CHEVRON, LH_UI, LINE, ROW, TEXT, TEXT_MUTED,
-};
+use crate::theme::{CH, CHROME, CONTROL_H, FS_UI, ICON_CHEVRON, LH_UI, LINE, ROW, TEXT, TEXT_DIM};
 
 /// A nav Project new tasks can go to.
 #[derive(Clone, Debug, PartialEq)]
@@ -145,7 +143,7 @@ impl BoardView {
                     .child(crate::icons::icon(
                         crate::icons::CHEVRON_DOWN,
                         ICON_CHEVRON,
-                        TEXT_MUTED,
+                        TEXT_DIM,
                     )),
             );
         let picker = components::ChoiceMenu {
@@ -182,7 +180,7 @@ impl BoardView {
                 .bg(rgb(CHROME))
                 .border_b_1()
                 .border_color(rgb(LINE))
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .whitespace_nowrap()
                 // Its presses are its own, not a click on the board's cells.
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())

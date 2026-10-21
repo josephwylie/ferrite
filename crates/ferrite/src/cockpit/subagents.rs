@@ -367,7 +367,7 @@ fn mark_slot(mark: Option<u32>) -> Div {
 /// One Subject tab's face on the headless tab (its role and selection are
 /// the platform's): `width` wide (`tab_width`), `CHIP_H` high. Selected, a
 /// `SELECTION` pill in `TEXT_STRONG` that goes to `SELECTION_HOVER` under the pointer
-/// (`hover_carried`); otherwise no ground, `TEXT_MUTED` blending to `TEXT`
+/// (`hover_carried`); otherwise no ground, `TEXT_DIM` blending to `TEXT`
 /// through the one hover blend. No edge and no rule: the pill says which.
 fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) -> gpui_base::Tab {
     use crate::pointer::Pointer as _;
@@ -405,7 +405,7 @@ fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) ->
         .when(!selected, |tab| {
             tab.text_color(crate::motion::hover_blend(
                 &key,
-                rgb(theme::TEXT_MUTED).into(),
+                rgb(theme::TEXT_DIM).into(),
                 rgb(theme::TEXT).into(),
             ))
             .on_hover(crate::motion::hover_listener(key.clone()))
@@ -526,7 +526,7 @@ impl CockpitView {
             let run = gpui::TextRun {
                 len: text.len(),
                 font: gpui::font(theme::FONT_UI),
-                color: rgb(theme::TEXT_MUTED).into(),
+                color: rgb(theme::TEXT_DIM).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -739,7 +739,7 @@ impl CockpitView {
                             .gap(px(theme::SUBJECT_TAB_INNER_GAP))
                             .text_size(px(theme::FS_UI))
                             .line_height(px(theme::LH_UI))
-                            .text_color(rgb(theme::TEXT_MUTED))
+                            .text_color(rgb(theme::TEXT_DIM))
                             .child(mark_slot(hidden_waiting.then_some(theme::ATTENTION)))
                             .child(components::tabular(
                                 div().child(format!("+{}", hidden.len())),
@@ -911,7 +911,7 @@ impl CockpitView {
             .items_center()
             .min_w_0()
             .overflow_hidden()
-            .text_color(rgb(theme::TEXT_MUTED));
+            .text_color(rgb(theme::TEXT_DIM));
         let text = match (&error, coverage) {
             // `failed · could not load transcript · <error>`: only the
             // state word carries the hue, and the error is machine text.
@@ -2402,7 +2402,7 @@ impl Cards {
                             div()
                                 .flex_shrink_0()
                                 .w(px(3.0 * theme::CH))
-                                .text_color(rgb(theme::TEXT_MUTED))
+                                .text_color(rgb(theme::TEXT_DIM))
                                 .children(
                                     digit(question.options.len())
                                         .map(|key| SharedString::from(decision::key_label(&key))),

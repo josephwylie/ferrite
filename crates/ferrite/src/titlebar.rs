@@ -180,7 +180,7 @@ fn drag_region(maximized: bool) -> Div {
 /// row on the chrome (`paint::CHROME`), closed above by a `paint::LINE`
 /// rule, tmux's grammar in the one face — the window's `doors` (the
 /// sidebar toggle, the bell and, off macOS, the gear), `ferrite` in
-/// `ACCENT` at the strong weight, `1 solo` and a tab per Group (the current
+/// `TEXT_STRONG` at the strong weight, `1 solo` and a tab per Group (the current
 /// view's bright on a band), the stretch holding the focused Pane's
 /// `status` line, a usage segment per provider, the `?` door and the clock
 /// in `TEXT`. No state counts: the sidebar and the bell hold those. The
@@ -218,7 +218,7 @@ pub fn bottom_bar(
                 .items_center()
                 .px(px(BAR_SEG_PAD_X))
                 .font_weight(W_STRONG)
-                .text_color(rgb(ACCENT))
+                .text_color(rgb(TEXT_STRONG))
                 .child(components::cells("ferrite")),
         )
         .children(tabs)
@@ -402,7 +402,7 @@ fn caption_buttons(maximized: bool) -> Div {
 /// control, because the pointer stops at the window's corner and the hover
 /// face has to be there when it does. Full height — the buttons win the top
 /// edge from the resize border, as Windows' own do. The mark rests at
-/// `TEXT_MUTED` and brightens under the pointer; `close` lays the platform
+/// `TEXT_DIM` and brightens under the pointer; `close` lays the platform
 /// red under it.
 fn button(
     id: &'static str,
@@ -455,7 +455,7 @@ fn button(
             )
         })
         .child(
-            icon(glyph, CAPTION_GLYPH, TEXT_MUTED)
+            icon(glyph, CAPTION_GLYPH, TEXT_DIM)
                 .group_hover(id, move |style| style.text_color(rgb(hover_ink))),
         )
 }

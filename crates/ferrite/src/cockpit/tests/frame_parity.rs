@@ -58,7 +58,7 @@ fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
 }
 
 /// F-2: a waiting Pane wears the one attention edge whether it holds focus
-/// or not — no focus ring inside it — and a calm focused Pane the accent.
+/// or not — no focus ring inside it — and a calm focused Pane `TEXT_STRONG`.
 #[gpui::test]
 fn a_focused_waiting_pane_wears_only_the_attention_edge(cx: &mut TestAppContext) {
     let (view, fake, cx, _group) = board_of("frame-one-edge", 4, cx);

@@ -124,7 +124,7 @@ pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
         .h(px(ICON_BUTTON))
         .p_0()
         .accessibility_label(label)
-        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_MUTED))
+        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_DIM))
 }
 
 /// The pinned footer under a `paint::LINE`: secondary actions left, the
@@ -438,7 +438,7 @@ pub fn body(
                 .when(searching && shown.groups.is_empty(), |list| {
                     list.child(
                         components::text_ui()
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .child("no matching settings"),
                     )
                 })
@@ -458,7 +458,7 @@ pub fn body(
         .child(content)
 }
 
-/// The search line atop the sidebar: the accent `❯` in its gutter, then the
+/// The search line atop the sidebar: the strong `❯` in its gutter, then the
 /// field, over a `paint::LINE` — the palette's own input line.
 fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     let focused = gpui::Focusable::focus_handle(search.read(cx), cx).is_focused(window);
@@ -484,9 +484,9 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
 }
 
 /// A sidebar row: the page's name on the grid. The page shown is
-/// `paint::SELECTION` with the accent `❯` and `TEXT_STRONG`; the rest `TEXT`,
+/// `paint::SELECTION` with the strong `❯` and `TEXT_STRONG`; the rest `TEXT`,
 /// `paint::HOVER` under the pointer. While a search runs, a page with no
-/// match reads `TEXT_MUTED`.
+/// match reads `TEXT_DIM`.
 fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     let (rest, hover): (gpui::Hsla, gpui::Hsla) = if selected {
         (paint::SELECTION.into(), paint::SELECTION_HOVER.into())
@@ -496,7 +496,7 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     let ink = match (selected, hit) {
         (true, _) => TEXT_STRONG,
         (false, true) => TEXT,
-        (false, false) => TEXT_MUTED,
+        (false, false) => TEXT_DIM,
     };
     components::faded_button(
         key.selector(),
@@ -522,7 +522,7 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     )
 }
 
-/// A group: its label (and a provider's mark) as a `TEXT_MUTED` row, then
+/// A group: its label (and a provider's mark) as a `TEXT_DIM` row, then
 /// its rows, each over a `paint::LINE` rule.
 fn group_rows(
     label: Option<SharedString>,
@@ -549,7 +549,7 @@ fn group_rows(
                 .items_center()
                 .gap(px(CH))
                 .h(px(ROW))
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .children(group.mark.map(|(path, ink)| icon(path, STATUS_LOGO, ink)))
                 .child(section_words(&label))
         }))
@@ -619,20 +619,20 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
         )
 }
 
-/// A row's hint: `TEXT_MUTED`, one line. One that opens with a key table's
+/// A row's hint: `TEXT_DIM`, one line. One that opens with a key table's
 /// chord (`cmd-B toggles it any time`) draws the chord as keys (`⌘B`,
 /// `components::key_combo`): the face has no command glyph.
 fn hint(detail: SharedString) -> Div {
     let line = components::text_ui()
         .min_w_0()
         .truncate()
-        .text_color(rgb(TEXT_MUTED));
+        .text_color(rgb(TEXT_DIM));
     match detail.split_once(' ') {
         Some((chord, rest)) if chord.starts_with("cmd-") => line
             .flex()
             .items_center()
             .gap(px(CH))
-            .child(components::key_combo(chord, TEXT_MUTED))
+            .child(components::key_combo(chord, TEXT_DIM))
             .child(SharedString::from(rest.to_string())),
         _ => line.child(detail),
     }
@@ -713,7 +713,7 @@ pub fn chooser<T: Clone + 'static>(
                             .truncate()
                             .child(components::form_label(selected.clone(), TEXT)),
                     )
-                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, TEXT_MUTED).flex_shrink_0()),
+                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, TEXT_DIM).flex_shrink_0()),
             )
             .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
                 options.iter().fold(
@@ -771,17 +771,17 @@ pub fn model_options(
     options
 }
 
-/// The on/off token's word and ink: `on` in the accent at `W_STRONG`, `off`
-/// in `TEXT_MUTED`.
+/// The on/off token's word and ink: `on` in `TEXT_STRONG` at `W_STRONG`, `off`
+/// in `TEXT_DIM`.
 fn toggle_face(checked: bool) -> (&'static str, u32) {
     if checked {
-        ("on", ACCENT)
+        ("on", TEXT_STRONG)
     } else {
-        ("off", TEXT_MUTED)
+        ("off", TEXT_DIM)
     }
 }
 
-/// An on/off setting: one word on the row — `on` in the accent, `off` dim —
+/// An on/off setting: one word on the row — `on` in `TEXT_STRONG`, `off` dim —
 /// that flips the setting on a click, Enter or Space (a tab stop with the
 /// focus outline), `paint::HOVER` under the pointer. No iOS switch.
 pub fn toggle(
@@ -817,20 +817,16 @@ pub fn toggle(
 
 /// One option of a short ladder (a two-way choice, a stepper's ends): a
 /// token one row high with a cell of padding. Chosen, it is inverse —
-/// `ACCENT_STRONG` with `ON_ACCENT` at `W_STRONG`; the rest `TEXT_MUTED`,
+/// `PRIMARY` with `ON_PRIMARY` at `W_STRONG`; the rest `TEXT_DIM`,
 /// `paint::HOVER` under the pointer. A tab stop.
 pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (rest, hover, ink): (gpui::Hsla, gpui::Hsla, u32) = if selected {
-        (
-            rgb(ACCENT_STRONG).into(),
-            rgb(PRIMARY_HOVER).into(),
-            ON_ACCENT,
-        )
+        (rgb(PRIMARY).into(), rgb(TEXT).into(), ON_PRIMARY)
     } else {
         (
             gpui::rgba(TRANSPARENT).into(),
             paint::HOVER.into(),
-            TEXT_MUTED,
+            TEXT_DIM,
         )
     };
     components::faded_button(id, rest, hover, paint::PRESS.into(), rgb(ink).into(), cx)
@@ -997,7 +993,7 @@ pub fn entry(
 }
 
 /// A read-only fact (About): its key at the left, its value at the right
-/// in `TEXT_MUTED` (versions are machine text), wrapping anywhere rather
+/// in `TEXT_DIM` (versions are machine text), wrapping anywhere rather
 /// than cut. Searchable by both.
 pub fn fact(title: &'static str, value: SharedString) -> Row {
     let words = vec![value.clone()];
@@ -1030,7 +1026,7 @@ pub fn action(
                 .debug_selector(move || id.into())
                 .h(px(SETTINGS_CONTROL_H))
                 .px(px(CH))
-                .child(components::form_label(label, ON_ACCENT))
+                .child(components::form_label(label, ON_PRIMARY))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     act(cx);
@@ -1086,7 +1082,7 @@ pub fn path_fact(
                     if copied { RUNNING } else { TEXT_FAINT },
                 )
                 .flex_shrink_0()
-                .group_hover(COPY_GROUP, |style| style.text_color(rgb(TEXT_MUTED))),
+                .group_hover(COPY_GROUP, |style| style.text_color(rgb(TEXT_DIM))),
             )
             .into_any_element()
     })
@@ -1103,7 +1099,7 @@ fn fact_value(title: &'static str, value: SharedString) -> Div {
         .text_right()
         .font_family(FONT_CODE)
         .font_weight(W_BODY)
-        .text_color(rgb(TEXT_MUTED))
+        .text_color(rgb(TEXT_DIM))
         .child(value)
 }
 
@@ -1119,18 +1115,18 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
 }
 
 /// The bottom bar's gear: the door to this panel. Ground and glyph blend
-/// to their hover faces over the one 150ms blend (`TEXT_MUTED` → `TEXT`, as
+/// to their hover faces over the one 150ms blend (`TEXT_DIM` → `TEXT`, as
 /// the collapse button does). `gear` hangs its tooltip, `Settings ⌘,`.
 pub fn gear_button(cx: &App) -> Button {
     let id = gpui::ElementId::from("settings-gear");
     let key = crate::pointer::hover_key(&id);
-    let glyph = crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into());
+    let glyph = crate::motion::hover_blend(&key, rgb(TEXT_DIM).into(), rgb(TEXT).into());
     components::faded_button(
         id,
         gpui::rgba(TRANSPARENT).into(),
         paint::HOVER.into(),
         paint::PRESS.into(),
-        rgb(TEXT_MUTED).into(),
+        rgb(TEXT_DIM).into(),
         cx,
     )
     .debug_selector(|| "settings-gear".into())
@@ -1138,7 +1134,7 @@ pub fn gear_button(cx: &App) -> Button {
     .h_full()
     .p_0()
     .accessibility_label("Settings")
-    .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
+    .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_DIM).text_color(glyph))
 }
 
 /// The gear with its tooltip, `Settings ⌘,` (a kit button's own tooltip is
@@ -1188,7 +1184,7 @@ mod tests {
         assert_eq!(style.background, Some(paint::FLOAT.into()));
         assert_eq!(style.border_color, Some(paint::LINE2.into()));
         assert_eq!(style.box_shadow, Some(components::float_shadow()));
-        assert_eq!(style.corner_radii.top_left, Some(px(0.).into()), "square");
+        assert_eq!(style.corner_radii.top_left, Some(px(R_PANE).into()));
         assert_eq!(veil().style().background, Some(gpui::rgba(VEIL).into()));
     }
 
@@ -1301,14 +1297,14 @@ mod tests {
     }
 
     /// Terminal-native (WP-E): an on/off setting is a word, `on` in the
-    /// accent and `off` dim — no iOS switch.
+    /// strong and `off` dim — no iOS switch.
     #[test]
     fn a_toggle_reads_on_in_the_accent_and_off_dim() {
-        assert_eq!(toggle_face(true), ("on", ACCENT));
-        assert_eq!(toggle_face(false), ("off", TEXT_MUTED));
+        assert_eq!(toggle_face(true), ("on", TEXT_STRONG));
+        assert_eq!(toggle_face(false), ("off", TEXT_DIM));
     }
 
-    /// The chosen token of a short ladder is inverse — the accent ground
+    /// The chosen token of a short ladder is inverse — `TEXT_STRONG` ground
     /// with dark ink — and the rest lie on no ground at all.
     #[gpui::test]
     fn a_chosen_token_is_inverse_and_the_rest_lie_flat(cx: &mut gpui::TestAppContext) {
@@ -1316,7 +1312,7 @@ mod tests {
             crate::theme::init_components(cx);
             let mut on = chip(("c", 0), "Claude".into(), true, cx);
             let mut off = chip(("c", 1), "Codex".into(), false, cx);
-            assert_eq!(on.style().background, Some(rgb(ACCENT_STRONG).into()));
+            assert_eq!(on.style().background, Some(rgb(PRIMARY).into()));
             assert_eq!(off.style().background, None);
         });
     }

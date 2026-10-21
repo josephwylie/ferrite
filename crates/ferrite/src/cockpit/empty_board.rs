@@ -140,7 +140,7 @@ impl CockpitView {
             .items_center()
             .gap(px(CH))
             .whitespace_nowrap()
-            .text_color(rgb(TEXT_MUTED));
+            .text_color(rgb(TEXT_DIM));
         for (provider, version) in &clis {
             let (glyph, ink, name) = match provider {
                 Provider::Claude => (crate::icons::CLAUDE, PROVIDER_CLAUDE, "claude"),
@@ -188,7 +188,7 @@ impl CockpitView {
                     .debug_selector(|| "empty-board-path".into())
                     .flex_shrink_0()
                     .cursor_pointer()
-                    .text_color(rgb(PATH_INK))
+                    .text_color(rgb(LINK_INK))
                     .child(crate::file_links::path_text(shown, target))
                     .on_click(move |_, window, cx| {
                         crate::file_links::FileLink {
@@ -223,7 +223,7 @@ impl CockpitView {
                                     .text_color(rgb(TEXT_STRONG))
                                     .child("Ferrite"),
                             )
-                            .child(div().text_color(rgb(TEXT_MUTED)).child(version)),
+                            .child(div().text_color(rgb(TEXT_DIM)).child(version)),
                     )
                     .child(facts)
                     .children(root),
@@ -260,7 +260,9 @@ impl CockpitView {
                             .flex_shrink_0()
                             .items_center()
                             .w(px(GLYPH_GUTTER))
-                            .children(selected.then(|| crate::components::prompt_mark(ACCENT))),
+                            .children(
+                                selected.then(|| crate::components::prompt_mark(TEXT_STRONG)),
+                            ),
                     )
                     .child(
                         div()
@@ -276,7 +278,7 @@ impl CockpitView {
                             .justify_end()
                             .w(px(EMPTY_KEY_W))
                             .children(
-                                keys.map(|keys| crate::components::key_combo(&keys, TEXT_MUTED)),
+                                keys.map(|keys| crate::components::key_combo(&keys, TEXT_DIM)),
                             ),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -341,14 +343,14 @@ impl CockpitView {
                             .w(px(EMPTY_RECENT_PROJECT_W))
                             .flex_shrink_0()
                             .truncate()
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .children(row.project.clone()),
                     )
                     .child(
                         div()
                             .w(px(EMPTY_RECENT_AGE_W))
                             .flex_shrink_0()
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .child(age),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -382,7 +384,7 @@ impl CockpitView {
             .when(has_recent, |board| {
                 board
                     .child(div().flex_shrink_0().h(px(2.0 * ROW)))
-                    .child(div().text_color(rgb(TEXT_MUTED)).child("recent"))
+                    .child(div().text_color(rgb(TEXT_DIM)).child("recent"))
                     .child(div().flex_shrink_0().h(px(HALF_ROW)))
                     .child(rows_list)
             })

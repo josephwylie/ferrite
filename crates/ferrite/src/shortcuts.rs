@@ -347,7 +347,7 @@ impl Render for Shortcuts {
                         div()
                             .flex_shrink_0()
                             .ml(px(FLOAT_DETAIL_GAP))
-                            .child(components::key_combo(&row.keys, TEXT_MUTED)),
+                            .child(components::key_combo(&row.keys, TEXT_DIM)),
                     ),
             );
         }

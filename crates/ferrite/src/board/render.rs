@@ -23,15 +23,15 @@ use sw_board::shown::ink::{Ink, Inked, Piece};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::{
-    ACCENT, BAND, BLUE, CH, CHROME, CYAN, GREEN, LINE, LINE2, MAGENTA, ORANGE, PLANE, RED, ROW,
-    SELECTION, TEXT, TEXT_MUTED, W_STRONG, YELLOW,
+    BAND, BLUE, CH, CHROME, CYAN, GREEN, LINE, LINE2, MAGENTA, ORANGE, PLANE, RED, ROW, SELECTION,
+    TEXT, TEXT_DIM, TEXT_STRONG, W_STRONG, YELLOW,
 };
 
 /// Ferrite's own theme's name, as `Theme::name` carries it.
 pub(crate) const FERRITE: &str = "ferrite";
 
 /// The brighter grey (herdr's `subtext0`): words that have to be read,
-/// between `TEXT_MUTED` and `TEXT`.
+/// between `TEXT_DIM` and `TEXT`.
 const SOFT: u32 = 0xb6b6bb;
 
 /// The theme `board.theme` is set to. Reads the settings file: off the UI
@@ -66,7 +66,7 @@ pub(crate) fn ferrite_theme(plain: bool) -> Theme {
     let ground = own(PLANE);
     let text = own(TEXT);
     let mut pal = Pal {
-        accent: own(ACCENT),
+        accent: own(TEXT_STRONG),
         panel_bg: ground,
         sidebar_bg: own(CHROME),
         active_row_bg: own(SELECTION),
@@ -74,8 +74,8 @@ pub(crate) fn ferrite_theme(plain: bool) -> Theme {
         surface0: own(BAND),
         surface1: own(LINE2),
         surface_dim: own(LINE),
-        overlay0: own(TEXT_MUTED),
-        overlay1: own(TEXT_MUTED),
+        overlay0: own(TEXT_DIM),
+        overlay1: own(TEXT_DIM),
         text,
         subtext0: own(SOFT),
         mauve: own(MAGENTA),

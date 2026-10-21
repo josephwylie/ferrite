@@ -17,7 +17,7 @@ use super::fixture::{self, NOW};
 use super::keys::{is_paste, press_of};
 use super::render::{self, Run};
 use super::{BoardEvent, BoardView};
-use crate::theme::{ACCENT, GREEN, PLANE, RED, SELECTION, TEXT, YELLOW};
+use crate::theme::{GREEN, PLANE, RED, SELECTION, TEXT, TEXT_STRONG, YELLOW};
 
 // ------------------------------------------------------------------ keys
 
@@ -275,7 +275,7 @@ fn the_list_draws_its_header_groups_marks_and_columns() {
 
     let selected = line_with(&lines, "#5 ");
     let gutter = &selected[0];
-    assert_eq!((gutter.text.as_str(), gutter.fg), ("▌", ACCENT));
+    assert_eq!((gutter.text.as_str(), gutter.fg), ("▌", TEXT_STRONG));
     assert!(
         selected.iter().all(|run| run.bg == Some(SELECTION)),
         "the tint runs to the end"

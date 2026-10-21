@@ -386,8 +386,9 @@ impl Markdown {
 impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
-        // Prose sets its own face; the inherited style is the Pane's.
-        let face: SharedString = theme::FONT_UI.into();
+        // Prose sets its own face (the transcript's, Geist Mono); the
+        // inherited style is the Pane's.
+        let face: SharedString = theme::FONT_CODE.into();
         #[cfg(test)]
         testing::record(
             self.id.clone(),
@@ -404,12 +405,9 @@ impl gpui::RenderOnce for Markdown {
         let text_style = if self.muted {
             // A thought stays one step down the ink ladder, headings too.
             (1..=6).fold(
-                text_style.with_foreground(rgb(theme::TEXT_MUTED).into()),
+                text_style.with_foreground(rgb(theme::TEXT_DIM).into()),
                 |style, level| {
-                    style.with_heading(
-                        level,
-                        heading(level, base).text_color(rgb(theme::TEXT_MUTED)),
-                    )
+                    style.with_heading(level, heading(level, base).text_color(rgb(theme::TEXT_DIM)))
                 },
             )
         } else {
@@ -627,7 +625,7 @@ impl gpui::Render for CodeActions {
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
-            .text_color(rgb(theme::TEXT_MUTED));
+            .text_color(rgb(theme::TEXT_DIM));
         let mut hovered = gpui::div()
             .flex()
             .items_center()
@@ -703,7 +701,7 @@ impl gpui::Render for CodeActions {
     }
 }
 
-/// A quiet text action in a fence's overlay: `FS_UI` `TEXT_MUTED` with no
+/// A quiet text action in a fence's overlay: `FS_UI` `TEXT_DIM` with no
 /// ground, the hover overlay under the pointer (the one 150ms blend),
 /// pressed at once, a stable `CODE_ACTION_MIN_W` target one row high.
 fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
@@ -712,7 +710,7 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
         rgba(theme::TRANSPARENT).into(),
         theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT_MUTED).into(),
+        rgb(theme::TEXT_DIM).into(),
         cx,
     )
     .h(px(theme::LH_UI))
@@ -747,11 +745,11 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
     let mut style = TextViewStyle::default()
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT).into())
-        .with_muted_foreground(rgb(theme::TEXT_MUTED).into())
+        .with_muted_foreground(rgb(theme::TEXT_DIM).into())
         // Links and paths read cyan, with no underline at rest: a link
         // underlines in its own ink only under the pointer.
-        .with_link(rgb(theme::PATH_INK).into())
-        .with_link_underline(Some(rgb(theme::PATH_INK).into()))
+        .with_link(rgb(theme::LINK_INK).into())
+        .with_link_underline(Some(rgb(theme::LINK_INK).into()))
         .with_link_underline_on_hover(true)
         // A column of numbers reads right-aligned, as a terminal table does.
         .with_numeric_columns_right(true)
@@ -838,7 +836,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             gpui::StyleRefinement::default()
                 .border_l(px(theme::QUOTE_RULE_W))
                 .border_color(theme::paint::LINE2)
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::TEXT_DIM))
                 .not_italic()
                 .pl(px(2.0 * cell - theme::QUOTE_RULE_W))
                 .pr(px(0.)),
@@ -860,9 +858,9 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             gap: px(cell),
         }))
         .with_list_markers(
-            gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+            gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
             crate::components::tabular(
-                gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+                gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
             ),
         )
         // One blank line between blocks, as a terminal prints them; a
@@ -2760,10 +2758,10 @@ mod style_tests {
         assert_eq!(style.foreground(), solid(theme::TEXT));
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
         assert_eq!(style.strong().color, Some(solid(theme::TEXT_STRONG)));
-        assert_eq!(style.link(), solid(theme::PATH_INK));
+        assert_eq!(style.link(), solid(theme::LINK_INK));
         // The underline is the link's own ink, painted only under the
         // pointer (`with_link_underline_on_hover`).
-        assert_eq!(style.link_underline(), Some(solid(theme::PATH_INK)));
+        assert_eq!(style.link_underline(), Some(solid(theme::LINK_INK)));
         assert!(style.link_underline_on_hover());
         assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
         assert!(
@@ -2839,11 +2837,11 @@ mod style_tests {
         }
     }
 
-    /// Theme rule 6: inline code is cyan (`INLINE_CODE`), at body weight.
+    /// Theme rule 6: inline code is cyan (`INLINE_CODE_INK`), at body weight.
     #[test]
     fn inline_code_is_cyan_at_body_weight() {
         use ferrite_core::settings::ReadingSize;
-        assert_eq!(theme::INLINE_CODE_INK, theme::INLINE_CODE);
+        assert_eq!(theme::INLINE_CODE_INK, theme::INLINE_CODE_INK);
         // No chip at any reading size: the ink alone sets code apart.
         for size in [
             ReadingSize::STANDARD,

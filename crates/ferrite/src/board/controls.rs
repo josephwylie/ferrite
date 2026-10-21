@@ -13,7 +13,7 @@ use sw_board::json::*;
 use super::BoardView;
 use crate::components::{self, Tip};
 use crate::theme::{
-    BAND2, CH, CHROME, CONTROL_H, ICON_CHEVRON, LINE, ON_ACCENT, PLANE, ROW, TEXT, TEXT_MUTED,
+    BAND2, CH, CHROME, CONTROL_H, ICON_CHEVRON, LINE, ON_PRIMARY, PLANE, ROW, TEXT, TEXT_DIM,
     TEXT_STRONG, W_STRONG,
 };
 
@@ -45,7 +45,7 @@ impl BoardView {
             .accessibility_label(label)
             .child(
                 components::text_ui()
-                    .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_MUTED }))
+                    .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_DIM }))
                     .child(label),
             )
             .on_click(cx.listener(move |view, _, _, cx| {
@@ -101,9 +101,9 @@ impl BoardView {
             .child(
                 components::text_ui()
                     .text_color(rgb(if disabled {
-                        TEXT_MUTED
+                        TEXT_DIM
                     } else if primary {
-                        ON_ACCENT
+                        ON_PRIMARY
                     } else {
                         TEXT
                     }))
@@ -292,7 +292,7 @@ impl BoardView {
                 .child(crate::icons::icon(
                     crate::icons::CHEVRON_DOWN,
                     ICON_CHEVRON,
-                    TEXT_MUTED,
+                    TEXT_DIM,
                 )),
             choices,
             open: self.controls.open == Some("more"),
@@ -383,13 +383,13 @@ impl BoardView {
                 .child(
                     components::text_ui()
                         .truncate()
-                        .text_color(rgb(if disabled { TEXT_MUTED } else { TEXT }))
+                        .text_color(rgb(if disabled { TEXT_DIM } else { TEXT }))
                         .child(shown.to_owned()),
                 )
                 .child(crate::icons::icon(
                     crate::icons::CHEVRON_DOWN,
                     ICON_CHEVRON,
-                    TEXT_MUTED,
+                    TEXT_DIM,
                 )),
             choices,
             open: self.controls.open == Some(name),

@@ -7,8 +7,8 @@
 //! table of visual rows, so wrapped and hard-broken lines read alike.
 //!
 //! The caret is a terminal's block (theme WP-D): one cell wide, one row
-//! high, in the accent, blinking softly while this line holds the keyboard
-//! (the character under it turns `ON_ACCENT`), a still hollow box when it
+//! high, in `TEXT_STRONG`, blinking softly while this line holds the keyboard
+//! (the character under it turns `ON_PRIMARY`), a still hollow box when it
 //! does not. A line the cockpit keeps lit (`set_caret_lit`: Solo's, and the
 //! focused board Pane's) draws its block whoever holds the keyboard.
 //!
@@ -967,8 +967,8 @@ fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
 /// (a path's cyan, no ground) over `pills`, the selection's own
 /// `TEXT_STRONG` ink over `selected` — the selection quad is the app's one
 /// translucent selection wash, painted under the shaped line — the IME
-/// underline (`TEXT_MUTED`, 1px) over `marked`, and the character under the
-/// block caret in the caret's own `ink` (toward `ON_ACCENT` as the block
+/// underline (`TEXT_DIM`, 1px) over `marked`, and the character under the
+/// block caret in the caret's own `ink` (toward `ON_PRIMARY` as the block
 /// comes up). Split at every boundary so each run wears exactly its styles.
 fn runs_for(
     base: &TextRun,
@@ -1026,7 +1026,7 @@ fn runs_for(
             .is_some_and(|marked| marked.start <= from && to <= marked.end)
         {
             run.underline = Some(UnderlineStyle {
-                color: Some(rgb(crate::theme::TEXT_MUTED).into()),
+                color: Some(rgb(crate::theme::TEXT_DIM).into()),
                 thickness: px(1.),
                 wavy: false,
             });
@@ -1370,7 +1370,7 @@ impl Element for LineElement {
         let caret_ink = alpha.map(|alpha| {
             crate::motion::mix(
                 rgb(crate::theme::TEXT).into(),
-                rgb(crate::theme::ON_ACCENT).into(),
+                rgb(crate::theme::ON_PRIMARY).into(),
                 alpha,
             )
         });
@@ -1579,7 +1579,7 @@ fn paint_text(
     let line_height = layout.line_height;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         // The block goes under the glyphs, so the character it stands on
-        // reads in its own (`ON_ACCENT`) ink over it, as a terminal's does.
+        // reads in its own (`ON_PRIMARY`) ink over it, as a terminal's does.
         for quad in quads {
             window.paint_quad(quad);
         }
@@ -1678,7 +1678,7 @@ impl Element for CaretOverlay {
         let alpha = caret_blink_now(self.origin, window, cx);
         let ink = crate::motion::mix(
             rgb(crate::theme::TEXT).into(),
-            rgb(crate::theme::ON_ACCENT).into(),
+            rgb(crate::theme::ON_PRIMARY).into(),
             alpha,
         );
         let line_height = window.line_height();
@@ -1838,9 +1838,9 @@ mod tests {
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
         // A picked mention is a path: the terminal's cyan, on no ground —
-        // never the accent, never a chip (theme WP-D).
+        // never `TEXT_STRONG`, never a chip (theme WP-D).
         assert_eq!(runs[1].color, rgb(crate::theme::MENTION_INK).into());
-        assert_eq!(crate::theme::MENTION_INK, crate::theme::PATH_INK);
+        assert_eq!(crate::theme::MENTION_INK, crate::theme::LINK_INK);
         assert!(runs[1].background_color.is_none());
         assert!(runs[0].background_color.is_none());
         assert!(runs[3].underline.is_some(), "the mark wears the underline");
@@ -1863,7 +1863,7 @@ mod tests {
             underline: None,
             strikethrough: None,
         };
-        let ink: Hsla = rgb(crate::theme::ON_ACCENT).into();
+        let ink: Hsla = rgb(crate::theme::ON_PRIMARY).into();
         let runs = runs_for(&base, 5, None, &[], None, Some((2..3, ink)));
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens, [2, 1, 2]);

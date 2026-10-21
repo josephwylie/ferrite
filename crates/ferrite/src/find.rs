@@ -270,7 +270,7 @@ impl Find {
     }
 
     /// The bar: the palette's input row as a float of its own — `❯` in
-    /// the accent, the query in `TEXT_STRONG`, the count muted at the
+    /// `TEXT_STRONG`, the query in `TEXT_STRONG`, the count muted at the
     /// right — hung `FLOAT_OFFSET` under the top right of its host, the
     /// text it searches (`relative`). A host narrower than the bar narrows
     /// the query, never the count.
@@ -292,7 +292,7 @@ impl Find {
                             .flex_shrink_0()
                             .items_center()
                             .w(px(FLOAT_GUTTER))
-                            .child(crate::components::prompt_mark(ACCENT)),
+                            .child(crate::components::prompt_mark(TEXT_STRONG)),
                     )
                     .child(
                         div()
@@ -309,7 +309,7 @@ impl Find {
                             .flex_shrink_0()
                             .ml(px(FLOAT_DETAIL_GAP))
                             .whitespace_nowrap()
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .child(count)
                     })),
             );

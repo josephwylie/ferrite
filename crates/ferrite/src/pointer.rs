@@ -2,7 +2,7 @@
 //! clickable surface, and a render site only says which role a thing is —
 //! the trait owns the tokens, the cursor, and the pairing between them.
 //! Hover is achromatic: it answers "would a click here land?" and never
-//! borrows the accent (keyboard position) or amber/red (attention).
+//! borrows `TEXT_STRONG` (keyboard position) or amber/red (attention).
 //!
 //! Only widget constructors call these (`menu_row`, `keycap`, nav's row
 //! frames, the cell shell …) — render sites never write a hover refinement

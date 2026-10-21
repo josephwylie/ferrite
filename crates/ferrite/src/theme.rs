@@ -1,159 +1,157 @@
 //! Ferrite's visual system: every colour, face, size and metric, named once.
-//! This module doc is where the design rules live; there is no other design
-//! document. Render code imports from here and holds no colour or metric
-//! literal of its own; core stays colour-blind. The approved picture these
-//! rules describe is `spikes/terminal-native/index.html` (its `:root`
-//! tokens, then its `.clean` and `.glass` blocks: grey, clean, glass).
+//! This module doc is where the design rules live. Render code imports from
+//! here and holds no colour or metric literal of its own; core stays
+//! colour-blind. The picture these rules describe is the UI refresh's
+//! (`docs/design/ui-refresh/`: `SPEC.md` is the build reference, its
+//! `mockups/` the visual truth; ADR 0033 records the decisions).
+//! `spikes/terminal-native/index.html` is no longer the approved picture.
 //!
-//! **Terminal-native, glass on the frame.** Ferrite reads like the provider
-//! CLIs it drives — one monospace grid, `❯` prompts, `●` tool bullets, `└`
-//! results, real terminal colour — and keeps what only a native app can do:
-//! vector marks, inline images, side-by-side diffs, folds in place, pixel
-//! scrolling, floating pickers. The frame around the terminal (sidebar,
-//! titlebar, bottom bar) is macOS glass; the reading plane stays a terminal
-//! surface. No chat bubbles, no avatars, no cards, no pills, no centred
-//! column of proportional prose.
+//! **A terminal in a card, calm chrome around it.** Ferrite keeps the
+//! provider CLIs' terminal — a monospace transcript, `❯` prompts, `●` tool
+//! bullets, `└` results, braille spinners, state inks — and keeps what only
+//! a native app can do: vector marks, inline images, side-by-side diffs,
+//! folds in place, pixel scrolling, floating pickers. Everything around the
+//! transcript is quieter and modern: sans chrome, rounded cards on a
+//! lighter frame, hairlines, and colour only for state. No chat bubbles, no
+//! proportional transcript.
 //!
 //! The rules every render site follows:
 //!
-//! 1. **One face, one grid.** Geist Mono (bundled) is the only face, on
-//!    every surface: sidebar, titlebar, menus, sheets, prose, code.
-//!    `FONT_UI` and `FONT_CODE` both name it (two names so call sites keep
-//!    saying what the text is). A surface sets one size on one line height:
-//!    the chrome `FS_UI` 13 on `LH_UI` 20; the transcript the operator's
-//!    reading size (`answer_text_size`, cmd-= / cmd-- / cmd-0) on its 1.5×
-//!    line (`answer_line_height`), and everything inside a transcript scales
-//!    with it. Vertical metrics are whole or half rows (`ROW`, `HALF_ROW`);
-//!    horizontal ones are cells (`CH`, the face's 0.6em advance). Hierarchy
-//!    comes from ink, weight, colour and the 2-cell glyph gutter, never from
-//!    size or face: a heading is the body size (`heading_scale` is 1).
-//!    Weights: 400 body; 500 a surface's one title, a tool's name,
-//!    a label; 600 the prompt `❯`, strong prose, headings, a Project heading.
-//!    700 is unused. Never reach a weight by family name.
-//! 2. **Square and flat inside.** Every in-app radius is 0 (the `R_*`
-//!    names stay so call sites compile). No card, no drop shadow, no top
-//!    light, no pill, no well, no emboss. Separation is a 1px line
-//!    (`paint::LINE`, `paint::LINE2`) or a full-width shaded band
-//!    (`paint::BAND`, `paint::HEAD`, `paint::INBAND`). Only a floating
-//!    surface — menu, picker, palette, popover, tooltip, toast — casts, one
-//!    small shadow (`components::float_shadow`); a modal adds `VEIL`.
-//!    `components::elevation` keeps its rungs as names and paints nothing
-//!    but the float's shadow.
-//! 3. **Grey, not near-black.** The opaque ladder, darkest first: `NODIFF`
-//!    (a split diff's empty side) < `PLANE` #1b1b1c (the reading plane: a
-//!    Pane's body, the empty board) < `HUNK` (a hunk's header row) <
-//!    `CHROME` #242425 (the sidebar, the bottom bar; also `HEAD`, the focused Pane's head band, and `INBAND`, the
-//!    Composer's input band) < `FLOAT` (floating ground) < `HOVER` #2c2c2e
-//!    (under the pointer) < `BAND` #2e2e30 (the prompt echo, sticky over its
-//!    turn; a diff's file head; a Decision's command well) < `SELECTION`
-//!    #343437 (the selected row, the menu cursor) < `BAND2` (the current
-//!    bottom-bar tab, a chip) < `SELECTION_HOVER` (a selected row under the
-//!    pointer, every press). Lines: `LINE` #2f2f31 for every rule and seam,
-//!    `LINE2` #3c3c3f for a float's edge, a table's head rule, a code block's
-//!    rail. The 1px seams between Panes on a board are lines, not gutters.
-//! 4. **Glass on the frame, terminal in the content** (macOS: `GLASS`). The
+//! 1. **Two faces, one rule** (supersedes "one face, one grid"). The
+//!    transcript is Geist Mono (`FONT_CODE`); everything else is Geist
+//!    (`FONT_UI`): nav, heads, tabs, buttons, menus, the palette, the panel,
+//!    the bar, the Composer's input. Numbers and glyphs from the terminal's
+//!    world (diffstats, spinners, `❯`) stay in Geist Mono inside chrome.
+//!    Chrome type is a set of roles (SPEC §3.5: `FS_UI` 13/20 default,
+//!    `FS_TITLE`, `FS_LABEL`, `FS_META`, `FS_BADGE`, …) with tabular
+//!    figures; the transcript is the reading size (`answer_text_size`,
+//!    cmd-= / cmd-- / cmd-0, the transcript only) on its 1.5× line, and
+//!    everything inside it scales with it, measured in cells (`tx_cell`,
+//!    the face's 0.6em). Chrome metrics are pixels on the space scale, not
+//!    cells. Weights: 400 body; 500 tabs, buttons, Pane titles, labels, a
+//!    tool's name; 600 a view title, the prompt `❯`, strong prose,
+//!    headings, a badge count. 700 is unused. Never reach a weight by
+//!    family name.
+//! 2. **Cards on a frame** (supersedes "square and flat inside"). The
+//!    window's frame is `FRAME` #222 (the nav, the heads, the right panel,
+//!    a Group's gutter); a Pane is a card on it, `CARD` #181818, radius
+//!    `R_PANE`, a 1px `CARD_RING`. Only the bottom bar (`BAR`) is
+//!    full-bleed. Radii run by role (`R_INLINE` 4 … `R_PALETTE` 12; dots,
+//!    pills and the send circle round). Separation is a 1px white hairline
+//!    (`HAIRLINE` 6% … `HAIRLINE_STRONG` 10%) or a fill step: no visible grey
+//!    borders, no keycap boxes, no boxed section labels. Only a floating
+//!    surface casts, one shadow (`components::float_shadow`); a modal adds
+//!    `VEIL`.
+//! 3. **Neutral greys.** The opaque surfaces, darkest first: `NODIFF` <
+//!    `SUNKEN` (a command well) < `CARD` < `BAR` (the bar; diff and fence
+//!    blocks) < `DECISION` < `FIELD_COMPACT` < `FRAME` = `FIELD` (the Solo
+//!    Composer, the prompt band) < `TAB_ACTIVE` < `RAISED` (chips, inline
+//!    code, secondary buttons, hover on the frame) < `SELECTED` (the
+//!    selected row, tab, option, cursor) < `SELECTION_HOVER` (every press)
+//!    < `SEND`. `FLOAT` grounds menus and popovers. `PRIMARY` (the
+//!    strongest ink, with `ON_PRIMARY`) is the primary button.
+//! 4. **Glass on the frame, terminal in the card** (macOS: `GLASS`). The
 //!    window opens blurred (`window_background`) and its root paints nothing
 //!    (`paint::WINDOW`); each region paints its own fill once, from
-//!    `paint::*`, translucent on macOS: chrome at 72%, the reading plane at
-//!    94% (a hint of the desktop, never a busy picture under text, the way
-//!    Ghostty and iTerm do background opacity), the head and input bands,
-//!    hover and selection as white overlays (5 / 6 / 11%), lines as white at
-//!    8 / 14%. gpui blurs no single element, so a float paints opaque
-//!    (`paint::FLOAT`; the prototype's 96% leans on a backdrop blur gpui
-//!    cannot do, and without it the text under a menu ghosts through), and
-//!    a surface that must occlude what scrolls under it (the sticky prompt,
-//!    a Decision docked over the tail) stacks over its plane, never over
-//!    the bare window. Every other platform paints the
-//!    opaque greys of rule 3. Fills and lines go through `theme::paint`
-//!    (typed `Paint`, so `rgb()` cannot swallow one by mistake); the bare
-//!    `PLANE`, `CHROME`, … consts are the opaque values, for contrast math and
-//!    the few places that must be opaque. **Never stack two region fills**:
-//!    a region paints once over the window; what sits inside it paints an
-//!    overlay (`HEAD`, `HOVER`, `SELECTION`, `BAND2`) or nothing.
-//! 5. **An ink ladder with floors**, brightest first: `TEXT_STRONG` #f4f4f5
-//!    (titles, the prompt text, headings, a tool's name, `**strong**`),
-//!    `TEXT` #d7d7d9 (agent prose, body), `TEXT_MUTED` #98989d (metadata,
-//!    arguments, results, durations, the sidebar's state words; the floor for
-//!    text that must be read: 4.5:1 on every plane a row rests on, 4:1 on a
-//!    selected row), `TEXT_FAINT` #5e5e63 (structure only: elbows, rails,
-//!    the `·` seam, the parked ring). **`TEXT_FAINT` is never text.** A row
-//!    spends at most two text inks, one glyph ink and one colour.
-//! 6. **Real terminal colour.** `ACCENT` steel blue #8eb1f0 is the
-//!    operator's: the prompt `❯`, the caret, the focused Pane's border,
-//!    links, the current row's `❯`, a selected choice, the primary action.
-//!    State: `RUNNING` green #93cf8c (live work, `ok`, diff `+`), `ATTENTION`
-//!    yellow #e6c47c (needs you), `BLOCKED` red #ef8a80 (failed, diff `−`);
-//!    green never means "finished". Syntax: `SYN_KEYWORD` magenta,
-//!    `SYN_FUNCTION` blue, `SYN_STRING` green, `SYN_NUMBER`/`SYN_CONST`
-//!    orange, `SYN_TYPE` yellow, comments `TEXT_MUTED` italic, punctuation
-//!    `TEXT_MUTED`; inline code and file paths `CYAN` (`INLINE_CODE`,
-//!    `PATH_INK`); the permission mode word `MODE_INK` (magenta). A diff row
-//!    washes red or green (`DIFF_*_WASH`, the changed words `DIFF_*_WORD`)
-//!    under its code's own colours; the sign carries the hue. A provider's
-//!    brand colour (`PROVIDER_CLAUDE`, `PROVIDER_CODEX`) is only on its
-//!    logomark and its working spinner. **Colour sits on the word**: a state
-//!    shows once per surface and never tints a ground (the ochre wash stays
-//!    retired; a waiting Pane's border is `ATTENTION_EDGE`).
-//! 7. **Clean: one place per fact.** A Pane head carries no state word and
-//!    no number — the dot (or the braille spinner), the title, the provider
-//!    mark; state reads at the foot of the Pane (the working line, the turn's
-//!    end, the Decision). Sidebar rows carry no provider marks, and their
-//!    state words are `TEXT_MUTED` (the dot carries the colour). The bottom
-//!    bar shows no counts. An unfocused Pane keeps its Composer's input row
-//!    and hides its status line.
+//!    `paint::*`, translucent on macOS: the frame and the bar at 88%, the
+//!    card at 94% (a hint of the desktop, never a busy picture under text),
+//!    fields, raised and selected fills as white overlays. gpui blurs no
+//!    single element, so a float paints opaque (`paint::FLOAT`), and a
+//!    surface that must occlude what scrolls under it (the sticky prompt, a
+//!    Decision docked over the tail) stacks over its card, never over the
+//!    bare window. Every other platform paints the opaque greys of rule 3.
+//!    Fills and lines go through `theme::paint` (typed `Paint`, so `rgb()`
+//!    cannot swallow one by mistake); the bare consts are the opaque values,
+//!    for contrast math. **Never stack two region fills**: the frame and
+//!    the card are separate regions, and what sits inside a region paints
+//!    an overlay or nothing.
+//! 5. **An ink ladder with floors**, brightest first: `TEXT_STRONG` #f2f2f2
+//!    (titles, selected rows, the prompt, `**strong**`, `❯`, the caret,
+//!    focus, links and paths in prose), `TEXT_PROSE` (assistant prose),
+//!    `TEXT` (chrome text, nav titles, tool output), `TEXT_BAR` (emphasised
+//!    bar items), `TEXT_MUTED` (unselected tabs and views, chips),
+//!    `TEXT_DIM` #8c8c8c (metadata, times, icons, section headings, tool
+//!    arguments; **the floor for readable text**: 4.5:1 on `FRAME` and
+//!    `CARD`, 4:1 on `SELECTED`), `TEXT_FAINT` (structure only: `└`, rails,
+//!    diff line numbers). **`TEXT_FAINT` is never text.** A row spends at
+//!    most two text inks, one glyph ink and one colour (a diffstat's `+`/`−`
+//!    pair may join a state's colour, ADR 0033).
+//! 6. **No accent; colour is state** (supersedes "real terminal colour").
+//!    Steel blue is retired: focus, selection, `❯`, the caret and links use
+//!    `TEXT_STRONG`, and selection is a lighter fill, never a coloured
+//!    outline. Hue is for state only: `RUNNING` green (working, `ok`, diff
+//!    `+`), `ATTENTION` yellow (needs you, a risky permission mode,
+//!    `mode_ink`), `BLOCKED` red (failed, diff `−`). Done is a shape
+//!    (`check-circle`) in `TEXT_DIM`, not a hue. A provider's brand colour
+//!    (`PROVIDER_CLAUDE`, `PROVIDER_CODEX`) is only on its logomark and its
+//!    working glyphs. Syntax colour (`SYN_*`) is for code in diffs and fences
+//!    only; inline code and paths are `TEXT_STRONG` (a path in a tool's
+//!    arguments `TEXT_DIM`). A diff row washes red or green (`DIFF_*_WASH`,
+//!    the changed words `DIFF_*_WORD`) under its code's own colours. The
+//!    find wash (`FIND_WASH`) stays orange. **Colour sits on the word, the
+//!    dot or the ring** — a blocked Pane's ring is `WAIT_RING`, a focused
+//!    one's `FOCUS_RING` (white at 22%) — never on a ground.
+//! 7. **One place per fact** (supersedes "clean": SPEC §5 places them). The
+//!    bar is views and vitals; the Composer holds the mode, model and
+//!    effort; the right panel holds changes, the pull request and context;
+//!    a Group Pane's head speaks its state word. Nothing shows twice on one
+//!    surface.
 //! 8. **Little moves at once.** What moves: the working line's spinner
 //!    (`components::working_spinner`, `· ✢ ✳ ✶ ✻ ✽` at
 //!    `MOTION_WORKING_FRAME_MS`, the provider's colour) and its caption's
 //!    shimmer (`components::shimmer`), on the focused Pane only; the braille
 //!    spinner (`components::braille_spinner`, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` at
-//!    `MOTION_BRAILLE_FRAME_MS`, `RUNNING`) in place of the dot of every
-//!    working Thread, in the sidebar and in Pane heads; the soft block caret
-//!    blinking in the focused Composer (`components::caret_blink`); the
-//!    sidebar collapsing (cmd-B, `MOTION_RESIZE_MS`, its content fading).
-//!    **No dot pulses or breathes**; unread is ink (`TEXT_STRONG` title), not
-//!    motion. The motion section below holds the rest of the catalog, and
-//!    reduced motion holds every loop on a static end state that says the
-//!    same thing.
+//!    `MOTION_BRAILLE_FRAME_MS`, `RUNNING`) in place of the mark of every
+//!    working Thread; the caret blinking in the focused Composer
+//!    (`components::caret_blink`); the nav and the panel riding their width
+//!    (`MOTION_RESIZE_MS`); hover fills blending in. **No dot pulses or
+//!    breathes**; unread is ink (`TEXT_STRONG` title), not motion. The
+//!    motion section below holds the rest of the catalog, and reduced
+//!    motion holds every loop on a static end state that says the same
+//!    thing.
 //! 9. **Pixel line heights and a space scale.** Every text role is a (size,
 //!    line height) pair, and fixed row heights are `const` expressions of
 //!    those pairs, never hand-summed literals. Space: 2 · 4 · 6 · 8 · 12 ·
-//!    16 · 24 · 32 (`SPACE_*`, named in gpui's 4px units) and, on the grid,
-//!    `ROW` · `HALF_ROW` · `CH`. A metric off them says why in its doc.
-//! 10. **Glyph coverage.** Every glyph is text, as the prototype's browser
-//!     sets it: Geist Mono's own, and the ones its cmap lacks in the face
-//!     the platform falls back to — on macOS Menlo for `❯ ◆ ✓ ✗ ▾ ▸ ⌘ ⌥ ⌃`
-//!     and the working spinner's stars, STIX Two Math for `⏵ ⏸`, Apple
-//!     Braille for the braille spinner (`components::glyph`) — on the
-//!     line's baseline, at the face's advance. `CHROME_GLYPHS` lists the
-//!     non-ASCII glyphs Geist Mono sets (`● ○ └ ├ │ ─ · ↑ ↓ ⇧ ⇥ ⏎ …`) and
-//!     `FALLBACK_GLYPHS` the ones it lacks; a test checks each against the
-//!     face.
+//!    16 · 24 · 32 (`SPACE_*`, named in gpui's 4px units); inside the
+//!    transcript, its line and cells. A metric off the scale says why in its
+//!    doc.
+//! 10. **Glyph coverage.** Every glyph is text, set in its face where the
+//!     face has it and in the face the platform falls back to where it does
+//!     not — on macOS Menlo for `❯ ◆ ✓ ✗ ▾ ▸ ⌘ ⌥ ⌃` and the working
+//!     spinner's stars, STIX Two Math for `⏵ ⏸`, Apple Braille for the
+//!     braille spinner (`components::glyph`) — on the line's baseline.
+//!     `CHROME_GLYPHS` lists the non-ASCII glyphs Geist Mono sets,
+//!     `UI_GLYPHS` the ones the chrome sets in Geist (`⇧ ↑ ↓ · …`), and
+//!     `FALLBACK_GLYPHS` the ones both lack; a test checks each against the
+//!     faces. Icons are Ferrite's own line family (`icons.rs`, 1.5px at 16).
 //! 11. **Words.** Ferrite's own copy speaks one shared word list
 //!     (`theme::words`, beside the state inks and tested against the
 //!     notifications, the Decision card and the transcript): `needs you`,
 //!     `failing N`, `failed`, `interrupted`, `working`, `done`. Titles,
-//!     buttons, menu items, labels and empty states are sentence case
-//!     (`New thread`, `Delete thread`); state and value tokens are always
+//!     buttons, menu items, labels, chip labels and empty states are
+//!     sentence case (`New thread`, `Review PR`); state and value tokens are
 //!     lowercase, even leading a row; Title Case lives only in the macOS menu
-//!     bar. `·` (in `TEXT_FAINT`) is the only separator inside a line — no
-//!     colon labels, no em dash, no final period on one-line copy — and no
-//!     surface prints `now`. A shortcut in a tooltip is a `TEXT_MUTED`
-//!     suffix with glyph modifiers (`Toggle sidebar ⌘B`), read from the
-//!     keymap, never typed by hand.
+//!     bar. `·` is the only separator inside a line — no colon labels, no
+//!     em dash, no final period on one-line copy — and no surface prints
+//!     `now`. A shortcut is plain `TEXT_DIM` text, only where the operator
+//!     is already looking (a menu, the palette, the `Search` row, a
+//!     tooltip: `Toggle sidebar ⌘B`), read from the keymap, never typed by
+//!     hand.
 //!
-//! **Layout of this file.** Everything down to `init_components` is the frozen
-//! shared head: values more than one work package reads, the paints, and the
-//! kit mapping. Then a block of **legacy aliases** — the previous design's
-//! names, mapped onto the new tokens so every module still builds while the
-//! surfaces are restyled; it is removed after integration. Below it, one
-//! section per work package (`WP-A` … `WP-G`), each opened by a banner and
-//! closed by an `(end WP-x)` line. A package edits values and appends tokens
-//! only inside its own section; a token two packages need is a request to
-//! the integrator, who adds it to the head.
+//! **Layout of this file.** Everything down to `init_components` is the
+//! shared head: values more than one surface reads, the paints, and the kit
+//! mapping. Then a block of **legacy aliases** — the square chrome's surface
+//! names (`PLANE`, `CHROME`, `BAND`, …), mapped onto the new surfaces so
+//! every module still builds while the refresh's phases restyle them; the
+//! last phase removes it. Below it, one section per work package (`WP-A` …
+//! `WP-G`), each opened by a banner and closed by an `(end WP-x)` line,
+//! whose prose may still describe the square chrome until its phase lands.
+//! A token two sections need goes in the head.
 //!
-//! The contrast floors, the ladder order, the paints, the kit-token mapping
-//! and the derived row heights are asserted in `theme::tests`. Dark only:
-//! operators work long sessions beside dark editors and terminals.
+//! The contrast floors, the ladders, the hairlines, the radii, the paints,
+//! the faces, the kit-token mapping and the derived row heights are
+//! asserted in `theme::tests`. Dark only: operators work long sessions
+//! beside dark editors and terminals.
 
 use gpui::FontWeight;
 
@@ -222,88 +220,122 @@ impl From<Paint> for gpui::Fill {
     }
 }
 
-// ---------------------------------------------------------------- planes
+// ---------------------------------------------------------------- surfaces
 //
-// Each plane's opaque value (rule 3, `rgb()`), then its glass value
-// (`0xRRGGBBAA`). Paint a region with `paint::*`, which picks between them.
+// The opaque greys (`docs/design/ui-refresh/SPEC.md` §3.1), darkest first,
+// each beside its glass value (`0xRRGGBBAA`, rule 4). Paint a region with
+// `paint::*`, which picks between them; the bare consts are the opaque
+// values, for contrast math and the few places that must be opaque.
 
-/// `#1b1b1c` — the reading plane: a Pane's body, the empty board, the
-/// titlebar band over the board. The darkest working plane.
-pub const PLANE: u32 = 0x1b1b1c;
-/// The reading plane as glass: 94%, a terminal's background opacity.
+/// `#161616` — sunk below the card: a Decision's command well, the
+/// palette scrim's base.
 #[allow(dead_code)]
-pub const PLANE_GLASS: u32 = 0x1a1a1bf0;
-/// `#242425` — chrome, lifted off the plane: the sidebar, the bottom
-/// bar.
-pub const CHROME: u32 = 0x242425;
-/// Chrome as glass, 88%. The window's blur shows whatever sits behind
+pub const SUNKEN: u32 = 0x161616;
+/// `#181818` — the card: a Pane's body, the transcript's surface.
+pub const CARD: u32 = 0x181818;
+/// The card as glass: 94%, a terminal's background opacity.
+#[allow(dead_code)]
+pub const CARD_GLASS: u32 = 0x181818f0;
+/// `#1e1e1e` — the bottom bar; diff and code-fence blocks.
+pub const BAR: u32 = 0x1e1e1e;
+#[allow(dead_code)]
+pub const BAR_GLASS: u32 = 0x1e1e1ee0;
+/// `#1f1f1f` — the Decision box.
+#[allow(dead_code)]
+pub const DECISION: u32 = 0x1f1f1f;
+/// `#202020` — the compact Composer in a Group Pane.
+#[allow(dead_code)]
+pub const FIELD_COMPACT: u32 = 0x202020;
+/// `#222222` — the frame behind the cards: the nav, the heads, the right
+/// panel, a Group's gutter.
+pub const FRAME: u32 = 0x222222;
+/// The frame as glass, 88%. The window's blur shows whatever sits behind
 /// Ferrite — other windows included — so a bright window behind turned a
-/// 72% sidebar light grey (sampled #5f5f60) and its muted ink fell to 2.8:1.
-/// At 88% the chrome stays dark over pure white (≈#3e3e40), keeping
-/// `CHROME_MUTED` above 4.5:1, and still takes a tint of what is behind.
+/// 72% sidebar light grey and its dim ink fell to 2.8:1. At 88% the frame
+/// stays dark over pure white and still takes a tint of what is behind.
 #[allow(dead_code)]
-pub const CHROME_GLASS: u32 = 0x242427e0;
-/// `#242425` — the focused Pane's head band: chrome's value, on the plane.
+pub const FRAME_GLASS: u32 = 0x222222e0;
+/// `#222222` — a field on the card: the Solo Composer's box, the prompt
+/// band. The frame's value, a step over the card.
+pub const FIELD: u32 = 0x222222;
+/// A field as glass: a white overlay on the card.
+pub const FIELD_GLASS: u32 = 0xffffff0d;
+/// `#262626` — the active tab inside a card.
 #[allow(dead_code)]
-pub const HEAD: u32 = 0x242425;
-/// The head band as glass: a white overlay on the plane.
-#[allow(dead_code)]
-pub const HEAD_GLASS: u32 = 0xffffff0d;
-/// `#242425` — the Composer's input band, full width at the Pane's foot.
-#[allow(dead_code)]
-pub const INBAND: u32 = 0x242425;
-#[allow(dead_code)]
-pub const INBAND_GLASS: u32 = 0xffffff0d;
-/// `#2e2e30` — a band: the prompt echo (sticky over its turn), a diff's
-/// file head, a Decision's command well.
-pub const BAND: u32 = 0x2e2e30;
-/// A band as glass: 80%, painted over the plane, where it composes to ~99%
-/// — the sticky prompt band must occlude what scrolls under it.
-#[allow(dead_code)]
-pub const BAND_GLASS: u32 = 0x343437cc;
-/// `#363638` — a band a step further: the current bottom-bar tab, an
-/// attachment chip, a quick-answer button under the pointer, a keycap.
-pub const BAND2: u32 = 0x363638;
-pub const BAND2_GLASS: u32 = 0xffffff1a;
-/// `#2c2c2e` — a row or control under the pointer, on any ground.
-pub const HOVER: u32 = 0x2c2c2e;
-pub const HOVER_GLASS: u32 = 0xffffff0f;
-/// `#343437` — the selected row: the focused Thread, the menu cursor, a
-/// selected option.
-pub const SELECTION: u32 = 0x343437;
-pub const SELECTION_GLASS: u32 = 0xffffff1c;
-/// `#3a3a3d` — a selected row under the pointer, and every press.
-pub const SELECTION_HOVER: u32 = 0x3a3a3d;
-pub const SELECTION_HOVER_GLASS: u32 = 0xffffff24;
+pub const TAB_ACTIVE: u32 = 0x262626;
+/// `#2a2a2a` — raised a step: chips, inline code, secondary buttons, the
+/// panel's file block, and the hover fill on the frame.
+pub const RAISED: u32 = 0x2a2a2a;
+pub const RAISED_GLASS: u32 = 0xffffff0f;
 /// `#2a2a2c` — the floating ground: menus, pickers, the palette, popovers,
 /// tooltips, toasts, sheets.
 pub const FLOAT: u32 = 0x2a2a2c;
-/// A float as glass: opaque. gpui blurs no single element, so the
-/// prototype's 96% (which a backdrop blur softens) let the rows under a
-/// menu, a picker or a sheet ghost through as sharp text; a float must stay
-/// legible on its own over a busy board.
+/// A float as glass: opaque. gpui blurs no single element, so a backdrop
+/// the prototype's blur softened would let the rows under a menu ghost
+/// through as sharp text; a float must stay legible on its own.
 pub const FLOAT_GLASS: u32 = 0x2c2c2fff;
-/// `#202022` — a diff's hunk header row.
+/// `#2e2e2e` — selected: the selected nav row, the active view and panel
+/// tab, the cursor row of a menu, a Decision option and the palette.
+pub const SELECTED: u32 = 0x2e2e2e;
+pub const SELECTED_GLASS: u32 = 0xffffff1c;
+/// `#363636` — a selected row under the pointer, and every press.
+pub const SELECTION_HOVER: u32 = 0x363636;
+pub const SELECTION_HOVER_GLASS: u32 = 0xffffff24;
+/// `#3a3a3a` — the send button's circle (and a comment's avatar).
 #[allow(dead_code)]
-pub const HUNK: u32 = 0x202022;
+pub const SEND: u32 = 0x3a3a3a;
+/// `#141414` — the empty side of a split diff (a row with no partner),
+/// below the card.
 #[allow(dead_code)]
-pub const HUNK_GLASS: u32 = 0x0000001f;
-/// `#18181a` — the empty side of a split diff (a row with no partner).
-#[allow(dead_code)]
-pub const NODIFF: u32 = 0x18181a;
+pub const NODIFF: u32 = 0x141414;
 #[allow(dead_code)]
 pub const NODIFF_GLASS: u32 = 0x00000033;
+/// `#f2f2f2` / `#161616` — the primary button (`primary_button`, dialogs
+/// and settings) and its ink. No hue: the primary is the strongest ink.
+pub const PRIMARY: u32 = TEXT_STRONG;
+pub const ON_PRIMARY: u32 = 0x161616;
 
-// ------------------------------------------------------------------ lines
+// -------------------------------------------------------------- hairlines
+//
+// White at an opacity over whatever is below (SPEC §3.2): the same on
+// glass and on the opaque greys, so these are `0xRRGGBBAA` and paint with
+// `rgba()` or `paint::*`.
 
-/// `#2f2f31` — the one rule weight: the seam between Panes, the rule under
-/// a Pane head, the bottom bar's top edge, a table's row rules, a thematic
-/// break.
-pub const LINE: u32 = 0x2f2f31;
+/// 6% — dividers in cards and panels: a tab strip's foot, the queued row's
+/// foot, panel sections.
+pub const HAIRLINE: u32 = 0xffffff0f;
+/// 7% — the 1px ring around a card.
+#[allow(dead_code)]
+pub const CARD_RING: u32 = 0xffffff12;
+/// 8% — the 1px ring around the Composer.
+#[allow(dead_code)]
+pub const FIELD_RING: u32 = 0xffffff14;
+/// 10% — a float's edge.
+pub const HAIRLINE_STRONG: u32 = 0xffffff1a;
+/// 6% — the inset ring on the selected nav row.
+#[allow(dead_code)]
+pub const ROW_RING: u32 = 0xffffff0f;
+/// 5% — the bottom bar's top edge.
+#[allow(dead_code)]
+pub const BAR_TOP: u32 = 0xffffff0d;
+/// 22% — the focused Pane on a Group (more than one Pane shows), a drop
+/// target's edge.
+pub const FOCUS_RING: u32 = 0xffffff38;
+/// `ATTENTION` at 35% — the ring of a Pane whose Thread is blocked,
+/// focused or not.
+pub const WAIT_RING: u32 = 0xe6c47c59;
+
+// ------------------------------------------------- legacy line greys
+//
+// The opaque rules the square chrome drew. Neutral now; the surfaces move
+// to the hairlines above as their phase restyles them.
+
+/// `#2c2c2c` — the old rule weight: a seam, a table's row rules, a break.
+pub const LINE: u32 = 0x2c2c2c;
 pub const LINE_GLASS: u32 = 0xffffff14;
-/// `#3c3c3f` — the stronger rule: a float's edge, a table's head rule, a
-/// code block's left rail, an image's frame, a quick-answer button's edge.
-pub const LINE2: u32 = 0x3c3c3f;
+/// `#3a3a3a` — the old strong rule: a table's head rule, a code block's
+/// rail, an image's frame.
+pub const LINE2: u32 = 0x3a3a3a;
 pub const LINE2_GLASS: u32 = 0xffffff24;
 /// The column between the sidebar and the content: nothing on the opaque
 /// greys (the value step separates them), a dark seam on glass.
@@ -320,38 +352,52 @@ pub mod paint {
     use super::{solid, Paint, TRANSPARENT};
 
     /// The window's own root: nothing on glass, so each region's fill shows
-    /// the blur behind the window; the reading plane elsewhere.
-    pub const WINDOW: Paint = Paint::pick(TRANSPARENT, solid(super::PLANE));
-    pub const PLANE: Paint = Paint::pick(super::PLANE_GLASS, solid(super::PLANE));
-    pub const CHROME: Paint = Paint::pick(super::CHROME_GLASS, solid(super::CHROME));
-    pub const HEAD: Paint = Paint::pick(super::HEAD_GLASS, solid(super::HEAD));
-    pub const INBAND: Paint = Paint::pick(super::INBAND_GLASS, solid(super::INBAND));
-    pub const BAND: Paint = Paint::pick(super::BAND_GLASS, solid(super::BAND));
-    pub const BAND2: Paint = Paint::pick(super::BAND2_GLASS, solid(super::BAND2));
-    pub const HOVER: Paint = Paint::pick(super::HOVER_GLASS, solid(super::HOVER));
-    pub const SELECTION: Paint = Paint::pick(super::SELECTION_GLASS, solid(super::SELECTION));
+    /// the blur behind the window; the card elsewhere.
+    pub const WINDOW: Paint = Paint::pick(TRANSPARENT, solid(super::CARD));
+    pub const CARD: Paint = Paint::pick(super::CARD_GLASS, solid(super::CARD));
+    pub const FRAME: Paint = Paint::pick(super::FRAME_GLASS, solid(super::FRAME));
+    pub const BAR: Paint = Paint::pick(super::BAR_GLASS, solid(super::BAR));
+    pub const FIELD: Paint = Paint::pick(super::FIELD_GLASS, solid(super::FIELD));
+    pub const RAISED: Paint = Paint::pick(super::RAISED_GLASS, solid(super::RAISED));
+    pub const SELECTED: Paint = Paint::pick(super::SELECTED_GLASS, solid(super::SELECTED));
     pub const SELECTION_HOVER: Paint =
         Paint::pick(super::SELECTION_HOVER_GLASS, solid(super::SELECTION_HOVER));
     /// Every press: the selected row's hover face.
     pub const PRESS: Paint = SELECTION_HOVER;
     pub const FLOAT: Paint = Paint::pick(super::FLOAT_GLASS, solid(super::FLOAT));
-    pub const HUNK: Paint = Paint::pick(super::HUNK_GLASS, solid(super::HUNK));
     pub const NODIFF: Paint = Paint::pick(super::NODIFF_GLASS, solid(super::NODIFF));
+    /// The hairlines: white overlays on every platform.
+    pub const HAIRLINE: Paint = Paint(super::HAIRLINE);
+    pub const HAIRLINE_STRONG: Paint = Paint(super::HAIRLINE_STRONG);
     pub const LINE: Paint = Paint::pick(super::LINE_GLASS, solid(super::LINE));
     pub const LINE2: Paint = Paint::pick(super::LINE2_GLASS, solid(super::LINE2));
     pub const CHROME_SEAM: Paint = Paint::pick(super::CHROME_SEAM_GLASS, TRANSPARENT);
+
+    // Legacy names (the square chrome's), mapped onto the surfaces above
+    // until each phase restyles its region; removed in the last phase.
+    pub const PLANE: Paint = CARD;
+    pub const CHROME: Paint = FRAME;
+    pub const HEAD: Paint = FIELD;
+    pub const INBAND: Paint = FIELD;
+    /// The prompt band: a field that must occlude what scrolls under it, so
+    /// on glass it is 80% over the card (composing to ~99%), not an overlay.
+    pub const BAND: Paint = Paint::pick(0x222222cc, solid(super::FIELD));
+    pub const BAND2: Paint = RAISED;
+    pub const HOVER: Paint = RAISED;
+    pub const SELECTION: Paint = SELECTED;
+    pub const HUNK: Paint = BAR;
 }
 
 // ------------------------------------------------------------------ edges
 
-/// `#7c7c82` — a resting checkbox, radio or switch boundary: solid and at
-/// least 3:1 on the plane, chrome, a float and a band, so an unchecked
+/// `#7c7c7c` — a resting checkbox, radio or switch boundary: solid and at
+/// least 3:1 on the card, the frame, a float and a field, so an unchecked
 /// control never vanishes.
-pub const INPUT_EDGE: u32 = 0x7c7c82;
-/// `#3c3c3f` / `#55555a` — the scrollbar thumb, at rest and under the
+pub const INPUT_EDGE: u32 = 0x7c7c7c;
+/// `#3a3a3a` / `#555555` — the scrollbar thumb, at rest and under the
 /// pointer.
-pub const SCROLLBAR: u32 = 0x3c3c3f;
-pub const SCROLLBAR_HOVER: u32 = 0x55555a;
+pub const SCROLLBAR: u32 = 0x3a3a3a;
+pub const SCROLLBAR_HOVER: u32 = 0x555555;
 /// `#ffffff1a` — an unlit meter segment and the usage lines' tracks.
 pub const METER_OFF: u32 = 0xffffff1a;
 /// The veil behind a modal sheet: lighter over glass, which already dims.
@@ -359,29 +405,37 @@ pub const VEIL: u32 = if GLASS { 0x00000033 } else { 0x00000059 };
 
 // -------------------------------------------------------------------- ink
 
-/// `#f4f4f5` — titles, the operator's own prompt text, headings, a tool's
-/// name, bold runs, a Decision's question.
-pub const TEXT_STRONG: u32 = 0xf4f4f5;
-/// `#d7d7d9` — agent prose, the body copy, a Thread row's title.
-pub const TEXT: u32 = 0xd7d7d9;
-/// `#98989d` — metadata: tool arguments and results, durations, hints,
-/// timestamps, placeholders, state words in the sidebar. The floor for any
-/// text that must be read.
-pub const TEXT_MUTED: u32 = 0x98989d;
-/// `#5e5e63` — structure, never words: the `·` seam, `└` elbows, rails,
+/// `#f2f2f2` — titles, selected rows, the prompt text, `**strong**`, `❯`,
+/// the caret, focus, links and paths in prose, inline code.
+pub const TEXT_STRONG: u32 = 0xf2f2f2;
+/// `#e6e6e6` — assistant prose.
+#[allow(dead_code)]
+pub const TEXT_PROSE: u32 = 0xe6e6e6;
+/// `#d0d0d0` — default chrome text, nav titles, tool output.
+pub const TEXT: u32 = 0xd0d0d0;
+/// `#c0c0c0` — emphasised bar items.
+#[allow(dead_code)]
+pub const TEXT_BAR: u32 = 0xc0c0c0;
+/// `#a0a0a0` — unselected tabs and nav views, chips.
+#[allow(dead_code)]
+pub const TEXT_MUTED: u32 = 0xa0a0a0;
+/// `#8c8c8c` — metadata: times, icons, section headings, tool arguments
+/// and results, hints, placeholders. **The floor for readable text**:
+/// 4.5:1 on `FRAME` and `CARD`, 4:1 on `SELECTED`.
+pub const TEXT_DIM: u32 = 0x8c8c8c;
+/// `#5e5e5e` — structure, never words: `└`, diff line numbers, rails,
 /// disclosure glyphs, the parked ring.
-pub const TEXT_FAINT: u32 = 0x5e5e63;
-/// The muted ink on the chrome glass (the sidebar, the bottom bar). Over a see-through ground the opaque `TEXT_MUTED` loses
-/// its contrast against a bright desktop, so on glass it lifts a step;
-/// opaque builds keep `TEXT_MUTED`.
-pub const CHROME_MUTED: u32 = if GLASS { 0xb6b6bb } else { TEXT_MUTED };
-/// The faint (structure-only) ink on the chrome glass: tree glyphs, fold
-/// triangles, the parked ring. Lifted on glass for the same reason.
-pub const CHROME_FAINT: u32 = if GLASS { 0x7e7e84 } else { TEXT_FAINT };
+pub const TEXT_FAINT: u32 = 0x5e5e5e;
+/// The dim ink on the frame's glass (the sidebar, the bottom bar). Over a
+/// see-through ground the opaque `TEXT_DIM` loses its contrast against a
+/// bright desktop, so on glass it lifts a step; opaque builds keep it.
+pub const CHROME_MUTED: u32 = if GLASS { 0xb6b6b6 } else { TEXT_DIM };
+/// The faint (structure-only) ink on the frame's glass, lifted likewise.
+pub const CHROME_FAINT: u32 = if GLASS { 0x7e7e7e } else { TEXT_FAINT };
 
 // --------------------------------------------------------------- palette
 //
-// Real terminal colour (rule 6): the named hues. Semantic tokens below
+// The named hues: state, syntax, the context legend. Semantic tokens below
 // point at them; render code names the semantic token.
 
 pub const RED: u32 = 0xef8a80;
@@ -392,65 +446,49 @@ pub const MAGENTA: u32 = 0xc59df0;
 pub const CYAN: u32 = 0x78ccd0;
 pub const ORANGE: u32 = 0xeda879;
 
-// ----------------------------------------------------------------- accent
+// ----------------------------------------------------- focus and selection
 
-/// `#8eb1f0` — steel blue, the operator's colour: the prompt `❯`, the caret,
-/// the focused Pane's border, links, the current row's `❯`, a selected
-/// choice, a drop target.
-pub const ACCENT: u32 = 0x8eb1f0;
-/// `#b4cbf6` — the accent a step lighter: link hover, accent on a selection.
-pub const ACCENT_HI: u32 = 0xb4cbf6;
-/// The accent as a fill: the primary button, the selected effort chip, with
-/// `ON_ACCENT` ink.
-pub const ACCENT_STRONG: u32 = ACCENT;
-/// A primary button under the pointer and held down.
-pub const PRIMARY_HOVER: u32 = 0xa5c1f3;
-pub const PRIMARY_ACTIVE: u32 = 0x7fa3e3;
-/// `#0b0d12` — ink on an accent fill (the prototype's inverse token).
-pub const ON_ACCENT: u32 = 0x0b0d12;
-/// **The** keyboard-focus ink: the focused Pane's border, the kit's `ring`,
-/// every focus outline. The accent itself.
-pub const FOCUS_RING: u32 = ACCENT;
-/// `#8eb1f066` — the accent as an outline that is not focus: a link's
-/// underline, a drop target's edge.
-pub const ACCENT_EDGE: u32 = 0x8eb1f066;
-/// `#8eb1f024` (14%) — the accent as a ground: the slot a dragged Pane would
-/// take. Never inline code, never a state.
-pub const ACCENT_WASH: u32 = 0x8eb1f024;
-/// `#8eb1f040` (25%) — native text selection, painted over glyphs.
-pub const TEXT_SELECTION_WASH: u32 = 0x8eb1f040;
+/// Keyboard focus on a control (`components::control_focus`, the kit's
+/// `ring`): the strongest ink, never a hue (rule 2).
+pub const CONTROL_FOCUS: u32 = TEXT_STRONG;
+/// White at 20% — native text selection, painted over glyphs.
+pub const TEXT_SELECTION_WASH: u32 = 0xffffff33;
 /// `#eda87933` (20%) — every occurrence a find (⌘F) marks, under its
-/// glyphs: orange, a hue no state wears, kept apart from the accent's
+/// glyphs: orange, a hue no state wears, kept apart from the white
 /// selection and from yellow, which means "needs you".
 pub const FIND_WASH: u32 = 0xeda87933;
 /// `#eda87980` (50%) — the occurrence the find is on.
 pub const FIND_ACTIVE_WASH: u32 = 0xeda87980;
-/// The caret: the soft block in the focused Composer.
-pub const CARET: u32 = ACCENT;
+/// The caret in the focused Composer.
+pub const CARET: u32 = TEXT_STRONG;
+/// A board seam under the pointer or held: `TEXT_STRONG` at 40%.
+pub const SEAM_HOVER: u32 = 0xf2f2f266;
 
 // -------------------------------------------------------- state + signals
 
 /// Green — live work: the running dot and braille spinner, `ok`, a passing
 /// check, diff `+`.
 pub const RUNNING: u32 = GREEN;
-/// Yellow — a Decision: the dot, the `◆`, the kind word, the waiting Pane's
-/// border.
+/// Yellow — needs you: the dot, the `◆`, the kind word, a risky mode.
 pub const ATTENTION: u32 = YELLOW;
-/// A waiting Pane's border on a board: yellow at 75% (the prototype's
-/// `.pane.attn::after`, `rgba(230,196,124,.75)`).
-pub const ATTENTION_EDGE: u32 = 0xe6c47cbf;
-/// Red — blocked or failed: the dot, the word `failed`, diff `−`.
+/// Red — failed: the dot, the word `failed`, diff `−`.
 pub const BLOCKED: u32 = RED;
 /// Red as a one-line ground (a refused drop, a destructive control under
 /// the pointer); never a multi-line wash (`DIFF_REMOVED_WASH`).
 pub const BLOCKED_WASH: u32 = 0xef8a801f;
-/// The idle/parked dot: the muted ink in a dot role.
-pub const IDLE: u32 = TEXT_MUTED;
-/// Teal — a turn finished that the operator has not seen: the `✓`.
-pub const FINISHED: u32 = CYAN;
-/// The permission mode word in the status line (`accept edits`, `plan`).
-#[allow(dead_code)]
-pub const MODE_INK: u32 = MAGENTA;
+/// The idle/parked dot: the dim ink in a dot role. (Done is a shape, the
+/// check-circle, in this ink too: no hue, ADR 0033.)
+pub const IDLE: u32 = TEXT_DIM;
+
+/// A permission mode word's ink (`mode_word`): `ATTENTION` for the modes
+/// that skip asking (bypass permissions, Codex's full access), `TEXT_MUTED`
+/// for the rest (magenta is retired, ADR 0033).
+pub fn mode_ink(word: &str) -> u32 {
+    match word {
+        "bypass permissions" | "danger-full-access" => ATTENTION,
+        _ => TEXT_MUTED,
+    }
+}
 
 /// **The lexicon.** Every state word Ferrite prints about a Thread or an
 /// agent, defined once next to the inks that colour them. State and value
@@ -506,14 +544,12 @@ pub const MACHINE_LOST_OPACITY: f32 = 0.5;
 
 /// The ink a lexicon word wears when it leads a line: `needs you` is
 /// `ATTENTION`, `failed`/`failing` are `BLOCKED`, every other word is
-/// `TEXT_MUTED` — colour always means something needs you. (The sidebar
-/// sets its words in `TEXT_MUTED` whatever they say: its dot carries the
-/// colour, rule 7.)
+/// `TEXT_DIM` — colour always means something needs you.
 pub fn word_ink(word: &str) -> u32 {
     match word {
         words::NEEDS_YOU => ATTENTION,
         words::FAILED | words::FAILING => BLOCKED,
-        _ => TEXT_MUTED,
+        _ => TEXT_DIM,
     }
 }
 
@@ -571,22 +607,20 @@ pub const SYN_NUMBER: u32 = ORANGE;
 /// Constants (`true`, `None`, `SCREAMING_CASE`): orange, with the numbers.
 #[allow(dead_code)]
 pub const SYN_CONST: u32 = ORANGE;
-/// Comments are read, not decoration: `TEXT_MUTED`, set italic.
-pub const SYN_COMMENT: u32 = TEXT_MUTED;
+/// Comments are read, not decoration: `TEXT_DIM`, set italic.
+pub const SYN_COMMENT: u32 = TEXT_DIM;
 /// Punctuation: the plain ink (the prototype leaves `::`, `(`, `;` unclassed).
 pub const SYN_PUNCT: u32 = TEXT;
 /// Everything the highlighter leaves unclassed.
 pub const SYN_PLAIN: u32 = TEXT;
-/// Inline `code` in prose: cyan ink, no chip.
-pub const INLINE_CODE: u32 = CYAN;
-/// A file path, in prose or in a tool call's arguments: cyan, underlined
-/// under the pointer.
-#[allow(dead_code)]
-pub const PATH_INK: u32 = CYAN;
-/// A link's ink and its underline.
-pub const LINK_INK: u32 = ACCENT;
-/// The wash over the slot a dragged Pane would take.
-pub const DROP_WASH: u32 = ACCENT_WASH;
+/// A link or a path in prose, a file chip's name: `TEXT_STRONG`, underlined
+/// under the pointer (cyan is retired, ADR 0033). A path in a tool call's
+/// arguments is `TEXT_DIM` with the rest of them.
+pub const LINK_INK: u32 = TEXT_STRONG;
+/// The wash over the slot a dragged Pane would take: white at 6%.
+pub const DROP_WASH: u32 = 0xffffff0f;
+/// That slot's edge: the focus ring's white at 22%.
+pub const DROP_EDGE: u32 = FOCUS_RING;
 /// A diff row's changed words: the row's hue at 24% (added) and 28%
 /// (removed), over the row's own wash (`DIFF_ADDED_WASH`,
 /// `DIFF_REMOVED_WASH`).
@@ -624,24 +658,24 @@ pub const SHADOW_FLOAT_BLUR: f32 = 7.0;
 
 // ------------------------------------------------------------------- type
 //
-// **One size per surface** (rule 1). The chrome — sidebar, titlebar, bottom
-// bar, Pane heads, menus, pickers, the palette, sheets, toasts, tooltips,
-// the Composer and its status line — is `FS_UI` 13 on `LH_UI` 20. The
-// transcript is the reading size on its own line (`answer_text_size`,
-// `answer_line_height`; 13 on 20 at Standard, the chrome's own grid) and
-// every transcript measure scales from it. Hierarchy is ink and weight,
-// never a size: no surface sets a second size, and headings are the body
-// size.
+// **Two faces** (rule 1). The chrome is Geist (`FONT_UI`) at `FS_UI` 13 on
+// `LH_UI` 20 by default, with the roles of SPEC §3.5 below (`FS_TITLE`,
+// `FS_LABEL`, `FS_META`, …). The transcript is Geist Mono (`FONT_CODE`) at
+// the reading size on its own line (`answer_text_size`,
+// `answer_line_height`; 13 on 20 at Standard) and every transcript measure
+// scales from it. Numbers and glyphs from the terminal's world (diffstats,
+// spinners, `❯`) stay in Geist Mono inside chrome too.
 //
 // **Weights:** `W_BODY` (400) for everything that is read; `W_LABEL` (500)
-// a surface's one title, a tool's name, a label; `W_STRONG` (600) the
-// prompt `❯`, headings, `**strong**`, a Project heading, a table head. 700
+// tabs, buttons, Pane titles, labels, a tool's name; `W_STRONG` (600) a
+// view title, the prompt `❯`, headings, `**strong**`, a badge count. 700
 // is never used, and no render site names a `FontWeight` itself. Weight
 // never signals state on a row that can truncate.
 //
-// **Figures:** any number that changes while it is on screen is
-// `components::tabular` (Geist Mono's figures are tabular already; the
-// feature keeps that true if the face changes).
+// **Figures:** the chrome sets tabular figures (`components::tabular` on
+// the window root), so a ticking count or a column of numbers never
+// shifts. Geist Mono's figures are tabular already, and it ships no
+// ligatures (`theme::tests`).
 
 /// 13px — the grid's size: every chrome line, on `LH_UI`.
 pub const FS_UI: f32 = 13.0;
@@ -653,6 +687,37 @@ pub const LH_UI: f32 = 20.0;
 pub const FS_PROSE: f32 = 13.0;
 /// 20px — the Standard reading size's line: 1.5×, whole.
 pub const LH_PROSE: f32 = 20.0;
+/// 13.5 on 20 — a view title (the Solo and Group heads), at `W_STRONG`.
+#[allow(dead_code)]
+pub const FS_TITLE: f32 = 13.5;
+/// 12.5 — tabs, buttons, Pane titles, panel tabs, at `W_LABEL` on `LH_UI`.
+#[allow(dead_code)]
+pub const FS_LABEL: f32 = 12.5;
+/// 12 on 16 (or `LH_UI`) — metadata, section headings, the bar, a row's
+/// second line.
+#[allow(dead_code)]
+pub const FS_META: f32 = 12.0;
+#[allow(dead_code)]
+pub const LH_META: f32 = 16.0;
+/// 11 on 18 — a badge's count, at `W_STRONG`.
+#[allow(dead_code)]
+pub const FS_BADGE: f32 = 11.0;
+#[allow(dead_code)]
+pub const LH_BADGE: f32 = 18.0;
+/// 13.5 on 20 — the Solo Composer's input (a Group's is `FS_UI`).
+#[allow(dead_code)]
+pub const FS_COMPOSER: f32 = 13.5;
+/// 14.5 — the palette's query.
+#[allow(dead_code)]
+pub const FS_PALETTE: f32 = 14.5;
+/// 11 on 19 — the panel's diff, in Geist Mono.
+#[allow(dead_code)]
+pub const FS_PANEL_DIFF: f32 = 11.0;
+#[allow(dead_code)]
+pub const LH_PANEL_DIFF: f32 = 19.0;
+/// 11.5 — a diffstat, a spinner or a `#N` set in Geist Mono inside chrome.
+#[allow(dead_code)]
+pub const FS_CHROME_CODE: f32 = 11.5;
 
 /// Weights (see the type notes above): 400 body; 500 a title, a tool's
 /// name, a label; 600 the prompt mark, headings, `**strong**`.
@@ -724,6 +789,11 @@ pub const CHROME_GLYPHS: &[char] = &[
     '●', '○', '└', '├', '│', '─', '·', '•', '…', '↑', '↓', '←', '→', '↳', '↩', '⇧', '⇥', '⏎', '↵',
     '⌫', '±', '−', '—', '×', '›', '‹', '▲', '▼', '▶', '◀',
 ];
+/// The non-ASCII glyphs the chrome sets in Geist (`FONT_UI`): every one is in
+/// its cmap (asserted by `theme::tests`). `⌘ ⌥ ⌃` are the platform's in both
+/// faces (`FALLBACK_GLYPHS`).
+#[cfg(test)]
+pub const UI_GLYPHS: &[char] = &['⇧', '↑', '↓', '·', '⇥', '…', '—', '−', '×', '●', '○'];
 /// The glyphs the design uses that Geist Mono lacks: each is typed all the
 /// same, and the platform's fallback face sets it (rule 10). Asserted
 /// *absent* from the face, so a face update that adds one is noticed.
@@ -750,21 +820,34 @@ pub const SPACE_6: f32 = 24.0;
 
 // ------------------------------------------------------------------ radii
 //
-// **Square inside** (rule 2): every in-app radius is 0. The names stay, so
-// call sites compile and say what they are; a status dot stays round
-// because it is a dot, not a corner.
+// **Radii by role** (rule 2, SPEC §3.6): 4 · 5 · 6 · 7 · 8 · 10 · 12, and
+// round for dots, pills and the send circle (`rounded_full`).
 
-/// A Pane, a sheet.
-pub const R_PANE: f32 = 0.0;
-/// Blocks: the Composer, code, menus, popovers, toasts. The kit's
-/// `radius_lg`.
-pub const R_BLOCK: f32 = 0.0;
-/// Controls: buttons, fields, rows, pickers, tooltips. The kit's `radius`.
-pub const R_CONTROL: f32 = 0.0;
-/// Chips, keycaps, a menu's rows.
-pub const R_CHIP: f32 = 0.0;
-/// Meter segments and other tiny marks.
-pub const R_TIGHT: f32 = 0.0;
+/// 4px — the inline code chip.
+#[allow(dead_code)]
+pub const R_INLINE: f32 = 4.0;
+/// 5px — a view tab in the bar, a 22px icon button.
+#[allow(dead_code)]
+pub const R_SMALL: f32 = 5.0;
+/// 6px — a 28px icon button, a tab in a card, a Decision option, the
+/// command well.
+#[allow(dead_code)]
+pub const R_TAB: f32 = 6.0;
+/// 7px — controls: nav rows, buttons, fields, the prompt band, diff and
+/// fence blocks. The kit's `radius`.
+pub const R_CONTROL: f32 = 7.0;
+/// 7px — chips (and a menu's rows, keycaps).
+pub const R_CHIP: f32 = R_CONTROL;
+/// 8px — blocks: floats, the Group Composer, the Decision box, the failure
+/// strip, the panel's file block. The kit's `radius_lg`.
+pub const R_BLOCK: f32 = 8.0;
+/// 10px — the Pane card, the Solo Composer.
+pub const R_PANE: f32 = 10.0;
+/// 12px — the palette.
+#[allow(dead_code)]
+pub const R_PALETTE: f32 = 12.0;
+/// 2px — meter segments and other tiny marks.
+pub const R_TIGHT: f32 = 2.0;
 
 // --------------------------------------------------------- shell and board
 
@@ -911,20 +994,21 @@ pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 
 // ------------------------------------------------------------------ faces
 
-/// The face, **bundled**: Geist Mono, on every surface (rule 1). The kit's
+/// The chrome's face, **bundled**: Geist (rule 1) — nav, heads, tabs,
+/// buttons, menus, the palette, the panel, the bar. The kit's
 /// `font_family` is set from it.
 ///
 /// gpui has no variation-axis support, so `main.rs` registers static
-/// instances (Regular, Italic, Medium, SemiBold, Bold). They share their
-/// typographic family name (name ID 16), and CoreText/DirectWrite resolve
-/// the face from `.font_weight(..)`. **Never reach a weight by family
-/// name**: `.font_family("Geist Mono Medium")` silently resolves to the
-/// fallback face.
-pub const FONT_UI: &str = "Geist Mono";
+/// instances (Regular, Italic, Medium, SemiBold, Bold) of both faces. Each
+/// face's instances share their typographic family name (name ID 16), and
+/// CoreText/DirectWrite resolve the instance from `.font_weight(..)`.
+/// **Never reach a weight by family name**: `.font_family("Geist Medium")`
+/// silently resolves to the fallback face.
+pub const FONT_UI: &str = "Geist";
 
-/// The same face, named for what the text is (code, machine output, keys):
-/// the kit's `mono_font_family`.
-pub const FONT_CODE: &str = FONT_UI;
+/// The transcript's face, and code, machine output and terminal numbers
+/// anywhere: Geist Mono, the kit's `mono_font_family`.
+pub const FONT_CODE: &str = "Geist Mono";
 
 /// How the window's own background is drawn (rule 4): blurred glass on
 /// macOS, opaque elsewhere. The root then paints `paint::WINDOW`.
@@ -965,12 +1049,12 @@ pub fn init_components(cx: &mut gpui::App) {
     crate::attachments::init(cx);
     crate::rich::init(cx);
     let theme = Theme::global_mut(cx);
-    // One face, one size (rule 1).
+    // Two faces (rule 1): Geist for the chrome, Geist Mono for code.
     theme.font_family = FONT_UI.into();
     theme.font_size = px(FS_UI);
     theme.mono_font_family = FONT_CODE.into();
     theme.mono_font_size = px(FS_UI);
-    // Square inside (rule 2).
+    // Radii by role (rule 2).
     theme.radius = px(R_CONTROL);
     theme.radius_lg = px(R_BLOCK);
     // Floats carry Ferrite's one float shadow; the kit's own stays off.
@@ -981,60 +1065,62 @@ pub fn init_components(cx: &mut gpui::App) {
     // The kit's ground is the opaque plane: its fields and dialogs sit on
     // a region already painted, never on the bare glass window (the window
     // Root's own ground is overridden with `paint::WINDOW`, `main.rs`).
-    theme.background = rgb(PLANE).into();
+    theme.background = rgb(CARD).into();
     theme.foreground = rgb(TEXT).into();
     theme.border = paint::LINE2.into();
     // Kit menu and completion rows sit on a float: their hover and cursor
     // face is the selection overlay.
     theme.accent = paint::SELECTION.into();
     theme.accent_foreground = rgb(TEXT_STRONG).into();
-    theme.secondary = rgb(BAND).into();
-    theme.secondary_hover = rgb(SELECTION).into();
+    theme.secondary = rgb(RAISED).into();
+    theme.secondary_hover = rgb(SELECTED).into();
     theme.secondary_active = rgb(SELECTION_HOVER).into();
     theme.secondary_foreground = rgb(TEXT).into();
-    theme.primary = rgb(ACCENT_STRONG).into();
-    theme.primary_hover = rgb(PRIMARY_HOVER).into();
-    theme.primary_active = rgb(PRIMARY_ACTIVE).into();
-    theme.primary_foreground = rgb(ON_ACCENT).into();
+    // The primary has no hue: the strongest ink, stepping down to `TEXT`
+    // under the pointer and pressed.
+    theme.primary = rgb(PRIMARY).into();
+    theme.primary_hover = rgb(TEXT).into();
+    theme.primary_active = rgb(TEXT).into();
+    theme.primary_foreground = rgb(ON_PRIMARY).into();
     // `Button::primary` reads its own fields, not `primary`.
-    theme.button_primary = rgb(ACCENT_STRONG).into();
-    theme.button_primary_hover = rgb(PRIMARY_HOVER).into();
-    theme.button_primary_active = rgb(PRIMARY_ACTIVE).into();
-    theme.button_primary_foreground = rgb(ON_ACCENT).into();
-    theme.muted = rgb(BAND).into();
-    theme.muted_foreground = rgb(TEXT_MUTED).into();
+    theme.button_primary = rgb(PRIMARY).into();
+    theme.button_primary_hover = rgb(TEXT).into();
+    theme.button_primary_active = rgb(TEXT).into();
+    theme.button_primary_foreground = rgb(ON_PRIMARY).into();
+    theme.muted = rgb(RAISED).into();
+    theme.muted_foreground = rgb(TEXT_DIM).into();
     theme.popover = paint::FLOAT.into();
     theme.popover_foreground = rgb(TEXT).into();
-    theme.ring = rgb(FOCUS_RING).into();
+    theme.ring = rgb(CONTROL_FOCUS).into();
     theme.caret = rgb(CARET).into();
     // The reader's line numbers sit on the plane itself. The gutter is
     // painted opaque over the text, so it takes the plane's own colour.
     let mut highlight = (*theme.highlight_theme).clone();
-    highlight.style.editor_gutter_background = Some(rgb(PLANE).into());
+    highlight.style.editor_gutter_background = Some(rgb(CARD).into());
     theme.highlight_theme = std::sync::Arc::new(highlight);
     theme.selection = rgba(TEXT_SELECTION_WASH).into();
     theme.link = rgb(LINK_INK).into();
-    theme.link_hover = rgb(ACCENT_HI).into();
+    theme.link_hover = rgb(LINK_INK).into();
     theme.link_active = rgb(LINK_INK).into();
     // Native checkbox/radio indicators use `input` for their resting edge.
     theme.input = rgb(INPUT_EDGE).into();
-    theme.switch = rgb(BAND2).into();
+    theme.switch = rgb(RAISED).into();
     theme.switch_thumb = rgb(TEXT_STRONG).into();
     theme.overlay = rgba(VEIL).into();
     theme.danger = rgb(BLOCKED).into();
     theme.warning = rgb(ATTENTION).into();
     theme.success = rgb(RUNNING).into();
-    theme.info = rgb(ACCENT).into();
+    theme.info = rgb(TEXT_STRONG).into();
     theme.list_hover = paint::HOVER.into();
     theme.list_active = paint::SELECTION.into();
-    theme.table_head = rgb(PLANE).into();
+    theme.table_head = rgb(CARD).into();
     theme.table_head_foreground = rgb(TEXT_STRONG).into();
-    theme.drag_border = rgb(ACCENT).into();
-    theme.drop_target = rgba(ACCENT_WASH).into();
-    theme.sidebar = rgb(CHROME).into();
+    theme.drag_border = rgba(DROP_EDGE).into();
+    theme.drop_target = rgba(DROP_WASH).into();
+    theme.sidebar = rgb(FRAME).into();
     theme.sidebar_foreground = rgb(TEXT).into();
     // The selected Settings page is the selection row.
-    theme.sidebar_accent = rgb(SELECTION).into();
+    theme.sidebar_accent = rgb(SELECTED).into();
     theme.sidebar_accent_foreground = rgb(TEXT_STRONG).into();
     theme.sidebar_border = rgba(TRANSPARENT).into();
     // No track: only the thumb is ever ink, and it lightens rather than
@@ -1042,12 +1128,12 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.scrollbar = rgba(TRANSPARENT).into();
     theme.scrollbar_thumb = rgb(SCROLLBAR).into();
     theme.scrollbar_thumb_hover = rgb(SCROLLBAR_HOVER).into();
-    // Kit tabs, should one appear: no bar ground, the active tab `BAND2` in
-    // `TEXT_STRONG` (the bottom bar's current tab), the rest muted.
+    // Kit tabs, should one appear: no bar ground, the active tab `SELECTED`
+    // in `TEXT_STRONG`, the rest muted.
     theme.tab_bar = rgba(TRANSPARENT).into();
-    theme.tab_active = rgb(BAND2).into();
+    theme.tab_active = rgb(SELECTED).into();
     theme.tab_active_foreground = rgb(TEXT_STRONG).into();
-    theme.tab_foreground = rgb(TEXT_MUTED).into();
+    theme.tab_foreground = rgb(TEXT_DIM).into();
     // `Theme::change` resolved the kit's pre-computed tokens from its default
     // palette, and nothing recomputes them: widgets that read `tokens.*`
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
@@ -1091,6 +1177,32 @@ pub fn init_components(cx: &mut gpui::App) {
 
 // ======================================== end of the frozen shared head
 
+// ======================================== legacy aliases
+// The square chrome's surface names, mapped onto the new surfaces so every
+// module builds while the phases of the UI refresh restyle it (SPEC §11).
+// A restyled surface names the new token; the last phase deletes this
+// block. Nothing new names these.
+
+/// The reading plane → the card.
+pub const PLANE: u32 = CARD;
+/// Chrome (the sidebar, the bottom bar) → the frame.
+pub const CHROME: u32 = FRAME;
+/// The focused Pane's head band and the Composer's input band → a field.
+#[allow(dead_code)]
+pub const HEAD: u32 = FIELD;
+#[allow(dead_code)]
+pub const INBAND: u32 = FIELD;
+/// The prompt band, a diff's file head → a field.
+pub const BAND: u32 = FIELD;
+/// The bar's current tab, a chip → raised.
+pub const BAND2: u32 = RAISED;
+/// The selected row → selected.
+pub const SELECTION: u32 = SELECTED;
+/// A hunk's header row → the bar's ground, the diff block's.
+#[allow(dead_code)]
+pub const HUNK: u32 = BAR;
+// (end legacy aliases)
+
 // ======================================== WP-A · transcript rows and grammar
 // Owner: WP-A (transcript.rs, pane/text.rs, the transcript rows in pane.rs, ferrite-core transcript strings.)
 // Edit values and append tokens only inside this section.
@@ -1110,30 +1222,30 @@ pub fn init_components(cx: &mut gpui::App) {
 //   column after it, and wrapped lines hang under the content column, never
 //   under the mark. Rows sit `TX_PAD_L` (two chrome cells) from the Pane's
 //   left edge and `TX_PAD_R` from its right; there is no centred column.
-// - **Marks.** `❯` (accent, semibold) heads the operator's prompt; `●`
+// - **Marks.** `❯` (`TEXT_STRONG`, semibold) heads the operator's prompt; `●`
 //   heads agent prose (`TEXT_STRONG`, once per speaker change:
-//   `transcript::AnswerMarks`) and every tool call (`TEXT_MUTED` done,
+//   `transcript::AnswerMarks`) and every tool call (`TEXT_DIM` done,
 //   `RUNNING` live, `BLOCKED` failed; never pulsing); `✻` (in the
 //   provider's colour) the turn's end; `◆` (`ATTENTION`) a Decision — all
 //   typed (rule 10). `∴` (drawn) heads reasoning.
-// - **The banner.** Every transcript opens on one `TEXT_MUTED` line:
+// - **The banner.** Every transcript opens on one `TEXT_DIM` line:
 //   `~/ferrite on dev · started 7:18 pm` (ADR 0014). The nav row names
 //   the Thread and the status line its model.
 // - **The prompt band.** The prompt echo is a full-width `paint::BAND` with
 //   half a line above and below its text: `❯` in the gutter, the text in
 //   `TEXT_STRONG` at body weight, its attachments inline after the words
-//   (`CYAN` names on `paint::BAND2`), and its send time (`7:31 pm`,
-//   `TEXT_MUTED`) in its own right-aligned column on the first line. The
+//   (`LINK_INK` names on `paint::BAND2`), and its send time (`7:31 pm`,
+//   `TEXT_DIM`) in its own right-aligned column on the first line. The
 //   band of the turn being read stays pinned at the top of the body while
 //   its output scrolls under it — exactly the band, pushed up by the next
 //   turn's band. Nothing on a band answers the pointer.
 // - **Tool rows.** `● Name(args)`, one row per call (never folded into a
 //   summary): the name `TEXT_STRONG` at `W_LABEL` (`Update`, `Bash`, the
-//   way Claude Code names them), the parens and arguments `TEXT_MUTED` (a
-//   path argument `CYAN`, a hover target), one line that truncates; the
+//   way Claude Code names them), the parens and arguments `TEXT_DIM` (a
+//   path argument `TEXT_DIM`, a hover target), one line that truncates; the
 //   trail hard right (`+N −M` in `RUNNING`/`BLOCKED`, then the duration
-//   `TEXT_MUTED`, tabular). What it produced hangs under a typed `└ ` elbow
-//   (`TEXT_FAINT`) on the content column, in `TEXT_MUTED`; further output
+//   `TEXT_DIM`, tabular). What it produced hangs under a typed `└ ` elbow
+//   (`TEXT_FAINT`) on the content column, in `TEXT_DIM`; further output
 //   lines align after the elbow. Long output folds to
 //   `OUTPUT_PREVIEW_LINES` and a `+ N lines` line that toggles it. A tool
 //   row changes nothing under the pointer but a path's underline.
@@ -1144,11 +1256,11 @@ pub fn init_components(cx: &mut gpui::App) {
 //   above a row is chosen at reconcile from the row before it
 //   (`rows::gap_before`) and is part of the row's identity.
 // - **The turn's end.** `✻ Worked for 41s · 7:32 pm · ↑ 3.2k ↓ 1.1k`,
-//   `TEXT_MUTED`, every `·` too. A failed or interrupted turn hangs under
+//   `TEXT_DIM`, every `·` too. A failed or interrupted turn hangs under
 //   the last row: `└ failed · 0.1s · <message>`, the lead word in its state
 //   ink.
-// - **Diffs** have no box: a `TEXT_MUTED` hunk header naming its section
-//   (none when it has none), `TEXT_MUTED` line numbers, red and green row
+// - **Diffs** have no box: a `TEXT_DIM` hunk header naming its section
+//   (none when it has none), `TEXT_DIM` line numbers, red and green row
 //   washes (`DIFF_*_WASH`) with the changed tokens washed deeper
 //   (`DIFF_*_WORD`), code in full syntax colour and one line per row, cut
 //   with `…`, the sign carrying the hue. Side by side once the transcript
@@ -1244,7 +1356,7 @@ pub const IMAGE_CELLS: f32 = 48.0;
 /// **The minimap** (the transcript's scrollbar): a `MINIMAP_W` rail at the
 /// body's right edge, shown while the pointer is anywhere on the Pane
 /// (Composer included) and fading over `MOTION_HOVER_FADE_MS`. A
-/// `MINIMAP_TICK_H` tick (`MINIMAP_TICK_R` corners) per prompt (`ACCENT`),
+/// `MINIMAP_TICK_H` tick (`MINIMAP_TICK_R` corners) per prompt (`TEXT_STRONG`),
 /// failed call (`BLOCKED`), Decision (`ATTENTION`) and passing check
 /// (`RUNNING`), inset `MINIMAP_TICK_INSET` — 6px wide; the viewport as a
 /// white band at 6% (`MINIMAP_BAND`), 11% under the pointer
@@ -1318,9 +1430,9 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// on the content column and held to `MEASURE_CH` cells; code, tables and
 /// rules keep the whole column. Blocks sit one blank line apart; headings
 /// are the body size in `W_STRONG` `TEXT_STRONG`, `**strong**` the same.
-/// Inline code is `INLINE_CODE` cyan with no chip; links and file paths are
-/// `PATH_INK` cyan with no underline at rest, every link underlining under
-/// the pointer (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_MUTED`, hanging
+/// Inline code is `INLINE_CODE_INK` with no chip (yet); links and file paths are
+/// `LINK_INK` with no underline at rest, every link underlining under
+/// the pointer (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_DIM`, hanging
 /// in the first of two cells. A fence has no ground: a 1px `paint::LINE2`
 /// rule on its left, the code two cells in, in full syntax colour, at most
 /// `MEASURE_CH` cells from the content column; its language tag dim at its
@@ -1332,16 +1444,17 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// column flush, figures tabular; a column of numbers aligns right (head
 /// included) unless the Markdown says otherwise. An image is framed like a
 /// prompt's (`IMAGE_CELLS`) with its caption under it. A quote is a 2px
-/// `LINE2` rule and `TEXT_MUTED`; a thematic break one `LINE`.
+/// `LINE2` rule and `TEXT_DIM`; a thematic break one `LINE`.
 ///
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
 /// sizes scale them with `reading_step`.
 #[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
 pub const PROSE_GAP: f32 = SPACE_3;
-/// Inline code's ink: cyan (`INLINE_CODE`, rule 6). The Markdown path
-/// paints it; the plain-text fallback carries the ink alone.
-pub const INLINE_CODE_INK: u32 = INLINE_CODE;
+/// Inline code's ink: `TEXT_STRONG` (cyan is retired, ADR 0033; the chip
+/// under it lands with the transcript's phase). The Markdown path paints
+/// it; the plain-text fallback carries the ink alone.
+pub const INLINE_CODE_INK: u32 = TEXT_STRONG;
 /// The inline-code chip reaches 2px past its glyphs. Painted, never laid
 /// out; its height is `inline_code_chip_h`, centred in the prose line box.
 #[cfg_attr(not(test), allow(dead_code))] // the previous grammar, now read only by tests
@@ -1397,13 +1510,13 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // (`motion::RESIZE`). A seam is also the 9px grab band (`SEAM_GRAB` in the
 // cockpit) that resizes its two sides, clamped to 22–78% of the board; a
 // default grid's aligned seams are one line that drags as one, and under
-// the pointer and while held the whole line takes the accent, fading in
+// the pointer and while held the whole line takes `SEAM_HOVER`, fading in
 // over `MOTION_SEAM_FADE_MS`.
 //
 // **The Pane frame.** A Pane's content starts at its own edges; its 1px
 // edge is an overlay laid over them (the prototype's `.pane::after`), so a
 // state change reflows nothing. By precedence (`pane::PaneEdge`): a
-// waiting Pane `ATTENTION_EDGE` on every side, focused or not (focus then
+// waiting Pane `WAIT_RING` on every side, focused or not (focus then
 // shows in its head ground and title) > focused `FOCUS_RING` > at rest
 // `TRANSPARENT` — the seams separate Panes, an edge only ever says
 // something. Focus is drawn only while more than one Pane is on the board.
@@ -1426,7 +1539,7 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // 360px tall (`docview::Level::for_cell`); smaller, it is a wall tile. One
 // Level per board (rule 2.3.5), with `LEVEL_HYSTERESIS`. A tile is the
 // head, its state word at the strong weight in its colour, half a row, its
-// last `WALL_LINES` lines — one `TEXT_MUTED` run each, glyph included —
+// last `WALL_LINES` lines — one `TEXT_DIM` run each, glyph included —
 // and, while it waits, quick answers boxed in `paint::LINE2`; no meter, no
 // sparkline.
 //
@@ -1435,7 +1548,7 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // strip; the board starts below it on macOS and Windows. The window's one
 // bar is the bottom bar (`STATUS_BAR_H`), on the chrome under a
 // `paint::LINE` rule: the sidebar toggle and the bell, the session in
-// `ACCENT` at the strong weight, `1 solo` and a tab per Group (the current
+// `TEXT_STRONG` at the strong weight, `1 solo` and a tab per Group (the current
 // view's `TEXT_STRONG` on `paint::BAND2`), the focused Pane's status line
 // (mode, model, `ctx`, changed files), each provider's usage behind its
 // mark, `?` and the clock. No state counts.
@@ -1550,7 +1663,7 @@ pub const READER_NUMBER_GAP: f32 = 2.0 * CH;
 /// far a drag can take the seam between them (the board's 22–78%).
 pub const READER_SHARE: f32 = 0.5;
 
-/// A dragged Pane's drop wash: `DROP_WASH` ground, `ACCENT_EDGE` edge,
+/// A dragged Pane's drop wash: `DROP_WASH` ground, `DROP_EDGE` edge,
 /// square; its label is a float tag one row high, a cell padded.
 pub const DROP_LABEL_PAD_X: f32 = CH;
 pub const DROP_LABEL_PAD_Y: f32 = 0.0;
@@ -1610,7 +1723,7 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 ///
 /// - **The input band** spans the Pane's width on `paint::INBAND`, padded
 ///   `COMPOSER_PAD_Y` above and below and `COMPOSER_PAD_L` / `COMPOSER_PAD_R`
-///   at its sides, so its `❯` (accent, the prompt mark) hangs in the 2-cell
+///   at its sides, so its `❯` (the prompt mark) hangs in the 2-cell
 ///   gutter at the transcript's own glyph column and the text starts two
 ///   cells further in. Typed input is mono `TEXT`; a selected run takes
 ///   `TEXT_STRONG` on `COMPOSER_SELECTION`. Queued prompts (dim `❯` lines)
@@ -1619,10 +1732,10 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 ///   Solo and in the focused board Pane it is always the block, blinking
 ///   softly (`MOTION_CARET_BLINK_MS`, `components::caret_blink`) whoever
 ///   holds the keyboard — the transcript, an open float, an inactive
-///   window — and the character under it takes `ON_ACCENT`; an unfocused
+///   window — and the character under it takes `ON_PRIMARY`; an unfocused
 ///   board Pane draws a still, hollow 1px box in `CARET_HOLLOW`. Typing
 ///   restarts the blink solid.
-/// - **The placeholder** sits after the caret cell and a space, `TEXT_MUTED`,
+/// - **The placeholder** sits after the caret cell and a space, `TEXT_DIM`,
 ///   a couple of words and no keys (`?` lists them, ADR 0014): `Steer this
 ///   thread`; while a turn runs `Queue a follow-up`; a Pane a Decision
 ///   waits in `Answer above`; any other unfocused Pane nothing.
@@ -1636,7 +1749,7 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 /// - **The status line** is the focused Pane's, in the window's bottom bar
 ///   (ADR 0014): `⏵⏵ accept edits` (the mode, `MODE_INK`) · the provider's
 ///   logomark and `opus 5.5 (1M) · medium` (one control: the model and its
-///   effort, a `TEXT_MUTED` `·` between) · `ctx`, an 8-cell meter and
+///   effort, a `TEXT_DIM` `·` between) · `ctx`, an 8-cell meter and
 ///   `32%` · `1 file +9 −4`. Every segment is a quiet control
 ///   (`COMPOSER_SEG_PAD_X` padding, `paint::HOVER` under the pointer, no
 ///   chevron) that opens what it always opened; segments are split by a
@@ -1710,9 +1823,9 @@ pub const CARET_HOLLOW: u32 = TEXT_FAINT;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
-/// An `@`-mention the operator picked: a path, so `PATH_INK` (cyan) on no
+/// An `@`-mention the operator picked: a path, so `LINK_INK` on no
 /// ground — the terminal's own colour for a path.
-pub const MENTION_INK: u32 = PATH_INK;
+pub const MENTION_INK: u32 = LINK_INK;
 /// The usage meter's detail card: one column of labelled bars, sized so
 /// the three windows read at a glance without the card becoming a panel.
 pub const USAGE_CARD_W: f32 = 288.0;
@@ -1740,13 +1853,13 @@ pub const USAGE_SWATCH: f32 = 8.0;
 pub const USAGE_SHARE_W: f32 = 44.0;
 /// What fills the context window, one ink per category in the stacked bar
 /// and its legend: the terminal palette, the operator's own words first.
-pub const CTX_MESSAGES: u32 = ACCENT;
+pub const CTX_MESSAGES: u32 = TEXT_STRONG;
 pub const CTX_TOOLS: u32 = ORANGE;
 pub const CTX_MCP: u32 = GREEN;
 pub const CTX_SKILLS: u32 = YELLOW;
 pub const CTX_PROMPT: u32 = MAGENTA;
 pub const CTX_MEMORY: u32 = CYAN;
-pub const CTX_BUFFER: u32 = TEXT_MUTED;
+pub const CTX_BUFFER: u32 = TEXT_DIM;
 pub const CTX_FREE: u32 = LINE2;
 pub const CTX_DEFERRED: u32 = TEXT_FAINT;
 pub const CTX_CYCLE: [u32; 4] = [BLUE, RED, 0x8fb2b8, 0xb5b48e];
@@ -1759,7 +1872,7 @@ pub const PREVIEW_MAX_W: f32 = 768.0;
 pub const BG_CHIP_MAX_W: f32 = 32.0 * CH;
 /// A pending file on the shelf: the prototype's `.att` — one row on
 /// `paint::BAND2`, a cell of padding each side, the image mark (or a 12px
-/// thumbnail) and the name in `PATH_INK`, cut at 32 cells, then `×`.
+/// thumbnail) and the name in `LINK_INK`, cut at 32 cells, then `×`.
 pub const ATTACH_CHIP_H: f32 = ROW;
 pub const ATTACH_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_THUMB: f32 = 12.0;
@@ -1782,21 +1895,21 @@ pub const MODEL_PICKER_GAP: f32 = 5.0;
 ///
 /// - **A head** (`menu::head`): one row, the surface's title in
 ///   `TEXT_STRONG` at `W_STRONG` at the left, its command or verb in
-///   `TEXT_MUTED` at the right (`model  /model`, `notifications  clear`).
-/// - **A section** (`menu::section`): one row in `TEXT_MUTED`,
+///   `TEXT_DIM` at the right (`model  /model`, `notifications  clear`).
+/// - **A section** (`menu::section`): one row in `TEXT_DIM`,
 ///   `FLOAT_SECTION_GAP` above it, a provider's logomark leading in its
 ///   brand colour.
-/// - **A row** (`menu::row`): one row; a 2-cell gutter that holds the accent
+/// - **A row** (`menu::row`): one row; a 2-cell gutter that holds the strong
 ///   `❯` (`W_STRONG`) on the cursor row; the name in `TEXT` (`TEXT_STRONG` on
-///   the cursor); its description `TEXT_MUTED` two cells after it; a key in
-///   `TEXT_MUTED` hard right; a `RUNNING` `✓` on the standing choice. The
+///   the cursor); its description `TEXT_DIM` two cells after it; a key in
+///   `TEXT_DIM` hard right; a `RUNNING` `✓` on the standing choice. The
 ///   cursor row is `paint::SELECTION`, a row under the pointer
 ///   `paint::HOVER`.
 /// - **A footer** (`menu::footer`): a `FLOAT_RULE` rule, then one row of
-///   key hints, all `TEXT_MUTED` (its `·` too): `↑↓ select · ⏎ open · esc`.
+///   key hints, all `TEXT_DIM` (its `·` too): `↑↓ select · ⏎ open · esc`.
 /// - **An inverse token** (`menu::token`): the chosen one of a short ladder
-///   (an effort, a two-way setting) on `ACCENT_STRONG` in `ON_ACCENT` at
-///   `W_STRONG`; the rest `TEXT_MUTED`, `paint::HOVER` under the pointer.
+///   (an effort, a two-way setting) on `PRIMARY` in `ON_PRIMARY` at
+///   `W_STRONG`; the rest `TEXT_DIM`, `paint::HOVER` under the pointer.
 pub const FLOAT_ROW_H: f32 = ROW;
 pub const FLOAT_PAD_X: f32 = CH;
 pub const FLOAT_GUTTER: f32 = GLYPH_GUTTER;
@@ -1811,7 +1924,7 @@ pub const SLASH_MENU_W: f32 = 84.0 * CH;
 /// its description and the `✓` on one row.
 pub const MODEL_PICKER_W: f32 = 66.0 * CH;
 /// A form field or a sheet's text button: one row in a cell of padding,
-/// inside a 1px `paint::LINE2` box (the accent while a field holds the
+/// inside a 1px `paint::LINE2` box (`CONTROL_FOCUS` while a field holds the
 /// caret).
 pub const FORM_CONTROL_H: f32 = ROW + 2.0 * SPACE_1 + 2.0;
 pub const FORM_FIELD_PAD_X: f32 = CH;
@@ -1925,10 +2038,10 @@ const fn float_ink(glass: u32, opaque: u32) -> Paint {
 pub const FLOAT_GROUND: Paint = float_ink(FLOAT_GLASS, FLOAT);
 pub const FLOAT_EDGE: Paint = float_ink(LINE2_GLASS, LINE2);
 pub const FLOAT_RULE: Paint = float_ink(LINE_GLASS, LINE);
-pub const FLOAT_SEL: Paint = float_ink(SELECTION_GLASS, SELECTION);
-pub const FLOAT_HOVER: Paint = float_ink(HOVER_GLASS, HOVER);
+pub const FLOAT_SEL: Paint = float_ink(SELECTED_GLASS, SELECTED);
+pub const FLOAT_HOVER: Paint = float_ink(RAISED_GLASS, RAISED);
 /// A quick answer under the pointer on a float (a toast's buttons).
-pub const FLOAT_BAND2: Paint = float_ink(BAND2_GLASS, BAND2);
+pub const FLOAT_BAND2: Paint = float_ink(RAISED_GLASS, RAISED);
 /// A sheet (Settings, the Project editor, the image preview) is a float at
 /// sheet size: its head two rows (the title and the one close control over
 /// a `paint::LINE`), its body two cells in, a footer under a `paint::LINE`.
@@ -1951,25 +2064,25 @@ pub const MENU_PATH_TAIL: usize = 48;
 // terminal's grammar: one face on the grid, square, rows and rules, no
 // cards and no iOS controls.
 //
-// - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (`❯` in the
-//   accent, then the field), a `paint::LINE` under it, then one row per page
-//   — the accent `❯` and `paint::SELECTION` on the page shown, `TEXT` on the
+// - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (`❯` in `TEXT_STRONG`,
+//   then the field), a `paint::LINE` under it, then one row per page
+//   — the `TEXT_STRONG` `❯` and `paint::SELECTION` on the page shown, `TEXT` on the
 //   rest — and `About` at the foot. ↑/↓ step pages while the sheet holds
 //   focus.
 // - **Content:** the page title in `TEXT_STRONG` `W_STRONG`, then groups a
-//   row apart: a group's label is a `TEXT_MUTED` row (a provider's led by
+//   row apart: a group's label is a `TEXT_DIM` row (a provider's led by
 //   its logomark), its rows split by `paint::LINE` rules.
-// - **Row:** the label (`TEXT`) over an optional hint (`TEXT_MUTED`) at the
+// - **Row:** the label (`TEXT`) over an optional hint (`TEXT_DIM`) at the
 //   left; the control right and centred.
-// - **Controls** are words on the row: an on/off setting is `on` in the
-//   accent at `W_STRONG` or `off` in `TEXT_MUTED`; a two-way choice is a
+// - **Controls** are words on the row: an on/off setting is `on` in
+//   `TEXT_STRONG` at `W_STRONG` or `off` in `TEXT_DIM`; a two-way choice is a
 //   pair of tokens, the chosen one inverse; a longer list is the value and
 //   a chevron that opens a menu; a size is `‹ 14px ›`. Each is a tab stop
 //   with the one focus outline, `paint::HOVER` under the pointer.
 // - **About** is a list of facts: the key at the left, the value at the
-//   right in `TEXT_MUTED`. A path copies on click.
+//   right in `TEXT_DIM`. A path copies on click.
 // - **Search** filters every page at once: matching rows keep their groups,
-//   each labelled `Page · Group`; pages with no match read `TEXT_MUTED`.
+//   each labelled `Page · Group`; pages with no match read `TEXT_DIM`.
 pub const SETTINGS_W: f32 = 760.0;
 pub const SETTINGS_H: f32 = 448.0;
 pub const SETTINGS_SIDEBAR_W: f32 = 24.0 * CH;
@@ -2003,13 +2116,13 @@ pub const SETTINGS_FIELD_W: f32 = 24.0 * CH;
 /// own grammar (the prototype's `.r` holding a `.dec`, clean): no box, no
 /// ground, no rule. `◆ Bash needs approval · codex · read-only sandbox`
 /// heads it — the typed `◆` at the gutter's start,
-/// the lead in `ATTENTION`, every detail and its `·` in `TEXT_MUTED` — and
+/// the lead in `ATTENTION`, every detail and its `·` in `TEXT_DIM` — and
 /// every other section sits on the content column after the 2-cell gutter,
 /// `DECISION_GAP` (half a row) below the one above: the command on a
 /// `paint::BAND` behind a faint `$ `, the three options as one-row lines
-/// (`❯ 1. Allow`: the accent `❯` and a `paint::SELECTION` bar across the
+/// (`❯ 1. Allow`: the `TEXT_STRONG` `❯` and a `paint::SELECTION` bar across the
 /// content column on the cursor's row, its label `TEXT_STRONG`; the
-/// ordinal dim; a pattern in `INLINE_CODE`; the pointer's row on
+/// ordinal dim; a pattern in `INLINE_CODE_INK`; the pointer's row on
 /// `paint::HOVER`), and, half a row down, the dim hint line (`↑↓ select ·
 /// 1–3 pick · esc deny · tab amend`). No keycaps, no pills, no `↵`, no
 /// `✓`. Deny is not red. Head 20 · gap 10 · band 30 · gap 10 · options
@@ -2044,11 +2157,11 @@ pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (LH_UI + LH_UI) + DECISION_ROW_
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
 /// A question's own answer (rule 2.8.6) is not a second field: it is one
 /// bare mono input line on the text column, `LH_UI` high, placeholder
-/// `Or type your own answer…` in `TEXT_MUTED`; the digit one past the last
+/// `Or type your own answer…` in `TEXT_DIM`; the digit one past the last
 /// option arms it.
 pub const QUESTION_OTHER_H: f32 = LH_UI;
-/// The primary's `↵`: `ON_ACCENT` at 70%, so the key reads under its label
-/// on the accent fill.
+/// The primary's `↵`: `ON_PRIMARY` at 70%, so the key reads under its label
+/// on the primary fill.
 pub const SEND_KEY_INK: u32 = 0x111214b3;
 
 /// Subagent tabs (rule 2.2.4-5): their own `SUBJECT_STRIP_H` row at the
@@ -2056,7 +2169,7 @@ pub const SEND_KEY_INK: u32 = 0x111214b3;
 /// permanent `HAIRLINE` the body clips at. 20px tabs packed with no gap
 /// and centred in the row, 8px inline padding, no edge; the active tab a
 /// `paint::SELECTION` pill in `TEXT_STRONG` (stepping up under the pointer), the
-/// others `TEXT_MUTED` blending to `TEXT` with no ground. Main's label sits
+/// others `TEXT_DIM` blending to `TEXT` with no ground. Main's label sits
 /// on the text column. Labels truncate at 112px. A still status dot
 /// leads a subagent's label 6px before it, in a slot every tab reserves —
 /// waiting `ATTENTION` > failed `BLOCKED` > working `RUNNING` — so a tab
@@ -2100,7 +2213,7 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // fold at the foot. A Thread a second Group includes is listed under that
 // Group too.
 //
-// A Thread row's first 2ch cell is the cursor (`❯` in `ACCENT` on the
+// A Thread row's first 2ch cell is the cursor (`❯` in `TEXT_STRONG` on the
 // selected row, else blank), then a 2ch mark cell (the status dot, the
 // braille spinner of a working Thread), then the title, then one
 // right-aligned word 1ch after it, its checkout's facts before the word.
@@ -2113,7 +2226,7 @@ pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // dot sits at its cell's start. Hierarchy is ink, never size: every
 // heading is a lowercase label in `CHROME_MUTED`; every title is `TEXT` —
 // only the selected row's reaches `TEXT_STRONG` — and a parked
-// title is `TEXT_MUTED`; every right-hand word is `TEXT_MUTED` (the
+// title is `TEXT_DIM`; every right-hand word is `TEXT_DIM` (the
 // prototype's `.nrow .s` outranks its state classes: the dot carries the
 // colour).
 //
@@ -2245,7 +2358,7 @@ pub const MOTION_FADE_IN_RISE: f32 = 4.0;
 /// header.
 pub const MOTION_RESIZE_MS: u64 = 200;
 pub const MOTION_COLLAPSE_MS: u64 = 180;
-/// A board seam's accent line fading in under the pointer: 120ms.
+/// A board seam's hover line fading in under the pointer: 120ms.
 pub const MOTION_SEAM_FADE_MS: u64 = 120;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
@@ -2359,14 +2472,14 @@ mod tests {
             let expected = match *word {
                 words::NEEDS_YOU => ATTENTION,
                 words::FAILED | words::FAILING => BLOCKED,
-                _ => TEXT_MUTED,
+                _ => TEXT_DIM,
             };
             assert_eq!(word_ink(word), expected, "{word:?}");
         }
         assert_eq!(word_ink("needs you"), ATTENTION);
         assert_eq!(word_ink("failed"), BLOCKED);
         assert_eq!(word_ink("failing"), BLOCKED);
-        assert_eq!(word_ink("done"), TEXT_MUTED);
+        assert_eq!(word_ink("done"), TEXT_DIM);
     }
 
     /// WCAG 2.x relative luminance of an opaque `0xRRGGBB`.
@@ -2410,49 +2523,59 @@ mod tests {
         }
     }
 
-    /// The planes a readable row rests on (rule 5).
-    const PLANES: &[(&str, u32)] = &[
-        ("PLANE", PLANE),
-        ("CHROME", CHROME),
+    /// The grounds a readable row rests on (rule 5).
+    const GROUNDS: &[(&str, u32)] = &[
+        ("FRAME", FRAME),
+        ("CARD", CARD),
+        ("BAR", BAR),
+        ("FIELD", FIELD),
+        ("FIELD_COMPACT", FIELD_COMPACT),
+        ("DECISION", DECISION),
+        ("SUNKEN", SUNKEN),
+    ];
+    /// The raised grounds: a chip, a float, the selected row.
+    const RAISED_GROUNDS: &[(&str, u32)] = &[
+        ("TAB_ACTIVE", TAB_ACTIVE),
+        ("RAISED", RAISED),
         ("FLOAT", FLOAT),
-        ("HOVER", HOVER),
-        ("BAND", BAND),
-        ("HUNK", HUNK),
-        ("NODIFF", NODIFF),
+        ("SELECTED", SELECTED),
     ];
 
     #[test]
-    fn ink_clears_its_floor_on_every_plane() {
-        // Readable text: AA body text on every plane a row rests on.
-        floor(
-            &[
-                ("TEXT_STRONG", TEXT_STRONG),
-                ("TEXT", TEXT),
-                ("TEXT_MUTED", TEXT_MUTED),
-            ],
-            PLANES,
-            4.5,
-        );
-        // A selected row and a band2 chip: the operator's dim (#98989d)
-        // holds 4:1 there; the brighter inks hold AA.
-        let raised = &[("SELECTION", SELECTION), ("BAND2", BAND2)];
-        floor(&[("TEXT_MUTED", TEXT_MUTED)], raised, 4.0);
-        floor(&[("TEXT_STRONG", TEXT_STRONG), ("TEXT", TEXT)], raised, 4.5);
-        // Structure only, never text: a visible glyph on its planes.
+    fn ink_clears_its_floor_on_every_ground() {
+        // Readable text: AA on every ground, raised ones included, down to
+        // `TEXT_MUTED`.
+        let readable = &[
+            ("TEXT_STRONG", TEXT_STRONG),
+            ("TEXT_PROSE", TEXT_PROSE),
+            ("TEXT", TEXT),
+            ("TEXT_BAR", TEXT_BAR),
+            ("TEXT_MUTED", TEXT_MUTED),
+        ];
+        floor(readable, GROUNDS, 4.5);
+        floor(readable, RAISED_GROUNDS, 4.5);
+        // `TEXT_DIM` is the floor (SPEC §3.3): 4.5:1 on the frame, the card
+        // and the grounds rows sit on, 4:1 on the raised ones.
+        floor(&[("TEXT_DIM", TEXT_DIM)], GROUNDS, 4.5);
+        floor(&[("TEXT_DIM", TEXT_DIM)], RAISED_GROUNDS, 4.0);
+        assert!(contrast(TEXT_DIM, FRAME) >= 4.5 && contrast(TEXT_DIM, CARD) >= 4.5);
+        assert!(contrast(TEXT_DIM, SELECTED) >= 4.0);
+        // Comments are the dim ink, under its floor.
+        assert_eq!(SYN_COMMENT, TEXT_DIM);
+        // Structure only, never text: a visible glyph on its grounds.
         floor(
             &[("TEXT_FAINT", TEXT_FAINT)],
             &[
-                ("PLANE", PLANE),
-                ("CHROME", CHROME),
+                ("CARD", CARD),
+                ("FRAME", FRAME),
                 ("FLOAT", FLOAT),
-                ("BAND", BAND),
+                ("BAR", BAR),
             ],
             2.0,
         );
-        // Every terminal colour reads as text on the planes it is written on.
+        // State and syntax read as text on the grounds they are written on.
         floor(
             &[
-                ("ACCENT", ACCENT),
                 ("RUNNING", RUNNING),
                 ("ATTENTION", ATTENTION),
                 ("BLOCKED", BLOCKED),
@@ -2462,20 +2585,18 @@ mod tests {
                 ("SYN_STRING", SYN_STRING),
                 ("SYN_NUMBER", SYN_NUMBER),
                 ("SYN_CONST", SYN_CONST),
-                ("SYN_COMMENT", SYN_COMMENT),
                 ("SYN_PUNCT", SYN_PUNCT),
                 ("SYN_PLAIN", SYN_PLAIN),
-                ("INLINE_CODE", INLINE_CODE),
-                ("PATH_INK", PATH_INK),
-                ("MODE_INK", MODE_INK),
+                ("INLINE_CODE_INK", INLINE_CODE_INK),
+                ("LINK_INK", LINK_INK),
                 ("DIFF_ADDED_INK", DIFF_ADDED_INK),
                 ("DIFF_REMOVED_INK", DIFF_REMOVED_INK),
             ],
             &[
-                ("PLANE", PLANE),
-                ("CHROME", CHROME),
+                ("CARD", CARD),
+                ("FRAME", FRAME),
                 ("FLOAT", FLOAT),
-                ("BAND", BAND),
+                ("BAR", BAR),
             ],
             4.5,
         );
@@ -2488,76 +2609,94 @@ mod tests {
         ] {
             floor(
                 &[("TEXT", TEXT), ("SYN_FUNCTION", SYN_FUNCTION)],
-                &[("a diff wash on PLANE", over(wash, PLANE))],
+                &[("a diff wash on CARD", over(wash, CARD))],
                 4.5,
             );
         }
-        // A primary button's label, at rest, under the pointer and pressed.
+        // A primary button's label, at rest and under the pointer.
         floor(
-            &[("ON_ACCENT", ON_ACCENT)],
-            &[
-                ("ACCENT_STRONG", ACCENT_STRONG),
-                ("PRIMARY_HOVER", PRIMARY_HOVER),
-                ("PRIMARY_ACTIVE", PRIMARY_ACTIVE),
-            ],
+            &[("ON_PRIMARY", ON_PRIMARY)],
+            &[("PRIMARY", PRIMARY), ("TEXT", TEXT)],
             4.5,
         );
-        // Focus and control boundaries, and a provider's mark: non-text 3:1.
+        // Control boundaries, keyboard focus and a provider's mark: 3:1.
         floor(
             &[
-                ("FOCUS_RING", FOCUS_RING),
+                ("CONTROL_FOCUS", CONTROL_FOCUS),
                 ("INPUT_EDGE", INPUT_EDGE),
                 ("PROVIDER_CLAUDE", PROVIDER_CLAUDE),
                 ("PROVIDER_CODEX", PROVIDER_CODEX),
             ],
             &[
-                ("PLANE", PLANE),
-                ("CHROME", CHROME),
+                ("CARD", CARD),
+                ("FRAME", FRAME),
                 ("FLOAT", FLOAT),
-                ("BAND", BAND),
+                ("FIELD", FIELD),
             ],
             3.0,
         );
-        // Ink stays readable on the washes painted under it.
+        // Ink stays readable on the washes painted under it, and the find's
+        // orange reads apart from the white selection.
         floor(
             &[("TEXT_STRONG", TEXT_STRONG)],
-            &[("ACCENT_WASH on PLANE", over(ACCENT_WASH, PLANE))],
+            &[("DROP_WASH on CARD", over(DROP_WASH, CARD))],
             4.5,
         );
         floor(
             &[("TEXT", TEXT)],
             &[(
-                "TEXT_SELECTION_WASH on PLANE",
-                over(TEXT_SELECTION_WASH, PLANE),
+                "TEXT_SELECTION_WASH on CARD",
+                over(TEXT_SELECTION_WASH, CARD),
             )],
             4.5,
         );
+        let (find, selected) = (over(FIND_WASH, CARD), over(TEXT_SELECTION_WASH, CARD));
+        assert!(
+            (find >> 16) & 0xff > (find & 0xff) + 8,
+            "the find wash stays warm"
+        );
+        assert_ne!(find, selected);
     }
 
-    /// Rule 5: four inks, brightest first.
+    /// Rule 5: the ink ladder, brightest first.
     #[test]
     fn the_ink_ladder_steps_down() {
-        let ladder = [TEXT_STRONG, TEXT, TEXT_MUTED, TEXT_FAINT];
+        let ladder = [
+            TEXT_STRONG,
+            TEXT_PROSE,
+            TEXT,
+            TEXT_BAR,
+            TEXT_MUTED,
+            TEXT_DIM,
+            TEXT_FAINT,
+        ];
+        assert_eq!(
+            ladder,
+            [0xf2f2f2, 0xe6e6e6, 0xd0d0d0, 0xc0c0c0, 0xa0a0a0, 0x8c8c8c, 0x5e5e5e]
+        );
         for pair in ladder.windows(2) {
             assert!(luminance(pair[0]) > luminance(pair[1]), "{pair:06x?}");
         }
     }
 
-    /// Rule 3: grey, not near-black — the opaque ladder in order, every
-    /// face opaque (`rgb`), hover visible on every ground it hovers.
+    /// Rule 3: the surfaces, darkest first, every one opaque and neutral
+    /// grey (no hue anywhere but state), the legacy names on their new
+    /// values, and no accent.
     #[test]
-    fn the_plane_ladder_is_strictly_ordered() {
+    fn the_surface_ladder_is_ordered_and_grey() {
         let ladder = [
             ("NODIFF", NODIFF),
-            ("PLANE", PLANE),
-            ("HUNK", HUNK),
-            ("CHROME", CHROME),
-            ("FLOAT", FLOAT),
-            ("HOVER", HOVER),
-            ("BAND", BAND),
-            ("SELECTION", SELECTION),
-            ("BAND2", BAND2),
+            ("SUNKEN", SUNKEN),
+            ("CARD", CARD),
+            ("BAR", BAR),
+            ("DECISION", DECISION),
+            ("FIELD_COMPACT", FIELD_COMPACT),
+            ("FRAME", FRAME),
+            ("TAB_ACTIVE", TAB_ACTIVE),
+            ("RAISED", RAISED),
+            ("SELECTED", SELECTED),
             ("SELECTION_HOVER", SELECTION_HOVER),
+            ("SEND", SEND),
         ];
         for pair in ladder.windows(2) {
             assert!(
@@ -2567,37 +2706,90 @@ mod tests {
                 pair[1].0
             );
         }
-        assert_eq!(
-            (HEAD, INBAND),
-            (CHROME, CHROME),
-            "the bands sit on chrome's value"
-        );
-        assert!(luminance(LINE) > luminance(PLANE) && luminance(LINE2) > luminance(LINE));
-        for (_, face) in ladder {
-            assert!(face <= 0xffffff, "{face:x} carries alpha");
+        for (name, face) in ladder {
+            assert!(face <= 0xffffff, "{name} carries alpha");
+            let (r, g, b) = (face >> 16, (face >> 8) & 0xff, face & 0xff);
+            assert!(r == g && g == b, "{name} #{face:06x} is not a neutral grey");
         }
+        assert_eq!(
+            [FRAME, CARD, BAR, FIELD, RAISED, SELECTED],
+            [0x222222, 0x181818, 0x1e1e1e, 0x222222, 0x2a2a2a, 0x2e2e2e]
+        );
+        assert_eq!((PRIMARY, ON_PRIMARY), (TEXT_STRONG, 0x161616));
+        assert_eq!(
+            (PLANE, CHROME, BAND, BAND2, SELECTION, HUNK),
+            (CARD, FRAME, FIELD, RAISED, SELECTED, BAR),
+            "the legacy names sit on the new surfaces"
+        );
+        // The hairlines are white at their stated opacities.
+        let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
+        for (line, opacity) in [
+            (HAIRLINE, 0.06),
+            (CARD_RING, 0.07),
+            (FIELD_RING, 0.08),
+            (HAIRLINE_STRONG, 0.10),
+            (ROW_RING, 0.06),
+            (BAR_TOP, 0.05),
+            (FOCUS_RING, 0.22),
+            (DROP_EDGE, 0.22),
+            (DROP_WASH, 0.06),
+        ] {
+            assert_eq!(line >> 8, 0xffffff, "{line:08x} is white");
+            assert!((alpha(line) - opacity).abs() < 0.005, "{line:08x}");
+        }
+        assert_eq!(WAIT_RING >> 8, ATTENTION, "the wait ring is yellow");
+        assert!((alpha(WAIT_RING) - 0.35).abs() < 0.005);
     }
 
-    /// Rule 4: glass on macOS — the window paints nothing, chrome and the
-    /// plane are translucent at their stated opacities, overlays are white,
-    /// a float stays near-opaque — and the opaque greys everywhere else.
+    /// No accent: no ink the chrome wears is blue, and the retired names
+    /// stay retired (ADR 0033).
+    #[test]
+    fn the_accent_is_retired() {
+        let source = include_str!("theme.rs");
+        let head = &source[..source.find("\n#[cfg(test)]\nmod tests").unwrap()];
+        for retired in [
+            "ACCENT",
+            "ON_ACCENT",
+            "ACCENT_HI",
+            "PATH_INK",
+            "MODE_INK",
+            "FINISHED",
+        ] {
+            let decl = format!("pub const {retired}:");
+            assert!(!head.contains(&decl), "{retired} is retired");
+        }
+        for (name, ink) in [
+            ("CARET", CARET),
+            ("CONTROL_FOCUS", CONTROL_FOCUS),
+            ("LINK_INK", LINK_INK),
+            ("INLINE_CODE_INK", INLINE_CODE_INK),
+            ("MENTION_INK", MENTION_INK),
+            ("PRIMARY", PRIMARY),
+        ] {
+            assert_eq!(ink, TEXT_STRONG, "{name} is the strongest ink");
+        }
+        assert_eq!(mode_ink("bypass permissions"), ATTENTION);
+        assert_eq!(mode_ink("accept edits"), TEXT_MUTED);
+        assert_eq!(IDLE, TEXT_DIM, "done and idle wear no hue");
+    }
+
+    /// Rule 4: glass on macOS — the window paints nothing, the frame and
+    /// the card are translucent at their stated opacities, overlays are
+    /// white, a float stays opaque — and the opaque greys everywhere else.
     #[test]
     fn the_paints_are_glass_on_macos_and_grey_elsewhere() {
         let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
         let near = |a: f32, b: f32| (a - b).abs() < 0.01;
-        assert!(near(alpha(PLANE_GLASS), 0.94));
+        assert!(near(alpha(CARD_GLASS), 0.94));
         assert!(
-            near(alpha(CHROME_GLASS), 0.88),
+            near(alpha(FRAME_GLASS), 0.88),
             "dark enough over a white window behind"
         );
-        assert!(near(alpha(BAND_GLASS), 0.80));
         assert_eq!(alpha(FLOAT_GLASS), 1.0, "a float hides what it covers");
         for (overlay, opacity) in [
-            (HEAD_GLASS, 0.05),
-            (INBAND_GLASS, 0.05),
-            (HOVER_GLASS, 0.06),
-            (BAND2_GLASS, 0.10),
-            (SELECTION_GLASS, 0.11),
+            (FIELD_GLASS, 0.05),
+            (RAISED_GLASS, 0.06),
+            (SELECTED_GLASS, 0.11),
             (SELECTION_HOVER_GLASS, 0.14),
             (LINE_GLASS, 0.08),
             (LINE2_GLASS, 0.14),
@@ -2607,25 +2799,22 @@ mod tests {
         }
         // Glass overlays step up in the same order as the opaque ladder.
         const {
-            assert!(HEAD_GLASS & 0xff < HOVER_GLASS & 0xff);
-            assert!(HOVER_GLASS & 0xff < SELECTION_GLASS & 0xff);
-            assert!(SELECTION_GLASS & 0xff < SELECTION_HOVER_GLASS & 0xff);
+            assert!(FIELD_GLASS & 0xff < RAISED_GLASS & 0xff);
+            assert!(RAISED_GLASS & 0xff < SELECTED_GLASS & 0xff);
+            assert!(SELECTED_GLASS & 0xff < SELECTION_HOVER_GLASS & 0xff);
         }
         let paints = [
-            (paint::PLANE, PLANE_GLASS, PLANE),
-            (paint::CHROME, CHROME_GLASS, CHROME),
-            (paint::HEAD, HEAD_GLASS, HEAD),
-            (paint::INBAND, INBAND_GLASS, INBAND),
-            (paint::BAND, BAND_GLASS, BAND),
-            (paint::BAND2, BAND2_GLASS, BAND2),
-            (paint::HOVER, HOVER_GLASS, HOVER),
-            (paint::SELECTION, SELECTION_GLASS, SELECTION),
+            (paint::CARD, CARD_GLASS, CARD),
+            (paint::FRAME, FRAME_GLASS, FRAME),
+            (paint::BAR, BAR_GLASS, BAR),
+            (paint::FIELD, FIELD_GLASS, FIELD),
+            (paint::RAISED, RAISED_GLASS, RAISED),
+            (paint::SELECTED, SELECTED_GLASS, SELECTED),
             (
                 paint::SELECTION_HOVER,
                 SELECTION_HOVER_GLASS,
                 SELECTION_HOVER,
             ),
-            (paint::HUNK, HUNK_GLASS, HUNK),
             (paint::NODIFF, NODIFF_GLASS, NODIFF),
             (paint::LINE, LINE_GLASS, LINE),
             (paint::LINE2, LINE2_GLASS, LINE2),
@@ -2639,7 +2828,14 @@ mod tests {
                 assert!(paint.is_opaque());
             }
         }
+        // The hairlines are the same white overlay on every platform.
+        assert_eq!(paint::HAIRLINE.rgba(), HAIRLINE);
+        assert_eq!(paint::HAIRLINE_STRONG.rgba(), HAIRLINE_STRONG);
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
+        assert_eq!(
+            (paint::PLANE, paint::CHROME, paint::HOVER, paint::SELECTION),
+            (paint::CARD, paint::FRAME, paint::RAISED, paint::SELECTED)
+        );
         // A float is opaque on every platform: glass picks its own grey.
         assert!(paint::FLOAT.is_opaque());
         assert_eq!(
@@ -2654,7 +2850,7 @@ mod tests {
                 gpui::WindowBackgroundAppearance::Blurred
             );
         } else {
-            assert_eq!(paint::WINDOW.rgba(), solid(PLANE));
+            assert_eq!(paint::WINDOW.rgba(), solid(CARD));
             assert_eq!(paint::CHROME_SEAM.rgba(), TRANSPARENT);
             assert_eq!(
                 window_background(),
@@ -2662,23 +2858,25 @@ mod tests {
             );
         }
         // A paint converts the way `rgba()` does, never the way `rgb()` would.
-        let fill: gpui::Fill = paint::PLANE.into();
-        assert_eq!(fill, gpui::Fill::from(gpui::rgba(paint::PLANE.0)));
-        let hsla: gpui::Hsla = paint::HOVER.into();
-        assert_eq!(hsla, paint::HOVER.hsla());
+        let fill: gpui::Fill = paint::CARD.into();
+        assert_eq!(fill, gpui::Fill::from(gpui::rgba(paint::CARD.0)));
+        let hsla: gpui::Hsla = paint::RAISED.into();
+        assert_eq!(hsla, paint::RAISED.hsla());
     }
 
-    /// Rule 2: square inside, and nothing lit.
+    /// Rule 2: radii by role (SPEC §3.6), and only floats cast.
     #[test]
-    fn every_radius_is_square_and_nothing_is_lit() {
-        for radius in [R_PANE, R_BLOCK, R_CONTROL, R_CHIP, R_TIGHT, R_MENU_ROW] {
-            assert_eq!(radius, 0.0);
-        }
+    fn radii_follow_their_roles_and_only_floats_cast() {
+        assert_eq!(
+            [R_INLINE, R_SMALL, R_TAB, R_CONTROL, R_CHIP, R_BLOCK, R_PANE, R_PALETTE],
+            [4.0, 5.0, 6.0, 7.0, 7.0, 8.0, 10.0, 12.0]
+        );
+        assert_eq!((R_TIGHT, R_MENU_ROW), (2.0, R_CHIP));
         const { assert!(SHADOW_FLOAT_Y > 0.0 && SHADOW_FLOAT_BLUR > 0.0) };
     }
 
-    /// Rule 1: one size per surface on a whole-pixel line, a 1.5× terminal
-    /// row at every reading size, headings at the body size, a cell of
+    /// Rule 1: every type role on a whole-pixel line, a 1.5× terminal row
+    /// at every reading size, headings at the body size, a code cell of
     /// 0.6em.
     #[test]
     fn every_type_role_has_a_whole_pixel_line_box() {
@@ -2701,6 +2899,21 @@ mod tests {
             assert_eq!(heading_scale(level), 1.0, "H{level} is the body size");
         }
         assert_eq!(prose_line_height(FS_PROSE), LH_PROSE);
+        // The chrome's roles (SPEC §3.5).
+        assert_eq!(
+            [
+                FS_TITLE,
+                FS_LABEL,
+                FS_META,
+                FS_BADGE,
+                FS_COMPOSER,
+                FS_PALETTE
+            ],
+            [13.5, 12.5, 12.0, 11.0, 13.5, 14.5]
+        );
+        for line in [LH_META, LH_BADGE, LH_PANEL_DIFF] {
+            assert_eq!(line, line.round());
+        }
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
         assert!(near(CODE_CELL, 7.8) && near(CH, CODE_CELL));
         assert!(near(GLYPH_GUTTER, 2.0 * CH));
@@ -2720,31 +2933,33 @@ mod tests {
             let alpha = |value: u32| -> Hsla { rgba(value).into() };
             // The resolved tokens, which kit widgets actually paint from.
             let tokens = &theme.tokens;
-            assert_eq!(tokens.button_primary.color, solid(ACCENT_STRONG));
-            assert_eq!(tokens.button_primary_hover.color, solid(PRIMARY_HOVER));
-            assert_eq!(tokens.button_primary_foreground.color, solid(ON_ACCENT));
-            assert_eq!(tokens.primary.color, solid(ACCENT_STRONG));
-            assert_eq!(tokens.accent.color, paint::SELECTION.hsla());
+            assert_eq!(tokens.button_primary.color, solid(PRIMARY));
+            assert_eq!(tokens.button_primary_hover.color, solid(TEXT));
+            assert_eq!(tokens.button_primary_foreground.color, solid(ON_PRIMARY));
+            assert_eq!(tokens.primary.color, solid(PRIMARY));
+            assert_eq!(tokens.accent.color, paint::SELECTED.hsla());
             assert_eq!(tokens.popover.color, paint::FLOAT.hsla());
-            assert_eq!(tokens.muted.color, solid(BAND));
-            assert_eq!(tokens.tab_active.color, solid(BAND2));
-            assert_eq!(tokens.ring.color, solid(FOCUS_RING));
+            assert_eq!(tokens.muted.color, solid(RAISED));
+            assert_eq!(tokens.tab_active.color, solid(SELECTED));
+            assert_eq!(tokens.ring.color, solid(CONTROL_FOCUS));
             assert_eq!(tokens.input.color, solid(INPUT_EDGE));
             assert_eq!(tokens.border.color, paint::LINE2.hsla());
             assert_eq!(tokens.selection.color, alpha(TEXT_SELECTION_WASH));
-            assert_eq!(tokens.caret.color, solid(ACCENT));
-            assert_eq!(tokens.link.color, solid(ACCENT));
-            assert_eq!(tokens.sidebar.color, solid(CHROME));
+            assert_eq!(tokens.caret.color, solid(TEXT_STRONG));
+            assert_eq!(tokens.link.color, solid(TEXT_STRONG));
+            assert_eq!(tokens.sidebar.color, solid(FRAME));
+            assert_eq!(tokens.drop_target.color, alpha(DROP_WASH));
             // And the colours the non-token paths read.
-            assert_eq!(theme.primary, solid(ACCENT_STRONG));
-            assert_eq!(theme.muted, solid(BAND));
-            assert_eq!(theme.background, solid(PLANE));
+            assert_eq!(theme.primary, solid(PRIMARY));
+            assert_eq!(theme.info, solid(TEXT_STRONG), "no accent hue");
+            assert_eq!(theme.muted, solid(RAISED));
+            assert_eq!(theme.background, solid(CARD));
             assert!(!theme.shadow, "floats wear Ferrite's own shadow");
-            assert_eq!(theme.radius, gpui::px(0.));
-            assert_eq!(theme.radius_lg, gpui::px(0.));
+            assert_eq!(theme.radius, gpui::px(R_CONTROL));
+            assert_eq!(theme.radius_lg, gpui::px(R_BLOCK));
             assert_eq!(theme.font_size, gpui::px(FS_UI));
             assert_eq!(theme.mono_font_size, gpui::px(FS_UI));
-            assert_eq!(theme.font_family.as_ref(), "Geist Mono");
+            assert_eq!(theme.font_family.as_ref(), "Geist");
             assert_eq!(theme.mono_font_family.as_ref(), "Geist Mono");
         });
     }
@@ -2868,22 +3083,28 @@ mod tests {
     }
 
     const GEIST_MONO: &[u8] = include_bytes!("../assets/fonts/GeistMono.ttf");
+    const GEIST: &[u8] = include_bytes!("../assets/fonts/Geist.ttf");
 
-    /// Rule 1: one face. Both role names resolve to Geist Mono, and every
-    /// bundled face is one of its weights.
+    /// Rule 1: two faces. The chrome's is Geist and the code's Geist Mono,
+    /// and every bundled face is one of their five weights.
     #[test]
-    fn faces_are_the_bundled_family() {
-        assert_eq!(FONT_UI, "Geist Mono");
-        assert_eq!(FONT_CODE, FONT_UI, "one face on every surface");
-        assert!(!crate::FONTS.is_empty());
-        for face in crate::FONTS {
-            let family = family(face);
-            assert_eq!(
-                family, FONT_UI,
-                "a bundled face names the family `{family}`"
-            );
+    fn faces_are_the_bundled_families() {
+        assert_eq!((FONT_UI, FONT_CODE), ("Geist", "Geist Mono"));
+        assert_eq!(family(GEIST), FONT_UI);
+        assert_eq!(family(GEIST_MONO), FONT_CODE);
+        for name in [FONT_UI, FONT_CODE] {
+            let weights = crate::FONTS
+                .iter()
+                .filter(|face| family(face) == name)
+                .count();
+            assert_eq!(weights, 5, "{name}: regular, italic and three weights");
         }
-        assert_eq!(family(GEIST_MONO), FONT_UI);
+        assert_eq!(crate::FONTS.len(), 10, "nothing else is bundled");
+        assert_eq!(
+            family(crate::FONTS[0]),
+            FONT_CODE,
+            "the baseline is measured on Geist Mono"
+        );
     }
 
     /// Rule 10: what Geist Mono sets is in the face; what the platform's
@@ -2899,6 +3120,18 @@ mod tests {
                 !covers(GEIST_MONO, *glyph),
                 "{glyph} is in Geist Mono now (move it to CHROME_GLYPHS)"
             );
+        }
+        // The chrome's own glyphs in Geist (ADR 0033); `⌘` is the
+        // platform's in both faces.
+        for glyph in UI_GLYPHS {
+            assert!(covers(GEIST, *glyph), "{glyph} is not in Geist");
+        }
+        for glyph in ['\u{2318}', '\u{2325}', '\u{2303}', '\u{276f}'] {
+            assert!(
+                !covers(GEIST, glyph),
+                "{glyph} is in Geist now (move it to UI_GLYPHS)"
+            );
+            assert!(FALLBACK_GLYPHS.contains(&glyph));
         }
         // The spinner frames the design animates are the fallback's.
         for frame in crate::components::BRAILLE_FRAMES

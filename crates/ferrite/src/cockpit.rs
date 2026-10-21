@@ -142,7 +142,7 @@ pub(crate) use ferrite_core::Attention;
 /// (on screen while the window had focus): a quiet Thread that finished
 /// unseen is **done**, a teal check, until it is seen and settles to idle.
 pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatus {
-    use crate::theme::{words, ATTENTION, BLOCKED, FINISHED, IDLE, RUNNING, TEXT_FAINT};
+    use crate::theme::{words, ATTENTION, BLOCKED, IDLE, RUNNING, TEXT_DIM, TEXT_FAINT};
     use pane::WallState;
     let solid = |ink, word| ThreadStatus {
         shape: DotShape::Solid,
@@ -156,7 +156,7 @@ pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatu
         WallState::Blocked => solid(BLOCKED, Some(words::FAILED)),
         WallState::Done | WallState::Idle if unread => ThreadStatus {
             shape: DotShape::Check,
-            ink: FINISHED,
+            ink: TEXT_DIM,
             word: Some(words::DONE),
         },
         WallState::Done | WallState::Idle => solid(IDLE, None),
@@ -839,10 +839,10 @@ impl Render for PaneGhost {
             );
         }
         let marker = if self.face.reader {
-            crate::icons::icon(crate::icons::FILE, theme::ROW_ICON, theme::TEXT_MUTED)
+            crate::icons::icon(crate::icons::FILE, theme::ROW_ICON, theme::TEXT_DIM)
                 .into_any_element()
         } else {
-            crate::components::status_dot(theme::TEXT_MUTED).into_any_element()
+            crate::components::status_dot(theme::TEXT_DIM).into_any_element()
         };
         let head = div()
             .flex()
@@ -873,7 +873,7 @@ impl Render for PaneGhost {
                     .truncate()
                     .text_size(px(theme::FS_UI))
                     .line_height(px(theme::LH_UI))
-                    .text_color(rgb(theme::TEXT_MUTED))
+                    .text_color(rgb(theme::TEXT_DIM))
                     .child(detail)
             }));
         let card = div()
@@ -883,7 +883,7 @@ impl Render for PaneGhost {
             .h(px(h))
             .overflow_hidden()
             .border_1()
-            .border_color(rgb(theme::FOCUS_RING))
+            .border_color(rgba(theme::FOCUS_RING))
             .bg(theme::paint::FLOAT)
             .shadow(crate::components::elevation(
                 crate::components::Elevation::Float,
@@ -1039,7 +1039,7 @@ fn version_label(version: &str, dev: bool) -> String {
 }
 
 /// A rename editor with its keys beside it while it edits: `↵ save · esc
-/// cancel` in mono `TEXT_MUTED`, the `·` in structure ink. The keys live
+/// cancel` in mono `TEXT_DIM`, the `·` in structure ink. The keys live
 /// here, where they act, rather than on the menu row that opened it.
 fn rename_field(editor: Entity<crate::composer::Composer>) -> Div {
     let text = "↵ save · esc cancel";
@@ -1116,7 +1116,7 @@ impl Render for NavDragPreview {
 }
 
 /// What a row says while a drag hovers it: the wash of the answer core
-/// already knows — `DROP_WASH`, the accent as a ground, where the drop would
+/// already knows — `DROP_WASH`, `TEXT_STRONG` as a ground, where the drop would
 /// land, or `BLOCKED_WASH` where core refuses it. The wash alone speaks: a
 /// ring would need an edge the rows do not have, and adding one mid-drag
 /// would move the row.
@@ -3143,8 +3143,8 @@ impl CockpitView {
     }
 
     /// The plan card (`open_plan`): the float grammar's head (`plan · 3/4`),
-    /// then one row per step — done `TEXT_MUTED` behind a dim check, the
-    /// step being worked `TEXT_STRONG` behind the accent `❯`, the rest
+    /// then one row per step — done `TEXT_DIM` behind a dim check, the
+    /// step being worked `TEXT_STRONG` behind the strong `❯`, the rest
     /// `TEXT` behind a faint ring.
     fn plan_card_element(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::theme::*;
@@ -3174,7 +3174,7 @@ impl CockpitView {
                     .justify_between()
                     .h(px(ROW))
                     .px(px(CH))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(
                         div()
                             .font_weight(W_STRONG)
@@ -3192,9 +3192,9 @@ impl CockpitView {
             let working = !done && !marked && current == Some(step.text.as_str());
             marked |= working;
             let mark = if done {
-                crate::components::glyph("\u{2713}", TEXT_MUTED).into_any_element()
+                crate::components::glyph("\u{2713}", TEXT_DIM).into_any_element()
             } else if working {
-                crate::components::prompt_mark(ACCENT)
+                crate::components::prompt_mark(TEXT_STRONG)
             } else {
                 div()
                     .text_color(rgb(TEXT_FAINT))
@@ -3221,7 +3221,7 @@ impl CockpitView {
                             .min_w_0()
                             .truncate()
                             .text_color(rgb(if done {
-                                TEXT_MUTED
+                                TEXT_DIM
                             } else if working {
                                 TEXT_STRONG
                             } else {
@@ -4018,7 +4018,7 @@ impl CockpitView {
         // default grid's aligned column seams are one line from the board's
         // top to its foot — and a 9px grab band over each seam. Under the
         // pointer (any band of the set) and while held, the whole line takes
-        // the accent, fading in over `motion::SEAM_FADE`.
+        // `TEXT_STRONG`, fading in over `motion::SEAM_FADE`.
         let seams = tree.seams(bounds, crate::theme::BOARD_SEAM, SEAM_GRAB);
         let mut drawn: Vec<SeamId> = Vec::new();
         for seam in &seams {
@@ -4080,12 +4080,12 @@ impl CockpitView {
                 }
             };
             let accent = if dragging {
-                rgb(crate::theme::ACCENT).into()
+                rgba(crate::theme::SEAM_HOVER).into()
             } else {
                 crate::motion::hover_blend(
                     &key,
                     crate::theme::paint::LINE.hsla(),
-                    rgb(crate::theme::ACCENT).into(),
+                    rgba(crate::theme::SEAM_HOVER).into(),
                 )
             };
             board = board.child(
@@ -4143,8 +4143,8 @@ impl CockpitView {
                 .into_iter()
                 .find(|(leaf, _)| *leaf == target)
             {
-                // The slot a release would fill: the accent wash with the
-                // non-focus accent edge (a focused Pane's ring is its own
+                // The slot a release would fill: the strong wash with the
+                // non-focus strong edge (a focused Pane's ring is its own
                 // blue), and a raised mono tag naming the verb.
                 let wash = local(layout::zone_rect(rect, zone));
                 board = board.child(
@@ -4156,7 +4156,7 @@ impl CockpitView {
                         .h(px(wash.h))
                         .bg(rgba(crate::theme::DROP_WASH))
                         .border_1()
-                        .border_color(rgba(crate::theme::ACCENT_EDGE))
+                        .border_color(rgba(crate::theme::DROP_EDGE))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -8426,7 +8426,7 @@ impl CockpitView {
     /// selector's precedent). Every row is the one menu row: `/`, `@` and
     /// import rows through `pane::menu_row` (slash descriptions in one
     /// aligned column), band rows through `pane::picker_row` with the
-    /// accent check on the standing choice; an inert explanation
+    /// strong check on the standing choice; an inert explanation
     /// ("Searching files…", a refusal) is a `menu_note`. The rows scroll
     /// inside the popover's cap; the footer stays.
     fn menu_surface(&self, open: &Popover, cx: &mut Context<Self>) -> AnyElement {
@@ -10243,8 +10243,9 @@ impl CockpitView {
 
         // A terminal multiplexer's window (theme WP-C): the sidebar and the
         // board side by side over the bottom bar, the 1px seam between
-        // them, and the titlebar band laid over their tops. One face on
-        // every surface (`FONT_UI`, Geist Mono).
+        // them, and the titlebar band laid over their tops. Chrome inherits
+        // Geist (`FONT_UI`) with tabular figures; the transcript and code
+        // set Geist Mono themselves.
         div()
             .flex()
             .flex_col()
@@ -10256,6 +10257,7 @@ impl CockpitView {
             // each region lays its own fill over the blur.
             .bg(crate::theme::paint::WINDOW)
             .font_family(crate::theme::FONT_UI)
+            .map(crate::components::tabular)
             .track_focus(&self.focus)
             .key_context(crate::keymap::COCKPIT)
             // At wall range no Pane holds a Composer, so the answer keys are
@@ -11946,7 +11948,7 @@ impl CockpitView {
                 gpui::rgba(crate::theme::TRANSPARENT).into(),
                 crate::theme::FLOAT_HOVER.into(),
                 crate::theme::FLOAT_SEL.into(),
-                rgb(crate::theme::TEXT_MUTED).into(),
+                rgb(crate::theme::TEXT_DIM).into(),
                 cx,
             )
             .h(px(crate::theme::FLOAT_ROW_H))
@@ -12116,7 +12118,7 @@ impl CockpitView {
                             .text_color(rgb(if server.status == ferrite_core::McpStatus::Failed {
                                 crate::theme::BLOCKED
                             } else {
-                                crate::theme::TEXT_MUTED
+                                crate::theme::TEXT_DIM
                             }))
                             .child(word),
                     )
@@ -12215,7 +12217,7 @@ impl CockpitView {
                             + crate::theme::CH))
                         .pr(px(crate::theme::FLOAT_PAD_X))
                         .text_size(px(crate::theme::FS_UI))
-                        .text_color(rgb(crate::theme::TEXT_MUTED))
+                        .text_color(rgb(crate::theme::TEXT_DIM))
                         .whitespace_normal()
                         .child(error.clone()),
                 );
@@ -25293,7 +25295,7 @@ mod tests {
             assert_eq!(finished.tail, nav::NavTail::Done);
             let face = finished.status.face();
             assert_eq!(face.shape, DotShape::Check);
-            assert_eq!(face.ink, crate::theme::FINISHED, "teal, never ochre");
+            assert_eq!(face.ink, crate::theme::TEXT_DIM, "teal, never ochre");
             assert_eq!(view.thread_row(threads[0]).status, nav::RowStatus::Idle);
         });
 

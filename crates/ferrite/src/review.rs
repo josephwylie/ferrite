@@ -1416,7 +1416,7 @@ impl ReviewView {
                     .h(px(line_h))
                     .pl(px(indent))
                     .cursor_pointer()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .when(picked, |row| row.bg(paint::SELECTION))
                     .child(SharedString::from(format!(
                         "\u{22ef} {hidden} line{}",
@@ -1439,7 +1439,7 @@ impl ReviewView {
                     .w(px(number_w))
                     .pr(px(cell))
                     .text_right()
-                    .text_color(rgb(if picked { ACCENT } else { TEXT_MUTED }))
+                    .text_color(rgb(if picked { TEXT_STRONG } else { TEXT_DIM }))
                     .children(number.map(|number| SharedString::from(number.to_string()))),
             )
         };
@@ -1491,7 +1491,7 @@ impl ReviewView {
                                 .debug_selector(|| "review-add-comment".into())
                                 .pl(px(2. * cell))
                                 .pr(px(cell))
-                                .text_color(rgb(ACCENT))
+                                .text_color(rgb(TEXT_STRONG))
                                 .hover_control(format!("review-comment-on-{at}"))
                                 .child(COMMENT_ON)
                                 // On the press, before the row's own press re-picks one line.
@@ -1554,7 +1554,7 @@ impl ReviewView {
                             .id("review-comment-save")
                             .debug_selector(|| "review-comment-save".into())
                             .flex_shrink_0()
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .hover_control("review-comment-save")
                             .child("\u{21b5} add")
                             .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
@@ -1566,7 +1566,7 @@ impl ReviewView {
                         div()
                             .id("review-comment-cancel")
                             .flex_shrink_0()
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .hover_control("review-comment-cancel")
                             .child("esc cancel")
                             .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
@@ -1604,7 +1604,7 @@ impl ReviewView {
                     .id(("review-uncomment", id as usize))
                     .flex_shrink_0()
                     .px(px(cell))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .cursor_pointer()
                     .child("\u{d7}")
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
@@ -1631,7 +1631,7 @@ impl ReviewView {
                 div()
                     .h(px(self.grid.line))
                     .pl(px(2. * self.number_w() + 2. * self.grid.cell()))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(message),
             )
             .into_any_element()
@@ -1680,7 +1680,7 @@ impl ReviewView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(abbreviate_oid(&commit.sha))),
             )
             .child(
@@ -1695,7 +1695,7 @@ impl ReviewView {
                 row.child(
                     div()
                         .flex_shrink_0()
-                        .text_color(rgb(TEXT_MUTED))
+                        .text_color(rgb(TEXT_DIM))
                         .child(SharedString::from(commit.author.clone())),
                 )
             })
@@ -1746,7 +1746,7 @@ impl ReviewView {
         let cell = self.grid.cell();
         let muted = |text: String| {
             div()
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(text))
         };
         let mut body = div()
@@ -1784,7 +1784,7 @@ impl ReviewView {
                     WireCheckStatus::Success => ("\u{2713}", GREEN),
                     WireCheckStatus::Failure => ("\u{2717}", RED),
                     WireCheckStatus::Running | WireCheckStatus::Pending => ("\u{25cb}", YELLOW),
-                    WireCheckStatus::Skipped | WireCheckStatus::Unknown => ("\u{2013}", TEXT_MUTED),
+                    WireCheckStatus::Skipped | WireCheckStatus::Unknown => ("\u{2013}", TEXT_DIM),
                 };
                 body = body.child(
                     div()
@@ -1891,7 +1891,7 @@ impl ReviewView {
                                 .whitespace_nowrap()
                                 .cursor_pointer()
                                 .when(index == search.pick, |row| row.bg(paint::SELECTION))
-                                .child(div().flex_shrink_0().text_color(rgb(PATH_INK)).child(
+                                .child(div().flex_shrink_0().text_color(rgb(LINK_INK)).child(
                                     SharedString::from(match found.line {
                                         Some(line) => format!("{}:{line}", found.path),
                                         None => found.path.clone(),
@@ -1926,7 +1926,7 @@ impl ReviewView {
                     .h(px(FLOAT_ROW_H))
                     .px(px(CH))
                     .gap(px(CH))
-                    .child(crate::components::prompt_mark(ACCENT))
+                    .child(crate::components::prompt_mark(TEXT_STRONG))
                     .child(div().flex_1().min_w_0().child(search.field.clone())),
             )
             .child(results)
@@ -1934,7 +1934,7 @@ impl ReviewView {
     }
 
     /// Every file as reviewr's tree: directories first, a changed file in
-    /// the accent, a closed directory holding one marked, an ignored entry
+    /// `TEXT_STRONG`, a closed directory holding one marked, an ignored entry
     /// quiet.
     fn tree_body(&self, tree: &TreePanel, cx: &mut Context<Self>) -> AnyElement {
         let entries = match &tree.entries {
@@ -1975,11 +1975,11 @@ impl ReviewView {
                             ""
                         };
                         let glyph = if *expanded { "\u{25be}" } else { "\u{25b8}" };
-                        (format!("{glyph} {}/{mark}", row.name), PATH_INK)
+                        (format!("{glyph} {}/{mark}", row.name), LINK_INK)
                     }
                     RowKind::File { index } => {
                         let ink = if entries[*index].annotation.is_some() {
-                            ACCENT
+                            TEXT_STRONG
                         } else {
                             TEXT
                         };
@@ -1996,7 +1996,7 @@ impl ReviewView {
                     .whitespace_nowrap()
                     .cursor_pointer()
                     .when(index == tree.pick, |line| line.bg(paint::SELECTION))
-                    .text_color(rgb(if row.ignored { TEXT_MUTED } else { ink }))
+                    .text_color(rgb(if row.ignored { TEXT_DIM } else { ink }))
                     .child(div().min_w_0().truncate().child(SharedString::from(label)))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                         window.focus(&view.focus, cx);
@@ -2064,13 +2064,13 @@ impl ReviewView {
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
-                                        .text_color(rgb(PATH_INK))
+                                        .text_color(rgb(LINK_INK))
                                         .child(SharedString::from(base.name.clone())),
                                 )
                                 .child(
                                     div()
                                         .flex_shrink_0()
-                                        .text_color(rgb(TEXT_MUTED))
+                                        .text_color(rgb(TEXT_DIM))
                                         .child(SharedString::from(facts.join(" \u{b7} "))),
                                 )
                                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -2097,7 +2097,7 @@ impl ReviewView {
                     .h(px(FLOAT_ROW_H))
                     .px(px(CH))
                     .gap(px(CH))
-                    .child(crate::components::prompt_mark(ACCENT))
+                    .child(crate::components::prompt_mark(TEXT_STRONG))
                     .child(div().flex_1().min_w_0().child(panel.field.clone())),
             )
             .child(list)
@@ -2221,7 +2221,7 @@ impl ReviewView {
                     .debug_selector(move || selector.into())
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(text))
             }))
             .child(div().flex_1())
@@ -2232,7 +2232,7 @@ impl ReviewView {
                     .map(|files| {
                         div()
                             .flex_shrink_0()
-                            .text_color(rgb(TEXT_MUTED))
+                            .text_color(rgb(TEXT_DIM))
                             .child(stat(files))
                     }),
             );

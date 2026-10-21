@@ -156,6 +156,11 @@ struct Scripted {
 impl Spawner for Spawn {
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
         let (tx, rx) = mpsc::channel();
+        // The day's clock jumps hours between beats, and the engine ends a
+        // Session that rests that long (ADR 0032): a scripted one holds
+        // scheduled work, so it lives until the day is played.
+        tx.send(SessionEvent::ScheduledWork { pending: true })
+            .expect("the receiver is held below");
         self.0.borrow_mut().push(tx.clone());
         Ok(Box::new(Scripted {
             rx,

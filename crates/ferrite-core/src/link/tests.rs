@@ -301,7 +301,8 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
 
     drop(attached);
     assert!(matches!(
-        hear.recv_timeout(std::time::Duration::from_secs(10)).expect("dropping the client must disconnect its reader"),
+        hear.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("dropping the client must disconnect its reader"),
         Heard::Gone(7)
     ));
     drop(connection);
