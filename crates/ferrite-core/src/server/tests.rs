@@ -815,7 +815,8 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
     let mut steady = attach(&harness.address);
     let (thread, provider) = open(&mut steady, &harness);
     steady.watch(thread, None);
-    let shows = |said: String| {
+    // Anywhere: a turn's completion row follows its text.
+    let shows_turn = |said: String| {
         move |window: &Window| {
             window.mirrors.view(thread).is_some_and(|view| {
                 view.transcript()
@@ -836,7 +837,7 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
             })
             .unwrap();
         // One turn at a time, so the steady window never lags either.
-        steady.until(shows(format!("turn {nth}")));
+        steady.until(shows_turn(format!("turn {nth}")));
     }
 
     let mut late = attach(&harness.address);
@@ -844,7 +845,7 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
     // Tens of megabytes through a debug build: seconds, more on a busy machine.
     late.until_within(
         Duration::from_secs(120),
-        shows(format!("turn {}", turns - 1)),
+        shows_turn(format!("turn {}", turns - 1)),
     );
     assert!(late.replies.is_empty(), "{:?}", late.replies);
     let reply = late.command(4, Op::SettingsChanged);
@@ -1234,6 +1235,17 @@ fn pump_until_within(
         window.pump();
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Whether the window's digest of `thread` reads `said` on its wall card.
+fn digest_says(window: &crate::cockpit::Cockpit, thread: ThreadId, said: &str) -> bool {
+    window.thread(thread).is_some_and(|open| {
+        open.digest()
+            .wall
+            .lines
+            .iter()
+            .any(|line| line.text.contains(said))
+    })
 }
 
 fn shows(window: &crate::cockpit::Cockpit, thread: ThreadId, said: &str) -> bool {
@@ -4149,15 +4161,6 @@ fn a_window_mirrors_only_the_threads_it_draws() {
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
     let mut window = cockpit(&harness);
-    let digest_says = |window: &crate::cockpit::Cockpit, said: &str| {
-        window.thread(thread).is_some_and(|open| {
-            open.digest()
-                .wall
-                .lines
-                .iter()
-                .any(|line| line.text.contains(said))
-        })
-    };
     window.send(thread, "go".into());
     provider.send(text("on it\n\n")).unwrap();
     provider.send(decision()).unwrap();
@@ -4167,7 +4170,7 @@ fn a_window_mirrors_only_the_threads_it_draws() {
             .thread(thread)
             .is_some_and(|open| open.pending().is_some())
     });
-    pump_until(&mut window, |window| digest_says(window, "on it"));
+    pump_until(&mut window, |window| digest_says(window, thread, "on it"));
     assert!(!shows(&window, thread, "on it"), "no transcript off screen");
 
     window.draws_transcripts([thread]);
@@ -4213,15 +4216,7 @@ fn a_thread_drawn_again_arrives_whole() {
     }
     turn_ends(&provider);
     provider.send(text("latest\n\n")).unwrap();
-    pump_until(&mut window, |window| {
-        window.thread(thread).is_some_and(|open| {
-            open.digest()
-                .wall
-                .lines
-                .iter()
-                .any(|line| line.text.contains("latest"))
-        })
-    });
+    pump_until(&mut window, |window| digest_says(window, thread, "latest"));
 
     // Drawn every frame as fast as the window can, as the app draws while
     // the pieces cross.
@@ -4254,13 +4249,7 @@ fn a_window_attaching_streams_no_thread_it_does_not_draw() {
 
     let mut window = cockpit(&harness);
     pump_until(&mut window, |window| {
-        window.thread(thread).is_some_and(|open| {
-            open.digest()
-                .wall
-                .lines
-                .iter()
-                .any(|line| line.text.contains("before the window"))
-        })
+        digest_says(window, thread, "before the window")
     });
     for _ in 0..20 {
         window.pump();
