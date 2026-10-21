@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Static export of a design canvas board. Open it in a browser at its own size. -->
+<title>Ferrite · Solo thread (PR tab)</title>
+
+</head>
+<body>
+
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:ital,wght@0,400;0,500;0,600;1,400&amp;display=swap">
+<style>
+body{margin:0;background:#222222}
+a{color:inherit;text-decoration:none}a:hover{color:#f2f2f2}
+button{font:inherit;color:inherit;cursor:pointer;background:none;border:0;padding:0;text-align:left}
+input{font:inherit;color:inherit}
+input::placeholder{color:#8c8c8c}
+</style>
+
+<div style="width: 100%; height: 960px; display: flex; flex-direction: column; background: #222222; color: #d0d0d0; font-family: Geist, -apple-system, system-ui, sans-serif; font-size: 13px; line-height: 20px; overflow: hidden; -webkit-font-smoothing: antialiased; white-space: nowrap; font-feature-settings: 'tnum' 1">
+
+<div style="flex: 1; min-height: 0; display: flex; flex-wrap: wrap">
+
+<!-- ======================================================= sidebar -->
+<aside aria-label="Threads" style="flex: none; width: 264px; display: flex; flex-direction: column; padding: 0 8px 8px; box-sizing: border-box; overflow: hidden">
+
+<div style="flex: none; height: 46px; display: flex; align-items: center; padding: 0 4px 0 10px">
+<div aria-hidden="true" style="display: flex; gap: 8px; flex: 1">
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f57"></span>
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #febc2e"></span>
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #28c840"></span>
+</div>
+<button aria-label="Hide sidebar" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"></rect><path d="M9 4v16"></path></svg></button>
+</div>
+
+<nav aria-label="Views" style="flex: none; display: flex; flex-direction: column; margin-bottom: 14px">
+<button style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 7px; color: #a0a0a0"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span style="flex: 1">Search</span><span style="font-size: 12px; color: #8c8c8c">⌘K</span></button>
+<button style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 7px; color: #d0d0d0"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg><span style="flex: 1">Needs you</span><span style="min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: rgba(230,196,124,.16); color: #e6c47c; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center">3</span></button>
+<button style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 7px; color: #a0a0a0"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg><span style="flex: 1">Parked</span><span style="font-size: 12px; color: #8c8c8c">3</span></button>
+</nav>
+
+<div style="flex: none; display: flex; align-items: center; height: 26px; padding: 0 6px 0 10px; font-size: 12px; font-weight: 500; color: #8c8c8c"><span style="flex: 1">Projects</span><button aria-label="Add project" style="width: 22px; height: 22px; display: grid; place-items: center; border-radius: 5px"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button></div>
+
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 6px">
+
+<section style="display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; color: #d0d0d0; font-weight: 500"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex: 1">ferrite</span></div>
+<a href="#" style="display: flex; flex-direction: column; justify-content: center; height: 44px; padding: 0 10px 0 35px; border-radius: 7px; position: relative">
+<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 10px; top: 8px"><rect x="2" y="4" width="20" height="16" rx="2.5"></rect><path d="m6 9 3 3-3 3M12 15h5"></path></svg>
+<span style="display: flex; gap: 8px"><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis">Hedr: Rust agent management</span></span>
+<span style="font-size: 12px; color: #8c8c8c">main</span>
+</a>
+<a href="#" aria-current="page" style="display: flex; flex-direction: column; justify-content: center; height: 44px; padding: 0 10px 0 35px; border-radius: 7px; position: relative; background: #2e2e2e; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); color: #f2f2f2">
+<span aria-hidden="true" style="position: absolute; left: 12px; top: 6px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #8cd398">⠹</span>
+<span style="display: flex; gap: 8px"><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500">Ferrite idle memory usage</span><span style="font-family: 'Geist Mono', monospace; font-size: 11.5px"><span style="color: #8cd398">+4</span> <span style="color: #ef8a80">−1</span></span></span>
+<span style="font-size: 12px; color: #9a9a9a">scheduled-work-crash · 5m 22s</span>
+</a>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; color: #d0d0d0; font-weight: 500"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex: 1">agenticos</span><span style="font-size: 12px; font-weight: 400; color: #8c8c8c">↑715</span></div>
+<a href="#" style="display: flex; flex-direction: column; justify-content: center; height: 44px; padding: 0 10px 0 35px; border-radius: 7px; position: relative">
+<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 10px; top: 8px"><rect x="2" y="4" width="20" height="16" rx="2.5"></rect><path d="m6 9 3 3-3 3M12 15h5"></path></svg>
+<span style="overflow: hidden; text-overflow: ellipsis">Chess Matches: Principled play</span>
+<span style="font-size: 12px; color: #8c8c8c">main</span>
+</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 35px; border-radius: 7px; position: relative">
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 11px; top: 9px"><path d="m9 18 6-6-6-6"></path></svg>
+<span style="flex: 1">WORK</span><span style="font-size: 12px; color: #ef8a80">1 failed</span><span style="font-size: 12px; color: #8c8c8c">· 4</span>
+</a>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; color: #d0d0d0; font-weight: 500"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex: 1">production-scheduling</span></div>
+<a href="#" style="display: flex; flex-direction: column; justify-content: center; height: 44px; padding: 0 10px 0 35px; border-radius: 7px; position: relative">
+<span aria-hidden="true" style="position: absolute; left: 14px; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: #e6c47c; box-shadow: 0 0 0 3px rgba(230,196,124,.15)"></span>
+<span style="overflow: hidden; text-overflow: ellipsis">Implement recipes feature</span>
+<span style="font-size: 12px; color: #e6c47c">needs you · approval</span>
+</a>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; color: #d0d0d0; font-weight: 500"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex: 1">invoicemate</span><span style="font-size: 12px; font-weight: 400; color: #8c8c8c">↑1 ↓5</span></div>
+<a href="#" style="display: flex; flex-direction: column; justify-content: center; height: 44px; padding: 0 10px 0 35px; border-radius: 7px; position: relative">
+<span aria-hidden="true" style="position: absolute; left: 14px; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: #e6c47c; box-shadow: 0 0 0 3px rgba(230,196,124,.15)"></span>
+<span style="overflow: hidden; text-overflow: ellipsis">Calling customers to move</span>
+<span style="font-size: 12px; color: #e6c47c">needs you · question</span>
+</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 35px; border-radius: 7px; position: relative">
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 11px; top: 9px"><path d="m9 18 6-6-6-6"></path></svg>
+<span style="flex: 1">InvoiceMate Business</span><span style="font-size: 12px; color: #8c8c8c">2</span>
+</a>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; color: #d0d0d0; font-weight: 500"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex: 1">strat</span></div>
+<a href="#" style="display: flex; flex-direction: column; justify-content: center; height: 44px; padding: 0 10px 0 35px; border-radius: 7px; position: relative">
+<span aria-hidden="true" style="position: absolute; left: 14px; top: 13px; width: 7px; height: 7px; border-radius: 50%; background: #e6c47c; box-shadow: 0 0 0 3px rgba(230,196,124,.15)"></span>
+<span style="overflow: hidden; text-overflow: ellipsis">I don't have permission to…</span>
+<span style="font-size: 12px; color: #e6c47c">needs you · approval</span>
+</a>
+</section>
+
+<button style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 7px; color: #a0a0a0"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex: 1">workmate</span><span style="font-size: 12px; color: #8c8c8c">1</span></button>
+<button style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 7px; color: #a0a0a0"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex: 1">tempo</span><span style="font-size: 12px; color: #8c8c8c">overnight/coach</span></button>
+</div>
+
+<div style="flex: none; display: flex; align-items: center; gap: 4px; padding: 8px 4px 0 10px">
+<span style="flex: 1; color: #8c8c8c; font-size: 12px">Ferrite 0.5</span>
+<button aria-label="Settings" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
+</div>
+</aside>
+
+<!-- ======================================================= thread -->
+<main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; padding-bottom: 8px">
+
+<header style="flex: none; height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 4px 0 6px">
+<h1 style="margin: 0; font-size: 13.5px; font-weight: 600; color: #f2f2f2">Ferrite idle memory usage</h1>
+<span style="color: #8c8c8c">ferrite</span>
+<span style="flex: 1"></span>
+<span style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; background: #2a2a2a; font-family: 'Geist Mono', monospace; font-size: 12px"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round"><path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg><span style="font-family: Geist, system-ui, sans-serif; font-size: 12.5px; color: #d0d0d0">scheduled-work-crash</span><span style="color: #8cd398">+4</span><span style="color: #ef8a80">−1</span></span>
+</header>
+
+<!-- terminal card -->
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column; background: #181818; border-radius: 10px; box-shadow: 0 0 0 1px rgba(255,255,255,.07); overflow: hidden">
+
+<div style="flex: none; height: 38px; display: flex; align-items: center; gap: 2px; padding: 0 6px; border-bottom: 1px solid rgba(255,255,255,.06)">
+<a href="#" aria-current="page" style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 10px; border-radius: 6px; background: #262626; color: #f2f2f2; font-size: 12.5px"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2.5"></rect><path d="m6 9 3 3-3 3M12 15h5"></path></svg>Main</a>
+<a href="#" style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border-radius: 6px; color: #a0a0a0; font-size: 12.5px"><span aria-hidden="true" style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #8cd398">⠼</span>Spec review of crash fix</a>
+<span aria-hidden="true" style="width: 1px; height: 16px; margin: 0 6px; background: rgba(255,255,255,.08)"></span>
+<button aria-haspopup="menu" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 10px; border-radius: 6px; color: #8c8c8c; font-size: 12.5px"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg>23 done<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+<span style="flex: 1"></span>
+<button aria-label="Split right" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2.5"></rect><path d="M12 3v18"></path></svg></button>
+<button aria-label="Split down" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2.5"></rect><path d="M3 12h18"></path></svg></button>
+</div>
+
+<!-- transcript (mono) -->
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 28px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; line-height: 21px; font-variant-ligatures: none; white-space: normal">
+<div style="flex: none; display: flex; flex-direction: column; gap: 14px; padding-bottom: 16px">
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto; padding: 8px 12px; margin: 0 -12px; border-radius: 7px; background: #222222">
+<span style="color: #f2f2f2; font-weight: 600">❯</span>
+<span style="color: #f2f2f2">Oamy ylou killed it again? it keeps dying</span>
+<span style="padding-left: 2ch; color: #8c8c8c">12:26 pm</span>
+</div>
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto; margin-top: 4px">
+<span style="color: #ef8a80">●</span>
+<span style="color: #d0d0d0">Ran 7 commands <span style="color: #8c8c8c">·</span> <span style="color: #ef8a80">1 failed</span> <span style="color: #8c8c8c">›</span></span>
+<span style="color: #8c8c8c; padding-left: 2ch">34s</span>
+</div>
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr)">
+<span style="color: #f2f2f2">●</span>
+<p style="margin: 0; max-width: 100ch; color: #e6e6e6"><span style="font-weight: 600; color: #f2f2f2">Red, with the exact panic from your crash reports.</span> <span style="padding: 1px 5px; border-radius: 4px; background: #2a2a2a; color: #f2f2f2">job.spawn().unwrap()</span> panics when the worktree it was queued for has been removed. Fixing it.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto">
+<span style="color: #8c8c8c">●</span>
+<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="font-weight: 600; color: #f2f2f2">Update</span><span style="color: #8c8c8c">(crates/ferrite-core/src/scheduled_work.rs)</span></span>
+<span style="padding-left: 2ch"><span style="color: #8cd398">+4</span> <span style="color: #ef8a80">−1</span></span>
+<span></span>
+<div style="margin-top: 6px; padding: 6px 0; border-radius: 7px; background: #1e1e1e; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); font-size: 12.5px; line-height: 20px">
+<div style="display: grid; grid-template-columns: 5ch 2ch minmax(0, 1fr); white-space: pre; color: #8c8c8c"><span style="text-align: right; padding-right: 1.5ch; color: #5e5e5e">88</span><span></span><span>let job = queue.pop_front()?;</span></div>
+<div style="display: grid; grid-template-columns: 5ch 2ch minmax(0, 1fr); white-space: pre; background: rgba(239,138,128,.09)"><span style="text-align: right; padding-right: 1.5ch; color: #8a6460">89</span><span style="color: #ef8a80">−</span><span>let handle = job.spawn().unwrap();</span></div>
+<div style="display: grid; grid-template-columns: 5ch 2ch minmax(0, 1fr); white-space: pre; background: rgba(140,211,152,.09)"><span style="text-align: right; padding-right: 1.5ch; color: #5f8a66">89</span><span style="color: #8cd398">+</span><span>let Ok(handle) = job.spawn() else {</span></div>
+<div style="display: grid; grid-template-columns: 5ch 2ch minmax(0, 1fr); white-space: pre; background: rgba(140,211,152,.09)"><span style="text-align: right; padding-right: 1.5ch; color: #5f8a66">90</span><span style="color: #8cd398">+</span><span>    return self.requeue(job);</span></div>
+</div>
+<span></span>
+</div>
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto">
+<span style="color: #8cd398">●</span>
+<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="font-weight: 600; color: #f2f2f2">Bash</span><span style="color: #8c8c8c">(cargo test -p ferrite-core)</span></span>
+<span style="color: #8c8c8c; padding-left: 2ch">59s</span>
+<span></span>
+<span style="color: #8c8c8c"><span style="color: #5e5e5e">└ </span><span style="color: #8cd398">ok</span> · 954 passed</span>
+<span></span>
+</div>
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr)">
+<span style="color: #f2f2f2">●</span>
+<div style="max-width: 100ch; color: #e6e6e6; display: flex; flex-direction: column; gap: 6px">
+<p style="margin: 0"><span style="font-weight: 600; color: #f2f2f2">Fixed, and the full core suite passes.</span> A job whose worktree is gone now goes back on the queue instead of taking the server down.</p>
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr)"><span style="color: #8c8c8c">-</span><span>Free disk dropped to <span style="font-weight: 600; color: #f2f2f2">7.5 GB</span>, so I'm checking what grew before building anything else.</span></div>
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr)"><span style="color: #8c8c8c">-</span><span>Clearing the <span style="font-weight: 600; color: #f2f2f2">5 GB</span> incremental cache my test runs left in <span style="padding: 1px 5px; border-radius: 4px; background: #2a2a2a; color: #f2f2f2">target/</span>. Cargo rebuilds it on demand.</span></div>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto">
+<span style="color: #8c8c8c">●</span>
+<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="font-weight: 600; color: #f2f2f2">Agent</span><span style="color: #8c8c8c">(Standards review of crash fix)</span></span>
+<span style="color: #8c8c8c; padding-left: 2ch">56s</span>
+<span style="color: #8cd398">●</span>
+<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="font-weight: 600; color: #f2f2f2">Agent</span><span style="color: #8c8c8c">(Spec review of crash fix)</span></span>
+<span style="color: #8c8c8c; padding-left: 2ch">2m 00s</span>
+</div>
+
+<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto">
+<span style="color: #d97757">✶</span>
+<span><span style="background: linear-gradient(90deg, #d97757 0%, #f3c2ac 45%, #d97757 75%); -webkit-background-clip: text; background-clip: text; color: transparent">Pondering…</span><span style="color: #8c8c8c"> 5m 22s · ↑ 130 tokens</span></span>
+<span style="padding-left: 2ch; color: #8c8c8c">esc to interrupt</span>
+</div>
+</div>
+</div>
+
+<!-- composer -->
+<div style="flex: none; padding: 0 14px 14px">
+<form style="display: flex; flex-direction: column; border-radius: 10px; background: #222222; box-shadow: 0 0 0 1px rgba(255,255,255,.08)">
+<div style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 8px 0 14px; border-bottom: 1px solid rgba(255,255,255,.06)">
+<span style="font-size: 12px; font-weight: 500; color: #8c8c8c">Queued</span>
+<span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #a0a0a0">Also once this is done, i wnat to make terminal ui overhaul the main of this repo please,e and remove the other oberhaul branch and the codex full access branch remove as well</span>
+<button type="button" aria-label="Remove queued message" style="width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+</div>
+<label style="display: flex; align-items: center; padding: 14px 14px 8px">
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</span>
+<input placeholder="Queue a follow-up" style="flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 0; font-size: 13.5px; line-height: 20px">
+</label>
+<div style="display: flex; align-items: center; gap: 2px; height: 42px; padding: 0 8px">
+<button type="button" aria-label="Attach" style="width: 30px; height: 30px; display: grid; place-items: center; border-radius: 7px; color: #8c8c8c"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+<button type="button" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 7px; color: #e6c47c; font-size: 12.5px; font-weight: 500"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="M12 8v4M12 16h.01"></path></svg>Bypass permissions<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+<span style="flex: 1"></span>
+<button type="button" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 7px; color: #a0a0a0; font-size: 12.5px"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" style="color: #d97757"><path fill="currentColor" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"></path></svg>Opus 5.5<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+<button type="button" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 7px; color: #a0a0a0; font-size: 12.5px">High<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+<button type="submit" aria-label="Send" style="width: 28px; height: 28px; margin-left: 6px; display: grid; place-items: center; border-radius: 50%; background: #3a3a3a; color: #f2f2f2"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg></button>
+</div>
+</form>
+</div>
+</div>
+</main>
+
+<!-- ======================================================= details -->
+
+<aside aria-label="Thread panel" style="flex: none; width: 304px; display: flex; flex-direction: column; padding: 0 10px 8px 8px; box-sizing: border-box; overflow: hidden">
+
+
+<div style="flex: none; height: 46px; display: flex; align-items: center; gap: 4px">
+<div role="tablist" aria-label="Details" style="flex: 1; display: flex; gap: 2px">
+<button role="tab" aria-selected="false" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; color: #a0a0a0; font-size: 12.5px; font-weight: 500">Changes<span style="font-size: 12px; font-weight: 400; color: #8c8c8c">1</span></button>
+<button role="tab" aria-selected="true" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; background: #2e2e2e; color: #f2f2f2; font-size: 12.5px; font-weight: 500">PR<span style="font-family: 'Geist Mono', monospace; font-size: 11.5px; font-weight: 400; color: #8c8c8c">#146</span></button>
+<button role="tab" aria-selected="false" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; color: #a0a0a0; font-size: 12.5px; font-weight: 500">Context</button>
+</div>
+<button aria-label="Hide panel" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><rect x="3" y="3" width="18" height="18" rx="2.5"></rect><path d="M15 3v18"></path></svg></button>
+</div>
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; flex-direction: column; padding: 2px 2px 14px">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px; border-radius: 11px; background: rgba(140,211,152,.14); color: #8cd398; font-size: 12px; font-weight: 500"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><path d="M6 9v12"></path></svg>Open</span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #8c8c8c">#146</span>
+<span style="flex: 1"></span>
+<button aria-label="Refresh" style="width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></button>
+<button aria-label="Open on GitHub" style="width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg></button>
+</div>
+<p style="margin: 10px 0 0; font-size: 14px; line-height: 20px; font-weight: 600; color: #f2f2f2; white-space: normal">Requeue scheduled work whose worktree is gone</p>
+<div style="display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: #8c8c8c"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg><span style="color: #c0c0c0">scheduled-work-crash</span><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5e5e5e" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg><span>main</span></div>
+</div>
+<div style="display: flex; flex-direction: column; border-radius: 8px; background: #2a2a2a">
+<div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px;"><span aria-hidden="true" style="width: 15px; text-align: center; font-family: 'Geist Mono', monospace; font-size: 12px; color: #8cd398">⠼</span><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">Checks running</span><span style="font-size: 12px; color: #8c8c8c">1 of 3 done</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border-top: 1px solid rgba(255,255,255,.05);"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8cd398" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">No conflicts with main</span><span style="font-size: 12px; color: #8c8c8c"></span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border-top: 1px solid rgba(255,255,255,.05);"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#e6c47c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">1 commit not pushed</span><span style="font-size: 12px; color: #8c8c8c"></span></div>
+</div>
+<div style="display: flex; align-items: center; height: 30px; margin-top: 14px; padding: 0 2px; font-size: 12px; color: #8c8c8c"><span style="flex: 1; font-weight: 500">Checks</span><span>3</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 2px"><span aria-hidden="true" style="width: 15px; text-align: center; font-family: 'Geist Mono', monospace; font-size: 12px; color: #8cd398">⠼</span><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">macOS (Metal)</span><span style="font-size: 12px; color: #8c8c8c">running</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 2px"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8cd398" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">Windows (DirectX 11)</span><span style="font-size: 12px; color: #8c8c8c">passed</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 2px"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8cd398" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">Claude Code Review</span><span style="font-size: 12px; color: #8c8c8c">passed</span></div>
+<div style="display: flex; align-items: center; height: 30px; margin-top: 14px; padding: 0 2px; font-size: 12px; color: #8c8c8c"><span style="flex: 1; font-weight: 500">Comments</span><span>2 · 1 unresolved</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<article style="display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: #2a2a2a">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #8c8c8c">
+<span aria-hidden="true" style="width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: #3a3a3a; color: #f2f2f2; font-size: 10px; font-weight: 600">C</span>
+<span style="font-size: 12.5px; font-weight: 500; color: #f2f2f2">claude</span><span>finding</span><span style="font-size: 11.5px; color: #e6c47c">unresolved</span><span style="flex: 1"></span><span>6m</span>
+</div>
+<span style="font-family: 'Geist Mono', monospace; font-size: 11.5px; color: #a0a0a0; overflow: hidden; text-overflow: ellipsis">scheduled_work.rs:89–91</span>
+<p style="margin: 0; font-size: 12.5px; line-height: 18px; color: #d0d0d0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden"><span style="padding: 0 4px; border-radius: 4px; background: #333333; font-family: 'Geist Mono', monospace; font-size: 11.5px; color: #f2f2f2">requeue</span> retries forever if the worktree never comes back. Cap the attempts or drop the job after a few.</p>
+</article>
+<article style="display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: #2a2a2a">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #8c8c8c">
+<span aria-hidden="true" style="width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: #3a3a3a; color: #f2f2f2; font-size: 10px; font-weight: 600">J</span>
+<span style="font-size: 12.5px; font-weight: 500; color: #f2f2f2">josephwylie</span><span>comment</span><span style="flex: 1"></span><span>4m</span>
+</div>
+<p style="margin: 0; font-size: 12.5px; line-height: 18px; color: #d0d0d0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden">Tried it locally. Closing the window mid-run no longer takes the server down.</p>
+</article>
+<button style="display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 4px; font-size: 12.5px; color: #8c8c8c"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="m9 18 6-6-6-6"></path></svg>1 resolved</button>
+</div>
+<button style="flex: none; height: 32px; margin-top: 14px; border-radius: 7px; background: #2a2a2a; color: #f2f2f2; font-size: 12.5px; font-weight: 500; text-align: center">Review PR</button>
+</div>
+
+<div style="flex: none; display: flex; flex-direction: column; gap: 10px; padding: 14px 10px 4px; border-top: 1px solid rgba(255,255,255,.06)">
+<div style="display: flex; font-size: 12px; color: #8c8c8c"><span style="flex: 1; font-weight: 500">Context</span><span style="color: #a0a0a0">84k / 200k</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px">
+<span style="width: 18%; border-radius: 2px; background: #6f9be0"></span>
+<span style="width: 15%; border-radius: 2px; background: #d98a5f"></span>
+<span style="width: 5%; border-radius: 2px; background: #5fae84"></span>
+<span style="width: 4%; border-radius: 2px; background: #c9a55a"></span>
+<span style="flex: 1; border-radius: 2px; background: #333333"></span>
+</div>
+</div>
+</aside>
+
+</div>
+
+<!-- ======================================================= status bar -->
+<footer style="flex: none; height: 30px; display: flex; align-items: center; gap: 18px; padding: 0 14px; border-top: 1px solid rgba(255,255,255,.05); background: #1e1e1e; font-size: 12px; color: #8c8c8c">
+<nav aria-label="Views" style="display: flex; align-items: center; gap: 2px">
+<a href="#" aria-current="page" style="display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 5px; background: #2e2e2e; color: #f2f2f2; font-weight: 500"><span style="color: #8c8c8c">1</span>Solo<span aria-hidden="true" style="width: 5px; height: 5px; border-radius: 50%; background: #8cd398"></span></a>
+<a href="#" style="display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 5px"><span>2</span><span style="color: #c0c0c0">Work</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 5px"><span>3</span><span style="color: #c0c0c0">InvoiceMate business</span><span aria-hidden="true" style="width: 5px; height: 5px; border-radius: 50%; background: #e6c47c"></span></a>
+</nav>
+<span style="flex: 1"></span>
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #e6c47c"></span><span style="color: #c0c0c0">3 need you</span></span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="color: #d97757">✻</span>14% this week</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="color: #10a37f">◉</span>6% this week</span>
+<span>7.5 GB free</span>
+<span style="color: #c0c0c0">12:31 pm</span>
+</footer>
+</div>
+
+
+</body>
+</html>
