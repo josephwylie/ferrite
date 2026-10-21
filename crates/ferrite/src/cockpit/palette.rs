@@ -193,9 +193,7 @@ impl CockpitView {
         self.context_menu = None;
         self.session_controls = None;
         self.mode_picker = None;
-        self.context_usage = None;
         self.context_checks = None;
-        self.changed_files_card = None;
         self.floats.shortcuts = None;
         self.projects.drop_popup();
     }
@@ -719,7 +717,9 @@ impl CockpitView {
             .is_empty()
         });
         let facts = focused.and_then(|thread| self.facts.get(thread));
-        let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty());
+        // The changes show in the Solo panel, so only where it can show.
+        let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty())
+            && self.panel_candidate().is_some();
         let pr = facts.and_then(|facts| facts.pr.reading.as_ref());
         let checks = pr.is_some_and(|pr| pr.checks.is_some());
         let plan = open.is_some_and(|open| open.transcript().todos().is_some());
@@ -1222,7 +1222,7 @@ impl CockpitView {
             }
             Command::ShowChanges => {
                 if let Some(thread) = thread {
-                    self.changed_files_card = Some(thread);
+                    self.open_panel_tab(thread, super::panel::PanelTab::Changes, cx);
                 }
             }
             Command::ShowChecks => self.open_checks(window, cx),

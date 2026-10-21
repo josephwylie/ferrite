@@ -98,6 +98,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "cockpit::FocusThread9" => Hidden,
         "cockpit::ToggleFullscreen" => Row(Board, "fullscreen pane"),
         "cockpit::ToggleNav" => Row(Board, "toggle sidebar"),
+        "cockpit::TogglePanel" => Row(Board, "toggle panel"),
         "cockpit::TextLarger" => Row(Board, "text larger"),
         "cockpit::TextSmaller" => Row(Board, "text smaller"),
         "cockpit::TextReset" => Row(Board, "text reset"),

@@ -626,7 +626,6 @@ impl CockpitView {
         self.cockpit.focus_thread(thread);
         self.focus_pane(index);
         self.popover = None;
-        self.context_usage = None;
         // Keep native text selections in their retained Subject entities.
         // A tab selection must not edit or focus Main's hidden Composer.
         if self.panes[index].is_main() {
@@ -660,7 +659,6 @@ impl CockpitView {
         self.cockpit
             .set_visible_subject(thread, self.panes[index].selected.clone());
         self.popover = None;
-        self.context_usage = None;
         cx.notify();
     }
 

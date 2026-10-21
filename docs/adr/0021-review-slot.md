@@ -203,3 +203,11 @@ take reviewr itself instead, so its fixes and features keep arriving.
 - An ignored directory in the all-files list does not open: reviewr
   lists its entries on demand (`git::all_files_in`), which would need a
   read per directory.
+
+## Amendment (2026-10-21, UI refresh phase 7a)
+
+The status line's changed-files card and its `review` verb are gone. The
+Solo panel's Changes tab (SPEC §5.6) lists the Thread's edited files and
+ends in `Review changes`, which opens `Beside::Review(Uncommitted)` beside
+the Pane as the card's verb did; the panel gives way while the Review is
+open.

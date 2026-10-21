@@ -919,6 +919,47 @@ pub const GRID_PAD: f32 = 10.0;
 /// (SPEC §4): the same gutter as between two cards (`GRID_GAP`). The left
 /// has none: the nav's own padding is the gutter there.
 pub const BOARD_PAD: f32 = SPACE_2;
+
+// ------------------------------------------------------------ Solo panel
+
+/// 304px — the Solo view's right panel (SPEC §5.6), a fixed column on the
+/// frame outside the board; padding 0 10 8 8 (`PANEL_PAD_*`, the right a
+/// step wider than the gutter, as the nav's). Off the space scale: the
+/// mockups' column.
+pub const PANEL_W: f32 = 304.0;
+pub const PANEL_PAD_L: f32 = SPACE_2;
+pub const PANEL_PAD_R: f32 = 10.0;
+pub const PANEL_PAD_B: f32 = SPACE_2;
+/// The window widths the panel shows from and hides under (SPEC §4,
+/// §5.6): it shows by default from about 1280px and, once shown, stays
+/// down to about 1180px, so a window resized across the line does not
+/// flicker. The panel goes before the nav folds to its rail.
+pub const PANEL_SHOW_W: f32 = 1280.0;
+pub const PANEL_HIDE_W: f32 = 1180.0;
+/// 28px — a panel tab in the head row (r7, 12.5/500), 10px inline padding,
+/// 6px to its count; 2px between tabs.
+pub const PANEL_TAB_H: f32 = 28.0;
+pub const PANEL_TAB_PAD_X: f32 = 10.0;
+/// 48px — a two-line panel row (the branch row, a file block's head): its
+/// 14px icon at x 10, y 9; its text at x 34 (SPEC §4's panel rows).
+pub const PANEL_ROW_H: f32 = 48.0;
+pub const PANEL_ROW_ICON: f32 = 14.0;
+pub const PANEL_ROW_ICON_X: f32 = 10.0;
+pub const PANEL_ROW_ICON_Y: f32 = 9.0;
+pub const PANEL_ROW_TEXT_X: f32 = 34.0;
+/// 30px — a panel section line (`N files changed`, diffstat right), 8px
+/// below the row over it.
+pub const PANEL_SECTION_H: f32 = 30.0;
+/// 32px — the panel's full-width secondary buttons (`Review changes`).
+pub const PANEL_BUTTON_H: f32 = 32.0;
+/// The foot's context meter: 6px high, 2px between segments, radius 2,
+/// over an empty track of `PANEL_METER_TRACK`; the foot's padding is
+/// 14 10 4 with 10px between its line and the meter.
+pub const PANEL_METER_H: f32 = 6.0;
+pub const PANEL_METER_TRACK: u32 = 0x333333;
+pub const PANEL_FOOT_PAD_T: f32 = 14.0;
+pub const PANEL_FOOT_PAD_B: f32 = SPACE_1;
+
 /// A toast's width: 52 cells (the prototype's `.toast`).
 pub const TOAST_W: f32 = 52.0 * CH;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
@@ -1789,9 +1830,6 @@ pub const EMPTY_RECENT_AGE_W: f32 = 6.0 * CH;
 /// How many recent Threads the empty board lists (R13).
 pub const EMPTY_RECENT_MAX: usize = 4;
 
-/// The status line's segments in the bottom bar: a cell of padding each
-/// side (until the Composer and the panel take them, phases 6 and 7a).
-pub const BAR_SEG_PAD_X: f32 = CH;
 /// The provider mark on the empty board's provider rows.
 pub const BAR_MARK: f32 = 11.0;
 /// 14px — the bottom bar's inset at each end (SPEC §5.7; off the space
@@ -1872,25 +1910,15 @@ pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
 /// controls' corner).
 pub const COMPOSER_PAD_END: f32 = SPACE_2;
 pub const COMPOSER_INSET_B: f32 = SPACE_2;
-pub const COMPOSER_CHIP_R: f32 = R_CHIP;
 /// One band row: what an unfocused board cell's band measures.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const COMPOSER_GRID_H: f32 = 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H;
-/// The ctx meter: eight cells by 4px on a `paint::LINE2` track, filled
-/// `RUNNING` below `CTX_METER_WARN`, `ATTENTION` below `CTX_METER_FULL`,
-/// then `BLOCKED`.
 /// How far a table cell's text sits under the cell's top (`rich::style`):
 /// the prototype's 19px line centred in its 20px cell, rounded down to the
 /// whole pixel.
 pub const TABLE_TEXT_DROP: f32 = 1.0;
-pub const CTX_METER_W: f32 = 8.0 * CH;
-pub const CTX_METER_H: f32 = 4.0;
-/// The meter's ends, rounded as the prototype's `.meter` rounds them (the
-/// one radius inside a Pane: it is a bar, not a corner).
-pub const CTX_METER_R: f32 = 1.0;
-/// `vertical-align: middle` puts the bar's middle half an x-height over
-/// the baseline: 1px under the row's centre at 13/20.
-pub const CTX_METER_DROP: f32 = 1.0;
+/// The context meter's state steps (the panel's foot, `pane::ctx_meter_ink`):
+/// `ATTENTION` from `CTX_METER_WARN`, `BLOCKED` from `CTX_METER_FULL`.
 pub const CTX_METER_WARN: f32 = 0.60;
 pub const CTX_METER_FULL: f32 = 0.85;
 /// The Composer's band sits between two 1px rules (the prototype's
@@ -1928,11 +1956,9 @@ pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
 /// An `@`-mention the operator picked: a path, so `LINK_INK` on no
 /// ground — the terminal's own colour for a path.
 pub const MENTION_INK: u32 = LINK_INK;
-/// The usage meter's detail card: one column of labelled bars, sized so
-/// the three windows read at a glance without the card becoming a panel.
-pub const USAGE_CARD_W: f32 = 288.0;
-/// Between one window's block and the next, and inside one block: the
-/// blocks stand twice as far apart as their own lines.
+/// The Context tab's blocks (`pane::context_usage`): between one window's
+/// block and the next, and inside one block; the blocks stand twice as far
+/// apart as their own lines.
 pub const USAGE_CARD_GAP: f32 = SPACE_3;
 pub const USAGE_CARD_ROW_GAP: f32 = SPACE_1_5;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
@@ -1945,9 +1971,6 @@ pub const USAGE_TIGHT: f32 = 0.80;
 /// its state and two quiet actions (`needs sign-in`, `Sign in`,
 /// `Reconnect`): 52 cells.
 pub const SESSION_CARD_W: f32 = 52.0 * CH;
-/// The changed-files card: wide enough for a file name, a short directory
-/// and its `+N −N` on one menu row.
-pub const CHANGED_FILES_CARD_W: f32 = 360.0;
 /// One row of the usage card's legend, its colour square, and the share
 /// column the percentages right-align in.
 pub const USAGE_LEGEND_ROW_H: f32 = 20.0;

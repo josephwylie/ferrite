@@ -65,6 +65,13 @@ _Avoid_: dashboard, workspace (see Workspace binding).
 **Solo**
 The default Cockpit view: exactly the focused Thread's Pane.
 
+**Panel**
+The Solo view's right column, beside the board: the Thread's changes, its
+pull request and its context, one tab each. Hidden on a Group, when the
+window is narrow, and while something is open beside the Pane.
+_Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
+board).
+
 **Group**
 A durable, operator-ordered set of two or more Threads, which may span
 Projects. Each Thread retains its own Workspace binding. Opening the Group's

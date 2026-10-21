@@ -265,30 +265,29 @@ fn history_recall_leaves_the_comments_on_the_shelf(cx: &mut TestAppContext) {
     assert_eq!(sent.matches("why?").count(), 1, "{sent}");
 }
 
-/// A shift-click stretches the pick to a range; the files-changed card's
-/// `review` opens the Review; the shelf chip's × drops every comment.
+/// A shift-click stretches the pick to a range; the panel's `Review
+/// changes` opens the Review beside the Pane (the panel giving way to it);
+/// the shelf chip's × drops every comment.
 #[gpui::test]
 fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     let (mut core, fake, repo) = edited("review-range");
     tidied(&mut core, &fake, &repo);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| {
-        view.changed_files_card = Some(thread);
-        cx.notify();
-    });
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     tick(cx);
     let review = cx
-        .debug_bounds("changed-files-review")
-        .expect("on the card's head");
+        .debug_bounds("panel-review-changes")
+        .expect("under the panel's changed files");
     cx.simulate_click(review.center(), gpui::Modifiers::none());
     until(cx, |cx| cx.debug_bounds("review-lines").is_some());
     assert!(
         view.read_with(cx, |view, _| view.panes[0].preview.review().is_some()),
-        "the card opens the Review"
+        "the button opens the Review"
+    );
+    assert!(
+        cx.debug_bounds("panel").is_none(),
+        "the panel never shows with the Beside slot open"
     );
     let first = cx.debug_bounds("review-line-0").expect("drawn");
     let last = cx.debug_bounds("review-line-2").expect("drawn");

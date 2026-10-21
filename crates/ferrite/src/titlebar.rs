@@ -25,8 +25,7 @@
 //!
 //! The band says nothing (ADR 0014): no location, no doors. The nav's
 //! selected row names the Thread; the window's one bar is the bottom bar
-//! (`bottom_bar`, SPEC §5.7): `1 Solo` and a tab per Group, the focused
-//! Pane's status line until the Composer and the panel take it, then the
+//! (`bottom_bar`, SPEC §5.7): `1 Solo` and a tab per Group, then the
 //! vitals — who needs you, usage, free disk and the clock.
 //!
 //! Drawing only, like `nav.rs`: the cockpit places these and owns the state
@@ -159,13 +158,8 @@ fn drag_region(maximized: bool) -> Div {
 /// ADR 0033): full width on `paint::BAR`, closed above by a `BAR_TOP`
 /// hairline, `BAR_PAD_X` in from each end, `BAR_GAP` between its items,
 /// Geist `FS_META` in `TEXT_DIM` (`CHROME_MUTED`, its step up on glass).
-/// Left the view `tabs`; then the `status` stretch, which also pushes the
-/// `vitals` to the right end.
-///
-/// `status` is the focused Pane's status line until the Composer and the
-/// panel take its parts (phases 6 and 7a); then the caller passes a bare
-/// `div().flex_1()` and this stays as it is.
-pub fn bottom_bar(tabs: Vec<AnyElement>, status: Div, vitals: AnyElement) -> Div {
+/// Left the view `tabs`; the `vitals` pushed to the right end.
+pub fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
     div()
         .debug_selector(|| "bottom-bar".into())
         .flex()
@@ -195,7 +189,7 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, status: Div, vitals: AnyElement) -> Div
                 .gap(px(SPACE_0_5))
                 .children(tabs),
         )
-        .child(status)
+        .child(div().flex_1())
         .child(vitals)
 }
 

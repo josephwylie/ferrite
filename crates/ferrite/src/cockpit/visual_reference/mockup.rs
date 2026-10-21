@@ -550,6 +550,26 @@ fn crash_fix_hunk() -> Hunk {
 
 // ---------------------------------------------------------------- scripts
 
+/// The model menu Claude announces here: the fixture menu, with the plain
+/// `opus` alias the crash fix runs on named as the mockups name it,
+/// `Opus 5.5` (the CLI's own row for it).
+fn menu() -> Vec<ferrite_core::ModelInfo> {
+    let mut menu = claude_menu();
+    let long = menu
+        .iter()
+        .position(|row| row.value == "opus[1m]")
+        .expect("the fixture menu has Opus");
+    let opus = ferrite_core::ModelInfo {
+        value: "opus".into(),
+        display: "Opus 5.5".into(),
+        detail: "for complex work".into(),
+        resolved: Some("claude-opus-5-5".into()),
+        ..menu[long].clone()
+    };
+    menu.insert(long, opus);
+    menu
+}
+
 /// Ferrite idle memory usage (solo.png): one turn, 5m22s in at capture —
 /// seven commands, the panic found, the fix, the core suite, two reviews
 /// by Subagent (one still running) — the working line `Pondering…`.
@@ -558,13 +578,7 @@ fn crash_fix(s: &mut Script, who: ThreadId) {
     s.prompt(start, who, "Oamy ylou killed it again? it keeps dying");
     s.ev(start, who, init("mockup-memory", "claude-opus-5-5"));
     s.ev(start, who, mode("bypassPermissions"));
-    s.ev(
-        start,
-        who,
-        SessionEvent::Models {
-            models: claude_menu(),
-        },
-    );
+    s.ev(start, who, SessionEvent::Models { models: menu() });
     // The account's windows, as Claude last reported them: the week is the
     // fuller one, `14% this week`.
     s.ev(start, who, limits(0.05, 0.14));
@@ -1401,6 +1415,11 @@ mod tests {
         );
         let memory = core.thread(world.cast.memory).unwrap();
         assert_eq!(memory.model(), Some("opus"));
+        assert_eq!(
+            ferrite_core::providers::models::label("opus", memory.models()),
+            "Opus 5.5",
+            "the model chip names it as the mockups do"
+        );
         assert_eq!(memory.effort(), Some("high"));
         drop(world);
         let _ = std::fs::remove_dir_all(&root);

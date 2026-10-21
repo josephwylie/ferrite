@@ -249,6 +249,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // #21: fold the nav to its LED rail and back — the VS Code sidebar
         // muscle memory (cmd-t/w are spoken for by #20, cmd-f by find).
         (with_primary("b"), "cockpit::ToggleNav", None),
+        // The Solo panel (SPEC §5.6) beside it: ⌥⌘B, the sidebar's chord
+        // with the option key, as the editors pair their two sidebars.
+        (with_primary("alt-b"), "cockpit::TogglePanel", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
         // The bell: what finished while the operator looked elsewhere.
@@ -763,6 +766,7 @@ mod tests {
             ("find::Open", "f"),
             // #21: the nav collapses to its rail on both platforms.
             ("cockpit::ToggleNav", "b"),
+            ("cockpit::TogglePanel", "alt-b"),
             ("cockpit::OpenSettings", ","),
             ("cockpit::NewWorktreeThread", "shift-n"),
             // ⌘G opens a Group; New Group moves to ⌘⇧G.

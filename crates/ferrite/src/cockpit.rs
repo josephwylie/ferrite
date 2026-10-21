@@ -9,6 +9,7 @@ pub(crate) mod empty_board;
 mod leaving;
 mod machines;
 mod palette;
+mod panel;
 mod parts;
 #[cfg_attr(not(unix), path = "cockpit/projects_unavailable.rs")]
 mod projects;
@@ -229,6 +230,7 @@ actions!(
         OpenSettings,
         ToggleFullscreen,
         ToggleNav,
+        TogglePanel,
         ToggleNotifications,
         MenuNext,
         MenuPrevious,
@@ -486,13 +488,10 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
-    /// The usage meter's detail card, tied to the Pane that opened it. A
-    /// draft Pane has a meter too — its account windows are real before the
-    /// first prompt — so this is a `PaneIdentity`, not a Thread. Like every
-    /// card it hangs off its trigger's bounds (`float_triggers`), never the
-    /// pointer, so a click and a key open it in the same place.
-    context_usage: Option<PaneIdentity>,
-    /// Whether the usage card's context legend is open. Kept across
+    /// The Solo view's right panel (`panel`): its tab per Thread and
+    /// whether the window has room for it.
+    panel: panel::Panel,
+    /// Whether the panel's Context tab has its legend open. Kept across
     /// openings: an operator who wants the breakdown wants it every time.
     context_usage_expanded: bool,
     session_controls: Option<(ThreadId, u64)>,
@@ -503,10 +502,8 @@ pub struct CockpitView {
     /// `BranchStatus` the mark was drawn from, so the card can never
     /// disagree with the mark that opened it.
     context_checks: Option<ThreadId>,
-    /// The changed-files card, opened from the status line's `N files`.
-    changed_files_card: Option<ThreadId>,
-    /// Each status-line card trigger's bounds as last laid out (`usage-…`,
-    /// `files-…`), recorded in prepaint: what a bar card hangs from.
+    /// Each bar card trigger's bounds as last laid out (a draft's band
+    /// chips), recorded in prepaint: what a bar card hangs from.
     float_triggers: FloatTriggers,
     /// Frames each open card has waited for its trigger's or Pane's
     /// geometry, by trigger key (`card_corner`); none once it has some.
@@ -660,12 +657,10 @@ pub enum Landing {
 
 impl EventEmitter<GoToMachine> for CockpitView {}
 
-/// What a card hangs from (`card_corner`): its trigger in the window's
-/// bar (a status-line segment, ADR 0014), or its Pane's Composer (opening
+/// What a card hangs from (`card_corner`): its Pane's Composer (opening
 /// up) or head (opening down).
 #[derive(Clone, Copy)]
 enum CardFrom {
-    Bar,
     Composer(PaneIdentity),
     Head(PaneIdentity),
 }
@@ -1415,8 +1410,6 @@ pub(crate) mod drawn {
         static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
         static NAV_RENDERS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadId, String>> = RefCell::new(HashMap::new());
-        static STATUS_USAGE: RefCell<Option<String>> = const { RefCell::new(None) };
-        static STATUS_RENDERS: Cell<usize> = const { Cell::new(0) };
         static PROJECTS_TOGGLES: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -1427,23 +1420,6 @@ pub(crate) mod drawn {
     /// How many times the Projects board was toggled on this thread.
     pub(crate) fn projects_toggles() -> usize {
         PROJECTS_TOGGLES.with(Cell::get)
-    }
-
-    /// The bar's status line was built reading these usage facts: the
-    /// focused Thread's context window and its account's.
-    pub(crate) fn record_status(usage: Option<String>) {
-        STATUS_RENDERS.with(|renders| renders.set(renders.get() + 1));
-        STATUS_USAGE.with(|status| *status.borrow_mut() = usage);
-    }
-
-    /// How many times the bar's status line has been built on this thread.
-    pub(crate) fn status_renders() -> usize {
-        STATUS_RENDERS.with(Cell::get)
-    }
-
-    /// The usage facts the bar's status line last drew.
-    pub(crate) fn status_usage() -> Option<String> {
-        STATUS_USAGE.with(|status| status.borrow().clone())
     }
 
     pub(crate) fn built_pane(identity: PaneIdentity) {
@@ -1621,13 +1597,12 @@ impl CockpitView {
             asking_repo: None,
             rename: None,
             context_menu: None,
-            context_usage: None,
+            panel: Default::default(),
             context_usage_expanded: false,
             session_controls: None,
             mode_picker: None,
             session_control_error: None,
             context_checks: None,
-            changed_files_card: None,
             float_triggers: FloatTriggers::default(),
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
@@ -2431,13 +2406,8 @@ impl CockpitView {
         // (`observe_self`), so they draw in this same frame.
         self.sync_visible_transcripts(cx);
         let rows = !frame.is_empty() || !swept_busy.is_empty();
-        let focused = self.focused_thread();
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
-            // Its usage reads in the bar (`pane_status`).
-            if Some(thread) == focused {
-                self.notify_part(parts::Part::Status, cx);
-            }
         }
         if rows {
             self.notify_part(parts::Part::Nav, cx);
@@ -2685,7 +2655,6 @@ impl CockpitView {
             || self.popover.is_some()
             || self.context_checks.is_some()
             || self.plan_card.is_some()
-            || self.changed_files_card.is_some()
             || self.context_menu.is_some()
             || self.sheet_float_open()
     }
@@ -2746,16 +2715,18 @@ impl CockpitView {
     /// floor (`TILE_FLOOR_WIDTH`) that folding would lift it over. It unfolds only once both
     /// clear their threshold by `NAV_AUTO_RAIL_HYSTERESIS`. The operator's
     /// cmd-B override (`nav_forced_open`) outranks it either way. The board
-    /// beside the 264px column is the window less the column and the
-    /// right-hand `BOARD_PAD`, so the nav folds under 832px (the card keeps
+    /// beside the 264px column is the window less the column and what the
+    /// board leaves at its right (`board_right`: the panel, or `BOARD_PAD`),
+    /// so with the panel hidden the nav folds under 832px (the card keeps
     /// 560px, as it did beside the 36ch column).
     fn update_auto_rail(&mut self, window: &Window) {
-        use crate::theme::{BOARD_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
+        use crate::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
         use ferrite_core::docview::TILE_FLOOR_WIDTH;
         let held = self.nav_auto_rail.get();
         let slack = if held { NAV_AUTO_RAIL_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
-        let board = width - nav::WIDTH - BOARD_PAD;
+        let right = self.board_right();
+        let board = width - nav::WIDTH - right;
         let narrowest = |view: &Self| {
             view.pane_rects(window)
                 .iter()
@@ -2766,7 +2737,7 @@ impl CockpitView {
         let full = narrowest(self);
         self.nav_measure_full.set(false);
         let railed_board = layout::Rect {
-            w: width - nav::FOLDED_WIDTH - BOARD_PAD,
+            w: width - nav::FOLDED_WIDTH - right,
             ..self.board.get()
         };
         // What the narrowest cell would be beside the rail: the same tree,
@@ -2831,8 +2802,9 @@ impl CockpitView {
 
     /// The board the cards lay out in, in window coordinates (theme WP-C):
     /// flush right of the nav, from under the head row
-    /// (`titlebar::board_top`) to `BOARD_PAD` short of the window's right
-    /// edge and of the bottom bar.
+    /// (`titlebar::board_top`) to `BOARD_PAD` short of the bottom bar and
+    /// `board_right` short of the window's right edge (the panel, or the
+    /// gutter).
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         use crate::theme::{BOARD_PAD, STATUS_BAR_H};
         let viewport = window.viewport_size();
@@ -2841,7 +2813,7 @@ impl CockpitView {
         let bounds = layout::Rect {
             x: left,
             y: top,
-            w: (f32::from(viewport.width) - left - BOARD_PAD).max(0.0),
+            w: (f32::from(viewport.width) - left - self.board_right()).max(0.0),
             h: (f32::from(viewport.height) - top - STATUS_BAR_H - BOARD_PAD).max(0.0),
         };
         self.board.set(bounds);
@@ -3117,7 +3089,6 @@ impl CockpitView {
         }
         self.popover = None;
         self.context_menu = None;
-        self.context_usage = None;
         self.plan_card = None;
         self.context_checks = Some(thread);
         cx.notify();
@@ -3452,7 +3423,6 @@ impl CockpitView {
     fn open_context_menu(&mut self, target: MenuTarget, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.popover = None;
         self.context_checks = None;
-        self.changed_files_card = None;
         if self.rename.is_some() {
             self.finish_rename(false, cx);
         }
@@ -5954,14 +5924,6 @@ impl CockpitView {
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
         if self.context_checks.take().is_some() {
-            cx.notify();
-            return;
-        }
-        if self.changed_files_card.take().is_some() {
-            cx.notify();
-            return;
-        }
-        if self.context_usage.take().is_some() {
             cx.notify();
             return;
         }
@@ -10019,6 +9981,7 @@ impl CockpitView {
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
+        self.fit_panel(window);
         self.update_auto_rail(window);
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_cli_updates(window, cx);
@@ -10087,7 +10050,6 @@ impl CockpitView {
                 || self.facts.pr(thread).is_none_or(|pr| pr.checks.is_none())
         }) {
             self.context_checks = None;
-            self.changed_files_card = None;
         }
 
         if self.session_controls.is_some_and(|(thread, generation)| {
@@ -10112,26 +10074,6 @@ impl CockpitView {
                     .is_none_or(|open| open.generation() != generation)
         }) {
             self.mode_picker = None;
-        }
-
-        if self.context_usage.is_some_and(|identity| {
-            level != Level::Transcript
-                || self.settings_open
-                || self.project_editor.is_some()
-                || self.panes.get(self.focused()).map(|pane| pane.identity) != Some(identity)
-                || match identity {
-                    // A Thread's card is a reading, and goes when the
-                    // reading does. A draft's card is its account windows,
-                    // which are real before any turn has reported.
-                    PaneIdentity::Thread(thread) => self
-                        .cockpit
-                        .thread(thread)
-                        .and_then(|open| open.transcript().usage())
-                        .is_none(),
-                    PaneIdentity::Draft(_) => false,
-                }
-        }) {
-            self.context_usage = None;
         }
 
         // The popover belongs to the focused Pane's Composer at L1 (#23):
@@ -10373,15 +10315,18 @@ impl CockpitView {
         }
 
         // The cards start under the head row (`titlebar::board_top`), with
-        // `BOARD_PAD` of frame right of and under them (`board_bounds`).
+        // `BOARD_PAD` of frame under them and right of them — none at the
+        // right beside the panel, whose column is the frame there
+        // (`board_bounds`).
         let board_top = crate::titlebar::board_top();
+        let panel_shown = self.panel_thread().is_some();
         let frame = || {
             div()
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
                 .pt(px(board_top))
-                .pr(px(crate::theme::BOARD_PAD))
+                .when(!panel_shown, |frame| frame.pr(px(crate::theme::BOARD_PAD)))
                 .pb(px(crate::theme::BOARD_PAD))
         };
         let visible = self.visible_indices();
@@ -10539,6 +10484,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::toggle_nav))
+            .on_action(cx.listener(Self::toggle_panel))
             .on_action(
                 cx.listener(|view, _: &FocusThread1, window, cx| view.focus_rail(1, window, cx)),
             )
@@ -10706,13 +10652,17 @@ impl CockpitView {
                             .absolute()
                             .top_0()
                             .bottom_0()
-                            .right_0()
+                            .right(px(if panel_shown {
+                                crate::theme::PANEL_W
+                            } else {
+                                0.
+                            }))
                             .left(px(self.board_left()))
                             .flex()
                             .child(grid),
                     ),
             )
-            .child(self.bottom_bar(level, cx))
+            .child(self.bottom_bar(cx))
             // The window's own titlebar, where the platform makes the app
             // draw one. It is the last thing over the band and the first
             // thing under a menu: an overlay that reached into the band
@@ -10724,12 +10674,13 @@ impl CockpitView {
                 self.maximized,
             ))
             .children(self.view_head(cx))
+            // The Solo panel over the strip's right end: its tabs take
+            // their presses, the gaps between them still drag.
+            .children(self.panel_element(window, cx))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
-            .children(self.context_usage_element(window, cx))
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
-            .children(self.changed_files_element(window, cx))
             .children(self.band_menu_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
@@ -11026,12 +10977,13 @@ impl CockpitView {
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
+
     /// The bottom bar (SPEC §5.7): `1 Solo` always and one tab per Group
     /// in the nav's order, open or not — the current view's selected (none
     /// on the empty board), each with its roll-up dot — a press on `Solo`
     /// showing Solo (the loose Thread used last, else the empty board) and
-    /// on a Group entering it; then the status stretch and the vitals.
-    fn bottom_bar(&self, level: Level, cx: &mut Context<Self>) -> Div {
+    /// on a Group entering it; then the vitals.
+    fn bottom_bar(&self, cx: &mut Context<Self>) -> Div {
         let view = self.cockpit.roster().view();
         let empty = self.empty_board_shown();
         let mut tabs = Vec::new();
@@ -11108,7 +11060,7 @@ impl CockpitView {
             .chain(Some(clock.into_any_element()))
             .collect();
         let vitals = crate::titlebar::vitals(vitals).into_any_element();
-        crate::titlebar::bottom_bar(tabs, self.status_slot(level, cx), vitals)
+        crate::titlebar::bottom_bar(tabs, vitals)
     }
 
     /// Read free disk for the bar off the UI thread: the least free of the
@@ -11152,51 +11104,6 @@ impl CockpitView {
         if moved {
             cx.notify();
         }
-    }
-
-    /// What is left of the focused Pane's status line in the window's bar:
-    /// its `ctx` meter and its changed files, until the right panel takes
-    /// them (SPEC §5.6, phase 7a). The mode, model and effort are the
-    /// Composer's chips now (`composer_toolbar`). Nothing on the empty
-    /// board, below L1, or on a Subagent's tab.
-    fn pane_status(&self, level: Level, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if level != Level::Transcript || self.empty_board_shown() {
-            return None;
-        }
-        let index = self.focused();
-        let pane = self.panes.get(index)?;
-        if !pane.is_main() {
-            return None;
-        }
-        #[cfg(test)]
-        drawn::record_status(pane.thread().and_then(|thread| {
-            let open = self.cockpit.thread(thread)?;
-            Some(format!(
-                "{:?} {:?}",
-                open.transcript().usage().map(|usage| usage.total_tokens),
-                self.cockpit.account_limits(open.provider())
-            ))
-        }));
-        let items: Vec<AnyElement> = [
-            self.usage_meter(index, cx),
-            self.changed_files_chip(index, cx),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        (!items.is_empty()).then(|| {
-            div()
-                .debug_selector(|| "bar-meters".into())
-                .flex()
-                .flex_shrink(1.)
-                .items_center()
-                .h_full()
-                .min_w_0()
-                .pl(px(crate::theme::BAR_SEG_PAD_X))
-                .overflow_hidden()
-                .children(items)
-                .into_any_element()
-        })
     }
 
     /// A bound action's first keystroke as a keycap reads it, from this
@@ -11291,160 +11198,6 @@ impl CockpitView {
             reader: false,
             size: self.slot_size(thread),
         }
-    }
-
-    /// The status line's `N files`: the files this Thread edited, a quiet
-    /// reading that opens the changed-files card above it. None until the
-    /// Thread has changed a file.
-    fn changed_files_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.panes.get(index)?.thread()?;
-        let files = &self.facts.get(thread)?.changed_files;
-        let count = files.len();
-        if count == 0 {
-            return None;
-        }
-        let added = files.iter().map(|file| file.added).sum();
-        let removed = files.iter().map(|file| file.removed).sum();
-        let was_open = self.changed_files_card == Some(thread);
-        Some(
-            pane::bar_control(("changed-files", thread.get() as usize), cx)
-                .tip("Files changed")
-                .child(pane::files_chip(count, added, removed))
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.focus_pane(index);
-                    view.popover = None;
-                    view.context_menu = None;
-                    view.context_usage = None;
-                    view.session_controls = None;
-                    view.context_checks = None;
-                    view.changed_files_card = (!was_open).then_some(thread);
-                    cx.notify();
-                }))
-                // The card hangs off the word's bounds, so it opens in the
-                // same place however it was pressed.
-                .map(|chip| {
-                    crate::components::on_bounds(
-                        div().relative().flex_shrink_0().child(chip),
-                        self.record_trigger(format!("files-{}", thread.get()).into()),
-                    )
-                })
-                .into_any_element(),
-        )
-    }
-
-    /// The changed-files card: every file this Thread (and its subagents)
-    /// edited, one menu row each with its `+N −N`. A row opens the file in
-    /// the reader beside the Pane and closes the card; the head's `review`
-    /// opens the Review there instead (ADR 0021).
-    fn changed_files_element(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        use crate::theme::*;
-        use gpui::component::scroll::ScrollableElement as _;
-        let thread = self.changed_files_card?;
-        let at = self.card_corner(format!("files-{}", thread.get()), CardFrom::Bar, window)?;
-        let index = self.pane_for(thread)?;
-        let files = self.facts.get(thread)?.changed_files.clone();
-        if files.is_empty() {
-            return None;
-        }
-        let cwd = self.thread_path(thread)?;
-        let preview = self.panes[index].preview.clone();
-        let max_h = (f32::from(at.y) - GRID_PAD)
-            .min(f32::from(window.viewport_size().height) - 2. * GRID_PAD)
-            .max(MENU_ROW_H * 4.);
-        let mut rows = div().flex().flex_col().min_w_0();
-        for (row, file) in files.into_iter().enumerate() {
-            let raw = std::path::PathBuf::from(&file.path);
-            let path = if raw.is_absolute() {
-                raw
-            } else {
-                cwd.join(&raw)
-            };
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            // The directory as the operator knows it: under the Thread's
-            // checkout, from there; elsewhere, whole.
-            let dir = path
-                .parent()
-                .map(|dir| dir.strip_prefix(&cwd).unwrap_or(dir).display().to_string())
-                .filter(|dir| !dir.is_empty())
-                .map(SharedString::from);
-            let host = preview.clone();
-            let title = name.clone();
-            rows = rows.child(
-                pane::changed_file_row(row, name.into(), dir, file.added, file.removed).on_click(
-                    cx.listener(move |view, _: &ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        view.changed_files_card = None;
-                        host.open_document(path.clone(), title.clone(), window, cx);
-                        cx.notify();
-                    }),
-                ),
-            );
-        }
-        // The float grammar (theme WP-E): its head, then a row per file.
-        let card = crate::menu::float()
-            .id("changed-files-card")
-            .debug_selector(|| "changed-files-card".into())
-            .w(px(CHANGED_FILES_CARD_W))
-            .pb(px(HALF_ROW))
-            .child(
-                crate::menu::head("files changed").child(
-                    div()
-                        .id("changed-files-review")
-                        .debug_selector(|| "changed-files-review".into())
-                        .px(px(CH))
-                        .hover_float("changed-files-review")
-                        .child("review")
-                        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            view.changed_files_card = None;
-                            view.open_beside(
-                                beside::Beside::Review(ferrite_reviewr::model::Scope::Uncommitted),
-                                window,
-                                cx,
-                            );
-                        })),
-                ),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .max_h(px(max_h - 2. - FLOAT_ROW_H - HALF_ROW))
-                    .overflow_y_scrollbar()
-                    .child(rows),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                if view.changed_files_card.take().is_some() {
-                    cx.notify();
-                }
-            }));
-        Some(
-            deferred(
-                anchored()
-                    .anchor(gpui::Anchor::BottomRight)
-                    .position(at)
-                    .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(crate::motion::menu_in(
-                        "changed-files-in",
-                        card,
-                        crate::motion::Opens::Up,
-                    )),
-            )
-            .with_priority(2)
-            .into_any_element(),
-        )
     }
 
     fn toggle_tool(
@@ -11821,86 +11574,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The Composer meter opens the latest reported usage on click.
-    /// No reading is invented when the provider has not reported usage.
-    fn usage_meter(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let identity = self.panes[index].identity;
-        let (fraction, provider, key, can_refresh) = match identity {
-            PaneIdentity::Thread(thread) => {
-                let open = self.cockpit.thread(thread)?;
-                let usage = open.transcript().usage()?;
-                let fraction = usage
-                    .context_window
-                    .filter(|window| *window > 0)
-                    .map(|window| usage.total_tokens as f32 / window as f32);
-                (
-                    fraction,
-                    open.provider(),
-                    thread.get().to_string(),
-                    open.supports_control(ferrite_core::ControlKind::RefreshContext),
-                )
-            }
-            // A draft has spent no context yet, and that empty window is
-            // half of what the operator came to check before writing a
-            // prompt. The account windows beside it are already real.
-            PaneIdentity::Draft(draft) => (
-                None,
-                self.panes[index].draft()?.binding.provider().provider,
-                format!("draft-{}", draft.get()),
-                false,
-            ),
-        };
-        // Account-wide and remembered across launches, so the meter is
-        // not blank until this Thread's first turn happens to report.
-        let limits = self.cockpit.account_limits(provider);
-        let was_open = self.context_usage.is_some_and(|shown| shown == identity);
-        let selector = key.clone();
-        Some(
-            div()
-                .id(gpui::ElementId::Name(SharedString::from(format!(
-                    "usage-meter-{key}"
-                ))))
-                .debug_selector(move || format!("usage-meter-{selector}"))
-                .rounded(px(crate::theme::COMPOSER_CHIP_R))
-                .child(pane::usage_meter_body(fraction, limits)?)
-                .map(|meter| {
-                    crate::components::on_bounds(
-                        meter,
-                        self.record_trigger(format!("usage-{identity:?}").into()),
-                    )
-                })
-                .hover_raised(format!("usage-meter-{key}"))
-                .press_raised()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.focus_pane(index);
-                        if !was_open && can_refresh {
-                            let PaneIdentity::Thread(thread) = identity else {
-                                return;
-                            };
-                            if let Some(open) = view.cockpit.thread(thread) {
-                                view.run_session_control(
-                                    thread,
-                                    open.generation(),
-                                    ferrite_core::SessionControl::RefreshContext,
-                                );
-                            }
-                        }
-                        view.popover = None;
-                        view.context_menu = None;
-                        view.session_controls = None;
-                        // Outside-click dismissal runs in capture phase, before this
-                        // toggle. Use the state of the meter that received the press.
-                        view.context_usage = (!was_open).then_some(identity);
-                        cx.notify();
-                    }),
-                )
-                .into_any_element(),
-        )
-    }
-
     /// Records a card trigger's laid-out bounds under `key`.
     fn record_trigger(
         &self,
@@ -11925,15 +11598,8 @@ impl CockpitView {
         window: &mut Window,
     ) -> Option<Point<Pixels>> {
         let up = !matches!(from, CardFrom::Head(_));
-        let corner = match from {
-            CardFrom::Bar => {
-                let trigger = self.float_triggers.borrow().get(key.as_str()).copied();
-                trigger.map(|trigger| self.bar_place().card_corner(trigger, true))
-            }
-            CardFrom::Composer(identity) | CardFrom::Head(identity) => {
-                self.pane_card_corner(identity, up)
-            }
-        };
+        let (CardFrom::Composer(identity) | CardFrom::Head(identity)) = from;
+        let corner = self.pane_card_corner(identity, up);
         let mut waits = self.card_waits.borrow_mut();
         if corner.is_some() {
             waits.remove(&key);
@@ -11968,12 +11634,12 @@ impl CockpitView {
     /// window's margin.
     fn bar_place(&self) -> crate::components::FloatPlace {
         use crate::theme::{BOARD_PAD, GRID_PAD};
-        // The board stops `BOARD_PAD` short of the bar and the window's
-        // right edge.
+        // The board stops `BOARD_PAD` short of the bar and `board_right`
+        // short of the window's right edge.
         let board = self.board.get();
         crate::components::FloatPlace {
             floor: board.y + board.h + BOARD_PAD,
-            limit_right: board.x + board.w + BOARD_PAD - GRID_PAD,
+            limit_right: board.x + board.w + self.board_right() - GRID_PAD,
         }
     }
 
@@ -12616,7 +12282,6 @@ impl CockpitView {
                         cx.stop_propagation();
                         cx.open_url(&url);
                         view.context_checks = None;
-                        view.changed_files_card = None;
                         cx.notify();
                     }),
                 ),
@@ -12647,112 +12312,6 @@ impl CockpitView {
                         "context-checks-in",
                         card,
                         crate::motion::Opens::Down,
-                    )),
-            )
-            .with_priority(2)
-            .into_any_element(),
-        )
-    }
-
-    fn context_usage_element(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let identity = self.context_usage?;
-        let at = self.card_corner(format!("usage-{identity:?}"), CardFrom::Bar, window)?;
-        // The card opens upward from `at`: it grows into the room above,
-        // inside the window's margin, and scrolls past that.
-        let max_h = (f32::from(at.y) - crate::theme::GRID_PAD)
-            .min(f32::from(window.viewport_size().height) - 2. * crate::theme::GRID_PAD)
-            .max(crate::theme::MENU_ROW_H * 4.);
-        let (usage, provider, details, usage_details, last_cost) = match identity {
-            PaneIdentity::Thread(thread) => {
-                let open = self.cockpit.thread(thread)?;
-                (
-                    open.transcript().usage()?,
-                    open.provider(),
-                    open.transcript().context_details(),
-                    open.transcript().usage_details(),
-                    open.transcript().last_cost(),
-                )
-            }
-            // Nothing spent, and no window to divide by until the Provider
-            // reports one: the card says the context is not reported
-            // rather than inventing a maximum for a Thread that does not
-            // exist yet.
-            PaneIdentity::Draft(draft) => (
-                ferrite_core::transcript::Usage {
-                    total_tokens: 0,
-                    context_window: None,
-                },
-                self.panes
-                    .iter()
-                    .find(|pane| pane.identity == PaneIdentity::Draft(draft))?
-                    .draft()?
-                    .binding
-                    .provider()
-                    .provider,
-                None,
-                None,
-                None,
-            ),
-        };
-        let card = crate::components::floating_surface()
-            .id("context-usage-card")
-            .debug_selector(|| "context-usage-card".into())
-            // The shell's own width is the context menu's; this card sizes
-            // to its content plus the shell's padding, or its right edge
-            // is clipped.
-            .w(px(crate::theme::USAGE_CARD_W + 2. * crate::theme::MENU_PAD))
-            .child(pane::context_usage(
-                usage,
-                self.cockpit.account_limits(provider),
-                details,
-                usage_details,
-                last_cost,
-                self.context_usage_expanded,
-                max_h - 2. * crate::theme::FLOAT_PAD,
-                cx.listener(|view, _: &ClickEvent, _, cx| {
-                    view.context_usage_expanded = !view.context_usage_expanded;
-                    cx.notify();
-                }),
-            ))
-            .when_some(
-                match identity {
-                    PaneIdentity::Thread(thread) => self.cockpit.thread(thread).and_then(|open| {
-                        self.session_control_error
-                            .as_ref()
-                            .filter(|(shown, generation, _)| {
-                                *shown == thread && *generation == open.generation()
-                            })
-                            .map(|(_, _, error)| error.clone())
-                    }),
-                    PaneIdentity::Draft(_) => None,
-                },
-                |card, error| card.child(pane::card_error(error).id("session-control-error")),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            .on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                if view.context_usage.take().is_some() {
-                    cx.notify();
-                }
-            }));
-        // The meter sits toward the right of the Composer's row, beside
-        // the model: the card opens upward, its right edge on the meter's.
-        Some(
-            deferred(
-                anchored()
-                    .anchor(gpui::Anchor::BottomRight)
-                    .position(at)
-                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(crate::motion::menu_in(
-                        "context-usage-in",
-                        card,
-                        crate::motion::Opens::Up,
                     )),
             )
             .with_priority(2)
@@ -13027,8 +12586,6 @@ impl CockpitView {
         let chosen = current.and_then(|current| labels.iter().position(|label| *label == current));
         Some((steps, labels, chosen))
     }
-
-    /// The effort chip's click: the root chip's toggle grammar.
 
     /// The effort picker in the Composer slot: the operator's default for
     /// the provider on top (what it resolves to, named), then the ladder
@@ -14514,6 +14071,7 @@ mod tests {
     mod loops_overlay;
     mod machines;
     mod nav_parity;
+    mod panel;
     mod pr;
     #[cfg(unix)]
     mod projects;
@@ -16321,12 +15879,42 @@ mod tests {
         }
     }
 
+    /// The panel's Context tab reads the Session's reported usage: the
+    /// context window's counts and the account windows, following live
+    /// readings and never inventing a window; the foot under every tab
+    /// reads the same counts. With no account window reported, one line
+    /// says so.
     #[gpui::test]
-    fn composer_usage_lines_show_context_and_subscription_windows(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("context-click", 1);
+    fn the_context_tab_shows_context_and_subscription_windows(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("context-tab", 1);
         bind_production_keys(cx);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+        let usage = |total_tokens: u64, context_window: Option<u64>| SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens: total_tokens,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            context_window,
+        };
+        fake.streams.borrow()[0]
+            .send(usage(64_000, Some(200_000)))
+            .unwrap();
+        tick(cx);
+        assert!(
+            cx.debug_bounds("panel-foot-64000").is_some(),
+            "the foot reads the context on the Changes tab"
+        );
+        let tab = cx.debug_bounds("panel-tab-Context").expect("the tab");
+        cx.simulate_click(tab.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert!(cx.debug_bounds("context-usage-current-64000").is_some());
+        assert!(
+            cx.debug_bounds("context-usage-limits-unknown").is_some(),
+            "no account window reported: one line, no bars"
+        );
+        assert!(cx.debug_bounds("context-usage-five-hour-0").is_none());
         // Resets inside their windows: a reset already past reads nothing.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -16345,36 +15933,11 @@ mod tests {
             })
             .unwrap();
         fake.streams.borrow()[0]
-            .send(SessionEvent::TokenUsage {
-                total_tokens: 124_000,
-                input_tokens: 124_000,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                context_window: Some(200_000),
-            })
+            .send(usage(124_000, Some(200_000)))
             .unwrap();
         tick(cx);
-        // `ctx 62%` is text, one run; the account windows are not tight, so
-        // the line names only the context, and no meter mark is drawn.
-        assert!(cx.debug_bounds("usage-readout-62").is_some());
-        assert!(cx.debug_bounds("usage-token-ctx 62%").is_some());
-        assert!(cx.debug_bounds("usage-token-5h 52%").is_none());
-        assert!(cx.debug_bounds("usage-token-wk 8%").is_none());
-        assert!(cx.debug_bounds("usage-line-context-62").is_none());
-        let meter = cx
-            .debug_bounds("usage-meter-1")
-            .expect("the ctx readout is visible on the status line");
-        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
-        cx.run_until_parked();
-        assert!(
-            cx.debug_bounds("context-usage-current-124000").is_some(),
-            "click must reveal current tokens"
-        );
-        assert!(
-            cx.debug_bounds("context-usage-maximum-200000").is_some(),
-            "click must reveal maximum tokens"
-        );
+        assert!(cx.debug_bounds("context-usage-current-124000").is_some());
+        assert!(cx.debug_bounds("context-usage-maximum-200000").is_some());
         assert!(cx.debug_bounds("context-usage-five-hour-52").is_some());
         assert!(cx.debug_bounds("context-usage-weekly-8").is_some());
         assert!(cx
@@ -16387,123 +15950,20 @@ mod tests {
             cx.debug_bounds("context-usage-limits-unknown").is_none(),
             "both windows reported: no note"
         );
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TokenUsage {
-                total_tokens: 31_000,
-                input_tokens: 31_000,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                context_window: None,
-            })
-            .unwrap();
+        fake.streams.borrow()[0].send(usage(31_000, None)).unwrap();
         tick(cx);
         assert!(
             cx.debug_bounds("context-usage-current-31000").is_some(),
-            "open card follows live usage"
+            "the tab follows live usage"
         );
         assert!(
             cx.debug_bounds("context-usage-maximum-unknown").is_some(),
             "unknown limit is not invented"
         );
         assert!(
-            cx.debug_bounds("usage-meter-1").is_none(),
-            "an unknown window reads nothing on the status line, not `ctx —`"
+            cx.debug_bounds("panel-meter").is_none(),
+            "an unknown window draws no meter"
         );
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TokenUsage {
-                total_tokens: 32_000,
-                input_tokens: 32_000,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                context_window: Some(100_000),
-            })
-            .unwrap();
-        tick(cx);
-        assert!(cx.debug_bounds("usage-token-ctx 32%").is_some());
-        let meter = cx
-            .debug_bounds("usage-meter-1")
-            .expect("a known window reads again");
-        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| {
-            assert!(view.context_usage.is_none(), "second meter click closes it")
-        });
-        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| assert!(view.context_usage.is_some()));
-        cx.simulate_mouse_down(
-            gpui::point(px(500.), px(300.)),
-            MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| {
-            assert!(view.context_usage.is_none(), "outside click dismisses")
-        });
-        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
-        cx.run_until_parked();
-        cx.simulate_keystrokes("escape");
-        view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
-    }
-
-    /// A card hangs off its trigger, never the pointer: wherever the meter
-    /// is pressed, the usage card rests at the same place, its foot
-    /// `FLOAT_OFFSET` above the bar and its right edge on the meter's (ADR
-    /// 0014). With no account windows reported, one line says so.
-    #[gpui::test]
-    fn the_usage_card_origin_is_independent_of_the_pointer(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("usage-card-origin", 1);
-        bind_production_keys(cx);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TokenUsage {
-                total_tokens: 64_000,
-                input_tokens: 64_000,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                context_window: Some(200_000),
-            })
-            .unwrap();
-        tick(cx);
-        let meter = cx.debug_bounds("usage-meter-1").expect("the ctx readout");
-        let mut origins = Vec::new();
-        for at in [
-            meter.origin + gpui::point(px(1.), px(1.)),
-            meter.bottom_right() - gpui::point(px(1.), px(1.)),
-        ] {
-            cx.simulate_mouse_down(at, MouseButton::Left, gpui::Modifiers::none());
-            cx.run_until_parked();
-            // Let the entrance settle.
-            cx.executor().advance_clock(Duration::from_millis(300));
-            cx.update(|window, _| window.refresh());
-            cx.run_until_parked();
-            let card = cx
-                .debug_bounds("context-usage-card")
-                .expect("the press opens the card");
-            origins.push(card.origin);
-            let bar = cx.debug_bounds("bottom-bar").unwrap();
-            assert_eq!(
-                card.bottom(),
-                bar.top() - px(crate::theme::FLOAT_OFFSET),
-                "the card rests FLOAT_OFFSET above the bar it opened from"
-            );
-            assert!(
-                card.right() >= meter.right(),
-                "it hangs off its trigger, pulled right only to stay inside the window"
-            );
-            assert!(
-                cx.debug_bounds("context-usage-limits-unknown").is_some(),
-                "no account window reported: one line, no bars"
-            );
-            assert!(cx.debug_bounds("context-usage-five-hour-0").is_none());
-            cx.simulate_keystrokes("escape");
-            view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
-        }
-        assert_eq!(origins[0], origins[1], "the pointer does not move the card");
     }
 
     /// The model picker rests above its chip in the Composer's toolbar
@@ -16543,13 +16003,11 @@ mod tests {
         assert_eq!(row.size.height, px(crate::theme::FLOAT_ROW_H));
     }
 
-    /// The bar's ctx card hangs off its meter, not off the focused Pane
-    /// (ADR 0014): with focus in a Group's right column, the card's right
-    /// edge is the meter's, resting on the bar. A Group Pane's Composer
-    /// carries no chips (SPEC §5.9): the mode, model and effort are Solo's.
+    /// A Group Pane's Composer carries no chips (SPEC §5.9): the mode,
+    /// model and effort are Solo's.
     #[gpui::test]
-    fn the_status_lines_popovers_hang_off_the_bar(cx: &mut TestAppContext) {
-        let (mut core, fake) = cockpit("bar-popovers", 2);
+    fn a_group_panes_composer_carries_no_chips(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("group-no-chips", 2);
         let group = group_all(&mut core);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -16559,37 +16017,8 @@ mod tests {
             view.focus_pane(1);
             cx.notify();
         });
-        fake.streams.borrow()[1]
-            .send(SessionEvent::TokenUsage {
-                total_tokens: 64_000,
-                input_tokens: 64_000,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                context_window: Some(200_000),
-            })
-            .unwrap();
         tick(cx);
-        let settle = |cx: &mut gpui::VisualTestContext| {
-            for _ in 0..3 {
-                cx.executor().advance_clock(Duration::from_millis(300));
-                cx.update(|window, _| window.refresh());
-                cx.run_until_parked();
-            }
-        };
         let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
-        let bar = cx.debug_bounds("bottom-bar").unwrap();
-        let meter = debug_bounds(cx, format!("usage-meter-{}", thread.get()))
-            .expect("the focused Thread's ctx rides the bar");
-        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
-        cx.run_until_parked();
-        settle(cx);
-        let card = cx
-            .debug_bounds("context-usage-card")
-            .expect("the press opens the card");
-        assert_eq!(card.right(), meter.right(), "the card hangs off the meter");
-        assert_eq!(card.bottom(), bar.top() - px(crate::theme::FLOAT_OFFSET));
-        cx.simulate_keystrokes("escape");
         assert!(cx.debug_bounds("composer-toolbar").is_none());
         assert!(debug_bounds(cx, format!("model-picker-{}", thread.get())).is_none());
     }
@@ -16629,65 +16058,6 @@ mod tests {
             rows.bottom() <= chip.top() - px(crate::theme::FLOAT_OFFSET),
             "it rests above its chip: {rows:?} / {chip:?}"
         );
-    }
-
-    /// A draft has spent no context, so its status line reads nothing — no
-    /// `ctx —` — until an account window runs tight; then that window's
-    /// token alone shows, and it opens the same card (#29).
-    #[gpui::test]
-    fn a_draft_pane_shows_usage_only_when_a_window_runs_tight(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("draft-usage", 1);
-        bind_production_keys(cx);
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-        view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
-        tick(cx);
-        let draft = view.read_with(cx, |view, _| {
-            view.panes[view.focused()]
-                .identity
-                .draft()
-                .expect("the draft holds focus")
-        });
-        let key: &'static str =
-            Box::leak(format!("usage-meter-draft-{}", draft.get()).into_boxed_str());
-        assert!(
-            cx.debug_bounds(key).is_none(),
-            "nothing spent, nothing tight: no reading"
-        );
-        assert!(cx.debug_bounds("usage-readout-unknown").is_none());
-
-        fake.streams.borrow()[0]
-            .send(SessionEvent::RateLimits {
-                five_hour: Some(ferrite_core::RateLimitWindow {
-                    used_fraction: 0.91,
-                    resets_at: Some(11),
-                }),
-                weekly: None,
-            })
-            .unwrap();
-        tick(cx);
-        assert!(cx.debug_bounds("usage-token-5h 91%").is_some());
-        let meter = cx
-            .debug_bounds(key)
-            .expect("a tight window rides the draft's status line");
-        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
-        cx.run_until_parked();
-        assert!(cx.debug_bounds("context-usage-current-0").is_some());
-        assert!(
-            cx.debug_bounds("context-usage-maximum-unknown").is_some(),
-            "a draft has no reported window, and none is invented"
-        );
-        assert!(cx.debug_bounds("context-usage-five-hour-91").is_some());
-        assert!(
-            cx.debug_bounds("context-usage-weekly-0").is_none()
-                && cx.debug_bounds("context-usage-limits-unknown").is_none(),
-            "an unreported window is left out, not drawn empty"
-        );
-        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| {
-            assert!(view.context_usage.is_none(), "a second click closes it")
-        });
     }
 
     /// A PR whose checks are mixed — one Actions job failing, one passing,
@@ -18622,82 +17992,6 @@ mod tests {
         );
     }
 
-    /// A card hangs from its Pane's laid-out geometry and waits a frame or
-    /// two for it. One whose Pane has nothing it can hang from — the
-    /// changed-files card the palette opens on an L3 wall tile, which draws
-    /// no Composer to rest above — must not wait for ever, asking the
-    /// display for every frame: after a few it hangs from the board's
-    /// corner instead.
-    #[gpui::test]
-    fn a_card_with_nothing_to_hang_from_stops_asking_for_frames(cx: &mut TestAppContext) {
-        let (mut core, fake) = cockpit("card-corner-wall", 24);
-        let group = group_all(&mut core);
-        core.enter_group(group).unwrap();
-        let thread = core.threads()[0];
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-        let stream = view.read_with(cx, |view, _| view.pane_for(thread).unwrap());
-        for event in [
-            SessionEvent::ToolStarted {
-                id: "edit".into(),
-                name: "Edit".into(),
-                input: serde_json::json!({ "file_path": "src/lib.rs" }),
-            },
-            SessionEvent::ToolCompleted {
-                id: "edit".into(),
-                output: "updated".into(),
-                is_error: false,
-                result: ferrite_core::ToolResult::FileEdit {
-                    path: "src/lib.rs".into(),
-                    hunks: vec![ferrite_core::Hunk {
-                        old_start: 1,
-                        old_lines: 0,
-                        new_start: 1,
-                        new_lines: 1,
-                        lines: vec!["+pub fn changed() {}".into()],
-                        section: None,
-                    }],
-                },
-            },
-        ] {
-            fake.streams.borrow()[stream].send(event).unwrap();
-        }
-        tick(cx);
-        assert_eq!(
-            cx.update(|window, cx| view.read(cx).level_now(window)),
-            Level::Wall,
-            "the premise: wall tiles, no Composer"
-        );
-
-        // What the palette's `show changes` does.
-        view.update(cx, |view, cx| {
-            view.focus_pane(stream);
-            view.changed_files_card = Some(thread);
-            cx.notify();
-        });
-        let mut asked = Vec::new();
-        for _ in 0..8 {
-            asked.push(cx.update(|window, cx| window.simulate_next_frame(cx)));
-            cx.run_until_parked();
-        }
-        assert_eq!(
-            asked.last(),
-            Some(&0),
-            "the open card asks for a frame every frame: {asked:?}"
-        );
-        let card = cx
-            .debug_bounds("changed-files-card")
-            .expect("the card is up");
-        let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
-        assert!(
-            f32::from(card.left()) >= board.x
-                && f32::from(card.right()) <= board.x + board.w
-                && f32::from(card.top()) >= board.y
-                && f32::from(card.bottom()) <= board.y + board.h,
-            "it hangs inside the board: {card:?} in {board:?}"
-        );
-    }
-
     /// #29: the header's binding slot is fed from the branch cache — the
     /// actual git checkout of the Thread's cwd, read at bootstrap and on
     /// refresh, so an agent that switches branches is reported honestly.
@@ -20257,7 +19551,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn edited_files_are_a_status_line_word_and_one_click_away(cx: &mut TestAppContext) {
+    fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
         let (core, fake, workspace) = bound_cockpit("thread-documents", Provider::Claude);
         let document = workspace.join("docs").join("generated.md");
         let source = workspace.join("src").join("generated.rs");
@@ -20266,7 +19560,7 @@ mod tests {
         std::fs::write(&document, "# Generated guide\n").unwrap();
         std::fs::write(&source, "fn generated() {}\n").unwrap();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.simulate_resize(gpui::size(px(1600.), px(900.)));
         let stream = fake.streams.borrow();
         stream[0]
             .send(SessionEvent::ToolStarted {
@@ -20321,27 +19615,21 @@ mod tests {
         drop(stream);
         tick(cx);
 
-        // The files are a reading on the status line, under the prompt —
-        // what the Thread has done, apart from what is being typed.
-        let word = debug_bounds(cx, "changed-files-2".to_string())
-            .expect("the status line counts the edited files");
-        let prompt = debug_bounds(cx, "focused-prompt-editor".to_string()).unwrap();
+        // The files are the panel's Changes tab, beside the Pane: what
+        // the Thread has done, apart from what is being typed.
+        let section = cx
+            .debug_bounds("panel-changes-section")
+            .expect("the panel counts the edited files");
+        let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
         assert!(
-            word.origin.y > prompt.origin.y,
-            "the word sits below the prompt"
+            f32::from(section.left()) >= card.x + card.w,
+            "beside the Pane, not in it"
         );
-        let open_card = |cx: &mut gpui::VisualTestContext| {
-            let word = debug_bounds(cx, "changed-files-2".to_string()).unwrap();
-            cx.simulate_click(word.center(), gpui::Modifiers::none());
-            assert!(
-                debug_bounds(cx, "changed-files-card".to_string()).is_some(),
-                "the word opens the card"
-            );
-        };
-        open_card(cx);
-        let link = debug_bounds(cx, "changed-file-0".to_string())
+        let link = cx
+            .debug_bounds("panel-file-0")
             .expect("the edited Markdown file is listed in its Thread");
         cx.simulate_click(link.center(), gpui::Modifiers::none());
+        tick(cx);
         assert_eq!(
             view.read_with(cx, |view, _| view.panes[0]
                 .preview
@@ -20350,15 +19638,16 @@ mod tests {
             Some(document)
         );
         assert!(
-            debug_bounds(cx, "changed-files-card".to_string()).is_none(),
-            "opening a file closes the card"
+            cx.debug_bounds("panel").is_none(),
+            "the reader beside the Pane takes the panel's place"
         );
         view.update(cx, |view, cx| view.close_reader(0, cx));
         tick(cx);
-        open_card(cx);
-        let code = debug_bounds(cx, "changed-file-1".to_string())
-            .expect("a non-Markdown file is listed too");
+        let code = cx
+            .debug_bounds("panel-file-1")
+            .expect("a non-Markdown file is listed too, the panel back");
         cx.simulate_click(code.center(), gpui::Modifiers::none());
+        tick(cx);
         assert_eq!(
             view.read_with(cx, |view, _| view.panes[0]
                 .preview

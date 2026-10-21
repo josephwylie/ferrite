@@ -5,7 +5,7 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
     let (core, fake) = cockpit("native-context-ui", 1);
     *fake.native_controls.borrow_mut() = true;
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
+    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     for event in [
         SessionEvent::TokenUsage {
             total_tokens: 12000,
@@ -30,8 +30,8 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    let meter = cx.debug_bounds("usage-meter-1").unwrap();
-    cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
+    let tab = cx.debug_bounds("panel-tab-Context").unwrap();
+    cx.simulate_click(tab.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
         fake.controls.borrow().as_slice(),
@@ -47,12 +47,12 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
     assert!(cx.debug_bounds("context-usable-150000").is_some());
     assert!(cx.debug_bounds("context-compaction-140000").is_some());
     assert!(cx.debug_bounds("context-category-0-12000").is_some());
-    cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_click(tab.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
         fake.controls.borrow().len(),
         1,
-        "closing the card must not request another refresh"
+        "pressing the open tab again must not request another refresh"
     );
 }
 
@@ -222,7 +222,7 @@ fn contract_permission_and_mcp_auth_controls_are_native(cx: &mut TestAppContext)
 fn contract_native_accounting_and_cost_are_visible(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("native-usage-details-ui", 1);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1100.), px(1000.)));
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
     for event in [
         SessionEvent::ContextUsage {
             total_tokens: 12000,
@@ -245,8 +245,8 @@ fn contract_native_accounting_and_cost_are_visible(cx: &mut TestAppContext) {
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    let meter = cx.debug_bounds("usage-meter-1").unwrap();
-    cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
+    let tab = cx.debug_bounds("panel-tab-Context").unwrap();
+    cx.simulate_click(tab.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     for selector in [
         "usage-scope-turn",

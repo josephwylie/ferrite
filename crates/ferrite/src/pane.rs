@@ -3490,19 +3490,6 @@ pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
         .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, TEXT_DIM))
 }
 
-/// The bar's last two status items until the panel takes them (SPEC
-/// §5.6, phase 7a): `ctx` and the changed files, each a quiet control —
-/// no ground at rest, `paint::HOVER` under the pointer.
-pub fn bar_control(
-    id: impl Into<gpui::ElementId>,
-    cx: &gpui::App,
-) -> gpui::component::button::Button {
-    chip_button(id, cx)
-        .p_0()
-        .h_auto()
-        .rounded(px(theme::R_CHIP))
-}
-
 /// A quiet control's button: no ground at rest, `paint::HOVER` under the
 /// pointer over the one 150ms blend, `paint::PRESS` pressed at once.
 fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::component::button::Button {
@@ -3514,78 +3501,6 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
         rgb(TEXT_DIM).into(),
         cx,
     )
-}
-
-/// The bar's changed-files item: `3 files` (`1 file`) and the Thread's
-/// whole `+N −N`, the signs in the diff hues — a reading that opens the
-/// changed-files card.
-pub fn files_chip(count: usize, added: usize, removed: usize) -> Div {
-    let word = if count == 1 { "file" } else { "files" };
-    div()
-        .debug_selector(move || format!("changed-files-{count}"))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::CH))
-        .h(px(theme::LH_UI))
-        .px(px(theme::CH))
-        .whitespace_nowrap()
-        .text_size(px(theme::FS_UI))
-        .text_color(rgb(TEXT_DIM))
-        .child(components::tabular(components::cells(format!(
-            "{count} {word}"
-        ))))
-        .child(diff_stat(added, removed))
-}
-
-/// One row of the changed-files card, in the float grammar: the file's
-/// name, its directory muted two cells after it, and its `+N −N` hard
-/// right. The whole row opens the file in the reader.
-pub fn changed_file_row(
-    index: usize,
-    name: SharedString,
-    dir: Option<SharedString>,
-    added: usize,
-    removed: usize,
-) -> gpui::Stateful<Div> {
-    let id = gpui::ElementId::from(SharedString::from(format!("changed-file-{index}")));
-    let key = crate::pointer::hover_key(&id);
-    components::text_ui()
-        .id(id)
-        .debug_selector(move || format!("changed-file-{index}"))
-        .flex()
-        .items_center()
-        .min_w_0()
-        .h(px(theme::FLOAT_ROW_H))
-        .px(px(theme::FLOAT_PAD_X))
-        .whitespace_nowrap()
-        .cursor_pointer()
-        .hover_float(key)
-        .press_float()
-        .child(crate::menu::gutter(false))
-        .child(
-            div()
-                .flex_shrink(1.)
-                .min_w_0()
-                .truncate()
-                .text_color(rgb(theme::LINK_INK))
-                .child(name),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .ml(px(theme::FLOAT_DETAIL_GAP))
-                .truncate()
-                .text_color(rgb(TEXT_DIM))
-                .children(dir),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .ml(px(theme::FLOAT_DETAIL_GAP))
-                .child(diff_stat(added, removed)),
-        )
 }
 
 /// The idle line's placeholder: a couple of words in `TEXT_DIM` after
@@ -4093,40 +4008,6 @@ pub fn questions_of(decision: &Decision) -> Option<&[ferrite_core::questions::Qu
 
 // ------------------------------------------------------------ shared bits
 
-/// `+N −N`: a change's size, the whole `+9` in the diff's green and the
-/// whole `−4` in its red (FL-10), at the grid's own size, one text run so
-/// gpui's per-run pixel rounding cannot widen it. Shared by a tool row's
-/// trail, a changed-strip chip, aggregate instruments and the Composer's
-/// file shelf.
-pub(crate) fn diff_stat(added: usize, removed: usize) -> Div {
-    let added_text = format!("+{added}");
-    let text = format!("{added_text} \u{2212}{removed}");
-    let removed_at = added_text.len() + 1;
-    let run = |range: std::ops::Range<usize>, ink: u32| {
-        (
-            range,
-            HighlightStyle {
-                color: Some(rgb(ink).into()),
-                ..Default::default()
-            },
-        )
-    };
-    let highlights = vec![
-        run(0..added_text.len(), RUNNING),
-        run(removed_at..text.len(), BLOCKED),
-    ];
-    components::tabular(
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .w(px(components::run_width(&text)))
-            .text_size(px(theme::FS_UI))
-            .text_color(rgb(TEXT_DIM))
-            .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
-    )
-}
-
 /// A subscription window's plausible Unix reset instant in compact, useful
 /// units. Providers disagree on the field's units, so only a future value
 /// inside the window's own maximum span is safe to present as a countdown.
@@ -4247,18 +4128,40 @@ fn category_in_window(name: &str) -> bool {
     !name.contains("free") && !name.contains("deferred")
 }
 
-/// The usage meter's detail card: the meter's own windows, in the meter's
-/// own order, each a labelled bar over the reading behind it. Counts are
-/// reported values, never estimates. An account window the provider has
-/// not reported is left out; when it reports neither, one line says so
-/// (`Limits not reported by this provider`) in place of two empty bars.
-/// Each block holds the menu rows' inset (`MENU_ROW_PAD_X`) inside the
-/// floating surface's `FLOAT_PAD`.
+/// What a context bar draws: each category in the window that holds
+/// tokens, its ink and its share of `denominator`, in the provider's order.
+pub(crate) fn context_segments(
+    categories: &[ferrite_core::ContextCategory],
+    denominator: u64,
+) -> Vec<(u32, f32)> {
+    if denominator == 0 {
+        return Vec::new();
+    }
+    categories
+        .iter()
+        .enumerate()
+        .filter(|(_, category)| category_in_window(&category.name) && category.tokens > 0)
+        .map(|(index, category)| {
+            (
+                category_ink(&category.name, index),
+                category.tokens as f32 / denominator as f32,
+            )
+        })
+        .collect()
+}
+
+/// The panel's Context tab (SPEC §5.6): the context window and the
+/// account windows, in that order, each a labelled bar over the reading
+/// behind it. Counts are reported values, never estimates. An account
+/// window the provider has not reported is left out; when it reports
+/// neither, one line says so (`Limits not reported by this provider`) in
+/// place of two empty bars. Each block holds the rows' inset
+/// (`FLOAT_PAD_X`).
 ///
 /// The context bar is stacked by category when the provider says what
 /// fills the window, and its heading is a row that opens the legend: every
-/// category with its ink, its count and its share of the window. The card
-/// grows to `max_h` (the window's room) and scrolls past it.
+/// category with its ink, its count and its share of the window. The tab
+/// grows to `max_h` (the panel's room) and scrolls past it.
 #[allow(clippy::too_many_arguments)]
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
@@ -4272,8 +4175,7 @@ pub fn context_usage(
 ) -> impl IntoElement {
     let maximum = usage.context_window.filter(|limit| *limit > 0);
     let now = ferrite_core::clock::system_time();
-    // One 4px bar, full width: the same track and the same status ink as
-    // the meter that opened the card, at a size a card can afford.
+    // One 4px bar, full width, on the meter's track in its status ink.
     let bar = |fraction: f32| {
         let used = fraction.clamp(0., 1.);
         div()
@@ -4391,17 +4293,7 @@ pub fn context_usage(
     let context_fraction = maximum.map(|maximum| current as f32 / maximum as f32);
     // The bar: stacked by category when the provider says what fills the
     // window, one status-ink fill when it only reports the total.
-    let in_window: Vec<(u32, f32)> = categories
-        .iter()
-        .enumerate()
-        .filter(|(_, category)| category_in_window(&category.name) && category.tokens > 0)
-        .map(|(index, category)| {
-            (
-                category_ink(&category.name, index),
-                share_of(category.tokens),
-            )
-        })
-        .collect();
+    let in_window = context_segments(categories, denominator);
     let context_bar = if !in_window.is_empty() {
         Some(
             div()
@@ -4566,7 +4458,7 @@ pub fn context_usage(
         .id("context-usage-body")
         .flex()
         .flex_col()
-        .w(px(theme::USAGE_CARD_W))
+        .w_full()
         .gap(px(theme::USAGE_CARD_GAP))
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
@@ -4701,41 +4593,6 @@ pub fn usage_ink(fraction: f32) -> u32 {
     }
 }
 
-/// A usage token's ink: `TEXT_DIM` like every value word, the whole
-/// token turning `ATTENTION` once its window runs tight
-/// (`USAGE_TIGHT`), the same step as the card behind it (`usage_ink`).
-pub fn readout_ink(fraction: f32) -> u32 {
-    if fraction >= theme::USAGE_TIGHT {
-        ATTENTION
-    } else {
-        TEXT_DIM
-    }
-}
-
-/// The tokens the status line reads, in order: `ctx 32%` when the context
-/// window is known, then the tightest account window only while it runs
-/// tight (`5h 91%`). Each is one run and one ink.
-fn usage_tokens(
-    context: Option<f32>,
-    limits: ferrite_core::transcript::RateLimits,
-) -> Vec<(String, f32)> {
-    let percent = |fraction: f32| (fraction.clamp(0., 1.) * 100.).round() as u32;
-    let worst = [
-        ("5h", limits.five_hour.map(|limit| limit.used_fraction)),
-        ("wk", limits.weekly.map(|limit| limit.used_fraction)),
-    ]
-    .into_iter()
-    .filter_map(|(name, used)| used.map(|used| (name, used)))
-    .filter(|(_, used)| *used >= theme::USAGE_TIGHT)
-    .max_by(|a, b| a.1.total_cmp(&b.1));
-    context
-        .map(|used| ("ctx", used))
-        .into_iter()
-        .chain(worst)
-        .map(|(name, used)| (format!("{name} {}%", percent(used)), used))
-        .collect()
-}
-
 /// The ctx meter's fill: `RUNNING` while the window has room, `ATTENTION`
 /// from `CTX_METER_WARN`, `BLOCKED` from `CTX_METER_FULL` — the prototype's
 /// green, yellow and red by fill.
@@ -4747,95 +4604,6 @@ pub fn ctx_meter_ink(fraction: f32) -> u32 {
     } else {
         RUNNING
     }
-}
-
-/// The 8-cell, 4px ctx meter on its `paint::LINE2` track, filled to
-/// `fraction` in `ctx_meter_ink`: the prototype's `.meter`, its 1px
-/// radius rounding the track's ends and the fill's start (the track clips
-/// it), set `CTX_METER_DROP` below the row's centre as `vertical-align:
-/// middle` sets it on the text.
-fn ctx_meter(fraction: f32) -> Div {
-    let fraction = fraction.clamp(0., 1.);
-    let radius = px(theme::CTX_METER_R);
-    div()
-        .debug_selector(|| "usage-meter-bar".into())
-        .relative()
-        .top(px(theme::CTX_METER_DROP))
-        .flex_shrink_0()
-        .w(px(theme::CTX_METER_W))
-        .h(px(theme::CTX_METER_H))
-        .rounded(radius)
-        .bg(theme::paint::LINE2)
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(relative(fraction))
-                .rounded_l(radius)
-                .when(fraction >= 1., |fill| fill.rounded(radius))
-                .bg(rgb(ctx_meter_ink(fraction))),
-        )
-}
-
-/// The status line's usage segment (the prototype's `ctx ▬▬▭▭ 32%`): `ctx`,
-/// the 8-cell meter and the percentage, tabular `TEXT_DIM`, then a tight
-/// account window (`5h 91%`, `ATTENTION`) — inside the segment that opens
-/// the usage card. `None` when there is nothing to read: no reading is ever
-/// invented (no `ctx —`).
-pub fn usage_meter_body(
-    context: Option<f32>,
-    limits: ferrite_core::transcript::RateLimits,
-) -> Option<Div> {
-    let tokens = usage_tokens(context, limits);
-    if tokens.is_empty() {
-        return None;
-    }
-    let key = context.map_or_else(
-        || "unknown".to_owned(),
-        |used| ((used.clamp(0., 1.) * 100.).round() as u32).to_string(),
-    );
-    Some(
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .h(px(theme::LH_UI))
-            .px(px(theme::CH))
-            .whitespace_nowrap()
-            .text_size(px(theme::FS_UI))
-            .text_color(rgb(TEXT_DIM))
-            .child(components::tabular(
-                div()
-                    .debug_selector(move || format!("usage-readout-{key}"))
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(theme::CH))
-                    .whitespace_nowrap()
-                    .children(tokens.into_iter().map(|(token, used)| {
-                        let selector = token.clone();
-                        let reading = div()
-                            .debug_selector(move || format!("usage-token-{selector}"))
-                            .flex()
-                            .items_center()
-                            .gap(px(theme::CH));
-                        // The context window reads as a meter between its name
-                        // and its share; an account window as plain words.
-                        match token.strip_prefix("ctx ") {
-                            Some(share) => reading
-                                .child(components::cells("ctx"))
-                                .child(ctx_meter(used))
-                                .child(components::cells(share.to_owned())),
-                            None => reading
-                                .text_color(rgb(readout_ink(used)))
-                                .child(components::cells(token)),
-                        }
-                    })),
-            )),
-    )
 }
 
 /// Which checkout a Thread works in — a worktree's own name, or "main" for
@@ -10695,43 +10463,9 @@ mod tests {
         assert_eq!(usage_ink(0.9), ATTENTION);
         assert_eq!(usage_ink(0.95), ATTENTION);
         assert_eq!(usage_ink(1.0), ATTENTION);
-        // The status line's readout: muted, then attention at 80% as a
-        // whole token, and never blocked.
         assert_eq!(theme::USAGE_TIGHT, 0.80);
-        assert_eq!(readout_ink(0.79), TEXT_DIM);
-        assert_eq!(readout_ink(theme::USAGE_TIGHT), ATTENTION);
-        assert_eq!(readout_ink(1.0), ATTENTION);
     }
 
-    /// `ctx 32%` is text: one token per window, no reading invented where
-    /// none was reported, and an account window only while it runs tight.
-    #[test]
-    fn the_usage_readout_is_one_run_per_window() {
-        use ferrite_core::transcript::RateLimits;
-        use ferrite_core::RateLimitWindow;
-        let quiet = RateLimits::default();
-        let tokens = |context, limits| {
-            usage_tokens(context, limits)
-                .into_iter()
-                .map(|(token, _)| token)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(tokens(Some(0.32), quiet), ["ctx 32%"]);
-        assert!(tokens(None, quiet).is_empty(), "no `ctx —`");
-        assert!(usage_meter_body(None, quiet).is_none());
-        let tight = RateLimits {
-            five_hour: Some(RateLimitWindow {
-                used_fraction: 0.91,
-                resets_at: None,
-            }),
-            weekly: Some(RateLimitWindow {
-                used_fraction: 0.85,
-                resets_at: None,
-            }),
-        };
-        assert_eq!(tokens(Some(0.52), tight), ["ctx 52%", "5h 91%"]);
-        assert_eq!(tokens(None, tight), ["5h 91%"]);
-    }
     // (end WP-D)
 
     // ---- WP-E tests (append above the end line)

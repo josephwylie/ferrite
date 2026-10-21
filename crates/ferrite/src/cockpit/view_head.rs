@@ -28,11 +28,13 @@ impl CockpitView {
             View::Solo => (self.solo_head(cx)?, theme::VIEW_HEAD_PAD_R),
             View::Group(group) => (self.group_view_head(group, cx)?, 0.),
         };
-        // Windows draws its caption buttons at the row's right end.
-        let right = if crate::titlebar::CUSTOM {
+        // The head stops where the board does: at the panel's left edge
+        // while it shows (its head holds the row's right end, caption
+        // buttons and all), else before Windows' caption buttons.
+        let right = if crate::titlebar::CUSTOM && self.panel_thread().is_none() {
             3. * theme::CAPTION_W
         } else {
-            theme::BOARD_PAD
+            self.board_right()
         };
         Some(
             div()
@@ -119,7 +121,7 @@ impl CockpitView {
 
     /// The branch chip: `branch` icon, the branch, and the Thread's summed
     /// diffstat in Geist Mono, on `RAISED`. A click opens the panel's
-    /// Changes tab (`show_panel_changes`).
+    /// Changes tab, or hides the panel already on it (`panel_changes_door`).
     fn branch_chip(
         &self,
         thread: ThreadId,
@@ -177,19 +179,9 @@ impl CockpitView {
         control(
             chip.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                view.show_panel_changes(thread, cx);
+                view.panel_changes_door(thread, cx);
             })),
         )
-    }
-
-    /// The branch chip's act (SPEC §5.2): open the right panel on its
-    /// Changes tab, or toggle the panel when it already shows Changes.
-    ///
-    /// SEAM for phase 7a: the panel does not exist yet, so this does
-    /// nothing. When the panel lands, this body becomes "if the panel is
-    /// shown on Changes, hide it; else show it on Changes" for `thread`.
-    pub(super) fn show_panel_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let _ = (thread, cx);
     }
 
     /// A Group: its title, `<project> · N threads`, a spacer, and `New

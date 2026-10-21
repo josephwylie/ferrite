@@ -514,8 +514,8 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
     }
 }
 
-/// F-14: a reader opens beside the Solo Pane at a line — half and half —
-/// and closing it gives the Pane its board back.
+/// F-14: a reader opens beside the Solo Pane at a line — half and half,
+/// the panel giving way — and closing it gives the Pane its board back.
 #[gpui::test]
 fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
     let dir = scratch("frame-reader");
@@ -553,9 +553,12 @@ fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
         )
     });
     assert_eq!(line, Some(3));
+    // The reader takes the panel's place (SPEC §5.6): the board it halves
+    // runs to the window's gutter.
+    let board = whole + crate::theme::PANEL_W - crate::theme::BOARD_PAD;
     assert!(
-        (half - (whole - crate::theme::BOARD_SEAM) / 2.0).abs() <= 1.0,
-        "half and half: {half} of {whole}"
+        (half - (board - crate::theme::BOARD_SEAM) / 2.0).abs() <= 1.0,
+        "half and half: {half} of {board}"
     );
     assert!(cx.debug_bounds("reader-head").is_some());
     view.update(cx, |view, cx| view.close_reader(0, cx));
@@ -636,11 +639,12 @@ fn dragging_the_vertical_seam_moves_both_rows(cx: &mut TestAppContext) {
 }
 
 /// SPEC §4: Solo's card sits on the frame flush right of the nav, under
-/// the 46px head row, `BOARD_PAD` short of the window's right edge and of
-/// the 30px bar — the mockups' frame at their 1600×960.
+/// the 46px head row, `BOARD_PAD` short of the 30px bar and flush with the
+/// panel's column (§5.6), which runs from the window's top to the bar —
+/// the mockups' frame at their 1600×960.
 #[gpui::test]
 fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
-    use crate::theme::{BOARD_PAD, STATUS_BAR_H, WIN_CHROME_H};
+    use crate::theme::{BOARD_PAD, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
     let (core, _fake) = cockpit("frame-solo-card", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -649,9 +653,17 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
     let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
     let card = rects[0].1;
     assert_eq!((card.x, card.y), (nav::WIDTH, WIN_CHROME_H));
-    assert_eq!(card.x + card.w, 1600. - BOARD_PAD);
+    assert_eq!(card.x + card.w, 1600. - PANEL_W);
     assert_eq!(card.y + card.h, 960. - STATUS_BAR_H - BOARD_PAD);
-    assert_eq!((card.x, card.y, card.w, card.h), (264., 46., 1328., 876.));
+    assert_eq!((card.x, card.y, card.w, card.h), (264., 46., 1032., 876.));
+    let panel = cx.debug_bounds("panel").expect("the panel");
+    assert_eq!(
+        panel,
+        gpui::Bounds::new(
+            gpui::point(px(1296.), px(0.)),
+            gpui::size(px(PANEL_W), px(960. - STATUS_BAR_H))
+        )
+    );
     let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
     let root = bounds(cx, format!("pane-root-{key}"));
     assert!((root.left() - px(card.x)).abs() < px(1.) && (root.top() - px(card.y)).abs() < px(1.));

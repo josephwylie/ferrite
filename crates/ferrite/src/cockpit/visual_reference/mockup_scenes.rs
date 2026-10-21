@@ -12,6 +12,7 @@ use ferrite_core::workspace::BranchStatus;
 use ferrite_core::ThreadId;
 use gpui::{Context, Window};
 
+use super::super::panel::PanelTab;
 use super::{CockpitView, HeldLoops, Home, Scene, Setup};
 use crate::demo::mockup::{self, Look, Pr, World, CAPTURE};
 use crate::demo::world::{self, Clock, Fixture};
@@ -57,13 +58,6 @@ const SHOTS: [(&str, Shot); 7] = [
 /// Whether `state` is one of the refresh scenes.
 pub(super) fn handles(state: &str) -> bool {
     SHOTS.iter().any(|(name, _)| *name == state)
-}
-
-/// The Solo panel's tab a scene opens (SPEC §5.6).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PanelTab {
-    Changes,
-    Pr,
 }
 
 impl Shot {
@@ -220,16 +214,13 @@ fn prepare(
 
 /// The Solo panel on `tab` for `thread` (SPEC §5.6): the Changes tab, or
 /// the PR tab reading the forge's fixture (`Cockpit::fixture_forge`, which
-/// answers `review_pull_request` for the crash fix's worktree).
-///
-/// The panel lands in phase 7a (Changes) and 7c (PR); until then this
-/// opens nothing, and the Solo, Changes and PR scenes draw alike. The
-/// phase that builds the panel fills this in with its own act.
+/// answers `review_pull_request` for the crash fix's worktree; phase 7c
+/// draws what it reads).
 fn open_panel(
     view: &mut CockpitView,
     thread: ThreadId,
     tab: PanelTab,
     cx: &mut Context<CockpitView>,
 ) {
-    let _ = (view, thread, tab, cx);
+    view.open_panel_tab(thread, tab, cx);
 }
