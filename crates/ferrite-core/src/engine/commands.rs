@@ -29,9 +29,14 @@ fn unknown() -> WireError {
 
 impl Engine {
     pub fn execute(&mut self, op: &Op) -> Executed {
-        // An act on a Thread reads what the Engine holds of it.
-        if let Some(thread) = op.thread() {
-            self.hold(thread);
+        // The acts that read a let-go Thread's transcript read it back first;
+        // starting its agent does so itself (`start_session`). A window's
+        // routine acts (its worktree listing, the Subject it shows) never do.
+        if let Op::SetProvider { thread, .. }
+        | Op::Park { thread }
+        | Op::LoadSubject { thread, .. } = op
+        {
+            self.hold(*thread);
         }
         match op {
             Op::Open {

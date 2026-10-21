@@ -579,6 +579,9 @@ struct Thread {
     /// window watches is let go to its digest, and read back from its log
     /// when used (ADR 0032).
     held: bool,
+    /// When it was last read back: it is not let go again within
+    /// `HOLD_AT_LEAST`.
+    read_back_at: Option<Instant>,
     native_queue: queue::Queue,
     /// An interrupt was sent while prompts were mirrored: when the turn
     /// ends, everything held goes out as one prompt — Escape means "stop,
@@ -683,6 +686,7 @@ impl Thread {
             settled_at: None,
             scheduled_work: false,
             held: true,
+            read_back_at: None,
             native_queue: queue::Queue::open(dir.join("queue.json")),
             resend_held_on_turn_end: false,
             prompt_history: PromptHistory::new(Vec::new()),
@@ -758,6 +762,10 @@ struct Published {
     /// Inputs applied since the digest last refolded.
     digest_owed: bool,
 }
+
+/// How long a Thread read back from its log is held before it may be let
+/// go again: whatever reads it often reads its log once a minute at most.
+const HOLD_AT_LEAST: Duration = Duration::from_secs(60);
 
 /// How often a streaming Thread's digest may refold: four times a second.
 /// The fold walks every Block the Thread holds (and its Subagents', for the
@@ -4627,6 +4635,7 @@ impl Engine {
         let Some(watched) = &self.watched else {
             return;
         };
+        let now = crate::clock::instant();
         for (id, thread) in &mut self.threads {
             let current = self
                 .published
@@ -4638,6 +4647,9 @@ impl Engine {
                 && thread.session.is_none()
                 && thread.replacement.is_none()
                 && thread.at_rest()
+                && thread
+                    .read_back_at
+                    .is_none_or(|at| now.saturating_duration_since(at) >= HOLD_AT_LEAST)
             {
                 thread.activity.forget();
                 thread.history.clear();
@@ -4687,6 +4699,7 @@ impl Engine {
         });
         state.activity.settle();
         state.held = true;
+        state.read_back_at = Some(crate::clock::instant());
     }
 
     /// Refold each digest its Thread's inputs left owing: at once when Main
