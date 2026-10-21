@@ -4399,3 +4399,111 @@ fn a_thread_let_go_reads_back_whole_for_the_api_and_a_watch() {
         "the watch carries what the last agent announced"
     );
 }
+
+/// A Thread let go to its digest, as
+/// `a_thread_nobody_uses_holds_only_its_digest_until_used` leaves one:
+/// the Engine, the Thread, what its transcript reads and the clock.
+fn let_go(
+    name: &str,
+) -> (
+    Engine,
+    ThreadId,
+    Vec<String>,
+    crate::clock::ThreadFixture,
+    Receiver<Sender<SessionEvent>>,
+) {
+    let (spawner, providers) = spawn();
+    let (mut engine, thread, agent, clock) = at_rest(name, spawner, &providers);
+    agent.send(text("All done here.\n\n")).unwrap();
+    agent
+        .send(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    pump_engine_until(&mut engine, "the turn never ended", |engine| {
+        engine.thread(thread).unwrap().transcript().turn_completed()
+    });
+    let before = said_in(&engine, thread);
+    engine.set_watched(BTreeSet::new());
+    clock.advance(TEN_MINUTES);
+    engine.pump();
+    engine.take_messages();
+    assert!(said_in(&engine, thread).is_empty(), "let go");
+    (engine, thread, before, clock, providers)
+}
+
+fn said_in(engine: &Engine, thread: ThreadId) -> Vec<String> {
+    engine
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .map(|block| format!("{:?}", block.body))
+        .collect()
+}
+
+/// What a window says of a Thread on every tick (its worktree listing, the
+/// Subject it shows) never reads a let-go Thread's log back: only an act
+/// that reads its transcript does (ADR 0032).
+#[test]
+fn a_windows_routine_acts_leave_a_let_go_thread_let_go() {
+    let (mut engine, thread, _, _clock, _providers) = let_go("routine-acts");
+
+    engine
+        .execute(&Op::WorktreesListed {
+            thread,
+            listed: Vec::new(),
+            age_ms: 0,
+        })
+        .unwrap();
+    engine
+        .execute(&Op::ShowSubject {
+            thread,
+            subject: protocol::WireSubject::Main,
+        })
+        .unwrap();
+    engine.take_messages();
+
+    assert!(said_in(&engine, thread).is_empty(), "still let go");
+}
+
+/// Read back, a Thread stays held a minute before it may be let go again,
+/// so whatever reads it often does not read its log each time.
+#[test]
+fn a_thread_read_back_stays_held_a_minute() {
+    let (mut engine, thread, before, clock, _providers) = let_go("held-a-minute");
+
+    engine.set_watched([thread].into());
+    engine.set_watched(BTreeSet::new());
+    engine.pump();
+    engine.take_messages();
+    assert_eq!(said_in(&engine, thread), before, "held");
+    clock.advance(Duration::from_secs(59));
+    engine.pump();
+    engine.take_messages();
+    assert_eq!(said_in(&engine, thread), before, "still held");
+    clock.advance(Duration::from_secs(1));
+    engine.pump();
+    engine.take_messages();
+    assert!(said_in(&engine, thread).is_empty(), "let go again");
+}
+
+/// An act that writes to a let-go Thread reads it back first, so what it
+/// writes lands on its history and stays: an effort change says so.
+#[test]
+fn an_act_that_writes_reads_a_let_go_thread_back_first() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("writes-read-back");
+
+    engine
+        .execute(&Op::SetEffort {
+            thread,
+            effort: Some("high".into()),
+        })
+        .unwrap();
+
+    let said = said_in(&engine, thread);
+    assert_eq!(said[..before.len()], before[..], "on its history");
+    assert!(said.len() > before.len(), "{said:?}");
+}
