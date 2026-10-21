@@ -34,6 +34,9 @@ pub(crate) struct Mirror {
     /// Whether the Activity holds the stream: what a view reads first, the
     /// digest standing in until it does.
     loaded: bool,
+    /// A history on its way, held until the whole has arrived: the Pane
+    /// draws it at once, never its oldest pieces first.
+    arriving: Option<Vec<WireInput>>,
     /// Server identities survive a history rebuild; local replay counters do not.
     decision_handles: HashMap<String, DecisionHandle>,
 }
@@ -170,8 +173,16 @@ impl Mirror {
             digest: None,
             watched: true,
             loaded: false,
+            arriving: None,
             decision_handles: HashMap::new(),
         }
+    }
+
+    /// An empty Activity: what a history rebuilds from, and what a window
+    /// holds of a Thread it lets go.
+    fn start_over(&mut self) {
+        self.activity = Activity::default();
+        self.generation = 0;
     }
 
     fn apply(&mut self, input: ActivityInput, update: &mut PaneUpdate) {
@@ -242,22 +253,29 @@ impl Mirrors {
             } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
                 if after == 0 {
-                    mirror.activity = Activity::default();
-                    mirror.generation = 0;
-                    self.restarted.push(thread);
+                    mirror.arriving = Some(Vec::new());
                 }
-                let update = updated(&mut self.updates, thread);
-                for input in &inputs {
-                    mirror.apply_wire(input, boot, update);
+                // A piece that does not follow the one held is the rest of
+                // a history this window let go: it goes, and its end with it.
+                match &mut mirror.arriving {
+                    Some(arriving) if arriving.len() as u64 == after => arriving.extend(inputs),
+                    _ => mirror.arriving = None,
                 }
             }
             ServerMessage::HistoryEnd { thread, seq, live } => {
                 let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
-                mirror.seq = seq;
-                mirror.loaded = true;
-                let update = updated(&mut self.updates, thread);
-                for input in &live {
-                    mirror.apply_wire(input, crate::clock::instant(), update);
+                if let Some(history) = mirror.arriving.take() {
+                    mirror.start_over();
+                    self.restarted.push(thread);
+                    mirror.seq = seq;
+                    mirror.loaded = true;
+                    let update = updated(&mut self.updates, thread);
+                    for input in &history {
+                        mirror.apply_wire(input, boot, update);
+                    }
+                    for input in &live {
+                        mirror.apply_wire(input, crate::clock::instant(), update);
+                    }
                 }
             }
             ServerMessage::Input {
@@ -422,10 +440,10 @@ impl Mirrors {
         for (&thread, mirror) in &mut self.threads {
             let wanted = watched.contains(&thread);
             if mirror.watched && !wanted {
-                mirror.activity = Activity::default();
-                mirror.generation = 0;
+                mirror.start_over();
                 mirror.seq = 0;
                 mirror.loaded = false;
+                mirror.arriving = None;
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             mirror.watched = wanted;
@@ -751,5 +769,97 @@ impl<'a> ThreadView<'a> {
     /// The live Session's permission mode (#23): the meta row's mode chip.
     pub fn permission_mode(&self) -> Option<&'a str> {
         self.facts.permission_mode.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::Mirrors;
+    use crate::activity::ActivityInput;
+    use crate::protocol::{self, Outgoing, ServerMessage, WireInput};
+    use crate::transcript::Input;
+    use crate::{SessionEvent, ThreadId};
+
+    fn said(text: &str) -> WireInput {
+        let input = ActivityInput::Main {
+            input: Input::Event(SessionEvent::TextDelta {
+                text: format!("{text}\n\n"),
+            }),
+            at: Instant::now(),
+        };
+        match protocol::outgoing(&input, None) {
+            Outgoing::Input(input) => input,
+            _ => unreachable!("a text delta crosses as an input"),
+        }
+    }
+
+    fn shows(mirrors: &Mirrors, thread: ThreadId, text: &str) -> bool {
+        mirrors.threads[&thread]
+            .activity
+            .view()
+            .main()
+            .transcript()
+            .blocks()
+            .iter()
+            .any(|block| format!("{:?}", block.body).contains(text))
+    }
+
+    /// A window that lets a Thread go while its history crosses, and
+    /// watches it again, draws none of the history it let go: its last
+    /// pieces and end arrive ahead of the new history, and are dropped.
+    #[test]
+    fn a_history_let_go_while_crossing_draws_nothing() {
+        let thread = ThreadId::new(1);
+        let boot = Instant::now();
+        let mut mirrors = Mirrors::default();
+        mirrors.receive(
+            ServerMessage::History {
+                thread,
+                after: 0,
+                inputs: vec![said("oldest")],
+            },
+            boot,
+        );
+        mirrors.watch_only(&[]);
+        mirrors.watch_only(&[thread]);
+        mirrors.receive(
+            ServerMessage::History {
+                thread,
+                after: 1,
+                inputs: vec![said("tail of the old")],
+            },
+            boot,
+        );
+        mirrors.receive(
+            ServerMessage::HistoryEnd {
+                thread,
+                seq: 2,
+                live: Vec::new(),
+            },
+            boot,
+        );
+        assert!(!shows(&mirrors, thread, "tail of the old"));
+
+        for (after, text) in [(0, "oldest"), (1, "latest")] {
+            mirrors.receive(
+                ServerMessage::History {
+                    thread,
+                    after,
+                    inputs: vec![said(text)],
+                },
+                boot,
+            );
+        }
+        mirrors.receive(
+            ServerMessage::HistoryEnd {
+                thread,
+                seq: 2,
+                live: Vec::new(),
+            },
+            boot,
+        );
+        assert!(shows(&mirrors, thread, "oldest") && shows(&mirrors, thread, "latest"));
     }
 }
