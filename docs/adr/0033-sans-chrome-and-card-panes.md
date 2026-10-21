@@ -59,20 +59,25 @@ controls. A thin bar along the bottom shows usage.
 
   A row may now spend two hues: its state and the diffstat's `+`/`−`. This
   bends rule 5's "one colour" for that number pair only.
-- **Search is a visible door.** The nav opens with `Search` (the
-  palette, its chord read from the keymap), `Needs you` (the blocked
-  filter, with its count) and `Parked`. This reverses ADR 0014's removal
-  of the `⌘K` door, for the nav only.
+- **The nav opens with its views.** `Search` (the palette, its chord read
+  from the keymap), `Needs you` (blocked Threads oldest first, then the
+  bell's Notices, under a count), `Parked`, and `Tasks` when Projects is
+  live. This reverses ADR 0014's removal of the `⌘K` door, for the nav
+  only. The Needs-you *view* is not the strip ADR 0015 removed: the tree
+  stays free of duplicated rows.
 - **The Composer holds the session controls.** The permission mode,
-  model and effort are chips in the Composer's toolbar. This supersedes
-  ADR 0014's "focused Pane's status line" in the bar. There is still one
-  bar, and nothing per Pane stacks on it. A Group Pane's compact Composer
-  shows the input only.
+  model and effort are chips in the Composer's toolbar, with a Draft's
+  setup chips beside them. This supersedes ADR 0014's "focused Pane's
+  status line" in the bar. There is still one bar, and nothing per Pane
+  stacks on it. A Group Pane's compact Composer shows the input only.
+  Chip labels are sentence case, which amends rule 11's "values
+  lowercase" for chips.
 - **A right panel for Solo.** `Changes` (branch, files, hunks) and
   `Context` (the `ctx` breakdown) replace the bar's changed-files and
-  `ctx` popovers. The panel is toggled, and it is never shown on a Group.
-  The Review (ADR 0021) still takes the reader slot. The panel's `Review`
-  action opens it there.
+  `ctx` popovers. The panel is a fixed column outside the board, toggled,
+  and its state is persisted. It is never shown on a Group or beside an
+  open Beside slot. The Review (ADR 0021) still takes the reader slot,
+  and the panel's `Review changes` opens it there.
 - **The subagent strip shows live work.** The strip shows `Main`, one tab
   per running Subagent, and an `N done` menu for the rest. Finished
   Subagents leave the strip. This amends ADR 0002's overflow rule.
@@ -80,15 +85,22 @@ controls. A thin bar along the bottom shows usage.
   Right: `N need you`, weekly usage per provider, free disk when low, and
   the clock. The other items move:
   - the sidebar toggle goes to the nav head;
-  - the bell's Decisions go to `Needs you`;
-  - `ferrite` goes to the nav foot;
+  - the bell goes to `Needs you`;
+  - the board door goes to `Tasks`;
+  - the gear and `ferrite` go to the nav foot;
   - `?` goes to the palette and the app menu.
 
   This supersedes `theme.rs` rule 7's "the bottom bar shows no counts".
+  ⌘1–9 still focus the shown board's Panes. Views switch from the bar,
+  ⌘G or the nav.
+- **Solo gets a head.** The Thread title, its Project, a branch chip with
+  the agent-edit diffstat, and one primary action: `View PR #N` (the
+  existing `OpenPrInBrowser`) or `Create PR` (a new act running
+  `gh pr create --web`).
 - **Group Pane heads speak.** A Group Pane's head shows the state glyph,
   the title, a state word (elapsed time, `needs you`, `failed`, or
-  `done` while unseen), the provider logo, and a button to open it in
-  Solo. A blocked Pane's ring is yellow at 35%. The focused Pane's ring
+  `done` while unseen), the provider logo, and a button that fills the
+  board with it (`ToggleFullscreen`). A blocked Pane's ring is yellow at 35%. The focused Pane's ring
   is white at 22%. This supersedes rule 7's "a Pane head carries no state
   word" for Group Panes.
 
@@ -116,7 +128,11 @@ controls. A thin bar along the bottom shows usage.
 - The glyph-coverage test (rule 10) gains a Geist case for the chrome
   glyphs (`⌘ ⇧ ↑ ↓ ·`).
 - The frame wakes for the bar's minute (clock, free disk) and the
-  spinners, as before. Free disk rides the minute.
+  spinners, as before. Free disk is read off the UI thread on that minute.
+- The Composer's block caret becomes a 2px bar, since a mono cell no
+  longer sizes it.
+- `GRID_GAP` and `BOARD_SEAM` become 8px. The seam's grab band sits in
+  the gutter, and the Layout's split tree is unchanged.
 - Supersedes `theme.rs` rules 1, 2, 6 and 7 as stated above. Amends ADR
   0014 (bar contents, `⌘K`, popovers), ADR 0015 (done face, the folded
   rail's width becomes 52px), ADR 0002 (strip overflow) and ADR 0021 (the
