@@ -13,7 +13,9 @@ How to use this document:
 
 | Mockup | Files | Size |
 | --- | --- | --- |
-| Solo view (one Thread) | [`mockups/solo.png`](mockups/solo.png) · [`.html`](mockups/solo.html) | 1600×960 |
+| Solo view (one Thread), panel on its PR tab | [`mockups/solo.png`](mockups/solo.png) · [`.html`](mockups/solo.html) | 1600×960 |
+| Solo view, panel on its Changes tab | [`mockups/solo-changes.png`](mockups/solo-changes.png) · [`.html`](mockups/solo-changes.html) | 1600×960 |
+| PR tab states (failing, merged, no PR) | [`mockups/pr-states.png`](mockups/pr-states.png) · [`.html`](mockups/pr-states.html) | 1040×980 |
 | Group view (four Panes) | [`mockups/group.png`](mockups/group.png) · [`.html`](mockups/group.html) | 1600×960 |
 | Command search (palette) | [`mockups/command-search.png`](mockups/command-search.png) · [`.html`](mockups/command-search.html) | 800×560 |
 | Before: today's UI, for comparison | [`mockups/before.png`](mockups/before.png) · [`.html`](mockups/before.html) | 1600×960 |
@@ -47,13 +49,13 @@ Everything *around* the transcript becomes calmer and more modern:
 - **No accent.** Steel blue is retired, and hue is kept for state only.
 - **Two-line sidebar.** The nav becomes a two-line Thread list with
   branch, diffstat and state reason.
-- **A real Pane head.** The Pane gains a head: title, branch chip and
-  PR action in Solo; a tab strip of Main plus live Subagents.
+- **A real Pane head.** The Pane gains a head: title and branch chip in
+  Solo; a tab strip of Main plus live Subagents.
 - **Composer box.** The Composer becomes a rounded box that holds the
   permission mode, model and effort, so the bar no longer carries a
   status line.
-- **Changes panel.** A right panel in Solo shows the Thread's changes and
-  context.
+- **Right panel.** A right panel in Solo shows the Thread's changes, its
+  pull request (checks, merge state, review comments) and its context.
 - **A calmer bar.** The bar keeps only views and vitals.
 - **Group cards.** A Group is a grid of the same cards, each with a
   speaking head.
@@ -124,7 +126,7 @@ over `FRAME`.
 | `DECISION` | `#1f1f1f` | none | Decision box |
 | `SUNKEN` | `#161616` | `BAND` | Command well in a Decision; palette scrim base |
 | `SEND` | `#3a3a3a` | none | Send button |
-| `PRIMARY` / `ON_PRIMARY` | `#f2f2f2` / `#161616` | `ACCENT` / `ON_ACCENT` | The one primary button in a view |
+| `PRIMARY` / `ON_PRIMARY` | `#f2f2f2` / `#161616` | `ACCENT` / `ON_ACCENT` | Primary buttons in dialogs and settings (`primary_button`) |
 | `FLOAT` | keep `#2a2a2c` | `FLOAT` | Menus, popovers: now radius 8 with a `HAIRLINE_STRONG` ring |
 
 ### 3.2 Hairlines (white at an opacity, over whatever is below)
@@ -260,7 +262,7 @@ spinners, `●`, `❯`.
 
 ```
 ┌──────────────┬──────────────────────────────────────────┬─────────────┐
-│ Nav 264      │ View head 46                             │ Panel 272   │
+│ Nav 264      │ View head 46                             │ Panel 304   │
 │  head 46     ├──────────────────────────────────────────┤ (Solo,      │
 │  views       │ Pane card (radius 10)                    │  toggled)   │
 │  projects    │  tab strip 38                            │             │
@@ -435,18 +437,8 @@ Thread). Left to right:
   `changed_files` diffstat in Geist Mono 12. Clicking it opens the
   panel's Changes tab, or toggles the panel if it is already on Changes.
   The chip is hidden for a Thread with no Workspace binding.
-- **PR action.** Height 28, radius 7, `PRIMARY` with `ON_PRIMARY`
-  12.5/500:
-  - `View PR #N` when `facts.pr` has a PR. It runs the existing
-    `OpenPrInBrowser`.
-  - `Create PR` when the branch isn't the default, is ahead of its base,
-    and has no PR. This is a **new** act (§8): run
-    `gh pr create --web --head <branch>` in the Thread's checkout, off the
-    UI thread.
-  - Hidden otherwise.
-
-  If `gh` is missing, hide `Create PR`. `PrWatch` already learns whether
-  `gh` works.
+There is no PR button in the head. The pull request lives in the
+panel's PR tab (§5.6.2), and Ferrite does not create pull requests.
 
 **Group:**
 - the Group title in 13.5/600 `TEXT_STRONG`;
@@ -595,14 +587,19 @@ to the panel (§5.6).
 
 ### 5.6 Right panel (Solo, new)
 
-The panel is a fixed column, 272 wide, padding 0 10 8 8, on `FRAME`,
+The panel is a fixed column, 304 wide, padding 0 10 8 8, on `FRAME`,
 with no border. It is not the Beside slot: the Reader, Review and Thread
 still open beside the Pane inside the board (ADR 0021).
 
-- **Head (46, in the head row).** Two tabs: `Changes N` and `Context`.
+- **Head (46, in the head row).** Three tabs: `Changes N`, `PR #N` and
+  `Context`.
   - Tabs are 28 high, radius 7, 12.5/500. The active tab is `SELECTED`
-    with `TEXT_STRONG`; the inactive tab is `TEXT_MUTED`.
-  - The `N` is the changed-file count, in 12/400 `TEXT_DIM`.
+    with `TEXT_STRONG`; inactive tabs are `TEXT_MUTED`.
+  - `Changes` carries the changed-file count in 12/400 `TEXT_DIM`.
+  - `PR` carries the PR number in Geist Mono 11.5 `TEXT_DIM` when the
+    branch has one, and nothing otherwise.
+  - The panel remembers the last tab per Thread. A new Thread opens on
+    `Changes`.
   - At the right, a `panel-right` icon button hides the panel.
   - A new act `TogglePanel` shows and hides it. Bind an unused chord
     (`alt-cmd-b` is free today) and read it from the keymap.
@@ -630,6 +627,7 @@ still open beside the Pane inside the board (ADR 0021).
     `Beside::Review(Uncommitted)`, the changed-files card's `review` verb
     today.
   - **Empty state:** `No changes yet` in `TEXT_DIM`.
+- **PR tab** (§5.6.2).
 - **Context tab.** The `ctx` card's content (`pane::context_usage`), in
   the new inks: the category legend rows (swatch, name, tokens right).
   Opening the tab fires `RefreshContext`, as the meter does today.
@@ -644,6 +642,121 @@ still open beside the Pane inside the board (ADR 0021).
 - **What it replaces.** The bar's `ctx` meter and its card
   (`context_usage_element`), and the files chip and its card
   (`changed_files_element`), are removed.
+
+#### 5.6.2 PR tab
+
+A read-only view of the branch's pull request, designed to answer at a
+glance "can this merge, and what's in the way". Mockups: `solo.png` (open,
+checks running) and `pr-states.png` (failing with conflicts, merged, no
+PR). It is fed by the Review's forge read
+(`Cockpit::review_pull_request` → `forge::PrSnapshot` → `WirePr`), the
+same snapshot the Review's PR scope shows. Nothing new is fetched from
+GitHub.
+
+Top to bottom, with 14px between sections:
+
+1. **PR head** (padding 2 2 14).
+   - **Line 1.** A state pill (22 high, radius 11, padding 0 9 0 7,
+     12/500, with a 13px icon), then `#N` in Geist Mono 12 `TEXT_DIM`, a
+     spacer, and two 26px icon buttons:
+     - `refresh` re-reads now (the `refresh PR status` act, plus a new
+       snapshot read);
+     - `external` opens the PR on GitHub (`OpenPrInBrowser`).
+
+     The pill comes in four kinds:
+
+     | State | Icon | Fill | Text |
+     | --- | --- | --- | --- |
+     | Open | `git-pull-request` | `RUNNING` 14% | `RUNNING` |
+     | Draft | `git-pull-request` | `SELECTED` | `TEXT_MUTED` |
+     | Merged | `git-merge` | `SELECTED` | `TEXT` |
+     | Closed | `git-pull-request` | `SELECTED` | `TEXT_DIM` |
+
+     Merged deliberately takes no purple: colour stays for state that
+     needs the operator.
+   - **Title.** The PR title in 14/20 600 `TEXT_STRONG`, wrapping, at most
+     3 lines.
+   - **Branches.** A `branch` icon, `head_ref` in `TEXT_BAR`, an arrow in
+    `TEXT_FAINT`, then `base_ref` in `TEXT_DIM`, all 12px. A fork head
+     shows `owner:branch`.
+2. **Readiness** (one `RAISED` group, radius 8, 40px rows, `HAIRLINE`
+   between rows). Each row has an icon 15, text 13 `TEXT`, and meta 12
+   `TEXT_DIM` at the right. Rows appear in this order, and each only when
+   it has something to say:
+
+   | Source | Row |
+   | --- | --- |
+   | Checks: any failed | `x-circle` `BLOCKED`, `N check(s) failed`, meta `M of T passed` |
+   | Checks: any running or pending | spinner `RUNNING`, `Checks running`, meta `M of T done` |
+   | Checks: all passed | `check-circle` `RUNNING`, `All checks passed`, meta `T of T` |
+   | `merge` Conflicting | `warning` `BLOCKED`, `Conflicts with <base>` |
+   | `merge` Blocked | `warning` `ATTENTION`, `Merging is blocked` |
+   | `merge` Clean (open PR) | `check-circle` `RUNNING`, `No conflicts with <base>` |
+   | `sync` Unpushed | `arrow-up` `ATTENTION`, `N commit(s) not pushed` |
+   | `sync` Behind | `arrow-down` `ATTENTION`, `N commit(s) to pull` |
+   | `sync` InSync | `check-circle` `TEXT_DIM`, `In sync with your branch` |
+   | Merged | `git-merge` `TEXT`, `Merged into <base>` (it replaces the merge and sync rows) |
+3. **Checks.**
+   - Heading (30): `Checks` 12/500 `TEXT_DIM`, with the count at the
+     right.
+   - One 30px row per check:
+     - an icon 15: spinner `RUNNING` running, `check-circle` `RUNNING`
+       success, `x-circle` `BLOCKED` failure, a hollow ring in
+       `TEXT_FAINT` pending or skipped;
+     - the name, 13 `TEXT`, ellipsised;
+     - a status word at the right: `running`, `passed`, `failed` (in
+       `BLOCKED`), `pending`, `skipped`.
+   - Order: failed, running, pending, passed, skipped.
+   - Clicking a check opens its page when the snapshot has a link.
+     Otherwise it opens the PR.
+   - After 8 rows, a `Show N more` row. `checks_truncated` adds `· more on
+     GitHub`.
+4. **Comments.**
+   - Heading (30): `Comments` with `N · M unresolved` at the right, or
+     `N · all resolved`.
+   - Unresolved items come first, newest first. Each is a card: radius 8,
+     `RAISED`, padding 10 12, gap 6.
+     - **Line 1:** an 18px avatar circle (`#3a3a3a`, the author's initial
+       in 10/600 `TEXT_STRONG`), the author in 12.5/500 `TEXT_STRONG`, the
+       kind word in 12 `TEXT_DIM` (`review`, `comment`, `finding`),
+       `unresolved` in 11.5 `ATTENTION` for an open finding, a spacer, and
+       the age in 12 `TEXT_DIM`.
+     - **Finding anchor:** for a finding, the `path:start–end` anchor in
+       Geist Mono 11.5 `TEXT_MUTED`. Clicking it opens the file at those
+       lines (file links).
+     - **Body:** markdown rendered small: 12.5/18 `TEXT`, inline code as
+       chips, clamped to 3 lines. Clicking the card expands it in place
+       to the full body, the snippet and the replies (each reply has the
+       author, age and body, indented 26).
+     - **Outdated** findings show `outdated` in `TEXT_DIM` beside the
+       kind.
+   - Resolved items fold into one 30px row: a chevron and `N resolved`
+     in `TEXT_DIM`. It expands to the same cards at 60% ink.
+   - `comments_truncated` adds a last row, `More on GitHub`.
+5. **`Review PR`.** A secondary full-width button (32, radius 7,
+   `RAISED`, 12.5/500 `TEXT_STRONG`). It opens the Review beside the Pane
+   in its PR scope (ADR 0021), where findings can be read against the
+   diff.
+
+**Empty state** (no PR for the branch, or `gh` unavailable):
+- a 36px rounded tile with the `git-pull-request` icon;
+- `No pull request` in 13.5/600;
+- `When a pull request is open for <branch>, its checks, merge state and
+  comments show here.` in 12.5 `TEXT_DIM`.
+
+There is no create button. With no `gh` or no login, the line reads `Ferrite reads pull
+requests with the GitHub CLI (gh). Sign in with gh auth login to see
+them here.`
+
+**Loading:** the last snapshot stays on screen while a new one is
+fetched. The `refresh` icon spins (reduced motion: it dims). The first
+fetch shows the PR head from `PrWatch`'s reading (number, state), then
+fills in the rest.
+
+**Freshness:** read the snapshot when the tab is opened, then on
+`PrWatch`'s cadence (`AUTO_EVERY`, 30s) while the tab is visible and the
+window is focused. Never poll a hidden tab. A change to the checks' or
+merge state also updates the nav row's PR label.
 
 ### 5.7 Bottom bar (30)
 
@@ -830,7 +943,7 @@ Nothing new moves.
 ## 7. Copy
 
 - State words come from `theme::words`. Labels are sentence case
-  (`New thread`, `Create PR`, `Review changes`, `Solo`).
+  (`New thread`, `Review PR`, `Review changes`, `Solo`).
 - Chip labels show the mode, model and effort as their pickers name them,
   in sentence case.
 - `·` is the only separator. There are no colon labels, and no full stop
@@ -845,8 +958,8 @@ Nothing new moves.
 | --- | --- | --- |
 | Per-Thread branch for nav line 2 | Exists: `ThreadFacts.branch`, `.status` | Draw it |
 | Per-Thread diffstat (nav, branch chip, panel) | Exists as agent-edit totals: `ThreadFacts.changed_files` (`FileChange{path, added, removed}`) | Sum it. It counts the agent's edits, not a git diff against the base. That is acceptable for v1; name it as such in a doc line. |
-| PR state | Exists: `PrWatch` (`#123 ✓`) | Draw it on line 2 and in the PR action |
-| Create PR | **Missing** | New act `CreatePr`: run `gh pr create --web --head <branch>` in the checkout off the UI thread. On success `PrWatch` picks the PR up within 30s. Show errors as a Notice. |
+| PR label | Exists: `PrWatch` (`#123 ✓`) | Draw it on nav line 2 and as the PR tab's number |
+| PR tab | Exists: the Review's forge read, `Cockpit::review_pull_request` → `forge::PrSnapshot` (title, body, state, draft, head and base, merge, sync, checks, comments with findings, resolved, outdated, replies) | Fetch it for the panel, off the UI thread, on `PrWatch`'s cadence while the tab is visible. Per-check durations and links, the review decision (approved or changes requested) and the PR's author are **not** in the snapshot. v1 leaves them out; adding them is an extension of `forge.rs`'s `gh` query. |
 | Needs-you queue and Notices list | Exists: `Cockpit::needs_you()`, `notices_float` rows | A view in the nav |
 | Account usage | Exists: `account_limits` | Re-label |
 | Free disk | **Missing** | Read free bytes on the volume holding the Threads' checkouts (`statvfs`, or `GetDiskFreeSpaceExW` on Windows; `fs4`/`sysinfo` are acceptable). Do it off the UI thread on the bar's existing minute wake (ADR 0012/0014: no new wake). Hide the item when it is unknown. |
@@ -923,7 +1036,8 @@ time of writing; search for the name.
 | Palette | `palette.rs` `row_element` :525–581, input :491, footer :408, filters :376 | `cockpit/palette.rs` `toggle_palette`/`open_palette` :208–244, floats :1377–1428 |
 | Shared widgets | `components.rs` buttons :29–:1142, `floating_surface` :316, `float_shadow` :302, marks :371–392, `key_combo` :846; `menu.rs` float grammar :40–:457 | |
 | Icons | `icons.rs` `icons!` :35–96; `assets/icons/` | |
-| PR | `pr.rs` `PrWatch` :21; `OpenPrInBrowser` (cockpit.rs ~248, ~10342) | |
+| PR label | `pr.rs` `PrWatch` :21, `label` / `symbol`; `ferrite-core/src/workspace/mod.rs` `pull_request` / `pr_view` / `parse_pr_json` (~:625–700) | `OpenPrInBrowser` (cockpit.rs ~248, ~10342) |
+| PR tab data | `crates/ferrite-reviewr/src/forge.rs` `PrSnapshot` :104, `read_pr` :553; `ferrite-core/src/protocol/review.rs` `WirePr` :478, `WirePrComment` :558 | `cockpit/beside.rs` `read_pull_request` :329 (the Review's fetch, to reuse); `review.rs` `pr_facts` :2256; checks card pieces `pane::checks_card` / `check_row` / `check_ink` (pane.rs ~2250–2452) |
 | Usage, clock | `ferrite-core` `Cockpit::account_limits` (cockpit.rs ~1921), `progress::clock_label` :393 | |
 | Facts | `facts.rs` `ThreadFacts` :26; `ferrite-core/src/cockpit/mirror.rs` `ThreadView` :520; `workspace/mod.rs` `BranchStatus` :482 | |
 
@@ -949,17 +1063,20 @@ One phase per pull request, each shippable on its own. In every phase:
 | **1. Frame and cards** | §4: the head row at 46, the bar at 30, the Pane as a card on `FRAME` with an 8px gutter, `GRID_GAP` 8, the seam grab band in the gutter, the rings by `PaneEdge`. | Solo and a 2×2 Group match the mockups' frame (positions within 2px at 1600×960). Seams still resize, and drag-to-swap still works. |
 | **2. Nav** | §5.1: head, views (Search, Needs you, Parked, Tasks), headings, two-line rows, Group rows and members, rail, foot. The Needs-you view replaces the bell's list. | The nav matches `solo.png` and `group.png`. The attention sort, hold-under-pointer, drag-to-Group and ⌘B still work. ⌘D walks the needs-you queue. |
 | **3. Bar** | §5.7: view tabs with roll-up dots, need-you count, usage labels, clock; items moved out. Free disk lands here (§8) or in phase 9. | The bar matches the mockups. Nothing that left the bar is unreachable (toggle, Notices, gear, `?`, Tasks). |
-| **4. Pane head and tab strip** | §5.2 Solo head (title, branch chip, `View PR`), §5.3 card strip with live tabs and the `N done` menu, split right. | A Thread with 3 running and 20 finished Subagents shows `Main`, 3 tabs and `20 done ▾`. Picking a done Subagent opens it. Esc stops a Subagent. |
+| **4. Pane head and tab strip** | §5.2 Solo head (title, branch chip), §5.3 card strip with live tabs and the `N done` menu, split right. | A Thread with 3 running and 20 finished Subagents shows `Main`, 3 tabs and `20 done ▾`. Picking a done Subagent opens it. Esc stops a Subagent. |
 | **5. Transcript** | §5.4: prompt band, inks, inline code chips, fence and diff boxes, working line without parentheses. | `core_transcript_parity` passes with updated inks. A long Edit diff in split view still renders and folds. |
 | **6. Composer** | §5.5: the box, queued row, input in Geist with the bar caret, toolbar chips (draft chips, mode, model, effort), send/stop; the bar's status line deleted. | Every picker that was in the bar works from its chip, with and without a live Session. ⇧⇥ cycles the mode. @-mentions, attachments and predictions still work. |
 | **7a. Panel** | §5.6 without hunks: Changes (branch, files, Review button), Context, the meter foot, toggle and setting; the ctx and files cards deleted. | The panel matches `solo.png`. It hides on a Group, beside a Reader, and under ~1280px. `Review changes` opens the Review beside the Pane. |
 | **7b. Panel hunks** | §5.6 hunks per file, fetched lazily. | Unfolding a file shows its hunks within a frame or two, with no UI-thread git. |
+| **7c. PR tab** | §5.6.2: PR head, readiness, checks, comments, `Review PR`, the empty and no-`gh` states, refresh and cadence. | It matches `solo.png` and each column of `pr-states.png` on a real PR. A pushed commit flips the sync row within one cadence. A hidden tab makes no `gh` calls. |
 | **8. Group Panes** | §5.9: the Group head, Pane heads with state words and the fullscreen button, the Decision box, the failure strip and Retry, the compact Composer, wall tiles in the card shell. | `group.png` is matched. The quick answers (1/2/3) work on tiles and boxes, the seen rule clears `done`, and Retry re-sends. |
-| **9. Palette, floats, Create PR, cleanup** | §5.8, the shared float shell, the `CreatePr` act, free disk if not done, legacy aliases removed, amendment notes, `CONTEXT.md`, `README.md`. | `command-search.png` is matched (with the real sections). Every float uses the new shell. `Create PR` opens GitHub's compare page for a branch that is ahead. |
+| **9. Palette, floats, cleanup** | §5.8, the shared float shell, free disk if not done, legacy aliases removed, amendment notes, `CONTEXT.md`, `README.md`. | `command-search.png` is matched (with the real sections). Every float uses the new shell. |
 
 ## 12. Out of scope
 
 - Light theme (the app is dark only).
+- Creating, merging or commenting on pull requests from Ferrite. The PR
+  tab reads; GitHub writes.
 - Search inside transcripts. The mockup's `In transcripts` palette
   section is an idea for later.
 - A layout switch for Groups.

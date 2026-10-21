@@ -72,9 +72,15 @@ controls. A thin bar along the bottom shows usage.
   stacks on it. A Group Pane's compact Composer shows the input only.
   Chip labels are sentence case, which amends rule 11's "values
   lowercase" for chips.
-- **A right panel for Solo.** `Changes` (branch, files, hunks) and
-  `Context` (the `ctx` breakdown) replace the bar's changed-files and
-  `ctx` popovers. The panel is a fixed column outside the board, toggled,
+- **A right panel for Solo.** `Changes` (branch, files, hunks), `PR` and
+  `Context` (the `ctx` breakdown). `Changes` and `Context` replace the
+  bar's changed-files and `ctx` popovers. `PR` is a read-only view of the
+  branch's pull request, fed by the Review's existing forge snapshot:
+  - state, title and branches;
+  - merge readiness (checks, conflicts, unpushed commits);
+  - the checks;
+  - review comments and findings, unresolved first;
+  - a door to the Review's PR scope. The panel is a fixed column outside the board, toggled,
   and its state is persisted. It is never shown on a Group or beside an
   open Beside slot. The Review (ADR 0021) still takes the reader slot,
   and the panel's `Review changes` opens it there.
@@ -93,10 +99,9 @@ controls. A thin bar along the bottom shows usage.
   This supersedes `theme.rs` rule 7's "the bottom bar shows no counts".
   ⌘1–9 still focus the shown board's Panes. Views switch from the bar,
   ⌘G or the nav.
-- **Solo gets a head.** The Thread title, its Project, a branch chip with
-  the agent-edit diffstat, and one primary action: `View PR #N` (the
-  existing `OpenPrInBrowser`) or `Create PR` (a new act running
-  `gh pr create --web`).
+- **Solo gets a head.** The Thread title, its Project, and a branch chip
+  with the agent-edit diffstat. There is no PR button: the pull request
+  lives in the panel.
 - **Group Pane heads speak.** A Group Pane's head shows the state glyph,
   the title, a state word (elapsed time, `needs you`, `failed`, or
   `done` while unseen), the provider logo, and a button that fills the
@@ -114,6 +119,8 @@ controls. A thin bar along the bottom shows usage.
   Ferrite's identity.
 - **An Agents tab in the right panel.** It duplicated the subagent strip.
   The strip keeps live Subagents, and its `N done` menu keeps the rest.
+- **A `Create PR` button in the Solo head.** The operator declined it:
+  pull requests are opened on GitHub. Ferrite shows them, in the PR tab.
 
 ## Consequences
 

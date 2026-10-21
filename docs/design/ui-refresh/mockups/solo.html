@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<!-- Static export of the design canvas board. Open in a browser at 1600×960 (command search: 800×560). -->
-<title>Ferrite · Solo thread</title>
+<!-- Static export of a design canvas board. Open it in a browser at its own size. -->
+<title>Ferrite · Solo thread (PR tab)</title>
 
 </head>
 <body>
@@ -121,7 +121,6 @@ input::placeholder{color:#8c8c8c}
 <span style="color: #8c8c8c">ferrite</span>
 <span style="flex: 1"></span>
 <span style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; background: #2a2a2a; font-family: 'Geist Mono', monospace; font-size: 12px"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round"><path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg><span style="font-family: Geist, system-ui, sans-serif; font-size: 12.5px; color: #d0d0d0">scheduled-work-crash</span><span style="color: #8cd398">+4</span><span style="color: #ef8a80">−1</span></span>
-<button style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 7px; background: #f2f2f2; color: #161616; font-size: 12.5px; font-weight: 500">Create PR</button>
 </header>
 
 <!-- terminal card -->
@@ -234,40 +233,61 @@ input::placeholder{color:#8c8c8c}
 
 <!-- ======================================================= details -->
 
-<aside aria-label="Thread details" style="flex: none; width: 272px; display: flex; flex-direction: column; padding: 0 10px 8px 8px; box-sizing: border-box; overflow: hidden">
+<aside aria-label="Thread panel" style="flex: none; width: 304px; display: flex; flex-direction: column; padding: 0 10px 8px 8px; box-sizing: border-box; overflow: hidden">
+
+
 <div style="flex: none; height: 46px; display: flex; align-items: center; gap: 4px">
 <div role="tablist" aria-label="Details" style="flex: 1; display: flex; gap: 2px">
-<button role="tab" aria-selected="true" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; background: #2e2e2e; color: #f2f2f2; font-size: 12.5px; font-weight: 500">Changes<span style="font-size: 12px; font-weight: 400; color: #8c8c8c">1</span></button>
-<button role="tab" aria-selected="false" style="height: 28px; padding: 0 10px; border-radius: 7px; color: #a0a0a0; font-size: 12.5px; font-weight: 500">Context</button>
+<button role="tab" aria-selected="false" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; color: #a0a0a0; font-size: 12.5px; font-weight: 500">Changes<span style="font-size: 12px; font-weight: 400; color: #8c8c8c">1</span></button>
+<button role="tab" aria-selected="true" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; background: #2e2e2e; color: #f2f2f2; font-size: 12.5px; font-weight: 500">PR<span style="font-family: 'Geist Mono', monospace; font-size: 11.5px; font-weight: 400; color: #8c8c8c">#146</span></button>
+<button role="tab" aria-selected="false" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; color: #a0a0a0; font-size: 12.5px; font-weight: 500">Context</button>
 </div>
-<button aria-label="Hide details" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2.5"></rect><path d="M15 3v18"></path></svg></button>
+<button aria-label="Hide panel" style="width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><rect x="3" y="3" width="18" height="18" rx="2.5"></rect><path d="M15 3v18"></path></svg></button>
+</div>
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; flex-direction: column; padding: 2px 2px 14px">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px; border-radius: 11px; background: rgba(140,211,152,.14); color: #8cd398; font-size: 12px; font-weight: 500"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><path d="M6 9v12"></path></svg>Open</span>
+<span style="font-family: 'Geist Mono', monospace; font-size: 12px; color: #8c8c8c">#146</span>
+<span style="flex: 1"></span>
+<button aria-label="Refresh" style="width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></button>
+<button aria-label="Open on GitHub" style="width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: #8c8c8c"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg></button>
+</div>
+<p style="margin: 10px 0 0; font-size: 14px; line-height: 20px; font-weight: 600; color: #f2f2f2; white-space: normal">Requeue scheduled work whose worktree is gone</p>
+<div style="display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: #8c8c8c"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg><span style="color: #c0c0c0">scheduled-work-crash</span><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5e5e5e" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg><span>main</span></div>
+</div>
+<div style="display: flex; flex-direction: column; border-radius: 8px; background: #2a2a2a">
+<div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px;"><span aria-hidden="true" style="width: 15px; text-align: center; font-family: 'Geist Mono', monospace; font-size: 12px; color: #8cd398">⠼</span><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">Checks running</span><span style="font-size: 12px; color: #8c8c8c">1 of 3 done</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border-top: 1px solid rgba(255,255,255,.05);"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8cd398" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">No conflicts with main</span><span style="font-size: 12px; color: #8c8c8c"></span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border-top: 1px solid rgba(255,255,255,.05);"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#e6c47c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">1 commit not pushed</span><span style="font-size: 12px; color: #8c8c8c"></span></div>
+</div>
+<div style="display: flex; align-items: center; height: 30px; margin-top: 14px; padding: 0 2px; font-size: 12px; color: #8c8c8c"><span style="flex: 1; font-weight: 500">Checks</span><span>3</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 2px"><span aria-hidden="true" style="width: 15px; text-align: center; font-family: 'Geist Mono', monospace; font-size: 12px; color: #8cd398">⠼</span><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">macOS (Metal)</span><span style="font-size: 12px; color: #8c8c8c">running</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 2px"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8cd398" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">Windows (DirectX 11)</span><span style="font-size: 12px; color: #8c8c8c">passed</span></div>
+<div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 2px"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8cd398" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #d0d0d0">Claude Code Review</span><span style="font-size: 12px; color: #8c8c8c">passed</span></div>
+<div style="display: flex; align-items: center; height: 30px; margin-top: 14px; padding: 0 2px; font-size: 12px; color: #8c8c8c"><span style="flex: 1; font-weight: 500">Comments</span><span>2 · 1 unresolved</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<article style="display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: #2a2a2a">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #8c8c8c">
+<span aria-hidden="true" style="width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: #3a3a3a; color: #f2f2f2; font-size: 10px; font-weight: 600">C</span>
+<span style="font-size: 12.5px; font-weight: 500; color: #f2f2f2">claude</span><span>finding</span><span style="font-size: 11.5px; color: #e6c47c">unresolved</span><span style="flex: 1"></span><span>6m</span>
+</div>
+<span style="font-family: 'Geist Mono', monospace; font-size: 11.5px; color: #a0a0a0; overflow: hidden; text-overflow: ellipsis">scheduled_work.rs:89–91</span>
+<p style="margin: 0; font-size: 12.5px; line-height: 18px; color: #d0d0d0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden"><span style="padding: 0 4px; border-radius: 4px; background: #333333; font-family: 'Geist Mono', monospace; font-size: 11.5px; color: #f2f2f2">requeue</span> retries forever if the worktree never comes back. Cap the attempts or drop the job after a few.</p>
+</article>
+<article style="display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: #2a2a2a">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #8c8c8c">
+<span aria-hidden="true" style="width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: #3a3a3a; color: #f2f2f2; font-size: 10px; font-weight: 600">J</span>
+<span style="font-size: 12.5px; font-weight: 500; color: #f2f2f2">josephwylie</span><span>comment</span><span style="flex: 1"></span><span>4m</span>
+</div>
+<p style="margin: 0; font-size: 12.5px; line-height: 18px; color: #d0d0d0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden">Tried it locally. Closing the window mid-run no longer takes the server down.</p>
+</article>
+<button style="display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 4px; font-size: 12.5px; color: #8c8c8c"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="m9 18 6-6-6-6"></path></svg>1 resolved</button>
+</div>
+<button style="flex: none; height: 32px; margin-top: 14px; border-radius: 7px; background: #2a2a2a; color: #f2f2f2; font-size: 12.5px; font-weight: 500; text-align: center">Review PR</button>
 </div>
 
-<div style="flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 2px">
-<a href="#" style="display: flex; flex-direction: column; justify-content: center; height: 48px; padding: 0 10px 0 34px; border-radius: 7px; position: relative">
-<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8c8c8c" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 10px; top: 9px"><path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
-<span style="overflow: hidden; text-overflow: ellipsis; color: #f2f2f2; font-weight: 500">scheduled-work-crash</span>
-<span style="font-size: 12px; color: #8c8c8c">from main</span>
-</a>
-
-<div style="display: flex; align-items: center; height: 30px; margin-top: 8px; padding: 0 10px; font-size: 12px; color: #8c8c8c"><span style="flex: 1; font-weight: 500">1 file changed</span><span style="font-family: 'Geist Mono', monospace; font-size: 11.5px"><span style="color: #8cd398">+4</span> <span style="color: #ef8a80">−1</span></span></div>
-<div style="display: flex; flex-direction: column; border-radius: 8px; background: #2a2a2a; overflow: hidden">
-<a href="#" style="display: flex; flex-direction: column; justify-content: center; height: 48px; padding: 0 10px 0 34px; position: relative">
-<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a0a0a0" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 10px; top: 9px"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>
-<span style="display: flex"><span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #f2f2f2; font-weight: 500">scheduled_work.rs</span><span style="font-family: 'Geist Mono', monospace; font-size: 11.5px"><span style="color: #8cd398">+4</span> <span style="color: #ef8a80">−1</span></span></span>
-<span style="font-size: 12px; color: #8c8c8c; overflow: hidden; text-overflow: ellipsis">crates/ferrite-core/src</span>
-</a>
-<div style="padding: 4px 0 6px; background: #1e1e1e; font-family: 'Geist Mono', monospace; font-size: 11px; line-height: 19px; overflow: hidden">
-<div style="display: grid; grid-template-columns: 2.5ch minmax(0, 1fr); padding-left: 1ch; white-space: pre; color: #8c8c8c"><span></span><span>let job = queue.pop_front()?;</span></div>
-<div style="display: grid; grid-template-columns: 2.5ch minmax(0, 1fr); padding-left: 1ch; white-space: pre; background: rgba(239,138,128,.09); color: #d0d0d0"><span style="color: #ef8a80">−</span><span>let handle = job.spawn().unwrap();</span></div>
-<div style="display: grid; grid-template-columns: 2.5ch minmax(0, 1fr); padding-left: 1ch; white-space: pre; background: rgba(140,211,152,.09); color: #d0d0d0"><span style="color: #8cd398">+</span><span>let Ok(handle) = job.spawn() else {</span></div>
-<div style="display: grid; grid-template-columns: 2.5ch minmax(0, 1fr); padding-left: 1ch; white-space: pre; background: rgba(140,211,152,.09); color: #d0d0d0"><span style="color: #8cd398">+</span><span>    return self.requeue(job);</span></div>
-</div>
-</div>
-
-<div style="flex: 1"></div>
-
-<div style="display: flex; flex-direction: column; gap: 10px; padding: 14px 10px 4px; border-top: 1px solid rgba(255,255,255,.06)">
+<div style="flex: none; display: flex; flex-direction: column; gap: 10px; padding: 14px 10px 4px; border-top: 1px solid rgba(255,255,255,.06)">
 <div style="display: flex; font-size: 12px; color: #8c8c8c"><span style="flex: 1; font-weight: 500">Context</span><span style="color: #a0a0a0">84k / 200k</span></div>
 <div aria-hidden="true" style="display: flex; gap: 2px; height: 6px">
 <span style="width: 18%; border-radius: 2px; background: #6f9be0"></span>
@@ -275,7 +295,6 @@ input::placeholder{color:#8c8c8c}
 <span style="width: 5%; border-radius: 2px; background: #5fae84"></span>
 <span style="width: 4%; border-radius: 2px; background: #c9a55a"></span>
 <span style="flex: 1; border-radius: 2px; background: #333333"></span>
-</div>
 </div>
 </div>
 </aside>
