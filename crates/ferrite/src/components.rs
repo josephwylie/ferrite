@@ -1056,12 +1056,12 @@ pub fn gutter(mark: impl IntoElement, first_line_h: f32) -> Div {
 
 // --------------------------------------------------------------- controls
 
-/// The chord an action is bound to with no key context, as a menu shortcut
-/// spells it (`cmd-D`, the last key upper-cased; `esc`, `⏎`, `⌫`): `None`
-/// when nothing binds it, so a tooltip never names a key that would not
-/// act.
+/// The chord an action is bound to with no key context, or in the
+/// Cockpit's own (`esc` to close), as a menu shortcut spells it (`cmd-D`,
+/// the last key upper-cased; `esc`, `⏎`, `⌫`): `None` when nothing binds
+/// it, so a tooltip never names a key that would not act.
 pub fn bound_chord(action: &str) -> Option<String> {
-    bound_chord_in(action, None)
+    bound_chord_in(action, None).or_else(|| bound_chord_in(action, Some(crate::keymap::COCKPIT)))
 }
 
 /// The chord an action is bound to in exactly `context` (`None`: no

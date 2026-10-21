@@ -1002,8 +1002,7 @@ impl CockpitView {
                 && open.is_some_and(|open| !open.permission_modes().is_empty()),
             "permission mode".into(),
             "",
-            bound_chord("status::CycleMode")
-                .or_else(|| bound_chord_in("status::CycleMode", Some("Ferrite"))),
+            bound_chord("status::CycleMode"),
             Command::PermissionMode,
         );
         add(
