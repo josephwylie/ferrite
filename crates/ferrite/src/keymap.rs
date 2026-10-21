@@ -181,10 +181,13 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Copy the transcript selection a drag made; with nothing selected
         // the key does nothing (the Composer has no selection of its own).
         (with_primary("c"), "cockpit::CopySelection", None),
-        ("enter".into(), "cockpit::Submit", None),
+        // The Cockpit's own, not every context's: a binding with none ranks
+        // as deep as the deepest, so it outranked the kit's menus, popovers
+        // and dialogs, whose Enter picks and Escape closes.
+        ("enter".into(), "cockpit::Submit", Some("Ferrite")),
         // Kit buttons synthesize clicks from Enter/Space; do not submit a prompt.
         ("enter".into(), "zed::NoAction", Some("PromptAttachment")),
-        ("escape".into(), "cockpit::Interrupt", None),
+        ("escape".into(), "cockpit::Interrupt", Some("Ferrite")),
         // Only while a Decision holds the keyboard: elsewhere these are
         // just letters going into the Composer.
         ("y".into(), "cockpit::Allow", Some("Decision")),

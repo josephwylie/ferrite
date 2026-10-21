@@ -23527,6 +23527,41 @@ mod tests {
         );
     }
 
+    /// Escape in an open picker closes the picker: the agent at work keeps
+    /// working, and the next Escape stops it.
+    #[gpui::test]
+    fn escape_in_an_open_picker_never_interrupts_the_agent(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("picker-escape", 1);
+        core.send(core.threads()[0], "keep working".into());
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("/");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.popover.is_some(), "the picker opened")
+        });
+
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            0,
+            "Escape only closes the picker"
+        );
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            1,
+            "the Composer's Escape stops it"
+        );
+    }
+
     /// #25 regression: reopening the picker with a standing model choice
     /// and pressing bare ↵ changes nothing — the current provider's row
     /// carries the choice, so the re-pick is a true no-op: no teardown, no
