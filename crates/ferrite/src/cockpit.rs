@@ -905,19 +905,17 @@ impl Render for PaneGhost {
     }
 }
 
-/// How wide the grab band over a seam is, centred on its 1px line: the
-/// prototype's 9px band (`.seam{width:9px;margin-left:-4px}`).
+/// How wide the grab band over a seam is, centred on the gutter: the
+/// prototype's 9px band (`.seam{width:9px;margin-left:-4px}`), a pixel past
+/// the 8px gutter.
 const SEAM_GRAB: f32 = 9.0;
 
-/// The 1px seam between two Panes laid out by flex (Solo's pending pair):
-/// a `paint::LINE` line between the cells of a row (`Row`) or between rows
-/// (`Column`).
-fn board_seam(axis: layout::Axis) -> Div {
-    let line = div().flex_shrink_0().bg(crate::theme::paint::LINE);
-    match axis {
-        layout::Axis::Row => line.w(px(crate::theme::BOARD_SEAM)).h_full(),
-        layout::Axis::Column => line.h(px(crate::theme::BOARD_SEAM)).w_full(),
-    }
+/// A board rect as gpui bounds, in the same window coordinates.
+fn window_bounds(rect: layout::Rect) -> gpui::Bounds<Pixels> {
+    gpui::Bounds::new(
+        gpui::point(px(rect.x), px(rect.y)),
+        gpui::size(px(rect.w), px(rect.h)),
+    )
 }
 
 /// A path as the operator reads it: their home spelled `~`.
@@ -2726,14 +2724,17 @@ impl CockpitView {
     /// than `NAV_AUTO_RAIL_BOARD_W`, or a board cell narrower than the tile
     /// floor (`TILE_FLOOR_WIDTH`) that folding would lift it over. It unfolds only once both
     /// clear their threshold by `NAV_AUTO_RAIL_HYSTERESIS`. The operator's
-    /// cmd-B override (`nav_forced_open`) outranks it either way.
+    /// cmd-B override (`nav_forced_open`) outranks it either way. The board
+    /// beside the 264px column is the window less the column and the
+    /// right-hand `BOARD_PAD`, so the nav folds under 832px (the card keeps
+    /// 560px, as it did beside the 36ch column).
     fn update_auto_rail(&mut self, window: &Window) {
-        use crate::theme::{CHROME_SEAM_W, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
+        use crate::theme::{BOARD_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
         use ferrite_core::docview::TILE_FLOOR_WIDTH;
         let held = self.nav_auto_rail.get();
         let slack = if held { NAV_AUTO_RAIL_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
-        let board = width - nav::WIDTH - CHROME_SEAM_W;
+        let board = width - nav::WIDTH - BOARD_PAD;
         let narrowest = |view: &Self| {
             view.pane_rects(window)
                 .iter()
@@ -2744,7 +2745,7 @@ impl CockpitView {
         let full = narrowest(self);
         self.nav_measure_full.set(false);
         let railed_board = layout::Rect {
-            w: width - nav::FOLDED_WIDTH - CHROME_SEAM_W,
+            w: width - nav::FOLDED_WIDTH - BOARD_PAD,
             ..self.board.get()
         };
         // What the narrowest cell would be beside the rail: the same tree,
@@ -2807,36 +2808,36 @@ impl CockpitView {
         level
     }
 
-    /// The board the Panes lay out in, in window coordinates (theme WP-C):
-    /// flush right of the sidebar and its 1px seam, from the window's top
-    /// (or under the titlebar band where it crosses the board,
-    /// `titlebar::board_top`) to the bottom bar, with no gutter of its own.
+    /// The board the cards lay out in, in window coordinates (theme WP-C):
+    /// flush right of the nav, from under the head row
+    /// (`titlebar::board_top`) to `BOARD_PAD` short of the window's right
+    /// edge and of the bottom bar.
     fn board_bounds(&self, window: &Window) -> layout::Rect {
+        use crate::theme::{BOARD_PAD, STATUS_BAR_H};
         let viewport = window.viewport_size();
         let top = crate::titlebar::board_top();
         let left = self.board_left();
         let bounds = layout::Rect {
             x: left,
             y: top,
-            w: (f32::from(viewport.width) - left).max(0.0),
-            h: (f32::from(viewport.height) - top - crate::theme::STATUS_BAR_H).max(0.0),
+            w: (f32::from(viewport.width) - left - BOARD_PAD).max(0.0),
+            h: (f32::from(viewport.height) - top - STATUS_BAR_H - BOARD_PAD).max(0.0),
         };
         self.board.set(bounds);
         bounds
     }
 
-    /// Where the board's left edge sits: the sidebar's width this frame
-    /// and the seam beside it. While cmd-B rides the column the board rides
-    /// with it, every frame (F-12): `column + 1`.
+    /// Where the board's left edge sits: the nav's width this frame (no
+    /// seam: the card's edge separates). While cmd-B rides the column the
+    /// board rides with it, every frame (F-12).
     fn board_left(&self) -> f32 {
-        let column = if self.nav_measure_full.get() {
+        if self.nav_measure_full.get() {
             nav::WIDTH
         } else if self.nav_measure_rest.get() {
             self.nav_width()
         } else {
             self.nav_ride.get().unwrap_or_else(|| self.nav_width())
-        };
-        column + crate::theme::CHROME_SEAM_W
+        }
     }
 
     /// A Group's tree in the board as the last frame laid it out: the
@@ -2851,7 +2852,7 @@ impl CockpitView {
     /// the widths ride.
     fn rest_board(&self) -> layout::Rect {
         let board = self.board.get();
-        let rest_left = self.nav_width() + crate::theme::CHROME_SEAM_W;
+        let rest_left = self.nav_width();
         layout::Rect {
             x: rest_left,
             w: (board.w + board.x - rest_left).max(0.0),
@@ -3978,6 +3979,10 @@ impl CockpitView {
             .iter()
             .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
             .collect();
+        // The column's frame, over the cards' corners and under the seams.
+        let frame = crate::components::frame_around(
+            rects.iter().map(|(_, rect)| window_bounds(*rect)).collect(),
+        );
         for (leaf, rect) in rects {
             let cell = match leaf_slot(leaf) {
                 Slot::Pane(identity) => {
@@ -3990,7 +3995,9 @@ impl CockpitView {
                     let Some(cell) = self.reader_cell(owner, leaf, cx) else {
                         continue;
                     };
-                    cell
+                    // A reader is a card beside the Pane, at rest.
+                    cell.relative()
+                        .child(pane::card_ring(rgba(crate::theme::CARD_RING)))
                 }
             };
             // The cell lies on its track as laid out; gpui rounds its edges
@@ -4014,11 +4021,14 @@ impl CockpitView {
                     .h(px(rect.h)),
             );
         }
-        // The seams (F-18): one 1px `paint::LINE` line per linked set — a
-        // default grid's aligned column seams are one line from the board's
-        // top to its foot — and a 9px grab band over each seam. Under the
-        // pointer (any band of the set) and while held, the whole line takes
-        // `TEXT_STRONG`, fading in over `motion::SEAM_FADE`.
+        board = board.child(frame);
+        // The seams (F-18): one line per linked set down the gutter's
+        // centre — a default grid's aligned column seams are one line from
+        // the board's top to its foot — and a 9px grab band over each seam.
+        // At rest the line is nothing: the gutter separates the cards.
+        // Under the pointer (any band of the set) and while held, the whole
+        // line draws `SEAM_LINE_W` of `SEAM_HOVER`, fading in over
+        // `motion::SEAM_FADE`.
         let seams = tree.seams(bounds, crate::theme::BOARD_SEAM, SEAM_GRAB);
         let mut drawn: Vec<SeamId> = Vec::new();
         for seam in &seams {
@@ -4043,7 +4053,7 @@ impl CockpitView {
                 drag.board == on && members.iter().any(|member| member.id == drag.seam)
             });
             // The line spans the union of the set's bands, along its axis.
-            let line_w = crate::theme::BOARD_SEAM;
+            let line_w = crate::theme::SEAM_LINE_W;
             let line = match seam.axis {
                 layout::Axis::Row => {
                     let top = members
@@ -4084,7 +4094,7 @@ impl CockpitView {
             } else {
                 crate::motion::hover_blend(
                     &key,
-                    crate::theme::paint::LINE.hsla(),
+                    rgba(crate::theme::TRANSPARENT).into(),
                     rgba(crate::theme::SEAM_HOVER).into(),
                 )
             };
@@ -4143,9 +4153,9 @@ impl CockpitView {
                 .into_iter()
                 .find(|(leaf, _)| *leaf == target)
             {
-                // The slot a release would fill: the strong wash with the
-                // non-focus strong edge (a focused Pane's ring is its own
-                // blue), and a raised mono tag naming the verb.
+                // The slot a release would fill: a white wash at the card's
+                // radius with the focus ring's edge, and a raised tag naming
+                // the verb.
                 let wash = local(layout::zone_rect(rect, zone));
                 board = board.child(
                     div()
@@ -4154,6 +4164,7 @@ impl CockpitView {
                         .top(px(wash.y))
                         .w(px(wash.w))
                         .h(px(wash.h))
+                        .rounded(px(crate::theme::R_PANE))
                         .bg(rgba(crate::theme::DROP_WASH))
                         .border_1()
                         .border_color(rgba(crate::theme::DROP_EDGE))
@@ -10167,11 +10178,18 @@ impl CockpitView {
             window.focus(&wanted, cx);
         }
 
-        // The board starts at the window's top, or flush under the
-        // titlebar band where it crosses the board (`titlebar::board_top`);
-        // nothing pads it on its other sides.
+        // The cards start under the head row (`titlebar::board_top`), with
+        // `BOARD_PAD` of frame right of and under them (`board_bounds`).
         let board_top = crate::titlebar::board_top();
-        let frame = || div().flex_1().min_w_0().min_h_0().pt(px(board_top));
+        let frame = || {
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .pt(px(board_top))
+                .pr(px(crate::theme::BOARD_PAD))
+                .pb(px(crate::theme::BOARD_PAD))
+        };
         let visible = self.visible_indices();
         // The empty board names the provider CLIs it found: ask once.
         if self.empty_board_shown()
@@ -10183,6 +10201,9 @@ impl CockpitView {
             self.probe_cli_versions(cx);
         }
         let board = self.board_bounds(window);
+        // The cards the board column's frame leaves holes for: one over
+        // the whole board unless a grid or a tree lays out several.
+        let mut cards = vec![board];
         let grid = if self.projects.coordinator_shown() {
             frame()
                 .flex()
@@ -10209,30 +10230,46 @@ impl CockpitView {
             // every seam, and — while a slot is being dragged — the wash
             // that says what a release would do. Absolute geometry, so a
             // seam drag moves exactly the two sides it sits between.
+            cards.clear();
             self.tree_board(board, tree, window, cx)
         } else if visible.is_empty() {
             // Nothing open: the board says how to start instead of lying
             // blank.
             frame().flex().child(self.empty_board(cx))
         } else {
-            // Solo's pending pair (or any plain grid): Panes flush, split
-            // by 1px seams.
+            // Solo's Pane, or its pending pair (any plain grid): cards
+            // `GRID_GAP` apart, as `pane_rects` measures them.
+            cards = self
+                .pane_rects(window)
+                .into_iter()
+                .map(|(_, rect)| rect)
+                .collect();
             let columns = layout::grid_shape(visible.len(), board).0.max(1);
-            let mut grid = frame().flex().flex_col();
-            for (at, row) in visible.chunks(columns).enumerate() {
-                if at > 0 {
-                    grid = grid.child(board_seam(layout::Axis::Column));
-                }
-                let mut line = div().flex().flex_row().flex_1().min_h_0();
-                for (column, index) in row.iter().enumerate() {
-                    if column > 0 {
-                        line = line.child(board_seam(layout::Axis::Row));
-                    }
+            let gap = px(crate::theme::GRID_GAP);
+            let mut grid = frame().flex().flex_col().gap(gap);
+            for row in visible.chunks(columns) {
+                let mut line = div().flex().flex_row().flex_1().min_h_0().gap(gap);
+                for index in row {
                     line = line.child(self.pane_slot(*index, level, window, cx));
                 }
                 grid = grid.child(line);
             }
             grid
+        };
+        // The board column's frame, over its cards' corners (a tree board
+        // lays its own, under its seams).
+        let grid = if cards.is_empty() {
+            grid
+        } else {
+            div()
+                .relative()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .child(grid)
+                .child(crate::components::frame_around(
+                    cards.into_iter().map(window_bounds).collect(),
+                ))
         };
 
         let grid = if lost {
@@ -10465,11 +10502,10 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    // The nav and its one seam column (`nav::seam`).
                     .child(self.nav(window, cx))
                     // The board lies from its own left edge — the column's
-                    // width this frame and the one seam the nav draws — so
-                    // it rides cmd-B with the column, every frame (F-12).
+                    // width this frame — so it rides cmd-B with the column,
+                    // every frame (F-12).
                     .child(
                         div()
                             .debug_selector(|| "board".into())
@@ -10488,11 +10524,7 @@ impl CockpitView {
             // thing under a menu: an overlay that reached into the band
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
-            .child(crate::titlebar::strip(
-                self.board_left(),
-                !self.overlay_open(),
-                self.maximized,
-            ))
+            .child(crate::titlebar::strip(!self.overlay_open(), self.maximized))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(window, cx))
@@ -11735,10 +11767,13 @@ impl CockpitView {
     /// (ADR 0014): its foot over the bar's top, its right edge inside the
     /// window's margin.
     fn bar_place(&self) -> crate::components::FloatPlace {
+        use crate::theme::{BOARD_PAD, GRID_PAD};
+        // The board stops `BOARD_PAD` short of the bar and the window's
+        // right edge.
         let board = self.board.get();
         crate::components::FloatPlace {
-            floor: board.y + board.h,
-            limit_right: board.x + board.w - crate::theme::GRID_PAD,
+            floor: board.y + board.h + BOARD_PAD,
+            limit_right: board.x + board.w + BOARD_PAD - GRID_PAD,
         }
     }
 
@@ -13311,7 +13346,7 @@ impl CockpitView {
             .children(self.nav_parked(state, cx))
     }
 
-    /// The nav column and its one seam (`nav::seam`): the tree and the
+    /// The nav column: the tree and the
     /// Parked fold on the chrome, from the window's top (ADR 0014).
     /// cmd-B rides its width down to the rail over `motion::RESIZE` (the
     /// render tail keeps frames coming while it moves) while its content
@@ -13347,7 +13382,7 @@ impl CockpitView {
                 let state = state.get_or_init(|| self.nav_state());
                 shell.child(self.nav_rail(state, window, cx).opacity(1.0 - content))
             });
-        frame.child(shell).child(nav::seam()).into_any_element()
+        frame.child(shell).into_any_element()
     }
 
     /// The rail (cmd-B folded): every open Thread in the tree's order —
@@ -15344,11 +15379,11 @@ mod tests {
     /// plus its hysteresis. cmd-B overrides it.
     #[gpui::test]
     fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
-        use crate::theme::{GRID_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH};
+        use crate::theme::{BOARD_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH};
         let (core, _fake) = cockpit("nav-auto-rail", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let saved = view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed);
-        let threshold = NAV_WIDTH + 2.0 * GRID_PAD + NAV_AUTO_RAIL_BOARD_W;
+        let threshold = NAV_WIDTH + BOARD_PAD + NAV_AUTO_RAIL_BOARD_W;
         cx.simulate_resize(gpui::size(px(720.), px(900.)));
         tick(cx);
         assert!(
@@ -18904,7 +18939,8 @@ mod tests {
             assert!(
                 control.right() <= summary.left() + px(0.5)
                     && (control.size.width - gutter).abs() <= px(1.)
-                    && (summary.left() - control.left() - gutter).abs() <= px(0.5),
+                    // gpui snaps both edges to the pixel.
+                    && (summary.left() - control.left() - gutter).abs() <= px(1.),
                 "the disclosure mark leads in the gutter, the text on the content column: {summary:?} / {control:?}"
             );
         }
@@ -24393,10 +24429,9 @@ mod tests {
                 .collect()
         });
         assert_eq!(rects.len(), 2, "both members have a rect");
-        // The prototype's halving: the first Pane half the board, the gap,
-        // the second the rest.
+        // Two equal cards, the gutter between.
         assert!(
-            (rects[0].w - rects[1].w - crate::theme::BOARD_SEAM).abs() < 0.01,
+            (rects[0].w - rects[1].w).abs() < 0.01,
             "a halving: {rects:?}"
         );
         assert!(

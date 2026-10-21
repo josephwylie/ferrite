@@ -444,8 +444,9 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         });
     });
     // The smallest 2×2 boards whose cells still read as transcripts (R12:
-    // 300 wide, 360 tall); anything smaller is the wall, with no Composer.
-    for (width, height) in [(900., 790.), (1000., 800.)] {
+    // 300 wide, 360 tall, under the 46px head row and over the 30px bar and
+    // the frame); anything smaller is the wall, with no Composer.
+    for (width, height) in [(900., 812.), (1000., 830.)] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);
         let queue = bounds(cx, format!("composer-queue-{namespace}"));

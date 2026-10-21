@@ -851,20 +851,21 @@ pub const R_TIGHT: f32 = 2.0;
 
 // --------------------------------------------------------- shell and board
 
-/// 36ch (280.8px) — the navigation column, the prototype's `--navw`; folded
-/// it is nothing. `CockpitView::cell()` subtracts whichever is live, so the
-/// nav stays part of the semantic-zoom input.
-pub const NAV_WIDTH: f32 = 36.0 * CH;
-/// 32px — the window-chrome band, the prototype's titlebar (`TITLEBAR_H`).
-/// It says nothing (ADR 0014): the host traffic lights centre here
-/// (`TRAFFIC_Y`), and the window drags by the empty band across its width.
-/// On macOS and Windows the board starts below it (`titlebar::board_top`).
+/// 264px — the navigation column (SPEC §5.1); folded it is the rail.
+/// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
+/// of the semantic-zoom input. Off the space scale: the mockups' column.
+pub const NAV_WIDTH: f32 = 264.0;
+/// 46px — the head row (SPEC §4), ADR 0014's titlebar grown into the row
+/// that holds the traffic lights over the nav, the view head over the board
+/// and the panel's tabs over the panel. The host traffic lights centre here
+/// (`TRAFFIC_Y`), the row drags the window outside its controls, and the
+/// board's cards start below it (`titlebar::board_top`). Off the space
+/// scale: a 28px control and 9px of frame either side.
 pub const WIN_CHROME_H: f32 = TITLEBAR_H;
-/// 32px — the titlebar band, and `STATUS_BAR_H` 24 the bottom bar (one
-/// `ROW` and 4px, closed above by a `LINE`).
-pub const TITLEBAR_H: f32 = 32.0;
-#[allow(dead_code)]
-pub const STATUS_BAR_H: f32 = ROW + SPACE_1;
+/// 46px — the head row, and `STATUS_BAR_H` 30 the bottom bar (full width,
+/// `BAR` under a `BAR_TOP` line). Off the scale: the mockups' rows.
+pub const TITLEBAR_H: f32 = 46.0;
+pub const STATUS_BAR_H: f32 = 30.0;
 /// Where the host traffic-light group's close button sits: 13px in from the
 /// window's left edge, vertically centred for a 14px button in the band.
 pub const TRAFFIC_X: f32 = 13.0;
@@ -875,6 +876,10 @@ pub const TRAFFIC_Y: f32 = (WIN_CHROME_H - 14.0) / 2.0;
 /// rule restores 10px. Port 10px.)
 pub const GRID_GAP: f32 = ferrite_core::layout::GRID_GAP;
 pub const GRID_PAD: f32 = 10.0;
+/// 8px — the frame the board column leaves right of and under its cards
+/// (SPEC §4): the same gutter as between two cards (`GRID_GAP`). The left
+/// has none: the nav's own padding is the gutter there.
+pub const BOARD_PAD: f32 = SPACE_2;
 /// A toast's width: 52 cells (the prototype's `.toast`).
 pub const TOAST_W: f32 = 52.0 * CH;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
@@ -1499,28 +1504,30 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // Owner: WP-C (the pane shell, head, wall tiles, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
 //
-// **The board is a terminal multiplexer's** (theme rules 2, 3, 7). The window
-// is two rows: the board beside the sidebar, and the bottom bar
-// (`STATUS_BAR_H`); the sidebar keeps the titlebar band (`WIN_CHROME_H`)
-// at its own top. Panes sit flush, square and
-// flat on the reading plane (`paint::PLANE`), split by `BOARD_SEAM` 1px
-// `paint::LINE` seams; there is no gutter and no card. The sidebar owns the
-// one `CHROME_SEAM_W` column between it and the board, and the board's left
-// edge rides the sidebar's width every frame while cmd-B folds it
-// (`motion::RESIZE`). A seam is also the 9px grab band (`SEAM_GRAB` in the
-// cockpit) that resizes its two sides, clamped to 22–78% of the board; a
-// default grid's aligned seams are one line that drags as one, and under
-// the pointer and while held the whole line takes `SEAM_HOVER`, fading in
-// over `MOTION_SEAM_FADE_MS`.
+// **Cards on a frame** (theme rule 2, SPEC §4). The window is two rows: the
+// nav and the board column over the head row (`WIN_CHROME_H`), and the
+// full-width bottom bar (`STATUS_BAR_H`). The board column starts at the
+// nav's right edge (no seam: the card's edge separates) and leaves
+// `BOARD_PAD` of frame right of and under its cards; its left edge rides
+// the nav's width every frame while cmd-B folds it (`motion::RESIZE`). The
+// column paints the frame itself (`components::frame_around`): `paint::
+// FRAME` over the head row and the gutters, with a rounded hole per card,
+// so the frame and the cards are separate regions (rule 4) and whatever a
+// card's children paint past its rounded corners is covered. Cards on a
+// board are `BOARD_SEAM` apart; a seam is the gutter's centre line and its
+// 9px grab band (`SEAM_GRAB` in the cockpit) that resizes its two sides,
+// clamped to 22–78% of the board. A default grid's aligned seams are one
+// line that drags as one, and under the pointer and while held the whole
+// line draws `SEAM_LINE_W` of `SEAM_HOVER` in the gutter, fading in over
+// `MOTION_SEAM_FADE_MS`.
 //
-// **The Pane frame.** A Pane's content starts at its own edges; its 1px
-// edge is an overlay laid over them (the prototype's `.pane::after`), so a
-// state change reflows nothing. By precedence (`pane::PaneEdge`): a
-// waiting Pane `WAIT_RING` on every side, focused or not (focus then
-// shows in its head ground and title) > focused `FOCUS_RING` > at rest
-// `TRANSPARENT` — the seams separate Panes, an edge only ever says
-// something. Focus is drawn only while more than one Pane is on the board.
-// Every Pane root is the `pane::PANE_GROUP` hover group.
+// **The Pane card.** `paint::CARD`, radius `R_PANE`, its content starting at
+// its own edges; its 1px ring is an overlay just outside them (the mockups'
+// `box-shadow: 0 0 0 1px`), so a state change reflows nothing. By
+// precedence (`pane::PaneEdge`): a waiting Pane `WAIT_RING`, focused or
+// not > focused `FOCUS_RING` (only while more than one Pane is on the
+// board) > at rest `CARD_RING`. Every Pane root is the `pane::PANE_GROUP`
+// hover group.
 //
 // **Solo has no head**: the nav's selected row names the Thread and the
 // body starts at the plane's top edge.
@@ -1543,9 +1550,9 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // and, while it waits, quick answers boxed in `paint::LINE2`; no meter, no
 // sparkline.
 //
-// **The window chrome** (ADR 0014). The titlebar band says nothing: it is
-// the nav's top chrome, the traffic lights' row and the window's drag
-// strip; the board starts below it on macOS and Windows. The window's one
+// **The window chrome** (ADR 0014, SPEC §4). The head row is the nav's top
+// chrome, the traffic lights' row and the window's drag strip, and the slot
+// the view head and the panel's tabs fill; the cards start below it. The window's one
 // bar is the bottom bar (`STATUS_BAR_H`), on the chrome under a
 // `paint::LINE` rule: the sidebar toggle and the bell, the session in
 // `TEXT_STRONG` at the strong weight, `1 solo` and a tab per Group (the current
@@ -1594,10 +1601,13 @@ pub const WINDOW_MIN_H: f32 = 420.0;
 /// from flickering the whole board between tiers.
 pub const LEVEL_HYSTERESIS: f32 = 24.0;
 
-/// 1px — the seam between two Panes on a board: a `paint::LINE` line and
-/// nothing else (no gutter), the tree's gap (`layout::Tree::rects`), the
-/// core's `GRID_GAP` so the default grid's equal cells stay equal.
+/// 8px — the gutter between two cards on a board, the tree's gap
+/// (`layout::Tree::rects`): the core's `GRID_GAP`, so the default grid's
+/// equal cells stay equal. Its centre line is the seam.
 pub const BOARD_SEAM: f32 = GRID_GAP;
+/// 2px — the line a seam draws in its gutter under the pointer and while
+/// held (`SEAM_HOVER`); at rest the gutter alone separates the cards.
+pub const SEAM_LINE_W: f32 = 2.0;
 /// 1px — the column between the sidebar and the board (`paint::CHROME_SEAM`).
 pub const CHROME_SEAM_W: f32 = 1.0;
 
@@ -2261,8 +2271,10 @@ pub const NAV_PAD_Y: f32 = HALF_ROW;
 pub const NAV_CELL: f32 = 2.0 * CH;
 /// 1ch — between a title and the word at the row's right.
 pub const NAV_WORD_GAP: f32 = CH;
-/// 34ch — the text box of every row: the column less its inline padding.
-pub const NAV_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_PAD_X;
+/// 31ch — the text box of every row: the whole cells the 264px column
+/// leaves inside its inline padding (phase 2 re-measures the rows in px).
+pub const NAV_TEXT_W: f32 = 31.0 * CH;
+const _: () = assert!(NAV_TEXT_W <= NAV_WIDTH - 2.0 * NAV_PAD_X);
 /// A half row — between two Project sections (the prototype's `.half`).
 pub const NAV_SECTION_GAP: f32 = HALF_ROW;
 /// The most cells a Project heading's branch takes before it truncates.
@@ -2918,7 +2930,8 @@ mod tests {
         assert!(near(CODE_CELL, 7.8) && near(CH, CODE_CELL));
         assert!(near(GLYPH_GUTTER, 2.0 * CH));
         assert_eq!((ROW, HALF_ROW), (20.0, 10.0));
-        assert_eq!((TITLEBAR_H, STATUS_BAR_H), (32.0, 24.0));
+        assert_eq!((TITLEBAR_H, STATUS_BAR_H), (46.0, 30.0));
+        assert_eq!((NAV_WIDTH, BOARD_PAD, GRID_GAP), (264.0, 8.0, 8.0));
         assert_eq!(WIN_CHROME_H, TITLEBAR_H);
         assert_eq!(TRAFFIC_Y, (WIN_CHROME_H - 14.0) / 2.0);
     }

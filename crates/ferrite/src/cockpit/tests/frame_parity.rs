@@ -311,7 +311,7 @@ fn a_parked_member_is_its_tile_until_enter_wakes_it(cx: &mut TestAppContext) {
 }
 
 /// F-12: the board rides cmd-B with the column, every frame: mid-ride its
-/// left edge is the column's width this frame and the seam, and the Pane
+/// left edge is the column's width this frame, and the Pane
 /// widths change from frame to frame — in Solo and on a 4-up board.
 #[gpui::test]
 fn the_board_rides_the_sidebar_every_frame(cx: &mut TestAppContext) {
@@ -341,8 +341,8 @@ fn the_board_rides_the_sidebar_every_frame(cx: &mut TestAppContext) {
                 (left, column, width)
             });
             assert!(
-                (left - (column + crate::theme::CHROME_SEAM_W)).abs() < 0.01,
-                "{count}: the board starts at the column + 1: {left} / {column}"
+                (left - column).abs() < 0.01,
+                "{count}: the board starts at the column: {left} / {column}"
             );
             widths.push(width);
         }
@@ -556,4 +556,67 @@ fn dragging_the_vertical_seam_moves_both_rows(cx: &mut TestAppContext) {
         (width(&after, 2) - width(&after, 0)).abs() <= 0.5,
         "and the bottom row's moves with it: {after:?}"
     );
+}
+
+/// SPEC §4: Solo's card sits on the frame flush right of the nav, under
+/// the 46px head row, `BOARD_PAD` short of the window's right edge and of
+/// the 30px bar — the mockups' frame at their 1600×960.
+#[gpui::test]
+fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
+    use crate::theme::{BOARD_PAD, STATUS_BAR_H, WIN_CHROME_H};
+    let (core, _fake) = cockpit("frame-solo-card", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(960.)));
+    tick(cx);
+    let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
+    let card = rects[0].1;
+    assert_eq!((card.x, card.y), (nav::WIDTH, WIN_CHROME_H));
+    assert_eq!(card.x + card.w, 1600. - BOARD_PAD);
+    assert_eq!(card.y + card.h, 960. - STATUS_BAR_H - BOARD_PAD);
+    assert_eq!((card.x, card.y, card.w, card.h), (264., 46., 1328., 876.));
+    let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
+    let root = bounds(cx, format!("pane-root-{key}"));
+    assert!((root.left() - px(card.x)).abs() < px(1.) && (root.top() - px(card.y)).abs() < px(1.));
+    let bar = cx.debug_bounds("bottom-bar").expect("the bar");
+    assert_eq!(bar.size.height, px(STATUS_BAR_H));
+    assert_eq!(bar.size.width, px(1600.), "full width");
+}
+
+/// SPEC §5.9: a 2×2 Group is four equal cards `GRID_GAP` apart on the
+/// frame, its seams the gutters' centre lines: a 9px grab band and a
+/// `SEAM_LINE_W` line, both centred in the 8px gutter.
+#[gpui::test]
+fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
+    use crate::theme::{BOARD_PAD, GRID_GAP, SEAM_LINE_W, STATUS_BAR_H, WIN_CHROME_H};
+    let (view, _fake, cx, _group) = board_of("frame-group-cards", 4, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(960.)));
+    tick(cx);
+    let mut rects: Vec<layout::Rect> = cx
+        .update(|window, cx| view.read(cx).pane_rects(window))
+        .into_iter()
+        .map(|(_, rect)| rect)
+        .collect();
+    rects.sort_by(|a, b| (a.y, a.x).partial_cmp(&(b.y, b.x)).unwrap());
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let [tl, tr, bl, br] = rects[..] else {
+        panic!("four cards: {rects:?}")
+    };
+    assert!(near(tl.x, nav::WIDTH) && near(tl.y, WIN_CHROME_H), "{tl:?}");
+    assert!(near(tr.x - (tl.x + tl.w), GRID_GAP), "{tl:?} {tr:?}");
+    assert!(near(bl.y - (tl.y + tl.h), GRID_GAP), "{tl:?} {bl:?}");
+    assert!(near(br.x + br.w, 1600. - BOARD_PAD), "{br:?}");
+    assert!(near(br.y + br.h, 960. - STATUS_BAR_H - BOARD_PAD), "{br:?}");
+    assert!(
+        near(tl.w, tr.w) && near(tl.h, bl.h),
+        "equal cards: {rects:?}"
+    );
+    let gutter = tl.x + tl.w + GRID_GAP / 2.;
+    let band = bounds(cx, "board-seam-0-band-0".to_string());
+    assert_eq!(band.size.width, px(9.));
+    // gpui snaps the half-pixel band to the device pixel.
+    assert!((band.center().x - px(gutter)).abs() <= px(0.5), "{band:?}");
+    let line = bounds(cx, "board-seam-0".to_string());
+    assert_eq!(line.size.width, px(SEAM_LINE_W));
+    assert!((line.center().x - px(gutter)).abs() <= px(0.5), "{line:?}");
 }

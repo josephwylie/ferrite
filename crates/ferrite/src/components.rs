@@ -1449,6 +1449,61 @@ pub fn menu_section(
         )
 }
 
+/// The frame around a board's cards (theme WP-C, rules 2 and 4): one
+/// `paint::FRAME` path over its own box with a rounded hole per card (in
+/// window coordinates), the hole taking the card's ring too (`R_PANE` and
+/// `FOCUS_RING_W` past the card's edge). The column paints its gutters and
+/// head row with it, so the frame and the cards stay separate regions on
+/// glass; laid over the cards, it also covers whatever a card's children
+/// paint past its rounded corners, which gpui's square clip lets through.
+pub fn frame_around(cards: Vec<gpui::Bounds<gpui::Pixels>>) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            // Even-odd fill: the box, minus every card and its ring. A
+            // card's ring may stand past the box (a card flush with the
+            // nav), so the path spans a ring further and the box clips it.
+            let ring = theme::FOCUS_RING_W;
+            let mut path = gpui::PathBuilder::fill();
+            rounded_rect(&mut path, bounds.dilate(px(ring)), 0.0);
+            for card in &cards {
+                rounded_rect(&mut path, card.dilate(px(ring)), theme::R_PANE + ring);
+            }
+            if let Ok(path) = path.build() {
+                let mask = gpui::ContentMask { bounds };
+                window.with_content_mask(Some(mask), |window| {
+                    window.paint_path(path, theme::paint::FRAME.hsla())
+                });
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// One closed rounded-rect sub-path of `path` (a square one at radius 0).
+fn rounded_rect(path: &mut gpui::PathBuilder, at: gpui::Bounds<gpui::Pixels>, radius: f32) {
+    let (x0, y0) = (f32::from(at.left()), f32::from(at.top()));
+    let (x1, y1) = (f32::from(at.right()), f32::from(at.bottom()));
+    let r = radius.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0).max(0.0);
+    let at = |x: f32, y: f32| gpui::point(px(x), px(y));
+    let corner = |path: &mut gpui::PathBuilder, x: f32, y: f32| {
+        if r > 0.0 {
+            path.arc_to(at(r, r), px(0.), false, true, at(x, y));
+        }
+    };
+    path.move_to(at(x0 + r, y0));
+    path.line_to(at(x1 - r, y0));
+    corner(path, x1, y0 + r);
+    path.line_to(at(x1, y1 - r));
+    corner(path, x1 - r, y1);
+    path.line_to(at(x0 + r, y1));
+    corner(path, x0, y1 - r);
+    path.line_to(at(x0, y0 + r));
+    corner(path, x0 + r, y0);
+    path.close();
+}
+
 /// Reports `element`'s laid-out bounds, unrounded, to `record` in
 /// prepaint, through an absolute box pinned to all four edges of its
 /// padding box, so padding never offsets it. A border is outside that box:

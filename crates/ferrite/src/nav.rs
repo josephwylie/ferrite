@@ -700,19 +700,6 @@ pub fn content() -> Div {
         .pb(px(NAV_PAD_Y))
 }
 
-/// The one seam column, right of the nav at its own x (the prototype's
-/// `.vline`): `paint::CHROME_SEAM` — a dark seam on glass, nothing on the
-/// opaque greys — beside the open column and the rail alike. It never
-/// darkens the nav's own last column.
-pub fn seam() -> Div {
-    div()
-        .debug_selector(|| "nav-seam".into())
-        .flex_shrink_0()
-        .h_full()
-        .w(px(CHROME_SEAM_W))
-        .bg(paint::CHROME_SEAM)
-}
-
 /// The sidebar toggle (the prototype's `#b-side`): the sidebar glyph at
 /// `ICON_BUTTON_GLYPH` in a door `ICON_BUTTON` wide at the bottom bar's
 /// left (`titlebar::bottom_bar`), the full height of the bar — the same
@@ -1548,7 +1535,7 @@ mod tests {
         assert_eq!(NAV_SECTION_GAP, HALF_ROW);
         assert_eq!(NAV_PAD_X, CH);
         assert_eq!(NAV_CELL, 2.0 * CH);
-        assert_eq!(WIDTH, 36.0 * CH, "the prototype's 36ch column");
+        assert_eq!(WIDTH, 264.0, "the mockups' 264px column");
     }
 
     /// N-5, the selection rule: one selection, on the row of what the board
@@ -1744,19 +1731,19 @@ mod tests {
     #[test]
     fn a_cut_title_ends_in_a_whole_ellipsis_one_cell_before_its_word() {
         let close = |left: f32, right: f32| (left - right).abs() < 1e-3;
-        assert!(close(NAV_TEXT_W, 34.0 * CH));
+        assert!(close(NAV_TEXT_W, 31.0 * CH));
         let solo = title_w(2.0, Some("done"));
         assert!(
-            close(solo, 25.0 * CH),
-            "the solo row: 34 less 2+2 cells, 4+1: {solo}"
+            close(solo, 22.0 * CH),
+            "the solo row: 31 less 2+2 cells, 4+1: {solo}"
         );
         let title = "Nav rows jitter on stream start";
         let keep = kept(title.chars().count(), solo / CH);
         let cut: String = title.chars().take(keep).collect();
-        assert_eq!(format!("{cut}\u{2026}"), "Nav rows jitter on strea\u{2026}");
+        assert_eq!(format!("{cut}\u{2026}"), "Nav rows jitter on st\u{2026}");
         assert_eq!(
             keep + 1,
-            25,
+            22,
             "the ellipsis takes the box's last cell, one gap before the word"
         );
         // Every kind of row, every word length: a title one cell too long
@@ -1982,7 +1969,7 @@ mod tests {
                     NavTail::Waiting("approval"),
                     12
                 ),
-                3.0
+                1.0
             ),
             Some("\u{2191}12 #12 \u{2713}".into()),
             "the word goes before the checkout's facts"
@@ -2143,11 +2130,11 @@ mod tests {
         }
     }
 
-    /// N-8: the column is chrome from the window's top — the titlebar band
-    /// over it draws nothing (ADR 0014) — and has no hairline; the one seam
-    /// is its own column right of the nav, open and railed alike.
+    /// N-8: the column is chrome from the window's top — the head row's
+    /// strip over it paints nothing — with no hairline and no seam beside
+    /// it: the card's edge separates (SPEC §5.1).
     #[test]
-    fn the_column_is_chrome_from_the_top_with_one_seam_beside_it() {
+    fn the_column_is_chrome_from_the_top() {
         let mut column = shell(WIDTH);
         let style = column.style();
         assert_eq!(style.background, None, "the body paints the ground");
@@ -2163,12 +2150,6 @@ mod tests {
             Some(gpui::Hsla::from(paint::CHROME).into())
         );
         assert_eq!(style.inset.top, Some(px(0.).into()));
-        let mut seam = seam();
-        assert_eq!(seam.style().size.width, Some(px(CHROME_SEAM_W).into()));
-        assert_eq!(
-            seam.style().background,
-            Some(gpui::Hsla::from(paint::CHROME_SEAM).into())
-        );
     }
 
     /// The rail keeps every open Thread's line: its ⌘ digit, dim, and its

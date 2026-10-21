@@ -110,11 +110,12 @@ fn the_decision_row_reads_head_band_options_hint(cx: &mut TestAppContext) {
         near(hints.top() - deny.bottom(), half),
         "{deny:?} / {hints:?}"
     );
-    // The band and the options run on the content column, after the gutter.
-    assert!(near(
-        well.left(),
-        head.left() + px(crate::theme::GLYPH_GUTTER)
-    ));
+    // The band and the options run on the content column, after the gutter
+    // (its 15.6px snapped to the pixel at both edges).
+    assert!(
+        (well.left() - head.left() - px(crate::theme::GLYPH_GUTTER)).abs() <= px(1.),
+        "{head:?} / {well:?}"
+    );
     assert!(near(allow.left(), well.left()) && near(allow.right(), well.right()));
     let cursor = cx.debug_bounds("decision-cursor").expect("the ❯");
     assert!(

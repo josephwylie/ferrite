@@ -3,13 +3,12 @@
 //! shows is folded in core, and every key it answers to belongs to the
 //! cockpit above it.
 //!
-//! The frame is the terminal-native board's (theme WP-C): a Pane is square
-//! and flat on the reading plane (`paint::PLANE`); its content starts at
-//! the Pane's own edges, and its 1px edge is an overlay laid over them
-//! (the prototype's `.pane::after`) that only changes colour — transparent
-//! at rest, `TEXT_STRONG` when focused on a board, `WAIT_RING` on every
-//! side while it waits (a focused waiting Pane shows only the yellow; its
-//! focus reads in the head ground and title). On a board it wears one head
+//! A Pane is a card on the frame (theme WP-C, SPEC §5.3): `paint::CARD` at
+//! `R_PANE`; its content starts at the card's own edges, and its 1px ring
+//! is an overlay just outside them (`card_ring`) that only changes colour —
+//! `CARD_RING` at rest, `FOCUS_RING` when focused on a board, `WAIT_RING`
+//! while it waits (a focused waiting Pane shows only the yellow; its focus
+//! reads in the head ground and title). On a board it wears one head
 //! row — the dot (a working Thread's braille spinner), the title, the
 //! provider mark — and no state word; top to bottom then the subagent
 //! strip, the transcript body (its Decision is the transcript's tail), the
@@ -1276,10 +1275,11 @@ fn record_card(shell: Div, view: &PaneView) -> Div {
     })
 }
 
-/// The Pane box (theme WP-C): the reading plane (`paint::PLANE`), square
-/// and flat, its content flush to its own edges — the edge is an overlay
-/// (`pane_frame`), never a border in layout. `overflow: hidden` keeps the
-/// body under the head rule.
+/// The Pane card (theme WP-C, SPEC §5.3): `paint::CARD` at `R_PANE`, its
+/// content flush to its own edges — the ring is an overlay (`pane_frame`),
+/// never a border in layout. `overflow: hidden` clips the children to the
+/// card's box; the frame laid over the board (`components::frame_around`)
+/// covers its rounded corners.
 fn pane_shell() -> Div {
     div()
         .relative()
@@ -1288,15 +1288,16 @@ fn pane_shell() -> Div {
         .size_full()
         .min_h_0()
         .min_w_0()
-        .bg(theme::paint::PLANE)
+        .rounded(px(theme::R_PANE))
+        .bg(theme::paint::CARD)
         .font_family(theme::FONT_UI)
         .overflow_hidden()
 }
 
-/// What a Pane's 1px edge says (F-2): a waiting Pane (`WAIT_RING`, on
-/// every side, focused or not) beats focus (`FOCUS_RING`), and a Pane with
-/// neither rests on a transparent edge — the seams separate Panes. Solo
-/// never recolours the frame (rule 2.2.5): the Decision carries the signal.
+/// What a Pane card's 1px ring says (F-2, SPEC §5.9): a waiting Pane
+/// (`WAIT_RING`, focused or not) beats focus (`FOCUS_RING`), and a Pane
+/// with neither rests on `CARD_RING`. Solo never recolours the ring (rule
+/// 2.2.5): the Decision carries the signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaneEdge {
     Attention,
@@ -1319,21 +1320,16 @@ impl PaneEdge {
         match self {
             PaneEdge::Attention => rgba(WAIT_RING).into(),
             PaneEdge::Focused => rgba(FOCUS_RING).into(),
-            PaneEdge::Rest => rgba(TRANSPARENT).into(),
+            PaneEdge::Rest => rgba(CARD_RING).into(),
         }
     }
 }
 
-/// The Pane root (F-1): the Pane box, then its 1px edge laid over it as an
-/// absolute `inset-0` overlay (the prototype's `.pane::after`) — it takes
-/// no layout and no pointer, so the content starts at the Pane's own edges
-/// and a state change moves nothing. Every Pane root is `PANE_GROUP`.
+/// The Pane root (F-1): the card, then its 1px ring (`card_ring`) — it
+/// takes no layout and no pointer, so the content starts at the card's own
+/// edges and a state change moves nothing. Every Pane root is `PANE_GROUP`.
 fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
-    let overlay = div()
-        .absolute()
-        .inset_0()
-        .border_1()
-        .border_color(edge.ink());
+    let overlay = card_ring(edge.ink());
     let overlay = match edge {
         PaneEdge::Focused => overlay.debug_selector(move || format!("pane-focus-edge-{key}")),
         PaneEdge::Attention => overlay.debug_selector(move || format!("pane-waiting-edge-{key}")),
@@ -1352,6 +1348,32 @@ fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
         .min_w_0()
         .child(pane)
         .child(overlay)
+}
+
+/// A card's 1px ring in `ink`, just outside its box (the mockups'
+/// `box-shadow: 0 0 0 1px`): an overlay `FOCUS_RING_W` past every edge,
+/// rounded to match, in the band the board's frame leaves around the card
+/// (`components::frame_around`). The band is frame, so the ring lays
+/// `paint::FRAME` under its ink there: the hairline reads over the frame,
+/// as drawn. The cockpit rings a reader's card with it.
+pub(crate) fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
+    let out = px(-theme::FOCUS_RING_W);
+    let ring = |color: gpui::Hsla| {
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(px(theme::R_PANE + theme::FOCUS_RING_W))
+            .border_1()
+            .border_color(color)
+    };
+    div()
+        .absolute()
+        .top(out)
+        .left(out)
+        .right(out)
+        .bottom(out)
+        .child(ring(theme::paint::FRAME.hsla()))
+        .child(ring(ink.into()))
 }
 
 // ------------------------------------------------------------------ drafts
@@ -10081,15 +10103,14 @@ mod tests {
     /// F-2: one attention edge. A waiting Pane draws `WAIT_RING` on a
     /// board whether it holds focus or not — no inner ring, no full-ink
     /// answer target, no red blocked edge; a calm focused Pane draws the
-    /// strong; at rest the edge is transparent and the seams separate
-    /// Panes. Solo never recolours the frame.
+    /// focus ring; at rest the card's own ring. Solo never recolours it.
     #[test]
     fn pane_edge_ranks_state_over_focus() {
         assert_eq!(PaneEdge::of(true, true, false), PaneEdge::Attention);
         assert_eq!(PaneEdge::of(false, true, false), PaneEdge::Attention);
         assert_eq!(PaneEdge::of(true, false, false), PaneEdge::Focused);
         assert_eq!(PaneEdge::of(false, false, false), PaneEdge::Rest);
-        assert_eq!(PaneEdge::Rest.ink(), rgba(TRANSPARENT).into());
+        assert_eq!(PaneEdge::Rest.ink(), rgba(CARD_RING).into());
         assert_eq!(PaneEdge::Focused.ink(), rgba(FOCUS_RING).into());
         assert_eq!(PaneEdge::Attention.ink(), rgba(WAIT_RING).into());
         for focused in [false, true] {

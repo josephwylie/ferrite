@@ -800,24 +800,13 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
-    let check = |cx: &mut gpui::VisualTestContext, crosses: bool| {
+    let check = |cx: &mut gpui::VisualTestContext| {
         let board = view.read_with(cx, |view, _| view.board.get());
-        let plane = cx.debug_bounds("titlebar-plane");
-        if crosses {
-            assert_eq!(
-                board.y,
-                crate::theme::WIN_CHROME_H,
-                "the board starts under the band"
-            );
-            let plane = plane.expect("the band's plane");
-            assert!(
-                (plane.left() - px(board.x)).abs() < px(1.),
-                "{plane:?} / {board:?}"
-            );
-        } else {
-            assert_eq!(board.y, 0.0, "the board starts at the window's top");
-            assert!(plane.is_none(), "the band ends at the nav");
-        }
+        assert_eq!(
+            board.y,
+            crate::theme::WIN_CHROME_H,
+            "the cards start under the head row"
+        );
         if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
             let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
             assert_eq!(drag.left(), px(0.), "the band over the nav drags");
@@ -832,10 +821,10 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
             }
         }
     };
-    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
+    check(cx);
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
-    check(cx, crate::titlebar::CUSTOM || cfg!(target_os = "macos"));
+    check(cx);
 }
 
 /// The checks card grows to its own tally: the counts line is never cut

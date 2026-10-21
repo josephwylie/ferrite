@@ -33,7 +33,9 @@
 //! they read.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea};
+use gpui::{
+    div, px, rgb, rgba, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea,
+};
 
 use crate::theme::paint;
 
@@ -54,36 +56,25 @@ pub const DEV: bool = option_env!("FERRITE_RELEASE").is_none();
 /// hiding it there would take the traffic lights with it.
 pub const CUSTOM: bool = cfg!(target_os = "windows");
 
-/// Keep a dedicated window-drag strip above interactive Pane content on
-/// macOS and Windows, independent of whether the nav is expanded.
-pub fn band_over_board() -> bool {
-    CUSTOM || cfg!(target_os = "macos")
-}
-
-/// Where the Pane board starts: under the band, or at the window's top.
+/// Where the board's cards start: under the head row (SPEC §4), on every
+/// platform — the row is the slot the view head fills.
 pub fn board_top() -> f32 {
-    if band_over_board() {
-        WIN_CHROME_H
-    } else {
-        0.0
-    }
+    WIN_CHROME_H
 }
 
-/// The titlebar band, as an overlay: the nav leaves its top `WIN_CHROME_H`
-/// empty (`nav::content`) and the board starts at `board_top`, so this adds
-/// no layout — it claims what the window already left empty. Over the nav
-/// alone it ends at `board_left`; across the board it paints the reading
-/// plane (`paint::PLANE`) from there.
+/// The head row's drag strip, as an overlay: the nav leaves its top
+/// `WIN_CHROME_H` empty (`nav::content`) and the cards start at
+/// `board_top`, so this adds no layout and paints nothing — it claims what
+/// the window already left empty, whose frame the nav and the board column
+/// paint (`components::frame_around`).
 ///
-/// The band says nothing (ADR 0014): it is the window's titlebar and no
-/// more — the strip the window drags by and, on Windows, the caption
-/// buttons.
+/// It is the window's titlebar and no more: the strip the window drags by
+/// and, on Windows, the caption buttons at its right end.
 ///
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and the drag would take
 /// the press meant for the row under the pointer.
-pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
-    let over_board = band_over_board();
+pub fn strip(draggable: bool, maximized: bool) -> Div {
     let stretch = if !draggable {
         div().flex_1().h_full()
     } else if CUSTOM {
@@ -97,28 +88,10 @@ pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
         .absolute()
         .top_0()
         .left_0()
-        .map(|band| {
-            if over_board {
-                band.right_0()
-            } else {
-                band.w(px(board_left))
-            }
-        })
+        .right_0()
         .h(px(WIN_CHROME_H))
         .flex()
         .flex_row()
-        .when(over_board, |band| {
-            band.child(
-                div()
-                    .debug_selector(|| "titlebar-plane".into())
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(board_left))
-                    .right_0()
-                    .bg(paint::PLANE),
-            )
-        })
         .child(stretch)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
@@ -126,7 +99,7 @@ pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
 /// The empty stretch macOS drags the window by: a press starts AppKit's
 /// window drag, a double-click takes the system's titlebar action (zoom or
 /// minimise). The traffic lights are AppKit's own buttons over it.
-fn mac_drag_region() -> Div {
+pub fn mac_drag_region() -> Div {
     div()
         .debug_selector(|| "titlebar-drag".into())
         .flex_1()
@@ -200,9 +173,9 @@ pub fn bottom_bar(
         .flex_shrink_0()
         .w_full()
         .h(px(STATUS_BAR_H))
-        .bg(paint::CHROME)
+        .bg(paint::BAR)
         .border_t_1()
-        .border_color(paint::LINE)
+        .border_color(rgba(BAR_TOP))
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(LH_UI))
@@ -489,21 +462,16 @@ mod tests {
     fn the_strip_is_an_overlay_of_the_band(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init_components(cx);
-            let mut strip = strip(crate::nav::WIDTH, true, false);
+            let mut strip = strip(true, false);
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });
     }
 
-    /// The window-drag strip has its own space above the board's controls.
+    /// The cards start under the head row on every platform (SPEC §4).
     #[test]
-    fn the_board_starts_at_the_top_unless_the_band_crosses_it() {
-        let expected = if CUSTOM || cfg!(target_os = "macos") {
-            WIN_CHROME_H
-        } else {
-            0.0
-        };
-        assert_eq!(board_top(), expected);
+    fn the_board_starts_under_the_head_row() {
+        assert_eq!(board_top(), WIN_CHROME_H);
     }
 
     /// F-9: a usage segment reads the provider's more used window, the 5h

@@ -6,7 +6,9 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
     let (mut core, fake) = cockpit("polish-question-containment", 4);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    // 830 tall: a 2×2 under the 46px head row and the 30px bar still
+    // reads as transcripts (R12: 360 tall).
+    cx.simulate_resize(gpui::size(px(1200.), px(830.)));
     view.update(cx, |view, cx| {
         view.enter_group(group, cx);
         view.focus_pane(0);
@@ -157,7 +159,9 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
     let group = group_all(&mut core);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    // 830 tall: a 2×2 under the 46px head row and the 30px bar still
+    // reads as transcripts (R12: 360 tall).
+    cx.simulate_resize(gpui::size(px(1200.), px(830.)));
     view.update(cx, |view, cx| {
         view.enter_group(group, cx);
         view.focus_pane(0);
@@ -221,7 +225,7 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
     tick(cx);
     assert!(cx.debug_bounds("question-island").is_some());
     // Repeat geometry changes to catch stale collapsed state and feedback loops.
-    for height in [1000., 800., 1000., 800.] {
+    for height in [1000., 830., 1000., 830.] {
         cx.simulate_resize(gpui::size(px(1200.), px(height)));
         tick(cx);
         assert!(cx.debug_bounds("question-island").is_some());
