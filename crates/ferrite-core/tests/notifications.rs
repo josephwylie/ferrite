@@ -220,6 +220,26 @@ fn a_finish_on_the_focused_thread_is_born_read() {
     assert!(!h.cockpit.notifications().attention(thread));
 }
 
+/// ADR 0017: the focused Pane is only seen while the window has focus. A
+/// finish there while the operator is in another app stays unread, and
+/// coming back reads it.
+#[test]
+fn a_finish_on_the_focused_thread_waits_while_the_window_is_away() {
+    let mut h = Harness::new("away", 1);
+    let thread = h.threads[0];
+    h.cockpit.set_window_active(false);
+    h.cockpit.send(thread, "go".into());
+    h.control.emit(0, ended());
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 1, "nobody was looking");
+    assert!(h.cockpit.notifications().attention(thread));
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 1, "pumping never reads it");
+
+    h.cockpit.set_window_active(true);
+    assert_eq!(h.unread(), 0, "coming back to the window reads it");
+}
+
 #[test]
 fn notifications_wait_for_a_child_permission_before_finishing() {
     let mut h = Harness::new("waiting-permission", 1);
@@ -837,6 +857,66 @@ fn contract_only_the_visible_subjects_requests_are_acknowledged() {
     assert_eq!(h.unread(), 1);
     h.cockpit.set_visible_subject(thread, Subject::Main);
     assert_eq!(h.unread(), 0);
+}
+
+/// An agent that ended unseen (ADR 0032) leaves the window looking where
+/// it was: after the next prompt starts another, only the shown
+/// Subagent's requests are read.
+#[test]
+fn an_unseen_end_keeps_the_shown_subject() {
+    let clock = ferrite_core::clock::ThreadFixture::install(chrono::Local::now());
+    let mut h = Harness::new("unseen-end-subject", 1);
+    let thread = h.threads[0];
+    let child = h.child(0, "shown-child");
+    h.control.activity(
+        0,
+        ActivityEvent::Status {
+            key: child.clone(),
+            state: AgentStatus::Idle,
+        },
+    );
+    h.cockpit.pump();
+    h.cockpit
+        .set_visible_subject(thread, Subject::Subagent(child.clone()));
+    h.cockpit.focus_thread(thread);
+    clock.advance(Duration::from_secs(10 * 60));
+    h.cockpit.pump();
+    assert_eq!(h.control.0.lock().unwrap().len(), 1);
+    h.cockpit.send(thread, "carry on".into());
+    h.cockpit.pump();
+    assert_eq!(
+        h.control.0.lock().unwrap().len(),
+        2,
+        "the send started another"
+    );
+    for (id, subject) in [("main", Subject::Main), ("child", Subject::Subagent(child))] {
+        h.control.activity(
+            1,
+            ActivityEvent::Decision {
+                subject: Some(subject),
+                decision: ferrite_core::Decision {
+                    kind: Default::default(),
+                    policy: Default::default(),
+                    delivery: Default::default(),
+                    id: id.into(),
+                    tool_use_id: id.into(),
+                    tool_name: "Bash".into(),
+                    description: "Approve".into(),
+                    input: serde_json::json!({}),
+                    suggestions: vec![],
+                },
+            },
+        );
+    }
+    h.cockpit.pump();
+    let notices: Vec<_> = h.cockpit.notifications().decisions().collect();
+    assert!(
+        notices
+            .iter()
+            .find(|n| n.subject == Some(Subject::Main))
+            .is_some_and(|n| !n.read),
+        "Main's request stays unread while its child is shown"
+    );
 }
 
 #[test]

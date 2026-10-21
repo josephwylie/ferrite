@@ -80,8 +80,31 @@ struct CachedText {
     touched: u64,
 }
 
+/// The kinds of native text a transcript keys under its namespace
+/// (`select.rs`): `{kind}{namespace}-…`.
+const TEXT_KINDS: [&str; 4] = ["markdown-", "literal-", "thinking-", "output-"];
+
+/// What a Pane's cache may hold of native text, by `held`, and in entries.
+const TEXT_BUDGET: usize = 32 * 1024 * 1024;
+const TEXT_ENTRIES: usize = 256;
+
+/// The most recent lookups belong to texts being drawn together; none of
+/// them is evicted for another, or a frame showing more than the budget
+/// would rebuild them all every frame. A frame looks up fewer than this.
+const DRAWN_TOGETHER: u64 = 64;
+
+/// What a cached native text holds, its parsed document and laid-out lines
+/// with them: measured in Sep 2026 by the memory freed as entries dropped,
+/// about 59 KiB for a 317-byte paragraph, 317 KiB for 2 KB and 3.4 MiB for
+/// 25 KB of drawn Markdown. Its source bytes alone understate it a
+/// hundredfold.
+fn held(source: &str) -> usize {
+    32 * 1024 + source.len() * 144
+}
+
 /// Pane-owned native text entities survive temporarily hidden Subjects. The
-/// least recently used run is discarded only at this explicit cache limit.
+/// least recently used run is discarded only at this explicit cache limit:
+/// `TEXT_ENTRIES`, or `TEXT_BUDGET` of what the texts hold.
 #[derive(Clone, Default)]
 pub struct TextCache(
     Rc<RefCell<(u64, HashMap<SharedString, CachedText>, usize)>>,
@@ -91,6 +114,9 @@ pub struct TextCache(
             Option<crate::attachment_preview::Preview>,
         )>,
     >,
+    /// The transcript (its namespace) that hosts this cache's path targets:
+    /// their hover card and ⌘-click (`file_links::PathTarget::scope`).
+    Rc<RefCell<Option<SharedString>>>,
 );
 
 impl TextCache {
@@ -99,12 +125,31 @@ impl TextCache {
         Rc::strong_count(&self.0)
     }
 
+    /// Every native text this cache holds, by id.
+    #[cfg(test)]
+    pub(crate) fn cached_ids(&self) -> Vec<SharedString> {
+        self.0.borrow().1.keys().cloned().collect()
+    }
+
     pub fn file_context(
         &self,
         cwd: Option<&std::path::Path>,
         preview: &crate::attachment_preview::Preview,
     ) {
         *self.1.borrow_mut() = (cwd.map(std::path::Path::to_path_buf), Some(preview.clone()));
+    }
+
+    /// Host this cache's path targets in the transcript `scope` (its
+    /// namespace): the one drawing now, so its card and ⌘-click route there.
+    pub(crate) fn set_path_scope(&self, scope: SharedString) {
+        let mut current = self.2.borrow_mut();
+        if current.as_ref() != Some(&scope) {
+            *current = Some(scope);
+        }
+    }
+
+    fn path_scope(&self) -> Option<SharedString> {
+        self.2.borrow().clone()
     }
 
     pub fn output_focused(&self, namespace: &str, window: &Window, cx: &App) -> bool {
@@ -130,25 +175,42 @@ impl TextCache {
         }
     }
 
+    /// Release every native text built under `namespace`: a transcript's
+    /// key that can never be drawn again (its history regenerated under a
+    /// new one, or the transcript released).
+    pub fn forget_namespace(&self, namespace: &str) {
+        let prefixes = TEXT_KINDS.map(|kind| format!("{kind}{namespace}-"));
+        let mut cache = self.0.borrow_mut();
+        let cache = &mut *cache;
+        let mut freed = 0;
+        cache.1.retain(|id, text| {
+            let stale = prefixes
+                .iter()
+                .any(|prefix| id.starts_with(prefix.as_str()));
+            if stale {
+                freed += held(&text.source);
+            }
+            !stale
+        });
+        cache.2 -= freed;
+    }
+
     pub fn redirect_namespace(&self, from: &str, to: &str) {
         let mut cache = self.0.borrow_mut();
         let keys: Vec<_> = cache
             .1
             .keys()
             .filter_map(|key| {
-                ["markdown-", "literal-", "thinking-", "output-"]
-                    .into_iter()
-                    .find_map(|kind| {
-                        key.strip_prefix(&format!("{kind}{from}")).map(|tail| {
-                            (key.clone(), SharedString::from(format!("{kind}{to}{tail}")))
-                        })
-                    })
+                TEXT_KINDS.into_iter().find_map(|kind| {
+                    key.strip_prefix(&format!("{kind}{from}"))
+                        .map(|tail| (key.clone(), SharedString::from(format!("{kind}{to}{tail}"))))
+                })
             })
             .collect();
         for (from, to) in keys {
             if let Some(state) = cache.1.remove(&from) {
                 if let Some(replaced) = cache.1.insert(to, state) {
-                    cache.2 -= replaced.source.len();
+                    cache.2 -= held(&replaced.source);
                 }
             }
         }
@@ -167,29 +229,30 @@ impl TextCache {
         // be updated in place, so it is rebuilt.
         if cache.1.get(&id).is_some_and(|text| !text.state.is(kind)) {
             if let Some(old) = cache.1.remove(&id) {
-                cache.2 -= old.source.len();
+                cache.2 -= held(&old.source);
             }
         }
         cache.0 += 1;
         let touched = cache.0;
-        let prior_bytes = cache.1.get(&id).map_or(0, |text| text.source.len());
-        while (!cache.1.contains_key(&id) && cache.1.len() >= 256)
-            || cache.2.saturating_sub(prior_bytes) + source.len() > 8 * 1024 * 1024
+        let prior = cache.1.get(&id).map_or(0, |text| held(&text.source));
+        let holds = held(source);
+        while (!cache.1.contains_key(&id) && cache.1.len() >= TEXT_ENTRIES)
+            || cache.2.saturating_sub(prior) + holds > TEXT_BUDGET
         {
             let Some(oldest) = cache
                 .1
                 .iter()
-                .filter(|(key, _)| *key != &id)
+                .filter(|(key, text)| *key != &id && text.touched + DRAWN_TOGETHER < touched)
                 .min_by_key(|(_, text)| text.touched)
                 .map(|(id, _)| id.clone())
             else {
                 break;
             };
             if let Some(old) = cache.1.remove(&oldest) {
-                cache.2 -= old.source.len();
+                cache.2 -= held(&old.source);
             }
         }
-        cache.2 = cache.2.saturating_sub(prior_bytes) + source.len();
+        cache.2 = cache.2.saturating_sub(prior) + holds;
         let text = cache.1.entry(id).or_insert_with(|| CachedText {
             source: source.to_string(),
             state: match kind {
@@ -264,7 +327,14 @@ pub struct Markdown {
     source: String,
     cache: TextCache,
     muted: bool,
+    /// Body ink in place of `TEXT` (a prompt's `TEXT_STRONG`).
+    ink: Option<u32>,
+    /// `ferrite-chip:` links draw as a prompt's inline file chips, opening
+    /// in this preview (`pane::prompt_chip`).
+    chips: Option<crate::attachment_preview::Preview>,
     document: Option<gpui::base::TextSelectionDocument>,
+    /// A find's occurrences to mark (`crate::find`).
+    find: Option<gpui::base::text::TextFind>,
 }
 
 impl Markdown {
@@ -276,17 +346,39 @@ impl Markdown {
         self
     }
 
+    pub fn find(mut self, find: Option<gpui::base::text::TextFind>) -> Self {
+        self.find = find;
+        self
+    }
+
     pub fn muted(mut self) -> Self {
         self.muted = true;
         self
     }
+
+    /// Set the body in `ink` (headings keep theirs).
+    pub fn ink(mut self, ink: u32) -> Self {
+        self.ink = Some(ink);
+        self
+    }
+
+    /// Draw `ferrite-chip:` links as a prompt's inline chips (a prompt's
+    /// band: its words, then its files), opening in `preview`.
+    pub fn chips(mut self, preview: crate::attachment_preview::Preview) -> Self {
+        self.chips = Some(preview);
+        self
+    }
+
     pub fn new(id: impl Into<SharedString>, source: String, cache: TextCache) -> Self {
         Self {
             id: id.into(),
             source,
             cache,
             muted: false,
+            ink: None,
+            chips: None,
             document: None,
+            find: None,
         }
     }
 }
@@ -294,30 +386,82 @@ impl Markdown {
 impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
+        // Prose sets its own face; the inherited style is the Pane's.
+        let face: SharedString = theme::FONT_UI.into();
         #[cfg(test)]
         testing::record(
             self.id.clone(),
             state.clone(),
-            window.text_style().clone(),
+            gpui::TextStyle {
+                font_family: face.clone(),
+                ..window.text_style().clone()
+            },
             cx,
         );
-        let heading_size = window.text_style().font_size.to_pixels(window.rem_size());
+        // Headings scale with the reading size the answer row set.
+        let base = window.text_style().font_size.to_pixels(window.rem_size());
+        let text_style = style_at(window.rem_size(), base);
         let text_style = if self.muted {
-            style(window.rem_size()).with_foreground(rgb(theme::TEXT_2).into())
+            // A thought stays one step down the ink ladder, headings too.
+            (1..=6).fold(
+                text_style.with_foreground(rgb(theme::TEXT_MUTED).into()),
+                |style, level| {
+                    style.with_heading(
+                        level,
+                        heading(level, base).text_color(rgb(theme::TEXT_MUTED)),
+                    )
+                },
+            )
         } else {
-            style(window.rem_size()).with_foreground(rgb(theme::TEXT).into())
+            text_style
         };
-        let text_style = text_style.with_heading_base_font_size(heading_size);
+        let text_style = match self.ink {
+            Some(ink) => text_style.with_foreground(rgb(ink).into()),
+            None => text_style,
+        };
+        // A prompt's band runs its words the band's whole width (the
+        // prototype's `.prompt .txt` has no measure).
+        let text_style = if self.chips.is_some() {
+            text_style.with_prose_max_width(None)
+        } else {
+            text_style
+        };
         let actions_namespace = self.id.clone();
         let (cwd, preview) = self.cache.1.borrow().clone();
+        let scope = self.cache.path_scope();
+        let chips = self.chips.clone();
         let link_cwd = cwd.clone();
-        TextView::new(&state)
+        let hang = theme::tx_cell(f32::from(base));
+        // A ```mermaid fence draws as its diagram (`visual::diagram`); the
+        // fence's Markdown (the source, moved in) says whether it has closed.
+        let diagrams = self
+            .source
+            .contains(crate::visual::diagram::LANGUAGE)
+            .then_some(self.source);
+        let view = TextView::new(&state)
             .link_renderer(move |url, label, window, cx| {
+                // A prompt's file, as its band's chip.
+                if let Some(path) = url.strip_prefix(CHIP_SCHEME) {
+                    let chips = chips.as_ref()?;
+                    return Some(crate::pane::prompt_chip(
+                        std::path::PathBuf::from(path),
+                        label,
+                        Some(chips),
+                        window,
+                        cx,
+                    ));
+                }
+                // An issue ref stays a native link (its underline under the
+                // pointer); a click opens it on the checkout's remote.
+                if url.starts_with(ISSUE_SCHEME) {
+                    return None;
+                }
                 let file = crate::file_links::FileLink::resolve(url, cwd.as_deref())?;
                 Some(crate::attachments::inline_file(
                     file,
                     label,
                     preview.as_ref(),
+                    scope.clone(),
                     window,
                     cx,
                 ))
@@ -325,8 +469,13 @@ impl gpui::RenderOnce for Markdown {
             .when_some(self.document, |view, document| {
                 view.selection_document(document, self.id)
             })
-            .font_family(theme::FONT_UI)
-            .w_full()
+            .find(self.find)
+            .font_family(face)
+            // A line's trailing space hangs past its edge, as CSS lets it:
+            // GPUI counts it when wrapping, so a word that ends within a
+            // cell of the edge would wrap a line early. The view runs one
+            // cell past its column; its words still end inside it.
+            .mr(px(-hang))
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
             .max_lines(usize::MAX)
@@ -343,21 +492,56 @@ impl gpui::RenderOnce for Markdown {
                 if !activate {
                     return;
                 }
+                if let Some(number) = url.strip_prefix(ISSUE_SCHEME) {
+                    if let Some(page) = link_cwd
+                        .as_deref()
+                        .and_then(|cwd| crate::file_links::issue_url(cwd, number))
+                    {
+                        cx.open_url(&page);
+                    }
+                    return;
+                }
                 if let Some(file) = crate::file_links::FileLink::resolve(url, link_cwd.as_deref()) {
                     file.open(window, cx);
                 } else {
                     cx.open_url(url);
                 }
             })
+            .when_some(diagrams, |view, source| {
+                view.code_block_view(move |block, element, window, cx| {
+                    let fence = block.span.and_then(|span| source.get(span.start..span.end));
+                    match fence {
+                        Some(fence)
+                            if block.lang().as_deref()
+                                == Some(crate::visual::diagram::LANGUAGE) =>
+                        {
+                            crate::visual::diagram::or_code(
+                                fence,
+                                block.code().to_string(),
+                                element,
+                                f32::from(base),
+                                window,
+                                cx,
+                            )
+                        }
+                        _ => element,
+                    }
+                })
+            })
             .code_block_actions(move |block, window, cx| {
                 let id: SharedString =
                     format!("code-actions-{actions_namespace}-{:?}", block.span).into();
                 let code = block.code();
                 let language = block.lang();
-                let actions = window.use_keyed_state(id, cx, |_, _| CodeActions {
+                let selected = block.has_selection();
+                let key = id.clone();
+                let actions = window.use_keyed_state(id, cx, |_, cx| CodeActions {
                     code: code.clone(),
                     language: language.clone(),
                     copied: false,
+                    selected,
+                    focus: cx.focus_handle(),
+                    key,
                 });
                 actions.update(cx, |actions, cx| {
                     if actions.code != code || actions.language != language {
@@ -366,9 +550,19 @@ impl gpui::RenderOnce for Markdown {
                         actions.copied = false;
                         cx.notify();
                     }
+                    if actions.selected != selected {
+                        actions.selected = selected;
+                        cx.notify();
+                    }
                 });
                 actions
-            })
+            });
+        // A block of the column's width; the view inside it stretches a
+        // cell past it (its negative margin), so a trailing space hangs.
+        gpui::div()
+            .w_full()
+            .min_w_0()
+            .child(view)
             .into_any_element()
     }
 }
@@ -379,119 +573,353 @@ struct CodeActions {
     code: SharedString,
     language: Option<SharedString>,
     copied: bool,
+    /// The caret or a selection is inside the block.
+    selected: bool,
+    focus: gpui::FocusHandle,
+    /// The hover blend's key: the block's own actions id.
+    key: SharedString,
+}
+
+/// A fence's language id as the overlay names it: none for plain text.
+fn code_language(language: Option<&SharedString>) -> Option<SharedString> {
+    language
+        .filter(|lang| {
+            !["text", "txt", "plaintext"]
+                .iter()
+                .any(|plain| lang.eq_ignore_ascii_case(plain))
+        })
+        .cloned()
 }
 
 impl gpui::Render for CodeActions {
-    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let code = self.code.clone();
-        let mut header = gpui::div()
+        // The overlay covers the whole block (the vendor lays it over the
+        // code with no layout of its own): the pointer anywhere on the block
+        // blends the actions in over 150ms; keyboard focus inside them, or
+        // the caret or a selection inside the block, shows them at once.
+        let revealed = self.selected || self.focus.contains_focused(window, cx);
+        let shown = if revealed {
+            1.
+        } else {
+            crate::motion::hover_t(&self.key)
+        };
+        // The transcript around this overlay is a cached view: while the
+        // blend is mid-flight, ask for the next frame's render here (the
+        // cached ancestors follow).
+        if shown > 0. && shown < 1. {
+            cx.notify();
+        }
+        // The prototype's `.code .lang` and `.code .copy`: the language tag
+        // always shows, dim, at the block's top right; the actions before it
+        // blend in under the pointer.
+        let mut actions = gpui::div()
             .key_context("TranscriptCodeActions")
+            .track_focus(&self.focus)
+            .debug_selector(|| "code-actions".into())
+            .absolute()
+            .top(px(theme::CODE_ACTIONS_TOP))
+            .right(px(theme::CODE_ACTIONS_RIGHT))
             .flex()
             .items_center()
-            .w_full()
-            .min_w_0()
-            .h(px(theme::CODE_HEADER_H))
-            .gap(px(theme::EVENT_GAP))
+            .justify_end()
+            .gap(px(theme::CH))
             .font_family(theme::FONT_UI)
-            .text_size(px(theme::FS_SM))
-            .text_color(rgb(theme::TEXT_MUTED))
-            .when_some(self.language.clone(), |header, language| {
-                header.child(gpui::div().min_w_0().truncate().child(language))
-            })
-            .child(gpui::div().flex_1());
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
+            .text_color(rgb(theme::TEXT_MUTED));
+        let mut hovered = gpui::div()
+            .flex()
+            .items_center()
+            .gap(px(theme::SPACE_1))
+            .opacity(shown);
         if self
             .language
             .as_ref()
             .is_some_and(|lang| lang.eq_ignore_ascii_case("html"))
         {
-            header = header.child(
-                crate::components::button("preview-html")
-                    .h(px(theme::CODE_ACTION_H))
-                    .min_w(px(theme::CODE_ACTION_MIN_W))
-                    .px(px(theme::CODE_ACTION_PAD_X))
-                    .flex_shrink_0()
-                    .tab_stop(true)
-                    .label("Preview")
-                    .on_click(move |_, window, cx| {
-                        use gpui::component::WindowExt as _;
-                        let html = code.clone();
-                        window.open_dialog(cx, move |dialog, window, _| {
-                            dialog
-                                .title("HTML preview")
-                                .width(px(720.))
-                                .bg(rgb(theme::MENU))
-                                .child(
-                                    gpui::div()
-                                        .id("html-preview")
-                                        .font_family(theme::FONT_MONO)
-                                        .max_h(px(520.))
-                                        .overflow_y_scroll()
-                                        .child(
-                                            TextView::html("html-preview-text", html.clone())
-                                                .style(style(window.rem_size())),
-                                        ),
-                                )
-                        });
-                    }),
-            );
+            hovered = hovered.child(code_action("preview-html", cx).label("Preview").on_click(
+                move |_, window, cx| {
+                    use gpui::component::WindowExt as _;
+                    let html = code.clone();
+                    window.open_dialog(cx, move |dialog, window, _| {
+                        reading_dialog(
+                            dialog,
+                            "html-preview",
+                            "HTML preview",
+                            TextView::html("html-preview-text", html.clone())
+                                .style(style(window.rem_size())),
+                        )
+                    });
+                },
+            ));
         }
-        header.child(
-            crate::components::button("copy-code")
-                .h(px(theme::CODE_ACTION_H))
-                .min_w(px(theme::CODE_ACTION_MIN_W))
-                .px(px(theme::CODE_ACTION_PAD_X))
+        // `Copy ⌘C`: the key read from the key table, as a mono suffix on a
+        // wrapper (a kit button's own tooltip is plain text).
+        hovered = hovered.child(
+            gpui::div()
+                .id("copy-code-tip")
                 .flex_shrink_0()
-                .tab_stop(true)
-                .debug_selector(|| "copy-code".into())
-                .accessibility_label("Copy code")
-                .label(if self.copied { "Copied" } else { "Copy" })
-                .when(self.copied, |button| {
-                    button.debug_selector(|| "code-copied".into())
-                })
-                .on_click(cx.listener(|view, _, _, cx| {
-                    cx.stop_propagation();
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(view.code.to_string()));
-                    view.copied = true;
-                    cx.notify();
-                })),
-        )
+                .tooltip(crate::menu::action_tooltip(
+                    "Copy",
+                    "cockpit::CopySelection",
+                ))
+                .child(
+                    code_action("copy-code", cx)
+                        .debug_selector(|| "copy-code".into())
+                        .accessibility_label("Copy code")
+                        .label(if self.copied { "Copied" } else { "Copy" })
+                        .when(self.copied, |button| {
+                            button.debug_selector(|| "code-copied".into())
+                        })
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                view.code.to_string(),
+                            ));
+                            view.copied = true;
+                            cx.notify();
+                        })),
+                ),
+        );
+        actions = actions.child(hovered).when_some(
+            code_language(self.language.as_ref()),
+            |actions, language| {
+                actions.child(
+                    gpui::div()
+                        .debug_selector(|| "code-language".into())
+                        .flex_shrink_0()
+                        .font_family(theme::FONT_CODE)
+                        .child(language),
+                )
+            },
+        );
+        gpui::div()
+            .id(SharedString::from(format!("{}-overlay", self.key)))
+            .relative()
+            .size_full()
+            .on_hover(crate::motion::hover_listener(self.key.clone()))
+            .child(actions)
     }
 }
 
-/// Convert the shared pixel gap using the active root font size.
+/// A quiet text action in a fence's overlay: `FS_UI` `TEXT_MUTED` with no
+/// ground, the hover overlay under the pointer (the one 150ms blend),
+/// pressed at once, a stable `CODE_ACTION_MIN_W` target one row high.
+fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
+    crate::components::faded_button(
+        id,
+        rgba(theme::TRANSPARENT).into(),
+        theme::paint::HOVER.into(),
+        theme::paint::PRESS.into(),
+        rgb(theme::TEXT_MUTED).into(),
+        cx,
+    )
+    .h(px(theme::LH_UI))
+    .min_w(px(theme::CODE_ACTION_MIN_W))
+    .px(px(theme::CH))
+    .rounded(px(theme::R_CHIP))
+    .font_family(theme::FONT_UI)
+    .text_size(px(theme::FS_UI))
+    .line_height(px(theme::LH_UI))
+    .flex_shrink_0()
+    .tab_stop(true)
+}
+
+/// The scheme of a prompt's inline file chip link (`pane::prompt_text`).
+pub(crate) const CHIP_SCHEME: &str = "ferrite-chip:";
+/// The scheme `file_links::link_targets` gives an issue ref (`#212`).
+pub(crate) const ISSUE_SCHEME: &str = "issue:";
+
+/// Markdown's look at the Standard reading size (see the WP-B section of
+/// `theme.rs` for the rules). Rems convert with the active root font size.
 pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
-    TextViewStyle::default()
+    style_at(rem_size, px(theme::FS_PROSE))
+}
+
+/// Markdown's look for prose set at `base`: headings are ratios of it
+/// (`theme::heading_scale`), each on its own pixel line height.
+pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
+    let rem = |value: f32| rems(value / f32::from(rem_size));
+    let size = f32::from(base);
+    let line = theme::prose_line_height(size);
+    let cell = theme::tx_cell(size);
+    let mut style = TextViewStyle::default()
         .with_dark(true)
-        .with_foreground(rgb(theme::TEXT_2).into())
-        .with_muted_foreground(rgb(theme::TEXT_2).into())
-        .with_link(rgb(theme::LINK_INK).into())
-        .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
-        .with_code_background(rgb(theme::PANE_HEAD).into())
-        .with_code_block(
+        .with_foreground(rgb(theme::TEXT).into())
+        .with_muted_foreground(rgb(theme::TEXT_MUTED).into())
+        // Links and paths read cyan, with no underline at rest: a link
+        // underlines in its own ink only under the pointer.
+        .with_link(rgb(theme::PATH_INK).into())
+        .with_link_underline(Some(rgb(theme::PATH_INK).into()))
+        .with_link_underline_on_hover(true)
+        // A column of numbers reads right-aligned, as a terminal table does.
+        .with_numeric_columns_right(true)
+        // A table is as wide as its cells, its first column on the prose
+        // edge (the prototype's `table.t`, `.clean … :first-child`).
+        .with_table_fit(Some(px(cell)))
+        // An image in an answer sits in the prompt image's frame:
+        // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE2` edge.
+        .with_image(
             gpui::StyleRefinement::default()
-                .p(px(theme::CODE_PAD))
-                .rounded(px(theme::R_CHIP))
-                .text_size(px(theme::FS_MD)),
+                .w(px(theme::IMAGE_CELLS * cell))
+                .border_1()
+                .border_color(theme::paint::LINE2),
         )
-        .with_inline_code(gpui::HighlightStyle {
-            color: Some(rgb(theme::INLINE_CODE_INK).into()),
+        .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
+        .with_strong(gpui::HighlightStyle {
+            color: Some(rgb(theme::TEXT_STRONG).into()),
+            font_weight: Some(theme::W_STRONG),
             ..Default::default()
         })
-        .with_border(rgb(theme::TABLE_RULE).into())
+        // A fence has no ground: a 1px `LINE2` rule on its left, the code
+        // two cells in, on the prose's own grid.
+        .with_code_background(gpui::transparent_black())
+        .with_code_block(
+            gpui::StyleRefinement::default()
+                .pl(px(2.0 * cell))
+                .pr(px(0.))
+                .py(px(0.))
+                // A fence holds to the measure too (the prototype's `.code`,
+                // `max-width: 108ch`): its language word sits at that edge.
+                .max_w(px(theme::MEASURE_CH * cell))
+                .border_l_1()
+                .border_color(theme::paint::LINE2)
+                .rounded(px(theme::R_BLOCK))
+                .font_family(theme::FONT_CODE)
+                .font_weight(theme::W_BODY)
+                .text_size(px(size))
+                .line_height(px(line))
+                .text_color(rgb(theme::SYN_PLAIN)),
+        )
+        // Inline code is cyan ink at body weight whatever it sits in, with
+        // no chip.
+        .with_inline_code(gpui::HighlightStyle {
+            color: Some(rgb(theme::INLINE_CODE_INK).into()),
+            font_weight: Some(theme::W_BODY),
+            ..Default::default()
+        })
+        .with_inline_code_font(Some(theme::FONT_CODE.into()))
+        .with_inline_code_wash(None)
+        // A table's row rules are the one `LINE`; its head's is `LINE2`.
+        .with_border(theme::paint::LINE.into())
         .with_table({
-            let mut table = gpui::StyleRefinement::default().bg(rgb(theme::PANE));
+            // No box and no ground.
+            let mut table = gpui::StyleRefinement::default()
+                .border_0()
+                .bg(gpui::transparent_black());
             table.overflow.x = Some(gpui::Overflow::Scroll);
             table
         })
+        // A row is a line and its rule, the text a pixel down: the
+        // prototype's `td` is a line tall (`height: lh`) with a line a pixel
+        // shorter (`line-height: lh - 1px`) centred in it, which the browser
+        // sets on the next whole pixel — its baseline 15px into the cell.
+        // The full line, a pixel down inside the cell's own height, puts it
+        // there.
+        .with_table_cell(crate::components::tabular(
+            gpui::StyleRefinement::default()
+                .border_r_0()
+                .px(px(cell))
+                .pt(px(theme::TABLE_TEXT_DROP))
+                .pb(px(0.))
+                .h(px(line))
+                .text_size(px(size))
+                .line_height(px(line)),
+        ))
         .with_table_head(
             gpui::StyleRefinement::default()
-                .bg(rgb(theme::PANE))
-                .text_color(rgb(theme::TEXT))
-                .font_weight(gpui::FontWeight::SEMIBOLD),
+                .bg(gpui::transparent_black())
+                .text_color(rgb(theme::TEXT_STRONG))
+                .font_weight(theme::W_STRONG)
+                .border_color(theme::paint::LINE2),
         )
-        .with_paragraph_gap(rems(theme::BLOCK_GAP / f32::from(rem_size)))
-        .with_heading_base_font_size(px(theme::FS_MD))
-        .with_heading_font_size(|level, base| base * theme::heading_scale(level))
+        .with_blockquote(
+            gpui::StyleRefinement::default()
+                .border_l(px(theme::QUOTE_RULE_W))
+                .border_color(theme::paint::LINE2)
+                .text_color(rgb(theme::TEXT_MUTED))
+                .not_italic()
+                .pl(px(2.0 * cell - theme::QUOTE_RULE_W))
+                .pr(px(0.)),
+        )
+        .with_rule(
+            gpui::StyleRefinement::default()
+                .h(px(1.))
+                .bg(theme::paint::LINE)
+                .my(px(theme::RULE_MARGIN_Y)),
+        )
+        // Prose holds to the measure (`MEASURE_CH` cells), left-aligned;
+        // code, tables and rules keep the column. One cell more, for the
+        // trailing space a line hangs (see `Markdown::render`).
+        .with_prose_max_width(Some(px(((theme::MEASURE_CH + 1.0) * cell).round())))
+        // A list's `•` hangs in the first of two cells, dim; its text on
+        // the second's far side.
+        .with_list_hang(Some(gpui::base::text::ListHang {
+            width: px(2.0 * cell),
+            gap: px(cell),
+        }))
+        .with_list_markers(
+            gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+            crate::components::tabular(
+                gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+            ),
+        )
+        // One blank line between blocks, as a terminal prints them; a
+        // heading takes the same.
+        .with_paragraph_gap(rem(line))
+        .with_heading_spacing(rem(0.), None)
+        .with_heading_base_font_size(base)
+        .with_heading_font_size(|level, base| px(heading_size(level, f32::from(base))));
+    for level in 1..=6 {
+        style = style.with_heading(level, heading(level, base));
+    }
+    style
+}
+
+/// A heading's size at prose size `base`: the type table's ratio, rounded
+/// to a whole pixel (18 · 16 · 14 at Standard, 21 · 18 · 16 at Comfortable,
+/// 23 · 21 · 18 at Large), so no heading lands on a half pixel.
+fn heading_size(level: u8, base: f32) -> f32 {
+    (base * theme::heading_scale(level)).round()
+}
+
+/// A heading's weight, ink and pixel line height at prose size `base`.
+/// H4–H6 are set apart by weight alone: 600 is only for H1–H3.
+fn heading(level: u8, base: gpui::Pixels) -> gpui::StyleRefinement {
+    let size = heading_size(level, f32::from(base));
+    gpui::StyleRefinement::default()
+        .font_weight(theme::W_STRONG)
+        .text_color(rgb(theme::TEXT_STRONG))
+        .line_height(px(theme::prose_line_height(size)))
+}
+
+/// A code token's highlight: ink by class (slice 01 §2.6), comments italic.
+/// The one mapping both the Markdown fence and the plain fallback paint.
+pub(crate) fn syntax_style(class: ferrite_core::transcript::Class) -> gpui::HighlightStyle {
+    use ferrite_core::transcript::Class;
+    let ink = match class {
+        Class::Plain => theme::SYN_PLAIN,
+        Class::Keyword => theme::SYN_KEYWORD,
+        Class::Str => theme::SYN_STRING,
+        Class::Number => theme::SYN_NUMBER,
+        Class::Comment => theme::SYN_COMMENT,
+        Class::Function => theme::SYN_FUNCTION,
+        Class::Type => theme::SYN_TYPE,
+        Class::Punct => theme::SYN_PUNCT,
+    };
+    gpui::HighlightStyle {
+        color: Some(rgb(ink).into()),
+        font_style: (class == Class::Comment).then_some(gpui::FontStyle::Italic),
+        ..Default::default()
+    }
+}
+
+/// The pixel line box of a heading of `level` in prose set at `size`: what a
+/// leading heading's first line occupies (the answer mark centres on it).
+#[allow(dead_code)]
+pub fn heading_line_height(level: u8, size: f32) -> f32 {
+    theme::prose_line_height(heading_size(level, size))
 }
 
 /// Literal provider output shares Markdown's selection engine and keeps
@@ -503,6 +931,8 @@ pub struct Literal {
     pub highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
     pub cache: TextCache,
     pub document: Option<gpui::base::TextSelectionDocument>,
+    /// A find's occurrences to mark (`crate::find`).
+    pub find: Option<gpui::base::text::TextFind>,
 }
 
 /// The same literal document feeds native rendering and offscreen copy.
@@ -523,6 +953,7 @@ impl gpui::RenderOnce for Literal {
         let inherited = window.text_style();
         let source = literal_source(&self.text);
         let highlights = self.highlights;
+        let text = self.text.clone();
         let style = style(window.rem_size())
             .with_foreground(inherited.color)
             .with_paragraph_gap(rems(0.))
@@ -541,12 +972,22 @@ impl gpui::RenderOnce for Literal {
             .when_some(self.document, |view, document| {
                 view.selection_document(document, self.id)
             })
+            .find(self.find)
             .w_full()
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
             .max_lines(usize::MAX)
             .style(style)
-            .code_block_highlighter(move |_| highlights.clone())
+            // The retained state re-parses off the main thread, so for a frame
+            // after the text changes its block still holds the previous text.
+            // The highlights index this text; they wait for its parse.
+            .code_block_highlighter(move |block| {
+                if block.code() == text {
+                    highlights.clone()
+                } else {
+                    Vec::new()
+                }
+            })
     }
 }
 
@@ -560,6 +1001,8 @@ pub struct Output {
     pub cache: TextCache,
     pub aria_label: SharedString,
     pub fill: bool,
+    /// A find's occurrences to mark (`crate::find`).
+    pub find: Option<gpui::base::text::TextFind>,
 }
 
 impl gpui::RenderOnce for Output {
@@ -570,6 +1013,7 @@ impl gpui::RenderOnce for Output {
         else {
             unreachable!("output has its own namespace")
         };
+        state.update(cx, |state, cx| state.set_find(self.find, cx));
         #[cfg(test)]
         testing::record_output(self.id, state.clone(), cx);
         Textarea::new(&state)
@@ -587,11 +1031,48 @@ impl gpui::RenderOnce for Output {
     }
 }
 
+/// A dialog to read in (the HTML preview, What's New), on the sheet
+/// recipe: raised, the strong edge (the kit's border), the Pane radius, a
+/// mono title, over prose at reading width that scrolls past
+/// `READING_DIALOG_MAX_H`.
+pub fn reading_dialog(
+    dialog: gpui::component::dialog::Dialog,
+    id: &'static str,
+    title: impl Into<SharedString>,
+    body: impl IntoElement,
+) -> gpui::component::dialog::Dialog {
+    dialog
+        .title(
+            gpui::div()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::TEXT_STRONG))
+                .child(title.into()),
+        )
+        .width(px(theme::READING_MAX_W))
+        .bg(theme::paint::FLOAT)
+        .rounded(px(theme::R_PANE))
+        .child(
+            gpui::div()
+                .id(id)
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_PROSE))
+                .line_height(px(theme::LH_PROSE))
+                .text_color(rgb(theme::TEXT))
+                .max_h(px(theme::READING_DIALOG_MAX_H))
+                .overflow_y_scroll()
+                .child(body),
+        )
+}
+
 /// The reader's body for an open document: Markdown rendered, a file in a
 /// language the lexer knows coloured, anything else as plain text.
 pub fn document_body(
     document: crate::attachment_preview::Document,
     cache: TextCache,
+    find: Option<gpui::base::text::TextFind>,
 ) -> gpui::AnyElement {
     let id = SharedString::from(format!("file-{}", document.path.display()));
     if document.is_markdown() {
@@ -600,6 +1081,7 @@ pub fn document_body(
             document.source,
             cache,
         )
+        .find(find)
         .into_any_element();
     }
     let aria_label = SharedString::from("File contents");
@@ -618,6 +1100,7 @@ pub fn document_body(
             cache,
             aria_label,
             fill: true,
+            find: None,
         }
         .into_any_element(),
     }
@@ -855,12 +1338,22 @@ pub mod testing {
             .map(|(_, (state, _))| state.read(cx).selected_text())
     }
 
+    /// The face a recorded text view was laid out in (its inherited family,
+    /// or a Markdown view's prose face).
+    pub fn font_family(prefix: &str, cx: &App) -> Option<SharedString> {
+        cx.global::<Views>()
+            .0
+            .iter()
+            .find(|(id, _)| id.starts_with(prefix))
+            .map(|(_, (_, style))| style.font_family.clone())
+    }
+
     pub fn font_size(prefix: &str, cx: &App) -> Option<gpui::Pixels> {
         cx.global::<Views>()
             .0
             .iter()
             .find(|(id, _)| id.starts_with(prefix))
-            .map(|(_, (_, style))| style.font_size.to_pixels(px(theme::FS_MD)))
+            .map(|(_, (_, style))| style.font_size.to_pixels(px(theme::FS_UI)))
     }
 
     pub fn record(
@@ -913,11 +1406,11 @@ pub mod testing {
     ) -> Option<gpui::Point<gpui::Pixels>> {
         let (state, style) = cx.global::<Views>().0.get(id)?;
         let mut bounds = state.read(cx).bounds();
-        let gap = px(theme::BLOCK_GAP);
+        let size = style.font_size.to_pixels(window.rem_size());
+        let gap = px(theme::reading_step(theme::PROSE_GAP, f32::from(size)));
         let stride = (bounds.size.height + gap) / paragraphs.max(1) as f32;
         let line_height = stride - gap;
         bounds.origin.y += stride * item as f32;
-        let size = style.font_size.to_pixels(window.rem_size());
         let run = gpui::TextRun {
             len: text.len(),
             font: style.font(),
@@ -946,7 +1439,11 @@ pub mod testing {
     ) -> Option<gpui::Point<gpui::Pixels>> {
         let (state, style) = cx.global::<Views>().0.get(id)?;
         let bounds = state.read(cx).bounds();
+        // A paragraph wraps at the prose measure (`MEASURE_CH` cells at its
+        // size) inside a wider view.
         let font_size = style.font_size.to_pixels(window.rem_size());
+        let measure = (theme::MEASURE_CH * theme::tx_cell(f32::from(font_size))).round();
+        let wrap = bounds.size.width.min(px(measure));
         let line_height = style.line_height_in_pixels(window.rem_size());
         let run = gpui::TextRun {
             len: text.len(),
@@ -958,13 +1455,7 @@ pub mod testing {
         };
         let layout = window
             .text_system()
-            .shape_text(
-                text.into(),
-                font_size,
-                &[run],
-                Some(bounds.size.width),
-                None,
-            )
+            .shape_text(text.into(), font_size, &[run], Some(wrap), None)
             .ok()?
             .into_iter()
             .next()?;
@@ -988,6 +1479,7 @@ mod file_link_tests {
         cwd: std::path::PathBuf,
         preview: crate::attachment_preview::Preview,
         font_size: f32,
+        line_height: Option<f32>,
     }
     impl Render for LinkFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -995,7 +1487,7 @@ mod file_link_tests {
             let document_body = self.preview.document().map(|document| {
                 self.document_cache
                     .file_context(document.path.parent(), &self.preview);
-                document_body(document, self.document_cache.clone())
+                document_body(document, self.document_cache.clone(), None)
             });
             use gpui::base::ElementExt;
             // The reader is a board slot of its own; beside the fixture's
@@ -1012,6 +1504,9 @@ mod file_link_tests {
                             div().size_full().child(
                                 div()
                                     .text_size(px(self.font_size))
+                                    .when_some(self.line_height, |this, line| {
+                                        this.line_height(px(line))
+                                    })
                                     .child(Markdown::new(
                                         "file-link-fixture",
                                         self.source.clone(),
@@ -1041,7 +1536,8 @@ mod file_link_tests {
                 source: source.into(),
                 cwd: std::env::temp_dir(),
                 preview,
-                font_size: 13.,
+                font_size: theme::FS_PROSE,
+                line_height: None,
             });
             gpui::component::Root::new(view, window, cx).bordered(false)
         });
@@ -1068,7 +1564,7 @@ mod file_link_tests {
     ) {
         let (view, cx) = fixture(cx, "");
         cx.simulate_resize(gpui::size(px(320.), px(720.)));
-        for font_size in [13., 17.] {
+        for font_size in [14., 18.] {
             for start in [9_u32, 99] {
                 let indent = " ".repeat(start.to_string().len() + 2);
                 let source = format!(
@@ -1116,7 +1612,173 @@ mod file_link_tests {
                 );
                 cx.simulate_resize(gpui::size(px(320.), px(720.)));
             }
+            // Terminal-native: one hang for every list and quote — bullet
+            // text, ordinal text (one digit or two) and quoted text all start
+            // two cells in at the reading size.
+            view.update(cx, |view, cx| {
+                view.source = "- [bullet](ul.md)\n\ntext\n\n9. [nine](nine.md)\n10. [ten](ten.md)\n\ntext\n\n> [quoted](quote.md)".into();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let bullet = card(cx, "ul.md");
+            let hang = px(theme::tx_gutter(font_size));
+            assert!(
+                (bullet.left() - hang).abs() < px(0.5),
+                "list text hangs two cells in at {font_size}px: {bullet:?}"
+            );
+            let quote = card(cx, "quote.md");
+            assert!(
+                (quote.left() - bullet.left()).abs() < px(0.5),
+                "quoted text shares the bullet's text column at {font_size}px: {quote:?}, {bullet:?}"
+            );
+            // An ordered list takes the same hang unless its widest marker
+            // (in the face the window shapes it in) and its gap outgrow it:
+            // with Geist's figures that is only from 100 up.
+            let ten = cx.update(|window, _| {
+                let run = gpui::TextRun {
+                    len: 3,
+                    font: window.text_style().font(),
+                    color: gpui::black(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                window
+                    .text_system()
+                    .layout_line("10.", px(font_size), &[run], None)
+                    .width
+            });
+            let column = hang.max(ten + px(theme::tx_cell(font_size)));
+            let (nine, ten) = (card(cx, "nine.md"), card(cx, "ten.md"));
+            assert!(
+                (nine.left() - ten.left()).abs() < px(0.5),
+                "9. and 10. share one column: {nine:?}, {ten:?}"
+            );
+            assert!(
+                (nine.left() - column).abs() < px(0.5),
+                "the ordered column is the hang or the widest marker: {nine:?} vs {column:?}"
+            );
         }
+    }
+
+    /// A fence is its code on a rule (terminal-native: no padding above or
+    /// below): the actions overlay takes no layout, so a one-line block is
+    /// one prose line, and revealing the actions from the keyboard moves
+    /// nothing.
+    #[gpui::test]
+    fn a_fence_is_its_code_and_padding_and_its_actions_take_no_room(cx: &mut TestAppContext) {
+        let (_, cx) = fixture(cx, "```rust\nfn main() {}\n```");
+        cx.simulate_resize(gpui::size(px(420.), px(300.)));
+        cx.run_until_parked();
+        let block = cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap());
+        assert_eq!(
+            block.size.height,
+            px(theme::prose_line_height(theme::FS_PROSE)),
+            "one line of code, no padding"
+        );
+        let actions = cx
+            .debug_bounds("code-actions")
+            .expect("the overlay is laid out at rest");
+        assert!(actions.top() >= block.top() && actions.right() <= block.right());
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap()),
+            block,
+            "revealing the actions leaves the block where it was"
+        );
+        assert_eq!(cx.debug_bounds("code-actions"), Some(actions));
+    }
+
+    const MERMAID: &str = "Before\n\n```mermaid\ngraph TD\n  a --> b\n```\n\nAfter";
+
+    /// A ```mermaid fence shows as code, asks for its diagram once that code
+    /// is on screen, and shows the diagram (cropped to what it drew, at its
+    /// own height) once drawn.
+    #[gpui::test]
+    fn a_mermaid_fence_draws_as_its_diagram(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(true, cx);
+        });
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("mermaid-diagram").is_none(),
+            "code until drawn"
+        );
+        assert_eq!(
+            engine.journal().len(),
+            1,
+            "one page opened: {:?}",
+            engine.journal()
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        let diagram = cx
+            .debug_bounds("mermaid-diagram")
+            .expect("the diagram replaces the fence");
+        let height = crate::visual::web::fake::CONTENT_HEIGHT as f32;
+        assert!(
+            (diagram.size.height - px(height)).abs() < px(1.),
+            "{diagram:?}"
+        );
+        assert_eq!(
+            engine.live_views(),
+            0,
+            "no page stays open for a drawn diagram"
+        );
+    }
+
+    /// A fence in a quote closes on a quoted line, and draws all the same.
+    #[gpui::test]
+    fn a_mermaid_fence_in_a_quote_draws(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(true, cx);
+        });
+        let (_, cx) = fixture(cx, "> ```mermaid\n> graph TD\n> ```\n\nAfter");
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mermaid-diagram").is_some());
+    }
+
+    /// Without an engine, or with visuals off, the fence stays code.
+    #[gpui::test]
+    fn a_mermaid_fence_stays_code_without_visuals(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::visual::diagram::init(true, cx));
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mermaid-diagram").is_none());
+        assert!(
+            cx.debug_bounds("code-actions").is_some(),
+            "the fence is drawn"
+        );
+    }
+
+    #[gpui::test]
+    fn a_mermaid_fence_stays_code_with_visuals_off(cx: &mut TestAppContext) {
+        let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+        cx.update(|cx| {
+            crate::visual::engine::Visuals::install(engine.clone(), cx);
+            crate::visual::diagram::init(false, cx);
+        });
+        let (_, cx) = fixture(cx, MERMAID);
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        cx.run_until_parked();
+        assert!(engine.journal().is_empty(), "nothing is drawn");
+        assert!(cx.debug_bounds("mermaid-diagram").is_none());
     }
 
     #[gpui::test]
@@ -1130,7 +1792,7 @@ mod file_link_tests {
         let copy = cx
             .debug_bounds("copy-code")
             .expect("fenced blocks expose Copy");
-        assert!(copy.size.height >= px(theme::CODE_ACTION_H));
+        assert!(copy.size.height >= px(theme::LH_UI));
         assert!(copy.size.width >= px(theme::CODE_ACTION_MIN_W));
         // The padded edge belongs to the action, not text selection behind it.
         cx.simulate_click(
@@ -1218,7 +1880,10 @@ mod file_link_tests {
         let reader = cx
             .debug_bounds("markdown-reader")
             .expect("the reader is rendered beside the transcript");
-        assert!(reader.left() > px(0.) && reader.size.width < px(800.));
+        // Beside the transcript, not over it: it starts right of the Pane
+        // and takes only its share of the window.
+        let window_w = cx.update(|window, _| window.viewport_size().width);
+        assert!(reader.left() > px(0.) && reader.size.width < window_w);
         let close = cx
             .debug_bounds("close-markdown-reader")
             .expect("the reader has an explicit close control");
@@ -1342,7 +2007,10 @@ mod file_link_tests {
             wide.left() > px(20.),
             "card follows the leading prose inline: {wide:?}"
         );
-        assert_eq!(wide.size.height, px(26.));
+        assert!(
+            wide.size.height < px(2. * theme::FS_PROSE),
+            "the link sits on one prose line: {wide:?}"
+        );
         assert!(card(cx, "notes.txt").top() > wide.bottom());
         assert!(card(cx, "data.csv").top() > card(cx, "notes.txt").bottom());
         cx.update(|_, cx| {
@@ -1358,14 +2026,16 @@ mod file_link_tests {
             assert!(selected.contains("Before report after."), "{selected}");
             assert!(selected.contains("notes") && selected.contains("data"));
         });
-        cx.simulate_resize(gpui::size(px(130.), px(500.)));
+        // Narrower than `Before ` and the card, less the cell a trailing
+        // space may hang into.
+        cx.simulate_resize(gpui::size(px(110.), px(500.)));
         let narrow = card(cx, "report.md");
         assert!(
             narrow.top() > wide.top(),
             "card wraps as a unit: {narrow:?}"
         );
         assert!(
-            narrow.right() <= px(130.),
+            narrow.right() <= px(110.),
             "card fits narrow pane: {narrow:?}"
         );
         // Appending source updates the same native parser/entity.
@@ -1379,6 +2049,67 @@ mod file_link_tests {
             cx.update(|_, cx| super::testing::first_entity("file-link-fixture", cx)),
             original
         );
+    }
+
+    /// A paragraph holding a chip is laid out in the prose's own style, not
+    /// the root's: one line box of the answer's line height, and the text
+    /// before the chip as wide as the recorded style shapes it.
+    #[gpui::test]
+    fn a_paragraph_with_a_file_chip_keeps_the_prose_line(cx: &mut TestAppContext) {
+        let (view, cx) = fixture(cx, "Before [report](report.md) after.");
+        view.update(cx, |view, cx| {
+            view.line_height = Some(theme::LH_PROSE);
+            cx.notify();
+        });
+        cx.simulate_resize(gpui::size(px(400.), px(200.)));
+        cx.run_until_parked();
+        let paragraph = cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap());
+        assert_eq!(paragraph.size.height, px(theme::LH_PROSE));
+        let chip = card(cx, "report.md");
+        let before = cx.update(|window, cx| {
+            testing::caret("file-link-fixture", 0, 1, "Before ", 7, window, cx).unwrap()
+        });
+        assert!(
+            (chip.left() - (before.x - px(0.5))).abs() < px(0.5),
+            "the chip follows text shaped at the prose size: {chip:?} vs {before:?}"
+        );
+    }
+
+    /// A file link is measured in the face and size it is drawn in (the
+    /// prose's), so a name that fits `INLINE_FILE_MAX_W` is drawn whole:
+    /// `transcript.rs:405` at the app's width is never ellipsized.
+    #[gpui::test]
+    fn a_file_chip_that_fits_is_drawn_whole(cx: &mut TestAppContext) {
+        let (_, cx) = fixture(cx, "Built in [transcript.rs](transcript.rs:405), then.");
+        cx.simulate_resize(gpui::size(px(720.), px(200.)));
+        cx.run_until_parked();
+        let chip = card(cx, "transcript.rs");
+        let want = cx.update(|window, _| {
+            crate::attachments::inline_file_width(
+                "transcript.rs",
+                ":405",
+                false,
+                px(theme::FS_PROSE),
+                window,
+            )
+        });
+        assert!(want < px(theme::INLINE_FILE_MAX_W), "{want:?}");
+        assert_eq!(chip.size.width, want, "the chip is its measured width");
+        // The name box holds its whole shaped width: nothing to ellipsize.
+        let name = cx.update(|window, _| {
+            let mut face = window.text_style();
+            face.font_family = theme::FONT_CODE.into();
+            window
+                .text_system()
+                .shape_line(
+                    "transcript.rs".into(),
+                    px(theme::FS_PROSE),
+                    &[face.to_run("transcript.rs".len())],
+                    None,
+                )
+                .width()
+        });
+        assert!(chip.size.width >= name, "{chip:?} holds {name:?}");
     }
 
     #[gpui::test]
@@ -1460,7 +2191,8 @@ mod file_link_tests {
         );
         let close = cx.debug_bounds("close-markdown-reader").unwrap();
         cx.simulate_click(close.center(), Modifiers::default());
-        cx.update(|window, cx| window.focus_next(cx));
+        // Closing the reader leaves the keyboard on the card that opened
+        // it, so the next Tab stop is the second card.
         cx.update(|window, cx| window.focus_next(cx));
         cx.simulate_keystrokes("enter");
         cx.simulate_event(gpui::KeyUpEvent {
@@ -1540,12 +2272,12 @@ mod spacing_tests {
 
     struct SpacingRoot {
         samples: Vec<String>,
-        gap: f32,
+        gapped: bool,
     }
 
     impl Render for SpacingRoot {
         fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            window.set_rem_size(px(theme::FS_MD));
+            window.set_rem_size(px(theme::FS_UI));
             div()
                 .w(px(360.))
                 .children(self.samples.iter().enumerate().map(|(ix, source)| {
@@ -1555,10 +2287,10 @@ mod spacing_tests {
                         .child(
                             TextView::markdown(format!("spacing-{ix}"), source.clone())
                                 .max_lines(usize::MAX)
-                                .style(if self.gap == 0. {
-                                    style(window.rem_size()).with_paragraph_gap(rems(0.))
-                                } else {
+                                .style(if self.gapped {
                                     style(window.rem_size())
+                                } else {
+                                    style(window.rem_size()).with_paragraph_gap(rems(0.))
                                 }),
                         )
                 }))
@@ -1566,7 +2298,8 @@ mod spacing_tests {
     }
 
     // Measure the real renderer, including nested blocks. Each pair must add
-    // exactly one boundary gap, regardless of either block's type.
+    // exactly one boundary gap, which depends only on whether a heading is
+    // involved, never on nesting.
     #[gpui::test]
     fn markdown_spacing_between_all_block_kinds(cx: &mut TestAppContext) {
         cx.update(gpui::component::init);
@@ -1583,7 +2316,7 @@ mod spacing_tests {
         ];
         let (root, cx) = cx.add_window_view(|_, _| SpacingRoot {
             samples: vec![],
-            gap: 10.,
+            gapped: true,
         });
         for first in blocks {
             for second in blocks {
@@ -1600,7 +2333,13 @@ mod spacing_tests {
                 });
                 let mut height = |ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
                 let gap = height(2) - height(0) - height(1);
-                assert!((gap - px(10.)).abs() < px(0.5), "{combined:?}: gap {gap:?}");
+                // Terminal-native: every boundary, a heading's included, is
+                // one blank line.
+                let want = theme::LH_PROSE;
+                assert!(
+                    (gap - px(want)).abs() < px(0.5),
+                    "{combined:?}: gap {gap:?}, want {want}"
+                );
             }
         }
     }
@@ -1629,6 +2368,44 @@ mod spacing_tests {
         // Wheel routing belongs to the toolkit's horizontal_scroll_area;
         // its own tests exercise ScrollHandle offsets. Debug bounds are
         // layout coordinates and do not report that paint translation.
+    }
+
+    /// An image on its own line under a caption gets the answer's image
+    /// frame; one with text beside it (a badge) stays text-sized in the line.
+    #[gpui::test]
+    fn an_image_on_its_own_line_is_framed_and_a_badge_stays_inline(cx: &mut TestAppContext) {
+        struct ImageRoot(&'static str);
+        impl Render for ImageRoot {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(800.)).child(
+                    TextView::markdown("image-lines", self.0)
+                        .max_lines(usize::MAX)
+                        .style(style(window.rem_size())),
+                )
+            }
+        }
+        let frame_w = px(theme::IMAGE_CELLS * theme::tx_cell(theme::FS_PROSE));
+        cx.update(gpui::component::init);
+        for (source, framed) in [
+            ("**Caption**\n![a](https://example.invalid/a.png)", true),
+            ("![a](https://example.invalid/a.png)\nCaption under", true),
+            ("Above\n![a](https://example.invalid/a.png)\nBelow", true),
+            (
+                "A badge ![b](https://example.invalid/b.png) in a line.",
+                false,
+            ),
+        ] {
+            let (_, cx) = cx.add_window_view(|_, _| ImageRoot(source));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let frame = cx.debug_bounds("markdown-image-frame");
+            assert_eq!(frame.is_some(), framed, "{source:?}");
+            if let Some(frame) = frame {
+                assert!((frame.size.width - frame_w).abs() < px(1.), "{source:?}");
+            }
+        }
     }
 
     #[gpui::test]
@@ -1733,7 +2510,10 @@ mod spacing_tests {
             "- One\n\n- Two\n\n- Three".into(),
             "- One\n\n  - Two\n  - Three".into(),
         ];
-        let (root, cx) = cx.add_window_view(|_, _| SpacingRoot { samples, gap: 0. });
+        let (root, cx) = cx.add_window_view(|_, _| SpacingRoot {
+            samples,
+            gapped: false,
+        });
         cx.run_until_parked();
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -1742,7 +2522,7 @@ mod spacing_tests {
             .map(|ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height)
             .collect();
         root.update(cx, |root, cx| {
-            root.gap = 10.;
+            root.gapped = true;
             cx.notify();
         });
         cx.run_until_parked();
@@ -1750,8 +2530,9 @@ mod spacing_tests {
             let _ = window.draw(cx);
         });
         // Tight unordered, ordered, task and nested lists gain no inter-item
-        // gap. Actual paragraphs and loose lists retain two 10px boundaries.
-        let extra_space = [0., 0., 0., 0., 20., 20., 20., 20., 10.];
+        // gap. Actual paragraphs and loose lists retain two blank lines.
+        let g = theme::LH_PROSE;
+        let extra_space = [0., 0., 0., 0., 2. * g, 2. * g, 2. * g, 2. * g, g];
         for (ix, before) in compact.into_iter().enumerate() {
             let after = cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
             assert!(
@@ -1819,7 +2600,10 @@ mod spacing_tests {
             "Before\n\n[unused]: https://example.com".into(),
             "Before\n\n[unused]: https://example.com\n\n**After**".into(),
         ];
-        let (_, cx) = cx.add_window_view(|_, _| SpacingRoot { samples, gap: 10. });
+        let (_, cx) = cx.add_window_view(|_, _| SpacingRoot {
+            samples,
+            gapped: true,
+        });
         cx.run_until_parked();
         cx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -1828,12 +2612,12 @@ mod spacing_tests {
         let paragraph_pair = height(2);
         assert_eq!(
             height(0),
-            paragraph_pair - px(10.),
+            paragraph_pair - px(theme::LH_PROSE),
             "two-space hard break must start a line"
         );
         assert_eq!(
             height(1),
-            paragraph_pair - px(10.),
+            paragraph_pair - px(theme::LH_PROSE),
             "backslash hard break must start a line"
         );
         assert_eq!(
@@ -1846,5 +2630,389 @@ mod spacing_tests {
             paragraph_pair,
             "definitions between paragraphs add no extra gap"
         );
+    }
+}
+
+/// The Ferrite knobs in `vendor/gpui-base/src/text` (see `vendor/README.md`),
+/// measured through the real renderer. The vendor crate is not a workspace
+/// member, so its own tests do not run here; these pin the behaviour.
+#[cfg(test)]
+mod vendor_knob_tests {
+    use super::*;
+    use gpui::{div, Context, Render, TestAppContext};
+
+    type Knobs = fn(TextViewStyle) -> TextViewStyle;
+
+    struct KnobRoot {
+        source: String,
+        knobs: Knobs,
+        width: f32,
+    }
+
+    impl Render for KnobRoot {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            window.set_rem_size(px(theme::FS_UI));
+            div().w(px(self.width)).child(
+                div()
+                    .debug_selector(|| "knob-sample".into())
+                    .w_full()
+                    .child(
+                        TextView::markdown("knob-sample", self.source.clone())
+                            .max_lines(usize::MAX)
+                            // Upstream defaults, so each knob is measured alone.
+                            .style((self.knobs)(
+                                TextViewStyle::default().with_paragraph_gap(rems(0.)),
+                            )),
+                    ),
+            )
+        }
+    }
+
+    fn height(cx: &mut TestAppContext, source: &str, width: f32, knobs: Knobs) -> gpui::Pixels {
+        let (_, cx) = cx.add_window_view(|_, _| KnobRoot {
+            source: source.into(),
+            knobs,
+            width,
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.debug_bounds("knob-sample").unwrap().size.height
+    }
+
+    fn plain(style: TextViewStyle) -> TextViewStyle {
+        style
+    }
+
+    #[gpui::test]
+    fn heading_space_rides_above_a_heading_only_after_a_sibling(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        fn spaced(style: TextViewStyle) -> TextViewStyle {
+            style.with_heading_spacing(rems(20. / theme::FS_UI), None)
+        }
+        let after = height(cx, "Para\n\n## Heading", 360., spaced)
+            - height(cx, "Para\n\n## Heading", 360., plain);
+        assert!((after - px(20.)).abs() < px(0.5), "space above: {after:?}");
+        let first = height(cx, "## Heading", 360., spaced) - height(cx, "## Heading", 360., plain);
+        assert!(
+            first.abs() < px(0.5),
+            "a first heading takes none: {first:?}"
+        );
+    }
+
+    /// The test text system gives every family one advance, so the family
+    /// itself is checked in the visual-reference captures. Here: the code
+    /// knobs render and paint their wash without moving any layout.
+    #[gpui::test]
+    fn inline_code_knobs_paint_without_moving_layout(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        fn code(style: TextViewStyle) -> TextViewStyle {
+            style
+                .with_inline_code_font(Some(theme::FONT_CODE.into()))
+                .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
+                    color: rgba(0xffffff0f).into(),
+                    radius: px(theme::R_CHIP),
+                    overhang: px(2.),
+                    inset_y: px(1.),
+                }))
+        }
+        for source in [
+            "Run `cargo test` now.".to_string(),
+            format!("Wrapped `{}` code.", "long ".repeat(30)),
+            "A [link](https://example.com) and `code` in a flow.".to_string(),
+        ] {
+            let before = height(cx, &source, 220., plain);
+            let after = height(cx, &source, 220., code);
+            assert_eq!(before, after, "{source:?}");
+        }
+    }
+
+    #[gpui::test]
+    fn the_rule_takes_its_refinement(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        fn hairline(style: TextViewStyle) -> TextViewStyle {
+            style.with_rule(gpui::StyleRefinement::default().h(px(1.)))
+        }
+        let thinner = height(cx, "---", 360., plain) - height(cx, "---", 360., hairline);
+        assert!((thinner - px(1.)).abs() < px(0.25), "{thinner:?}");
+    }
+}
+
+/// The Markdown look as data: the knobs `style()` turns on (the renderer
+/// itself is measured by `spacing_tests` and `vendor_knob_tests`).
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+    use ferrite_core::transcript::Class;
+    use gpui::{FontStyle, Hsla};
+
+    fn solid(value: u32) -> Hsla {
+        rgb(value).into()
+    }
+
+    /// Terminal-native: prose `TEXT`, strong `W_STRONG` `TEXT_STRONG`,
+    /// links and paths cyan with no underline at rest, inline code cyan with
+    /// no chip, a fence with no ground.
+    #[test]
+    fn prose_is_text_with_semibold_strong_and_cyan_links() {
+        let style = style(px(theme::FS_UI));
+        assert_eq!(style.foreground(), solid(theme::TEXT));
+        assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
+        assert_eq!(style.strong().color, Some(solid(theme::TEXT_STRONG)));
+        assert_eq!(style.link(), solid(theme::PATH_INK));
+        // The underline is the link's own ink, painted only under the
+        // pointer (`with_link_underline_on_hover`).
+        assert_eq!(style.link_underline(), Some(solid(theme::PATH_INK)));
+        assert!(style.link_underline_on_hover());
+        assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
+        assert!(
+            style.inline_code_wash().is_none(),
+            "inline code has no chip"
+        );
+        assert_eq!(
+            style.inline_code().color,
+            Some(solid(theme::INLINE_CODE_INK))
+        );
+        assert!(
+            style.code_background().is_transparent(),
+            "a fence has no ground"
+        );
+        assert_eq!(
+            style.code_block().border_color,
+            Some(theme::paint::LINE2.into()),
+            "a fence is its 1px rule"
+        );
+    }
+
+    /// Theme rule 1: a heading is the body size, set apart by weight and
+    /// ink, on the reading size's own line.
+    #[test]
+    fn headings_follow_the_type_table_at_every_reading_size() {
+        for (base, h1_line) in [(14., 21.), (18., 27.)] {
+            let style = style_at(px(theme::FS_UI), px(base));
+            assert_eq!(style.heading_font_size(1), Some(px(base)));
+            assert_eq!(style.heading_font_size(3), Some(px(base)));
+            let h1 = style.heading(1);
+            assert_eq!(h1.text.font_weight, Some(theme::W_STRONG));
+            assert_eq!(h1.text.color, Some(solid(theme::TEXT_STRONG)));
+            assert_eq!(h1.text.line_height, Some(px(h1_line).into()));
+            assert_eq!(heading_line_height(1, base), h1_line);
+            let h4 = style.heading(4);
+            assert_eq!(h4.text.font_weight, Some(theme::W_STRONG));
+            assert_eq!(h4.text.color, Some(solid(theme::TEXT_STRONG)));
+            assert_eq!(h4.text.font_style, None, "headings are never italic");
+        }
+        // Every heading is the body size at every reading size.
+        for (base, sizes) in [
+            (14., [14., 14., 14.]),
+            (16., [16., 16., 16.]),
+            (18., [18., 18., 18.]),
+        ] {
+            let style = style_at(px(theme::FS_UI), px(base));
+            for level in 1..=6 {
+                let size = f32::from(style.heading_font_size(level).unwrap());
+                assert_eq!(size.fract(), 0., "H{level} at {base}: {size}");
+                assert_eq!(
+                    size,
+                    sizes[(level as usize - 1).min(2)],
+                    "H{level} at {base}"
+                );
+                assert_eq!(
+                    style.heading(level).text.line_height,
+                    Some(px(theme::prose_line_height(size)).into()),
+                    "H{level} at {base} sits on its rounded size's line"
+                );
+            }
+        }
+        // Terminal-native: blocks sit one blank line apart at every
+        // reading size, a heading too.
+        let rem = px(theme::FS_UI);
+        for (base, gap) in [(14., 21.), (16., 24.), (18., 27.)] {
+            let style = style_at(rem, px(base));
+            let near = |value: gpui::Rems, want: f32| {
+                (f32::from(value.to_pixels(rem)) - want).abs() < 0.01
+            };
+            assert!(near(style.paragraph_gap(), gap), "{base}");
+            assert!(near(style.heading_space_above(), 0.), "{base}");
+            assert!(style.heading_space_below().is_none(), "{base}");
+        }
+    }
+
+    /// Theme rule 6: inline code is cyan (`INLINE_CODE`), at body weight.
+    #[test]
+    fn inline_code_is_cyan_at_body_weight() {
+        use ferrite_core::settings::ReadingSize;
+        assert_eq!(theme::INLINE_CODE_INK, theme::INLINE_CODE);
+        // No chip at any reading size: the ink alone sets code apart.
+        for size in [
+            ReadingSize::STANDARD,
+            ReadingSize::nearest(16),
+            ReadingSize::nearest(18),
+        ] {
+            let style = style_at(px(theme::FS_UI), px(theme::answer_text_size(size)));
+            assert!(style.inline_code_wash().is_none());
+        }
+        // Code inside `# heading` or `**strong**` shapes at 400: the code
+        // highlight is merged over the heading's or the strong run's weight.
+        let style = style(px(theme::FS_UI));
+        assert_eq!(style.inline_code().font_weight, Some(theme::W_BODY));
+        for weight in [theme::W_STRONG, style.strong().font_weight.unwrap()] {
+            let merged = gpui::HighlightStyle {
+                font_weight: Some(weight),
+                ..Default::default()
+            }
+            .highlight(style.inline_code());
+            assert_eq!(merged.font_weight, Some(theme::W_BODY));
+        }
+        let heading = gpui::TextStyle {
+            font_weight: theme::W_STRONG,
+            ..Default::default()
+        }
+        .highlight(style.inline_code());
+        assert_eq!(heading.font_weight, theme::W_BODY);
+    }
+
+    #[test]
+    fn markdown_never_tints_inline_code_with_the_accent() {
+        let source = include_str!("rich.rs");
+        assert!(!source.contains(concat!("ACCENT", "_WASH")));
+    }
+
+    #[test]
+    fn prose_holds_the_measure_and_code_keeps_the_column() {
+        let style = style(px(theme::FS_UI));
+        // `MEASURE_CH` cells at the Standard reading size, and the cell a
+        // line's trailing space hangs into.
+        assert_eq!(
+            style.prose_max_width(),
+            Some(px(((theme::MEASURE_CH + 1.0)
+                * theme::tx_cell(theme::FS_PROSE))
+            .round()))
+        );
+        // A fence holds to the measure (its language word at that edge); a
+        // table keeps the column.
+        assert_eq!(
+            style.code_block().max_size.width,
+            Some(px(theme::MEASURE_CH * theme::tx_cell(theme::FS_PROSE)).into())
+        );
+        assert_eq!(style.table().max_size.width, None);
+    }
+
+    /// Terminal-native (clean): a `W_STRONG` head over a `LINE2` rule, row
+    /// rules in `LINE`, each row one prose line, no box.
+    #[test]
+    fn tables_are_rows_on_the_grid_under_a_strong_header_rule() {
+        let style = style(px(theme::FS_UI));
+        assert_eq!(style.border(), theme::paint::LINE.into(), "row rules");
+        let cell = style.table_cell();
+        assert_eq!(cell.text.font_size, Some(px(theme::FS_PROSE).into()));
+        assert_eq!(cell.text.line_height, Some(px(theme::LH_PROSE).into()));
+        assert_eq!(
+            cell.text
+                .font_features
+                .as_ref()
+                .map(|features| features.tag_value_list().to_vec()),
+            Some(vec![("tnum".to_string(), 1)])
+        );
+        let head = style.table_head();
+        assert_eq!(head.text.font_weight, Some(theme::W_STRONG));
+        assert_eq!(head.text.color, Some(solid(theme::TEXT_STRONG)));
+        assert_eq!(head.border_color, Some(theme::paint::LINE2.into()));
+    }
+
+    #[test]
+    fn quotes_and_breaks_are_hairlines() {
+        let style = style(px(theme::FS_UI));
+        assert_eq!(
+            style.blockquote().border_color,
+            Some(theme::paint::LINE2.into())
+        );
+        assert_eq!(
+            style.rule().background,
+            Some(gpui::Fill::from(theme::paint::LINE))
+        );
+        assert_eq!(
+            style.blockquote().padding.left,
+            Some(px(theme::tx_gutter(theme::FS_PROSE) - theme::QUOTE_RULE_W).into()),
+            "quoted text starts where list text does"
+        );
+    }
+
+    #[test]
+    fn syntax_classes_paint_their_inks_and_comments_lean() {
+        for (class, ink) in [
+            (Class::Plain, theme::SYN_PLAIN),
+            (Class::Keyword, theme::SYN_KEYWORD),
+            (Class::Str, theme::SYN_STRING),
+            (Class::Number, theme::SYN_NUMBER),
+            (Class::Comment, theme::SYN_COMMENT),
+            (Class::Function, theme::SYN_FUNCTION),
+            (Class::Type, theme::SYN_TYPE),
+            (Class::Punct, theme::SYN_PUNCT),
+        ] {
+            let style = syntax_style(class);
+            assert_eq!(style.color, Some(solid(ink)), "{class:?}");
+            assert_eq!(
+                style.font_style,
+                (class == Class::Comment).then_some(FontStyle::Italic),
+                "{class:?}"
+            );
+            assert_eq!(style.background_color, None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cache_cost_tests {
+    use super::*;
+
+    /// A native text holds far more than its source: a 2 KB answer run
+    /// freed about 317 KB when dropped (Sep 2026 probe, drawn once).
+    const HELD_BY_A_2KB_RUN: usize = 317 * 1024;
+
+    fn draw(cache: &TextCache, id: String, source: &str, cx: &mut gpui::VisualTestContext) {
+        cx.update(|window, cx| {
+            cache.state(id.into(), source, window, cx);
+        });
+    }
+
+    /// A long-lived Pane draws one new answer run after another. Charged
+    /// only its source bytes, its cache held 256 runs, ~80 MB for runs of
+    /// 2 KB; what it holds is now bounded by what its texts really hold.
+    #[gpui::test]
+    fn a_panes_text_cache_holds_a_bounded_amount_of_native_text(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::theme::init_components);
+        let cx = cx.add_empty_window();
+        let cache = TextCache::default();
+        let source = "words ".repeat(2048 / 6);
+        for run in 0..256 {
+            draw(&cache, format!("markdown-pane-{run}"), &source, cx);
+        }
+        let ids = cache.cached_ids();
+        assert!(
+            ids.len() * HELD_BY_A_2KB_RUN <= TEXT_BUDGET,
+            "{} runs of 2 KB held, ~{} MB",
+            ids.len(),
+            ids.len() * HELD_BY_A_2KB_RUN / (1024 * 1024)
+        );
+        assert!(ids.iter().any(|id| id.as_ref() == "markdown-pane-255"));
+    }
+
+    /// Texts drawn together never evict each other, whatever they hold:
+    /// a frame showing more than the budget would otherwise rebuild them
+    /// all on every frame.
+    #[gpui::test]
+    fn texts_drawn_together_stay_cached_past_the_budget(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::theme::init_components);
+        let cx = cx.add_empty_window();
+        let cache = TextCache::default();
+        let source = "words ".repeat(50_000 / 6);
+        for frame in 0..3 {
+            for run in 0..12 {
+                draw(&cache, format!("markdown-big-{run}"), &source, cx);
+            }
+            assert_eq!(cache.cached_ids().len(), 12, "frame {frame}");
+        }
     }
 }

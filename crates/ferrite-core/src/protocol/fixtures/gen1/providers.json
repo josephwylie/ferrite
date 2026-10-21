@@ -1,0 +1,1 @@
+{"type":"providers","revision":13,"providers":[{"provider":"codex","live_sessions":0,"models":[{"value":"gpt-5.6","display":"GPT-5.6","detail":"","resolved":null,"efforts":["low","high"],"default_effort":"high"}]}]}

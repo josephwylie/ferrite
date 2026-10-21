@@ -8,9 +8,26 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 [features]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 visual-reference = ["gpui/test-support", "dep:gpui-reference-platform"]
+# The opaque greys on macOS too (`theme::GLASS`): what the headless parity
+# captures render, since a capture cannot show the desktop blur.
+opaque = []
+# Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013), on macOS and
+# Windows. The release packaging (`scripts/install-app.sh`,
+# `scripts/package-windows.ps1`) turns it on. Off by default so a plain
+# `cargo build` needs no cmake, ninja or 130-170 MB CEF download; without it
+# a visual shows its title, caption and an open-in-browser fallback instead
+# of the live page.
+cef = ["dep:cef"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# System notifications: herdr-focus-notify, vendored (its README).
+ferrite-focus-notify = { path = "../ferrite-focus-notify" }
+# herdr-reviewr's review core, vendored: the Review slot's rows, comments and
+# their prompt text (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+toml = { workspace = true }
+unicode-segmentation = { workspace = true }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
@@ -24,9 +41,33 @@ serde_json = { workspace = true }
 gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
 url = "2"
 percent-encoding = "2"
+# GPUI's default HTTP client refuses every request, so Markdown images with
+# http(s) URLs never load. GPUI Kit already builds this client; Ferrite wires it.
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.3" }
+# Visuals: a rendered frame becomes a gpui RenderImage (which holds
+# image::Frames), and the agent's screenshot is a PNG. Already in the tree
+# via gpui.
+image = { version = "0.25.1", default-features = false, features = ["png"] }
+# The visual engine's wake -> cx.notify bridge (a channel a foreground task
+# drains). Already in the tree via gpui.
+futures = "0.3"
+
+# Projects 1.0 uses Unix sockets, signals and flock (ADR 0031).
+# Keep its runtime out of Windows builds; the cockpit reports unavailability.
+[target.'cfg(unix)'.dependencies]
+sw-board = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Chromium Embedded Framework bindings (tauri-apps/cef-rs), the `cef`
+# feature's engine. Only the sandbox feature: the bundling helpers
+# (`build-util`) pull in clap/cargo_metadata, and install-app.sh does that job.
+cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+# The same engine on Windows, without `sandbox`: CEF's Windows sandbox only
+# runs inside its bootstrap launcher (ADR 0013), which Ferrite doesn't use.
+cef = { version = "=154.5.0", default-features = false, optional = true }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1", default-features = false }
@@ -35,3 +76,5 @@ winresource = { version = "0.1", default-features = false }
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+# The in-process machine the window's tests attach to.
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }

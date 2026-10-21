@@ -39,6 +39,87 @@ const TOOL_ITEM_TYPES: [&str; 10] = [
     "collabToolCall",
 ];
 
+/// Offer `show_visual` on a thread/start (`start`) or thread/resume.
+///
+/// Verified against 0.160.1 (fixture `codex-show-visual-0.160.1`): the tool
+/// is a `dynamicTools` namespace `ferrite` on thread/start, persisted with the
+/// thread so a resume carries it without being told. Both also carry a
+/// per-thread config making the namespace a direct call: a model in
+/// `code_mode_only` otherwise calls every tool from inside a JavaScript
+/// `exec` cell, where the screenshot never reached it.
+pub(super) fn offer_visuals(
+    params: &mut Value,
+    visuals: Option<&crate::visual::Visuals>,
+    start: bool,
+) {
+    let Some(definition) = visuals.and_then(crate::visual::Visuals::definition) else {
+        return;
+    };
+    if start {
+        params["dynamicTools"] = serde_json::json!([{
+            "type": "namespace",
+            "name": crate::visual::SERVER,
+            "description": "Ferrite, the app the operator watches this conversation in.",
+            "tools": [{
+                "type": "function",
+                "name": definition.name,
+                "description": definition.description,
+                "inputSchema": definition.input_schema,
+            }],
+        }]);
+    }
+    params["config"] = serde_json::json!({
+        "features": {"code_mode": {"direct_only_tool_namespaces": [crate::visual::SERVER]}}
+    });
+}
+
+/// Answer the server's `item/tool/call` for `show_visual`, off this thread:
+/// the render's text and screenshot as the call's content items. Returns
+/// whether `frame` was that call. Any other dynamic call is not Ferrite's.
+pub(super) fn answer_visual(
+    frame: &Value,
+    visuals: Option<&crate::visual::Visuals>,
+    stdin: std::sync::Arc<std::sync::Mutex<std::process::ChildStdin>>,
+) -> bool {
+    if frame["method"] != "item/tool/call" {
+        return false;
+    }
+    let params = &frame["params"];
+    if params["namespace"] != crate::visual::SERVER || params["tool"] != crate::visual::TOOL {
+        return false;
+    }
+    let Some(id) = frame.get("id").cloned() else {
+        return false;
+    };
+    let respond = move |answer: crate::visual::Answer| {
+        let mut items = vec![serde_json::json!({"type": "inputText", "text": answer.text})];
+        if let Some(png) = answer.png_base64() {
+            items.push(serde_json::json!({
+                "type": "inputImage",
+                "imageUrl": format!("data:image/png;base64,{png}"),
+            }));
+        }
+        let _ = super::write_request(
+            &stdin,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {"success": !answer.is_error, "contentItems": items},
+            }),
+        );
+    };
+    match visuals {
+        Some(visuals) => crate::visual::answer(
+            visuals,
+            params["callId"].as_str().unwrap_or_default(),
+            &params["arguments"],
+            respond,
+        ),
+        None => respond(crate::visual::Answer::unavailable()),
+    }
+    true
+}
+
 /// What the thread/start (or thread/resume) response said: the identity the
 /// Session announces and the capabilities the operator may rely on.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +182,11 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
             super::questions::decode_permissions(params, rpc_id_string(value.get("id")?)?)
                 .map(|decision| SessionEvent::DecisionRequested { decision })
         }
+        // Codex pursues an active goal on its own, unasked (ADR 0032).
+        "thread/goal/updated" => Some(SessionEvent::ScheduledWork {
+            pending: params["goal"]["status"] == "active",
+        }),
+        "thread/goal/cleared" => Some(SessionEvent::ScheduledWork { pending: false }),
         "thread/tokenUsage/updated" => parse_token_usage(params),
         "account/rateLimits/updated" => parse_rate_limits(params),
         "model/rerouted" => {
@@ -322,10 +408,13 @@ pub(super) fn parse_events(line: &str) -> Vec<SessionEvent> {
             Some("active") => {
                 let flags = params["status"]["activeFlags"].as_array();
                 if flags.is_some_and(|flags| flags.iter().any(|v| v == "waitingOnApproval")) {
-                    Some(phase(Phase::Waiting, "Approval needed".into()))
+                    Some(phase(
+                        Phase::Waiting,
+                        crate::progress::APPROVAL_NEEDED.into(),
+                    ))
                 } else if flags.is_some_and(|flags| flags.iter().any(|v| v == "waitingOnUserInput"))
                 {
-                    Some(phase(Phase::Waiting, "Answer needed".into()))
+                    Some(phase(Phase::Waiting, crate::progress::ANSWER_NEEDED.into()))
                 } else {
                     None
                 }
@@ -405,6 +494,12 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
         return None;
     }
     let id = item.get("id")?.as_str()?.to_string();
+    if kind == "dynamicToolCall"
+        && item["namespace"] == crate::visual::SERVER
+        && item["tool"] == crate::visual::TOOL
+    {
+        return Some(visual_item(id, item, completed));
+    }
     if !completed {
         return Some(SessionEvent::ToolStarted {
             id,
@@ -435,6 +530,13 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
                     .unwrap_or_else(|| v.to_string())
             })
             .unwrap_or_default(),
+    };
+    // A refused call ran nothing; its row says what happened to it (`└
+    // failed · declined`), never the patch it carried or a bare `failed ·`.
+    let output = if item["status"] == "declined" {
+        "declined".to_string()
+    } else {
+        output
     };
     let result = if kind == "commandExecution" {
         // Codex supplies one combined stream, so preserve it as the
@@ -499,8 +601,50 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
     })
 }
 
+/// A `show_visual` item: its own input (the call's arguments, as Claude's
+/// call carries it), and a result read as text — the screenshot the answer
+/// carried is base64 the transcript and the log have no use for.
+fn visual_item(id: String, item: &Value, completed: bool) -> SessionEvent {
+    if !completed {
+        return SessionEvent::ToolStarted {
+            id,
+            name: crate::visual::CODEX_NAME.into(),
+            input: item["arguments"].clone(),
+        };
+    }
+    let output = item["contentItems"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|content| content["text"].as_str().unwrap_or("[image]"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    SessionEvent::ToolCompleted {
+        id,
+        output,
+        is_error: item["status"] != "completed" || item["success"] == false,
+        result: ToolResult::Opaque,
+    }
+}
+
 /// Decode Codex's per-file unified diff without assigning a tool identity or
 /// inferring files absent from the native `changes` list.
+/// A `fileChange` item's `changes` as the diffs they make, path by path —
+/// what the item says before it runs (and before its approval is
+/// answered), so its row and its Decision can draw the edit asked for.
+pub(crate) fn file_change_diffs(item: &Value) -> Vec<(String, Vec<Hunk>)> {
+    item.get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|change| {
+            let path = change.get("path")?.as_str()?.to_string();
+            let hunks = parse_file_change(change);
+            (!hunks.is_empty()).then_some((path, hunks))
+        })
+        .collect()
+}
+
 fn parse_file_change(change: &Value) -> Vec<Hunk> {
     let diff = change
         .get("diff")
@@ -533,6 +677,7 @@ fn raw_file_hunk(content: &str, marker: char) -> Vec<Hunk> {
         new_start: if marker == '+' { 1 } else { 0 },
         new_lines: if marker == '+' { count } else { 0 },
         lines,
+        section: None,
     }]
 }
 
@@ -540,7 +685,8 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
     let mut hunks = Vec::new();
     let mut current: Option<Hunk> = None;
     for line in diff.lines() {
-        if let Some((old_start, old_lines, new_start, new_lines)) = parse_hunk_header(line) {
+        if let Some((old_start, old_lines, new_start, new_lines, section)) = parse_hunk_header(line)
+        {
             if let Some(hunk) = current.take() {
                 hunks.push(hunk);
             }
@@ -550,6 +696,7 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
                 new_start,
                 new_lines,
                 lines: Vec::new(),
+                section,
             });
         } else if current.is_some() && matches!(line.as_bytes().first(), Some(b' ' | b'+' | b'-')) {
             current.as_mut().unwrap().lines.push(line.to_string());
@@ -561,17 +708,20 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
     hunks
 }
 
-fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+/// `@@ -208,7 +208,11 @@ fn thread_row` → the ranges and the section git's
+/// funcname rule put after the second `@@` (none when it found none).
+fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32, Option<String>)> {
     let middle = line.strip_prefix("@@ -")?.split_once(" +")?;
     let (old, rest) = middle;
-    let (new, _) = rest.split_once(" @@")?;
+    let (new, tail) = rest.split_once(" @@")?;
     fn range(range: &str) -> Option<(u32, u32)> {
         let (start, count) = range.split_once(',').unwrap_or((range, "1"));
         Some((start.parse().ok()?, count.parse().ok()?))
     }
     let (old_start, old_lines) = range(old)?;
     let (new_start, new_lines) = range(new)?;
-    Some((old_start, old_lines, new_start, new_lines))
+    let section = crate::transcript::section_head(tail.trim());
+    Some((old_start, old_lines, new_start, new_lines, section))
 }
 
 /// The server blocks the turn on a Decision: a JSON-RPC request whose answer
@@ -618,9 +768,20 @@ fn approval_policy(params: &Value) -> DecisionPolicy {
     };
     DecisionPolicy {
         allow: choices.iter().any(|choice| choice == "accept"),
-        deny: choices.iter().any(|choice| choice == "decline"),
+        deny: refusable(choices),
         ..DecisionPolicy::default()
     }
+}
+
+/// Whether an approval may be declined — the model told no and the turn
+/// going on. 0.160 lists only `cancel` (which ends the turn) beside the
+/// allows, yet answers `decline` as the protocol's own refusal: the item
+/// settles `declined` and the model carries on. Any refusal offered means
+/// `decline` is too.
+pub(super) fn refusable(choices: &[Value]) -> bool {
+    choices
+        .iter()
+        .any(|choice| choice == "decline" || choice == "cancel")
 }
 
 fn codex_choice(value: &Value) -> Option<DecisionChoice> {
@@ -1175,6 +1336,8 @@ mod tests {
             SessionEvent::ContextDetails { .. } => return None,
             SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            // The resume capture clears its goal.
+            SessionEvent::ScheduledWork { .. } => "ScheduledWork",
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             // Raw reasoning is scoped by the activity router; these legacy
             // captures only contain reasoning summaries.
@@ -1184,6 +1347,8 @@ mod tests {
             // when the process exits, so no capture can contain it. Proved by
             // the session tests instead.
             SessionEvent::Closed { .. } => return None,
+            // Codex streams no tool input: a dynamic call arrives whole.
+            SessionEvent::ToolDraft { .. } => return None,
         })
     }
 
@@ -1320,6 +1485,7 @@ mod tests {
                 "Init",
                 "RateLimits",
                 "ReasoningSummaryDelta",
+                "ScheduledWork",
                 "TextDelta",
                 "TokenUsage",
                 "ToolCompleted",
@@ -1361,7 +1527,8 @@ mod tests {
                 // The same gate for a patch instead of a command.
                 ("approval-patch", 52, 25),
                 ("interrupt", 25, 4),
-                ("resume", 32, 10),
+                // ... and the goal a resumed thread no longer pursues.
+                ("resume", 32, 11),
                 // Ten retry errors and a warning, all ignored: only the failed
                 // turn itself is an event.
                 ("error", 22, 1),
@@ -1547,14 +1714,15 @@ mod tests {
     }
 
     /// Denial is not failure: the declined command completes as an error and
-    /// the turn runs to a normal end with the model talking about it.
+    /// the turn runs to a normal end with the model talking about it. Its
+    /// output says what happened to it (`declined`).
     #[test]
     fn a_declined_tool_fails_without_failing_the_turn() {
         let events = events_of("approval-deny");
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                SessionEvent::ToolCompleted { is_error: true, output, .. } if output.is_empty()
+                SessionEvent::ToolCompleted { is_error: true, output, .. } if output == "declined"
             )),
             "no declined tool result: {events:?}"
         );

@@ -1,4 +1,13 @@
 //! Durable, ordered Thread groups spanning Projects.
+//!
+//! **Membership is non-exclusive.** A Thread has at most one *home* Group —
+//! the one `Create` and `Join` put it in, taking it out of the home it had
+//! — and may also be a *guest* of any number of others (`Include`, which
+//! takes it out of nothing): "Everything" holds the members of "Perf sweep"
+//! without taking them from it. A guest is a full member everywhere a
+//! Group is read (its Panes, its layout, its count); the difference is only
+//! where the Thread lives when no Group claims it as home — the navigation
+//! lists it under its Project. `Leave` takes a Thread out of every Group.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -7,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::layout::Tree;
+use crate::layout::{Rect, Tree};
 use crate::store::Store;
 use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
@@ -33,7 +42,12 @@ impl GroupId {
 pub struct Group {
     pub id: GroupId,
     pub title: String,
+    /// Every member, home and guest alike, in the Group's own order.
     pub members: Vec<ThreadId>,
+    /// The members that are only guests here (`GroupChange::Include`):
+    /// their home, if they have one, is another Group. Always a subset of
+    /// `members`.
+    pub guests: BTreeSet<ThreadId>,
     /// The members' Pane arrangement, once one has been stored; `None` (as
     /// older files load) means the even grid. Always names exactly the
     /// members — see `Groups::layout` for the fitted view.
@@ -41,6 +55,11 @@ pub struct Group {
 }
 
 impl Group {
+    /// Whether `thread` lives here: a member that is not only a guest.
+    pub fn is_home_of(&self, thread: ThreadId) -> bool {
+        self.members.contains(&thread) && !self.guests.contains(&thread)
+    }
+
     pub fn display_title(&self) -> String {
         if self.title.trim().is_empty() {
             format!("group-{:02}", self.id.0)
@@ -49,10 +68,14 @@ impl Group {
         }
     }
 
-    /// Fit a stored layout to the membership after it changed.
+    /// Fit a stored layout to the membership after it changed. A tree that
+    /// can no longer be fitted (corrupt, or every leaf gone) is dropped: the
+    /// Group falls back to the default grid, computed at draw time.
     fn reconcile_layout(&mut self) {
         if let Some(tree) = &mut self.layout {
-            tree.reconcile(&self.members);
+            if !tree.fit(&self.members) {
+                self.layout = None;
+            }
         }
     }
 }
@@ -64,6 +87,14 @@ pub enum GroupChange {
         second: ThreadId,
     },
     Join {
+        thread: ThreadId,
+        group: GroupId,
+        index: Option<usize>,
+    },
+    /// Add `thread` to `group` as a guest: it stays wherever else it is
+    /// (`Join` without the detach). A Thread the Group already holds stays
+    /// where it is.
+    Include {
         thread: ThreadId,
         group: GroupId,
         index: Option<usize>,
@@ -213,7 +244,7 @@ impl std::fmt::Display for ApplyError {
             Self::Io(error) => write!(f, "{error}"),
             Self::MissingGroup => write!(f, "group no longer exists"),
             Self::MissingProject => write!(f, "Thread project metadata is missing"),
-            Self::SameThread => write!(f, "a Thread cannot be grouped with itself"),
+            Self::SameThread => write!(f, "a thread cannot be grouped with itself"),
             Self::InvalidLayout => write!(f, "layout does not name exactly the group's members"),
         }
     }
@@ -238,6 +269,8 @@ struct PersistedGroup {
     id: GroupId,
     title: String,
     members: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    guests: Vec<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<Tree>,
 }
@@ -246,6 +279,10 @@ struct PersistedGroup {
 #[derive(Clone)]
 pub struct Groups {
     dir: PathBuf,
+    /// Whether the Store at `dir` is on this computer, so a change is
+    /// checked against its Threads here: not in a copy of a machine's,
+    /// whose Server checks it when it applies the change (ADR 0026).
+    local: bool,
     groups: Vec<Group>,
     next_id: u64,
 }
@@ -272,7 +309,9 @@ impl Groups {
         }
         let store = Store::open(dir)?;
         let known: BTreeSet<ThreadId> = store.thread_ids()?.into_iter().collect();
-        let mut claimed = BTreeSet::new();
+        // A Thread has one home: a later Group claiming it as home keeps it
+        // as a guest instead.
+        let mut homed = BTreeSet::new();
         let mut healed = false;
         let mut groups = Vec::new();
         for stored in persisted
@@ -281,6 +320,7 @@ impl Groups {
             .flat_map(|value| &value.groups)
         {
             let before = stored.members.len();
+            let mut seen = BTreeSet::new();
             let members: Vec<_> = stored
                 .members
                 .iter()
@@ -297,28 +337,39 @@ impl Groups {
                 })
                 .collect::<io::Result<Vec<_>>>()?
                 .into_iter()
-                .filter(|thread| claimed.insert(*thread))
+                .filter(|thread| seen.insert(*thread))
                 .collect();
             healed |= members.len() != before;
             if members.len() < 2 {
                 healed = true;
                 continue;
             }
-            let layout = stored.layout.clone().map(|mut tree| {
-                tree.reconcile(&members);
-                tree
-            });
+            let stored_guests: BTreeSet<ThreadId> =
+                stored.guests.iter().copied().map(ThreadId::new).collect();
+            let mut guests = BTreeSet::new();
+            for thread in &members {
+                if stored_guests.contains(thread) || !homed.insert(*thread) {
+                    guests.insert(*thread);
+                }
+            }
+            healed |= guests != stored_guests;
+            let layout = stored
+                .layout
+                .clone()
+                .and_then(|mut tree| tree.fit(&members).then_some(tree));
             healed |= layout != stored.layout;
             groups.push(Group {
                 id: stored.id,
                 title: stored.title.clone(),
                 members,
+                guests,
                 layout,
             });
         }
         let next_id = groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1;
         let this = Self {
             dir: dir.to_path_buf(),
+            local: true,
             groups,
             next_id,
         };
@@ -336,24 +387,65 @@ impl Groups {
         self.groups.iter().find(|group| group.id == id)
     }
 
+    /// The first Group, in the durable order (creation order unless the
+    /// operator moved one), that holds `thread`, home or guest. Board code
+    /// that knows which Group is on screen asks that Group instead.
     pub fn of(&self, thread: ThreadId) -> Option<&Group> {
         self.groups
             .iter()
             .find(|group| group.members.contains(&thread))
     }
 
-    /// The Group's Pane arrangement, fit to its current members: the stored
-    /// tree reconciled, or the even grid when none was stored.
-    pub fn layout(&self, group: GroupId) -> Option<Tree> {
+    /// Every Group that holds `thread`, home or guest, in the durable order.
+    pub fn all_of(&self, thread: ThreadId) -> impl Iterator<Item = &Group> {
+        self.groups
+            .iter()
+            .filter(move |group| group.members.contains(&thread))
+    }
+
+    /// The Group `thread` lives in — the one `Create` or `Join` put it in —
+    /// if any. A Thread that is only ever a guest has none.
+    pub fn home(&self, thread: ThreadId) -> Option<&Group> {
+        self.groups.iter().find(|group| group.is_home_of(thread))
+    }
+
+    /// The Group's Pane arrangement in `bounds`, fit to its current
+    /// members: the tree the operator made, reconciled, or — when none was
+    /// stored, or after a reset — the default grid (`Tree::grid`), computed
+    /// here at draw time so it follows the window.
+    pub fn layout(&self, group: GroupId, bounds: Rect) -> Option<Tree> {
         let group = self.get(group)?;
         Some(match &group.layout {
             Some(tree) => {
                 let mut tree = tree.clone();
-                tree.reconcile(&group.members);
+                tree.reconcile(&group.members, bounds);
                 tree
             }
-            None => Tree::even(&group.members),
+            None => Tree::grid(&group.members, bounds),
         })
+    }
+
+    /// Whether the operator arranged this Group by hand (a stored tree).
+    pub fn has_custom_layout(&self, group: GroupId) -> bool {
+        self.get(group).is_some_and(|group| group.layout.is_some())
+    }
+
+    /// Forget the operator's arrangement: the Group goes back to the
+    /// default grid. A Group with no stored tree is left as it is.
+    pub fn reset_layout(&mut self, group: GroupId) -> Result<(), ApplyError> {
+        let index = self
+            .groups
+            .iter()
+            .position(|item| item.id == group)
+            .ok_or(ApplyError::MissingGroup)?;
+        let Some(before) = self.groups[index].layout.take() else {
+            return Ok(());
+        };
+        if let Err(error) = self.persist() {
+            self.groups[index].layout = Some(before);
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     /// Store an arrangement the operator made (a seam drag, a swap, a split).
@@ -423,13 +515,16 @@ impl Groups {
     }
 
     fn validate_change(&self, change: &GroupChange) -> Result<(), ApplyError> {
+        if !self.local {
+            return Ok(());
+        }
         self.validate_all()?;
         match &change {
             GroupChange::Create { first, second } => {
                 self.require_thread_project(*first)?;
                 self.require_thread_project(*second)?;
             }
-            GroupChange::Join { thread, .. } => {
+            GroupChange::Join { thread, .. } | GroupChange::Include { thread, .. } => {
                 self.require_thread_project(*thread)?;
             }
             _ => {}
@@ -450,15 +545,18 @@ impl Groups {
                 if first == second {
                     return Err(ApplyError::SameThread);
                 }
-                let mut dissolved = self.detach(first).into_iter().collect::<Vec<_>>();
-                dissolved.extend(self.detach(second));
+                let mut dissolved = self.detach_home(first).into_iter().collect::<Vec<_>>();
+                dissolved.extend(self.detach_home(second));
                 let id = GroupId(self.next_id);
                 self.next_id += 1;
                 self.groups.push(Group {
                     id,
                     title: String::new(),
                     members: vec![first, second],
-                    layout: Some(Tree::even(&[first, second])),
+                    guests: BTreeSet::new(),
+                    // No stored tree: the default grid is drawn until the
+                    // operator drags a seam, swaps or splits.
+                    layout: None,
                 });
                 Ok(Applied {
                     group: Some(id),
@@ -470,13 +568,24 @@ impl Groups {
                 group,
                 index,
             } => {
-                self.get(group).ok_or(ApplyError::MissingGroup)?;
-                let dissolved = self.detach(thread).into_iter().collect();
+                let at_home = self
+                    .get(group)
+                    .ok_or(ApplyError::MissingGroup)?
+                    .is_home_of(thread);
+                // Joining the Group it already lives in moves nothing out.
+                let dissolved = if at_home {
+                    Vec::new()
+                } else {
+                    self.detach_home(thread).into_iter().collect()
+                };
                 let target = self
                     .groups
                     .iter_mut()
                     .find(|item| item.id == group)
                     .ok_or(ApplyError::MissingGroup)?;
+                // A guest here comes home here, at the place asked for.
+                target.guests.remove(&thread);
+                target.members.retain(|member| *member != thread);
                 let at = index
                     .unwrap_or(target.members.len())
                     .min(target.members.len());
@@ -487,9 +596,32 @@ impl Groups {
                     dissolved,
                 })
             }
+            GroupChange::Include {
+                thread,
+                group,
+                index,
+            } => {
+                let target = self
+                    .groups
+                    .iter_mut()
+                    .find(|item| item.id == group)
+                    .ok_or(ApplyError::MissingGroup)?;
+                if !target.members.contains(&thread) {
+                    let at = index
+                        .unwrap_or(target.members.len())
+                        .min(target.members.len());
+                    target.members.insert(at, thread);
+                    target.guests.insert(thread);
+                    target.reconcile_layout();
+                }
+                Ok(Applied {
+                    group: Some(group),
+                    dissolved: Vec::new(),
+                })
+            }
             GroupChange::Leave { thread } => Ok(Applied {
                 group: None,
-                dissolved: self.detach(thread).into_iter().collect(),
+                dissolved: self.detach_all(thread),
             }),
             GroupChange::ReorderMember {
                 group,
@@ -543,28 +675,50 @@ impl Groups {
         }
     }
 
-    fn detach(&mut self, thread: ThreadId) -> Option<Dissolved> {
+    /// Take `thread` out of its home Group, if it has one — its guest seats
+    /// stay: the move `Create` and `Join` make. A Group left with fewer
+    /// than two members dissolves onto the one left.
+    fn detach_home(&mut self, thread: ThreadId) -> Option<Dissolved> {
         let index = self
             .groups
             .iter()
-            .position(|group| group.members.contains(&thread))?;
-        self.groups[index]
-            .members
-            .retain(|member| *member != thread);
-        if self.groups[index].members.len() < 2 {
+            .position(|group| group.is_home_of(thread))?;
+        self.remove_member(index, thread)
+    }
+
+    /// Take `thread` out of every Group that holds it: `Leave`.
+    fn detach_all(&mut self, thread: ThreadId) -> Vec<Dissolved> {
+        let mut dissolved = Vec::new();
+        while let Some(index) = self
+            .groups
+            .iter()
+            .position(|group| group.members.contains(&thread))
+        {
+            dissolved.extend(self.remove_member(index, thread));
+        }
+        dissolved
+    }
+
+    fn remove_member(&mut self, index: usize, thread: ThreadId) -> Option<Dissolved> {
+        let group = &mut self.groups[index];
+        group.members.retain(|member| *member != thread);
+        group.guests.remove(&thread);
+        if group.members.len() < 2 {
             let group = self.groups.remove(index);
             Some(Dissolved {
                 group: group.id,
                 survivor: group.members[0],
             })
         } else {
-            self.groups[index].reconcile_layout();
+            group.reconcile_layout();
             None
         }
     }
 
+    // Validation only reads the Store: a window's copy validates a drop
+    // without ever taking the Store's claim.
     fn thread_project(&self, thread: ThreadId) -> Result<Option<ProjectId>, ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         store
             .peek(thread)
             .map(|meta| meta.project_id)
@@ -577,7 +731,7 @@ impl Groups {
     }
 
     fn validate_all(&self) -> Result<(), ApplyError> {
-        let store = Store::open(&self.dir)?;
+        let store = Store::reader(&self.dir)?;
         let known: BTreeSet<_> = store.thread_ids()?.into_iter().collect();
         for thread in self.groups.iter().flat_map(|group| &group.members) {
             if !known.contains(thread) {
@@ -590,8 +744,54 @@ impl Groups {
         Ok(())
     }
 
+    /// The Groups as their file spells them: what a window's copy is
+    /// built from (ADR 0025).
+    pub fn to_wire(&self) -> serde_json::Value {
+        serde_json::to_value(self.persisted()).expect("the groups serialize")
+    }
+
+    /// No Groups: a window's copy of the Store in `dir` before the Server's
+    /// lands; `local` when that Store is on this computer.
+    pub(crate) fn empty(dir: &Path, local: bool) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            local,
+            groups: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// A window's read-only copy of the Server's Groups for the Store in
+    /// `dir`, taken as the Server healed them; `local` when that Store is on
+    /// this computer. It is never written: every change is the Server's.
+    pub fn from_wire(value: serde_json::Value, dir: &Path, local: bool) -> io::Result<Self> {
+        let persisted = serde_json::from_value::<PersistedGroups>(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let groups: Vec<Group> = persisted
+            .groups
+            .into_iter()
+            .map(|stored| Group {
+                id: stored.id,
+                title: stored.title,
+                members: stored.members.into_iter().map(ThreadId::new).collect(),
+                guests: stored.guests.into_iter().map(ThreadId::new).collect(),
+                layout: stored.layout,
+            })
+            .collect();
+        Ok(Self {
+            next_id: groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1,
+            groups,
+            ..Self::empty(dir, local)
+        })
+    }
+
     fn persist(&self) -> io::Result<()> {
-        let value = PersistedGroups {
+        let bytes = serde_json::to_vec_pretty(&self.persisted()).map_err(io::Error::other)?;
+        crate::store::replace_file(&self.dir.join(FILE_NAME), &bytes)
+    }
+
+    fn persisted(&self) -> PersistedGroups {
+        PersistedGroups {
             version: SCHEMA_VERSION,
             groups: self
                 .groups
@@ -600,33 +800,16 @@ impl Groups {
                     id: group.id,
                     title: group.title.clone(),
                     members: group.members.iter().map(|thread| thread.get()).collect(),
+                    guests: group.guests.iter().map(|thread| thread.get()).collect(),
                     layout: group.layout.clone(),
                 })
                 .collect(),
-        };
-        let bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
-        let temporary = self.dir.join(format!(".{FILE_NAME}.tmp"));
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, self.dir.join(FILE_NAME))
+        }
     }
 }
 
 fn group_gap_after_removal(old: usize, gap: usize, remaining: usize) -> usize {
     gap.saturating_sub(usize::from(gap > old)).min(remaining)
-}
-
-/// Near-square row × column packing, with the long edge horizontal.
-pub fn grid(count: usize) -> (usize, usize) {
-    if count == 0 {
-        return (0, 0);
-    }
-    let floor = (count as f64).sqrt() as usize;
-    let columns = if floor < count.div_ceil(floor.max(1)) {
-        floor + 1
-    } else {
-        floor.max(1)
-    };
-    (count.div_ceil(columns), columns)
 }
 
 #[cfg(test)]
@@ -635,6 +818,14 @@ mod tests {
     use crate::layout::{Node, SeamId};
     use crate::store::Provider;
     use crate::workspace::{registry::Registry, WorkspaceBinding};
+
+    /// A laptop board, for the default grids these tests compare against.
+    const BOUNDS: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 1134.0,
+        h: 838.0,
+    };
 
     fn leaf_set(tree: &Tree) -> BTreeSet<ThreadId> {
         tree.leaves().into_iter().collect()
@@ -653,16 +844,18 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        let even = Tree::even(&[threads[0], threads[1]]);
-        assert_eq!(groups.get(group).unwrap().layout, Some(even.clone()));
+        // A new pair stores no tree: it draws the default grid.
+        let even = Tree::grid(&[threads[0], threads[1]], BOUNDS);
+        assert_eq!(groups.get(group).unwrap().layout, None);
+        assert_eq!(groups.layout(group, BOUNDS), Some(even.clone()));
 
         let mut custom = even.clone();
         assert!(custom.set_ratio(&SeamId(vec![]), 0.3));
         groups.set_layout(group, custom.clone()).unwrap();
         let reloaded = Groups::load(&dir).unwrap();
         assert_eq!(reloaded.get(group).unwrap().layout, Some(custom.clone()));
-        assert_eq!(reloaded.layout(group), Some(custom));
-        assert_eq!(reloaded.layout(GroupId::new(99)), None);
+        assert_eq!(reloaded.layout(group, BOUNDS), Some(custom));
+        assert_eq!(reloaded.layout(GroupId::new(99), BOUNDS), None);
 
         // A file written before layouts existed: no `layout` key at all.
         let older = serde_json::json!({
@@ -676,7 +869,7 @@ mod tests {
         std::fs::write(dir.join(FILE_NAME), serde_json::to_vec(&older).unwrap()).unwrap();
         let mut groups = Groups::load(&dir).unwrap();
         assert_eq!(groups.get(group).unwrap().layout, None);
-        assert_eq!(groups.layout(group), Some(even));
+        assert_eq!(groups.layout(group, BOUNDS), Some(even.clone()));
         // Untouched, it persists without one; a stored tree writes the key.
         groups
             .apply(GroupChange::Rename {
@@ -687,10 +880,21 @@ mod tests {
         let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(!written.contains("layout"), "{written}");
         groups
-            .set_layout(group, Tree::even(&[threads[1], threads[0]]))
+            .set_layout(group, Tree::grid(&[threads[1], threads[0]], BOUNDS))
             .unwrap();
         let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(written.contains("\"layout\""), "{written}");
+        assert!(groups.has_custom_layout(group));
+        // A reset forgets the arrangement and persists without the key.
+        groups.reset_layout(group).unwrap();
+        assert!(!groups.has_custom_layout(group));
+        assert_eq!(groups.layout(group, BOUNDS), Some(even));
+        let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(!written.contains("layout"), "{written}");
+        assert_eq!(
+            groups.reset_layout(GroupId::new(99)),
+            Err(ApplyError::MissingGroup)
+        );
     }
 
     #[test]
@@ -750,7 +954,7 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        let mut custom = Tree::even(&[threads[0], threads[1]]);
+        let mut custom = Tree::grid(&[threads[0], threads[1]], BOUNDS);
         assert!(custom.set_ratio(&SeamId(vec![]), 0.3));
         groups.set_layout(group, custom).unwrap();
 
@@ -774,7 +978,7 @@ mod tests {
         let stored = groups.get(group).unwrap().layout.clone().unwrap();
         assert!(!stored.is_corrupt());
         assert_eq!(leaf_set(&stored), threads[1..3].iter().copied().collect());
-        assert_eq!(groups.layout(group), Some(stored.clone()));
+        assert_eq!(groups.layout(group, BOUNDS), Some(stored.clone()));
 
         groups
             .apply(GroupChange::ReorderMember {
@@ -790,11 +994,11 @@ mod tests {
         );
 
         assert_eq!(
-            groups.set_layout(group, Tree::even(&[threads[1], threads[3]])),
+            groups.set_layout(group, Tree::grid(&[threads[1], threads[3]], BOUNDS)),
             Err(ApplyError::InvalidLayout),
             "a tree naming a non-member is refused"
         );
-        let mut corrupt = Tree::even(&[threads[1], threads[2]]);
+        let mut corrupt = Tree::grid(&[threads[1], threads[2]], BOUNDS);
         if let Some(Node::Split { ratio, .. }) = &mut corrupt.root {
             *ratio = 2.0;
         }
@@ -803,7 +1007,10 @@ mod tests {
             Err(ApplyError::InvalidLayout)
         );
         assert_eq!(
-            groups.set_layout(GroupId::new(99), Tree::even(&[threads[1], threads[2]])),
+            groups.set_layout(
+                GroupId::new(99),
+                Tree::grid(&[threads[1], threads[2]], BOUNDS)
+            ),
             Err(ApplyError::MissingGroup)
         );
         assert_eq!(groups.get(group).unwrap().layout, Some(stored));
@@ -879,6 +1086,163 @@ mod tests {
         assert_eq!(
             groups.iter().next().unwrap().members,
             [threads[2], threads[3], threads[0]]
+        );
+    }
+
+    /// R1: Groups are non-exclusive. "Everything" includes "Perf sweep"'s
+    /// members without taking them out of it: each is listed by both, its
+    /// first Group (creation order) is Perf sweep, which stays its home,
+    /// and the guest seats survive a reload. Including a member twice
+    /// changes nothing.
+    #[test]
+    fn include_adds_a_guest_without_detaching_it() {
+        let dir = scratch("include-guest");
+        let (threads, _writers) = stored_threads(&dir, 4);
+        let mut groups = Groups::load(&dir).unwrap();
+        let perf = groups
+            .apply(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let everything = groups
+            .apply(GroupChange::Create {
+                first: threads[2],
+                second: threads[3],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        for (index, thread) in [threads[0], threads[1]].into_iter().enumerate() {
+            let applied = groups
+                .apply(GroupChange::Include {
+                    thread,
+                    group: everything,
+                    index: Some(index),
+                })
+                .unwrap();
+            assert!(applied.dissolved.is_empty(), "nothing is taken anywhere");
+        }
+        assert_eq!(groups.get(perf).unwrap().members, [threads[0], threads[1]]);
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[1], threads[2], threads[3]],
+            "the guests sit where they were asked to"
+        );
+        let all: Vec<GroupId> = groups.all_of(threads[0]).map(|group| group.id).collect();
+        assert_eq!(all, [perf, everything], "listed by both");
+        assert_eq!(groups.of(threads[0]).map(|group| group.id), Some(perf));
+        assert_eq!(groups.home(threads[0]).map(|group| group.id), Some(perf));
+        assert_eq!(
+            groups.home(threads[2]).map(|group| group.id),
+            Some(everything)
+        );
+        assert!(!groups.get(everything).unwrap().is_home_of(threads[0]));
+
+        groups
+            .apply(GroupChange::Include {
+                thread: threads[0],
+                group: everything,
+                index: Some(3),
+            })
+            .unwrap();
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[1], threads[2], threads[3]],
+            "a second include is a no-op"
+        );
+
+        let reloaded = Groups::load(&dir).unwrap();
+        assert_eq!(
+            reloaded.get(everything).unwrap().guests,
+            [threads[0], threads[1]]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            "the guest seats persist"
+        );
+        assert_eq!(reloaded.home(threads[1]).map(|group| group.id), Some(perf));
+    }
+
+    /// Join and Create still move a Thread's home — and only its home: the
+    /// guest seats stay. Leave takes it out of every Group, dissolving any
+    /// left with one member.
+    #[test]
+    fn join_moves_the_home_and_leave_takes_a_thread_out_of_every_group() {
+        let dir = scratch("include-join-leave");
+        let (threads, _writers) = stored_threads(&dir, 5);
+        let mut groups = Groups::load(&dir).unwrap();
+        let perf = groups
+            .apply(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let everything = groups
+            .apply(GroupChange::Create {
+                first: threads[2],
+                second: threads[3],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        groups
+            .apply(GroupChange::Include {
+                thread: threads[0],
+                group: everything,
+                index: None,
+            })
+            .unwrap();
+        groups
+            .apply(GroupChange::Join {
+                thread: threads[4],
+                group: perf,
+                index: None,
+            })
+            .unwrap();
+
+        // Joining Everything brings Thread 0 home there and out of Perf.
+        let applied = groups
+            .apply(GroupChange::Join {
+                thread: threads[0],
+                group: everything,
+                index: Some(0),
+            })
+            .unwrap();
+        assert!(applied.dissolved.is_empty());
+        assert_eq!(groups.get(perf).unwrap().members, [threads[1], threads[4]]);
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[2], threads[3]]
+        );
+        assert!(groups.get(everything).unwrap().is_home_of(threads[0]));
+
+        // Thread 1 is Perf's and a guest of Everything; leaving takes it
+        // out of both, and Perf, down to one member, dissolves.
+        groups
+            .apply(GroupChange::Include {
+                thread: threads[1],
+                group: everything,
+                index: None,
+            })
+            .unwrap();
+        let applied = groups
+            .apply(GroupChange::Leave { thread: threads[1] })
+            .unwrap();
+        assert_eq!(
+            applied.dissolved,
+            vec![Dissolved {
+                group: perf,
+                survivor: threads[4],
+            }]
+        );
+        assert!(groups.all_of(threads[1]).next().is_none());
+        assert_eq!(
+            groups.get(everything).unwrap().members,
+            [threads[0], threads[2], threads[3]]
         );
     }
 
@@ -1083,7 +1447,6 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(groups.get(group).unwrap().members, ids[..100]);
-        assert_eq!(grid(100), (10, 10));
         let join = groups.preview_drop(
             Drag::Thread {
                 thread: ids[100],

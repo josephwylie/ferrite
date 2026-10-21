@@ -1,0 +1,43 @@
+[package]
+name = "herdr-projects"
+# Ferrite: upstream's [workspace.package] values, which Ferrite's workspace does not share.
+version = "1.0.1"
+edition = "2024"
+description = "A work board for herdr: one list of tasks, each delegated one running as an ordinary herdr agent."
+license = "MIT"
+publish = false
+# The tests are one program (tests/main.rs, every file in tests/ a module of it), not one program per file.
+autotests = false
+
+[lib]
+name = "sw"
+path = "src/lib.rs"
+
+# Ferrite: upstream's `herdr-projects`; it ships with the app as
+# `ferrite-projects` (ADR 0031, "The command line").
+[[bin]]
+name = "ferrite-projects"
+path = "src/main.rs"
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+# Ferrite: sw-board in place of sw-web (crates/web is not taken: ADR 0031).
+[dependencies]
+sw-board.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+crossterm.workspace = true
+fancy-regex.workspace = true
+libc.workspace = true
+ratatui.workspace = true
+
+# Ferrite: upstream does not run clippy; this deny-by-default lint would stop
+# `cargo clippy --workspace` on unchanged upstream code (tests/takeover_kit/mod.rs).
+[lints.clippy]
+invisible_characters = "allow"

@@ -296,6 +296,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) display_map: DisplayMap,
     pub(super) undo_manager: UndoManager,
     pub(super) search_session: super::SearchSession,
+    /// Ferrite: an outside find's marks (`set_find`).
+    pub(super) outside_find: Option<super::search::OutsideFind>,
     pub(super) searchable: bool,
     pub(super) replaceable: bool,
     pub(super) soft_wrap: bool,
@@ -625,6 +627,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             text: "".into(),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
             search_session: super::SearchSession::default(),
+            outside_find: None,
             searchable: false,
             replaceable: true,
             soft_wrap: true,

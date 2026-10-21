@@ -25,6 +25,10 @@ fn live_config() -> ClaudeConfig {
         name: None,
         permission_mode: None,
         resume: None,
+        visuals: None,
+        env: Vec::new(),
+        launcher: Vec::new(),
+        args: Vec::new(),
     }
 }
 

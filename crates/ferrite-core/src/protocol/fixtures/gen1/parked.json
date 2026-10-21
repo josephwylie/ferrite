@@ -1,0 +1,1 @@
+{"type":"parked","revision":14,"threads":[{"thread":2,"provider":"codex","prompt_title":"Tidy the release notes","workspace":{"kind":"main","checkout":"/src/ferrite"},"project":2,"last_used_ms":1759990000000,"turns":11,"subagents":2},{"thread":3,"last_used_ms":1760000000000}]}

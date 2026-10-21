@@ -57,7 +57,7 @@ impl ModelCache {
         }
         *known = models;
         if let Err(error) = save(&self.dir.join(name), known) {
-            eprintln!("ferrite: could not save {provider:?} model catalog: {error}");
+            crate::log!("could not save {provider:?} model catalog: {error}");
         }
         true
     }

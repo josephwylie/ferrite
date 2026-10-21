@@ -31,7 +31,7 @@ pub struct Instruments {
 }
 
 /// One touched file's rolled-up diff stat.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FileChange {
     pub path: String,
     pub added: usize,
@@ -95,14 +95,25 @@ impl Instruments {
                 // worse than one flying none.
                 ToolState::Unavailable if is_test_run(tool) => instruments.tests = None,
                 state if is_test_run(tool) => {
-                    instruments.tests = Some(match state {
-                        ToolState::Failed(message) => Tests::Failed {
-                            count: test_count(message, &["failed", "failing"]),
-                        },
-                        _ => Tests::Passed {
-                            count: tool.result_line.as_deref().and_then(passed_count),
-                        },
-                    })
+                    instruments.tests =
+                        Some(match state {
+                            // The runner's own tally, wherever its output put
+                            // it (cargo: the closing `test result:` line).
+                            ToolState::Failed(message) => Tests::Failed {
+                                count: tool
+                                    .output
+                                    .as_ref()
+                                    .and_then(|output| {
+                                        output.text.lines().rev().find_map(|line| {
+                                            test_count(line, &["failed", "failing"])
+                                        })
+                                    })
+                                    .or_else(|| test_count(message, &["failed", "failing"])),
+                            },
+                            _ => Tests::Passed {
+                                count: tool.result_line.as_deref().and_then(passed_count),
+                            },
+                        })
                 }
                 _ => {}
             }
@@ -165,12 +176,18 @@ fn activity_line(tool: &ToolBlock) -> String {
 /// Every other tool's summary is a path, and a path is not a test result.
 const COMMAND_RUNNERS: [&str; 2] = ["Bash", "commandExecution"];
 
+/// Whether a tool runs a command, so its summary is the command itself: the
+/// transcript echoes it as `$ command` when the call is disclosed.
+pub fn is_command_run(name: &str) -> bool {
+    COMMAND_RUNNERS.contains(&name)
+}
+
 /// A tool row that ran a test suite. Gated on the tool actually being a
 /// command run: an Edit of `tests/foo.rs` or a Read under `tests/` would
 /// otherwise clear a red suite that nobody had rerun. Public because the
 /// tool row's pass badge asks the same question the instruments do.
 pub fn is_test_run(tool: &ToolBlock) -> bool {
-    if !COMMAND_RUNNERS.contains(&tool.name.as_str()) {
+    if !is_command_run(&tool.name) {
         return false;
     }
     let command = tool.summary.to_lowercase();
@@ -199,46 +216,42 @@ impl Cell {
     }
 }
 
-/// How much a Pane can say at its current size.
+/// How much a Pane can say at its current size. Two altitudes, no middle
+/// one (R12): a cell big enough to read a transcript in draws the
+/// transcript and its Composer; anything smaller is a wall tile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
-    /// Far: one signal, read across the room.
+    /// Far: the tile — the head, the state word, the last few lines, and
+    /// the quick answers while the Thread waits.
     Wall,
-    /// Mid: what the Thread is doing, without reading it.
-    Instruments,
     /// Near: the transcript itself, and a Composer to answer it.
     Transcript,
 }
 
-/// The zoom ladder, by both axes. A transcript with its Composer reads
-/// from 300px wide and 220px tall — three Panes across a laptop window,
-/// or a 3×3 board, are that size and were showing instruments in a
-/// column of empty ground. Under that, instruments from 200px wide and
-/// 120px tall; under that, the wall's one signal.
+/// The zoom ladder, by both axes: a transcript with its Composer reads
+/// from 300px wide and 360px tall — a 2x2 board on a laptop window is that
+/// size; a 3x3 board is not, and its cells are wall tiles.
 const TRANSCRIPT_WIDTH: f32 = 300.0;
-const TRANSCRIPT_HEIGHT: f32 = 220.0;
-const INSTRUMENTS_WIDTH: f32 = 200.0;
-const INSTRUMENTS_HEIGHT: f32 = 120.0;
+const TRANSCRIPT_HEIGHT: f32 = 360.0;
+/// The tile floor: the narrowest a wall tile still reads at. The UI folds
+/// the nav to its rail rather than let a board cell drop under it.
+pub const TILE_FLOOR_WIDTH: f32 = 200.0;
 
 impl Level {
-    /// How many Blocks this level draws. A wall cell draws none — it shows a
-    /// signal, not text — and per the Cockpit board L2 is instruments only
-    /// ("no transcript, no prompt"); only the near view reads the Thread.
+    /// How many Blocks this level draws. A wall tile reads its folded card
+    /// (`WallCard`), never the Blocks; only the near view reads the Thread.
     pub fn visible_blocks(self) -> usize {
         match self {
-            Level::Wall | Level::Instruments => 0,
+            Level::Wall => 0,
             Level::Transcript => 200,
         }
     }
 
-    /// Size decides — both of the cell's dimensions: a wide strip too
-    /// short for a transcript is instruments, a tall sliver too narrow
-    /// for one likewise.
+    /// Size decides — both of the cell's dimensions: a transcript needs
+    /// `TRANSCRIPT_WIDTH` and `TRANSCRIPT_HEIGHT`; anything less is a tile.
     pub fn for_cell(cell: Cell) -> Self {
         if cell.width >= TRANSCRIPT_WIDTH && cell.height >= TRANSCRIPT_HEIGHT {
             Level::Transcript
-        } else if cell.width >= INSTRUMENTS_WIDTH && cell.height >= INSTRUMENTS_HEIGHT {
-            Level::Instruments
         } else {
             Level::Wall
         }
@@ -277,6 +290,7 @@ mod tests {
                 new_start: 1,
                 new_lines: 1,
                 lines: lines.iter().map(|line| line.to_string()).collect(),
+                section: None,
             }],
         }
     }
@@ -455,37 +469,27 @@ mod tests {
     fn each_level_draws_only_what_it_can_show() {
         // The budget is the frame's, not the transcript's: walking history
         // nobody can read is what turns a 120fps wall into a 30fps one.
-        // L2 draws instruments, not prose (Cockpit board), so it too reads
-        // no Blocks.
         assert_eq!(Level::Wall.visible_blocks(), 0);
-        assert_eq!(Level::Instruments.visible_blocks(), 0);
         assert!(Level::Transcript.visible_blocks() >= 100);
     }
 
-    /// glance.md's ladder, on its own example cells: UNDER 200PX → Wall,
-    /// 200–380PX → Instruments, OVER 380PX → Transcript.
+    /// R12's ladder: a transcript from 300 wide and 360 tall, a tile under
+    /// either. At 1440x900 a 3x3 board's cells are tiles and a 2x2's are
+    /// transcripts, nav open (383.7 / 576 wide) or folded (479 / 719).
     #[test]
     fn size_alone_decides_the_level() {
-        // The three cells the ZoomLadder board draws.
-        assert_eq!(Level::for_cell(Cell::new(400.0, 264.0)), Level::Transcript);
-        assert_eq!(Level::for_cell(Cell::new(280.0, 176.0)), Level::Instruments);
-        assert_eq!(Level::for_cell(Cell::new(160.0, 100.0)), Level::Wall);
-        // Three across a 1440px window, and a 3×3 board: transcripts.
+        assert_eq!(Level::for_cell(Cell::new(383.7, 280.7)), Level::Wall);
+        assert_eq!(Level::for_cell(Cell::new(479.0, 280.7)), Level::Wall);
+        assert_eq!(Level::for_cell(Cell::new(576.0, 421.5)), Level::Transcript);
+        assert_eq!(Level::for_cell(Cell::new(719.0, 421.5)), Level::Transcript);
+        // Boundaries: 300x360 reads, a hair under on either axis does not.
+        assert_eq!(Level::for_cell(Cell::new(300.0, 360.0)), Level::Transcript);
+        assert_eq!(Level::for_cell(Cell::new(299.9, 900.0)), Level::Wall);
+        assert_eq!(Level::for_cell(Cell::new(1200.0, 359.9)), Level::Wall);
+        // A tall Solo column, a wide strip, a sliver.
         assert_eq!(Level::for_cell(Cell::new(372.0, 880.0)), Level::Transcript);
-        assert_eq!(Level::for_cell(Cell::new(372.0, 285.0)), Level::Transcript);
-        // A strip too short for a transcript is instruments however wide;
-        // too short for instruments, the wall.
-        assert_eq!(Level::for_cell(Cell::new(900.0, 200.0)), Level::Instruments);
-        assert_eq!(Level::for_cell(Cell::new(900.0, 100.0)), Level::Wall);
-        // The wall's own computed cell (~142px wide) stays at wall level.
+        assert_eq!(Level::for_cell(Cell::new(900.0, 200.0)), Level::Wall);
         assert_eq!(Level::for_cell(Cell::new(142.3, 115.5)), Level::Wall);
-        // Boundaries: 300×220 reads, a hair under does not; 200 wide is
-        // instruments, a hair under is the wall.
-        assert_eq!(Level::for_cell(Cell::new(300.0, 220.0)), Level::Transcript);
-        assert_eq!(Level::for_cell(Cell::new(299.9, 500.0)), Level::Instruments);
-        assert_eq!(Level::for_cell(Cell::new(500.0, 219.9)), Level::Instruments);
-        assert_eq!(Level::for_cell(Cell::new(200.0, 500.0)), Level::Instruments);
-        assert_eq!(Level::for_cell(Cell::new(199.9, 500.0)), Level::Wall);
     }
 
     /// The comps' running cells name the tool in flight; the activity line

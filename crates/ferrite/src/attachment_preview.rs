@@ -1,29 +1,35 @@
 //! Pane-owned file previews: images use a focused overlay while text files
-//! open in a reader that takes its own slot on the board, beside its Pane.
+//! open in a reader that takes its own slot on the board, beside its Pane
+//! (`cockpit/beside.rs` draws it: numbered lines, the target line marked).
+//! A review of the Thread's changes (`review.rs`) rides the same slot. The kit
+//! owns dialog focus and dismissal; this module supplies the owning Pane's
+//! bounds, which place and size the image sheet, while the scrim covers the
+//! window like every modal's.
 
+use crate::components::Tip as _;
+use crate::pointer::Pointer as _;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
-use gpui::component::{
-    button::{Button, ButtonVariants},
-    dialog::{DialogContent, DialogHeader, DialogTitle},
-    scroll::ScrollableElement,
-    Icon, IconName, Sizable, Theme, ThemeStyled,
-};
 use gpui::{
-    canvas, div, prelude::*, px, relative, rems, rgb, rgba, AnyElement, App, Bounds, Div,
-    FocusHandle, IntoElement, Pixels, Window,
+    canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Div, FocusHandle, IntoElement,
+    Pixels, Window,
 };
-
-use crate::theme;
 
 #[derive(Clone)]
 pub struct Document {
     pub path: PathBuf,
     pub title: String,
     pub source: String,
+    /// The line the reader opened at (1-based): marked and scrolled into
+    /// view (F-14). `None` opens at the top.
+    pub line: Option<u32>,
+    /// A review (ADR 0021): the Thread's changes as a diff that takes
+    /// comments, drawn in the reader's slot in place of a file. `path` is
+    /// the workspace and `source` is empty then.
+    pub review: Option<gpui::Entity<crate::review::ReviewView>>,
 }
 
 #[derive(Default)]
@@ -109,9 +115,71 @@ impl Preview {
             path,
             title,
             source,
+            line: None,
+            review: None,
         });
         window.refresh();
         true
+    }
+
+    /// Open a UTF-8 text file in the reader at `line` (F-14): the line is
+    /// marked and the cockpit scrolls it into view. `false` for a binary
+    /// file or one that cannot be read.
+    pub fn open_text_at(&self, path: PathBuf, title: String, line: Option<u32>) -> bool {
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        let Ok(source) = String::from_utf8(bytes) else {
+            return false;
+        };
+        self.state.lock().unwrap().document = Some(Document {
+            path,
+            title,
+            source,
+            line,
+            review: None,
+        });
+        true
+    }
+
+    /// Show text no file holds (a command's output) in the reader, as if
+    /// read from `path`: the path picks the reader's chip and highlighting.
+    pub fn open_source(&self, path: PathBuf, title: String, source: String) {
+        self.state.lock().unwrap().document = Some(Document {
+            path,
+            title,
+            source,
+            line: None,
+            review: None,
+        });
+    }
+
+    /// Show a review in the reader's slot, its head the workspace's name.
+    pub fn open_review(
+        &self,
+        workspace: PathBuf,
+        title: String,
+        review: gpui::Entity<crate::review::ReviewView>,
+    ) {
+        self.state.lock().unwrap().document = Some(Document {
+            path: workspace,
+            title,
+            source: String::new(),
+            line: None,
+            review: Some(review),
+        });
+    }
+
+    /// Close the reader with no window in hand (a test, the cockpit's own
+    /// key handler).
+    pub fn close_reader(&self) {
+        self.state.lock().unwrap().document = None;
+    }
+
+    /// Whether the reader slot (or anything in it) holds focus — what lets
+    /// ⌘W close the reader rather than its Pane.
+    pub fn reader_focused(&self, window: &Window, cx: &App) -> bool {
+        self.reader_focus.contains_focused(window, cx)
     }
 
     pub fn open_document(&self, path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
@@ -129,6 +197,16 @@ impl Preview {
 
     pub fn document(&self) -> Option<Document> {
         self.state.lock().unwrap().document.clone()
+    }
+
+    /// The review in the reader slot, when that is what it shows.
+    pub fn review(&self) -> Option<gpui::Entity<crate::review::ReviewView>> {
+        self.state
+            .lock()
+            .unwrap()
+            .document
+            .as_ref()
+            .and_then(|document| document.review.clone())
     }
 
     fn close(&self, window: &mut Window, cx: &mut App) {
@@ -149,7 +227,7 @@ impl Preview {
 
     /// The Pane with its image layer: the overlay covers exactly the Pane's
     /// own bounds. The text reader is not mounted here — it is a slot of
-    /// its own on the board (`reader`), laid out like any other Pane.
+    /// its own on the board (`cockpit/beside.rs`), laid out like a Pane.
     pub fn mount(&self, pane: Div) -> Div {
         let preview = self.clone();
         pane.child(
@@ -175,100 +253,80 @@ impl Preview {
         .child(PreviewLayer(self.clone()))
     }
 
-    /// The open document as a board slot: a Pane-shaped shell whose head
-    /// is handed to `head` (the cockpit wires the drag that moves the slot)
-    /// and whose body is the rendered `body`. None while no document is open.
+    /// The open document as a board slot (F-14): a Pane-shaped shell on the
+    /// plane whose head row is handed to `head` (the cockpit wires the drag
+    /// that moves the slot) and whose body is the rendered `body`. The head
+    /// is the Group head's twin — `PANE_HEAD_H`, its `paint::LINE` rule, a
+    /// cell in from each side — reading the file's path (its `title`) in
+    /// `PATH_INK` and its `:line` in `TEXT_MUTED`, or `review` and the
+    /// workspace, with a dim × at the right. None while no document is open.
     pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
+        use crate::theme::*;
         let document = self.document()?;
-        let markdown = document.is_markdown();
-        let kind = document.kind();
-        let document_content = if markdown {
-            div()
-                .id("markdown-reader-scroll")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
+        let label = match &document.review {
+            Some(_) => div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(format!("review \u{b7} {}", document.title)),
+            None => div()
+                .flex()
+                .min_w_0()
+                .overflow_hidden()
                 .child(
                     div()
-                        .w_full()
-                        .max_w(rems(52.))
-                        .mx_auto()
-                        .px(px(theme::PANE_PAD_X))
-                        .pt(px(theme::BODY_PAD_T))
-                        .pb(px(theme::BODY_PAD_B))
-                        .child(body),
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(PATH_INK))
+                        .child(document.title.clone()),
                 )
-                .into_any_element()
-        } else {
-            div()
-                .id("markdown-reader-scroll")
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .p(px(theme::PANE_PAD_X))
-                .child(div().size_full().child(body))
-                .into_any_element()
+                .children(document.line.map(|line| {
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(format!(":{line}"))
+                })),
         };
         let close = self.clone();
         let head_band = div()
+            .debug_selector(|| "reader-head".into())
             .flex()
-            .items_center()
-            .h(px(theme::PANE_HEAD_H))
             .flex_shrink_0()
-            .gap_2()
-            .px(px(theme::PANE_PAD_X))
-            .bg(rgb(theme::PANE_HEAD))
-            .rounded_t(px(theme::R_SURFACE - 1.))
+            .items_center()
+            .h(px(PANE_HEAD_H))
+            .px(px(HEAD_PAD_X))
             .border_b_1()
-            .border_color(rgba(theme::PANE_HEAD_EDGE))
-            .child(
-                Icon::new(IconName::FileText)
-                    .size(px(theme::ROW_ICON))
-                    .text_color(rgb(theme::TEXT_2)),
-            )
+            .border_color(paint::LINE)
+            .whitespace_nowrap()
+            .child(label)
+            .child(div().flex_1())
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(theme::FONT_UI)
-                    .text_size(px(theme::FS_MD))
-                    .text_color(rgb(theme::TEXT_STRONG))
-                    .child(document.title),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .rounded(px(theme::R_CHIP))
-                    .bg(rgb(theme::RAISED))
-                    .px(px(theme::CHIP_PAD_X))
-                    .py(px(theme::CHIP_PAD_Y))
-                    .text_size(px(theme::FS_MONO))
-                    .text_color(rgb(theme::TEXT_MUTED))
-                    .child(kind),
-            )
-            .child(
-                div()
+                    .id("close-markdown-reader")
                     .debug_selector(|| "close-markdown-reader".into())
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .w(px(ICON_BUTTON))
+                    .h(px(PANE_HEAD_H))
+                    .hover_control("reader-close")
                     // A press here closes; it must not also pick the slot
                     // up as a drag.
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        crate::components::button("close-markdown-reader")
-                            .w(px(theme::ICON_BUTTON))
-                            .h(px(theme::ICON_BUTTON))
-                            .p_0()
-                            .tooltip("Close document reader")
-                            .child(
-                                Icon::new(IconName::Close)
-                                    .size(px(theme::ICON_BUTTON_GLYPH))
-                                    .text_color(rgb(theme::TEXT_MUTED)),
-                            )
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                close.close_document(window);
-                            }),
-                    ),
+                    .tooltip(|window, cx| {
+                        gpui::component::tooltip::Tooltip::new("Close the reader \u{b7} esc")
+                            .build(window, cx)
+                    })
+                    .child(crate::icons::icon(
+                        crate::icons::CLOSE,
+                        GLYPH_BOX,
+                        TEXT_MUTED,
+                    ))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        close.close_document(window);
+                    }),
             );
         Some(
             div()
@@ -281,13 +339,12 @@ impl Preview {
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .rounded(px(theme::R_SURFACE))
-                .border_1()
-                .border_color(rgba(theme::TRANSPARENT))
-                .bg(rgb(theme::PANE))
-                .font_family(theme::FONT_MONO)
+                .bg(paint::PLANE)
+                .font_family(FONT_UI)
+                .text_size(px(FS_UI))
+                .line_height(px(LH_UI))
                 .child(head(head_band))
-                .child(document_content),
+                .child(body),
         )
     }
 }
@@ -314,6 +371,9 @@ impl Document {
     /// The reader's type chip: the language for a file the lexer knows, else
     /// the extension as a file card shows it, else just `FILE`.
     pub fn kind(&self) -> String {
+        if self.review.is_some() {
+            return "DIFF".into();
+        }
         if self.is_markdown() {
             return "MARKDOWN".into();
         }
@@ -349,7 +409,7 @@ impl Document {
 struct PreviewLayer(Preview);
 
 impl RenderOnce for PreviewLayer {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let preview = self.0;
         let image = preview.state.lock().unwrap().image.clone();
         let Some((path, title)) = image else {
@@ -359,79 +419,102 @@ impl RenderOnce for PreviewLayer {
         let close_button = preview.clone();
         let close_dialog = preview.clone();
         let original = path.clone();
-        let content = div()
+        // The image's own proportions size the sheet: decoded once through
+        // the same cache the `img` element reads, so it costs nothing twice.
+        let natural = window
+            .use_asset::<gpui::ImgResourceLoader>(&gpui::Resource::from(path.clone()), cx)
+            .and_then(Result::ok)
+            .map(|image| {
+                let size = image.size(0);
+                (size.width.0 as f32, size.height.0 as f32)
+            });
+        let (width, height) = sheet_size(
+            natural,
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+        );
+        // The sheet recipe (`prefs::sheet`): `paint::BAND`, a `paint::LINE2`
+        // edge, square, the float's one shadow; the 48px head with its title and the
+        // one close control over a hairline; then the image itself on the
+        // sheet, `MODAL_PAD` in from every edge. No well: nothing in a
+        // sheet is darker than the sheet.
+        // A word on the head, `paint::HOVER` under the pointer.
+        let open = crate::components::form_button("open-original-attachment", cx)
+            .flex_shrink_0()
+            .h(px(crate::theme::ROW))
+            .px(px(crate::theme::CH))
+            .child(crate::components::form_label(
+                "open original",
+                crate::theme::TEXT_MUTED,
+            ))
+            .accessibility_label("Open original image in the default app")
+            .tip("Open full-size image in the default app")
+            .debug_selector(|| "open-original-attachment".into())
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                open_original(&original, window, cx);
+            });
+        let close =
+            crate::prefs::sheet_close("close-attachment-preview", "Close image preview", cx)
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    close_button.close(window, cx);
+                });
+        let head =
+            crate::prefs::sheet_head(title, div().flex().items_center().child(open).child(close));
+        let sheet = crate::prefs::sheet(width, height)
             .debug_selector(|| "attachment-preview-content".into())
-            .w(relative(0.9))
-            .h(relative(0.85))
-            .max_w(rems(48.))
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(head)
             .child(
-                DialogContent::new()
-                    .size_full()
-                    .popover_style(cx)
-                    .p_3()
-                    .gap_2()
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .p(px(crate::theme::MODAL_PAD))
                     .child(
-                        DialogHeader::new()
-                            .flex_row()
-                            .items_center()
-                            .flex_shrink_0()
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .rounded(px(crate::theme::R_CHIP))
+                            .overflow_hidden()
                             .child(
-                                DialogTitle::new()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(title),
-                            )
-                            .child(
-                                Button::new("open-original-attachment")
-                                    .ghost()
-                                    .xsmall()
-                                    .flex_shrink_0()
-                                    .label("Open Original")
-                                    .accessibility_label("Open original image in the default app")
-                                    .tooltip("Open full-size image in the default app")
-                                    .debug_selector(|| "open-original-attachment".into())
-                                    .on_click(move |_, window, cx| {
-                                        cx.stop_propagation();
-                                        open_original(&original, window, cx);
-                                    }),
-                            )
-                            .child(
-                                Button::new("close-attachment-preview")
-                                    .ghost()
-                                    .xsmall()
-                                    .flex_shrink_0()
-                                    .icon(IconName::Close)
-                                    .accessibility_label("Close image preview")
-                                    .tooltip("Close image preview")
-                                    .on_click(move |_, window, cx| {
-                                        cx.stop_propagation();
-                                        close_button.close(window, cx);
-                                    }),
+                                gpui::img(path)
+                                    .absolute()
+                                    .inset_0()
+                                    .size_full()
+                                    .rounded(px(crate::theme::R_CHIP))
+                                    .object_fit(gpui::ObjectFit::Contain),
                             ),
-                    )
-                    .child(
-                        div().relative().flex_1().min_h_0().w_full().child(
-                            gpui::img(path)
-                                .absolute()
-                                .inset_0()
-                                .size_full()
-                                .object_fit(gpui::ObjectFit::Contain),
-                        ),
                     ),
             );
+        let content = crate::motion::dialog_in("attachment-preview-in", sheet);
+        // The scrim is the window's, as under Settings and the Project
+        // sheet: the nav and the titlebar dim too. The sheet itself stays
+        // centred on, and sized by, the Pane that owns it.
+        let window_size = window.viewport_size();
         gpui::base::Dialog::new(cx)
             .focus_handle(preview.focus.clone())
-            .left(bounds.origin.x)
-            .top(bounds.origin.y)
-            .w(bounds.size.width)
-            .h(bounds.size.height)
-            .backdrop(div().size_full().bg(Theme::global(cx).overlay))
+            .left(px(0.))
+            .top(px(0.))
+            .w(window_size.width)
+            .h(window_size.height)
+            .backdrop(crate::motion::veil_in(
+                "attachment-preview-veil",
+                div()
+                    .debug_selector(|| "attachment-preview-scrim".into())
+                    .size_full(),
+            ))
             .popup(
                 div()
                     .absolute()
-                    .inset_0()
+                    .left(bounds.origin.x)
+                    .top(bounds.origin.y)
+                    .w(bounds.size.width)
+                    .h(bounds.size.height)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -439,5 +522,57 @@ impl RenderOnce for PreviewLayer {
             )
             .request_close(move |_, window, cx| close_dialog.close(window, cx))
             .into_any_element()
+    }
+}
+
+/// The sheet's size for an image of `natural` pixels in a Pane of
+/// `pane_w` × `pane_h`: within `min(0.9 × pane_w, PREVIEW_MAX_W)` ×
+/// `0.85 × pane_h`, the image area (inside the head and `MODAL_PAD`) takes
+/// the image's aspect ratio, never scaled up past its own size. Until the
+/// image is decoded, the sheet takes the whole box.
+fn sheet_size(natural: Option<(f32, f32)>, pane_w: f32, pane_h: f32) -> (f32, f32) {
+    use crate::theme::{MODAL_HEAD_H, MODAL_PAD, PREVIEW_MAX_W};
+    let max_w = (pane_w * 0.9).clamp(0., PREVIEW_MAX_W);
+    let max_h = (pane_h * 0.85).max(0.);
+    // The frame around the image: the sheet's 1px edges, the head and its
+    // rule, and the inset on every side.
+    let frame_w = 2. + 2. * MODAL_PAD;
+    let frame_h = 2. + MODAL_HEAD_H + 1. + 2. * MODAL_PAD;
+    let Some((image_w, image_h)) = natural.filter(|(w, h)| *w > 0. && *h > 0.) else {
+        return (max_w, max_h);
+    };
+    let room_w = (max_w - frame_w).max(1.);
+    let room_h = (max_h - frame_h).max(1.);
+    let scale = (room_w / image_w).min(room_h / image_h).min(1.);
+    // A tiny image keeps a sheet wide enough for its head.
+    let width = (image_w * scale + frame_w).max(PREVIEW_MIN_W.min(max_w));
+    (width, image_h * scale + frame_h)
+}
+
+/// The narrowest preview sheet: room for a title beside its two controls.
+const PREVIEW_MIN_W: f32 = 320.;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sheet_takes_the_image_aspect_inside_the_pane_box() {
+        let (w, h) = sheet_size(Some((1600., 900.)), 1000., 800.);
+        assert!(w <= 768. && h <= 680.);
+        let frame_h = 2. + crate::theme::MODAL_HEAD_H + 1. + 2. * crate::theme::MODAL_PAD;
+        let frame_w = 2. + 2. * crate::theme::MODAL_PAD;
+        let ratio = (w - frame_w) / (h - frame_h);
+        assert!((ratio - 16. / 9.).abs() < 0.01, "{ratio}");
+        // A tall image is bounded by the height.
+        let (_, tall) = sheet_size(Some((400., 4000.)), 1000., 800.);
+        assert!((tall - 680.).abs() < 0.5);
+        // Never scaled up; still wide enough for the head.
+        assert_eq!(
+            sheet_size(Some((100., 50.)), 1000., 800.),
+            (320., 50. + frame_h)
+        );
+        // Undecoded: the whole box.
+        assert_eq!(sheet_size(None, 1000., 800.), (768., 680.));
     }
 }

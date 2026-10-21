@@ -50,28 +50,27 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
             let thread = view.panes[0].thread().unwrap();
             (
                 thread,
-                view.cockpit
-                    .thread(thread)
-                    .unwrap()
-                    .activity()
-                    .pending_decisions()[0]
+                view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                     .handle
                     .serial,
             )
         });
         let content = cx.debug_bounds("question-scroll-content").unwrap();
         assert!(
-            content.size.height >= px(crate::theme::FS_MD * crate::theme::LINE_UI),
+            content.size.height >= px(crate::theme::LH_UI),
             "the question has a real scroll viewport: {content:?}"
         );
         assert!(content.top() >= island.top());
         let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
         assert!(
-            send.top() - content.top() >= px(crate::theme::FS_MD * crate::theme::LINE_UI),
+            send.top() - content.top() >= px(crate::theme::LH_UI),
             "content keeps a usable viewport above the fixed actions"
         );
         assert!(
-            island.contains(&send.origin) && island.contains(&send.bottom_right()),
+            (send.left() >= island.left()
+                && send.top() >= island.top()
+                && send.right() <= island.right()
+                && send.bottom() <= island.bottom()),
             "the fixed answer row must stay inside the complete island: {send:?} / {island:?}"
         );
     }
@@ -82,11 +81,7 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
         let thread = view.panes[0].thread().unwrap();
         (
             thread,
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial,
         )
@@ -99,84 +94,6 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
         1,
         "the bounded question remains operable in Group"
     );
-}
-
-#[gpui::test]
-fn compact_group_paints_complete_latest_rows_after_composer_growth(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("polish-l2-whole-rows", 4);
-    let thread = core.threads()[0];
-    core.send(thread, "An older prompt that must never be a sliver".into());
-    let group = group_all(&mut core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
-        view.focus_pane(0);
-        cx.notify();
-    });
-    for line in 0..16 {
-        fake.streams.borrow()[0]
-            .send(SessionEvent::TextDelta {
-                text: format!("Meaningful update {line}.\n\n"),
-            })
-            .unwrap();
-    }
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    for (width, height, draft) in [
-        (860., 500., ""),
-        (860., 500., "First line\nSecond line\nThird line"),
-        (900., 560., ""),
-    ] {
-        cx.simulate_resize(gpui::size(px(width), px(height)));
-        view.update(cx, |view, cx| {
-            view.panes[0]
-                .composer
-                .update(cx, |composer, cx| composer.set(draft.into(), cx))
-        });
-        tick(cx);
-        let (namespace, ids) = view.read_with(cx, |view, _| {
-            (
-                view.panes[0].text_namespace(),
-                view.cockpit
-                    .thread(thread)
-                    .unwrap()
-                    .transcript()
-                    .blocks()
-                    .iter()
-                    .map(|block| block.id)
-                    .collect::<Vec<_>>(),
-            )
-        });
-        let tail = bounds(cx, format!("l2-tail-{namespace}"));
-        let mut painted = Vec::new();
-        for id in &ids {
-            if let Some(row) = debug_bounds(cx, format!("l2-tail-row-{namespace}-{id:?}")) {
-                assert!(
-                    row.top() >= tail.top() && row.bottom() <= tail.bottom(),
-                    "a whole semantic row must fit the remaining slot: {row:?} / {tail:?}"
-                );
-                assert!(
-                    row.size.height >= px(crate::theme::FS_MONO * crate::theme::LINE_BODY - 1.),
-                    "glyph lines must not shrink: {row:?}"
-                );
-                painted.push(*id);
-            }
-        }
-        assert_eq!(
-            painted.last(),
-            ids.last(),
-            "the newest meaningful update has priority"
-        );
-        assert!(
-            painted.len() < ids.len(),
-            "older rows should be omitted whole"
-        );
-        assert!(tail.bottom() <= cx.debug_bounds("focused-prompt-editor").unwrap().top());
-    }
 }
 
 #[gpui::test]
@@ -211,9 +128,10 @@ fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &m
         })
         .unwrap();
     tick(cx);
+    // Every call is its own row: two calls, two Tab stops.
     cx.simulate_keystrokes("tab enter");
     tick(cx);
-    for keys in ["", "tab", "tab", "shift-tab", "shift-tab"] {
+    for keys in ["", "tab", "shift-tab"] {
         if !keys.is_empty() {
             cx.simulate_keystrokes(keys);
         }
@@ -228,156 +146,9 @@ fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &m
     }
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
-        assert!(!view.panes[0].tool_expanded(pane::DisclosureId::Group("visible-a".into())))
+        assert!(!view.panes[0].tool_expanded(pane::DisclosureId::Tool("visible-a".into())))
     });
     assert_eq!(fake.sent.borrow().as_slice(), ["Inspect output"]);
-}
-
-/// Compact Questions use the fixed header to reach the retained full form;
-/// a tall draft must never cover this path or clear a selected answer.
-#[gpui::test]
-fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("polish-l2-question-expand", 4);
-    let group = group_all(&mut core);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(860.), px(500.)));
-    view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
-        view.focus_pane(0);
-        cx.notify();
-    });
-    for (iteration, draft) in [
-        "",
-        "First line\nSecond line\nThird line",
-        "One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        view.update(cx, |view, cx| {
-            view.panes[0]
-                .composer
-                .update(cx, |composer, cx| composer.set(draft.into(), cx))
-        });
-        fake.streams.borrow()[0]
-            .send(question(&format!("compact-question-{iteration}")))
-            .unwrap();
-        tick(cx);
-        let (pane, level) = cx.update(|window, cx| {
-            let view = view.read(cx);
-            (
-                view.pane_rects(window)
-                    .into_iter()
-                    .find(|(index, _)| *index == 0)
-                    .unwrap()
-                    .1,
-                view.level_of(0, window),
-            )
-        });
-        assert_eq!(level, Level::Instruments);
-        assert!(
-            cx.debug_bounds("question-island").is_none(),
-            "L2 must not paint an unusable compressed form"
-        );
-        let expand = cx
-            .debug_bounds("question-expand")
-            .expect("compact Question has an explicit action");
-        assert!(expand.left() >= px(pane.x) && expand.right() <= px(pane.x + pane.w));
-        assert!(
-            expand.top() >= px(pane.y)
-                && expand.bottom() <= px(pane.y + crate::theme::CELL_HEADER_H + 1.),
-            "expansion remains in the fixed header even with an eight-line draft: {expand:?} / {pane:?}"
-        );
-        assert_eq!(composer_text(&view, cx), draft);
-        if iteration == 1 {
-            cx.simulate_keystrokes("cmd-f");
-        } else {
-            cx.simulate_click(expand.center(), gpui::Modifiers::none());
-        }
-        tick(cx);
-        cx.update(|window, cx| {
-            let view = view.read(cx);
-            assert_eq!(view.level_of(0, window), Level::Transcript);
-            assert_eq!(
-                view.cockpit.roster().fullscreen(),
-                Some(view.panes[0].identity)
-            );
-        });
-        let choice = cx
-            .debug_bounds("question-choice-0-0")
-            .unwrap_or_else(|| panic!("expanded form has choices with draft {iteration}"));
-        assert!(
-            cx.debug_bounds("question-expand").is_none(),
-            "fullscreen never offers a no-op expansion action"
-        );
-        let answering_editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-        let content = cx.debug_bounds("question-scroll-content").unwrap();
-        let island = cx.debug_bounds("question-island").unwrap();
-        assert!(island.bottom() <= answering_editor.top());
-        let viewport = cx.debug_bounds("question-viewport").unwrap();
-        assert!(
-            choice.top() >= content.top() && choice.bottom() <= viewport.bottom(),
-            "a complete option remains above the fixed footer: {choice:?} / {viewport:?}"
-        );
-        if iteration == 2 {
-            assert!(answering_editor.size.height <= px(crate::theme::COMPOSER_ROW_H * 2. + 1.));
-        }
-        cx.simulate_click(choice.center(), gpui::Modifiers::none());
-        tick(cx);
-        cx.simulate_keystrokes("cmd-f");
-        tick(cx);
-        assert_eq!(composer_text(&view, cx), draft);
-        if iteration == 2 {
-            let restored_editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-            assert!(
-                restored_editor.size.height <= px(pane.h * crate::theme::COMPOSER_MAX_PANE_FRACTION),
-                "returning to a compact Pane keeps the draft viewport bounded"
-            );
-        }
-        let expand = cx
-            .debug_bounds("question-expand")
-            .expect("returning to Group restores expansion action");
-        cx.simulate_click(expand.center(), gpui::Modifiers::none());
-        tick(cx);
-        let (thread, serial) = view.read_with(cx, |view, _| {
-            let thread = view.panes[0].thread().unwrap();
-            (
-                thread,
-                view.cockpit
-                    .thread(thread)
-                    .unwrap()
-                    .activity()
-                    .pending_decisions()[0]
-                    .handle
-                    .serial,
-            )
-        });
-        let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
-        let island = cx.debug_bounds("question-island").unwrap();
-        assert!(island.contains(&send.origin) && island.contains(&send.bottom_right()));
-        cx.simulate_click(send.center(), gpui::Modifiers::none());
-        tick(cx);
-        assert_eq!(fake.answered.borrow().len(), iteration + 1);
-        assert!(
-            matches!(&fake.answered.borrow().last().unwrap().1, DecisionAnswer::Questions { answers } if answers[0].picks == [0]),
-            "selected answer survives collapse and re-expansion"
-        );
-        assert_eq!(
-            composer_text(&view, cx),
-            draft,
-            "answering must preserve the complete Composer draft"
-        );
-        if iteration == 2 {
-            let restored_editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-            assert!(
-                restored_editor.size.height > answering_editor.size.height,
-                "answering restores the full draft viewport"
-            );
-        }
-        cx.simulate_keystrokes("cmd-f");
-        tick(cx);
-    }
 }
 
 #[gpui::test]
@@ -429,38 +200,26 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
             "scroll position must not affect the fit decision"
         );
     }
-    let draft = "Keep the entered values.\nShow the recovery action.\nRetain the selected option.\nRestore the form afterward.";
+    // The Decision is the transcript's tail: a Composer grown to its full
+    // height leaves the body shorter, and the form stays in the transcript,
+    // reached by scrolling — there is no fullscreen door.
+    let draft = "Keep the entered values.\nShow the recovery action.\nRetain the selected option.\nRestore the form afterward.\nKeep the focus where it was.\nName the expired session.\nOffer to sign in again.\nThen resume the form.";
     view.update(cx, |view, cx| {
         view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.set(draft.into(), cx))
     });
     tick(cx);
-    assert!(
-        cx.debug_bounds("question-island").is_none(),
-        "insufficient Group body space uses the expansion action"
-    );
-    let expand = cx.debug_bounds("question-expand").unwrap();
-    cx.simulate_click(expand.center(), gpui::Modifiers::none());
-    tick(cx);
+    assert!(cx.debug_bounds("question-island").is_some());
+    assert!(cx.debug_bounds("question-expand").is_none());
     assert_eq!(composer_text(&view, cx), draft);
-    let first = cx.debug_bounds("question-choice-0-0").unwrap();
-    cx.simulate_click(first.center(), gpui::Modifiers::none());
-    tick(cx);
-    cx.simulate_keystrokes("cmd-f");
-    tick(cx);
-    assert!(cx.debug_bounds("question-expand").is_some());
     view.update(cx, |view, cx| {
         view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.set(String::new(), cx))
     });
     tick(cx);
-    assert!(
-        cx.debug_bounds("question-island").is_some(),
-        "shrinking the Composer restores the inline form"
-    );
-    assert!(cx.debug_bounds("question-expand").is_none());
+    assert!(cx.debug_bounds("question-island").is_some());
     // Repeat geometry changes to catch stale collapsed state and feedback loops.
     for height in [1000., 800., 1000., 800.] {
         cx.simulate_resize(gpui::size(px(1200.), px(height)));
@@ -472,15 +231,14 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
         let thread = view.panes[0].thread().unwrap();
         (
             thread,
-            view.cockpit
-                .thread(thread)
-                .unwrap()
-                .activity()
-                .pending_decisions()[0]
+            view.cockpit.thread(thread).unwrap().pending_decisions()[0]
                 .handle
                 .serial,
         )
     });
+    let choice = cx.debug_bounds("question-choice-0-0").unwrap();
+    cx.simulate_click(choice.center(), gpui::Modifiers::none());
+    tick(cx);
     let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
     cx.simulate_click(send.center(), gpui::Modifiers::none());
     tick(cx);
@@ -490,52 +248,146 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
     );
 }
 
-/// The compact status owns only the current live reasoning headline. Older
-/// observations and completed thinking remain available in the transcript.
+/// A pointer click only opens or closes a disclosure: it draws no keyboard
+/// ring on the row and leaves the Composer holding the keyboard. The ring
+/// is Tab's alone, and Tab still draws it after a click.
 #[gpui::test]
-fn compact_live_reasoning_appears_once_and_returns_to_history(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("polish-l2-live-reasoning", 4);
+fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("polish-disclosure-click", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Review the flow".into());
-    let group = group_all(&mut core);
-    core.enter_group(group).unwrap();
+    core.send(thread, "Inspect output".into());
+    bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(860.), px(1000.)));
-    for (item, text) in [
-        ("earlier", "The earlier observation is still relevant"),
-        ("current", "Checking the remaining interactions"),
-    ] {
-        fake.streams.borrow()[0].send(SessionEvent::ReasoningSummaryPart {
-            item_id: item.into(),
-            summary_index: 0,
-            text: text.into(),
-            snapshot: false,
-        }).unwrap();
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    for id in ["clicked-a", "clicked-b"] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command":"echo result"}),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "result".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
     }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
     tick(cx);
-    let (namespace, earlier, current) = view.read_with(cx, |view, _| {
-        let thoughts = view.cockpit.thread(thread).unwrap().transcript().blocks()
-            .iter().filter(|block| matches!(block.body, Body::Thinking(_)))
-            .map(|block| block.id).collect::<Vec<_>>();
-        (view.panes[0].text_namespace(), thoughts[0], thoughts[1])
+    let group = pane::DisclosureId::Group("clicked-a".into());
+    let at = view.read_with(cx, |view, _| {
+        view.panes[0].tool_bounds(group.clone()).unwrap().center()
     });
-    let row = |id| format!("l2-tail-row-{namespace}-{id:?}");
-    assert!(debug_bounds(cx, row(earlier)).is_some(), "older reasoning remains visible");
-    assert!(debug_bounds(cx, row(current)).is_none(), "live reasoning has one presentation");
-    assert!(cx.debug_bounds("progress-caption-Checking the remaining interactions").is_some());
-    fake.streams.borrow()[0].send(SessionEvent::Progress {
-        event: ferrite_core::progress::ProgressEvent::Phase {
-            phase: ferrite_core::progress::Phase::Compacting,
-            detail: String::new(),
-        },
-    }).unwrap();
+    cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
-    assert!(debug_bounds(cx, row(current)).is_some(), "a different live caption does not hide reasoning history");
-    fake.streams.borrow()[0].send(SessionEvent::TurnEnded {
-        outcome: ferrite_core::TurnOutcome::Completed,
-        cost_usd: None,
-    }).unwrap();
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.panes[0].tool_expanded(group.clone()),
+            "the click opens the group"
+        );
+        assert!(
+            !view.panes[0].has_tool_target(),
+            "a click sets no keyboard target"
+        );
+    });
+    assert!(
+        cx.debug_bounds("tool-disclosure-keyboard-target").is_none(),
+        "a click paints no keyboard ring"
+    );
+    cx.update(|window, cx| {
+        let pane = &view.read(cx).panes[0];
+        assert!(pane.composer.focus_handle(cx).is_focused(window));
+    });
+    cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
-    assert!(debug_bounds(cx, row(earlier)).is_some());
-    assert!(debug_bounds(cx, row(current)).is_some(), "completed reasoning is retained");
+    view.read_with(cx, |view, _| {
+        assert!(
+            !view.panes[0].tool_expanded(group.clone()),
+            "a second click closes it"
+        );
+    });
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("tool-disclosure-keyboard-target").is_some(),
+        "Tab still draws the ring"
+    );
+}
+
+/// The keyboard walks a group as the pointer sees it: Tab lands on the
+/// summary, a shut group's calls are no stops, Enter opens it, and then
+/// Tab steps into its calls.
+#[gpui::test]
+fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("polish-group-keys", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect output".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    for id in ["keys-a", "keys-b"] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command":"echo result"}),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "result".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+    }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let group = pane::DisclosureId::Group("keys-a".into());
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].targeted_tool(), Some(&group));
+    });
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.panes[0].targeted_tool(),
+            None,
+            "a shut group's calls are no stops"
+        );
+    });
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.panes[0].tool_expanded(group.clone()), "Enter opens it");
+    });
+    assert!(cx.debug_bounds("tool-row-keys-b").is_some());
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.panes[0].targeted_tool(),
+            Some(&pane::DisclosureId::Tool("keys-a".into())),
+            "open, Tab steps into its calls"
+        );
+    });
 }

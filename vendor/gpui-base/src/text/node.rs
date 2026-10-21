@@ -7,7 +7,7 @@ use std::{
 use gpui::{
     AnyElement, App, DefiniteLength, Div, ElementId, FontStyle, FontWeight, HighlightStyle, Hsla,
     Image, ImageFormat, InteractiveElement as _, IntoElement, Length, ObjectFit, Overflow,
-    ParentElement, Pixels, ScrollHandle, SharedString, SharedUri, StatefulInteractiveElement,
+    ParentElement, Pixels, Refineable as _, ScrollHandle, SharedString, SharedUri, StatefulInteractiveElement,
     StyleRefinement, Styled, StyledImage as _, WhiteSpace, Window, div, img,
     prelude::FluentBuilder as _, px, relative, rems,
 };
@@ -97,6 +97,9 @@ enum BlockTextKind {
     /// Like `Selected`, but reconstructs Markdown source for the selection
     /// instead of the rendered plain text.
     SelectedSource,
+    /// Ferrite: like `All`, but a table's cells each on a line of their own,
+    /// so every source run is (`TextView::markdown_find_text`).
+    Runs,
 }
 
 impl BlockNode {
@@ -144,6 +147,10 @@ impl BlockNode {
         self.text_by_kind(BlockTextKind::All)
     }
 
+    pub(super) fn find_text(&self) -> String {
+        self.text_by_kind(BlockTextKind::Runs)
+    }
+
     /// The selected text within this block, in `format`.
     ///
     /// [`SelectionFormat::Source`] reconstructs the Markdown source of the
@@ -167,7 +174,7 @@ impl BlockNode {
             }
             BlockNode::Paragraph(paragraph) => {
                 let block_text = match kind {
-                    BlockTextKind::All => paragraph.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => paragraph.text(),
                     BlockTextKind::Selected => paragraph.selected_text(),
                     BlockTextKind::SelectedSource => paragraph.selected_source(),
                 };
@@ -180,7 +187,7 @@ impl BlockNode {
                 level, children, ..
             } => {
                 let block_text = match kind {
-                    BlockTextKind::All => children.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => children.text(),
                     BlockTextKind::Selected => children.selected_text(),
                     BlockTextKind::SelectedSource => children.selected_source(),
                 };
@@ -251,13 +258,18 @@ impl BlockNode {
                         let mut row_texts = vec![];
                         for cell in row.children.iter() {
                             row_texts.push(match kind {
-                                BlockTextKind::All => cell.children.text(),
+                                BlockTextKind::All | BlockTextKind::Runs => cell.children.text(),
                                 // Source is handled above; only Selected reaches here.
                                 _ => cell.children.selected_text(),
                             });
                         }
                         if !row_texts.is_empty() {
-                            block_text.push_str(&row_texts.join(" "));
+                            let gap = if matches!(kind, BlockTextKind::Runs) {
+                                "\n"
+                            } else {
+                                " "
+                            };
+                            block_text.push_str(&row_texts.join(gap));
                             block_text.push('\n');
                         }
                     }
@@ -270,7 +282,7 @@ impl BlockNode {
             }
             BlockNode::CodeBlock(code_block) => {
                 let block_text = match kind {
-                    BlockTextKind::All => code_block.text(),
+                    BlockTextKind::All | BlockTextKind::Runs => code_block.text(),
                     BlockTextKind::Selected => code_block.selected_text(),
                     BlockTextKind::SelectedSource => code_block.selected_source(),
                 };
@@ -280,7 +292,7 @@ impl BlockNode {
                 }
             }
             BlockNode::Custom(node) => {
-                if let BlockTextKind::All = kind {
+                if let BlockTextKind::All | BlockTextKind::Runs = kind {
                     let content = node.as_text();
                     if !content.is_empty() {
                         text.push_str(content);
@@ -999,6 +1011,40 @@ impl Table {
         self.column_aligns.get(index).copied().unwrap_or_default()
     }
 
+    /// Ferrite: the alignment a column is drawn with — its own, except that
+    /// with `numeric_right` a column left at the default whose body cells
+    /// are all numbers reads right-aligned
+    /// (`TextViewStyle::with_numeric_columns_right`).
+    pub(crate) fn display_align(&self, index: usize, numeric_right: bool) -> ColumnumnAlign {
+        let align = self.column_align(index);
+        if numeric_right && align == ColumnumnAlign::Left && self.column_is_numeric(index) {
+            ColumnumnAlign::Right
+        } else {
+            align
+        }
+    }
+
+    /// Whether every non-empty body cell of a column is a number, and at
+    /// least one is.
+    fn column_is_numeric(&self, index: usize) -> bool {
+        let mut any = false;
+        for row in self.children.iter().skip(1) {
+            let Some(cell) = row.children.get(index) else {
+                continue;
+            };
+            let text = cell.children.text();
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if !is_numeric_cell(text) {
+                return false;
+            }
+            any = true;
+        }
+        any
+    }
+
     /// Serialize the table back to GFM pipe-table Markdown (`| a | b |`),
     /// preserving column alignments. Cell newlines collapse to spaces and
     /// `|` is escaped so rows stay intact.
@@ -1059,6 +1105,30 @@ impl Table {
             span: self.span.map(|span| span.start..span.end),
         }
     }
+}
+
+/// Ferrite: a table cell that reads as a number: digits with at most a
+/// sign, thousands commas, one decimal point, and one unit after them
+/// (`%`, `k`, `M`, `ms`, `s`, `x`, `×`), or a leading currency sign.
+pub(crate) fn is_numeric_cell(text: &str) -> bool {
+    let text = text.trim();
+    let text = text
+        .strip_prefix(['+', '-', '\u{2212}', '$', '\u{20ac}', '\u{a3}'])
+        .unwrap_or(text);
+    let digits_end = text
+        .char_indices()
+        .find(|(_, ch)| !(ch.is_ascii_digit() || *ch == ',' || *ch == '.'))
+        .map_or(text.len(), |(at, _)| at);
+    let (number, unit) = text.split_at(digits_end);
+    let number_ok = number.chars().any(|ch| ch.is_ascii_digit())
+        && number.matches('.').count() <= 1
+        && !number.starts_with(',')
+        && !number.ends_with(',');
+    let unit = unit.trim();
+    number_ok
+        && (unit.is_empty()
+            || ["%", "k", "K", "M", "B", "ms", "s", "x", "\u{d7}", "KB", "MB", "GB"]
+                .contains(&unit))
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
@@ -1275,10 +1345,9 @@ impl CodeBlock {
             .unwrap_or_default()
     }
 
-    /// Synchronously clear the selection stored in the inline state.
-    ///
-    /// Mirrors the [`selected_text`](Self::selected_text) traversal.
-    pub(super) fn has_selection(&self) -> bool {
+    /// Whether the caret or a selection lies inside this block (Ferrite:
+    /// its actions overlay shows while it does).
+    pub fn has_selection(&self) -> bool {
         self.state
             .lock()
             .is_ok_and(|state| state.selected_range().is_some())
@@ -1299,43 +1368,57 @@ impl CodeBlock {
     ) -> AnyElement {
         let style = &node_cx.style;
 
-        div()
+        let block = div()
+            .id(("codeblock", options.ix))
             .w_full()
             .min_w_0()
-            .child(
-                div()
-                    .id(("codeblock", options.ix))
-                    .w_full()
-                    .min_w_0()
-                    .p_3()
-                    .bg(style.code_background())
-                    .font_family(cx.theme().tokens.typography.mono.clone())
-                    .text_size(cx.theme().tokens.typography.mono_md.size)
-                    .relative()
-                    .refine_style(&style.code_block())
-                    // Actions occupy a header row rather than covering the first
-                    // source line. Literal blocks without actions keep their layout.
-                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
-                        this.child(
-                            div()
-                                .id("actions")
-                                .w_full()
-                                .mb_1()
-                                .child(actions(&self, window, cx)),
-                        )
-                    })
-                    .child(Inline::new(
-                        "code",
-                        self.state.clone(),
-                        vec![],
-                        node_cx
-                            .code_block_highlighter
-                            .as_ref()
-                            .map(|highlighter| self.highlighted_styles(highlighter))
-                            .unwrap_or_default(),
-                        node_cx.link_click_handler.clone(),
-                    )),
-            )
+            .p_3()
+            .bg(style.code_background())
+            .font_family(cx.theme().tokens.typography.mono.clone())
+            .text_size(cx.theme().tokens.typography.mono_md.size)
+            .relative()
+            .refine_style(&style.code_block())
+            .child(Inline::new(
+                "code",
+                self.state.clone(),
+                vec![],
+                node_cx
+                    .code_block_highlighter
+                    .as_ref()
+                    .map(|highlighter| self.highlighted_styles(highlighter))
+                    .unwrap_or_default(),
+                node_cx.link_click_handler.clone(),
+            ))
+            // Ferrite: actions are an overlay over the whole block,
+            // painted after the code and taking no layout, so a block
+            // with actions is exactly as tall as one without. The
+            // actions element places itself inside the overlay.
+            .when_some(node_cx.code_block_actions.clone(), |this, actions| {
+                this.child(
+                    div()
+                        .id("actions")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(actions(&self, window, cx)),
+                )
+            })
+            .into_any_element();
+        // Ferrite: the application may draw the block as something else;
+        // a find still counts the code's occurrences where it paints.
+        let (block, drawn) = match &node_cx.code_block_view {
+            Some(view) => (view(self, block, window, cx), true),
+            None => (block, false),
+        };
+        div()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .when(drawn, |this| {
+                this.child(super::find::count_drawn(self.state.clone()))
+            })
+            .child(block)
             .into_any_element()
     }
 }
@@ -1349,6 +1432,7 @@ pub(crate) struct NodeContext {
     pub(crate) link_refs: HashMap<SharedString, LinkMark>,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    pub(crate) code_block_view: Option<Arc<super::text_view::CodeBlockViewFn>>,
     pub(crate) code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     pub(crate) table_actions: Option<Arc<TableActionsFn>>,
     pub(crate) link_renderer: Option<Arc<super::text_view::LinkRendererFn>>,
@@ -1380,10 +1464,18 @@ impl Paragraph {
                 .iter()
                 .any(|child| child.marks.iter().any(|(_, mark)| mark.link.is_some()));
         if self.should_render_inline_flow() || has_custom_links {
+            let own_line = self.own_line_images();
+            if !own_line.is_empty() {
+                return self.render_split(&own_line, node_cx, _window, cx);
+            }
             let flow = InlineFlow::new(
                 span.unwrap_or_default(),
                 self.inline_flow_items(node_cx, cx),
                 node_cx.link_click_handler.clone(),
+            )
+            .code_style(
+                node_cx.style.inline_code_font(),
+                node_cx.style.inline_code_wash(),
             )
             .render_links(node_cx.link_renderer.as_ref(), _window, cx);
             if self.should_render_inline_flow() || flow.has_elements() {
@@ -1416,46 +1508,14 @@ impl Paragraph {
                             highlights.clone(),
                             node_cx.link_click_handler.clone(),
                         )
+                        .code_style(
+                            node_cx.style.inline_code_font(),
+                            node_cx.style.inline_code_wash(),
+                        )
                         .into_any_element(),
                     );
                 }
-                let link_click_handler = node_cx.link_click_handler.clone();
-                child_nodes.push(
-                    img(image_source(&image.url))
-                        .id(ix)
-                        .object_fit(ObjectFit::Contain)
-                        .max_w(relative(1.))
-                        .when_some(image.width, |this, width| this.w(width))
-                        .when_some(image.link.clone(), |this, link| {
-                            let link_click_handler = link_click_handler.clone();
-                            let aux_link = link.clone();
-                            let aux_link_click_handler = link_click_handler.clone();
-                            this.cursor_pointer()
-                                .on_click(move |event, window, cx| {
-                                    crate::TextSelection::end(window, cx);
-                                    cx.stop_propagation();
-                                    handle_link_click(
-                                        &link_click_handler,
-                                        link.url.clone(),
-                                        event.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                })
-                                .on_aux_click(move |event, window, cx| {
-                                    crate::TextSelection::end(window, cx);
-                                    cx.stop_propagation();
-                                    handle_link_click(
-                                        &aux_link_click_handler,
-                                        aux_link.url.clone(),
-                                        event.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                })
-                        })
-                        .into_any_element(),
-                );
+                child_nodes.push(block_image(ix, image, node_cx));
 
                 text.clear();
                 links.clear();
@@ -1468,7 +1528,7 @@ impl Paragraph {
 
                     let mut highlight = HighlightStyle::default();
                     if style.bold {
-                        highlight.font_weight = Some(FontWeight::BOLD);
+                        highlight = highlight.highlight(node_cx.style.strong());
                     }
                     if style.italic {
                         highlight.font_style = Some(FontStyle::Italic);
@@ -1496,6 +1556,7 @@ impl Paragraph {
                         highlight.color = Some(node_cx.style.link());
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
+                            color: node_cx.style.link_underline(),
                             ..Default::default()
                         });
 
@@ -1531,6 +1592,10 @@ impl Paragraph {
                     highlights,
                     node_cx.link_click_handler.clone(),
                 )
+                .code_style(
+                    node_cx.style.inline_code_font(),
+                    node_cx.style.inline_code_wash(),
+                )
                 .into_any_element(),
             );
         }
@@ -1538,6 +1603,100 @@ impl Paragraph {
         div()
             .id(span.unwrap_or_default())
             .children(child_nodes)
+            .into_any_element()
+    }
+
+    /// Ferrite: the children that are images alone on their line, with a
+    /// line break or the paragraph's edge on each side (a caption over a
+    /// picture). An image with text beside it (a badge) stays in the line.
+    fn own_line_images(&self) -> Vec<usize> {
+        let children = &self.children;
+        let blank = |c: &&InlineNode| c.image.is_none() && c.text.is_empty();
+        (0..children.len())
+            .filter(|&ix| children[ix].image.is_some())
+            .filter(|&ix| {
+                children[..ix]
+                    .iter()
+                    .rev()
+                    .find(|c| !blank(c))
+                    .is_none_or(|c| {
+                        c.image.is_none() && c.text.trim_end_matches([' ', '\t']).ends_with('\n')
+                    })
+            })
+            .filter(|&ix| {
+                children[ix + 1..]
+                    .iter()
+                    .find(|c| !blank(c))
+                    .is_none_or(|c| {
+                        c.image.is_none()
+                            && c.text.trim_start_matches([' ', '\t']).starts_with('\n')
+                    })
+            })
+            .collect()
+    }
+
+    /// Ferrite: the paragraph as a column, each image in `own_line` framed as
+    /// a block image between the text runs around it. Each run renders as its
+    /// own paragraph (an inline flow when it still holds badges or cards),
+    /// without the line breaks that set the images apart.
+    fn render_split(
+        &self,
+        own_line: &[usize],
+        node_cx: &NodeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let mut parts: Vec<AnyElement> = vec![];
+        let mut start = 0;
+        for end in own_line.iter().copied().chain([self.children.len()]) {
+            let run = &self.children[start..end];
+            if run
+                .iter()
+                .any(|c| c.image.is_some() || !c.text.trim().is_empty())
+            {
+                let last = run.len() - 1;
+                let children = run
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, c)| {
+                        let c = if ix == 0 && start > 0 {
+                            without_break(c, false)
+                        } else {
+                            c.clone()
+                        };
+                        if ix == last && end < self.children.len() {
+                            without_break(&c, true)
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
+                let run = Paragraph {
+                    span: self.span,
+                    children,
+                    link_refs: self.link_refs.clone(),
+                    // The state of the node that ends the run holds its text,
+                    // as in the block layout below.
+                    state: self
+                        .children
+                        .get(end)
+                        .map_or_else(|| self.state.clone(), |c| c.state.clone()),
+                };
+                parts.push(
+                    div()
+                        .id(ElementId::named_usize("run", start))
+                        .child(run.render(node_cx, window, cx))
+                        .into_any_element(),
+                );
+            }
+            if let Some(image) = self.children.get(end).and_then(|c| c.image.as_ref()) {
+                parts.push(block_image(end, image, node_cx));
+            }
+            start = end + 1;
+        }
+        div()
+            .id(self.span.unwrap_or_default())
+            .children(parts)
             .into_any_element()
     }
 
@@ -1590,7 +1749,7 @@ impl Paragraph {
 
                     let mut highlight = HighlightStyle::default();
                     if style.bold {
-                        highlight.font_weight = Some(FontWeight::BOLD);
+                        highlight = highlight.highlight(node_cx.style.strong());
                     }
                     if style.italic {
                         highlight.font_style = Some(FontStyle::Italic);
@@ -1618,6 +1777,7 @@ impl Paragraph {
                         highlight.color = Some(node_cx.style.link());
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
+                            color: node_cx.style.link_underline(),
                             ..Default::default()
                         });
 
@@ -1652,6 +1812,88 @@ impl Paragraph {
 
         items
     }
+}
+
+/// A paragraph's image laid out as a block. Ferrite: a frame set by
+/// `TextViewStyle::with_image` holds the picture, which fills its width at
+/// its own proportions.
+fn block_image(ix: usize, image: &ImageNode, node_cx: &NodeContext) -> AnyElement {
+    let link_click_handler = node_cx.link_click_handler.clone();
+    let frame = node_cx.style.image();
+    let framed = frame != StyleRefinement::default();
+    let picture = img(image_source(&image.url))
+        .id(ix)
+        .object_fit(ObjectFit::Contain)
+        .max_w(relative(1.))
+        .when(framed, |this| this.w_full())
+        .when_some(image.width, |this, width| this.w(width))
+        .when_some(image.link.clone(), |this, link| {
+            let link_click_handler = link_click_handler.clone();
+            let aux_link = link.clone();
+            let aux_link_click_handler = link_click_handler.clone();
+            this.cursor_pointer()
+                .on_click(move |event, window, cx| {
+                    crate::TextSelection::end(window, cx);
+                    cx.stop_propagation();
+                    handle_link_click(
+                        &link_click_handler,
+                        link.url.clone(),
+                        event.clone(),
+                        window,
+                        cx,
+                    );
+                })
+                .on_aux_click(move |event, window, cx| {
+                    crate::TextSelection::end(window, cx);
+                    cx.stop_propagation();
+                    handle_link_click(
+                        &aux_link_click_handler,
+                        aux_link.url.clone(),
+                        event.clone(),
+                        window,
+                        cx,
+                    );
+                })
+        })
+        .into_any_element();
+    if framed {
+        div()
+            .debug_selector(|| "markdown-image-frame".into())
+            .flex_shrink_0()
+            .max_w(relative(1.))
+            .overflow_hidden()
+            .refine_style(&frame)
+            .child(picture)
+            .into_any_element()
+    } else {
+        picture
+    }
+}
+
+/// Ferrite: `node` without the line break at its end (`at_end`) or start,
+/// its marks clamped to the text that is left.
+fn without_break(node: &InlineNode, at_end: bool) -> InlineNode {
+    let text = node.text.as_ref();
+    let kept = if at_end {
+        let head = text.trim_end_matches([' ', '\t']);
+        0..head.strip_suffix('\n').map_or(text.len(), str::len)
+    } else {
+        let tail = text.trim_start_matches([' ', '\t']);
+        tail.strip_prefix('\n')
+            .map_or(0, |rest| text.len() - rest.len())..text.len()
+    };
+    let mut node = node.clone();
+    node.text = text[kept.clone()].to_string().into();
+    node.marks = node
+        .marks
+        .into_iter()
+        .filter_map(|(range, mark)| {
+            let start = range.start.clamp(kept.start, kept.end);
+            let end = range.end.clamp(kept.start, kept.end);
+            (start < end).then(|| (start - kept.start..end - kept.start, mark))
+        })
+        .collect();
+    node
 }
 
 impl Paragraph {
@@ -1815,6 +2057,7 @@ impl BlockNode {
         line_height: Pixels,
         marker_width: Pixels,
     ) -> Div {
+        let hang = style.list_hang();
         h_flex()
             .w_full()
             .flex_1()
@@ -1822,18 +2065,24 @@ impl BlockNode {
             .relative()
             .items_start()
             .content_start()
+            .when_some(style.prose_max_width(), |row, width| row.max_w(width))
             .when(!options.todo && checked.is_none(), |this| {
+                let prefix =
+                    list_item_prefix(ix, options.ordered, options.depth, options.list_start);
                 this.child(
                     div()
                         .flex_none()
                         .w(marker_width)
                         .text_right()
-                        .child(list_item_prefix(
-                            ix,
-                            options.ordered,
-                            options.depth,
-                            options.list_start,
-                        )),
+                        // Ferrite: with a fixed hang the marker sits `gap` short
+                        // of the text, its own trailing space dropped.
+                        .when_some(hang, |marker, hang| marker.pr(hang.gap))
+                        .refine_style(style.list_marker(options.ordered))
+                        .child(if hang.is_some() {
+                            prefix.trim_end().to_string()
+                        } else {
+                            prefix
+                        }),
                 )
             })
             .when_some(checked, |this, checked| {
@@ -2071,6 +2320,108 @@ impl BlockNode {
     /// refinement keeps cell text on a single line, and the floors are raised
     /// to the full content widths so the single-line columns never shrink —
     /// the table scrolls as soon as the content is wider than the frame.
+    /// Ferrite: the content-sized table (`TextViewStyle::with_table_fit`).
+    fn render_fit_table(
+        table: &Table,
+        col_count: usize,
+        pad: Pixels,
+        node_cx: &NodeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let text_style = window.text_style();
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let mut col_w = vec![0.0_f32; col_count];
+        for row in table.children.iter() {
+            for (ix, cell) in row.children.iter().enumerate() {
+                let Some(slot) = col_w.get_mut(ix) else {
+                    continue;
+                };
+                for line in cell.children.text().split('\n') {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let run = text_style.to_run(line.len());
+                    let width = window
+                        .text_system()
+                        .layout_line(line, font_size, &[run], None)
+                        .width;
+                    *slot = slot.max(f32::from(width));
+                }
+            }
+        }
+        let pad = f32::from(pad);
+        let widths: Vec<f32> = col_w
+            .iter()
+            .enumerate()
+            .map(|(ix, w)| w + if ix == 0 { pad } else { 2.0 * pad })
+            .collect();
+        let total: f32 = widths.iter().sum();
+        let style = &node_cx.style;
+        let mut rows = Vec::with_capacity(table.children.len());
+        for (row_ix, row) in table.children.iter().enumerate() {
+            let mut cells = Vec::with_capacity(row.children.len());
+            for (ix, cell) in row.children.iter().enumerate() {
+                let align = table.display_align(ix, style.numeric_columns_right());
+                cells.push(
+                    div()
+                        .id(("cell", ix))
+                        .flex_none()
+                        .w(px(widths.get(ix).copied().unwrap_or(0.)))
+                        .when(align == ColumnumnAlign::Center, |this| this.text_center())
+                        .when(align == ColumnumnAlign::Right, |this| this.text_right())
+                        .refine_style(&style.table_cell())
+                        .when(row_ix == 0, |this| this.refine_style(&style.table_head()))
+                        .when(ix == 0, |this| this.pl_0())
+                        .whitespace_nowrap()
+                        .child(cell.children.render(node_cx, window, cx)),
+                );
+            }
+            rows.push(
+                div()
+                    .id("row")
+                    .w(px(total))
+                    .border_b_1()
+                    .border_color(style.border())
+                    .flex()
+                    .flex_row()
+                    .when(row_ix == 0, |this| {
+                        this.text_color(style.foreground())
+                            .refine_style(&style.table_head())
+                    })
+                    .children(cells),
+            );
+        }
+        // As wide as its cells; a frame narrower than that scrolls it.
+        let scroll_key = match table.span {
+            Some(span) => SharedString::from(format!(
+                "{}-table-scroll-{}:{}",
+                window.current_view(),
+                span.start,
+                span.end
+            )),
+            None => SharedString::from(format!("{}-table-scroll", window.current_view())),
+        };
+        let scroll_handle = window
+            .use_keyed_state(scroll_key, cx, |_, _| ScrollHandle::default())
+            .read(cx)
+            .clone();
+        div()
+            .debug_selector(|| "markdown-table-fit".into())
+            .max_w(px(total))
+            .child(horizontal_scroll_area(
+                ("table-fit", table.span.map_or(0, |span| span.start)),
+                &scroll_handle,
+                &StyleRefinement::default().refine_style(style.table()),
+                div()
+                    .debug_selector(|| "markdown-table-track".into())
+                    .w(px(total))
+                    .children(rows),
+            ))
+            .into_any_element()
+    }
+
     fn render_scroll_table(
         table: &Table,
         col_count: usize,
@@ -2127,6 +2478,11 @@ impl BlockNode {
             }
         }
         let style = &node_cx.style;
+        // Ferrite: a content-sized table (`with_table_fit`) — exact columns,
+        // the first flush left, every row's rule (the last's too).
+        if let Some(pad) = style.table_fit() {
+            return Self::render_fit_table(table, col_count, pad, node_cx, window, cx);
+        }
         // Nowrap cells (via the `table_cell` refinement, which cascades to
         // the cell text) must never shrink below their single-line content,
         // so their floor is the content width itself.
@@ -2168,7 +2524,7 @@ impl BlockNode {
         for (row_ix, row) in table.children.iter().enumerate() {
             let mut cells = Vec::with_capacity(row.children.len());
             for (ix, cell) in row.children.iter().enumerate() {
-                let align = table.column_align(ix);
+                let align = table.display_align(ix, style.numeric_columns_right());
                 let is_last_col = ix == row.children.len() - 1;
                 let width = col_w.get(ix).copied().unwrap_or(CELL_MIN_PX);
                 let min_width = col_min_w.get(ix).copied().unwrap_or(CELL_MIN_PX);
@@ -2202,7 +2558,13 @@ impl BlockNode {
                 div()
                     .id("row")
                     .w_full()
-                    .when(row_ix < row_count - 1, |this| this.border_b_1())
+                    // Ferrite: a transparent border colour draws no row rule and
+                    // takes no space; the header keeps its rule (its colour is
+                    // the header refinement's).
+                    .when(
+                        row_ix < row_count - 1 && (row_ix == 0 || !style.border().is_transparent()),
+                        |this| this.border_b_1(),
+                    )
                     .border_color(style.border())
                     .flex()
                     .flex_row()
@@ -2284,7 +2646,7 @@ impl BlockNode {
         for (row_ix, row) in table.children.iter().enumerate() {
             let mut cells = Vec::with_capacity(row.children.len());
             for (ix, cell) in row.children.iter().enumerate() {
-                let align = table.column_align(ix);
+                let align = table.display_align(ix, style.numeric_columns_right());
                 let is_last_col = ix == row.children.len() - 1;
                 let len = col_lens
                     .get(ix)
@@ -2315,7 +2677,13 @@ impl BlockNode {
                 div()
                     .id("row")
                     .w_full()
-                    .when(row_ix < row_count - 1, |this| this.border_b_1())
+                    // Ferrite: a transparent border colour draws no row rule and
+                    // takes no space; the header keeps its rule (its colour is
+                    // the header refinement's).
+                    .when(
+                        row_ix < row_count - 1 && (row_ix == 0 || !style.border().is_transparent()),
+                        |this| this.border_b_1(),
+                    )
                     .border_color(style.border())
                     .flex()
                     .flex_row()
@@ -2380,6 +2748,7 @@ impl BlockNode {
         let content = match self {
             BlockNode::Root { children, .. } => {
                 let last = children.iter().rposition(Self::is_visible);
+                let first = children.iter().position(Self::is_visible);
                 div()
                     .id(("div", ix))
                     .children(children.iter().enumerate().map(move |(ix, node)| {
@@ -2387,6 +2756,7 @@ impl BlockNode {
                             NodeRenderOptions {
                                 ix,
                                 is_last: Some(ix) == last,
+                                after_sibling: first.is_some_and(|first| ix > first),
                                 ..options
                             },
                             node_cx,
@@ -2398,6 +2768,7 @@ impl BlockNode {
             }
             BlockNode::Paragraph(paragraph) => div()
                 .id(("p", ix))
+                .when_some(node_cx.style.prose_max_width(), |p, width| p.max_w(width))
                 .child(paragraph.render(node_cx, window, cx))
                 .into_any_element(),
             BlockNode::Heading {
@@ -2423,6 +2794,7 @@ impl BlockNode {
                     .whitespace_normal()
                     .text_size(text_size)
                     .font_weight(font_weight)
+                    .refine_style(node_cx.style.heading(*level))
                     .child(children.render(node_cx, window, cx))
                     .into_any_element()
             }
@@ -2437,13 +2809,16 @@ impl BlockNode {
                         .border_color(node_cx.style.border())
                         .px_2()
                         .italic()
+                        .refine_style(node_cx.style.blockquote())
                         .children({
                             let last = children.iter().rposition(Self::is_visible);
+                            let first = children.iter().position(Self::is_visible);
                             children.into_iter().enumerate().map(move |(index, c)| {
                                 let is_last = Some(index) == last;
                                 c.render_block(
                                     NodeRenderOptions {
                                         ix: index,
+                                        after_sibling: first.is_some_and(|first| index > first),
                                         ..options.is_last(is_last)
                                     },
                                     node_cx,
@@ -2480,7 +2855,10 @@ impl BlockNode {
                     // and larger reading type must scale nested indentation.
                     let text_style = window.text_style();
                     let font_size = text_style.font_size.to_pixels(window.rem_size());
-                    let mut marker_width = font_size;
+                    let hang = node_cx.style.list_hang();
+                    // Ferrite: a fixed hang is the floor, and a marker (plus
+                    // its gap) wider than it widens this list alone.
+                    let mut marker_width = hang.map_or(font_size, |hang| hang.width);
                     for (item_index, item) in children
                         .iter()
                         .filter(|item| item.is_list_item())
@@ -2491,12 +2869,20 @@ impl BlockNode {
                         } else {
                             let marker =
                                 list_item_prefix(item_index, *ordered, options.depth, *start);
-                            let run = text_style.to_run(marker.len());
+                            let marker = match hang {
+                                Some(_) => marker.trim_end().to_string(),
+                                None => marker,
+                            };
+                            // Measure in the marker's own refined face.
+                            let mut marker_style = text_style.clone();
+                            marker_style.refine(&node_cx.style.list_marker(*ordered).text);
+                            let run = marker_style.to_run(marker.len());
                             marker_width = marker_width.max(
                                 window
                                     .text_system()
                                     .layout_line(&marker, font_size, &[run], None)
-                                    .width,
+                                    .width
+                                    + hang.map_or(px(0.), |hang| hang.gap),
                             );
                         }
                     }
@@ -2543,7 +2929,8 @@ impl BlockNode {
                     div()
                         .id("horizontal-rule")
                         .bg(node_cx.style.border())
-                        .h(px(2.)),
+                        .h(px(2.))
+                        .refine_style(node_cx.style.rule()),
                 )
                 .into_any_element(),
             BlockNode::Break { .. } => div().id("break").into_any_element(),
@@ -2556,10 +2943,20 @@ impl BlockNode {
                 div().into_any_element()
             }
         };
+        // Ferrite: a heading may carry its own space below (in place of the
+        // paragraph gap) and, after a sibling, space above.
+        let heading = matches!(self, BlockNode::Heading { .. });
+        let gap = match node_cx.style.heading_space_below() {
+            Some(below) if heading && !options.is_last => below,
+            _ => gap,
+        };
         div()
             .id(("markdown-block", ix))
             .w_full()
             .min_w_0()
+            .when(heading && options.after_sibling, |block| {
+                block.pt(node_cx.style.heading_space_above())
+            })
             .pb(gap)
             .child(content)
             .into_any_element()

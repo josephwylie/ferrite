@@ -16,13 +16,15 @@ pub(super) mod catalog;
 mod controls;
 pub(super) mod discovery;
 mod file_search;
+pub(crate) mod launch;
 mod live_catalogs;
 mod questions;
 mod queue;
 mod requests;
 pub(super) mod wire;
+pub(crate) use wire::file_change_diffs;
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -32,9 +34,11 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::activity::AgentKey;
+use crate::store::Provider;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::FileSuggestion;
+use super::FileSearchReply;
 
 use wire::ThreadHandshake;
 
@@ -59,10 +63,12 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 /// memory for the life of a Session.
 const STDERR_TAIL_LINES: usize = 20;
 
-/// How long spawn waits for each of its two handshake responses. Measured
-/// against `codex` 0.149.1, which answers both well under a second from a
-/// cold start; the budget is generous because overrunning it fails the spawn.
+/// Local protocol initialization and skill discovery should answer promptly.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Creating or resuming a thread also waits for model discovery and MCP
+/// startup. Their network timeouts can outlast the local handshake budget;
+/// allow the same process to finish rather than killing a recoverable start.
+const THREAD_START_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a resume keeps retrying past the thread's previous writer, and
 /// how often. A quitting Ferrite's app-server exits within a fraction of a
 /// second of losing its stdin; the budget covers a slow one.
@@ -119,6 +125,23 @@ pub struct CodexConfig {
     /// `Init`) instead of starting a fresh thread: the server reloads the
     /// conversation from its own rollout files.
     pub resume: Option<String>,
+    /// Ferrite's own `show_visual` tool (`crate::visual`): the operator's
+    /// level and the app's renderer. `None`, or Off, offers nothing. Codex
+    /// fixes a thread's tools when it starts — a resumed thread keeps the
+    /// tool (and description) it began with — so the level only shapes new
+    /// threads; the renderer still answers a resumed thread's calls.
+    pub visuals: Option<crate::visual::Visuals>,
+    /// Ferrite's caller context for the agent (`api::caller_environment`):
+    /// set over whatever the CLI inherited, after the Thread's own
+    /// (`thread.start --env`).
+    pub env: Vec<(String, std::ffi::OsString)>,
+    /// The program the CLI is run through, and its arguments
+    /// (`thread.start --launcher`); empty runs it directly.
+    pub launcher: Vec<String>,
+    /// Extra arguments to `codex app-server`: what `launch::from_tui_args`
+    /// leaves of a Thread's launch arguments, a `-c key=value` override,
+    /// say.
+    pub args: Vec<String>,
 }
 
 impl Default for CodexConfig {
@@ -132,6 +155,10 @@ impl Default for CodexConfig {
             approval_policy: None,
             sandbox: None,
             resume: None,
+            visuals: None,
+            env: Vec::new(),
+            launcher: Vec::new(),
+            args: Vec::new(),
         }
     }
 }
@@ -275,8 +302,13 @@ impl CodexSession {
     }
 
     fn spawn_once(program: &str, config: &CodexConfig) -> Result<Self, CodexSpawnError> {
-        let mut command = Command::new(program);
-        command.arg("app-server").no_console_window();
+        let mut command = super::launched(&config.launcher, program);
+        command
+            .arg("app-server")
+            .args(&config.args)
+            .no_console_window()
+            .agent_environment()
+            .envs(config.env.iter().cloned());
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.
@@ -334,6 +366,7 @@ impl CodexSession {
             queue.clone(),
             config.cwd.clone(),
             config.resume.is_some(),
+            config.visuals.clone(),
         );
 
         let mut session = Self {
@@ -417,7 +450,7 @@ impl CodexSession {
             "params": {"capabilities":{"experimentalApi":true}, "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
         }))
         .map_err(|e| format!("could not write initialize: {e}"))?;
-        match await_step(steps, "initialize")? {
+        match await_step(steps, "initialize", HANDSHAKE_TIMEOUT)? {
             HandshakeStep::Initialized => {}
             HandshakeStep::Thread(_) => return Err("thread answered before initialize".into()),
         }
@@ -467,6 +500,11 @@ impl CodexSession {
         if let Some(sandbox) = &config.sandbox {
             params["sandbox"] = serde_json::json!(sandbox);
         }
+        wire::offer_visuals(
+            &mut params,
+            config.visuals.as_ref(),
+            config.resume.is_none(),
+        );
         // Capture the CLI's default independently of Ferrite's override;
         // turn/start carries the chosen effort.
         self.write_line(&serde_json::json!({
@@ -476,7 +514,7 @@ impl CodexSession {
             "params": params,
         }))
         .map_err(|e| format!("could not write {method}: {e}"))?;
-        match await_step(steps, method)? {
+        match await_step(steps, method, THREAD_START_TIMEOUT)? {
             HandshakeStep::Thread(thread) => {
                 self.thread_id = thread.thread_id;
                 self.model = thread.model;
@@ -588,16 +626,12 @@ impl CodexSession {
     /// Ask the app-server for its ranked fuzzy matches. Its one cancellation
     /// token is stable for the Session, so each native query supersedes the
     /// prior search while normal requests retain their own IDs.
-    pub fn search_files(
-        &mut self,
-        query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+    pub fn search_files(&mut self, query: &str, reply: FileSearchReply) -> io::Result<()> {
         let root = match &self.cwd {
             Some(cwd) => cwd.clone(),
             None => std::env::current_dir()?,
         };
         let id = self.take_request_id();
-        let (reply, receiver) = sync_channel(1);
         let token = {
             let mut searches = lock(&self.file_search);
             searches.begin(id, reply);
@@ -616,7 +650,7 @@ impl CodexSession {
             lock(&self.file_search).discard(id);
             return Err(error);
         }
-        Ok(receiver)
+        Ok(())
     }
 
     /// Interrupt Main. When a sent start has not yet named its turn, retain
@@ -630,6 +664,22 @@ impl CodexSession {
         let result = self.write_line(&request);
         if result.is_err() {
             lock(&self.requests).discard(id);
+        }
+        result
+    }
+
+    /// Stop one Subagent: interrupt its own thread's running turn and end
+    /// the terminals it started. Main and the other Subagents run on; a
+    /// Subagent running no turn is left be.
+    pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        let ids = [self.take_request_id(), self.take_request_id()];
+        let requests = lock(&self.requests).stop_child(ids, key)?;
+        let result = requests
+            .iter()
+            .try_for_each(|request| self.write_line(request));
+        if result.is_err() {
+            let mut pending = lock(&self.requests);
+            ids.into_iter().for_each(|id| pending.discard(id));
         }
         result
     }
@@ -836,12 +886,13 @@ enum HandshakeStep {
 fn await_step(
     steps: &Receiver<Result<HandshakeStep, String>>,
     waiting_on: &str,
+    timeout: Duration,
 ) -> Result<HandshakeStep, String> {
-    match steps.recv_timeout(HANDSHAKE_TIMEOUT) {
+    match steps.recv_timeout(timeout) {
         Ok(step) => step,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
-            "no {waiting_on} response within {HANDSHAKE_TIMEOUT:?}"
-        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err(format!("no {waiting_on} response within {timeout:?}"))
+        }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
             Err(format!("server closed before answering {waiting_on}"))
         }
@@ -868,6 +919,7 @@ fn read_stdout(
     queue: Arc<Mutex<queue::Queue>>,
     cwd: Option<PathBuf>,
     resumed: bool,
+    visuals: Option<crate::visual::Visuals>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -891,8 +943,7 @@ fn read_stdout(
         // is announced before the frame goes on to its other readers.
         let mut background = background::BackgroundTerminals::default();
         loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
+            match super::read_line(&mut reader, &mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
@@ -995,7 +1046,12 @@ fn read_stdout(
                 }
             }
             turns.observe(text);
-            if let Ok(frame) = serde_json::from_str(text) {
+            if let Ok(frame) = serde_json::from_str::<serde_json::Value>(text) {
+                if let Some(stdin) = stdin.upgrade() {
+                    if wire::answer_visual(&frame, visuals.as_ref(), stdin) {
+                        continue;
+                    }
+                }
                 if let Some(event) = background.observe(&frame, turns.main_thread_id.as_deref()) {
                     if sender.send(event).is_err() {
                         return;
@@ -1166,8 +1222,9 @@ fn publish_activity(
     true
 }
 
-/// Main's interrupt target. Child lifecycle shares this connection but cannot
-/// replace or retire Main's turn. The handshake is the sole identity authority.
+/// Main's interrupt target, and each Subagent's own. Child lifecycle shares
+/// this connection but cannot replace or retire Main's turn; it names only
+/// the child's. The handshake is the sole identity authority.
 struct MainTurnTracker {
     main_thread_id: Option<String>,
     early_turns: HashMap<String, String>,
@@ -1197,11 +1254,15 @@ impl MainTurnTracker {
             return;
         };
         if let Some(main_thread_id) = &self.main_thread_id {
-            if thread_id != main_thread_id {
-                return;
-            }
             let mut requests = lock(&self.requests);
-            if started {
+            if thread_id != main_thread_id {
+                let key = AgentKey::new(Provider::Codex, main_thread_id, thread_id);
+                if started {
+                    requests.child_started(key, thread_id, turn_id, EARLY_TURN_THREAD_LIMIT);
+                } else {
+                    requests.child_completed(&key, turn_id);
+                }
+            } else if started {
                 requests.started(turn_id);
             } else {
                 requests.completed(turn_id);
@@ -1304,6 +1365,7 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
     let output = Command::new(program)
         .arg("--version")
         .no_console_window()
+        .agent_environment()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
@@ -1328,8 +1390,8 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
         });
     }
     if version >= CODEX_CLI_TESTED_BELOW {
-        eprintln!(
-            "ferrite: codex CLI {found} is newer than Ferrite is tested against \
+        crate::log!(
+            "codex CLI {found} is newer than Ferrite is tested against \
              (below {TESTED_BELOW_DISPLAY}); running it anyway"
         );
     }
@@ -1375,6 +1437,21 @@ pub mod title {
     /// positional argument.
     pub fn fill(program: &str, prompt: &str) -> TitleForm {
         fill_with_model(program, prompt, MODEL)
+    }
+
+    /// The small model to ask instead of [`MODEL`] when the provider's own
+    /// catalog no longer lists it: the first model the catalog calls fast
+    /// (`GPT-6 Luna — Fast and affordable model for easier tasks.`).
+    /// `None` keeps [`MODEL`]: it is listed, or the catalog names no fast
+    /// tier (an empty catalog says nothing either way).
+    pub fn cheap_model(catalog: &[crate::ModelInfo]) -> Option<String> {
+        if catalog.is_empty() || catalog.iter().any(|model| model.value == MODEL) {
+            return None;
+        }
+        catalog
+            .iter()
+            .find(|model| model.detail.to_lowercase().contains("fast"))
+            .map(|model| model.value.clone())
     }
 
     pub(super) fn fill_with_model(program: &str, prompt: &str, model: &'static str) -> TitleForm {
@@ -1436,6 +1513,30 @@ pub(super) mod followup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_handshake_wait_expires_but_provider_errors_return_immediately() {
+        let (sender, receiver) = sync_channel(1);
+        let budget = Duration::from_millis(20);
+        let started = Instant::now();
+        let error = await_step(&receiver, "thread/start", budget).err().unwrap();
+        assert_eq!(error, "no thread/start response within 20ms");
+        assert!(started.elapsed() >= budget);
+
+        sender.send(Err("no such model".into())).unwrap();
+        let started = Instant::now();
+        let error = await_step(&receiver, "thread/start", THREAD_START_TIMEOUT)
+            .err()
+            .unwrap();
+        assert_eq!(error, "no such model");
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        drop(sender);
+        let error = await_step(&receiver, "thread/resume", THREAD_START_TIMEOUT)
+            .err()
+            .unwrap();
+        assert_eq!(error, "server closed before answering thread/resume");
+    }
 
     #[test]
     fn the_displayed_window_matches_the_pins() {

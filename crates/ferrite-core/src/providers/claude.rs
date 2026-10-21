@@ -8,13 +8,17 @@
 
 mod activity;
 pub(super) mod discovery;
+mod drafts;
 mod file_search;
+mod mcp;
 mod menu;
 mod queue;
+mod shell_output;
+mod skill_mentions;
 mod suggestions;
 pub(super) mod wire;
 
-use crate::spawn::NoConsoleWindow;
+use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -24,9 +28,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::FileSuggestion;
+use super::{FileSearchReply, SettingAck};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -92,6 +97,19 @@ pub struct ClaudeConfig {
     /// announces the *same* session id in its init line, so the target stays
     /// stable across any number of resumes.
     pub resume: Option<String>,
+    /// Ferrite's own `show_visual` tool (`crate::visual`): the operator's
+    /// level and the app's renderer. `None`, or a level of Off, offers
+    /// nothing. Fixed for the Session: the CLI lists its tools once.
+    pub visuals: Option<crate::visual::Visuals>,
+    /// Ferrite's caller context for the agent (`api::caller_environment`):
+    /// set over whatever the CLI inherited, after the Thread's own
+    /// (`thread.start --env`).
+    pub env: Vec<(String, std::ffi::OsString)>,
+    /// The program the CLI is run through, and its arguments
+    /// (`thread.start --launcher`); empty runs it directly.
+    pub launcher: Vec<String>,
+    /// Extra arguments, after Ferrite's own (`thread.start --args`).
+    pub args: Vec<String>,
 }
 
 impl Default for ClaudeConfig {
@@ -106,6 +124,10 @@ impl Default for ClaudeConfig {
             name: None,
             permission_mode: None,
             resume: None,
+            visuals: None,
+            env: Vec::new(),
+            launcher: Vec::new(),
+            args: Vec::new(),
         }
     }
 }
@@ -126,6 +148,11 @@ pub enum ClaudeSpawnError {
     VersionCheckFailed {
         detail: String,
     },
+    /// The CLI exited before it was up, and why, as its stderr said
+    /// ("Session ID … is already in use").
+    Exited {
+        reason: String,
+    },
     Io(io::Error),
 }
 
@@ -145,6 +172,7 @@ impl std::fmt::Display for ClaudeSpawnError {
             ClaudeSpawnError::VersionCheckFailed { detail } => {
                 write!(f, "claude CLI version check failed: {detail}")
             }
+            ClaudeSpawnError::Exited { reason } => write!(f, "{reason}"),
             ClaudeSpawnError::Io(e) => write!(f, "io error spawning claude CLI: {e}"),
         }
     }
@@ -201,6 +229,7 @@ pub struct ClaudeSession {
     queue: Arc<Mutex<queue::Queue>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    skills: Arc<Mutex<skill_mentions::Skills>>,
     file_search: Arc<Mutex<file_search::Requests>>,
 }
 
@@ -212,8 +241,11 @@ impl ClaudeSession {
         let program = super::spawnable_program(&config.program);
         check_version(&program)?;
 
-        let mut command = Command::new(&program);
-        command.no_console_window();
+        let mut command = super::launched(&config.launcher, &program);
+        command
+            .no_console_window()
+            .agent_environment()
+            .envs(config.env.iter().cloned());
         command.args([
             "-p",
             "--input-format",
@@ -269,6 +301,13 @@ impl ClaudeSession {
         for directory in &config.additional_directories {
             command.arg("--add-dir").arg(directory);
         }
+        let visuals = mcp::Server::offered(config.visuals.as_ref());
+        if visuals {
+            // Ferrite's own tool is never a Decision: pre-allowed, so no
+            // permission mode asks for it (verified on 2.1.292 in `default`).
+            command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
+        }
+        command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -303,12 +342,14 @@ impl ClaudeSession {
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
+        let skills = Arc::new(Mutex::new(skill_mentions::Skills::default()));
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
+        let server = mcp::Server::new(config.visuals.clone(), Arc::clone(&stdin));
         let capabilities = read_stdout(
             stdout,
             sender,
             Arc::clone(&child),
-            stderr_tail,
+            Arc::clone(&stderr_tail),
             setting_reply.clone(),
             control_replies.clone(),
             Arc::clone(&stdin),
@@ -316,7 +357,9 @@ impl ClaudeSession {
             requests.clone(),
             queue.clone(),
             suggestions.clone(),
+            skills.clone(),
             file_search.clone(),
+            server,
         );
 
         let mut session = Self {
@@ -334,6 +377,7 @@ impl ClaudeSession {
             queue,
             next_request_id: 1,
             suggestions,
+            skills,
             file_search,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
@@ -342,46 +386,64 @@ impl ClaudeSession {
         // back a Session so that reason reaches the Pane.
         let id = session.take_request_id();
         debug_assert_eq!(id, HANDSHAKE_REQUEST_ID);
+        // `perTaskStopAffordance` says this host stops a background task by
+        // `stop_task` (the shelf's ×, a Subagent tab's escape). Without it the
+        // CLI fails closed: an interrupt also kills every background agent and
+        // workflow (2.1.299, `per_task_stop_sparing`, confirmed by capture).
+        // With it, an interrupt aborts only Main's turn.
+        let mut initialize =
+            serde_json::json!({"subtype": "initialize", "perTaskStopAffordance": true});
+        if visuals {
+            // The in-band server (`mcp`): the CLI tunnels its MCP traffic
+            // back over this pipe, starting before it answers this request.
+            initialize["sdkMcpServers"] = serde_json::json!([crate::visual::SERVER]);
+        }
         let _ = session.write_line(&serde_json::json!({
             "type": "control_request",
             "request_id": id,
-            "request": {"subtype": "initialize"},
+            "request": initialize,
         }));
         session.capabilities = capabilities
             .recv_timeout(HANDSHAKE_TIMEOUT)
             .unwrap_or_default();
         // Use the same override layer at startup and later: a CLI --effort
-        // flag would survive clearing effortLevel back to Default.
+        // flag would survive clearing effortLevel back to Default. Startup
+        // is off the UI thread, so it waits for the CLI to accept it.
         if config.effort.is_some() {
             session
                 .set_effort(config.effort.as_deref())
-                .map_err(ClaudeSpawnError::Io)?;
+                .and_then(|ack| {
+                    ack.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|e| {
+                        io::Error::other(format!("effort change was not acknowledged: {e}"))
+                    })?
+                })
+                .map_err(|error| exited_at_start(&session.child, &stderr_tail, error))?;
         }
         Ok(session)
     }
 
     /// The SDK's applyFlagSettings control, effective from the next turn.
-    /// Wait for acceptance so a rejected setting cannot look successful.
-    pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
-        self.set_setting(
-            serde_json::json!({
-                "subtype": "apply_flag_settings",
-                "settings": {"effortLevel": effort},
-            }),
-            "effort change was not acknowledged",
-        )
+    /// It holds once the CLI accepts it, so a rejected setting cannot look
+    /// successful.
+    pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
+        self.set_setting(serde_json::json!({
+            "subtype": "apply_flag_settings",
+            "settings": {"effortLevel": effort},
+        }))
     }
 
-    /// Select a model through Claude's native control protocol and wait for
-    /// its acknowledgement before reporting success.
-    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
-        self.set_setting(
-            serde_json::json!({"subtype": "set_model", "model": model}),
-            "model change was not acknowledged",
-        )
+    /// Select a model through Claude's native control protocol; it holds
+    /// once the CLI acknowledges it.
+    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
+        self.set_setting(serde_json::json!({"subtype": "set_model", "model": model}))
     }
 
     pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        // The CLI enters bypass only when it was launched in it (2.1.289
+        // refuses `set_permission_mode` to it otherwise: "Cannot set
+        // permission mode to bypassPermissions…"), so a Session that began
+        // elsewhere never offers it — ⇧⇥ would step onto a refusal.
+        let bypass = self.capabilities.permission_mode == "bypassPermissions";
         [
             ("default", "Default"),
             ("acceptEdits", "Accept edits"),
@@ -391,6 +453,7 @@ impl ClaudeSession {
             ("auto", "Auto"),
         ]
         .into_iter()
+        .filter(|(value, _)| bypass || *value != "bypassPermissions")
         .map(|(value, label)| PermissionModeChoice {
             value: value.into(),
             label: label.into(),
@@ -464,22 +527,22 @@ impl ClaudeSession {
         Ok(())
     }
 
-    fn set_setting(&mut self, request: serde_json::Value, timeout_message: &str) -> io::Result<()> {
+    /// Ask the CLI for a setting change; the reader thread answers the
+    /// ack with the CLI's reply. A newer change takes the reply slot, and
+    /// the older ack then reads as never answered.
+    fn set_setting(&mut self, request: serde_json::Value) -> io::Result<SettingAck> {
         let request_id = self.take_request_id();
         let (tx, rx) = sync_channel(1);
         *lock(&self.setting_reply) = Some((request_id.clone(), tx));
-        let result = self
-            .write_line(&serde_json::json!({
-                "type": "control_request",
-                "request_id": request_id,
-                "request": request,
-            }))
-            .and_then(|()| {
-                rx.recv_timeout(HANDSHAKE_TIMEOUT)
-                    .map_err(|e| io::Error::other(format!("{timeout_message}: {e}")))?
-            });
-        *lock(&self.setting_reply) = None;
-        result
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": request,
+        })) {
+            *lock(&self.setting_reply) = None;
+            return Err(error);
+        }
+        Ok(rx)
     }
 
     /// Rename the live native session so the CLI's own session list carries
@@ -509,12 +572,8 @@ impl ClaudeSession {
 
     /// Ask the live CLI for ranked paths. A newer query cancels the previous
     /// receiver locally; the control response is consumed by the reader.
-    pub fn search_files(
-        &mut self,
-        query: &str,
-    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+    pub fn search_files(&mut self, query: &str, reply: FileSearchReply) -> io::Result<()> {
         let id = self.take_request_id();
-        let (reply, receiver) = sync_channel(1);
         lock(&self.file_search).begin(id.clone(), reply);
         if let Err(error) = self.write_line(&serde_json::json!({
             "type": "control_request",
@@ -524,7 +583,7 @@ impl ClaudeSession {
             lock(&self.file_search).discard(&id);
             return Err(error);
         }
-        Ok(receiver)
+        Ok(())
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.
@@ -542,7 +601,7 @@ impl ClaudeSession {
         lock(&self.suggestions).sent();
         self.write_line(&serde_json::json!({
             "type":"user", "uuid":client_id, "isAsync":true,
-            "message":{"role":"user","content":wire::input_content(text,self.cwd.as_deref())}
+            "message":{"role":"user","content":wire::input_content(text,&lock(&self.skills),self.cwd.as_deref())}
         }))
     }
 
@@ -563,12 +622,22 @@ impl ClaudeSession {
             "type": "user",
             "message": {
                 "role": "user",
-                "content": wire::input_content(text, self.cwd.as_deref()),
+                "content": wire::input_content(text, &lock(&self.skills), self.cwd.as_deref()),
             },
         }))
     }
 
-    /// Interrupt the running turn over the stdio control protocol.
+    /// Stop one Subagent and nothing else: `stop_task` with its task id.
+    pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
+        let id = lock(&self.decoder).task_of(key).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "this subagent has no task to stop")
+        })?;
+        self.control(SessionControl::StopTask { id })
+    }
+
+    /// Interrupt Main's running turn over the stdio control protocol.
+    /// Background agents, workflows and tasks survive it: the handshake
+    /// declared `perTaskStopAffordance`.
     pub fn interrupt(&mut self) -> io::Result<()> {
         let request_id = self.take_request_id();
         self.write_line(&serde_json::json!({
@@ -672,7 +741,9 @@ fn read_stdout(
     requests: Arc<Mutex<wire::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    skills: Arc<Mutex<skill_mentions::Skills>>,
     file_search: Arc<Mutex<file_search::Requests>>,
+    server: mcp::Server,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
@@ -680,9 +751,9 @@ fn read_stdout(
         let mut line = Vec::new();
         let mut handshake = Some(handshake);
         let mut menu = menu::McpMenu::default();
+        let mut shells = shell_output::ShellOutputs::default();
         loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
+            match super::read_line(&mut reader, &mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
@@ -691,7 +762,11 @@ fn read_stdout(
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                shells.observe(&value, &sender);
                 if lock(&file_search).observe(&value) {
+                    continue;
+                }
+                if server.observe(&value) {
                     continue;
                 }
                 let queue_events = lock(&queue).observe(&value);
@@ -701,15 +776,23 @@ fn read_stdout(
                     }
                 }
                 lock(&suggestions).observe(&value);
+                lock(&skills).observe(&value);
                 lock(&requests).observe(&value);
                 let response = &value["response"];
-                let mut pending = lock(&setting_reply);
-                if value["type"] == "control_response"
-                    && pending
-                        .as_ref()
-                        .is_some_and(|(id, _)| response["request_id"].as_str() == Some(id.as_str()))
-                {
-                    let (_, reply) = pending.take().expect("matched above");
+                // Released before any event is sent: `set_setting` takes this
+                // lock on the UI thread, the thread that drains the channel,
+                // so holding it while parked on a full channel would wait
+                // out a frame that can never come.
+                let setting = if value["type"] == "control_response" {
+                    let mut pending = lock(&setting_reply);
+                    let answers = pending.as_ref().is_some_and(|(id, _)| {
+                        response["request_id"].as_str() == Some(id.as_str())
+                    });
+                    answers.then(|| pending.take().expect("matched above").1)
+                } else {
+                    None
+                };
+                if let Some(reply) = setting {
                     let result = if response["subtype"] == "success" {
                         Ok(())
                     } else {
@@ -846,6 +929,7 @@ fn read_stdout(
                 }
             }
         }
+        shells.stop_all();
         lock(&file_search).disconnect();
         lock(&control_replies).clear();
         let _ = sender.send(closed_event(&child, &stderr_tail));
@@ -916,7 +1000,7 @@ fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<
     }
 }
 
-fn write_stdin_line(stdin: &Arc<Mutex<ChildStdin>>, value: &serde_json::Value) -> io::Result<()> {
+fn write_stdin_line(stdin: &Mutex<ChildStdin>, value: &serde_json::Value) -> io::Result<()> {
     let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
     line.push('\n');
     let mut stdin = lock(stdin);
@@ -945,6 +1029,31 @@ fn drain_stderr(stderr: ChildStderr, tail: Arc<Mutex<StderrTail>>) {
 }
 
 fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> SessionEvent {
+    SessionEvent::Closed {
+        reason: exit_reason(child, stderr_tail),
+    }
+}
+
+/// A CLI that exited while starting says why on stderr: that, rather than
+/// the broken pipe or the silence its exit left behind.
+fn exited_at_start(
+    child: &Mutex<Child>,
+    stderr_tail: &Mutex<StderrTail>,
+    error: io::Error,
+) -> ClaudeSpawnError {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if matches!(lock(child).try_wait(), Ok(Some(_))) {
+            return ClaudeSpawnError::Exited {
+                reason: exit_reason(child, stderr_tail),
+            };
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    ClaudeSpawnError::Io(error)
+}
+
+fn exit_reason(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> String {
     let status = reap(child);
     let mut reason = match &status {
         Ok(status) => format!("claude CLI exited: {status}"),
@@ -957,7 +1066,7 @@ fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> Sessio
             reason.push_str(&lines.join("\n"));
         }
     }
-    SessionEvent::Closed { reason }
+    reason
 }
 
 /// The drain thread reaches EOF just after the child exits; wait for it rather
@@ -1008,6 +1117,7 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     let output = Command::new(program)
         .arg("--version")
         .no_console_window()
+        .agent_environment()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
@@ -1032,8 +1142,8 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
         });
     }
     if version >= CLAUDE_CLI_TESTED_BELOW {
-        eprintln!(
-            "ferrite: claude CLI {found} is newer than Ferrite is tested against \
+        crate::log!(
+            "claude CLI {found} is newer than Ferrite is tested against \
              (below {TESTED_BELOW_DISPLAY}); running it anyway"
         );
     }

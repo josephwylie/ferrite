@@ -544,6 +544,9 @@ fn overlapping_tool_and_message_ids_keep_transcripts_usage_and_resume_isolated()
         .unwrap();
     assert_eq!(snapshot.resume_target(), Some("main-0"));
     h.cockpit.revive(h.thread).unwrap();
+    // Its agent starts when the operator writes to it (ADR 0032).
+    h.cockpit.set_composing(h.thread, true);
+    h.cockpit.pump();
     assert_eq!(
         h.control.0.lock().unwrap()[1].resume.as_deref(),
         Some("main-0")
@@ -1357,9 +1360,11 @@ fn watchdog_replacement_invalidates_pending_history_read_before_a_new_read() {
 #[test]
 fn aliasing_evicted_history_into_a_retained_child_recovers_both_prefixes_and_live_decision() {
     // Cover selection both before and after the identity join. The selected
-    // case is valid whether disk completion or the live Alias reaches a pump
-    // first; the unselected case always requires recovery of an evicted prefix.
-    for select_before_alias in [false, true] {
+    // case covers both an outstanding read and a read completed before the join,
+    // without relying on disk-thread scheduling. The unselected case needs its evicted prefix.
+    for (select_before_alias, finish_read_before_alias) in
+        [(false, false), (true, false), (true, true)]
+    {
         let mut h = Harness::new();
         let source = evicted_oldest(&mut h);
         let canonical = AgentKey::new(Provider::Codex, "main-0", "cache-child-1");
@@ -1401,6 +1406,17 @@ fn aliasing_evicted_history_into_a_retained_child_recovers_both_prefixes_and_liv
                 .ensure_subject_history(thread, &source_subject)
                 .unwrap());
         }
+        if finish_read_before_alias {
+            pump_until(&mut h, |cockpit| {
+                cockpit
+                    .thread(thread)
+                    .unwrap()
+                    .activity()
+                    .subject(&source_subject)
+                    .unwrap()
+                    .retained()
+            });
+        }
         h.control.activity(
             0,
             ActivityEvent::Alias {
@@ -1429,7 +1445,7 @@ fn aliasing_evicted_history_into_a_retained_child_recovers_both_prefixes_and_liv
         assert_eq!(
             text(child.transcript()),
             "FROZEN PREFIX 0\nFROZEN PREFIX 1\nCANONICAL LIVE\nSOURCE LIVE\nTAIL AFTER ALIAS",
-            "selection before alias: {select_before_alias}"
+            "selection before alias: {select_before_alias}, read completed: {finish_read_before_alias}"
         );
         assert_eq!(view.canonical_subject(&source_subject), canonical_subject);
         assert_eq!(view.children().len(), 128);

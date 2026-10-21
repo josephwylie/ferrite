@@ -1,0 +1,1 @@
+{"type":"reply","id":40,"ok":{"kind":"diff","text":"diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-one\n+two\n"}}

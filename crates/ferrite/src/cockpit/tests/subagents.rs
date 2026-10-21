@@ -64,7 +64,10 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     assert_eq!(
-        view.read_with(cx, |view, _| view.thread_row(thread).subagents),
+        view.read_with(cx, |view, _| view
+            .facts
+            .get(thread)
+            .map_or(0, |facts| facts.subagents)),
         2,
         "the Thread card counts the discovered children"
     );
@@ -84,7 +87,7 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
             .activity()
             .subject(&view.panes[0].selected)
             .unwrap();
-        assert!(transcript_text(subject.transcript().blocks()).contains("Atlas transcript"));
+        assert!(plain_text(subject.transcript().blocks()).contains("Atlas transcript"));
     });
     assert!(cx.debug_bounds("return-main-1").is_some());
     emit(
@@ -189,15 +192,6 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     }
     tick(cx);
     click_child(cx, "Atlas");
-    let group = view.read_with(cx, |view, _| {
-        view.panes[0]
-            .tool_bounds(pane::DisclosureId::Group("same-call".into()))
-            .expect("completed tool group")
-            .center()
-    });
-    cx.simulate_click(group, gpui::Modifiers::none());
-    // Opening the retained group changes its measured height and tail offset.
-    // Draw that layout before targeting its newly visible child control.
     tick(cx);
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]
@@ -354,8 +348,9 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
         );
     }
     tick(cx);
-    let attention = cx.debug_bounds("agent-attention-1").unwrap().center();
-    cx.simulate_click(attention, gpui::Modifiers::none());
+    // ⌘D (the titlebar has no needs-you door any more: the nav's strip
+    // names its key).
+    cx.dispatch_action(crate::cockpit::NextDecision);
     cx.run_until_parked();
     assert_eq!(
         view.read_with(cx, |view, _| view.panes[0].selected.clone()),
@@ -365,7 +360,6 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
         view.cockpit
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -380,7 +374,6 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
             .cockpit
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].decision.id, "Cedar");
@@ -505,6 +498,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
     let (core, fake) = cockpit("subagents-responsive-tabs", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
         child(&fake, name, AgentStatus::Idle);
@@ -518,7 +512,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
         "all five native tabs fit a wide pane"
     );
     click_child(cx, "Rowan");
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     cx.run_until_parked();
     cx.simulate_resize(gpui::size(px(640.), px(800.)));
     cx.run_until_parked();
@@ -542,7 +536,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
             .text_system()
             .shape_line(
                 "Main".into(),
-                px(theme::FS_SM),
+                px(theme::FS_UI),
                 &[gpui::TextRun {
                     len: "Main".len(),
                     font: gpui::font(theme::FONT_UI),
@@ -555,16 +549,22 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
             )
             .width
     });
+    // The label's box is rounded to the pixel where it lands, its run is
+    // not (the browser's model, vendor/gpui-pre "Pixel snapping"): the two
+    // agree to within a pixel.
     assert!(
-        main_label.size.width >= expected_main_width,
-        "the Main label fits its shaped text width"
+        main_label.size.width + px(1.) >= expected_main_width,
+        "the Main label fits its shaped text width: {main_label:?} {expected_main_width:?}"
     );
     assert!(main_label.left() >= main.left() && main_label.right() <= main.right());
     let selected = bounds(cx, format!("subject-agent-1-{}", key("Rowan").as_str()));
     let overflow = cx.debug_bounds("subject-overflow-1").unwrap();
     let strip = cx.debug_bounds("subject-strip-1").unwrap();
     assert!(main.right() <= selected.left() && selected.right() <= overflow.left());
-    assert!(strip.contains(&main.origin) && strip.contains(&overflow.bottom_right()));
+    assert!(
+        strip.contains(&main.origin) && strip.contains(&overflow.bottom_right()),
+        "the strip holds Main and the overflow: {strip:?} / {main:?} / {overflow:?}"
+    );
     emit(
         &fake,
         ActivityEvent::Status {
@@ -590,7 +590,7 @@ fn native_tab_press_cannot_jump_to_an_overflow_slot_after_resize(cx: &mut TestAp
         child(&fake, name, AgentStatus::Idle);
     }
     tick(cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     cx.run_until_parked();
     let pressed = tab(cx, "Rowan");
     cx.simulate_mouse_down(pressed, MouseButton::Left, gpui::Modifiers::none());
@@ -689,8 +689,7 @@ fn attention_and_global_navigation_visit_every_distinct_pending_subject_then_wra
     );
     tick(cx);
     for name in ["Atlas", "Cedar", "Finch", "Atlas"] {
-        let attention = cx.debug_bounds("agent-attention-1").unwrap().center();
-        cx.simulate_click(attention, gpui::Modifiers::none());
+        cx.dispatch_action(crate::cockpit::NextDecision);
         cx.run_until_parked();
         assert_eq!(
             view.read_with(cx, |view, _| view.panes[0].selected.clone()),
@@ -714,8 +713,9 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
     let (core, fake) = cockpit("subagents-stale-menu-alias", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(640.), px(800.)));
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("cmd-shift-enter");
     cx.run_until_parked();
     for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
         child(&fake, name, AgentStatus::Idle);
@@ -760,7 +760,6 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
         view.cockpit
             .thread(view.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -773,7 +772,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     cx: &mut TestAppContext,
 ) {
     let (core, fake) = cockpit("subagents-native-progress", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     child(&fake, "Atlas", AgentStatus::Working);
     emit(
@@ -791,7 +790,8 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     click_child(cx, "Atlas");
-    assert!(cx.debug_bounds("progress-caption-Thinking").is_some());
+    assert!(cx.debug_bounds("progress-caption-Working").is_some());
+    assert!(cx.debug_bounds("progress-caption-Thinking").is_none());
     emit(
         &fake,
         ActivityEvent::Content {

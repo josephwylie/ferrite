@@ -4,6 +4,9 @@
 //! adapter beside the production one in `crate::session` — both hand the
 //! pump the same `Receiver<SessionEvent>`, so the demo exercises the real
 //! render path. Nothing here may reach a store an operator keeps work in.
+//!
+//! `--demo parity` opens the approved prototype's world instead (`parity`),
+//! the same one the visual reference's parity scenes capture.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +17,7 @@ use std::time::Duration;
 
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
 use ferrite_core::groups::GroupChange;
-use ferrite_core::providers::Session;
+use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
@@ -25,6 +28,47 @@ use ferrite_core::{
 
 use crate::cockpit::here;
 
+/// The prototype's world: its Projects, Threads, Groups and clock. It lives
+/// beside the visual reference's scenes, which capture it; it is declared
+/// here because the live demo is always built and the reference is not.
+#[path = "cockpit/visual_reference/parity.rs"]
+pub(crate) mod parity;
+
+/// `--demo parity`: the prototype's roster, live, on a disposable store and
+/// HOME — never the operator's. The fixture clock stays at the prototype's
+/// 7:41 pm for the run, so every stamp, age and duration reads as the
+/// prototype prints it; HOME and the working directory point into the
+/// disposable root so paths read `~/ferrite` and `~/Desktop/Projects`.
+pub fn parity_world() -> Cockpit {
+    let root = std::env::temp_dir().join("ferrite-parity-demo");
+    // Only our own disposable directory; never the operator's store.
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create the parity demo root");
+    let midnight = parity::midnight();
+    let at = parity::Clock {
+        midnight,
+        fixture: None,
+    }
+    .instant(parity::CAPTURE);
+    let fixture: &'static parity::Fixture = Box::leak(Box::new(parity::Fixture::install(at)));
+    let world = parity::build(
+        &root,
+        parity::Look::Solo,
+        parity::Clock {
+            midnight,
+            fixture: Some(fixture),
+        },
+    );
+    std::env::set_var("HOME", &world.home);
+    // The changed tokens the prototype marks by hand, on its world's diffs
+    // (the UI thread draws them; this runs on it, before the app starts).
+    crate::pane::set_word_marks(parity::word_marks());
+    if let Err(e) = std::env::set_current_dir(&world.launch) {
+        ferrite_core::log!("cannot stand in the parity launch directory: {e}");
+    }
+    world.core
+}
+
 /// A scripted event stream: no process, same channel, same pump.
 pub struct DemoSession {
     rx: Receiver<SessionEvent>,
@@ -33,15 +77,20 @@ pub struct DemoSession {
 }
 
 impl Session for DemoSession {
-    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
-        Ok(())
+    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<SettingAck> {
+        Ok(applied())
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.rx
     }
 
-    fn send(&mut self, _text: &str) -> io::Result<()> {
-        self.play_reply();
+    fn send(&mut self, text: &str) -> io::Result<()> {
+        if asks_for_a_visual(text) {
+            self.cancel.store(false, Ordering::Relaxed);
+            play(self.tx.clone(), self.cancel.clone(), visual_reply());
+        } else {
+            self.play_reply();
+        }
         Ok(())
     }
 
@@ -153,7 +202,16 @@ impl DemoSession {
     pub fn seeded(variant: usize) -> Self {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        play(tx.clone(), cancel.clone(), seed(variant));
+        // FERRITE_DEMO_VISUAL=1: the first Pane plays the visual reply at
+        // once, so visuals can be checked in a real window without typing.
+        let steps = if variant == 0 && std::env::var_os("FERRITE_DEMO_VISUAL").is_some() {
+            let mut steps = boot("demo-visual");
+            steps.extend(visual_reply());
+            steps
+        } else {
+            seed(variant)
+        };
+        play(tx.clone(), cancel.clone(), steps);
         Self { rx, tx, cancel }
     }
 
@@ -213,6 +271,7 @@ impl DemoSession {
                                     "+permission granted by the operator".into(),
                                     "+the demo writes one honest line".into(),
                                 ],
+                                section: None,
                             }],
                         },
                     },
@@ -594,6 +653,7 @@ fn edit(steps: &mut Vec<Step>, id: &str, path: &str) {
                         "+    cell.child(fraction_label(todos));".into(),
                         "     cell".into(),
                     ],
+                    section: None,
                 }],
             },
         },
@@ -922,6 +982,79 @@ pub fn reply() -> Vec<Step> {
     turn(&[], REPLY, 0.0091)
 }
 
+/// A prompt that asks to see something (`show me…`, `…visualise…`): the demo
+/// agent answers with a visual.
+fn asks_for_a_visual(prompt: &str) -> bool {
+    let prompt = prompt.to_lowercase();
+    ["show me", "visual", "chart", "mock up"]
+        .iter()
+        .any(|ask| prompt.contains(ask))
+}
+
+/// The demo agent's visual (ADR 0013): one line, then a `show_visual` call
+/// whose HTML streams in (the page builds up while it is drawn), the
+/// screenshot's answer, and a closing line.
+fn visual_reply() -> Vec<Step> {
+    const PAGE: &str = include_str!("cockpit/visual_reference/visuals/stats.html");
+    const ID: &str = "demo_visual";
+    let name = ferrite_core::visual::CLAUDE_NAME;
+    let input = |html: &str| {
+        serde_json::json!({
+            "title": "Token usage, last 30 days",
+            "caption": "Daily cost with a 7-day average, split by model",
+            "html": html,
+        })
+    };
+    let mut steps = Vec::new();
+    prose(&mut steps, "Here is the last 30 days, by day and by model.");
+    // As Claude streams a tool's input: a draft every chunk or so.
+    let chunk = PAGE.len() / 12;
+    let mut end = chunk;
+    while end < PAGE.len() {
+        while !PAGE.is_char_boundary(end) {
+            end += 1;
+        }
+        steps.push(Step::new(
+            160,
+            SessionEvent::ToolDraft {
+                id: ID.into(),
+                name: name.into(),
+                input: input(&PAGE[..end]),
+            },
+        ));
+        end += chunk;
+    }
+    steps.push(Step::new(
+        120,
+        SessionEvent::ToolStarted {
+            id: ID.into(),
+            name: name.into(),
+            input: input(PAGE),
+        },
+    ));
+    steps.push(Step::new(
+        900,
+        SessionEvent::ToolCompleted {
+            id: ID.into(),
+            output: "Shown to the operator inline.".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ));
+    prose(
+        &mut steps,
+        "Spend peaks on the nights the Group runs; Opus is most of it.",
+    );
+    steps.push(Step::new(
+        30,
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: Some(0.0124),
+        },
+    ));
+    steps
+}
+
 /// One turn: thinking lines, then word-by-word text, then TurnEnded.
 fn turn(thinking: &[&str], text: &str, cost: f64) -> Vec<Step> {
     let mut steps = Vec::new();
@@ -979,7 +1112,7 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
     for thread in members.into_iter().take(revivable) {
         match core.revive(thread) {
             Ok(()) => open += 1,
-            Err(e) => eprintln!("ferrite: thread {thread} could not be revived: {e:?}"),
+            Err(e) => ferrite_core::log!("thread {thread} could not be revived: {e:?}"),
         }
     }
     let parked = core.parked().map(|threads| threads.len()).unwrap_or(0);
@@ -997,7 +1130,7 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
         match core.open(provider, choice) {
             Ok(_) => open += 1,
             Err(e) => {
-                eprintln!("ferrite: could not open a thread: {e}");
+                ferrite_core::log!("could not open a thread: {e}");
                 break;
             }
         }
@@ -1051,13 +1184,13 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
                 let thread = pool.remove(at);
                 match cockpit.revive(thread) {
                     Ok(()) => shown.push(thread),
-                    Err(e) => eprintln!("ferrite: thread {thread} could not be revived: {e:?}"),
+                    Err(e) => ferrite_core::log!("thread {thread} could not be revived: {e:?}"),
                 }
             }
             None => match cockpit.open(want, WorkspaceChoice::Main { checkout: here() }) {
                 Ok(id) => shown.push(id),
                 Err(e) => {
-                    eprintln!("ferrite: could not open a thread: {e}");
+                    ferrite_core::log!("could not open a thread: {e}");
                     break;
                 }
             },
@@ -1101,12 +1234,12 @@ pub fn seed_groups(cockpit: &mut Cockpit, seeded: &[ThreadId], provider: Provide
                 // moment it exists, so the Cockpit stays the size it was
                 // asked for and the row is parked like the prototype's.
                 if let Err(e) = cockpit.park(id) {
-                    eprintln!("ferrite: thread {id} would not park: {e}");
+                    ferrite_core::log!("thread {id} would not park: {e}");
                 }
                 parked.push(id);
             }
             Err(e) => {
-                eprintln!("ferrite: could not open a thread: {e}");
+                ferrite_core::log!("could not open a thread: {e}");
                 break;
             }
         }
@@ -1140,7 +1273,7 @@ fn form_group(cockpit: &mut Cockpit, members: &[ThreadId], title: &str) {
     }) {
         Ok(applied) => applied.group,
         Err(e) => {
-            eprintln!("ferrite: could not group threads {seed} and {with}: {e}");
+            ferrite_core::log!("could not group threads {seed} and {with}: {e}");
             return;
         }
     };
@@ -1153,14 +1286,14 @@ fn form_group(cockpit: &mut Cockpit, members: &[ThreadId], title: &str) {
             group,
             index: None,
         }) {
-            eprintln!("ferrite: thread {thread} would not join the group: {e}");
+            ferrite_core::log!("thread {thread} would not join the group: {e}");
         }
     }
     if let Err(e) = cockpit.apply_group(GroupChange::Rename {
         group,
         title: title.to_string(),
     }) {
-        eprintln!("ferrite: could not name the group: {e}");
+        ferrite_core::log!("could not name the group: {e}");
     }
 }
 
@@ -1185,6 +1318,7 @@ mod tests {
         assert_eq!(transcript.last_cost(), Some(0.0380));
         assert!(transcript.blocks().iter().all(|block| match &block.body {
             Body::Meta(text) => !text.contains('$'),
+            Body::TurnEnd(end) => !end.text().contains('$'),
             _ => true,
         }));
 
@@ -1272,7 +1406,7 @@ mod tests {
     /// permission-waits.
     #[test]
     fn the_demo_seeds_deal_the_wall_census() {
-        use crate::pane::{wall_card, wall_state, WallState};
+        use crate::pane::{wall_state, Turn, WallCard, WallState};
         let mut census = Vec::new();
         for variant in 0..SEEDS {
             let mut transcript = Transcript::default();
@@ -1283,8 +1417,12 @@ mod tests {
                 }
                 transcript.apply(Input::Event(step.event));
             }
-            let card = wall_card(Some(&transcript), None);
-            census.push(wall_state(Some(&transcript), pending, card.tests_failing));
+            let card = WallCard::of(&transcript, None, None);
+            census.push(wall_state(
+                Some(&Turn::of(&transcript)),
+                pending,
+                card.tests_failing,
+            ));
         }
         use WallState::*;
         for wanted in [Working, Failing, Decision, Blocked, Done, Idle] {
@@ -1301,13 +1439,16 @@ mod tests {
         let mut spawn = Spawn::new(false);
         let revived = spawn
             .spawn(SpawnRequest {
+                thread: ferrite_core::ThreadId::new(1),
                 provider: Provider::Claude,
                 model: None,
                 effort: None,
                 resume: Some("4f2a"),
+                permission_mode: None,
                 cwd: None,
                 name: None,
                 additional_directories: Vec::new(),
+                launch: Default::default(),
             })
             .expect("demo spawns never fail");
         let events = revived.events();

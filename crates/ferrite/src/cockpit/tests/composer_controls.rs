@@ -1,5 +1,64 @@
 use super::*;
 
+/// A background task can park a Thread without going through this window's
+/// close action. The surviving Pane must keep the keyboard and the same draft
+/// even when that removal changes its index in the core roster.
+#[gpui::test]
+fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("composer-background-close", 3);
+    let threads = core.threads().to_vec();
+    core.focus_thread(threads[2]);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    tick(cx);
+    cx.simulate_input("keep this draft");
+    tick(cx);
+
+    // Exercise the core mutation seen from the Server, without the UI close
+    // action (which already synchronizes its mirror).
+    view.update(cx, |view, _| {
+        view.cockpit.park_thread(threads[0]).unwrap();
+        assert_eq!(
+            view.panes[view.focused()].thread(),
+            Some(threads[2]),
+            "focus follows identity even before the next UI pump"
+        );
+    });
+    tick(cx);
+    let editor = cx
+        .debug_bounds("focused-prompt-editor")
+        .expect("the visible editor still owns focus after another Thread parks");
+    cx.simulate_click(editor.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("end");
+    cx.simulate_input(" typed");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let pane = &view.panes[view.pane_for(threads[2]).unwrap()];
+        assert_eq!(pane.composer.read(cx).text(), "keep this draft typed");
+        assert_eq!(view.panes[view.focused()].thread(), Some(threads[2]));
+    });
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(" pasted".into())));
+    cx.dispatch_action(Paste);
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(
+            view.panes[view.focused()].composer.read(cx).text(),
+            "keep this draft typed pasted"
+        );
+    });
+    assert!(
+        cx.debug_bounds("prompt-placeholder").is_none(),
+        "pasted text must be visible in the editor"
+    );
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        fake.sent.borrow().as_slice(),
+        ["keep this draft typed pasted"]
+    );
+}
+
 #[gpui::test]
 fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-followup-width", 1);
@@ -24,12 +83,10 @@ fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext
     tick(cx);
     let ghost = cx.debug_bounds("prompt-placeholder").unwrap();
     let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
-    );
+    // Terminal-native (WP-D): no send control shares the row; the ghost
+    // stays inside the editor, its accept hint whole.
     assert!(ghost.right() <= editor.right());
-    assert!(ghost.right() < send.left());
+    assert!(cx.debug_bounds("prompt-placeholder-hint").is_some());
     cx.simulate_keystrokes("tab");
     cx.run_until_parked();
     view.read_with(cx, |view, cx| {
@@ -39,9 +96,13 @@ fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext
     assert!(cx.debug_bounds("prompt-placeholder").is_none());
 }
 
+/// FL-10 / FL-11: no verb is drawn — ⏎ sends and esc interrupts, as in a
+/// terminal — and the keys act on the focused Pane only; an unfocused board
+/// cell draws no status line and keeps its draft. Focus never moves the
+/// editor's text origin.
 #[gpui::test]
-fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("composer-pointer-panes", 2);
+fn composer_keys_target_the_focused_pane_only(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("composer-keys-panes", 2);
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
     bind_production_keys(cx);
@@ -64,13 +125,26 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         });
         cx.notify();
     });
-    cx.run_until_parked();
+    tick(cx);
     let origin = cx.debug_bounds("prompt-editor").unwrap().left();
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])),
+    assert!(
+        cx.debug_bounds(format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])).leak())
+            .is_none(),
+        "no verb hint is drawn"
     );
-    cx.simulate_click(send.center(), gpui::Modifiers::none());
+    view.update_in(cx, |view, window, cx| {
+        view.focus_pane(1);
+        let focus = view.panes[1].composer.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    });
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("focused-prompt-editor").unwrap().left(),
+        origin,
+        "gaining focus must keep the editor's text origin fixed"
+    );
+    cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(fake.sent.borrow().as_slice(), ["send from pane two"]);
     view.read_with(cx, |view, cx| {
@@ -78,45 +152,20 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
         assert!(view.panes[1].composer.read(cx).is_empty());
     });
-    assert_eq!(
-        cx.debug_bounds("focused-prompt-editor").unwrap().left(),
-        origin,
-        "gaining focus must keep the editor's text origin fixed"
-    );
-
-    view.update(cx, |view, cx| {
-        view.focus_pane(0);
-        cx.notify();
-    });
-    tick(cx);
-    let stop = bounds(
-        cx,
-        format!("composer-stop-{:?}", PaneIdentity::Thread(threads[1])),
-    );
-    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.focused_thread(), Some(threads[1]));
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
     });
-
-    // At instrument size, actions share the metadata row so they do not
-    // narrow every line of a draft or force extra wrapped rows.
-    cx.simulate_resize(gpui::size(px(860.), px(500.)));
-    tick(cx);
-    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])),
-    );
-    assert!(editor.right() >= send.right() - px(1.));
-    assert!(editor.bottom() <= send.top());
 }
 
+/// While a turn runs, ⏎ queues the line behind it, and esc interrupts and
+/// keeps both the new line and the queue.
 #[gpui::test]
-fn composer_pointer_send_preserves_busy_queue_behavior(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("composer-pointer-queue", 1);
+fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("composer-escape-queue", 1);
     let thread = core.threads()[0];
     core.send(thread, "first".into());
     bind_production_keys(cx);
@@ -125,11 +174,8 @@ fn composer_pointer_send_preserves_busy_queue_behavior(cx: &mut TestAppContext) 
     tick(cx);
     cx.simulate_input("follow up");
     cx.run_until_parked();
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
-    );
-    cx.simulate_click(send.center(), gpui::Modifiers::none());
+    // Enter queues the line, as it always has.
+    cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(fake.sent.borrow().as_slice(), ["first"]);
     view.read_with(cx, |view, cx| {
@@ -139,28 +185,28 @@ fn composer_pointer_send_preserves_busy_queue_behavior(cx: &mut TestAppContext) 
         );
         assert!(view.panes[0].composer.read(cx).is_empty());
     });
-    // A disabled empty Send must not invoke Enter's separate unqueue path.
-    cx.simulate_click(send.center(), gpui::Modifiers::none());
+
+    // With a new line typed, esc interrupts and keeps it.
+    cx.simulate_input("and then this");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
     tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1);
+    assert_eq!(
+        fake.sent.borrow().as_slice(),
+        ["first"],
+        "esc sends nothing"
+    );
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit.thread(thread).unwrap().queued_all(),
-            ["follow up"]
-        );
-        assert!(view.panes[0].composer.read(cx).is_empty());
-    });
-    let stop = bounds(
-        cx,
-        format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
-    );
-    cx.simulate_click(stop.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(*fake.interrupts.borrow(), 1);
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued_all(),
             ["follow up"],
-            "the pointer Stop preserves existing interrupt/queue semantics"
+            "the interrupt keeps the queue"
+        );
+        assert_eq!(
+            view.panes[0].composer.read(cx).text(),
+            "and then this",
+            "the line survives the interrupt"
         );
     });
 }
@@ -173,7 +219,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
     core.set_effort(thread, Some("high".into())).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.update(cx, |view, cx| {
+    view.update_in(cx, |view, window, cx| {
         view.open_provider_picker(thread, cx);
         let pick = view
             .popover
@@ -191,7 +237,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
                 state: ferrite_core::RunState::Running,
             }),
         );
-        view.pick(pick, cx);
+        view.pick(pick, window, cx);
         let menu = view.popover.as_ref().expect("explanation stays open");
         assert_eq!(menu.rows[0].name, TUNING_BUSY_HINT);
         assert!(menu.rows.iter().all(|row| row.inert));
@@ -230,25 +276,43 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
     });
 }
 
+/// An effort change waiting on the provider holds the pickers, saying so,
+/// and lets go of them when the provider answers.
 #[gpui::test]
-fn composer_pointer_action_does_not_confirm_another_surface(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("composer-modal-guard", 2);
+fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("composer-pending-tuning", 1);
+    let thread = core.threads()[0];
+    *fake.effort_answers.borrow_mut() = Some(Vec::new());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    view.update_in(cx, |view, window, cx| {
-        view.panes[0]
-            .composer
-            .update(cx, |composer, cx| composer.set("must stay".into(), cx));
-        let identity = view.panes[0].identity;
-        view.settings_open = true;
-        view.composer_action(identity, false, window, cx);
-        assert!(view.settings_open);
-        view.settings_open = false;
-        // The Solo view shows only the focused Thread, so pane zero is hidden.
-        view.focus_pane(1);
-        view.composer_action(identity, false, window, cx);
-        assert_eq!(view.panes[0].composer.read(cx).text(), "must stay");
-        assert!(fake.sent.borrow().is_empty());
+    view.update(cx, |view, cx| {
+        view.pick_effort(thread, Some("high".into()), cx);
+        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), None);
+        view.open_effort_picker(thread, cx);
+        let menu = view.popover.as_ref().unwrap();
+        assert_eq!(menu.rows[0].name, TUNING_PENDING_HINT);
+        assert!(menu.rows.iter().all(|row| row.inert));
+    });
+    fake.effort_answers
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .remove(0)
+        .send(Ok(()))
+        .unwrap();
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        let menu = view
+            .popover
+            .as_ref()
+            .expect("the answer keeps the picker open");
+        assert_ne!(menu.rows[0].name, TUNING_PENDING_HINT);
+        assert!(menu.rows.iter().any(|row| !row.inert));
+        assert_eq!(
+            menu.rows.iter().find(|row| row.active).unwrap().name,
+            "High"
+        );
     });
 }
 
@@ -274,29 +338,43 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
         cx.simulate_resize(gpui::size(px(width), px(height)));
         view.update(cx, |view, cx| {
             view.focus_pane(0);
-            view.panes[0].composer.update(cx, |composer, cx| composer.set(draft.into(), cx));
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.set(draft.into(), cx));
             cx.notify();
         });
         tick(cx);
         let (rect, level, thread) = cx.update(|window, cx| {
             let view = view.read(cx);
             (
-                view.pane_rects(window).into_iter().find(|(index, _)| *index == 0).unwrap().1,
+                view.pane_rects(window)
+                    .into_iter()
+                    .find(|(index, _)| *index == 0)
+                    .unwrap()
+                    .1,
                 view.level_of(0, window),
                 view.panes[0].thread().unwrap(),
             )
         });
         if level != Level::Wall {
             let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-            let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
             assert!(
-                editor.top() >= px(rect.y + rect.h * (1. - crate::theme::COMPOSER_MAX_PANE_FRACTION)),
+                editor.top()
+                    >= px(rect.y + rect.h * (1. - crate::theme::COMPOSER_MAX_PANE_FRACTION)),
                 "typing preserves the majority of the Pane for context: {editor:?} / {rect:?}"
             );
             assert!(editor.bottom() <= px(rect.y + rect.h));
-            assert!(send.top() >= px(rect.y) && send.bottom() <= px(rect.y + rect.h));
+            // The verb hint rides the status line, which an L2 cell does not
+            // draw (terminal-native, WP-D); where it shows, it is in the Pane.
+            if let Some(send) =
+                cx.debug_bounds(format!("composer-send-{:?}", PaneIdentity::Thread(thread)).leak())
+            {
+                assert!(send.top() >= px(rect.y) && send.bottom() <= px(rect.y + rect.h));
+            }
         }
-        view.read_with(cx, |view, cx| assert_eq!(view.panes[0].composer.read(cx).text(), draft));
+        view.read_with(cx, |view, cx| {
+            assert_eq!(view.panes[0].composer.read(cx).text(), draft)
+        });
         view.update(cx, |view, cx| {
             view.cockpit.toggle_fullscreen();
             cx.notify();
@@ -304,8 +382,13 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
         cx.simulate_resize(gpui::size(px(1200.), px(900.)));
         tick(cx);
         let expanded = cx.debug_bounds("focused-prompt-editor").unwrap();
-        assert_eq!(expanded.size.height, px(crate::theme::COMPOSER_ROW_H * crate::composer::MAX_ROWS as f32));
-        view.read_with(cx, |view, cx| assert_eq!(view.panes[0].composer.read(cx).text(), draft));
+        assert_eq!(
+            expanded.size.height,
+            px(crate::theme::COMPOSER_ROW_H * crate::composer::MAX_ROWS as f32)
+        );
+        view.read_with(cx, |view, cx| {
+            assert_eq!(view.panes[0].composer.read(cx).text(), draft)
+        });
     }
 }
 
@@ -327,35 +410,68 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let (namespace, other_namespace) = view.read_with(cx, |view, _| {
-        (view.panes[0].text_namespace(), view.panes[1].text_namespace())
+        (
+            view.panes[0].text_namespace(),
+            view.panes[1].text_namespace(),
+        )
     });
     // Reproduce the actual compact surface: checkout metadata, a passed-test
     // badge, live reasoning and elapsed time, queue, and an eight-line draft.
-    fake.streams.borrow()[0].send(SessionEvent::ToolStarted {
-        id: "queue-test-run".into(),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "cargo test --lib"}),
-    }).unwrap();
-    fake.streams.borrow()[0].send(SessionEvent::ToolCompleted {
-        id: "queue-test-run".into(),
-        output: "test result: ok. 24 passed; 0 failed; 0 ignored".into(),
-        is_error: false,
-        result: ferrite_core::ToolResult::Opaque,
-    }).unwrap();
-    fake.streams.borrow()[0].send(SessionEvent::ReasoningSummaryDelta {
-        text: "Checking the remaining interactions".into(),
-        summary_index: 0,
-    }).unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "queue-test-run".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "cargo test --lib"}),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "queue-test-run".into(),
+            output: "test result: ok. 24 passed; 0 failed; 0 ignored".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "Checking the remaining interactions".into(),
+            summary_index: 0,
+        })
+        .unwrap();
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(), cx);
         });
     });
-    for (width, height) in [(860., 500.), (1000., 520.)] {
+    // The smallest 2×2 boards whose cells still read as transcripts (R12:
+    // 300 wide, 360 tall); anything smaller is the wall, with no Composer.
+    for (width, height) in [(900., 790.), (1000., 800.)] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);
         let queue = bounds(cx, format!("composer-queue-{namespace}"));
-        let other_queue = bounds(cx, format!("composer-queue-{other_namespace}"));
+        // Fix 5: the queue belongs to the live Composer. The unfocused
+        // cell keeps its eight prompts and says `8 queued` on its flat line.
+        assert!(
+            cx.debug_bounds(format!("composer-queue-{other_namespace}").leak())
+                .is_none(),
+            "an unfocused cell draws no queue rows"
+        );
+        let other_cell = cx.update(|window, cx| {
+            view.read(cx)
+                .pane_rects(window)
+                .into_iter()
+                .find(|(at, _)| *at == 1)
+                .unwrap()
+                .1
+        });
+        let facts = cx
+            .debug_bounds("composer-flat-facts")
+            .expect("the flat line counts the queue");
+        assert!(
+            facts.left() >= px(other_cell.x) && facts.right() <= px(other_cell.x + other_cell.w),
+            "{facts:?} rides the unfocused cell {other_cell:?}"
+        );
+        assert_eq!(crate::pane::flat_facts_text(0, 8), "8 queued");
         cx.simulate_event(gpui::ScrollWheelEvent {
             position: queue.center(),
             delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(1000.))),
@@ -363,16 +479,19 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         });
         tick(cx);
         let latest = bounds(cx, format!("queue-row-{namespace}-0"));
-        let other_latest = bounds(cx, format!("queue-row-{other_namespace}-0"));
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-        let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
-        assert!(queue.size.height <= px(crate::theme::CELL_HEADER_H + 1.));
+        // The focused cell's status line stands under its band (FL-11).
+        let send = cx.debug_bounds("composer-meta").expect("the status line");
+        assert!(
+            queue.size.height
+                <= px(crate::theme::COMPOSER_QUEUE_ROWS as f32 * crate::theme::QUEUE_ROW_H + 1.)
+        );
         assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());
         assert!(queue.bottom() <= editor.top());
-        if width == 860. {
-            let progress = cx.debug_bounds("progress-caption-Checking the remaining interactions").unwrap();
+        if width == 900. {
+            let progress = bounds(cx, format!("transcript-progress-{namespace}"));
             assert!(
-                progress.bottom() <= queue.top() - px(crate::theme::COMPOSER_PAD_T + 1.),
+                progress.bottom() <= queue.top() - px(crate::theme::COMPOSER_PAD_Y),
                 "the complete live status stays above the Composer rule: {progress:?} / {queue:?}"
             );
             assert!(progress.size.height <= px(crate::theme::COMPOSER_ROW_H));
@@ -389,12 +508,35 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             oldest.top() >= queue.top() - px(1.) && oldest.bottom() <= queue.bottom() + px(1.),
             "oldest {oldest:?} must fit queue {queue:?}"
         );
+        // Focus the other cell: its queue comes back at its own position
+        // — the latest on top — untouched by this Pane's scroll.
+        let focus = |index: usize, cx: &mut gpui::VisualTestContext| {
+            view.update_in(cx, |view, window, cx| {
+                view.focus_pane(index);
+                let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                cx.notify();
+            });
+            tick(cx);
+        };
+        focus(1, cx);
+        let other_queue = bounds(cx, format!("composer-queue-{other_namespace}"));
         let unaffected = bounds(cx, format!("queue-row-{other_namespace}-0"));
-        assert_eq!(unaffected, other_latest, "another Pane keeps its own scroll position");
-        assert!(unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom());
+        assert!(
+            unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom(),
+            "another Pane keeps its own scroll position: {unaffected:?} in {other_queue:?}"
+        );
+        assert!(
+            cx.debug_bounds(format!("composer-queue-{namespace}").leak())
+                .is_none(),
+            "and the Pane that lost focus folds its queue"
+        );
+        focus(0, cx);
     }
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| composer.set(String::new(), cx));
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set(String::new(), cx));
     });
     tick(cx);
     cx.simulate_keystrokes("backspace");
@@ -402,7 +544,10 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].composer.read(cx).is_empty());
         assert_eq!(view.cockpit.thread(thread).unwrap().queued_all().len(), 7);
-        assert_eq!(view.cockpit.thread(thread).unwrap().queued(), Some("Queued follow-up 6"));
+        assert_eq!(
+            view.cockpit.thread(thread).unwrap().queued(),
+            Some("Queued follow-up 6")
+        );
         assert_eq!(view.cockpit.thread(other).unwrap().queued_all().len(), 8);
     });
     cx.simulate_keystrokes("enter");

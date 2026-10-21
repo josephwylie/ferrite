@@ -14,16 +14,28 @@ pub enum Phase {
 }
 
 impl Phase {
+    /// The working line's word. Thinking and answering are both work: the
+    /// line says `Working` for either, and names only the phases that are
+    /// something else (compacting, retrying, waiting).
     pub fn label(self) -> &'static str {
         match self {
-            Self::Working => "Working",
-            Self::Thinking => "Thinking",
-            Self::Answering => "Answering",
+            Self::Working | Self::Thinking | Self::Answering => "Working",
             Self::Compacting => "Compacting context",
             Self::Retrying => "Retrying",
             Self::Waiting => "Waiting",
         }
     }
+}
+
+/// The waits a provider reports while a Decision stands (Codex's
+/// `waitingOnApproval`, `waitingOnUserInput`): the Decision row is their
+/// whole account, so they leave no notice in the transcript.
+pub const APPROVAL_NEEDED: &str = "Approval needed";
+pub const ANSWER_NEEDED: &str = "Answer needed";
+
+/// Whether a wait is one of a standing Decision's (`APPROVAL_NEEDED`).
+pub fn decision_wait(phase: Phase, detail: &str) -> bool {
+    phase == Phase::Waiting && (detail == APPROVAL_NEEDED || detail == ANSWER_NEEDED)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +279,20 @@ impl Progress {
     pub fn summary(&mut self, text: &str) {
         self.summary = headline(text);
     }
+
+    /// Raw thinking (Claude's) as the live status: only a heading it bolds
+    /// (`**Planning the fix**`, as Codex's summaries do). Its first sentence
+    /// is the model talking to itself, not a status, so without a heading
+    /// the line keeps the turn's verb (`Reticulating…`).
+    pub fn thinking(&mut self, text: &str) {
+        self.thought_heading(bold_heading(text));
+    }
+
+    /// `thinking` for a thought whose heading was read as it streamed
+    /// (`HeadingScan`).
+    pub(crate) fn thought_heading(&mut self, heading: Option<String>) {
+        self.summary = heading.unwrap_or_default();
+    }
     pub fn caption(&self) -> Option<String> {
         let phase = self.phase?;
         if matches!(phase, Phase::Retrying | Phase::Compacting | Phase::Waiting) {
@@ -344,6 +370,133 @@ impl Progress {
     }
 }
 
+/// An elapsed time in compact units, the way the turn stamp and the working
+/// line print it: `0.3s`, `8.2s`, `42s`, `2m14s`. It never reads `0.0s`: a
+/// blip rounds up to the first tenth.
+pub fn duration_label(elapsed: std::time::Duration) -> String {
+    let secs = elapsed.as_secs_f64().max(0.1);
+    if secs < 10.0 {
+        format!("{secs:.1}s")
+    } else if secs < 60.0 {
+        format!("{}s", secs as u64)
+    } else if secs < 3600.0 {
+        let whole = secs as u64;
+        format!("{}m{:02}s", whole / 60, whole % 60)
+    } else {
+        let whole = secs as u64;
+        format!("{}h{:02}m", whole / 3600, whole % 3600 / 60)
+    }
+}
+
+/// The local wall clock as a turn's end stamps it (`7:41 pm`): the window's
+/// bottom bar reads it. Through `clock`, so a fixture freezes it.
+pub fn clock_label() -> String {
+    crate::clock::now_label()
+}
+
+/// A token count the way Claude Code prints it: `620`, `1.8k`, `3.2k`,
+/// `12k` (one decimal under ten thousand, whole thousands from there).
+pub fn token_label(tokens: u64) -> String {
+    if tokens >= 9_950 {
+        format!("{}k", tokens.max(10_000) / 1000)
+    } else if tokens >= 1000 {
+        format!("{:.1}k", tokens as f64 / 1000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// The working line's caption when the provider names no phase of its own:
+/// a Claude-Code-style verb, picked once per turn (`spinner_verb`).
+pub const SPINNER_VERBS: &[&str] = &[
+    "Reticulating",
+    "Instrumenting",
+    "Pondering",
+    "Percolating",
+    "Simmering",
+    "Tinkering",
+    "Untangling",
+    "Calibrating",
+    "Assembling",
+    "Composing",
+    "Distilling",
+    "Forging",
+    "Honing",
+    "Mulling",
+    "Noodling",
+    "Spelunking",
+    "Synthesizing",
+    "Whittling",
+    "Brewing",
+    "Cogitating",
+];
+
+/// The verb a turn's working line wears (`Reticulating…`): chosen from
+/// `SPINNER_VERBS` by the Thread and the turn's ordinal, so it holds still
+/// for the whole turn and differs from one turn to the next.
+pub fn spinner_verb(thread: u64, turn: usize) -> &'static str {
+    let mut hash = thread
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add((turn as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+    hash ^= hash >> 31;
+    SPINNER_VERBS[(hash % SPINNER_VERBS.len() as u64) as usize]
+}
+
+/// A settled call shows its time only from two seconds up (the prototype's
+/// `Bash(…) 2s`, and no time on a one-second `Read`); anything quicker is
+/// noise on every row.
+pub const DURATION_MIN_MS: u128 = 2_000;
+
+/// A live counter's reading, ticked at 1Hz: whole seconds, floored, so it
+/// never runs ahead of the clock — `0s` … `59s`, then `1m04s`, and from an
+/// hour `3h11m` (never `191m16s`). A frozen fact keeps its tenths
+/// (`duration_label`).
+pub fn live_seconds(elapsed: std::time::Duration) -> String {
+    let whole = elapsed.as_secs();
+    if whole < 60 {
+        format!("{whole}s")
+    } else if whole < 3600 {
+        format!("{}m{:02}s", whole / 60, whole % 60)
+    } else {
+        format!("{}h{:02}m", whole / 3600, whole % 3600 / 60)
+    }
+}
+
+/// A settled span, printed once the work is over: `<1s` for anything under
+/// a second (never `0s`, which reads as nothing happened), whole seconds
+/// under a minute (`3s`), then minutes and seconds apart — `3m 12s` — the
+/// way a turn's stamp reads (a live counter keeps `1m04s`).
+pub fn settled_duration_label(elapsed: std::time::Duration) -> String {
+    let whole = elapsed.as_secs();
+    if elapsed < std::time::Duration::from_secs(1) {
+        "<1s".to_string()
+    } else if whole < 60 {
+        format!("{whole}s")
+    } else if whole < 3600 {
+        format!("{}m {}s", whole / 60, whole % 60)
+    } else {
+        format!("{}h {}m", whole / 3600, whole % 3600 / 60)
+    }
+}
+
+/// A live counter coarsened for a Pane that does not hold the keyboard:
+/// whole minutes from a minute up (`1m`), whole seconds under (`8s`).
+pub fn coarse_seconds(elapsed: std::time::Duration) -> String {
+    let whole = elapsed.as_secs();
+    if whole < 60 {
+        format!("{whole}s")
+    } else if whole < 3600 {
+        format!("{}m", whole / 60)
+    } else {
+        format!("{}h{:02}m", whole / 3600, whole % 3600 / 60)
+    }
+}
+
+/// The bound on a one-line row's text: wider than any row can show, so a
+/// row cuts its line by width (an ellipsis at its edge) and this only caps
+/// what a pathological line costs to shape. Never a display length.
+pub const ROW_CHARS: usize = 256;
+
 /// A status line is one readable line. Bound Unicode by characters, and
 /// remove control characters. ANSI CSI/OSC escapes are discarded too.
 pub fn one_line(text: &str, max: usize) -> String {
@@ -374,12 +527,8 @@ pub fn one_line(text: &str, max: usize) -> String {
 /// Only a provider-authored first paragraph/heading is used. No summarizer.
 pub fn headline(text: &str) -> String {
     // Codex's CLI uses the first complete bold heading as its live status.
-    if let Some((_, rest)) = text.split_once("**") {
-        if let Some((heading, _)) = rest.split_once("**") {
-            if !heading.trim().is_empty() {
-                return one_line(heading, 160);
-            }
-        }
+    if let Some(heading) = bold_heading(text) {
+        return heading;
     }
     let text = text.trim_start().trim_start_matches('#').trim_start();
     let line = text
@@ -387,6 +536,57 @@ pub fn headline(text: &str) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or("");
     one_line(line.trim_matches(|c| matches!(c, '*' | '_' | '`')), 160)
+}
+
+/// The first complete bold heading in `text` (`**Instrumenting**`).
+fn bold_heading(text: &str) -> Option<String> {
+    let (_, rest) = text.split_once("**")?;
+    let (heading, _) = rest.split_once("**")?;
+    (!heading.trim().is_empty()).then(|| one_line(heading, 160))
+}
+
+/// `bold_heading` over a text that only grows, as a thought streams: each
+/// read covers what was appended since the last, so a thought of n deltas
+/// costs its length once, not n times. Once both marks have arrived the
+/// heading can no longer change.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HeadingScan {
+    /// Bytes searched so far; a mark may straddle the last of them.
+    read: usize,
+    /// Where the heading begins, once its opening mark has arrived.
+    open: Option<usize>,
+    /// The answer, once the closing mark has arrived.
+    found: Option<Option<String>>,
+}
+
+impl HeadingScan {
+    /// The first complete bold heading in `text`, which extends the text
+    /// this scan last read.
+    pub(crate) fn read(&mut self, text: &str) -> Option<String> {
+        loop {
+            if let Some(found) = &self.found {
+                return found.clone();
+            }
+            let mut from = self.read.saturating_sub(1).max(self.open.unwrap_or(0));
+            while !text.is_char_boundary(from) {
+                from -= 1;
+            }
+            let Some(at) = text[from..].find("**").map(|at| from + at) else {
+                self.read = text.len();
+                return None;
+            };
+            match self.open {
+                None => {
+                    self.open = Some(at + 2);
+                    self.read = at + 2;
+                }
+                Some(open) => {
+                    let heading = &text[open..at];
+                    self.found = Some((!heading.trim().is_empty()).then(|| one_line(heading, 160)));
+                }
+            }
+        }
+    }
 }
 
 fn strip_ansi(text: &str) -> String {
@@ -440,5 +640,104 @@ impl ProgressEvent {
                 .sum(),
         }
         .saturating_add(64)
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn durations_read_in_compact_units() {
+        assert_eq!(duration_label(Duration::from_millis(340)), "0.3s");
+        assert_eq!(duration_label(Duration::from_millis(8_200)), "8.2s");
+        assert_eq!(duration_label(Duration::from_secs(42)), "42s");
+        assert_eq!(duration_label(Duration::from_secs(134)), "2m14s");
+    }
+
+    /// The working line says `Working` for thinking and answering alike,
+    /// and names only the phases that are something else.
+    #[test]
+    fn a_heading_scan_reads_a_growing_text_as_the_whole_text_reads() {
+        const PIECES: &[&str] = &["*", "**", "***", " ", "word", "界", "\n", "Plan", "  "];
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as usize % n
+        };
+        for _ in 0..2000 {
+            let mut scan = HeadingScan::default();
+            let mut text = String::new();
+            for _ in 0..next(12) {
+                for _ in 0..1 + next(3) {
+                    text.push_str(PIECES[next(PIECES.len())]);
+                }
+                assert_eq!(scan.read(&text), bold_heading(&text), "{text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn thinking_and_answering_read_as_working() {
+        assert_eq!(Phase::Thinking.label(), "Working");
+        assert_eq!(Phase::Answering.label(), "Working");
+        assert_eq!(Phase::Working.label(), "Working");
+        assert_eq!(Phase::Compacting.label(), "Compacting context");
+        assert_eq!(Phase::Retrying.label(), "Retrying");
+        assert_eq!(Phase::Waiting.label(), "Waiting");
+    }
+
+    #[test]
+    fn a_live_counter_floors_to_whole_seconds() {
+        assert_eq!(live_seconds(Duration::from_millis(340)), "0s");
+        assert_eq!(live_seconds(Duration::from_millis(1_600)), "1s");
+        assert_eq!(live_seconds(Duration::from_millis(8_200)), "8s");
+        assert_eq!(live_seconds(Duration::from_millis(9_900)), "9s");
+        assert_eq!(live_seconds(Duration::from_millis(59_999)), "59s");
+        assert_eq!(live_seconds(Duration::from_secs(64)), "1m04s");
+        assert_eq!(live_seconds(Duration::from_secs(134)), "2m14s");
+    }
+
+    #[test]
+    fn a_settled_span_never_reads_zero() {
+        assert_eq!(settled_duration_label(Duration::ZERO), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(200)), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(300)), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(999)), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_secs(1)), "1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(3_800)), "3s");
+        assert_eq!(settled_duration_label(Duration::from_secs(64)), "1m 4s");
+        assert_eq!(settled_duration_label(Duration::from_secs(192)), "3m 12s");
+    }
+
+    #[test]
+    fn an_unfocused_counter_coarsens_past_a_minute() {
+        assert_eq!(coarse_seconds(Duration::from_secs(8)), "8s");
+        assert_eq!(coarse_seconds(Duration::from_secs(75)), "1m");
+        assert_eq!(live_seconds(Duration::from_secs(75)), "1m15s");
+    }
+
+    #[test]
+    fn token_counts_read_compactly() {
+        assert_eq!(token_label(620), "620");
+        assert_eq!(token_label(1_800), "1.8k");
+        assert_eq!(token_label(3_200), "3.2k");
+        assert_eq!(token_label(1_100), "1.1k");
+        assert_eq!(token_label(4_100), "4.1k");
+        assert_eq!(token_label(9_960), "10k");
+        assert_eq!(token_label(12_400), "12k");
+    }
+
+    #[test]
+    fn a_turn_keeps_one_spinner_verb() {
+        let first = spinner_verb(7, 1);
+        assert_eq!(spinner_verb(7, 1), first);
+        assert!(SPINNER_VERBS.contains(&first));
+        let verbs: std::collections::BTreeSet<_> =
+            (0..12).map(|turn| spinner_verb(7, turn)).collect();
+        assert!(verbs.len() > 1, "turns vary their verb");
     }
 }

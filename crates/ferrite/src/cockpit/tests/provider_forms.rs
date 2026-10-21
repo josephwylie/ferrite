@@ -51,7 +51,6 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
         v.cockpit
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -73,6 +72,90 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
         matches!(&answers[0].1, DecisionAnswer::Questions{answers} if answers[0].picks==[0] && answers[0].other.is_none()),
         "shared UI must send normalized answers, never provider response JSON"
     );
+}
+
+#[gpui::test]
+fn async_question_sends_picks_and_typed_answers_while_work_continues(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("async-question-send", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
+    for typed in [false, true] {
+        let SessionEvent::DecisionRequested { mut decision } = question(if typed {
+            "typed-answer"
+        } else {
+            "picked-answer"
+        }) else {
+            unreachable!()
+        };
+        decision.delivery = ferrite_core::DecisionDelivery::Async;
+        decision.tool_name = "request_user_input_async".into();
+        let DecisionKind::Questions(questions) = &mut decision.kind else {
+            unreachable!()
+        };
+        questions[0].question = "With the updated window open, can you type into the previously broken prompt and see pasted text normally?".into();
+        questions[0].header.clear();
+        questions[0].options[0].label = "Yes, typing and paste are visible".into();
+        questions[0].options[1].label = "The prompt is still broken".into();
+        for option in &mut questions[0].options {
+            option.description.clear();
+        }
+        fake.streams.borrow()[0]
+            .send(SessionEvent::DecisionRequested { decision })
+            .unwrap();
+        tick(cx);
+        let serial = view.read_with(cx, |v, _| {
+            v.cockpit
+                .thread(v.panes[0].thread().unwrap())
+                .unwrap()
+                .pending_decisions()
+                .last()
+                .unwrap()
+                .handle
+                .serial
+        });
+        if typed {
+            cx.simulate_keystrokes("3");
+            cx.simulate_input("Typing and paste work now");
+        } else {
+            cx.simulate_keystrokes("1");
+        }
+        cx.run_until_parked();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "Still checking the input controls.\n".repeat(50),
+            })
+            .unwrap();
+        tick(cx);
+        let submit = bounds(cx, format!("request-submit-1-{serial}"));
+        cx.simulate_click(submit.center(), gpui::Modifiers::none());
+        tick(cx);
+        let delivered = fake.answered.borrow();
+        assert_eq!(
+            delivered.len(),
+            usize::from(typed) + 1,
+            "Send must deliver the answer while the agent works"
+        );
+        let DecisionAnswer::Questions { answers } = &delivered.last().unwrap().1 else {
+            panic!("expected a question answer");
+        };
+        if typed {
+            assert_eq!(
+                answers[0].other.as_deref(),
+                Some("Typing and paste work now")
+            );
+        } else {
+            assert_eq!(answers[0].picks, [0]);
+        }
+        let id = delivered.last().unwrap().0.clone();
+        drop(delivered);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(
+                ferrite_core::activity::ActivityEvent::DecisionReply { id, error: None },
+            ))
+            .unwrap();
+        tick(cx);
+    }
 }
 
 /// Regression: the live Claude question that crashed Ferrite twice on Windows.
@@ -179,7 +262,6 @@ fn contract_mcp_form_defaults_submit_typed_values(cx: &mut TestAppContext) {
         v.cockpit
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -246,7 +328,6 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx: &mu
         v.cockpit
             .thread(v.panes[0].thread().unwrap())
             .unwrap()
-            .activity()
             .pending_decisions()[0]
             .handle
             .serial
@@ -277,11 +358,14 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx: &mu
     ));
 }
 
+/// An approval offers exactly three options (the terminal-native ruling):
+/// the provider's standing answer is option 2, and where a plain Allow is
+/// forbidden it goes back as the provider's own opaque choice, unchanged.
 #[gpui::test]
-fn contract_every_native_approval_choice_is_selectable(cx: &mut TestAppContext) {
+fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("approval-choice-ui", 1);
     bind_production_keys(cx);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1100.), px(800.)));
     let SessionEvent::DecisionRequested { mut decision } = typed_decision(DecisionKind::Approval)
     else {
@@ -304,14 +388,28 @@ fn contract_every_native_approval_choice_is_selectable(cx: &mut TestAppContext) 
         .send(SessionEvent::DecisionRequested { decision })
         .unwrap();
     tick(cx);
-    let choice = cx
-        .debug_bounds("approval-choice-1")
-        .expect("all native choices need a shared labeled button");
+    let (thread, serial) = view.read_with(cx, |v, _| {
+        let thread = v.panes[0].thread().unwrap();
+        let serial = v.cockpit.thread(thread).unwrap().pending_decisions()[0]
+            .handle
+            .serial;
+        (thread, serial)
+    });
+    let allow = debug_bounds(cx, format!("request-allow-{}-{serial}", thread.get()))
+        .expect("option 1 is always drawn");
+    cx.simulate_click(allow.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        fake.answered.borrow().is_empty(),
+        "a forbidden plain Allow cannot act"
+    );
+    let choice = debug_bounds(cx, format!("request-always-{}-{serial}", thread.get()))
+        .expect("option 2 carries the standing answer");
     cx.simulate_click(choice.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(
-        matches!(&fake.answered.borrow()[0].1,DecisionAnswer::Choose{value} if *value==serde_json::json!({"opaque":"second"})),
-        "opaque native choices survive UI unchanged even when plain Allow is forbidden"
+        matches!(&fake.answered.borrow()[0].1,DecisionAnswer::Choose{value} if *value==serde_json::json!({"opaque":"first"})),
+        "the opaque standing choice survives unchanged even when plain Allow is forbidden"
     );
 }
 
@@ -355,17 +453,14 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
 
         let card = cx.debug_bounds("project-editor-card").unwrap();
         let confirm = cx.debug_bounds("project-confirm").unwrap();
-        let add = cx.debug_bounds("project-Add Directory").unwrap();
-        for action in [confirm, add] {
-            assert!(
-                action.size.height > px(0.)
-                    && action.left() >= card.left()
-                    && action.top() >= card.top()
-                    && action.right() <= card.right()
-                    && action.bottom() <= card.bottom(),
-                "the full footer action must be inside the compact card: {action:?}, {card:?}"
-            );
-        }
+        assert!(
+            confirm.size.height > px(0.)
+                && confirm.left() >= card.left()
+                && confirm.top() >= card.top()
+                && confirm.right() <= card.right()
+                && confirm.bottom() <= card.bottom(),
+            "the full footer action must be inside the compact card: {confirm:?}, {card:?}"
+        );
         let first_id = format!("project-directory:{}", directories[0].display());
         let first = debug_bounds(cx, first_id.clone()).unwrap();
         assert!(first.top() >= card.top() && first.bottom() < confirm.top());
@@ -377,7 +472,18 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
         });
         tick(cx);
         assert_eq!(cx.debug_bounds("project-confirm").unwrap(), confirm);
-        assert_eq!(cx.debug_bounds("project-Add Directory").unwrap(), add);
+        // `+ Add directory` rides the body under the list: scrolled to the
+        // end, it sits under the last directory and above the pinned footer.
+        let add = cx
+            .debug_bounds("project-add-directory")
+            .expect("the add control follows the list");
+        assert!(
+            add.size.height > px(0.)
+                && add.left() >= card.left()
+                && add.right() <= card.right()
+                && add.bottom() < confirm.top(),
+            "{add:?} inside {card:?}, above {confirm:?}"
+        );
         let last = debug_bounds(
             cx,
             format!(
@@ -387,6 +493,10 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
         )
         .expect("scrolling reveals the last directory");
         assert!(last.top() >= card.top() && last.bottom() < confirm.top());
+        assert!(
+            last.bottom() <= add.top(),
+            "the add control is under the list"
+        );
         if let Some(scrolled_first) = debug_bounds(cx, first_id) {
             assert!(
                 scrolled_first.top() < first.top(),
@@ -413,4 +523,43 @@ fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAp
             project
         }));
     }
+}
+
+/// A blocking question leaves no notice: the Decision itself says what
+/// waits (the transcript's tail row while it pends), so no `asks 1
+/// question` line repeats it above.
+#[gpui::test]
+fn a_blocking_question_leaves_no_notice_row(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("question-notice-width", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    let text = "Which details should remain visible when the transcript is narrowed to a single \
+                column, and should the tool rows keep their durations or give them up first?";
+    let q = ferrite_core::questions::Question {
+        id: Some("q".into()),
+        question: text.into(),
+        header: String::new(),
+        multi_select: false,
+        secret: false,
+        allow_other: false,
+        options: vec![ferrite_core::questions::Choice {
+            label: "Keep".into(),
+            description: String::new(),
+            preview: None,
+        }],
+    };
+    fake.streams.borrow()[0]
+        .send(typed_decision(DecisionKind::Questions(vec![q])))
+        .unwrap();
+    tick(cx);
+    view.read_with(cx, |v, _| {
+        let thread = v.cockpit.thread(v.panes[0].thread().unwrap()).unwrap();
+        assert!(
+            !thread.transcript().blocks().iter().any(
+                |block| matches!(&block.body, ferrite_core::transcript::Body::Notice(line)
+                    if line.starts_with("asks "))
+            ),
+            "no notice repeats the question"
+        );
+    });
 }

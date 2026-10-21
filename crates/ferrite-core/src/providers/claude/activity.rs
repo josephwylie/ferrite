@@ -50,7 +50,13 @@ pub(super) struct Decoder {
     seen_child_frames: HashSet<String>,
     frame_order: VecDeque<String>,
     excluded_tasks: HashSet<String>,
+    /// Shell tasks serving a foreground Bash call: the call's own row shows
+    /// it running (`shell_output` streams its output there), so it is no
+    /// background task. A task the CLI backgrounds later leaves the set.
+    foreground_shells: HashSet<String>,
     main_stream_message: Option<String>,
+    /// Main's streaming `show_visual` inputs, drawn as they arrive.
+    visual_drafts: super::drafts::Drafts,
     main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
     main_stream_order: VecDeque<(String, u64)>,
     seen_main_frames: HashSet<String>,
@@ -122,6 +128,15 @@ impl Usage {
 }
 
 impl Decoder {
+    /// The CLI's task id for `key`, which `stop_task` takes: a Subagent is
+    /// known by several aliases, and only its task one can stop it.
+    pub(super) fn task_of(&self, key: &AgentKey) -> Option<String> {
+        self.aliases.iter().find_map(|(alias, target)| match alias {
+            Alias::Task(id) if target == key => Some(id.clone()),
+            _ => None,
+        })
+    }
+
     /// The host successfully answered this request. Actual execution state
     /// still comes from the provider; a sent answer is not proof of progress.
     pub(super) fn decision_resolved(&mut self, id: &str) {
@@ -193,6 +208,9 @@ impl Decoder {
                 five_hour: self.rate_limits.0,
                 weekly: self.rate_limits.1,
             });
+        }
+        if wire::schedules_work(&value) {
+            events.push(SessionEvent::ScheduledWork { pending: true });
         }
         match string(&value, "type") {
             Some("system") if string(&value, "subtype") == Some("init") => {
@@ -351,6 +369,9 @@ impl Decoder {
     /// Extra SDK observations share the execution path and attribution used
     /// for tools. Completed message snapshots are already decoded by message().
     fn progress(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        if self.foreground_shell(value) {
+            return;
+        }
         let extras: Vec<_> = wire::parse_events_value(value)
             .into_iter()
             .filter(|event| {
@@ -383,6 +404,48 @@ impl Decoder {
                     }
                 }
             }
+        }
+    }
+
+    /// Whether `value` is a task event of a foreground Bash call's shell
+    /// (`task_type` `local_bash`, not backgrounded), which no background
+    /// chip shows: the call's row is already running.
+    fn foreground_shell(&mut self, value: &Value) -> bool {
+        if value["type"] != "system" {
+            return false;
+        }
+        let Some(task) = value["task_id"].as_str() else {
+            return false;
+        };
+        let backgrounded = |value: &Value| {
+            value["is_backgrounded"] == true
+                || value["patch"]["is_backgrounded"] == true
+                || value["patch"]["isBackgrounded"] == true
+        };
+        match value["subtype"].as_str() {
+            Some("task_started") => {
+                let foreground = value["task_type"] == "local_bash"
+                    && !backgrounded(value)
+                    && value["tool_use_id"].is_string();
+                if foreground {
+                    self.foreground_shells.insert(task.to_owned());
+                }
+                foreground
+            }
+            Some("task_progress" | "task_notification" | "task_updated")
+                if self.foreground_shells.contains(task) =>
+            {
+                if backgrounded(value) {
+                    // Sent to the background mid-run: from now on it is one.
+                    self.foreground_shells.remove(task);
+                    return false;
+                }
+                if value["subtype"] == "task_notification" {
+                    self.foreground_shells.remove(task);
+                }
+                true
+            }
+            _ => false,
         }
     }
 
@@ -760,11 +823,7 @@ impl Decoder {
                     let Some(tool_id) = string(block, "tool_use_id") else {
                         continue;
                     };
-                    let output = match block.get("content") {
-                        Some(Value::String(text)) => text.clone(),
-                        Some(other) => other.to_string(),
-                        None => String::new(),
-                    };
+                    let output = wire::tool_result_text(block.get("content"));
                     let is_error = block["is_error"].as_bool().unwrap_or(false);
                     let structured = structured_result;
                     let result = wire::parse_tool_result(structured);
@@ -881,6 +940,9 @@ impl Decoder {
     /// block can replace the live stream. A full frame with no observed stream
     /// still keeps its outer delivery UUID.
     fn main_stream(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        if let Some(draft) = self.visual_drafts.observe(value) {
+            events.push(draft);
+        }
         match value["event"]["type"].as_str() {
             Some("message_start") => {
                 self.main_stream_message = value["event"]["message"]["id"]
@@ -1433,6 +1495,34 @@ mod tests {
             .flat_map(|line| decoder.decode(line))
             .collect();
         (decoder, events)
+    }
+
+    /// Work the CLI will start itself, which Ferrite cannot watch: a
+    /// wakeup, cron or monitor the agent scheduled, or an ambient task.
+    #[test]
+    fn scheduling_tools_and_ambient_tasks_are_scheduled_work() {
+        let tool = |name: &str| {
+            json!({"type":"assistant","session_id":"s1","parent_tool_use_id":null,
+                "message":{"id":"msg_1","role":"assistant","content":[
+                    {"type":"tool_use","id":format!("toolu_{name}"),"name":name,"input":{}}]}})
+            .to_string()
+        };
+        let task = |ambient: bool| {
+            json!({"type":"system","subtype":"task_started","session_id":"s1",
+                "task_id":format!("task_{ambient}"),"description":"watch","ambient":ambient})
+            .to_string()
+        };
+        let scheduled = |line: String| {
+            Decoder::default()
+                .decode(&line)
+                .contains(&SessionEvent::ScheduledWork { pending: true })
+        };
+        for name in ["ScheduleWakeup", "CronCreate", "Monitor"] {
+            assert!(scheduled(tool(name)), "{name}");
+        }
+        assert!(scheduled(task(true)), "an ambient task");
+        assert!(!scheduled(tool("Bash")), "an ordinary tool");
+        assert!(!scheduled(task(false)), "a task Ferrite shows");
     }
 
     #[test]

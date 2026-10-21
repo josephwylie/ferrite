@@ -19,6 +19,7 @@ use crate::{
     text::node::LinkMark,
     text::selection::word_range_at,
     text::state::LineSpan,
+    text::style::{INLINE_CODE_MARK, InlineCodeWash},
     text::text_view::{LinkClickHandlerFn, handle_link_click},
     text_selection::TextSelectionDocumentRange,
 };
@@ -33,6 +34,12 @@ pub(super) struct Inline {
     highlights: Vec<(Range<usize>, HighlightStyle)>,
     styled_text: StyledText,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    // Ferrite: inline code's own family and rounded ground (`code_style`).
+    code_font: Option<SharedString>,
+    code_wash: Option<InlineCodeWash>,
+    // Ferrite: underlines drawn per wrapped line, trimmed of trailing
+    // whitespace, instead of by the shaped runs (`paint_underlines`).
+    underlines: Vec<(Range<usize>, gpui::UnderlineStyle)>,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -277,6 +284,88 @@ fn selection_for_document_range(
     (start < end).then(|| (start..end).into())
 }
 
+/// The per-line boxes a byte range occupies in a wrapped layout.
+fn code_line_bounds(
+    text: &str,
+    text_layout: &TextLayout,
+    range: Range<usize>,
+    line_height: Pixels,
+) -> Vec<Bounds<Pixels>> {
+    let mut lines: Vec<Bounds<Pixels>> = Vec::new();
+    let end = range.end.min(text.len());
+    let mut offset = range.start.min(end);
+    for c in text[offset..end].chars() {
+        let next = offset + c.len_utf8();
+        if let Some(mut pos) = text_layout.position_for_index(offset) {
+            let next_pos = text_layout.position_for_index(next);
+            // At a soft wrap the index resolves to the end of the earlier
+            // line, but the glyph is drawn at the start of the next one.
+            if let Some(next_pos) = next_pos.filter(|next_pos| next_pos.y > pos.y) {
+                pos = point(text_layout.bounds().left(), next_pos.y);
+            }
+            let right = next_pos
+                .filter(|next_pos| next_pos.y == pos.y)
+                .map(|next_pos| next_pos.x)
+                .unwrap_or(pos.x + line_height.half());
+            let glyph = Bounds::from_corners(pos, point(right, pos.y + line_height));
+            match lines.last_mut() {
+                Some(line) if line.top() == pos.y => *line = line.union(&glyph),
+                _ => lines.push(glyph),
+            }
+        }
+        offset = next;
+    }
+    lines
+}
+
+/// Ferrite: the per-line spans an underline over `range` draws, as `(line
+/// top, left, right)`, each ending at the right edge of its line's last
+/// non-whitespace glyph — a wrapped link's underline never runs on under
+/// the space it wrapped at. `position` is the layout's index → position
+/// (at a soft wrap an index resolves to the end of the earlier line while
+/// its glyph is drawn at `left` on the next).
+fn underline_spans(
+    text: &str,
+    range: Range<usize>,
+    left: Pixels,
+    position: impl Fn(usize) -> Option<Point<Pixels>>,
+) -> Vec<(Pixels, Pixels, Pixels)> {
+    let mut spans: Vec<(Pixels, Pixels, Pixels)> = Vec::new();
+    // The line being walked: its top, its first glyph's left, and the right
+    // edge of its last non-whitespace glyph so far.
+    let mut line: Option<(Pixels, Pixels, Option<Pixels>)> = None;
+    let end = range.end.min(text.len());
+    let mut offset = range.start.min(end);
+    for c in text[offset..end].chars() {
+        let next = offset + c.len_utf8();
+        if let Some(mut pos) = position(offset) {
+            let next_pos = position(next);
+            if let Some(next_pos) = next_pos.filter(|next_pos| next_pos.y > pos.y) {
+                pos = point(left, next_pos.y);
+            }
+            let right = next_pos
+                .filter(|next_pos| next_pos.y == pos.y)
+                .map(|next_pos| next_pos.x);
+            if line.is_some_and(|(top, _, _)| top != pos.y) {
+                if let Some((top, start, Some(stop))) = line.take() {
+                    spans.push((top, start, stop));
+                }
+            }
+            let current = line.get_or_insert((pos.y, pos.x, None));
+            if !c.is_whitespace() {
+                if let Some(right) = right {
+                    current.2 = Some(right);
+                }
+            }
+        }
+        offset = next;
+    }
+    if let Some((top, start, Some(stop))) = line {
+        spans.push((top, start, stop));
+    }
+    spans
+}
+
 fn utf8_boundary_before(text: &str, mut offset: usize) -> usize {
     while offset > 0 && !text.is_char_boundary(offset) {
         offset -= 1;
@@ -304,8 +393,23 @@ impl Inline {
             text: text.clone(),
             styled_text: StyledText::new(text),
             link_click_handler,
+            code_font: None,
+            code_wash: None,
+            underlines: Vec::new(),
             state,
         }
+    }
+
+    /// Ferrite: shapes inline code runs (marked by [`INLINE_CODE_MARK`]) in
+    /// `font` and paints `wash` under them.
+    pub(super) fn code_style(
+        mut self,
+        font: Option<SharedString>,
+        wash: Option<InlineCodeWash>,
+    ) -> Self {
+        self.code_font = font;
+        self.code_wash = wash;
+        self
     }
 
     /// Get link at given mouse position.
@@ -460,6 +564,126 @@ impl Inline {
         line_bounds
     }
 
+    /// Paints `wash` under every inline code run (the highlights carrying
+    /// [`INLINE_CODE_MARK`]), one rounded quad per wrapped line of the run.
+    /// Skipped when the paragraph lies wholly outside the content mask.
+    fn paint_code_wash(&self, text_layout: &TextLayout, wash: InlineCodeWash, window: &mut Window) {
+        let mask = window.content_mask().bounds;
+        let visible = text_layout.bounds().intersect(&mask);
+        if visible.size.width <= px(0.) || visible.size.height <= px(0.) {
+            return;
+        }
+        let line_height = text_layout.line_height();
+        for (range, highlight) in &self.highlights {
+            if highlight.fade_out != INLINE_CODE_MARK {
+                continue;
+            }
+            for line in code_line_bounds(&self.text, text_layout, range.clone(), line_height) {
+                let bounds = Bounds::from_corners(
+                    point(line.left() - wash.overhang, line.top() + wash.inset_y),
+                    point(line.right() + wash.overhang, line.bottom() - wash.inset_y),
+                );
+                window.paint_quad(quad(
+                    bounds,
+                    wash.radius,
+                    wash.color,
+                    Edges::default(),
+                    gpui::transparent_black(),
+                    BorderStyle::default(),
+                ));
+            }
+        }
+    }
+
+    /// Ferrite: a wash under each occurrence of the enclosing view's find
+    /// needle (`TextFind`), one quad per wrapped line, over this inline's
+    /// slice of its source run (`root`), `offset` into the run.
+    fn paint_find(
+        &self,
+        text_layout: &TextLayout,
+        root: &Weak<Mutex<InlineState>>,
+        offset: usize,
+        window: &mut Window,
+        cx: &App,
+    ) {
+        let Some(view) = GlobalState::global(cx).text_view_state() else {
+            return;
+        };
+        let view = view.read(cx);
+        if view.find.is_none() {
+            return;
+        }
+        let source = if std::ptr::eq(root.as_ptr(), Arc::as_ptr(&self.state)) {
+            self.text.clone()
+        } else {
+            let Some(text) = root
+                .upgrade()
+                .and_then(|root| root.try_lock().ok().map(|root| root.text.clone()))
+            else {
+                return;
+            };
+            text
+        };
+        let line_height = text_layout.line_height();
+        super::find::paint_marks(
+            view,
+            root.as_ptr() as usize,
+            &source,
+            offset..offset + self.text.len(),
+            text_layout.bounds(),
+            |range| code_line_bounds(&self.text, text_layout, range, line_height),
+            window,
+        );
+    }
+
+    /// Ferrite: each underline, one stroke per wrapped line, from its first
+    /// glyph to the right edge of its last non-whitespace glyph, on the
+    /// baseline offset gpui's own line painter uses.
+    ///
+    /// With `hover_only` (`TextViewStyle::with_link_underline_on_hover`),
+    /// only the link under the pointer is underlined; other underlines
+    /// (`<u>`) always are.
+    fn paint_underlines(&self, text_layout: &TextLayout, hover_only: bool, window: &mut Window) {
+        if self.underlines.is_empty() {
+            return;
+        }
+        let hovered = hover_only
+            .then(|| {
+                let index = text_layout.index_for_position(window.mouse_position()).ok()?;
+                self.links
+                    .iter()
+                    .find(|(range, _)| range.contains(&index))
+                    .map(|(range, _)| range.clone())
+            })
+            .flatten();
+        let overlaps =
+            |a: &Range<usize>, b: &Range<usize>| a.start < b.end && b.start < a.end;
+        let line_height = text_layout.line_height();
+        let left = text_layout.bounds().left();
+        for (range, style) in &self.underlines {
+            if hover_only
+                && self.links.iter().any(|(link, _)| overlaps(link, range))
+                && !hovered.as_ref().is_some_and(|link| overlaps(link, range))
+            {
+                continue;
+            }
+            let Some(layout) = text_layout.line_layout_for_index(range.start) else {
+                continue;
+            };
+            let metrics = &layout.unwrapped_layout;
+            let baseline = (line_height - metrics.ascent - metrics.descent).half() + metrics.ascent;
+            for (top, start, stop) in underline_spans(&self.text, range.clone(), left, |index| {
+                text_layout.position_for_index(index)
+            }) {
+                window.paint_underline(
+                    point(start, top + baseline + metrics.descent * 0.618),
+                    stop - start,
+                    style,
+                );
+            }
+        }
+    }
+
     /// Paint the selection background.
     fn paint_selection(
         selection: &Selection,
@@ -543,6 +767,20 @@ impl IntoElement for Inline {
     }
 }
 
+/// Whether a highlight can be shaped as a run after the runs ending at `ix`.
+///
+/// `StyledText::with_runs` panics unless the runs tile the text exactly on
+/// char boundaries. Highlights can be computed against a different revision
+/// of the text than the one parsed (a retained view re-parses off the main
+/// thread), so a range that overlaps its predecessor, runs past the end or
+/// splits a character is dropped rather than trusted into a panic.
+pub(super) fn highlight_fits(text: &str, ix: usize, range: &Range<usize>) -> bool {
+    ix <= range.start
+        && range.start < range.end
+        && text.is_char_boundary(range.start)
+        && text.is_char_boundary(range.end)
+}
+
 impl Element for Inline {
     type RequestLayoutState = ();
     type PrepaintState = Hitbox;
@@ -563,14 +801,38 @@ impl Element for Inline {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let text_style = window.text_style();
+        // Ferrite: inline code may be shaped in its own family.
+        let code_font = self.code_font.clone();
 
         let mut runs = Vec::new();
         let mut ix = 0;
+        self.underlines.clear();
         for (range, highlight) in self.highlights.iter() {
+            if !highlight_fits(&self.text, ix, range) {
+                continue;
+            }
             if ix < range.start {
                 runs.push(text_style.clone().to_run(range.start - ix));
             }
-            runs.push(text_style.clone().highlight(*highlight).to_run(range.len()));
+            let mut run = text_style.clone().highlight(*highlight).to_run(range.len());
+            if let Some(family) = code_font
+                .as_ref()
+                .filter(|_| highlight.fade_out == INLINE_CODE_MARK)
+            {
+                run.font.family = family.clone();
+            }
+            // Ferrite: the underline is painted per line by `paint`, trimmed
+            // of the whitespace a wrap leaves at a line's end.
+            if let Some(underline) = run.underline.take() {
+                self.underlines.push((
+                    range.clone(),
+                    gpui::UnderlineStyle {
+                        color: Some(underline.color.unwrap_or(run.color)),
+                        ..underline
+                    },
+                ));
+            }
+            runs.push(run);
             ix = range.end;
         }
         if ix < self.text.len() {
@@ -636,8 +898,18 @@ impl Element for Inline {
         };
 
         let text_layout = self.styled_text.layout().clone();
+        // Ferrite: a rounded ground under each inline code run, under the text.
+        if let Some(wash) = self.code_wash {
+            self.paint_code_wash(&text_layout, wash, window);
+        }
+        // Ferrite: a find bar's occurrences, under the text.
+        self.paint_find(&text_layout, &source_root, source_offset, window, cx);
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
+        let hover_only = GlobalState::global(cx)
+            .text_view_state()
+            .is_some_and(|state| state.read(cx).text_view_style.link_underline_on_hover());
+        self.paint_underlines(&text_layout, hover_only, window);
 
         let (document_range, ordinal, source_offset) = GlobalState::global(cx)
             .text_view_state()
@@ -764,20 +1036,35 @@ impl Element for Inline {
         }
 
         // mouse move, update hovered link
+        // Ferrite: the hovered link (its ordinal in `links`) is kept in the
+        // inline's state, so the view repaints only when the pointer moves
+        // onto another link or off one — leaving the text included, so a
+        // hover underline goes when the pointer does.
         window.on_mouse_event({
             let hitbox = hitbox.clone();
             let text_layout = text_layout.clone();
+            let links = self.links.clone();
+            let inline_state = self.state.clone();
             let mut hovered_index = hovered_index;
             move |event: &MouseMoveEvent, phase, window, cx| {
-                if !phase.bubble() || !hitbox.is_hovered(window) {
+                if !phase.bubble() {
+                    return;
+                }
+                let inside = hitbox.is_hovered(window);
+                if !inside && hovered_index.is_none() {
                     return;
                 }
 
                 let current = hovered_index;
-                let updated = text_layout.index_for_position(event.position).ok();
-                //  notify update when hovering over different links
+                let updated = inside
+                    .then(|| text_layout.index_for_position(event.position).ok())
+                    .flatten()
+                    .and_then(|index| links.iter().position(|(range, _)| range.contains(&index)));
                 if current != updated {
                     hovered_index = updated;
+                    if let Ok(mut state) = inline_state.lock() {
+                        state.hovered_index = updated;
+                    }
                     cx.notify(current_view);
                 }
             }
@@ -939,12 +1226,48 @@ fn point_in_text_selection(
 #[cfg(test)]
 mod tests {
     use super::{
-        InlineSelectionProjection, InlineState, point_in_text_selection,
+        InlineSelectionProjection, InlineState, highlight_fits, point_in_text_selection,
         selection_for_document_range,
     };
     use crate::{TextSelectionContentKey, text_selection::TextSelectionDocumentRange};
     use gpui::{Bounds, point, px};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_wrapped_underline_ends_at_its_last_non_space_glyph() {
+        // "ab cd" wrapped after "ab ": a, b, space on line 0 (x 0/5/10, the
+        // line ending at 13), c, d on line 1 at the left edge. An index at
+        // the wrap resolves to the end of the earlier line.
+        let text = "ab cd";
+        let at = |index: usize| -> Option<Point<Pixels>> {
+            Some(match index {
+                0 => point(px(0.), px(0.)),
+                1 => point(px(5.), px(0.)),
+                2 => point(px(10.), px(0.)),
+                3 => point(px(13.), px(0.)),
+                4 => point(px(5.), px(20.)),
+                _ => point(px(10.), px(20.)),
+            })
+        };
+        let spans = underline_spans(text, 0..text.len(), px(0.), at);
+        assert_eq!(
+            spans,
+            vec![(px(0.), px(0.), px(10.)), (px(20.), px(0.), px(10.))],
+            "the first line's stroke stops at `b`'s right edge, not the space's"
+        );
+    }
+
+    #[test]
+    fn highlights_that_do_not_fit_the_text_are_skipped() {
+        // Highlights for "10 tool calls · 2" applied to the previous
+        // revision's "9 tool calls · 2": the dot's range splits the `·`.
+        let text = "9 tool calls · 2";
+        assert!(!highlight_fits(text, 0, &(14..16)));
+        assert!(!highlight_fits(text, 0, &(0..99)));
+        assert!(!highlight_fits(text, 2, &(0..2)), "overlaps its predecessor");
+        assert!(highlight_fits(text, 0, &(13..15)));
+        assert!(highlight_fits(text, 13, &(13..15)));
+    }
 
     #[test]
     fn document_range_preserves_utf8_bytes_across_reflow() {

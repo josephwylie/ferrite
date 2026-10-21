@@ -42,6 +42,16 @@ pub enum SessionEvent {
         name: String,
         input: serde_json::Value,
     },
+    /// A tool call's input as far as it has streamed, before the call is
+    /// settled (`ToolStarted` follows with the whole input). Only for tools
+    /// whose row draws its input live — today Ferrite's own `show_visual`
+    /// (see `visual`), whose page builds up as it arrives. Live only: never
+    /// recorded, since the start that follows carries all of it.
+    ToolDraft {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     /// A tool call finished. `output` is exactly what the provider fed back to
     /// the model — text as text, anything else as its compact JSON.
     ///
@@ -143,16 +153,16 @@ pub enum SessionEvent {
     },
     /// The Session's own command menu, announced at Session start — what the
     /// Composer's `/` popover lists (#23). Claude lifts it from the initialize
-    /// handshake's `commands[]`; Codex answers a `skills/list` request. Session
-    /// state like a Decision, not durable history: a replacement Session
-    /// announces its own.
+    /// handshake's `commands[]`; Codex answers a `skills/list` request. Not
+    /// history: the Thread keeps the last one beside its log, offered until
+    /// its next Session announces its own (ADR 0032).
     Commands {
         commands: Vec<SessionCommand>,
     },
     /// The permission mode the Session started in, in the provider's own
     /// word (`"acceptEdits"`, `"bypassPermissions"`, …) — the Composer's
     /// meta-row mode chip (#23). Claude lifts it from the same initialize
-    /// handshake; display-only, and Session state like the menu above.
+    /// handshake; display-only, and kept like the menu above.
     PermissionMode {
         mode: String,
     },
@@ -160,8 +170,8 @@ pub enum SessionEvent {
     /// own menu shows — the model picker's rows (#25). Claude lifts the
     /// list from the same initialize handshake; Codex asks `model/list`
     /// once its thread is up. Until either speaks the picker falls back
-    /// to the catalog in `providers::models`. Session state exactly like
-    /// the command menu: gone with the Session.
+    /// to the catalog in `providers::models`. Kept exactly like the command
+    /// menu.
     Models {
         models: Vec<ModelInfo>,
     },
@@ -169,7 +179,8 @@ pub enum SessionEvent {
     ContextDetails {
         details: ContextDetails,
     },
-    /// Current MCP server state for this Session.
+    /// Current MCP server state for this Session; kept like the command
+    /// menu, shown again when the Thread reopens.
     McpServers {
         servers: Vec<McpServer>,
     },
@@ -177,6 +188,12 @@ pub enum SessionEvent {
     McpAuthorization {
         server: String,
         url: Option<String>,
+    },
+    /// Whether the Session holds work it will start itself, out of
+    /// Ferrite's sight: a wakeup, cron or monitor it scheduled, or a goal
+    /// it pursues. While it does, it runs however long it is settled.
+    ScheduledWork {
+        pending: bool,
     },
     /// The session process exited; no further events will arrive.
     Closed {
@@ -201,7 +218,8 @@ pub struct UsageDetails {
     pub reasoning_output_tokens: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ControlKind {
     RefreshContext,
     RefreshMcp,
@@ -239,14 +257,15 @@ pub struct ContextCategory {
     pub tokens: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct McpServer {
     pub name: String,
     pub status: McpStatus,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum McpStatus {
     Connected,
     Connecting,
@@ -331,7 +350,7 @@ impl PartialEq<str> for ModelInfo {
 }
 
 /// One entry of a Session's command menu, in the provider's own words.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionCommand {
     /// What the operator types after `/`.
     pub name: String,
@@ -360,6 +379,15 @@ pub enum ToolResult {
         value: serde_json::Value,
         duration_ms: Option<u64>,
     },
+    /// A `Structured` payload as its row keeps it once the call settled:
+    /// its bounded preview and the line it gave the row, never the payload
+    /// (ADR 0032). Only an Activity's own records hold one; it is never
+    /// logged or sent.
+    Preview {
+        preview: Option<crate::transcript::ToolOutput>,
+        result_line: Option<String>,
+        duration_ms: Option<u64>,
+    },
     /// A file was written. `hunks` is empty when the file was created, which
     /// has nothing to diff against.
     FileEdit { path: String, hunks: Vec<Hunk> },
@@ -371,9 +399,9 @@ impl ToolResult {
     /// Native execution time when the provider supplied one.
     pub fn duration_ms(&self) -> Option<u64> {
         match self {
-            Self::Command { duration_ms, .. } | Self::Structured { duration_ms, .. } => {
-                *duration_ms
-            }
+            Self::Command { duration_ms, .. }
+            | Self::Structured { duration_ms, .. }
+            | Self::Preview { duration_ms, .. } => *duration_ms,
             _ => None,
         }
     }
@@ -387,7 +415,7 @@ pub struct FileEdit {
 }
 
 /// One changed region of a file, in the provider's own unified-diff form.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Hunk {
     pub old_start: u32,
     pub old_lines: u32,
@@ -395,6 +423,11 @@ pub struct Hunk {
     pub new_lines: u32,
     /// Each line keeps its marker: ' ' context, '-' removed, '+' added.
     pub lines: Vec<String>,
+    /// The enclosing section a unified-diff header names after its second
+    /// `@@` (`fn thread_row`), or one derived by git's default funcname rule
+    /// from the hunk's leading context (`transcript::hunk_section`). `None`
+    /// draws no header at all.
+    pub section: Option<String>,
 }
 
 /// Provider-normalized delivery, independent of tool names and input schemas.
@@ -419,6 +452,36 @@ pub enum DecisionKind {
     External { url: String },
     /// A native request Ferrite can safely dismiss but cannot render yet.
     Unsupported { reason: String },
+}
+
+impl DecisionKind {
+    /// Whether `answer` is one this kind of Decision can take, whatever the
+    /// provider: the shape every adapter refuses otherwise. An adapter may
+    /// still refuse what only it knows, such as a choice it never offered.
+    pub fn validate_answer(&self, answer: &DecisionAnswer) -> Result<(), String> {
+        use DecisionAnswer as A;
+        match (self, answer) {
+            (Self::Questions(questions), A::Questions { answers }) => {
+                if answers.len() != questions.len() {
+                    return Err("question answer count does not match".into());
+                }
+                questions
+                    .iter()
+                    .zip(answers)
+                    .try_for_each(|(question, answer)| {
+                        crate::questions::selected_values(question, answer).map(drop)
+                    })
+            }
+            (Self::Form { fields }, A::Form { values }) => validate_form(fields, values),
+            (_, A::Deny { .. } | A::Cancel)
+            | (Self::Approval, A::Allow { .. } | A::AllowAlways { .. } | A::Choose { .. })
+            | (
+                Self::Questions(_) | Self::External { .. },
+                A::Allow { .. } | A::AllowAlways { .. },
+            ) => Ok(()),
+            _ => Err("that answer does not fit this request".into()),
+        }
+    }
 }
 
 /// Provider-normalized controls for an approval card.
@@ -467,7 +530,7 @@ pub struct FormChoice {
 }
 
 /// A provider-native permission mode offered by the shared picker.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PermissionModeChoice {
     pub value: String,
     pub label: String,

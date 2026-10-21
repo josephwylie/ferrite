@@ -34,8 +34,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test core
         run: cargo test -p ferrite-core --locked
+      - name: Test the vendored review core
+        run: cargo test -p ferrite-reviewr --locked
+      # Projects (vendored herdr-projects) is Unix-only, so macOS alone.
+      - name: Test Projects 1.0
+        run: cargo test -p sw-core -p sw-flow -p sw-board -p herdr-projects --locked
       - name: Build app
         run: cargo build -p ferrite --locked
+      # The Chromium adapter is shared with Windows: keep it compiling here.
+      # (Running it needs the .app bundle; see visual/smoke.rs.)
+      - name: CEF version
+        id: cef
+        run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
+      - name: Install CEF build tools
+        run: brew install cmake ninja
+      - name: Build app with visuals
+        run: CEF_PATH="$HOME/.local/share/cef" cargo build -p ferrite --locked --features cef
 
   windows:
     name: Windows (DirectX 11)
@@ -50,6 +68,37 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
       - name: Test core
-        run: cargo test -p ferrite-core --locked
+        run: cargo test -p ferrite-core --locked -- --nocapture
+      - name: Test the vendored review core
+        run: cargo test -p ferrite-reviewr --locked
       - name: Build app
         run: cargo build -p ferrite --locked
+      # Visuals (ADR 0013): the app with Chromium, and proof that Chromium
+      # runs from it on Windows: `ferrite --visual-smoke` boots the engine
+      # headless, opens a page and checks its frames' pixels, its content
+      # height and a hover (crates/ferrite/src/visual/smoke.rs). CEF is a
+      # ~170 MB download, cached by its version in Cargo.lock; the runner
+      # has cmake, and ninja is installed for CEF's C++ wrapper. The runner
+      # has no GPU: Chromium falls back to software on its own.
+      - name: CEF version
+        id: cef
+        shell: bash
+        run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cef
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
+      - name: Install ninja
+        shell: pwsh
+        run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
+      - name: Build app with visuals
+        shell: pwsh
+        run: |
+          $env:CEF_PATH = Join-Path $HOME ".local\share\cef"
+          cargo build -p ferrite --locked --features cef
+      - name: Visuals smoke
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          scripts/copy-chromium-windows.ps1 -Destination target\debug
+          target\debug\ferrite.exe --visual-smoke

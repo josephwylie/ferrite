@@ -1,0 +1,47 @@
+[package]
+name = "inline-cef"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Spike: an interactive web page drawn inline in a GPUI list, rendered off-screen."
+
+# Standalone, like spikes/panes24: its own lockfile, never part of the app workspace.
+[workspace]
+
+[features]
+default = []
+# The real engine (Chromium Embedded Framework, off-screen). Without it the spike
+# runs on the fake engine, which needs nothing installed.
+cef = ["dep:cef"]
+# `--shots <dir>`: the autopilot saves frames rendered by the real renderer
+# (gpui's render_to_image is test-support only). Needs no screen-recording grant.
+shots = ["gpui/test-support", "dep:gpui-shots-platform"]
+
+[dependencies]
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+# Chromium Embedded Framework bindings (tauri-apps/cef-rs). Only the sandbox
+# feature: the bundling helpers (`build-util`) pull in clap/cargo_metadata and
+# bundle-macos.sh does that job instead.
+cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], optional = true }
+# A frame becomes a gpui RenderImage, which holds image::Frames (version as vendor/gpui-pre).
+image = { version = "0.25.1", default-features = false }
+# The wake -> cx.notify bridge (a channel a foreground task drains).
+futures = "0.3"
+# Only for `shots`: the macOS window's render_to_image is behind the platform
+# crate's own test-support (same trick as Ferrite's visual-reference feature).
+gpui-shots-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
+
+# The CEF engine end to end, without GPUI. Run inside its bundle:
+# ./bundle-macos.sh --example cef_smoke --run
+[[example]]
+name = "cef_smoke"
+required-features = ["cef"]
+
+[dev-dependencies]
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+
+[patch.crates-io]
+gpui-base = { path = "../../vendor/gpui-base" }
+gpui-pre = { path = "../../vendor/gpui-pre" }
+gpui-pre-macos = { path = "../../vendor/gpui-pre-macos" }
+taffy = { path = "../../vendor/taffy" }

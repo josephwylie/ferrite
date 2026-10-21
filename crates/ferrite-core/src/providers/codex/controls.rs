@@ -13,7 +13,10 @@ const MAX_PAGES: usize = 256;
 
 enum Purpose {
     Status,
-    Login { server: String, completed: bool },
+    Login {
+        server: String,
+        completed: bool,
+    },
     Reload,
     Permission,
     /// `thread/backgroundTerminals/terminate` for one process. Its reply

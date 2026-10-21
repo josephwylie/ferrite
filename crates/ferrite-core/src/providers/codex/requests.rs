@@ -5,7 +5,7 @@ use std::{collections::HashMap, io};
 use serde_json::{json, Value};
 
 use crate::{
-    activity::{ActivityEvent, ExecutionEvent},
+    activity::{ActivityEvent, AgentKey, ExecutionEvent},
     SessionEvent, TurnOutcome,
 };
 
@@ -23,6 +23,9 @@ pub(super) struct Requests {
     starting: Option<u64>,
     pub current_turn: Option<String>,
     deferred_interrupt: Option<u64>,
+    /// Each running Subagent's thread and turn: what stopping it alone
+    /// interrupts. Main's turn is `current_turn`, never one of these.
+    child_turns: HashMap<AgentKey, (String, String)>,
 }
 
 impl Requests {
@@ -57,6 +60,40 @@ impl Requests {
             self.deferred_interrupt = Some(id);
         }
         Ok(None)
+    }
+
+    /// Stop one Subagent: interrupt its running turn, then end the terminals
+    /// it started, which outlive an interrupt (0.163.0 ran an interrupted
+    /// child's `sleep` to completion). Empty when it runs no turn.
+    pub fn stop_child(&mut self, ids: [u64; 2], key: &AgentKey) -> io::Result<Vec<Value>> {
+        let Some((thread, turn)) = self.child_turns.get(key).cloned() else {
+            return Ok(Vec::new());
+        };
+        for id in ids {
+            self.register(id, Purpose::Interrupt)?;
+        }
+        Ok(vec![
+            interrupt_request(ids[0], &thread, &turn),
+            json!({"jsonrpc":"2.0", "id":ids[1], "method":"thread/backgroundTerminals/clean",
+                "params":{"threadId":thread}}),
+        ])
+    }
+
+    pub fn child_started(&mut self, key: AgentKey, thread: &str, turn: &str, limit: usize) {
+        if self.child_turns.len() < limit || self.child_turns.contains_key(&key) {
+            self.child_turns
+                .insert(key, (thread.to_owned(), turn.to_owned()));
+        }
+    }
+
+    pub fn child_completed(&mut self, key: &AgentKey, turn: &str) {
+        if self
+            .child_turns
+            .get(key)
+            .is_some_and(|(_, running)| running == turn)
+        {
+            self.child_turns.remove(key);
+        }
     }
 
     pub fn started(&mut self, turn: &str) {

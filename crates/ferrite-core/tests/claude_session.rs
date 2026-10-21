@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use ferrite_core::providers::{ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError};
+use ferrite_core::providers::{
+    ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError, SettingAck,
+};
 use ferrite_core::{
     activity::{Activity, ActivityInput, ExecutionEvent},
     transcript::{Body, Input},
@@ -134,6 +136,12 @@ fn prose(events: &[SessionEvent]) -> String {
             _ => None,
         })
         .collect()
+}
+
+/// A setting change's answer, once the CLI gives it.
+fn answer(ack: std::io::Result<SettingAck>) -> std::io::Result<()> {
+    ack?.recv_timeout(Duration::from_secs(5))
+        .expect("the CLI answered the setting change")
 }
 
 fn spawn_failure(program: String) -> ClaudeSpawnError {
@@ -325,7 +333,7 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
             Body::Tool(tool) => Some((
                 &tool.call,
                 &tool.name,
-                &tool.structured_result,
+                &tool.structured_preview,
                 &tool.output,
             )),
             _ => None,
@@ -688,6 +696,29 @@ fn an_abnormal_exit_explains_itself_with_stderr() {
     }
 }
 
+/// A CLI that refuses its arguments exits before the start's effort is
+/// set: the start fails with what it said, not the broken pipe it left.
+#[test]
+fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
+    let program = stub(
+        "claude-refuses",
+        &format!("{VERSION_CASE}\necho 'Error: Session ID 4a76 is already in use.' >&2\nexit 1"),
+    );
+    let refused = ClaudeSession::spawn(ClaudeConfig {
+        effort: Some("medium".into()),
+        ..config(program)
+    });
+    let Err(error) = refused else {
+        panic!("expected the start to fail")
+    };
+    let said = error.to_string();
+    assert!(said.contains("exit status: 1"), "{said}");
+    assert!(
+        said.contains("Session ID 4a76 is already in use."),
+        "{said}"
+    );
+}
+
 /// What the CLI is asked to be, and what it is told — recorded so a change to
 /// either is deliberate.
 #[test]
@@ -713,6 +744,10 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         name: Some("CI flake".into()),
         permission_mode: Some("default".into()),
         resume: None,
+        visuals: None,
+        env: Vec::new(),
+        launcher: Vec::new(),
+        args: vec!["--dangerously-skip-permissions".into()],
     })
     .unwrap();
     session.send("hi").unwrap();
@@ -735,16 +770,18 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --model haiku --permission-mode default --name CI flake --add-dir /extra/project"
+         --model haiku --permission-mode default --name CI flake --add-dir /extra/project \
+         --dangerously-skip-permissions"
     );
     assert_eq!(sent.len(), 6);
-    // Feature detection comes first, before a word of the Thread.
+    // Feature detection comes first, before a word of the Thread. Declaring
+    // per-task stops keeps an interrupt from killing background agents.
     assert_eq!(
         sent[0],
         serde_json::json!({
             "type": "control_request",
             "request_id": "req_1",
-            "request": {"subtype": "initialize"},
+            "request": {"subtype": "initialize", "perTaskStopAffordance": true},
         })
     );
     assert_eq!(
@@ -776,6 +813,40 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     );
 }
 
+/// A skill named mid-prompt reaches the model as the terminal's note, learned
+/// from the handshake's menu and sent ahead of the prompt so a leading
+/// `/name` still dispatches.
+#[test]
+fn a_skill_named_mid_prompt_is_noted_ahead_of_the_prompt() {
+    let log = log_path("skill-mention.log");
+    let program = stub(
+        "claude-skill-mention",
+        &format!(
+            r#"{VERSION_CASE}
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_1","response":{{"commands":[{{"name":"grill","description":""}}]}}}}}}'
+while IFS= read -r line; do
+  case "$line" in *'"type":"user"'*) printf '%s\n' "$line" > '{}'; exec cat > /dev/null;; esac
+done"#,
+            log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    session.send("do we need /grill").unwrap();
+    let sent: Value = serde_json::from_str(&read_lines(&log, 1)[0]).unwrap();
+    drop(session);
+
+    let content = sent["message"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+    assert!(content[0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("The user's message contains /grill, which is the name of a skill."));
+    assert_eq!(
+        content[1],
+        serde_json::json!({"type":"text","text":"do we need /grill"})
+    );
+}
+
 /// Ferrite must not smuggle in a model or a permission posture the operator
 /// did not choose: with no override the CLI keeps its own configuration.
 #[test]
@@ -795,6 +866,40 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false"
+    );
+}
+
+/// Projects' turn-end hooks (ADR 0031): herdr-projects hands its agent a
+/// `--settings` file of `Stop`/`StopFailure` hooks through `thread.start
+/// --args`; it reaches the CLI last, after Ferrite's own flags, with the
+/// environment those hooks run the program in.
+#[test]
+fn projects_settings_reach_the_cli_after_ferrites_flags() {
+    let log = log_path("argv-projects.log");
+    let program = stub(
+        "claude-echoes-projects",
+        &format!(
+            "{PRELUDE}\necho \"$@ | $HERDR_SOCKET_PATH $FERRITE_PROJECTS_BIN\" > '{}'\nexec cat > /dev/null",
+            log.display()
+        ),
+    );
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        program,
+        env: vec![
+            ("HERDR_SOCKET_PATH".into(), "/store/api.sock".into()),
+            ("FERRITE_PROJECTS_BIN".into(), "/f/ferrite-projects".into()),
+        ],
+        args: vec!["--settings".into(), "/d/tasks/app/1/claude.json".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    let recorded = read_lines(&log, 1);
+    drop(session);
+    assert_eq!(
+        recorded[0],
+        "-p --input-format stream-json --output-format stream-json \
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+         --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
     );
 }
 
@@ -819,9 +924,9 @@ cat >> '{log}'"#,
     );
     let mut session = ClaudeSession::spawn(config(program)).unwrap();
     let pid = session.pid();
-    session.set_effort(Some("max")).unwrap();
-    session.set_effort(Some("low")).unwrap();
-    session.set_effort(None).unwrap();
+    answer(session.set_effort(Some("max"))).unwrap();
+    answer(session.set_effort(Some("low"))).unwrap();
+    answer(session.set_effort(None)).unwrap();
     session.send("next").unwrap();
     assert_eq!(session.pid(), pid);
     let recorded = read_lines(&log, 5);
@@ -859,11 +964,105 @@ cat >> '{log}'"#,
         ),
     );
     let mut session = ClaudeSession::spawn(config(program)).unwrap();
-    let error = session.set_effort(Some("max")).unwrap_err();
+    let error = answer(session.set_effort(Some("max"))).unwrap_err();
     assert!(error.to_string().contains("unsupported effort"));
     session.send("still here").unwrap();
     let recorded = read_lines(&log, 3);
     let user: Value = serde_json::from_str(&recorded[2]).unwrap();
+    assert_eq!(user["type"], "user");
+}
+
+/// The UI thread both drains the event channel and changes settings, so a
+/// setting change must never wait on the reader. Here the reader parks on a
+/// full channel while delivering a control's answer: the change is asked at
+/// once, its answer waits behind the channel, and lands, accepted, once the
+/// channel drains — with nothing the CLI said lost.
+#[test]
+fn a_setting_change_while_the_reader_is_parked_is_answered_once_it_drains() {
+    // Channel capacity: the reader parks on whichever event comes next.
+    const CAPACITY: usize = 1024;
+    // Several answered controls straddle the full mark, so the reader parks
+    // inside control handling even if spawn announced a few events first.
+    const CONTROLS: usize = 8;
+    const DELTAS: usize = CAPACITY - CONTROLS / 2;
+
+    let payload = log_path("parked-reader.jsonl");
+    let mut lines = String::new();
+    for n in 0..DELTAS {
+        lines.push_str(&format!(
+            r#"{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"{n} "}}}}}}"#
+        ));
+        lines.push('\n');
+    }
+    // req_2 … req_9 are the controls below; req_1 was the handshake, which
+    // the stub reads first along with them.
+    for n in 0..CONTROLS {
+        lines.push_str(&format!(
+            r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"req_{}","response":{{"mcpServers":[]}}}}}}"#,
+            n + 2
+        ));
+        lines.push('\n');
+    }
+    fs::write(&payload, &lines).unwrap();
+    let log = log_path("parked-reader.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "claude-parked-reader",
+        &format!(
+            r#"{PRELUDE}
+for n in 0 1 2 3 4 5 6 7 8; do take; done
+cat '{payload}'
+take
+echo "$line" >> '{log}'
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_10","response":{{}}}}}}'
+cat >> '{log}'"#,
+            payload = payload.display(),
+            log = log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    for _ in 0..CONTROLS {
+        session
+            .control(ferrite_core::SessionControl::RefreshMcp)
+            .unwrap();
+    }
+    // Long enough for the reader to fill the channel and park on it.
+    std::thread::sleep(Duration::from_millis(300));
+
+    let asked = Instant::now();
+    let ack = session.set_effort(Some("max")).unwrap();
+    assert!(
+        asked.elapsed() < Duration::from_millis(500),
+        "the setting change waited on the parked reader"
+    );
+    // Behind the full channel: not answered, so it must not look applied.
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        ack.try_recv().is_err(),
+        "an unacknowledged change was answered"
+    );
+
+    let mut deltas = 0;
+    let mut answers = 0;
+    while answers < CONTROLS {
+        match session.events().recv_timeout(Duration::from_secs(5)) {
+            Ok(SessionEvent::TextDelta { .. }) => deltas += 1,
+            Ok(SessionEvent::McpServers { .. }) => answers += 1,
+            Ok(_) => {}
+            Err(error) => {
+                panic!("events stopped after {deltas} deltas, {answers} answers: {error}")
+            }
+        }
+    }
+    assert_eq!(deltas, DELTAS, "the parked reader lost events");
+    ack.recv_timeout(Duration::from_secs(5))
+        .expect("the change was answered once the channel drained")
+        .expect("the CLI accepted it");
+    session.send("still here").unwrap();
+    let recorded = read_lines(&log, 2);
+    let setting: Value = serde_json::from_str(&recorded[0]).unwrap();
+    assert_eq!(setting["request"]["subtype"], "apply_flag_settings");
+    let user: Value = serde_json::from_str(&recorded[1]).unwrap();
     assert_eq!(user["type"], "user");
 }
 

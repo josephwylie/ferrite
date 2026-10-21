@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use ferrite_core::activity::AgentKey;
 use ferrite_core::providers::{CodexConfig, CodexSession, Session};
+use ferrite_core::store::Provider;
 use ferrite_core::SessionEvent;
 use serde_json::{json, Value};
 
@@ -95,12 +97,12 @@ done
         .unwrap()
     }
 
-    fn interrupts(&self) -> Vec<Value> {
+    fn sent(&self, method: &str) -> Vec<Value> {
         fs::read_to_string(self.directory.join("host.jsonl"))
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .filter(|frame| frame["method"] == "turn/interrupt")
+            .filter(|frame| frame["method"] == method)
             .map(|frame| frame["params"].clone())
             .collect()
     }
@@ -172,7 +174,7 @@ fn child_lifecycle_cannot_replace_or_retire_mains_interrupt_target() {
     session.send("flush").unwrap();
     wait_for(session.as_ref(), "flushed"); // All preceding writes reached the stub.
     assert_eq!(
-        stub.interrupts(),
+        stub.sent("turn/interrupt"),
         vec![json!({"threadId": "main", "turnId": "main-turn"}); 3]
     );
 }
@@ -192,7 +194,7 @@ fn handshake_selects_main_from_interleaved_early_turns() {
     session.send("flush").unwrap();
     wait_for(session.as_ref(), "flushed");
     assert_eq!(
-        stub.interrupts(),
+        stub.sent("turn/interrupt"),
         vec![json!({"threadId": "main", "turnId": "early-main-turn"})]
     );
 }
@@ -218,7 +220,35 @@ fn overflowing_early_candidates_never_falls_back_to_a_child() {
     session.send("flush").unwrap();
     wait_for(session.as_ref(), "flushed");
     assert_eq!(
-        stub.interrupts(),
+        stub.sent("turn/interrupt"),
         vec![json!({"threadId": "main", "turnId": "main-turn"})]
+    );
+}
+
+#[test]
+fn stopping_a_subagent_ends_its_own_turn_and_terminals_never_mains() {
+    let stub = Stub::new();
+    let mut session: Box<dyn Session> = Box::new(stub.spawn(""));
+    let alpha = AgentKey::new(Provider::Codex, "main", "alpha");
+    session.send("phase-1").unwrap();
+    wait_for(session.as_ref(), "one");
+    session.stop_subagent(&alpha).unwrap();
+    session.send("phase-2").unwrap(); // alpha's turn completes.
+    wait_for(session.as_ref(), "two");
+    session.stop_subagent(&alpha).unwrap(); // Nothing left to stop.
+    session.interrupt().unwrap(); // Main's turn, still its own target.
+    session.send("flush").unwrap();
+    wait_for(session.as_ref(), "flushed");
+    assert_eq!(
+        stub.sent("turn/interrupt"),
+        vec![
+            json!({"threadId": "alpha", "turnId": "alpha-turn"}),
+            json!({"threadId": "main", "turnId": "main-turn"}),
+        ]
+    );
+    // An interrupted child's command runs on (0.163.0): its terminals end too.
+    assert_eq!(
+        stub.sent("thread/backgroundTerminals/clean"),
+        vec![json!({"threadId": "alpha"})]
     );
 }

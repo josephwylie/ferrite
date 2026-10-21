@@ -7,7 +7,7 @@ use crate::activity::{
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum PersistedActivity {
     Discovered {
@@ -57,6 +57,11 @@ pub(super) enum PersistedActivity {
         subject: PersistedSubject,
         elapsed_ms: u64,
         completed_at: String,
+        /// The turn's token counts; absent from older logs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_tokens: Option<u64>,
     },
     Alias {
         from: String,
@@ -64,14 +69,24 @@ pub(super) enum PersistedActivity {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum PersistedSubject {
     Main,
     Subagent { key: String },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+impl PersistedSubject {
+    /// The child's stored key, or `None` for Main.
+    pub(super) fn key(&self) -> Option<&str> {
+        match self {
+            Self::Main => None,
+            Self::Subagent { key } => Some(key),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Coverage {
     Unavailable,
@@ -81,7 +96,7 @@ pub(super) enum Coverage {
     Complete,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Status {
     Unknown,
@@ -97,7 +112,7 @@ pub(super) enum Status {
     NotLoaded,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Execution {
     FileChanges {
@@ -185,18 +200,21 @@ pub(super) enum Execution {
     },
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct StoredFileEdit {
     path: String,
     hunks: Vec<StoredHunk>,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct StoredHunk {
     old_start: u32,
     old_lines: u32,
     new_start: u32,
     new_lines: u32,
     lines: Vec<String>,
+    /// The section its header named; absent from older logs (none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    section: Option<String>,
 }
 
 impl PersistedSubject {
@@ -305,6 +323,7 @@ impl Execution {
                                 new_start: h.new_start,
                                 new_lines: h.new_lines,
                                 lines: h.lines.clone(),
+                                section: h.section.clone(),
                             })
                             .collect(),
                     })
@@ -415,6 +434,7 @@ impl Execution {
                                 new_start: h.new_start,
                                 new_lines: h.new_lines,
                                 lines: h.lines.clone(),
+                                section: h.section.clone(),
                             })
                             .collect(),
                     })
@@ -565,10 +585,14 @@ impl PersistedActivity {
                 subject,
                 elapsed_ms,
                 completed_at,
+                input_tokens,
+                output_tokens,
             } => Self::CompletionObservation {
                 subject: PersistedSubject::from_live(subject),
                 elapsed_ms: *elapsed_ms,
                 completed_at: completed_at.clone(),
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
             },
             ActivityEvent::Alias { from, to } => Self::Alias {
                 from: from.as_str().into(),
@@ -633,10 +657,14 @@ impl PersistedActivity {
                 subject,
                 elapsed_ms,
                 completed_at,
+                input_tokens,
+                output_tokens,
             } => ActivityEvent::CompletionObservation {
                 subject: subject.live(),
                 elapsed_ms: *elapsed_ms,
                 completed_at: completed_at.clone(),
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
             },
             Self::Alias { from, to } => ActivityEvent::Alias {
                 from: AgentKey::from_stored(from.clone()),
@@ -644,6 +672,22 @@ impl PersistedActivity {
             },
         }
     }
+    /// Every child key this observation names.
+    pub(super) fn children(&self) -> impl Iterator<Item = &str> {
+        let keys: [Option<&str>; 2] = match self {
+            Self::Discovered { key, .. }
+            | Self::Status { key, .. }
+            | Self::Content { key, .. }
+            | Self::HistoryContent { key, .. }
+            | Self::Coverage { key, .. }
+            | Self::Detached { key } => [Some(key), None],
+            Self::Alias { from, to } => [Some(from), Some(to)],
+            Self::CompletionObservation { subject, .. } => [subject.key(), None],
+            Self::MainContent { .. } | Self::BackgroundTurnEnded { .. } => [None, None],
+        };
+        keys.into_iter().flatten()
+    }
+
     pub(super) fn is_boundary(&self) -> bool {
         matches!(
             self,
