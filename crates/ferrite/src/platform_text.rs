@@ -1,7 +1,7 @@
 //! How the platform rasterises Ferrite's text, set once before the first
 //! glyph is drawn.
 //!
-//! **Why** (F-17). The approved prototype is drawn by a browser with
+//! **Why** (F-17). The design's pictures are drawn by a browser with
 //! `-webkit-font-smoothing: antialiased`: greyscale coverage, no stem
 //! darkening. gpui-pre-macos 0.3.3 thickens every glyph instead
 //! (`MacTextSystem::glyph_dilation_for_color`, up to four steps by the

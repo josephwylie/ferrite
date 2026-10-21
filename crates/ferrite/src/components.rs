@@ -107,7 +107,7 @@ impl Tip for Button {
     }
 }
 
-/// A form action: nothing at rest, `paint::HOVER` under the pointer
+/// A form action: nothing at rest, `paint::RAISED` under the pointer
 /// (blended), `paint::PRESS` pressed.
 pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
     form_button_on(id, rgba(theme::TRANSPARENT).into(), cx)
@@ -119,7 +119,7 @@ pub fn form_button_on(id: impl Into<ElementId>, rest: Hsla, cx: &App) -> Button 
     faded_button(
         id,
         rest,
-        theme::paint::HOVER.into(),
+        theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
         cx,
@@ -156,7 +156,7 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
 
 fn primary_face(disabled: bool) -> u32 {
     if disabled {
-        theme::SELECTION
+        theme::SELECTED
     } else {
         theme::PRIMARY
     }
@@ -293,7 +293,8 @@ pub fn float_shadow_faded(k: f32) -> Vec<BoxShadow> {
 }
 
 /// The one cast shadow (theme rule 2): CSS `0 6px 14px` at 50%, under
-/// every floating surface and nothing else.
+/// every floating surface but the palette's dialog (which deepens it,
+/// `palette::dialog`) and nothing else.
 pub fn float_shadow() -> Vec<BoxShadow> {
     vec![layer(
         theme::SHADOW_FLOAT,
@@ -303,11 +304,13 @@ pub fn float_shadow() -> Vec<BoxShadow> {
     )]
 }
 
-/// A floating surface (menu, picker, palette, popover, card, toast): the
-/// float's opaque ground (`FLOAT_GROUND`; floats cannot frost, theme WP-E
-/// FL-15), a 1px `FLOAT_EDGE`, square, the float shadow, `FLOAT_PAD`
-/// inside, the grid's type. It occludes what it covers and owns its cursor.
-/// The caller states its width and position.
+/// A floating surface (menu, picker, popover, card, toast, sheet; SPEC
+/// §5.8's shell at the float's scale): the float's opaque ground
+/// (`FLOAT_GROUND`; floats cannot frost, theme WP-E FL-15), radius
+/// `R_BLOCK`, a 1px `FLOAT_EDGE` ring, the float shadow, `FLOAT_PAD`
+/// inside, the UI type. It occludes what it covers and owns its cursor.
+/// The caller states its width and position. (The palette's dialog is the
+/// same shell at its own scale, `palette::dialog`.)
 pub fn floating_surface() -> Div {
     text_ui()
         .cursor_default()
@@ -763,7 +766,7 @@ pub fn embossed_mark(size: f32, body: u32) -> Div {
 }
 
 /// The one keycap: `KBD_H`, at least square, flat and square on
-/// `paint::BAND2`, the grid's type in `TEXT`, centred.
+/// `paint::RAISED`, the grid's type in `TEXT`, centred.
 #[cfg(test)]
 pub fn kbd(key: impl Into<SharedString>) -> Div {
     kbd_face().child(key.into())
@@ -780,7 +783,7 @@ fn kbd_face() -> Div {
         .min_w(px(theme::KBD_H))
         .px(px(theme::KBD_PAD_X))
         .rounded(px(theme::R_CHIP))
-        .bg(theme::paint::BAND2)
+        .bg(theme::paint::RAISED)
         .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
@@ -1114,13 +1117,13 @@ pub fn key_word(key: &str) -> String {
 }
 
 /// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT`;
-/// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
+/// hover `paint::RAISED`, press `paint::PRESS`. A button is read like any
 /// row, so it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
     faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        theme::paint::HOVER.into(),
+        theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
         cx,
@@ -1263,7 +1266,7 @@ pub struct RowInks {
 
 /// The row state table, as data: rest, cursor, disabled, armed. A
 /// destructive row reads like any other until it arms; armed, it holds the
-/// cursor's `paint::SELECTION` ground and its label alone turns `BLOCKED` —
+/// cursor's `paint::SELECTED` ground and its label alone turns `BLOCKED` —
 /// colour on the word, never a wash (rule 2.2.4).
 pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     if item.disabled {
@@ -1279,7 +1282,7 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
             label: theme::BLOCKED,
             detail: theme::TEXT_DIM,
             shortcut: theme::TEXT_DIM,
-            ground: Some(theme::paint::SELECTION.rgba()),
+            ground: Some(theme::paint::SELECTED.rgba()),
         };
     }
     let label = if cursor {
@@ -1291,7 +1294,7 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
         label,
         detail: theme::TEXT_DIM,
         shortcut: theme::TEXT_DIM,
-        ground: cursor.then_some(theme::paint::SELECTION.rgba()),
+        ground: cursor.then_some(theme::paint::SELECTED.rgba()),
     }
 }
 
@@ -1357,7 +1360,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
         .items_center()
         .gap(px(theme::MENU_ROW_GAP))
         .min_w_0()
-        .h(px(theme::MENU_ROW_H))
+        .h(px(theme::FLOAT_ROW_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .rounded(px(theme::R_MENU_ROW))
         .when_some(inks.ground, |row, ground| row.bg(rgba(ground)))
@@ -1445,7 +1448,7 @@ pub fn menu_section(
     text_meta()
         .flex()
         .items_end()
-        .h(px(theme::MENU_SECTION_H))
+        .h(px(theme::FLOAT_SECTION_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .pb(px(theme::SPACE_1))
         .cursor_default()
@@ -1457,7 +1460,7 @@ pub fn menu_section(
                 .h(px(theme::LH_UI))
                 .min_w_0()
                 .when_some(leading, |line, (path, ink)| {
-                    line.child(icons::icon(path, theme::MENU_SECTION_ICON, ink))
+                    line.child(icons::icon(path, theme::STATUS_LOGO, ink))
                 })
                 .child(div().font_weight(theme::W_LABEL).child(title.into()))
                 .children(note),
@@ -1613,7 +1616,7 @@ pub fn menu_note(text: impl Into<SharedString>) -> Div {
     text_meta()
         .flex()
         .items_center()
-        .h(px(theme::MENU_ROW_H))
+        .h(px(theme::FLOAT_ROW_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .cursor_default()
         .child(text.into())
@@ -1993,7 +1996,7 @@ mod tests {
         assert_eq!(plain.style().box_shadow, None);
         assert_eq!(primary_face(false), theme::PRIMARY);
         assert_eq!(primary_ink(false), theme::ON_PRIMARY);
-        assert_eq!(primary_face(true), theme::SELECTION);
+        assert_eq!(primary_face(true), theme::SELECTED);
         assert_eq!(primary_ink(true), theme::TEXT_DIM);
     }
 
@@ -2013,7 +2016,7 @@ mod tests {
         assert_eq!(key.style().size.height, Some(px(theme::KBD_H).into()));
         assert_eq!(
             key.style().background,
-            Some(Fill::from(theme::paint::BAND2))
+            Some(Fill::from(theme::paint::RAISED))
         );
         assert_eq!(key.style().box_shadow, None, "a keycap is flat");
         let mut gutter = gutter(div(), theme::LH_UI);
@@ -2023,7 +2026,7 @@ mod tests {
     #[test]
     fn menu_rows_follow_the_state_table() {
         let rest = MenuItem::new("Rename");
-        let fill = theme::paint::SELECTION.rgba();
+        let fill = theme::paint::SELECTED.rgba();
         assert_eq!(
             row_inks(&rest, false, false),
             RowInks {
@@ -2060,7 +2063,7 @@ mod tests {
     #[test]
     fn a_menu_row_is_one_row_high_and_only_live_rows_point() {
         let mut row = menu_row("r", &MenuItem::new("Rename"), false, false);
-        assert_eq!(row.style().size.height, Some(px(theme::MENU_ROW_H).into()));
+        assert_eq!(row.style().size.height, Some(px(theme::FLOAT_ROW_H).into()));
         assert_eq!(
             row.style().mouse_cursor,
             Some(gpui::CursorStyle::PointingHand)

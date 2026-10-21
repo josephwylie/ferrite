@@ -340,8 +340,7 @@ fn underline(key: &str, ink: u32, size: f32, line: f32) -> gpui::Div {
 }
 
 /// Wire `element` as a path target: the pointer cursor, the hover card while
-/// the pointer is on it, ⌘-click to the reader, and its laid-out box kept
-/// for `preview_path`.
+/// the pointer is on it, ⌘-click to the reader, and its laid-out box kept.
 fn wire_target(
     element: gpui::Stateful<gpui::Div>,
     target: PathTarget,
@@ -362,7 +361,6 @@ fn wire_target(
                 .or_default()
                 .entry(recorded.path.clone())
                 .or_insert(laid);
-            crate::hover_card::laid_out(&recorded, laid, cx);
         }
     })
     .cursor_pointer()

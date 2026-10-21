@@ -144,7 +144,7 @@ pub(crate) enum ScrollTarget {
 
 /// The paths a call names, read from the Thread's checkout: inside it,
 /// relative (`Read(src/stats.rs)`, `Update(src/stats.rs)`), as Claude Code
-/// prints them and the approved transcript reads — Claude reports every
+/// prints them — Claude reports every
 /// path absolute. A path outside the checkout stays whole.
 fn relative_paths(input: &mut TranscriptInput) {
     let Some(root) = input.workspace.clone() else {
@@ -773,28 +773,6 @@ impl TranscriptView {
     #[cfg(feature = "visual-reference")]
     pub(crate) fn namespace(&self) -> SharedString {
         self.input.namespace.clone()
-    }
-
-    /// Open the hover card on the first target naming `path` (a scene's
-    /// solo-hover view), at `line` or the Thread's latest change to it.
-    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-    pub(crate) fn preview_path(
-        &mut self,
-        path: &str,
-        line: Option<u32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let resolved = match &self.input.workspace {
-            Some(root) if !std::path::Path::new(path).is_absolute() => root.join(path),
-            _ => PathBuf::from(path),
-        };
-        let target = PathTarget::new(resolved)
-            .at_line(line)
-            .shown(SharedString::from(path.to_string()))
-            .in_scope(self.input.namespace.clone());
-        crate::hover_card::request(target, window, cx);
-        cx.notify();
     }
 
     fn text_runs(&self) -> TextRuns {
@@ -1598,7 +1576,7 @@ impl TranscriptView {
                         .px(px(row_inset(RowKind::Prompt, self.input.solo)))
                         // The band over an opaque plane: together they hide
                         // the rows scrolling under it, glass or not.
-                        .bg(gpui::rgb(theme::PLANE))
+                        .bg(gpui::rgb(theme::CARD))
                         .child(band),
                 )
                 .into_any_element(),
@@ -2202,7 +2180,7 @@ impl Render for TranscriptView {
                     .left_0()
                     .right_0()
                     .h(self.scroll.top_mask())
-                    .bg(gpui::rgb(theme::PLANE))
+                    .bg(gpui::rgb(theme::CARD))
             }))
             .children(pinned)
             .children(minimap)

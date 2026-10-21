@@ -249,7 +249,7 @@ impl CockpitView {
                     .pr(px(CH))
                     .map(|row| {
                         if selected {
-                            row.bg(paint::SELECTION).cursor_pointer()
+                            row.bg(paint::SELECTED).cursor_pointer()
                         } else {
                             row.hover_row(hover.clone()).press_row()
                         }
@@ -371,7 +371,7 @@ impl CockpitView {
             .flex_col()
             .min_w_0()
             .overflow_hidden()
-            .bg(paint::PLANE)
+            .bg(paint::CARD)
             .py(px(EMPTY_PAD_Y))
             .px(px(EMPTY_PAD_X))
             .font_family(FONT_UI)

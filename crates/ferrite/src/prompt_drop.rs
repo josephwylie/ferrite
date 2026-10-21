@@ -60,7 +60,7 @@ pub fn sheet() -> Div {
         .items_center()
         .justify_center()
         .rounded(px(theme::R_PANE))
-        .bg(theme::paint::BAND)
+        .bg(theme::paint::PROMPT_BAND)
         .border_1()
         .border_color(rgba(theme::DROP_EDGE))
         .opacity(0.96)

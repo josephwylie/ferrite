@@ -1,17 +1,19 @@
-//! The float grammar (theme WP-E, the prototype's `.float`) and the
+//! The float grammar (theme WP-E, SPEC §5.8 "Other floats") and the
 //! context menu built on it: what a right-click on a Thread, a Group, a
 //! Project or a Pane offers. Drawing only, like `nav.rs` — the cockpit
 //! decides the rows and runs the verbs.
 //!
-//! Every menu, picker, popover and card draws in this one grammar: the
-//! float (`float`: `FLOAT_GROUND`, a 1px `FLOAT_EDGE`, square, the float
-//! shadow, no inset), a head row (`head`), section rows (`section`), rows
-//! on the 20px grid with a 2-cell gutter that holds the strong `❯` on the
-//! cursor row (`row`, `item_row`), and a footer of key hints under a
-//! `FLOAT_RULE` (`footer`), every word of it `TEXT_DIM`. A short ladder's
-//! chosen step is an inverse token (`token`). Floats are opaque (theme
-//! WP-E, FL-15), so their rows wear the float inks (`FLOAT_SEL` on the
-//! cursor row, `FLOAT_HOVER` under the pointer) and never a glass overlay.
+//! Every menu, picker, popover and card draws in this one grammar, the
+//! palette's shell at a smaller scale: the float (`float`: `FLOAT_GROUND`,
+//! radius `R_BLOCK`, a 1px `FLOAT_EDGE` ring, the float shadow), a head
+//! row (`head`), section headings (`section`), rows `FLOAT_ROW_H` high
+//! inset `FLOAT_PAD` from the float's edge (`row`, `item_row`), the cursor
+//! row a `FLOAT_SEL` fill with its label `TEXT_STRONG`, and a footer of key
+//! hints under a `FLOAT_RULE` hairline (`footer`), every word of it
+//! `TEXT_DIM`. A short ladder's chosen step is an inverse token (`token`).
+//! Floats are opaque (theme WP-E, FL-15), so their rows wear the float
+//! inks (`FLOAT_SEL` on the cursor row, `FLOAT_HOVER` under the pointer)
+//! and never a glass overlay.
 //!
 //! A destructive verb never runs on one press: its row arms on the first
 //! (the selection ground, the label `BLOCKED` and `· press again` after it)
@@ -28,20 +30,20 @@ use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
 
 /// One row of a menu: the shared menu row's content. Its `shortcut` is the
-/// key that does the same thing (`cmd-F`), drawn so the command key can be
-/// a glyph box.
+/// key that does the same thing (`cmd-F`), drawn so the command key is a
+/// glyph.
 pub type Item = MenuItem;
 
 // ------------------------------------------------------------ the grammar
 
 /// The float: `components::floating_surface` with no inset of its own —
-/// its rows carry their cell of padding. The caller states its width and
-/// position.
+/// its rows hold their own (`FLOAT_PAD` round a row's fill, `FLOAT_PAD_X`
+/// to a line's text). The caller states its width and position.
 pub fn float() -> Div {
     components::floating_surface().p(px(0.))
 }
 
-/// A float's head row: its title in `TEXT_STRONG` at `W_STRONG`, and at the
+/// A float's head row: its title in `TEXT_STRONG` at `W_LABEL`, and at the
 /// right whatever the caller adds (its command, a verb), in `TEXT_DIM`.
 pub fn head(title: impl Into<SharedString>) -> Div {
     components::text_ui()
@@ -58,14 +60,15 @@ pub fn head(title: impl Into<SharedString>) -> Div {
             div()
                 .min_w_0()
                 .truncate()
-                .font_weight(W_STRONG)
+                .font_weight(W_LABEL)
                 .text_color(rgb(TEXT_STRONG))
                 .child(title.into()),
         )
 }
 
-/// A section row: its title in `TEXT_DIM`, half a row above it, led by a
-/// provider's logomark in its brand colour, an optional note after a `·`.
+/// A section heading, as the palette sets one at the float's scale: its
+/// word in 12/500 `TEXT_DIM` on the heading's foot, led by a provider's
+/// logomark in its brand colour, an optional note after a `·`.
 pub fn section(
     title: impl Into<SharedString>,
     logo: Option<(&'static str, u32)>,
@@ -74,19 +77,26 @@ pub fn section(
     components::text_ui()
         .flex()
         .flex_shrink_0()
-        .items_center()
-        .gap(px(CH))
-        .h(px(FLOAT_ROW_H))
+        .items_end()
+        .gap(px(SPACE_1_5))
+        .h(px(FLOAT_SECTION_H))
         .mt(px(FLOAT_SECTION_GAP))
+        .pb(px(SPACE_1))
         .px(px(FLOAT_PAD_X))
         .whitespace_nowrap()
         .cursor_default()
+        .text_size(px(FS_META))
+        .font_weight(W_LABEL)
         .text_color(rgb(TEXT_DIM))
         .when_some(logo, |line, (path, ink)| {
-            line.child(icons::icon(path, STATUS_LOGO, ink))
+            line.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(LH_META))
+                    .child(icons::icon(path, STATUS_LOGO, ink)),
+            )
         })
-        // The title and its note are one run, a space either side of the
-        // `·`, as the prototype sets them: no gap to snap, no run to round.
         .child({
             let title: SharedString = title.into();
             let words = match note {
@@ -94,21 +104,6 @@ pub fn section(
                 None => title,
             };
             div().min_w_0().truncate().child(words)
-        })
-}
-
-/// The 2-cell gutter every row opens with: the strong `❯` (`W_STRONG`, the
-/// drawn prompt mark) on the cursor row, empty on the rest.
-pub fn gutter(cursor: bool) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .w(px(FLOAT_GUTTER))
-        .h(px(FLOAT_ROW_H))
-        .when(cursor, |cell| {
-            cell.debug_selector(|| "float-cursor".into())
-                .child(components::prompt_mark(TEXT_STRONG))
         })
 }
 
@@ -148,9 +143,11 @@ pub fn key_label(keys: &str, ink: u32) -> AnyElement {
 }
 
 /// A row's face with no id and no pointer role, for kit hosts that own the
-/// row's interaction: the gutter, the label (strong on its fuzzy matches,
-/// never a weight), the description two cells after it, the key hard
-/// right, and a green `✓` on the standing choice.
+/// row's interaction: `FLOAT_ROW_H`, inset `FLOAT_PAD` from the float's
+/// edge, radius `R_MENU_ROW`; a leading mark, the label (strong on its
+/// fuzzy matches), the description after it, the key hard right, and a
+/// `✓` on the standing choice. The cursor (or an armed) row is `FLOAT_SEL`
+/// with its label `TEXT_STRONG`.
 pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
     let ink = label_ink(item, cursor, armed);
     let (label, highlights): (SharedString, _) = if armed {
@@ -170,45 +167,46 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
     components::text_ui()
         .flex()
         .items_center()
+        .gap(px(MENU_ROW_GAP))
         .min_w_0()
         .h(px(FLOAT_ROW_H))
-        .px(px(FLOAT_PAD_X))
+        .mx(px(FLOAT_PAD))
+        .px(px(MENU_ROW_PAD_X))
+        .rounded(px(R_MENU_ROW))
         .whitespace_nowrap()
         .when(armed || (cursor && !item.disabled), |row| row.bg(FLOAT_SEL))
         .text_color(rgb(ink))
-        .child(gutter(cursor && !item.disabled && !armed))
         .when_some(item.leading, |row, (path, mark)| {
             row.child(
                 div()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .w(px(FLOAT_GUTTER))
                     .child(icons::icon(path, ROW_ICON, mark)),
             )
         })
-        .child({
-            // The label holds its run's width, as the browser measures it.
-            let cells = components::run_width(&label);
+        .child(
             div()
                 .min_w_0()
                 .truncate()
                 .map(|cell| match item.label_w {
-                    Some(width) => cell.w(px(width)).flex_shrink_0(),
-                    None => cell.w(px(cells)).flex_shrink(1.),
+                    // An aligned column holds names that are code.
+                    Some(width) => cell.w(px(width)).flex_shrink_0().font_family(FONT_CODE),
+                    None => cell,
                 })
-                .child(gpui::StyledText::new(label).with_highlights(highlights))
-        })
+                .child(gpui::StyledText::new(label).with_highlights(highlights)),
+        )
         .map(|row| match item.detail.clone() {
             Some(detail) => {
                 let cell = div()
                     .flex_1()
                     .min_w_0()
-                    .ml(px(FLOAT_DETAIL_GAP))
                     .truncate()
                     .text_color(rgb(TEXT_DIM));
                 row.child(if item.mono {
-                    cell.text_ellipsis_start().child(detail)
+                    cell.font_family(FONT_CODE)
+                        .text_ellipsis_start()
+                        .child(detail)
                 } else {
                     cell.child(detail)
                 })
@@ -220,26 +218,23 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
                 div()
                     .flex()
                     .flex_shrink_0()
-                    .ml(px(FLOAT_DETAIL_GAP))
                     .child(key_label(&keys, TEXT_DIM)),
             )
         })
         .when(item.checked, |row| {
             row.child(
-                // The `✓` typed at the row's end, as the prototype's `.ok`
-                // follows its description.
                 div()
                     .flex()
                     .flex_shrink_0()
                     .debug_selector(|| "float-check".into())
-                    .child(components::glyph("\u{2713}", RUNNING)),
+                    .child(components::glyph("\u{2713}", TEXT_STRONG)),
             )
         })
 }
 
 /// A row with its pointer role: `FLOAT_HOVER` under the pointer and the
 /// press face; the cursor row keeps `FLOAT_SEL` under the pointer (hover
-/// never moves the `❯` or lightens its bar); an armed or disabled row takes
+/// never moves the cursor or lightens its fill); an armed or disabled row takes
 /// none. Callers add selectors and handlers only.
 pub fn item_row(id: impl Into<ElementId>, item: &Item, cursor: bool, armed: bool) -> Stateful<Div> {
     let id = id.into();
@@ -262,8 +257,7 @@ pub fn note(text: impl Into<SharedString>) -> Div {
         .flex_shrink_0()
         .items_center()
         .min_h(px(FLOAT_ROW_H))
-        .pl(px(FLOAT_PAD_X + FLOAT_GUTTER))
-        .pr(px(FLOAT_PAD_X))
+        .px(px(FLOAT_PAD_X))
         .cursor_default()
         .text_color(rgb(TEXT_DIM))
         .child(text.into())
@@ -293,9 +287,9 @@ pub fn footer_line(text: impl Into<SharedString>) -> Div {
     footer_shell().child(div().min_w_0().truncate().child(text))
 }
 
-/// The footer's row with nothing in it yet: the `FLOAT_RULE` rule, half a
-/// row above it, one row of `TEXT_DIM`. For a footer whose keys are set
-/// as key combinations (`⌘`, `components::key_combo`).
+/// The footer's row with nothing in it yet: `FLOAT_SECTION_GAP` of air,
+/// the `FLOAT_RULE` hairline, one row of 12 `TEXT_DIM`. For a footer whose
+/// keys are set as key combinations (`⌘`, `components::key_combo`).
 pub fn footer_shell() -> Div {
     components::text_ui()
         .flex()
@@ -308,12 +302,14 @@ pub fn footer_shell() -> Div {
         .border_color(FLOAT_RULE)
         .whitespace_nowrap()
         .overflow_hidden()
+        .text_size(px(FS_META))
         .text_color(rgb(TEXT_DIM))
 }
 
-/// One step of a short ladder (an effort level, a two-way setting): the
-/// chosen one inverse — `PRIMARY` with `ON_PRIMARY` at `W_STRONG` — the
-/// rest `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
+/// One step of a short ladder (an effort level, a two-way setting), a
+/// `TOKEN_H` pill `TOKEN_PAD_X` either side of its word: the chosen one
+/// inverse — `PRIMARY` with `ON_PRIMARY` at `W_LABEL` — the rest
+/// `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
 pub fn token(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -321,8 +317,6 @@ pub fn token(
 ) -> Stateful<Div> {
     let id = id.into();
     let key = crate::pointer::hover_key(&id);
-    // Exactly its cells and a cell either side: padded runs would snap
-    // each pad from 7.8 to 8 and round each word up, drifting the ladder.
     let label: SharedString = label.into();
     let token = div()
         .id(id)
@@ -330,15 +324,16 @@ pub fn token(
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .h(px(FLOAT_ROW_H))
-        .w(px(components::run_width(&label) + 2.0 * TOKEN_PAD_X))
+        .h(px(TOKEN_H))
+        .px(px(TOKEN_PAD_X))
+        .rounded(px(R_SMALL))
         .whitespace_nowrap()
-        .child(components::cells(label));
+        .child(label);
     if chosen {
         token
             .bg(rgb(PRIMARY))
             .text_color(rgb(ON_PRIMARY))
-            .font_weight(W_STRONG)
+            .font_weight(W_LABEL)
     } else {
         token
             .text_color(rgb(TEXT_DIM))
@@ -351,16 +346,16 @@ pub fn token(
 // --------------------------------------------------------- context menu
 
 /// The context menu's shell: the float, at least `MENU_W`, as wide as its
-/// longest verb beside its shortcut so no verb is cut, a quarter row of air
+/// longest verb beside its shortcut so no verb is cut, `FLOAT_PAD` of air
 /// above and below its rows. The caller positions it (`anchored`, which
 /// keeps it inside the window).
 pub fn shell() -> Div {
-    float().min_w(px(MENU_W)).py(px(SPACE_1))
+    float().min_w(px(MENU_W)).py(px(FLOAT_PAD))
 }
 
-/// The space between two groups of rows: half a row, no rule.
+/// The space between two groups of rows: `MENU_GROUP_GAP`, no rule.
 pub fn gap() -> Div {
-    div().flex_shrink_0().h(px(HALF_ROW))
+    div().flex_shrink_0().h(px(MENU_GROUP_GAP))
 }
 
 /// One row, its shortcut hard right. `armed` is a destructive row waiting
@@ -378,17 +373,16 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
                 div()
                     .flex()
                     .flex_shrink_0()
-                    .ml(px(FLOAT_DETAIL_GAP))
                     .child(key_label(&keys, TEXT_DIM)),
             )
         },
     )
 }
 
-/// A tooltip in the float grammar: one row of the grid's type in a cell of
-/// padding, at most `TOOLTIP_MAX_W` wide (a long path wraps), on the float
-/// with its edge and shadow. It is also how a label that truncates keeps
-/// its full value reachable.
+/// A tooltip in the float grammar: one `FLOAT_ROW_H` row of the UI type,
+/// its text `FLOAT_PAD_X` in, at most `TOOLTIP_MAX_W` wide (a long path
+/// wraps), on the float's ground, radius and ring with the float shadow.
+/// It is also how a label that truncates keeps its full value reachable.
 pub fn tooltip(
     text: impl Into<SharedString>,
 ) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
@@ -401,7 +395,8 @@ pub fn tooltip(
             .px(px(TOOLTIP_PAD_X))
             .py(px(TOOLTIP_PAD_Y))
             .max_w(px(TOOLTIP_MAX_W))
-            .rounded(px(R_CONTROL))
+            .rounded(px(R_BLOCK))
+            .border_color(FLOAT_EDGE)
             .shadow(components::float_shadow())
             .build(window, cx)
     }
@@ -441,7 +436,8 @@ pub fn tooltip_with_key(
         .px(px(TOOLTIP_PAD_X))
         .py(px(TOOLTIP_PAD_Y))
         .max_w(px(TOOLTIP_MAX_W))
-        .rounded(px(R_CONTROL))
+        .rounded(px(R_BLOCK))
+        .border_color(FLOAT_EDGE)
         .shadow(components::float_shadow())
         .build(window, cx)
     }
@@ -475,10 +471,10 @@ pub struct Ladder {
     pub on_step: Picked,
 }
 
-/// A picker in the float grammar (the prototype's `#picker`): a head
-/// (`model  /model`), the choices as rows — sections led by a provider's
-/// mark, the cursor's `❯` on its `FLOAT_SEL` bar, a green `✓` on the
-/// standing choice — an optional ladder row, and a footer of the keys that
+/// A picker in the float grammar: a head (`Model  /model`), the choices as
+/// rows — sections led by a provider's mark, the cursor row's `FLOAT_SEL`
+/// fill, a `✓` on the standing choice — an optional ladder row, and a
+/// footer of the keys that
 /// act. The kit `Popover` hangs it off its trigger; the menu owns its
 /// keyboard (↑/↓ the cursor, ←/→ the ladder, ↵ picks, esc closes) in the
 /// kit's own `PopupMenu` key context, so its bindings beat the bare enter
@@ -676,6 +672,7 @@ impl ChoiceContent {
             .flex()
             .flex_col()
             .min_h_0()
+            .py(px(FLOAT_PAD))
             .max_h(px(MENU_MAX_H))
             .overflow_y_scroll();
         // A mark rides its section title; only a menu without sections marks
@@ -683,10 +680,8 @@ impl ChoiceContent {
         let marked = !self.choices.iter().any(|choice| choice.section);
         for (index, choice) in self.choices.iter().enumerate() {
             if choice.section {
-                // A section names its group in the terminal's lowercase
-                // (`claude`, `codex · …`).
                 rows = rows.child(section(
-                    SharedString::from(choice.label.to_lowercase()),
+                    choice.label.clone(),
                     choice.icon,
                     choice.detail.clone(),
                 ));
@@ -706,7 +701,7 @@ impl ChoiceContent {
                 item = item.leading(path, ink);
             }
             // The pointer paints its own row (`FLOAT_HOVER`) and leaves the
-            // cursor where the arrows put it: only ↑↓ move the `❯`.
+            // cursor where the arrows put it: only ↑↓ move it.
             let pick = self.clone();
             rows = rows.child(
                 item_row(("choice-row", index), &item, cursor == Some(index), false)
@@ -724,8 +719,8 @@ impl ChoiceContent {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .mt(px(FLOAT_SECTION_GAP))
-                .pt(px(FLOAT_SECTION_GAP))
+                .gap(px(SPACE_0_5))
+                .h(px(FLOAT_ROW_H + 1.0))
                 .px(px(FLOAT_PAD_X))
                 .border_t_1()
                 .border_color(FLOAT_RULE)
@@ -733,7 +728,7 @@ impl ChoiceContent {
                 .child(
                     div()
                         .flex_shrink_0()
-                        .w(px(components::run_width(&ladder.label) + TOKEN_PAD_X))
+                        .mr(px(SPACE_2))
                         .whitespace_nowrap()
                         .text_color(rgb(TEXT_DIM))
                         .child(ladder.label.clone()),

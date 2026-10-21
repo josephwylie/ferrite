@@ -35,11 +35,6 @@ use crate::cockpit::here;
 #[path = "cockpit/visual_reference/world.rs"]
 pub(crate) mod world;
 
-/// The approved prototype's world, behind the `parity-*` scenes (retired
-/// with the UI refresh's last phase).
-#[path = "cockpit/visual_reference/parity.rs"]
-pub(crate) mod parity;
-
 /// The UI refresh's mockup world, behind `--demo parity` and the
 /// `refresh-*` scenes.
 #[path = "cockpit/visual_reference/mockup.rs"]

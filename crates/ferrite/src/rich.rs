@@ -708,7 +708,7 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
     crate::components::faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        theme::paint::HOVER.into(),
+        theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT_DIM).into(),
         cx,

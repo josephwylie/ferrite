@@ -17,7 +17,7 @@ use super::fixture::{self, NOW};
 use super::keys::{is_paste, press_of};
 use super::render::{self, Run};
 use super::{BoardEvent, BoardView};
-use crate::theme::{GREEN, PLANE, RED, SELECTION, TEXT, TEXT_STRONG, YELLOW};
+use crate::theme::{CARD, GREEN, RED, SELECTED, TEXT, TEXT_STRONG, YELLOW};
 
 // ------------------------------------------------------------------ keys
 
@@ -148,7 +148,7 @@ fn command_v_pastes_and_other_command_keys_stay_the_windows() {
 fn ferrite_theme_holds_the_boards_colour_rules() {
     let theme = render::ferrite_theme(false);
     let pal = &theme.pal;
-    let on_plane = |c: C| greys::contrast(c.real().expect("a real colour"), PLANE);
+    let on_plane = |c: C| greys::contrast(c.real().expect("a real colour"), CARD);
     for grey in [pal.overlay0, pal.subtext0, pal.todo] {
         assert!(
             on_plane(grey) >= greys::FLOOR,
@@ -277,7 +277,7 @@ fn the_list_draws_its_header_groups_marks_and_columns() {
     let gutter = &selected[0];
     assert_eq!((gutter.text.as_str(), gutter.fg), ("▌", TEXT_STRONG));
     assert!(
-        selected.iter().all(|run| run.bg == Some(SELECTION)),
+        selected.iter().all(|run| run.bg == Some(SELECTED)),
         "the tint runs to the end"
     );
     assert_eq!(cells(selected), 120);
@@ -335,7 +335,7 @@ fn the_text_box_and_the_hint_line() {
     let cursor = run(&lines[at], "A");
     assert_eq!(
         (cursor.fg, cursor.bg),
-        (PLANE, Some(TEXT)),
+        (CARD, Some(TEXT)),
         "the cursor cell, reversed"
     );
     let hints = lines.last().unwrap();
@@ -433,11 +433,11 @@ fn no_color_draws_marks_words_and_reverse_only() {
     let lines = draw(&mut state, &theme, 120, 40);
     for line in &lines {
         for run in line {
-            assert!(run.fg == TEXT || run.fg == PLANE, "{run:?}");
+            assert!(run.fg == TEXT || run.fg == CARD, "{run:?}");
         }
     }
     let selected = line_with(&lines, "#5 ");
-    assert_eq!((selected[0].fg, selected[0].bg), (PLANE, Some(TEXT)));
+    assert_eq!((selected[0].fg, selected[0].bg), (CARD, Some(TEXT)));
     assert_eq!(run(line_with(&lines, "#9 "), "?").bg, None);
 }
 

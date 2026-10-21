@@ -636,10 +636,10 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
 
 // ---------------------------------------------------------------- toasts
 
-/// A quick answer in a toast (the prototype's `.qa button`): the key in
-/// `TEXT_DIM` and the word in `TEXT`, in a 1px `FLOAT_EDGE` box a cell
-/// of padding wide, `TOAST_BUTTON_H` tall; under the pointer the float's
-/// band (`FLOAT_BAND2`) and the word `TEXT_STRONG`, over the one blend.
+/// A quick answer in a toast: the key in `TEXT_DIM` and the word in
+/// `TEXT`, on a `TOKEN_H` pill of the float's raised fill (`FLOAT_BAND2`),
+/// radius `R_SMALL`; under the pointer the word `TEXT_STRONG`, over the one
+/// blend.
 fn quick_button(
     id: impl Into<gpui::ElementId>,
     key: &'static str,
@@ -648,23 +648,21 @@ fn quick_button(
     let id = id.into();
     let blend = crate::pointer::hover_key(&id);
     let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
-    // Its cells, a cell of padding each side and its edge.
-    let width = components::run_width(key) + components::run_width(word) + 2.0 * CH + 2.0;
     div()
         .id(id)
         .flex()
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .h(px(TOAST_BUTTON_H))
-        .w(px(width))
-        .border_1()
-        .border_color(FLOAT_EDGE)
+        .h(px(TOKEN_H))
+        .px(px(TOKEN_PAD_X))
+        .rounded(px(R_SMALL))
+        .bg(FLOAT_BAND2)
         .whitespace_nowrap()
         .hover_quick(blend)
         .press_float()
-        .child(components::cells(key).text_color(rgb(TEXT_DIM)))
-        .child(components::cells(word).text_color(ink))
+        .child(div().text_color(rgb(TEXT_DIM)).child(key))
+        .child(div().text_color(ink).child(word))
 }
 
 /// A toast (the prototype's `.toast`, FL-18), in the float grammar with no
@@ -682,7 +680,13 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
             .flex()
             .min_w_0()
             .overflow_hidden()
-            .child(components::cells(format!("{tool} wants to run ")).text_color(rgb(TEXT)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .text_color(rgb(TEXT))
+                    .child(format!("{tool} wants to run\u{a0}")),
+            )
             .child(
                 div()
                     .min_w_0()
@@ -740,7 +744,7 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
     );
     crate::menu::float()
         .debug_selector(move || format!("toast-{thread}"))
-        .w(px(TOAST_BOX_W))
+        .w(px(TOAST_W))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
@@ -792,9 +796,8 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
         .child(
             div()
                 .flex()
-                .gap(px(CH))
+                .gap(px(SPACE_1_5))
                 .px(px(FLOAT_PAD_X))
-                .pt(px(TOAST_QUICK_GAP))
                 .pb(px(TOAST_QUICK_GAP))
                 .children(buttons),
         )

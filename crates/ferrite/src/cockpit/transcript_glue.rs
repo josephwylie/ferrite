@@ -235,23 +235,4 @@ impl CockpitView {
             transcript.update(cx, |transcript, cx| transcript.scroll_to(target, cx));
         }
     }
-
-    /// Open the hover card on the first path target in Pane `index`'s
-    /// transcript that names `path`, at `line` or the Thread's latest
-    /// change to it (a scene's solo-hover view).
-    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-    pub(crate) fn preview_path(
-        &mut self,
-        index: usize,
-        path: &str,
-        line: Option<u32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.transcript()) {
-            transcript.update(cx, |transcript, cx| {
-                transcript.preview_path(path, line, window, cx)
-            });
-        }
-    }
 }

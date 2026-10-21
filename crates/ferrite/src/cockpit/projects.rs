@@ -384,7 +384,7 @@ impl CockpitView {
 
     /// Shared navigation for the task list and the full conversation.
     fn tasks_header(&self, cx: &mut Context<Self>) -> Div {
-        use crate::theme::{CH, CHROME, CONTROL_H, LINE, TEXT_STRONG, W_STRONG};
+        use crate::theme::{CH, CONTROL_H, FRAME, LINE, TEXT_STRONG, W_STRONG};
         let chat = self.projects.coordinator_shown();
         let tab = |id: &'static str, label: &'static str, selected: bool| {
             crate::components::form_button(id, cx)
@@ -423,7 +423,7 @@ impl CockpitView {
             .h(px(TASKS_HEADER_H))
             .px(px(CH * 1.5))
             .gap(px(CH))
-            .bg(rgb(CHROME))
+            .bg(rgb(FRAME))
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .border_b_1()

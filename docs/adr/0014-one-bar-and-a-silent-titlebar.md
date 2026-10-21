@@ -82,3 +82,30 @@ logo. Herdr, the calmer reference, has no top toolbar and one status line.
   updated to match, so the parity scenes compare against the same chrome.
 - Item 4 (the needs-you strip, still carrying its `⌘D`) and item 5 (nav
   heading styles) are a separate change.
+
+## Amendment (2026-10-21): the bar's contents, the `⌘K` door and popovers
+
+The UI refresh ([ADR 0033](0033-sans-chrome-and-card-panes.md), SPEC §5.7)
+leaves the bar with views and vitals. On the left, the view tabs (`1 Solo`,
+then one per Group), each with a roll-up dot; on the right, `N need you`
+(which opens the Needs-you view, hidden at 0), each provider's usage
+(`N% this week` or `N% of 5h`), `N GB free` (only under 20 GB) and the
+clock. Everything else leaves: the sidebar toggle for the nav head, the
+bell for the nav's Needs-you view, the board door for its `Tasks` view,
+the gear and `ferrite` for the nav foot, and `?` for the palette's
+`Keyboard shortcuts` command and the Help menu. The focused Pane's status
+line is gone: the mode, model and effort are chips in the Composer, and
+`ctx` and the changed files are the Solo panel's. The count also amends
+theme rule 7's "no counts".
+
+`?` is no longer the one way in to the keys. The `⌘K` door is back as the
+nav's `Search` row, which opens the palette (SPEC §5.8). Its chord is the
+one always on screen; every other chord still sits in a menu, the palette
+or a tooltip.
+
+Popovers no longer hang off the bar. The pickers and a Draft's Project and
+Workspace menus anchor above their chips in the Composer. Every float
+shares one shell: `FLOAT`, radius 8, 30px rows and a 1px `HAIRLINE_STRONG`
+ring. The palette is its larger case, at radius 12 with a deeper shadow.
+The terminal-native prototype no longer pictures the chrome; the design
+lives in `docs/design/ui-refresh/`.

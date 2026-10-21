@@ -40,10 +40,11 @@ fn palette_open(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) ->
     view.read_with(cx, |view, _| view.floats.palette.is_some())
 }
 
-/// FL-1: ⌘K opens the palette, 84 cells wide, centred on the board, its
-/// head 56px under the board's top, over a veil that covers the board and
-/// nothing else; esc closes it without interrupting the running turn, and
-/// ⌘K toggles it.
+/// FL-1: ⌘K opens the palette, 640 wide, centred on the board, its head
+/// 56px under the board's top, over a veil that covers the board and
+/// nothing else, its input row 50 over a hairline, its rows 36, the
+/// footer 36 under a hairline counting the results (SPEC §5.8); esc closes
+/// it without interrupting the running turn, and ⌘K toggles it.
 #[gpui::test]
 fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("palette-open", 1);
@@ -60,7 +61,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
     assert!(
         (palette.size.width - px(crate::theme::PALETTE_W)).abs() <= px(1.),
-        "84 cells: {palette:?}"
+        "640 wide: {palette:?}"
     );
     assert!(
         (palette.center().x - px(board.x + board.w / 2.)).abs() <= px(1.),
@@ -80,8 +81,31 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     );
     let input = cx.debug_bounds("palette-input").expect("the input row");
     assert!(
-        (input.size.height - px(crate::theme::PALETTE_INPUT_H)).abs() <= px(1.),
-        "a row and 12px: {input:?}"
+        (input.size.height - px(crate::theme::PALETTE_INPUT_H + 1.)).abs() < px(0.5),
+        "50 and its hairline: {input:?}"
+    );
+    let row = cx.debug_bounds("palette-row-0").expect("a row");
+    assert!(
+        (row.size.height - px(crate::theme::PALETTE_ROW_H)).abs() < px(0.5),
+        "rows are 36: {row:?}"
+    );
+    assert!(
+        (row.left() - (palette.left() + px(crate::theme::PALETTE_LIST_PAD))).abs() < px(0.5),
+        "6 in from the dialog: {row:?} / {palette:?}"
+    );
+    let section = cx.debug_bounds("palette-section-0").expect("a heading");
+    assert!(
+        (section.top() - (input.bottom() + px(crate::theme::PALETTE_LIST_PAD))).abs() < px(0.5)
+            && (section.size.height - px(crate::theme::PALETTE_SECTION_H)).abs() < px(0.5),
+        "the first heading 32 high, 6 under the input: {section:?}"
+    );
+    let results = cx
+        .debug_bounds("palette-results")
+        .expect("the result count");
+    assert!(
+        (palette.bottom() - results.center().y - px(crate::theme::PALETTE_FOOT_H / 2.)).abs()
+            <= px(1.),
+        "the count centred in the 36px footer: {results:?} / {palette:?}"
     );
     cx.simulate_keystrokes("escape");
     tick(cx);

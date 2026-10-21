@@ -238,7 +238,7 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool) -> Div {
             .overflow_hidden()
             .when(overlay, |frame| {
                 frame
-                    .bg(theme::paint::PLANE)
+                    .bg(theme::paint::CARD)
                     // The transcript column's inset, Solo's or a Group
                     // Pane's.
                     .px(px(theme::tx_inset(solo)))

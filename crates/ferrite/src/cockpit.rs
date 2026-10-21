@@ -844,7 +844,7 @@ impl Render for PaneGhost {
                 div()
                     .h(px(theme::SPACE_1_5))
                     .w(gpui::relative(share))
-                    .bg(theme::paint::SELECTION),
+                    .bg(theme::paint::SELECTED),
             );
         }
         let marker = if self.face.reader {
@@ -2716,7 +2716,7 @@ impl CockpitView {
 
     /// Hold the sidebar's ride at `progress` (0 → 1 along `motion::RESIZE`)
     /// so a scene can capture the board mid-ride; `None` lets it go.
-    #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn fixture_hold_nav(&mut self, progress: Option<f32>) {
         self.nav_hold = progress;
     }
@@ -3172,31 +3172,14 @@ impl CockpitView {
             CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
-        let mut card = crate::components::floating_surface()
+        let mut card = crate::menu::float()
             .min_w(px(CHECKS_CARD_W))
             .max_w(px(CHECKS_CARD_MAX_W))
-            .font_family(FONT_UI)
-            .text_size(px(FS_UI))
-            .line_height(px(LH_UI))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(px(ROW))
-                    .px(px(CH))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(
-                        div()
-                            .font_weight(W_STRONG)
-                            .text_color(rgb(TEXT_STRONG))
-                            .child("plan"),
-                    )
-                    .child(SharedString::from(format!(
-                        "{}/{}",
-                        todos.done, todos.total
-                    ))),
-            );
+            .pb(px(FLOAT_PAD))
+            .child(crate::menu::head("Plan").child(SharedString::from(format!(
+                "{}/{}",
+                todos.done, todos.total
+            ))));
         let mut marked = false;
         for (index, step) in transcript.progress().plan.iter().enumerate() {
             let done = step.status == ferrite_core::progress::StepStatus::Completed;
@@ -3217,14 +3200,14 @@ impl CockpitView {
                     .debug_selector(move || format!("plan-step-{index}"))
                     .flex()
                     .items_center()
-                    .h(px(ROW))
-                    .px(px(CH))
+                    .h(px(FLOAT_ROW_H))
+                    .px(px(FLOAT_PAD_X))
                     .child(
                         div()
                             .flex()
                             .flex_shrink_0()
                             .items_center()
-                            .w(px(GLYPH_GUTTER))
+                            .w(px(SPACE_4 + SPACE_1))
                             .child(mark),
                     )
                     .child(
@@ -4187,9 +4170,10 @@ impl CockpitView {
                             div()
                                 .px(px(crate::theme::DROP_LABEL_PAD_X))
                                 .py(px(crate::theme::DROP_LABEL_PAD_Y))
-                                .bg(crate::theme::paint::FLOAT)
+                                .bg(crate::theme::FLOAT_GROUND)
+                                .rounded(px(crate::theme::R_BLOCK))
                                 .border_1()
-                                .border_color(crate::theme::paint::LINE2)
+                                .border_color(crate::theme::FLOAT_EDGE)
                                 .shadow(crate::components::float_shadow())
                                 .font_family(crate::theme::FONT_UI)
                                 .text_size(px(crate::theme::FS_UI))
@@ -11766,7 +11750,7 @@ impl CockpitView {
         let picker = weak.clone();
         Some(wrap(
             crate::menu::ChoiceMenu {
-                head: Some(("permission mode".into(), SharedString::default())),
+                head: Some(("Permission mode".into(), SharedString::default())),
                 ladder: None,
                 hints: vec![
                     ("\u{2191}\u{2193}", "mode"),
@@ -11900,17 +11884,19 @@ impl CockpitView {
                 rgb(crate::theme::TEXT_DIM).into(),
                 cx,
             )
-            .h(px(crate::theme::FLOAT_ROW_H))
-            .px(px(crate::theme::CH))
+            .h(px(crate::theme::TOKEN_H))
+            .px(px(crate::theme::TOKEN_PAD_X))
+            .rounded(px(crate::theme::R_SMALL))
             .child(crate::components::text_meta().child(verb))
         };
         // A card-wide verb is a whole float row: one row, the rows' inset,
         // `TEXT`, `FLOAT_HOVER` under the pointer.
         let action_row = |id: SharedString, verb: &'static str| {
             crate::components::form_button(id, cx)
-                .w_full()
                 .h(px(crate::theme::FLOAT_ROW_H))
-                .px(px(crate::theme::FLOAT_PAD_X + crate::theme::FLOAT_GUTTER))
+                .mx(px(crate::theme::FLOAT_PAD))
+                .px(px(crate::theme::MENU_ROW_PAD_X))
+                .rounded(px(crate::theme::R_MENU_ROW))
                 .child(
                     div()
                         .flex()
@@ -11921,21 +11907,20 @@ impl CockpitView {
                         .child(verb),
                 )
         };
-        // A section head is the float's section row (theme WP-E): it carries
-        // its own half row of air.
+        // A section head is the float's section heading (theme WP-E): it
+        // carries its own air.
         let head = |title: &'static str, _after: bool| crate::menu::section(title, None, None);
         let row = || {
             div()
                 .flex()
                 .items_center()
-                .gap(px(crate::theme::CH))
+                .gap(px(crate::theme::SPACE_2))
                 .min_h(px(crate::theme::FLOAT_ROW_H))
-                .pl(px(crate::theme::FLOAT_PAD_X + crate::theme::FLOAT_GUTTER))
-                .pr(px(crate::theme::FLOAT_PAD_X))
+                .px(px(crate::theme::FLOAT_PAD_X))
                 .min_w_0()
         };
         let mut card = crate::menu::float()
-            .pb(px(crate::theme::HALF_ROW))
+            .pb(px(crate::theme::FLOAT_PAD))
             .id("session-controls-card")
             .debug_selector(|| "session-controls-card".into())
             .w(px(crate::theme::SESSION_CARD_W))
@@ -11954,7 +11939,7 @@ impl CockpitView {
         let modes = open.permission_modes();
         let modes_empty = modes.is_empty();
         if !modes_empty {
-            card = card.child(head("mode", errored));
+            card = card.child(head("Mode", errored));
         }
         let current = open.permission_mode().map(str::to_owned);
         for (index, mode) in modes.into_iter().enumerate() {
@@ -11964,16 +11949,16 @@ impl CockpitView {
                 crate::components::button(SharedString::from(format!("permission-mode-{index}")))
                     .debug_selector(move || format!("permission-mode-{index}"))
                     .tab_stop(true)
-                    .w_full()
                     .h(px(crate::theme::FLOAT_ROW_H))
-                    .px(px(crate::theme::FLOAT_PAD_X))
+                    .mx(px(crate::theme::FLOAT_PAD))
+                    .px(px(crate::theme::MENU_ROW_PAD_X))
+                    .rounded(px(crate::theme::R_MENU_ROW))
                     .accessibility_label(mode.label.clone())
                     .child(
                         div()
                             .flex()
                             .w_full()
                             .items_center()
-                            .child(crate::menu::gutter(false))
                             .child(
                                 div()
                                     .flex_1()
@@ -11991,7 +11976,7 @@ impl CockpitView {
                                     .child(mode.label),
                             )
                             .children(checked.then(|| {
-                                crate::components::glyph("\u{2713}", crate::theme::RUNNING)
+                                crate::components::glyph("\u{2713}", crate::theme::TEXT_STRONG)
                             })),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -12010,7 +11995,7 @@ impl CockpitView {
         // `No MCP servers reported` would say it twice.
         if transcript.mcp_servers().is_empty() {
             card = card.child(
-                crate::menu::note("no MCP servers reported")
+                crate::menu::note("No MCP servers reported")
                     .when(errored || !modes_empty, |note| {
                         note.mt(px(crate::theme::FLOAT_SECTION_GAP))
                     }),
@@ -12161,7 +12146,6 @@ impl CockpitView {
                 card = card.child(
                     div()
                         .pl(px(crate::theme::FLOAT_PAD_X
-                            + crate::theme::FLOAT_GUTTER
                             + crate::theme::STATUS_DOT
                             + crate::theme::CH))
                         .pr(px(crate::theme::FLOAT_PAD_X))
@@ -12188,7 +12172,7 @@ impl CockpitView {
         }
         let tasks = transcript.progress().background();
         if !tasks.is_empty() || open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
-            card = card.child(head("background tasks", true));
+            card = card.child(head("Background tasks", true));
         }
         for (index, task) in tasks.iter().enumerate() {
             let working = task.status == ferrite_core::progress::TaskStatus::Working;
@@ -12462,7 +12446,7 @@ impl CockpitView {
                 let (steps, labels, chosen) = self.effort_ladder(thread)?;
                 let view = cx.entity().downgrade();
                 Some(crate::menu::Ladder {
-                    label: "effort".into(),
+                    label: "Effort".into(),
                     steps: labels,
                     chosen,
                     on_step: std::rc::Rc::new(move |at, _, cx| {
@@ -12475,10 +12459,10 @@ impl CockpitView {
                 })
             });
         let (head, things) = match (effort, band) {
-            (false, false) => (("model", "/model"), "model"),
-            (true, false) => (("effort", "/effort"), "effort"),
-            (false, true) => (("model", ""), "model"),
-            (true, true) => (("effort", ""), "effort"),
+            (false, false) => (("Model", "/model"), "model"),
+            (true, false) => (("Effort", "/effort"), "effort"),
+            (false, true) => (("Model", ""), "model"),
+            (true, true) => (("Effort", ""), "effort"),
         };
         let mut hints = vec![("\u{2191}\u{2193}", things)];
         if ladder.is_some() {
@@ -20830,13 +20814,11 @@ mod tests {
         });
     }
 
-    /// #21 AC3 is **overruled by the approved prototype**: navigation says
-    /// nothing about state. A blocked Thread and a running one are the same
-    /// row — no dot, no amber, no count, no chip — and the collapsed rail
-    /// says no more. A Decision is visible where it is answered: the Pane's
-    /// border, its signal line and its Decision card.
+    /// A pending Decision changes a row's mark (SPEC §6), never the rows
+    /// themselves: the same Threads under the same Projects, in the column
+    /// and in the collapsed rail alike.
     #[gpui::test]
-    fn a_pending_decision_changes_nothing_in_the_nav(cx: &mut TestAppContext) {
+    fn a_pending_decision_moves_no_row_in_the_nav(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("nav-amber", 2);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
@@ -20852,7 +20834,7 @@ mod tests {
             assert_eq!(
                 describe_nav(&view.nav_state()),
                 before,
-                "a pending Decision moves no ink in navigation"
+                "a pending Decision moves no row in navigation"
             );
         });
 
@@ -20866,8 +20848,7 @@ mod tests {
         });
     }
 
-    /// Everything a nav row can say, as one comparable string. If a state
-    /// signal ever creeps back in, this is what catches it.
+    /// Every nav row's name and Project, as one comparable list.
     fn describe_nav(state: &nav::NavState) -> Vec<String> {
         state
             .ordered_rows()

@@ -9,7 +9,7 @@ use gpui::{div, px, rgb, AnyElement, Context, SharedString};
 
 use super::BoardView;
 use crate::components;
-use crate::theme::{CH, CHROME, CONTROL_H, FS_UI, ICON_CHEVRON, LH_UI, LINE, ROW, TEXT, TEXT_DIM};
+use crate::theme::{CH, CONTROL_H, FRAME, FS_UI, ICON_CHEVRON, LH_UI, LINE, ROW, TEXT, TEXT_DIM};
 
 /// A nav Project new tasks can go to.
 #[derive(Clone, Debug, PartialEq)]
@@ -177,7 +177,7 @@ impl BoardView {
                 .h(px(self.aim.height()))
                 .px(px(CH * 1.5))
                 .gap(px(CH))
-                .bg(rgb(CHROME))
+                .bg(rgb(FRAME))
                 .border_b_1()
                 .border_color(rgb(LINE))
                 .text_color(rgb(TEXT_DIM))

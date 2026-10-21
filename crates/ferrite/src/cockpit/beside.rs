@@ -734,7 +734,7 @@ impl CockpitView {
 /// A file's lines, numbered (F-14): a `READER_NUMBER_W` column of numbers,
 /// right-aligned and dim, `READER_NUMBER_GAP` before the code, the code in
 /// its syntax colours (`highlight_tokens` for the path's language). The
-/// target line lies on `paint::SELECTION` with its number in `TEXT_STRONG`.
+/// target line lies on `paint::SELECTED` with its number in `TEXT_STRONG`.
 /// A line wider than the reader is cut at its edge; the one holding the
 /// find's occurrence starts further in when that would lie past it
 /// (`shown_from`). Virtualised: only the rows in view are laid out.
@@ -790,7 +790,7 @@ fn numbered_lines(
                         .w_full()
                         .h(px(LH_UI))
                         .whitespace_nowrap()
-                        .when(marked, |row| row.bg(paint::SELECTION))
+                        .when(marked, |row| row.bg(paint::SELECTED))
                         .child(
                             div()
                                 .flex()

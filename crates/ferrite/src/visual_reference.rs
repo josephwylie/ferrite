@@ -6,14 +6,11 @@
 //! would, and saves `{state}-{size}.png`. `FERRITE_REF_STATES` and
 //! `FERRITE_REF_SIZES` (comma lists) narrow a run to a subset.
 //!
-//! The `parity-*` states rebuild the approved terminal-native prototype's
-//! views on one shared world (`parity_scenes.rs`), and the `refresh-*`
-//! states the UI refresh's mockups on theirs (`mockup_scenes.rs`, at size
-//! `refresh`); run them with `--features visual-reference,opaque` so paints
-//! are the opaque greys the shots use.
-
-#[path = "cockpit/visual_reference/parity_scenes.rs"]
-mod parity_scenes;
+//! The `refresh-*` states rebuild the UI refresh's mockups
+//! (`docs/design/ui-refresh/mockups/`) on their one world
+//! (`mockup_scenes.rs`, at size `refresh`); run them with
+//! `--features visual-reference,opaque` so paints are the opaque greys the
+//! shots use.
 
 #[path = "cockpit/visual_reference/mockup_scenes.rs"]
 mod mockup_scenes;
@@ -277,14 +274,6 @@ impl Drop for HeldLoops {
     }
 }
 
-/// The Pane showing `thread`.
-fn pane_of(view: &CockpitView, thread: ThreadId) -> usize {
-    view.panes
-        .iter()
-        .position(|pane| pane.thread() == Some(thread))
-        .expect("a scene's Thread has a Pane")
-}
-
 impl Scene {
     fn new(tag: &str) -> Self {
         let root =
@@ -459,21 +448,6 @@ const STATES: &[(&str, &[&str])] = &[
     ("palettefilter", &["app"]),
     // (end WP-G)
 
-    // ---- parity: the approved prototype's views, one shared world
-    // (`parity_scenes.rs`); compared against /tmp/ferrite-tn-proto/<view>.png
-    ("parity-solo", &["app"]),
-    ("parity-solo-top", &["app"]),
-    ("parity-solo-hover", &["app"]),
-    ("parity-solo-picker", &["app"]),
-    ("parity-group", &["app"]),
-    ("parity-group-toast", &["app"]),
-    ("parity-group-notes", &["app"]),
-    ("parity-palette", &["app"]),
-    ("parity-wall", &["app"]),
-    ("parity-empty", &["app"]),
-    ("parity-collapsed", &["app"]),
-    ("parity-collapsed-ride", &["app"]),
-    // (end parity)
     // The UI refresh's mockups on their one world (`mockup_scenes.rs`);
     // compared against docs/design/ui-refresh/mockups/<view>.png.
     ("refresh-solo", &["refresh"]),
@@ -684,7 +658,6 @@ fn remove_root(root: &Path) {
 fn build(state: &str, label: &str) -> (Scene, Setup) {
     let none: Setup = Box::new(|_, _, _| {});
     match state {
-        state if parity_scenes::handles(state) => parity_scenes::build(state),
         state if mockup_scenes::handles(state) => mockup_scenes::build(state),
         state if feature_scenes::handles(state) => feature_scenes::build(state),
         "conversation" => (conversation(label), none),

@@ -1,5 +1,5 @@
-//! The kit the scripted worlds are built with (`parity`, the prototype's;
-//! `mockup`, the UI refresh's): a fixture clock the world is scripted in,
+//! The kit the scripted world is built with (`mockup`, the UI refresh's):
+//! a fixture clock the world is scripted in,
 //! scripted provider Sessions, a timeline of beats played in order, the
 //! events a provider says, and real git checkouts under a disposable HOME.
 //! Nothing here touches anything global: the caller owns HOME and the
@@ -186,16 +186,6 @@ impl Sessions {
 pub(crate) struct Spawn {
     feeds: Feeds,
     sides: Sides,
-}
-
-impl Spawn {
-    /// A spawner filling `feeds`.
-    pub(crate) fn new(feeds: Feeds) -> Self {
-        Spawn {
-            feeds,
-            sides: Sides::default(),
-        }
-    }
 }
 
 /// A scripted provider: it says what the timeline feeds it and nothing else.
@@ -502,14 +492,6 @@ pub(crate) fn mode(mode: &str) -> SessionEvent {
     SessionEvent::PermissionMode { mode: mode.into() }
 }
 
-/// Occupancy alone: the context meter, no turn accounting.
-pub(crate) fn context(total: u64, window: u64) -> SessionEvent {
-    SessionEvent::ContextUsage {
-        total_tokens: total,
-        context_window: Some(window),
-    }
-}
-
 /// A turn's accounting as Claude reports it: what it read and wrote, and
 /// the context it now occupies.
 pub(crate) fn tokens(total: u64, input: u64, output: u64, window: u64) -> [SessionEvent; 2] {
@@ -554,38 +536,6 @@ pub(crate) fn phase(detail: &str) -> SessionEvent {
             detail: detail.into(),
         },
     }
-}
-
-/// A Claude `Read`'s structured result (`toolUseResult.file`).
-pub(crate) fn read_result(path: &str, lines: &[String], total: usize) -> Outcome {
-    let content = lines.join("\n");
-    (
-        numbered(lines),
-        false,
-        ToolResult::Structured {
-            value: serde_json::json!({
-                "type": "text",
-                "file": {
-                    "filePath": path,
-                    "content": content,
-                    "numLines": total,
-                    "startLine": 1,
-                    "totalLines": total,
-                }
-            }),
-            duration_ms: None,
-        },
-    )
-}
-
-/// What `Read` hands the model: the lines, numbered.
-pub(crate) fn numbered(lines: &[String]) -> String {
-    lines
-        .iter()
-        .enumerate()
-        .map(|(at, line)| format!("{:>6}\u{2192}{line}", at + 1))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Codex asking to run a command, with its own standing answer for the
@@ -670,22 +620,6 @@ pub(crate) fn question(id: &str, question: &str, options: &[(&str, &str)]) -> Se
             suggestions: vec![],
         },
     }
-}
-
-/// A passing `cargo test` run of `tests` under `module`.
-pub(crate) fn passing(module: &str, tests: &[&str], count: usize, took: &str) -> String {
-    let mut lines = vec![format!("running {count} tests")];
-    lines.extend(
-        tests
-            .iter()
-            .take(count)
-            .map(|test| format!("test {module}::{test} ... ok")),
-    );
-    lines.push(format!(
-        "test result: ok. {count} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; \
-         finished in {took}"
-    ));
-    lines.join("\n")
 }
 
 /// Small methods to stand between the lines a scene shows, up to line

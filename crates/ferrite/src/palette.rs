@@ -4,16 +4,18 @@
 //! session import picker.
 //!
 //! The view holds what it shows — the rows, the filter's survivors and the
-//! cursor — and draws it in the float grammar: the input row (`❯`, the query
-//! in `TEXT_STRONG`, the block caret, the status filter's name at the
-//! right), section rows (`threads`, `projects`, `groups`, `commands`), rows
-//! (the cursor's `❯` on its `FLOAT_SEL` bar, a still state mark, the name
-//! with its matches in `TEXT_STRONG` at `W_STRONG`, the context muted after
-//! it, the key at the right), and the footer — the cursor row's detail (a
-//! Thread's working directory) where it has one, else the keys. The
-//! cockpit builds the rows (`cockpit::palette`) and runs them: every key
-//! the palette answers is a `palette::*` action bound in its `Palette`
-//! context, handled at the cockpit's root.
+//! cursor — and draws it as the command-search dialog (SPEC §5.8, theme's
+//! `PALETTE_*`): the input row (the `search` icon, the query in Geist
+//! `TEXT_STRONG`, `esc` or the status filter's name at the right), section
+//! headings (`Threads`, `Projects`, `Groups`, `Commands`, or `Sessions`),
+//! rows (a state mark or the command's icon, the name with its matches in
+//! `TEXT_STRONG` at `W_STRONG`, the context and the chord at the right, the
+//! cursor row `SELECTED` with its enter mark), and the footer — the cursor
+//! row's detail (a Thread's working directory) where it has one, else the
+//! keys, and the result count. The cockpit builds the rows
+//! (`cockpit::palette`) and runs them: every key the palette answers is a
+//! `palette::*` action bound in its `Palette` context, handled at the
+//! cockpit's root.
 //!
 //! **Status filters.** A line of one letter is a filter, not a search: `b`
 //! `w` `i` `d` keep only the rows whose state is blocked, working, idle or
@@ -82,11 +84,11 @@ pub(crate) enum Section {
 impl Section {
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Section::Threads => "threads",
-            Section::Projects => "projects",
-            Section::Groups => "groups",
-            Section::Commands => "commands",
-            Section::Sessions => "sessions",
+            Section::Threads => "Threads",
+            Section::Projects => "Projects",
+            Section::Groups => "Groups",
+            Section::Commands => "Commands",
+            Section::Sessions => "Sessions",
         }
     }
 }
@@ -162,6 +164,36 @@ pub(crate) enum Command {
     Projects(crate::projects::Command),
 }
 
+impl Command {
+    /// The icon in the row's mark column, where the icon family has one
+    /// that says the act (`command-search.png`: `plus`, `branch`, `board`);
+    /// the rest hold the column empty.
+    fn icon(&self) -> Option<&'static str> {
+        use crate::icons::*;
+        Some(match self {
+            Command::NewThread
+            | Command::NewThreadIn(_)
+            | Command::NewThreadInGroup
+            | Command::NewGroup
+            | Command::NewProject => PLUS,
+            Command::NewWorktreeThread | Command::ReviewBranch => BRANCH,
+            Command::OpenGroup => BOARD,
+            Command::ParkThread | Command::ShowParked => ARCHIVE,
+            Command::Settings => GEAR,
+            Command::ToggleSidebar => SIDEBAR,
+            Command::FullscreenPane => MAXIMIZE,
+            Command::Notifications => BELL,
+            Command::CopyPrompt => COPY,
+            Command::ResendPrompt => RESEND,
+            Command::PermissionMode => SHIELD,
+            Command::ShowChanges | Command::ReviewChanges => FILE,
+            Command::RefreshPr | Command::RefreshMcp | Command::ReconnectMcp => REFRESH,
+            Command::OpenPr => EXTERNAL,
+            _ => return None,
+        })
+    }
+}
+
 /// What a row does when it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Act {
@@ -201,17 +233,6 @@ pub(crate) struct Row {
 }
 
 impl Row {
-    /// How far after the name its context stands: four cells for a Thread
-    /// (and a Project or Group), two for a command's description.
-    fn context_gap(&self) -> f32 {
-        match self.section {
-            Section::Commands => FLOAT_DETAIL_GAP,
-            Section::Threads | Section::Projects | Section::Groups | Section::Sessions => {
-                PALETTE_CONTEXT_GAP
-            }
-        }
-    }
-
     /// Whether the status filter keeps the row: a row with no state always.
     fn passes(&self, filter: Option<Attention>) -> bool {
         match (filter, self.status) {
@@ -404,7 +425,7 @@ fn filter(rows: &[Row], query: &str, scope: PaletteScope) -> Vec<Shown> {
         .collect()
 }
 
-/// The palette's footer, word for word (the prototype's `.ffoot`).
+/// The palette's footer, word for word (`command-search.png`'s).
 pub(crate) const FOOTER: &str =
     "\u{2191}\u{2193} select \u{b7} \u{23ce} open \u{b7} \u{21e5} preview in a pane \u{b7} esc";
 /// ⌘G's footer: a Group has no pane to preview in.
@@ -412,21 +433,30 @@ pub(crate) const GROUPS_FOOTER: &str = "\u{2191}\u{2193} select \u{b7} \u{23ce} 
 /// The import picker's footer: ⏎ imports the session and resumes it.
 pub(crate) const SESSIONS_FOOTER: &str =
     "\u{2191}\u{2193} select \u{b7} \u{23ce} import \u{b7} esc";
-const NO_MATCHES: &str = "no matches";
+pub(crate) const NO_MATCHES: &str = "no matches";
+
+/// The footer's right: how many rows survive.
+fn results_word(count: usize) -> String {
+    match count {
+        1 => "1 result".to_string(),
+        count => format!("{count} results"),
+    }
+}
 
 impl Render for Palette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = input_row("palette-input", self.input.clone()).children(
-            status_filter(self.scope, &self.query(cx))
-                .flatten()
-                .map(|filter| {
-                    div()
-                        .debug_selector(|| "palette-filter".into())
-                        .flex_shrink_0()
-                        .ml(px(FLOAT_DETAIL_GAP))
-                        .text_color(rgb(TEXT_DIM))
-                        .child(filter_word(filter))
-                }),
+        let trailing = match status_filter(self.scope, &self.query(cx)).flatten() {
+            Some(filter) => div()
+                .debug_selector(|| "palette-filter".into())
+                .text_color(rgb(filter_ink(filter)))
+                .child(filter_word(filter)),
+            None => div().text_color(rgb(TEXT_DIM)).child("esc"),
+        };
+        let input = input_row("palette-input", self.input.clone()).child(
+            trailing
+                .flex_shrink_0()
+                .text_size(px(FS_META))
+                .whitespace_nowrap(),
         );
         let mut list = div()
             .id("palette-rows")
@@ -435,15 +465,19 @@ impl Render for Palette {
             .min_h_0()
             .max_h(px(PALETTE_MAX_H))
             .overflow_y_scroll()
-            .track_scroll(&self.scroll);
+            .track_scroll(&self.scroll)
+            .px(px(PALETTE_LIST_PAD))
+            .pt(px(PALETTE_LIST_PAD))
+            .pb(px(PALETTE_LIST_PAD_B));
         let mut section = None;
         for (at, shown) in self.shown.iter().enumerate() {
             let row = &self.rows[shown.row];
             if section != Some(row.section) {
+                let first = section.is_none();
                 section = Some(row.section);
                 list = list.child(
-                    crate::menu::section(row.section.title(), None, None)
-                        .debug_selector(move || format!("palette-section-{}", at)),
+                    section_heading(row.section.title(), first)
+                        .debug_selector(move || format!("palette-section-{at}")),
                 );
             }
             list = list.child(
@@ -462,7 +496,15 @@ impl Render for Palette {
             } else {
                 NO_MATCHES.into()
             };
-            list = list.child(crate::menu::note(note).mt(px(FLOAT_SECTION_GAP)));
+            list = list.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(PALETTE_ROW_H))
+                    .px(px(PALETTE_ROW_PAD_X))
+                    .text_color(rgb(TEXT_DIM))
+                    .child(note),
+            );
         }
         let footer = match (
             self.selected().and_then(|row| row.detail.clone()),
@@ -473,55 +515,158 @@ impl Render for Palette {
             (None, PaletteScope::Groups) => GROUPS_FOOTER.into(),
             (None, PaletteScope::Sessions) => SESSIONS_FOOTER.into(),
         };
-        crate::menu::float()
+        dialog()
             .debug_selector(|| "palette".into())
-            .w(px(PALETTE_BOX_W))
             // A press inside never reaches the veil or the board under it.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(input)
             .child(list)
-            .child(crate::menu::footer_line(footer))
+            .child(footer_row(footer, results_word(self.shown.len())))
     }
 }
 
-/// A float's input row (the palette's, the shortcuts sheet's filter): `❯`
-/// in its 2-cell gutter (`TEXT_STRONG`, the typed prompt mark), the line in
-/// `TEXT_STRONG` with the block caret, a row and 12px tall over the float's
-/// rule.
+/// The status filter's word in its state's ink: hue for the two states
+/// that have one (needs you, working), `TEXT_DIM` for idle and done (done
+/// is a shape, not a hue).
+fn filter_ink(filter: Attention) -> u32 {
+    match filter {
+        Attention::Blocked => ATTENTION,
+        Attention::Working => RUNNING,
+        Attention::Idle | Attention::Done => TEXT_DIM,
+    }
+}
+
+/// The dialog's shell (SPEC §5.8): `PALETTE_W` on `PALETTE_GROUND`, radius
+/// `R_PALETTE`, clipped to it, the 1px `HAIRLINE_STRONG` ring drawn
+/// *outside* the box (a spread shadow, as the mockup's `0 0 0 1px`, so the
+/// box keeps its full 640 inside), and the deep shadow under it. The
+/// shortcuts sheet wears it too.
+pub(crate) fn dialog() -> gpui::Div {
+    use gpui::{point, BoxShadow};
+    components::text_ui()
+        .cursor_default()
+        .occlude()
+        .flex()
+        .flex_col()
+        .w(px(PALETTE_W))
+        .overflow_hidden()
+        .rounded(px(R_PALETTE))
+        .bg(rgb(PALETTE_GROUND))
+        .shadow(vec![
+            BoxShadow {
+                inset: false,
+                color: gpui::rgba(HAIRLINE_STRONG).into(),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+            },
+            BoxShadow {
+                inset: false,
+                color: gpui::rgba(SHADOW_PALETTE).into(),
+                offset: point(px(0.), px(SHADOW_PALETTE_Y)),
+                blur_radius: px(SHADOW_PALETTE_BLUR),
+                spread_radius: px(0.),
+            },
+        ])
+}
+
+/// The dialog's input row (the palette's, the shortcuts sheet's filter):
+/// `PALETTE_INPUT_H` over a `HAIRLINE`, the `search` icon in `TEXT_DIM`,
+/// then the line in Geist `FS_PALETTE` `TEXT_STRONG`. The caller adds
+/// what stands at its right.
 pub(crate) fn input_row(selector: &'static str, input: Entity<Composer>) -> gpui::Div {
     div()
         .debug_selector(move || selector.into())
         .flex()
         .flex_shrink_0()
         .items_center()
-        .h(px(PALETTE_INPUT_H))
-        .px(px(FLOAT_PAD_X))
+        .gap(px(PALETTE_GAP))
+        // The row, then its hairline under it (gpui's border sits inside
+        // the box).
+        .h(px(PALETTE_INPUT_H + 1.0))
+        .px(px(PALETTE_PAD_X))
         .border_b_1()
-        .border_color(FLOAT_RULE)
-        // Centred in the 31px over its rule, the line falls half a
-        // pixel off the grid: set where the browser sets it.
-        .child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .w(px(FLOAT_GUTTER))
-                .child(components::prompt_mark(TEXT_STRONG)),
-        )
+        .border_color(gpui::rgba(HAIRLINE))
+        .child(crate::icons::icon(
+            crate::icons::SEARCH,
+            PALETTE_SEARCH_ICON,
+            TEXT_DIM,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .font_family(FONT_CODE)
+                .font_family(FONT_UI)
+                .text_size(px(FS_PALETTE))
                 .line_height(px(LH_UI))
                 .text_color(rgb(TEXT_STRONG))
                 .child(input),
         )
 }
 
-/// One palette row (the prototype's `.frow`): the gutter (`❯` on the
-/// cursor), the 2-cell dot column, the name (matches lit), the context
-/// muted after it, the key at the right.
+/// A section heading: its word in 12/500 `TEXT_DIM`, set on the heading's
+/// foot; a heading after the first stands `PALETTE_SECTION_GAP` taller.
+pub(crate) fn section_heading(title: &'static str, first: bool) -> gpui::Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_end()
+        .h(px(PALETTE_SECTION_H))
+        .when(!first, |heading| heading.mt(px(PALETTE_SECTION_GAP)))
+        .px(px(PALETTE_ROW_PAD_X))
+        .pb(px(PALETTE_SECTION_PAD_B))
+        .text_size(px(FS_META))
+        .font_weight(W_LABEL)
+        .text_color(rgb(TEXT_DIM))
+        .whitespace_nowrap()
+        .child(title)
+}
+
+/// The footer: `PALETTE_FOOT_H` under a `HAIRLINE`, the cursor row's cwd or
+/// the keys at the left (cut with an ellipsis), the result count at the
+/// right, all 12 `TEXT_DIM`.
+pub(crate) fn footer_row(left: SharedString, right: String) -> gpui::Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_4))
+        // Its hairline over it, then the row.
+        .h(px(PALETTE_FOOT_H + 1.0))
+        .px(px(PALETTE_PAD_X))
+        .border_t_1()
+        .border_color(gpui::rgba(HAIRLINE))
+        .text_size(px(FS_META))
+        .text_color(rgb(TEXT_DIM))
+        .whitespace_nowrap()
+        .child(div().flex_1().min_w_0().truncate().child(left))
+        .child(
+            div()
+                .flex_shrink_0()
+                .debug_selector(|| "palette-results".into())
+                .child(right),
+        )
+}
+
+/// A row's mark: a Thread's (or a Project's or Group's roll-up) state
+/// mark, else the command's icon, else nothing.
+fn mark(row: &Row) -> Option<gpui::AnyElement> {
+    match (row.status, &row.act) {
+        (Some(status), _) => Some(crate::nav::mark(status, false)),
+        (None, Act::Command(command)) => command
+            .icon()
+            .map(|icon| crate::icons::icon(icon, PALETTE_MARK_ICON, TEXT_DIM).into_any_element()),
+        _ => None,
+    }
+}
+
+/// One palette row (SPEC §5.8): `PALETTE_ROW_H`, radius `R_CONTROL`, its
+/// parts `PALETTE_GAP` apart — the mark column, the name (`TEXT`, its
+/// matches 600 `TEXT_STRONG`), the context at the right in 12 `TEXT_DIM`,
+/// the chord after it as plain 12 `TEXT_DIM` text, then the enter mark's
+/// column: `corner-down-left` on the cursor row (`SELECTED`, its name all
+/// `TEXT_STRONG`), held empty on a row with no chord so the contexts line
+/// up.
 fn row_element(
     at: usize,
     row: &Row,
@@ -533,45 +678,53 @@ fn row_element(
     let ink = if cursor { TEXT_STRONG } else { TEXT };
     let name =
         StyledText::new(row.name.clone()).with_highlights(components::match_highlights(lit, false));
-    let element = components::text_ui()
+    let meta = || div().text_size(px(FS_META)).text_color(rgb(TEXT_DIM));
+    let element = div()
         .id(id)
         .debug_selector(move || format!("palette-row-{at}"))
         .flex()
         .flex_shrink_0()
         .items_center()
+        .gap(px(PALETTE_GAP))
         .min_w_0()
-        .h(px(FLOAT_ROW_H))
-        .pl(px(FLOAT_PAD_X))
-        .pr(px(PALETTE_ROW_PAD_R))
+        .h(px(PALETTE_ROW_H))
+        .px(px(PALETTE_ROW_PAD_X))
+        .rounded(px(R_CONTROL))
         .whitespace_nowrap()
         .text_color(rgb(ink))
-        .child(crate::menu::gutter(cursor))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .w(px(FLOAT_GUTTER))
-                .when_some(row.status, |cell, status| cell.child(status.face().dot())),
+                .justify_center()
+                .w(px(PALETTE_MARK_W))
+                .children(mark(row)),
         )
-        .child(div().flex_shrink_0().min_w_0().truncate().child(name))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .ml(px(row.context_gap()))
-                .truncate()
-                .text_color(rgb(TEXT_DIM))
-                .child(row.context.clone()),
-        )
+        .child(div().flex_1().min_w_0().truncate().child(name))
+        .when(!row.context.is_empty(), |element| {
+            element.child(meta().min_w_0().truncate().child(row.context.clone()))
+        })
         .when_some(row.keys.clone(), |element, keys| {
             element.child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .ml(px(FLOAT_DETAIL_GAP))
-                    .child(components::key_combo(&keys, TEXT_DIM)),
+                meta().flex_shrink_0().child(
+                    components::key_combo(&keys, TEXT_DIM)
+                        .font_family(FONT_UI)
+                        .text_size(px(FS_META)),
+                ),
             )
+        })
+        .when(cursor || row.keys.is_none(), |element| {
+            element.child(div().flex().flex_shrink_0().w(px(PALETTE_ENTER_ICON)).when(
+                cursor,
+                |cell| {
+                    cell.child(crate::icons::icon(
+                        crate::icons::CORNER_DOWN_LEFT,
+                        PALETTE_ENTER_ICON,
+                        TEXT_DIM,
+                    ))
+                },
+            ))
         });
     if cursor {
         element.float_cursor().press_float()
@@ -713,5 +866,28 @@ mod tests {
         ];
         let shown = filter(&rows, "d", PaletteScope::Sessions);
         assert_eq!(names(&rows, &shown), ["deploy script"]);
+    }
+
+    /// The footer counts what survives, in the singular for one.
+    #[test]
+    fn the_footer_counts_the_results() {
+        assert_eq!(results_word(0), "0 results");
+        assert_eq!(results_word(1), "1 result");
+        assert_eq!(results_word(5), "5 results");
+    }
+
+    /// The headings are sentence case, `Commands` (never `Actions`), and
+    /// the mockup's commands lead with its icons.
+    #[test]
+    fn headings_and_command_icons_follow_the_mockup() {
+        assert_eq!(Section::Threads.title(), "Threads");
+        assert_eq!(Section::Commands.title(), "Commands");
+        assert_eq!(Command::NewThread.icon(), Some(crate::icons::PLUS));
+        assert_eq!(
+            Command::NewWorktreeThread.icon(),
+            Some(crate::icons::BRANCH)
+        );
+        assert_eq!(Command::OpenGroup.icon(), Some(crate::icons::BOARD));
+        assert_eq!(Command::SortCreated.icon(), None);
     }
 }

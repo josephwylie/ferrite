@@ -58,9 +58,9 @@ fn colour(name: &str, scheme: Scheme) -> Option<String> {
     use Scheme::*;
     let rgb = match (name, scheme) {
         // The opaque ladder (theme rule 3): pages paint the card.
-        ("bg", Dark) => theme::PLANE,
-        ("band", Dark) => theme::CHROME,
-        ("band2", Dark) => theme::BAND,
+        ("bg", Dark) => theme::CARD,
+        ("band", Dark) => theme::FRAME,
+        ("band2", Dark) => theme::FIELD,
         ("fg", Dark) => theme::TEXT,
         ("strong", Dark) => theme::TEXT_STRONG,
         ("muted", Dark) => theme::TEXT_DIM,

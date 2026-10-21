@@ -269,9 +269,9 @@ impl Find {
         })
     }
 
-    /// The bar: the palette's input row as a float of its own — `❯` in
-    /// `TEXT_STRONG`, the query in `TEXT_STRONG`, the count muted at the
-    /// right — hung `FLOAT_OFFSET` under the top right of its host, the
+    /// The bar: the palette's input row as a float of its own — the
+    /// `search` icon in `TEXT_DIM`, the query in `TEXT_STRONG`, the count
+    /// muted at the right — hung `FLOAT_OFFSET` under the top right of its host, the
     /// text it searches (`relative`). A host narrower than the bar narrows
     /// the query, never the count.
     pub(crate) fn bar(&self) -> Div {
@@ -284,21 +284,19 @@ impl Find {
                 div()
                     .flex()
                     .items_center()
+                    .gap(px(SPACE_2))
                     .h(px(FLOAT_ROW_H))
                     .px(px(FLOAT_PAD_X))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .w(px(FLOAT_GUTTER))
-                            .child(crate::components::prompt_mark(TEXT_STRONG)),
-                    )
+                    .child(crate::icons::icon(
+                        crate::icons::SEARCH,
+                        FIND_ICON,
+                        TEXT_DIM,
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .font_family(FONT_CODE)
+                            .font_family(FONT_UI)
                             .line_height(px(LH_UI))
                             .text_color(rgb(TEXT_STRONG))
                             .child(self.field.clone()),

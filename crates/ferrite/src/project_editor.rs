@@ -117,7 +117,7 @@ fn field(
 }
 
 /// One directory the machine's Server listed under what the path field
-/// holds: its name and a `/`, `TEXT_DIM`, `paint::HOVER` under the
+/// holds: its name and a `/`, `TEXT_DIM`, `paint::RAISED` under the
 /// pointer, hung a cell outside the text's edge like a directory row.
 pub fn path_completion(index: usize, name: &str) -> gpui::Stateful<Div> {
     let selector: SharedString = format!("project-path-completion:{name}").into();
@@ -157,7 +157,7 @@ pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
 
 /// The quiet text control under the list that adds a directory (`+ Add
 /// directory`, or `+ Add main directory` while there is none): `TEXT_DIM`,
-/// `TEXT` on `paint::HOVER` under the pointer, on the text's own edge.
+/// `TEXT` on `paint::RAISED` under the pointer, on the text's own edge.
 pub fn add_directory(label: &'static str, cx: &App) -> Button {
     components::form_button("add-project-directory", cx)
         .debug_selector(|| "project-add-directory".into())
@@ -197,7 +197,7 @@ pub fn primary_button(
 /// One directory: its name, `main` beside the first, and its full path
 /// under it in `TEXT_DIM`, wrapping anywhere rather than cut — a path is
 /// machine text. The row's height is its content's. Under the pointer it
-/// takes `paint::HOVER`, hung a cell outside the text's edge, so the text
+/// takes `paint::RAISED`, hung a cell outside the text's edge, so the text
 /// stays on the sheet's column.
 pub fn directory_row(
     index: usize,
@@ -269,7 +269,7 @@ pub fn directory_row(
 
 /// A destructive action: a word in a 1px `paint::LINE2` box (the
 /// prototype's quick buttons) — `TEXT_DIM` at rest, `TEXT` on
-/// `paint::HOVER` under the pointer. No red and no wash: colour is state,
+/// `paint::RAISED` under the pointer. No red and no wash: colour is state,
 /// and a verb is not one. Disabled, it stays `TEXT_DIM` and takes no face.
 pub fn destructive_button(
     id: impl Into<gpui::ElementId>,
@@ -281,7 +281,7 @@ pub fn destructive_button(
     let (hover, press): (gpui::Hsla, gpui::Hsla) = if disabled {
         (none, none)
     } else {
-        (paint::HOVER.into(), paint::PRESS.into())
+        (paint::RAISED.into(), paint::PRESS.into())
     };
     components::faded_button(id, none, hover, press, rgb(TEXT_DIM).into(), cx)
         .tab_stop(true)

@@ -284,7 +284,7 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     tick(cx);
     let rows = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().rows.len());
     assert!(
-        rows as f32 * crate::theme::MENU_ROW_H > crate::theme::MENU_MAX_H,
+        rows as f32 * crate::theme::FLOAT_ROW_H > crate::theme::MENU_MAX_H,
         "the premise: {rows} rows overflow the list"
     );
     let visible = |cx: &mut gpui::VisualTestContext| {

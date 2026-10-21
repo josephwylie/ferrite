@@ -40,18 +40,18 @@ fn a_request_toast_stands_two_cells_in_and_over_the_bottom_bar(cx: &mut TestAppC
     let window = cx.update(|window, _| window.viewport_size());
     assert!(
         (toast.size.width - px(crate::theme::TOAST_W)).abs() <= px(1.),
-        "52 cells: {toast:?}"
+        "TOAST_W wide: {toast:?}"
     );
     assert!(
-        (toast.right() - (window.width - px(2.0 * crate::theme::CH))).abs() <= px(1.),
-        "two cells in from the window's edge: {toast:?}"
+        (toast.right() - (window.width - px(crate::theme::TOAST_BOX_RIGHT))).abs() <= px(1.),
+        "TOAST_BOX_RIGHT in from the window's edge: {toast:?}"
     );
     assert!(
         (toast.bottom()
             - (window.height - px(crate::theme::STATUS_BAR_H + crate::theme::TOAST_BOTTOM)))
         .abs()
             <= px(1.),
-        "36px over the bottom bar: {toast:?}"
+        "TOAST_BOTTOM over the bottom bar: {toast:?}"
     );
 }
 

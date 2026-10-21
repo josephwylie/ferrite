@@ -928,7 +928,7 @@ impl CockpitView {
             bound_chord("cockpit::TextReset"),
             Command::TextReset,
         );
-        // The model's thinking is off the approved transcript; these put
+        // The model's thinking is off the transcript by default; these put
         // its `∴` rows back, and take them away again.
         let thinking = self.prefs.settings.show_thinking;
         add(
@@ -1379,7 +1379,7 @@ impl CockpitView {
 
     /// The palette's veil (the board only: the sidebar, the titlebar and
     /// the bottom bar stay as they are) and the palette or the shortcuts
-    /// sheet over it, at the palette's geometry: 84 cells, centred on the
+    /// sheet over it, at the palette's geometry: 640 wide, centred on the
     /// board, 56px under its top. A press on the veil closes the float and
     /// nothing else.
     pub(super) fn sheet_floats(
@@ -1448,10 +1448,10 @@ impl CockpitView {
         let viewport = window.viewport_size();
         let anchor = gpui::Bounds::new(
             gpui::point(
-                viewport.width - px(crate::theme::TOAST_BOX_RIGHT + crate::theme::TOAST_BOX_W),
+                viewport.width - px(crate::theme::TOAST_BOX_RIGHT + crate::theme::TOAST_W),
                 viewport.height - px(crate::theme::STATUS_BAR_H + crate::theme::TOAST_BOTTOM),
             ),
-            gpui::size(px(crate::theme::TOAST_BOX_W), px(0.)),
+            gpui::size(px(crate::theme::TOAST_W), px(0.)),
         );
         let handle = self.notice_handle(cx);
         Some(float::hang_element(

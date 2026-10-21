@@ -1,13 +1,12 @@
 //! The shortcuts sheet (`?`, FL-8): every key the cockpit binds, read from
 //! the bound key table (`keymap::active`, the operator's keys included)
-//! through one label table, in the float grammar at the palette's geometry
+//! through one label table, in the palette's dialog (`palette::dialog`)
 //! and over its veil.
 //!
-//! A head (`shortcuts`, `?` at its right), a filter line under it (`❯`, the
-//! palette's input row), sections by where a key acts —
-//! `threads`, `board`, `composer`, `decision`, `wall`, `transcript` — rows
-//! with the label at the left and the chord at the right, and the footer
-//! `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
+//! The palette's input row (the `search` icon, the filter, `esc`), its
+//! section headings by where a key acts — `Threads`, `Board`, `Composer`,
+//! `Decision`, `Wall`, `Transcript` — rows with the label at the left and
+//! the chord at the right, and the palette's footer, `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
 //! match, as the palette filters. The floats' own keys (the palette's, the
 //! list's, this sheet's) and the Review slot's are in their footers, so the
 //! sheet leaves them out; the label table still names them, so a key the
@@ -42,12 +41,12 @@ pub(crate) enum Place {
 impl Place {
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Place::Threads => "threads",
-            Place::Board => "board",
-            Place::Composer => "composer",
-            Place::Decision => "decision",
-            Place::Wall => "wall",
-            Place::Transcript => "transcript",
+            Place::Threads => "Threads",
+            Place::Board => "Board",
+            Place::Composer => "Composer",
+            Place::Decision => "Decision",
+            Place::Wall => "Wall",
+            Place::Transcript => "Transcript",
         }
     }
 }
@@ -303,7 +302,7 @@ impl Shortcuts {
     pub(crate) fn scroll_by(&mut self, rows: f32, cx: &mut Context<Self>) {
         let offset = self.scroll.offset();
         let max = f32::from(self.scroll.max_offset().y).max(0.0);
-        let y = (f32::from(offset.y) - rows * ROW).clamp(-max, 0.0);
+        let y = (f32::from(offset.y) - rows * PALETTE_ROW_H).clamp(-max, 0.0);
         self.scroll.set_offset(point(offset.x, px(y)));
         cx.notify();
     }
@@ -311,7 +310,13 @@ impl Shortcuts {
 
 impl Render for Shortcuts {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = crate::palette::input_row("shortcuts-input", self.input.clone());
+        let input = crate::palette::input_row("shortcuts-input", self.input.clone()).child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(FS_META))
+                .text_color(rgb(TEXT_DIM))
+                .child("esc"),
+        );
         let query = self.input.read(cx).text().to_string();
         let shown = filter(&self.rows, &query);
         let mut list = div()
@@ -321,12 +326,16 @@ impl Render for Shortcuts {
             .min_h_0()
             .max_h(px(PALETTE_MAX_H))
             .overflow_y_scroll()
-            .track_scroll(&self.scroll);
+            .track_scroll(&self.scroll)
+            .px(px(PALETTE_LIST_PAD))
+            .pt(px(PALETTE_LIST_PAD))
+            .pb(px(PALETTE_LIST_PAD_B));
         let mut place = None;
         for (index, (row, lit)) in shown.iter().enumerate() {
             if place != Some(row.place) {
+                let first = place.is_none();
                 place = Some(row.place);
-                list = list.child(crate::menu::section(row.place.title(), None, None));
+                list = list.child(crate::palette::section_heading(row.place.title(), first));
             }
             list = list.child(
                 components::text_ui()
@@ -335,9 +344,9 @@ impl Render for Shortcuts {
                     .flex_shrink_0()
                     .items_center()
                     .justify_between()
-                    .h(px(FLOAT_ROW_H))
-                    .pl(px(FLOAT_PAD_X + FLOAT_GUTTER))
-                    .pr(px(FLOAT_PAD_X))
+                    .gap(px(PALETTE_GAP))
+                    .h(px(PALETTE_ROW_H))
+                    .px(px(PALETTE_ROW_PAD_X))
                     .whitespace_nowrap()
                     .child(
                         div().min_w_0().truncate().text_color(rgb(TEXT)).child(
@@ -348,22 +357,28 @@ impl Render for Shortcuts {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .ml(px(FLOAT_DETAIL_GAP))
+                            .text_size(px(FS_META))
                             .child(components::key_combo(&row.keys, TEXT_DIM)),
                     ),
             );
         }
         if shown.is_empty() {
-            list = list.child(crate::menu::note("no matches").mt(px(FLOAT_SECTION_GAP)));
+            list = list.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(PALETTE_ROW_H))
+                    .px(px(PALETTE_ROW_PAD_X))
+                    .text_color(rgb(TEXT_DIM))
+                    .child(crate::palette::NO_MATCHES),
+            );
         }
-        crate::menu::float()
+        crate::palette::dialog()
             .debug_selector(|| "shortcuts-sheet".into())
-            .w(px(PALETTE_W))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(crate::menu::head("shortcuts").child("?"))
             .child(input)
             .child(list)
-            .child(crate::menu::footer_line(FOOTER))
+            .child(crate::palette::footer_row(FOOTER.into(), String::new()))
     }
 }
 

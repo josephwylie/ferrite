@@ -683,7 +683,38 @@ fn crash_fix(s: &mut Script, who: ThreadId) {
     for event in tokens(84_000, 2_400, 130, 200_000) {
         s.ev(CAPTURE - 1, who, event);
     }
+    // What fills it, as `/context` names it: the panel foot's meter in
+    // four segments (solo.png's blue, orange, green, yellow), then the
+    // free space it leaves undrawn.
+    s.ev(CAPTURE - 1, who, context(&CRASH_FIX_CONTEXT));
     s.ev(CAPTURE, who, phase("Pondering"));
+}
+
+/// The crash fix's context window by category: 84k of 200k.
+const CRASH_FIX_CONTEXT: [(&str, u64); 5] = [
+    ("Messages", 36_000),
+    ("System tools", 30_000),
+    ("MCP tools", 10_000),
+    ("Skills", 8_000),
+    ("Free space", 116_000),
+];
+
+/// A Session's `/context` reading: `categories` by name and size.
+fn context(categories: &[(&str, u64)]) -> SessionEvent {
+    SessionEvent::ContextDetails {
+        details: ferrite_core::ContextDetails {
+            usable_window: None,
+            auto_compact_threshold: None,
+            is_auto_compact_enabled: None,
+            categories: categories
+                .iter()
+                .map(|(name, tokens)| ferrite_core::ContextCategory {
+                    name: (*name).into(),
+                    tokens: *tokens,
+                })
+                .collect(),
+        },
+    }
 }
 
 /// A Subagent of the crash fix's Main, discovered at `at` in `state`.

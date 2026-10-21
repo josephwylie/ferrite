@@ -335,7 +335,7 @@ impl Preview {
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .bg(paint::PLANE)
+                .bg(paint::CARD)
                 .font_family(FONT_UI)
                 .text_size(px(FS_UI))
                 .line_height(px(LH_UI))
@@ -429,12 +429,12 @@ impl RenderOnce for PreviewLayer {
             f32::from(bounds.size.width),
             f32::from(bounds.size.height),
         );
-        // The sheet recipe (`prefs::sheet`): `paint::BAND`, a `paint::LINE2`
-        // edge, square, the float's one shadow; the 48px head with its title and the
-        // one close control over a hairline; then the image itself on the
+        // The sheet recipe (`prefs::sheet`): the float's shell at sheet
+        // size; the 48px head with its title and the one close control over
+        // a hairline; then the image itself on the
         // sheet, `MODAL_PAD` in from every edge. No well: nothing in a
         // sheet is darker than the sheet.
-        // A word on the head, `paint::HOVER` under the pointer.
+        // A word on the head, `paint::RAISED` under the pointer.
         let open = crate::components::form_button("open-original-attachment", cx)
             .flex_shrink_0()
             .h(px(crate::theme::ROW))

@@ -1418,7 +1418,7 @@ impl ReviewView {
                     .pl(px(indent))
                     .cursor_pointer()
                     .text_color(rgb(TEXT_DIM))
-                    .when(picked, |row| row.bg(paint::SELECTION))
+                    .when(picked, |row| row.bg(paint::SELECTED))
                     .child(SharedString::from(format!(
                         "\u{22ef} {hidden} line{}",
                         if hidden == 1 { "" } else { "s" }
@@ -1458,7 +1458,7 @@ impl ReviewView {
             .whitespace_nowrap()
             .cursor_pointer()
             .map(|line| match (picked, ink.wash) {
-                (true, _) => line.bg(paint::SELECTION),
+                (true, _) => line.bg(paint::SELECTED),
                 (false, Some(wash)) => line.bg(rgba(wash)),
                 (false, None) => line,
             })
@@ -1548,7 +1548,7 @@ impl ReviewView {
                     .py(px(self.grid.half() / 2.))
                     .pl(px(indent))
                     .pr(px(cell))
-                    .bg(paint::BAND2)
+                    .bg(paint::RAISED)
                     .child(div().min_w_0().flex_1().child(editor.clone()))
                     .child(
                         div()
@@ -1592,7 +1592,7 @@ impl ReviewView {
             .min_h(px(self.grid.line))
             .pl(px(2. * self.number_w() + 2. * cell))
             .pr(px(cell))
-            .bg(paint::BAND2)
+            .bg(paint::RAISED)
             .child(
                 div()
                     .flex_1()
@@ -1676,7 +1676,7 @@ impl ReviewView {
             .whitespace_nowrap()
             .cursor_pointer()
             .when(self.commit_run().contains(&index), |row| {
-                row.bg(paint::SELECTION)
+                row.bg(paint::SELECTED)
             })
             .child(
                 div()
@@ -1817,7 +1817,7 @@ impl ReviewView {
                 .debug_selector(move || format!("review-pr-comment-{index}"))
                 .mt(px(self.grid.half()))
                 .p(px(cell))
-                .bg(paint::BAND2)
+                .bg(paint::RAISED)
                 // A review or a comment is anchored to its own kind's
                 // word: only a finding's place is worth a second mention.
                 .child(muted(format!(
@@ -1891,7 +1891,7 @@ impl ReviewView {
                                 .px(px(cell))
                                 .whitespace_nowrap()
                                 .cursor_pointer()
-                                .when(index == search.pick, |row| row.bg(paint::SELECTION))
+                                .when(index == search.pick, |row| row.bg(paint::SELECTED))
                                 .child(div().flex_shrink_0().text_color(rgb(LINK_INK)).child(
                                     SharedString::from(match found.line {
                                         Some(line) => format!("{}:{line}", found.path),
@@ -1996,7 +1996,7 @@ impl ReviewView {
                     .pr(px(cell))
                     .whitespace_nowrap()
                     .cursor_pointer()
-                    .when(index == tree.pick, |line| line.bg(paint::SELECTION))
+                    .when(index == tree.pick, |line| line.bg(paint::SELECTED))
                     .text_color(rgb(if row.ignored { TEXT_DIM } else { ink }))
                     .child(div().min_w_0().truncate().child(SharedString::from(label)))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -2059,7 +2059,7 @@ impl ReviewView {
                                 .px(px(cell))
                                 .whitespace_nowrap()
                                 .cursor_pointer()
-                                .when(index == panel.pick, |line| line.bg(paint::SELECTION))
+                                .when(index == panel.pick, |line| line.bg(paint::SELECTED))
                                 .child(
                                     div()
                                         .flex_1()

@@ -141,13 +141,9 @@
 //!
 //! **Layout of this file.** Everything down to `init_components` is the
 //! shared head: values more than one surface reads, the paints, and the kit
-//! mapping. Then a block of **legacy aliases** — the square chrome's surface
-//! names (`PLANE`, `CHROME`, `BAND`, …), mapped onto the new surfaces so
-//! every module still builds while the refresh's phases restyle them; the
-//! last phase removes it. Below it, one section per work package (`WP-A` …
-//! `WP-G`), each opened by a banner and closed by an `(end WP-x)` line,
-//! whose prose may still describe the square chrome until its phase lands.
-//! A token two sections need goes in the head.
+//! mapping. Below it, one section per work package (`WP-A` … `WP-G`), each
+//! opened by a banner and closed by an `(end WP-x)` line. A token two
+//! sections need goes in the head.
 //!
 //! The contrast floors, the ladders, the hairlines, the radii, the paints,
 //! the faces, the kit-token mapping and the derived row heights are
@@ -171,7 +167,7 @@ pub const fn solid(rgb: u32) -> u32 {
 
 /// A fill or a line whose value depends on the platform (rule 4):
 /// `0xRRGGBBAA`, translucent glass on macOS and the opaque grey elsewhere.
-/// It converts into `Hsla`, `Rgba` and `Fill`, so `.bg(paint::PLANE)` and
+/// It converts into `Hsla`, `Rgba` and `Fill`, so `.bg(paint::CARD)` and
 /// `.border_color(paint::LINE)` just work, and `rgb()` refuses it: the one
 /// mistake a bare `u32` would let through silently (`rgb(0x1a1a1bf0)` drops
 /// the red byte and paints blue).
@@ -335,15 +331,16 @@ pub const COMPACT_RING_FOCUSED: u32 = 0xffffff1f;
 /// `BLOCKED` at 7% — the failure strip's fill.
 pub const FAILURE_WASH: u32 = 0xef8a8012;
 
-// ------------------------------------------------- legacy line greys
+// ------------------------------------------------------------ rule greys
 //
-// The opaque rules the square chrome drew. Neutral now; the surfaces move
-// to the hairlines above as their phase restyles them.
+// Two opaque rules, for what a hairline cannot carry: a seam, a table's
+// rules, a code block's rail, an image's frame, a board's lines. Chrome
+// separates by the hairlines above.
 
-/// `#2c2c2c` — the old rule weight: a seam, a table's row rules, a break.
+/// `#2c2c2c` — a rule: a seam, a table's row rules, a break.
 pub const LINE: u32 = 0x2c2c2c;
 pub const LINE_GLASS: u32 = 0xffffff14;
-/// `#3a3a3a` — the old strong rule: a table's head rule, a code block's
+/// `#3a3a3a` — a strong rule: a table's head rule, a code block's
 /// rail, an image's frame.
 pub const LINE2: u32 = 0x3a3a3a;
 pub const LINE2_GLASS: u32 = 0xffffff24;
@@ -391,19 +388,9 @@ pub mod paint {
     pub const LINE2: Paint = Paint::pick(super::LINE2_GLASS, solid(super::LINE2));
     pub const CHROME_SEAM: Paint = Paint::pick(super::CHROME_SEAM_GLASS, TRANSPARENT);
 
-    // Legacy names (the square chrome's), mapped onto the surfaces above
-    // until each phase restyles its region; removed in the last phase.
-    pub const PLANE: Paint = CARD;
-    pub const CHROME: Paint = FRAME;
-    pub const HEAD: Paint = FIELD;
-    pub const INBAND: Paint = FIELD;
     /// The prompt band: a field that must occlude what scrolls under it, so
     /// on glass it is 80% over the card (composing to ~99%), not an overlay.
-    pub const BAND: Paint = Paint::pick(0x222222cc, solid(super::FIELD));
-    pub const BAND2: Paint = RAISED;
-    pub const HOVER: Paint = RAISED;
-    pub const SELECTION: Paint = SELECTED;
-    pub const HUNK: Paint = BAR;
+    pub const PROMPT_BAND: Paint = Paint::pick(0x222222cc, solid(super::FIELD));
 }
 
 // ------------------------------------------------------------------ edges
@@ -671,11 +658,18 @@ pub const SHIMMER_CREST_CLAUDE: u32 = 0xffe1d3;
 //
 // **One cast shadow** (rule 2): a floating surface's, CSS `0 6px 14px` at
 // 50%. gpui's blur is a gaussian σ, half a CSS blur. Nothing else casts
-// and nothing is lit.
+// and nothing is lit. The palette's dialog (and the shortcuts sheet, which
+// wears it) deepens it to `SHADOW_PALETTE_*`: SPEC §5.8 gives that depth to
+// the palette alone, and every other float takes the palette's shell "at a
+// smaller scale", its shadow included.
 
 pub const SHADOW_FLOAT: u32 = 0x00000080;
 pub const SHADOW_FLOAT_Y: f32 = 6.0;
 pub const SHADOW_FLOAT_BLUR: f32 = 7.0;
+/// The dialog's shadow: the float's deepened to CSS `0 24px 64px` at 55%.
+pub const SHADOW_PALETTE: u32 = 0x0000008c;
+pub const SHADOW_PALETTE_Y: f32 = 24.0;
+pub const SHADOW_PALETTE_BLUR: f32 = 32.0;
 
 // ------------------------------------------------------------------- type
 //
@@ -1015,8 +1009,8 @@ pub const PR_RESOLVED_OPACITY: f32 = 0.6;
 pub const PR_SPIN_MS: u64 = 900;
 pub const PR_SPIN_STEPS: usize = 18;
 
-/// A toast's width: 52 cells (the prototype's `.toast`).
-pub const TOAST_W: f32 = 52.0 * CH;
+/// A toast's width.
+pub const TOAST_W: f32 = 400.0;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
 /// one toast (`max_items`), so this is only ever the kit's own spacing.
 pub const TOAST_GAP: f32 = SPACE_3;
@@ -1081,35 +1075,34 @@ pub const ICON_CHEVRON: f32 = 12.0;
 /// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
 pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
-/// 7px — a small drawn mark beside a label (a menu section title's).
-pub const KEY_GLYPH: f32 = 7.0;
 /// A keycap: 18px high (it fits inside a 20px row), 5px inline padding.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const KBD_H: f32 = 18.0;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const KBD_PAD_X: f32 = 5.0;
-/// 4px — a floating menu's inset around its rows (`FLOAT_PAD`).
-pub const MENU_PAD: f32 = 4.0;
-/// 28px — one menu row: `LH_UI` plus 4px above and below.
-pub const MENU_ROW_H: f32 = 28.0;
-/// A floating surface's inset around its rows (the same 4px as `MENU_PAD`),
-/// and the gap it keeps from the control that opened it.
-pub const FLOAT_PAD: f32 = MENU_PAD;
+/// **The float's shell** (SPEC §5.8 "Other floats": the palette's at a
+/// smaller scale): radius `R_BLOCK`, rows `FLOAT_ROW_H` (`LH_UI` and 5px
+/// above and below), each inset `FLOAT_PAD` from the float's edge with its
+/// text `MENU_ROW_PAD_X` inside its fill, so a line without a fill (a
+/// head, a note, a footer) sets its text `FLOAT_PAD_X` in.
+pub const FLOAT_ROW_H: f32 = 30.0;
+pub const FLOAT_PAD: f32 = SPACE_1;
+pub const FLOAT_PAD_X: f32 = FLOAT_PAD + MENU_ROW_PAD_X;
+/// The gap a float keeps from the control that opened it.
 pub const FLOAT_OFFSET: f32 = 6.0;
 /// The context menu's width, and any floating list's height cap before it
 /// scrolls.
 pub const MENU_W: f32 = 256.0;
 pub const MENU_MAX_H: f32 = 420.0;
 /// A menu row's inline padding and the gap between its label and trailing
-/// parts.
-pub const MENU_ROW_PAD_X: f32 = 8.0;
+/// parts; its fill's radius (`R_TAB`: concentric enough inside the float's
+/// 8 at a 4px inset).
+pub const MENU_ROW_PAD_X: f32 = SPACE_2;
 pub const MENU_ROW_GAP: f32 = SPACE_3;
-pub const R_MENU_ROW: f32 = R_CHIP;
-/// A menu section title row: 24px, its title sat on the row's foot so it
-/// hugs the rows it heads.
-pub const MENU_SECTION_H: f32 = 24.0;
-/// 10px — a section title's mark.
-pub const MENU_SECTION_ICON: f32 = KEY_GLYPH;
+pub const R_MENU_ROW: f32 = R_TAB;
+/// A section heading: 28px, its 12/500 word sat on the heading's foot
+/// (4px under it) so it hugs the rows it heads, as the palette's does.
+pub const FLOAT_SECTION_H: f32 = 28.0;
 /// 8px — what splits one group of rows from the next inside any floating
 /// surface. Space, never a rule.
 pub const MENU_GROUP_GAP: f32 = SPACE_2;
@@ -1216,7 +1209,7 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.border = paint::LINE2.into();
     // Kit menu and completion rows sit on a float: their hover and cursor
     // face is the selection overlay.
-    theme.accent = paint::SELECTION.into();
+    theme.accent = paint::SELECTED.into();
     theme.accent_foreground = rgb(TEXT_STRONG).into();
     theme.secondary = rgb(RAISED).into();
     theme.secondary_hover = rgb(SELECTED).into();
@@ -1257,8 +1250,8 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.warning = rgb(ATTENTION).into();
     theme.success = rgb(RUNNING).into();
     theme.info = rgb(TEXT_STRONG).into();
-    theme.list_hover = paint::HOVER.into();
-    theme.list_active = paint::SELECTION.into();
+    theme.list_hover = paint::RAISED.into();
+    theme.list_active = paint::SELECTED.into();
     theme.table_head = rgb(CARD).into();
     theme.table_head_foreground = rgb(TEXT_STRONG).into();
     theme.drag_border = rgba(DROP_EDGE).into();
@@ -1322,32 +1315,6 @@ pub fn init_components(cx: &mut gpui::App) {
 }
 
 // ======================================== end of the frozen shared head
-
-// ======================================== legacy aliases
-// The square chrome's surface names, mapped onto the new surfaces so every
-// module builds while the phases of the UI refresh restyle it (SPEC §11).
-// A restyled surface names the new token; the last phase deletes this
-// block. Nothing new names these.
-
-/// The reading plane → the card.
-pub const PLANE: u32 = CARD;
-/// Chrome (the sidebar, the bottom bar) → the frame.
-pub const CHROME: u32 = FRAME;
-/// The focused Pane's head band and the Composer's input band → a field.
-#[allow(dead_code)]
-pub const HEAD: u32 = FIELD;
-#[allow(dead_code)]
-pub const INBAND: u32 = FIELD;
-/// The prompt band, a diff's file head → a field.
-pub const BAND: u32 = FIELD;
-/// The bar's current tab, a chip → raised.
-pub const BAND2: u32 = RAISED;
-/// The selected row → selected.
-pub const SELECTION: u32 = SELECTED;
-/// A hunk's header row → the bar's ground, the diff block's.
-#[allow(dead_code)]
-pub const HUNK: u32 = BAR;
-// (end legacy aliases)
 
 // ======================================== WP-A · transcript rows and grammar
 // Owner: WP-A (transcript.rs, pane/text.rs, the transcript rows in pane.rs, ferrite-core transcript strings.)
@@ -1421,7 +1388,7 @@ pub const HUNK: u32 = BAR;
 //   side is `paint::NODIFF`. A later edit to a file already diffed in the
 //   turn shows `+ show diff` instead.
 // - **No transcript row has a hover ground** but the keyboard's disclosure
-//   target (`paint::HOVER`).
+//   target (`paint::RAISED`).
 
 /// A prose-relative vertical step at answer size `size`: em-proportional to
 /// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
@@ -1750,7 +1717,7 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // bar is the bottom bar (`STATUS_BAR_H`), on the chrome under a
 // `paint::LINE` rule: the sidebar toggle and the bell, the session in
 // `TEXT_STRONG` at the strong weight, `1 solo` and a tab per Group (the current
-// view's `TEXT_STRONG` on `paint::BAND2`), the focused Pane's status line
+// view's `TEXT_STRONG` on `paint::RAISED`), the focused Pane's status line
 // (mode, model, `ctx`, changed files), each provider's usage behind its
 // mark, `?` and the clock. No state counts.
 //
@@ -1867,10 +1834,10 @@ pub const CHECKS_CARD_MAX_W: f32 = 420.0;
 pub const CHECKS_CARD_GAP: f32 = MENU_GROUP_GAP;
 /// The card's heading row and one run's row: a menu row's height, so the
 /// card lists at the same pitch as every other floating list.
-pub const CHECKS_HEAD_H: f32 = MENU_ROW_H;
-pub const CHECKS_ROW_H: f32 = MENU_ROW_H;
+pub const CHECKS_HEAD_H: f32 = FLOAT_ROW_H;
+pub const CHECKS_ROW_H: f32 = FLOAT_ROW_H;
 /// The space that sets a workflow's group off from the one before it. The
-/// heading itself is the menu section title (`MENU_SECTION_H`).
+/// heading itself is the menu section title (`FLOAT_SECTION_H`).
 pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
 /// The wall tile's body: half a row above and below, two cells in.
@@ -1894,10 +1861,10 @@ pub const READER_NUMBER_GAP: f32 = 2.0 * CH;
 /// far a drag can take the seam between them (the board's 22–78%).
 pub const READER_SHARE: f32 = 0.5;
 
-/// A dragged Pane's drop wash: `DROP_WASH` ground, `DROP_EDGE` edge,
-/// square; its label is a float tag one row high, a cell padded.
-pub const DROP_LABEL_PAD_X: f32 = CH;
-pub const DROP_LABEL_PAD_Y: f32 = 0.0;
+/// A dragged Pane's drop wash: `DROP_WASH` ground, `DROP_EDGE` edge; its
+/// label is a float tag in the float's shell, one tooltip high.
+pub const DROP_LABEL_PAD_X: f32 = TOOLTIP_PAD_X;
+pub const DROP_LABEL_PAD_Y: f32 = TOOLTIP_PAD_Y;
 /// The Pane a live drag picked up, dimmed in its slot until the release.
 pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
 /// The miniature that rides the pointer while a slot is dragged: see-through
@@ -2048,16 +2015,17 @@ pub const USAGE_TIGHT: f32 = 0.80;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside
 /// its state and two quiet actions (`needs sign-in`, `Sign in`,
-/// `Reconnect`): 52 cells.
-pub const SESSION_CARD_W: f32 = 52.0 * CH;
+/// `Reconnect`).
+pub const SESSION_CARD_W: f32 = 416.0;
 /// One row of the usage card's legend, its colour square, and the share
 /// column the percentages right-align in.
 pub const USAGE_LEGEND_ROW_H: f32 = 20.0;
 pub const USAGE_SWATCH: f32 = 8.0;
 pub const USAGE_SHARE_W: f32 = 44.0;
 /// What fills the context window, one ink per category in the stacked bar
-/// and its legend: the terminal palette, the operator's own words first.
-pub const CTX_MESSAGES: u32 = TEXT_STRONG;
+/// and its legend: the terminal palette, the operator's own words first
+/// (blue, as the retired accent had them: a category, not a state).
+pub const CTX_MESSAGES: u32 = BLUE;
 pub const CTX_TOOLS: u32 = ORANGE;
 pub const CTX_MCP: u32 = GREEN;
 pub const CTX_SKILLS: u32 = YELLOW;
@@ -2131,89 +2099,121 @@ pub const COMPOSER_SEND_GAP: f32 = SPACE_1_5;
 // Owner: WP-E (menus, popovers, Settings, the Project editor, notifications.)
 // Edit values and append tokens only inside this section.
 
-/// **One float grammar** (the prototype's `.float`; `menu.rs` draws it):
-/// every menu, picker, popover, card, toast and sheet is
-/// `components::floating_surface` — `paint::FLOAT`, a 1px `paint::LINE2`
-/// edge, square, the one float shadow — with no inset of its own: its rows
-/// carry a cell of padding each side and sit on the 20px grid.
+/// **One float grammar** (SPEC §5.8, `menu.rs` draws it): every menu,
+/// picker, popover, card, toast and sheet is `components::floating_surface`
+/// — `FLOAT_GROUND`, radius `R_BLOCK`, a 1px `FLOAT_EDGE` ring
+/// (`HAIRLINE_STRONG`), the one float shadow — the palette's shell at a
+/// smaller scale (the shell head names its metrics).
 ///
 /// - **A head** (`menu::head`): one row, the surface's title in
-///   `TEXT_STRONG` at `W_STRONG` at the left, its command or verb in
-///   `TEXT_DIM` at the right (`model  /model`, `notifications  clear`).
-/// - **A section** (`menu::section`): one row in `TEXT_DIM`,
-///   `FLOAT_SECTION_GAP` above it, a provider's logomark leading in its
-///   brand colour.
-/// - **A row** (`menu::row`): one row; a 2-cell gutter that holds the strong
-///   `❯` (`W_STRONG`) on the cursor row; the name in `TEXT` (`TEXT_STRONG` on
-///   the cursor); its description `TEXT_DIM` two cells after it; a key in
-///   `TEXT_DIM` hard right; a `RUNNING` `✓` on the standing choice. The
-///   cursor row is `paint::SELECTION`, a row under the pointer
-///   `paint::HOVER`.
-/// - **A footer** (`menu::footer`): a `FLOAT_RULE` rule, then one row of
-///   key hints, all `TEXT_DIM` (its `·` too): `↑↓ select · ⏎ open · esc`.
+///   `TEXT_STRONG` at `W_LABEL` at the left, its command or verb in
+///   `TEXT_DIM` at the right (`Model  /model`).
+/// - **A section** (`menu::section`): a `FLOAT_SECTION_H` heading in
+///   12/500 `TEXT_DIM`, `FLOAT_SECTION_GAP` above it, a provider's
+///   logomark leading in its brand colour.
+/// - **A row** (`menu::row`): `FLOAT_ROW_H`, inset `FLOAT_PAD`, radius
+///   `R_MENU_ROW`; a leading mark, the name in `TEXT`, its description
+///   `TEXT_DIM` after it, a key in `TEXT_DIM` hard right, a `✓` on the
+///   standing choice. The cursor row is `FLOAT_SEL` with its name
+///   `TEXT_STRONG`, a row under the pointer `FLOAT_HOVER`.
+/// - **A footer** (`menu::footer`): a `FLOAT_RULE` hairline, then one row
+///   of key hints in 12 `TEXT_DIM` (its `·` too): `↑↓ select · ⏎ open ·
+///   esc`.
 /// - **An inverse token** (`menu::token`): the chosen one of a short ladder
-///   (an effort, a two-way setting) on `PRIMARY` in `ON_PRIMARY` at
-///   `W_STRONG`; the rest `TEXT_DIM`, `paint::HOVER` under the pointer.
-pub const FLOAT_ROW_H: f32 = ROW;
-pub const FLOAT_PAD_X: f32 = CH;
-pub const FLOAT_GUTTER: f32 = GLYPH_GUTTER;
-pub const FLOAT_DETAIL_GAP: f32 = 2.0 * CH;
-pub const FLOAT_SECTION_GAP: f32 = HALF_ROW;
-pub const FLOAT_FOOT_H: f32 = ROW + 1.0;
-pub const TOKEN_PAD_X: f32 = CH;
-/// The `/` and `@` menus: at most 84 cells (the palette's width), hung over
-/// the Composer from the `❯` column.
-pub const SLASH_MENU_W: f32 = 84.0 * CH;
-/// The model picker (the prototype's `#picker`): 66 cells — a model's name,
-/// its description and the `✓` on one row.
-pub const MODEL_PICKER_W: f32 = 66.0 * CH;
+///   (an effort, a two-way setting) on `PRIMARY` in `ON_PRIMARY`; the rest
+///   `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
+pub const FLOAT_DETAIL_GAP: f32 = MENU_ROW_GAP;
+pub const FLOAT_SECTION_GAP: f32 = SPACE_1;
+pub const FLOAT_FOOT_H: f32 = FLOAT_ROW_H + 1.0;
+/// A ladder's step: 22 high (the bar tab's), radius `R_SMALL`.
+pub const TOKEN_H: f32 = 22.0;
+pub const TOKEN_PAD_X: f32 = SPACE_2;
+/// The `/` and `@` menus: at most the palette's width, hung over the
+/// Composer.
+pub const SLASH_MENU_W: f32 = PALETTE_W;
+/// The model picker: a model's name, its description and the `✓` on one
+/// row.
+pub const MODEL_PICKER_W: f32 = 520.0;
 /// A form field or a sheet's text button: one row in a cell of padding,
 /// inside a 1px `paint::LINE2` box (`CONTROL_FOCUS` while a field holds the
 /// caret).
 pub const FORM_CONTROL_H: f32 = ROW + 2.0 * SPACE_1 + 2.0;
 pub const FORM_FIELD_PAD_X: f32 = CH;
 pub const FORM_BUTTON_PAD_X: f32 = CH;
-/// A tooltip: a float row in a cell of padding, wrapping past 40 cells. It
-/// is how a truncated label keeps its full value reachable.
-pub const TOOLTIP_PAD_X: f32 = CH;
-pub const TOOLTIP_PAD_Y: f32 = 0.0;
-pub const TOOLTIP_MAX_W: f32 = 40.0 * CH;
+/// A tooltip: one float row (`FLOAT_ROW_H`), its text `FLOAT_PAD_X` in,
+/// wrapping past `TOOLTIP_MAX_W`. It is how a truncated label keeps its
+/// full value reachable.
+pub const TOOLTIP_PAD_X: f32 = FLOAT_PAD_X;
+pub const TOOLTIP_PAD_Y: f32 = (FLOAT_ROW_H - LH_UI) / 2.0;
+pub const TOOLTIP_MAX_W: f32 = 320.0;
 /// The kit's own toast stack (unused by the bell, kept for the kit's
 /// margins in `init_components`): this far up from the window's foot.
 pub const TOAST_ABOVE_COMPOSER: f32 =
     GRID_PAD + 1.0 + 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H + COMPOSER_STATUS_PAD_B + HALF_ROW;
-/// **A toast** (the prototype's `.toast`): a float `TOAST_W` wide, its
-/// right edge two cells in from the window's (`TOAST_BOX_*` as laid out on
-/// whole pixels), its foot `TOAST_BOTTOM`
-/// over the bottom bar. One row of head (`◆ needs you · <title>`, `⌘D`), one
-/// body line, then the quick answers: `TOAST_BUTTON_H` boxes a cell apart,
-/// `TOAST_QUICK_GAP` under the body and over the float's edge.
-/// The toast's box: its right edge 2 cells in from the window's, 52 cells
-/// wide (gpui rounds its edges to the pixel, as the browser does).
-pub const TOAST_BOX_RIGHT: f32 = 2.0 * CH;
-pub const TOAST_BOX_W: f32 = 52.0 * CH;
-pub const TOAST_BOTTOM: f32 = ROW + 16.0;
-pub const TOAST_BUTTON_H: f32 = ROW + 2.0;
-pub const TOAST_QUICK_GAP: f32 = HALF_ROW;
-/// **The palette** (the prototype's `#palette`, ⌘K): 84 cells wide, centred
-/// on the board, its head `PALETTE_TOP` under the board's top, over the
-/// veil (`VEIL`, the board only). The input row is a row and 12px, under a
-/// `FLOAT_RULE`; a Thread's context stands `PALETTE_CONTEXT_GAP` after its
-/// name; the list scrolls past `PALETTE_MAX_H`. The shortcuts sheet takes
-/// the same geometry and veil.
-pub const PALETTE_W: f32 = 84.0 * CH;
-/// The palette's box: its 84 cells.
-pub const PALETTE_BOX_W: f32 = PALETTE_W;
-/// A palette row's right inset: one cell.
-pub const PALETTE_ROW_PAD_R: f32 = CH;
+/// **A toast**: a float `TOAST_W` wide, its right edge
+/// `TOAST_BOX_RIGHT` in from the window's, its foot `TOAST_BOTTOM` over the
+/// bottom bar. One row of head (`◆ needs you · <title>`, `⌘D`), one body
+/// line, then the quick answers: `TOKEN_H` pills (`menu::token`'s size),
+/// `TOAST_QUICK_GAP` over the float's edge.
+pub const TOAST_BOX_RIGHT: f32 = SPACE_4;
+pub const TOAST_BOTTOM: f32 = SPACE_4;
+pub const TOAST_QUICK_GAP: f32 = SPACE_2;
+/// **The palette** (command search, ⌘K; SPEC §5.8, `command-search.png`):
+/// a 640px dialog centred on the board, its head `PALETTE_TOP` under the
+/// board's top, over the veil (`VEIL`, the board only), on
+/// `PALETTE_GROUND`, radius `R_PALETTE`, a 1px `HAIRLINE_STRONG` ring and
+/// the deep shadow (`SHADOW_PALETTE_*`). Top to bottom:
+///
+/// - the input row, `PALETTE_INPUT_H` over a `HAIRLINE`: the `search`
+///   icon (`PALETTE_SEARCH_ICON`), the query in `FS_PALETTE`, `esc` (or
+///   the status filter's word) at the right, `PALETTE_PAD_X` in from
+///   either edge, `PALETTE_GAP` between;
+/// - the list, `PALETTE_LIST_PAD` in (`PALETTE_LIST_PAD_B` at its foot),
+///   scrolling past `PALETTE_MAX_H`: section headings `PALETTE_SECTION_H`
+///   tall, their 12/500 word on the foot less `PALETTE_SECTION_PAD_B`, every
+///   heading after the first `PALETTE_SECTION_GAP` lower; rows
+///   `PALETTE_ROW_H`, radius `R_CONTROL`, `PALETTE_ROW_PAD_X` in, their
+///   parts `PALETTE_GAP` apart — the `PALETTE_MARK_W` mark column, the
+///   name, the context and chord at the right, then the
+///   `PALETTE_ENTER_ICON` enter mark's column;
+/// - the footer, `PALETTE_FOOT_H` under a `HAIRLINE`, `PALETTE_PAD_X` in.
+///
+/// The shortcuts sheet takes the same width, input row and veil.
+pub const PALETTE_W: f32 = 640.0;
 pub const PALETTE_TOP: f32 = 56.0;
-pub const PALETTE_INPUT_H: f32 = ROW + 12.0;
-pub const PALETTE_CONTEXT_GAP: f32 = 4.0 * CH;
-pub const PALETTE_MAX_H: f32 = 16.0 * ROW;
-/// **The find bar** (⌘F): a one-row float 40 cells wide, hung
-/// `FLOAT_OFFSET` under the top right of the text it searches — `❯`, the
-/// query, the count.
-pub const FIND_W: f32 = 40.0 * CH;
+/// The dialog's ground: `FRAME`'s `#222`, not `FLOAT`. The mockup paints
+/// it so, and on `FLOAT` (`#2a2a2c`) the `SELECTED` cursor row would sit
+/// a bare 4 levels over its ground and all but vanish (a deliberate
+/// departure from SPEC §5.8's `FLOAT ground`). Opaque on every platform,
+/// as every float is (FL-15).
+pub const PALETTE_GROUND: u32 = FRAME;
+pub const PALETTE_INPUT_H: f32 = 50.0;
+pub const PALETTE_PAD_X: f32 = SPACE_4;
+/// 10 — between a row's parts, and the input row's (off the space scale,
+/// the mockup's flex gap).
+pub const PALETTE_GAP: f32 = 10.0;
+pub const PALETTE_SEARCH_ICON: f32 = 16.0;
+pub const PALETTE_LIST_PAD: f32 = SPACE_1_5;
+pub const PALETTE_LIST_PAD_B: f32 = SPACE_2;
+/// 32: a 28px heading and the 4px under its word (the mockup's content
+/// box, `height: 28px; padding-bottom: 4px`); a later heading stands
+/// `PALETTE_SECTION_GAP` taller.
+pub const PALETTE_SECTION_H: f32 = 32.0;
+pub const PALETTE_SECTION_PAD_B: f32 = SPACE_1;
+pub const PALETTE_SECTION_GAP: f32 = SPACE_1;
+pub const PALETTE_ROW_H: f32 = 36.0;
+/// 10 — a row's inset, the name column on the input's text edge.
+pub const PALETTE_ROW_PAD_X: f32 = 10.0;
+pub const PALETTE_MARK_W: f32 = 14.0;
+pub const PALETTE_MARK_ICON: f32 = 14.0;
+pub const PALETTE_ENTER_ICON: f32 = 13.0;
+pub const PALETTE_FOOT_H: f32 = 36.0;
+pub const PALETTE_MAX_H: f32 = 12.0 * PALETTE_ROW_H;
+/// **The find bar** (⌘F): a one-row float `FIND_W` wide, hung
+/// `FLOAT_OFFSET` under the top right of the text it searches — the
+/// `search` icon (`FIND_ICON`), the query, the count.
+pub const FIND_W: f32 = 320.0;
+pub const FIND_ICON: f32 = 14.0;
 /// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
 /// float stays opaque.** The prototype frosts its floats (`.glass .float`:
 /// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
@@ -2229,8 +2229,8 @@ pub const FIND_W: f32 = 40.0 * CH;
 ///    gives a titled window rounded corners and its own window shadow, and
 ///    `WindowOptions` offers no borderless mask, corner radius or shadow
 ///    switch (`gpui-pre-0.3.3/src/platform.rs:1948-2017`; its
-///    `window_decorations` is X11/Wayland only, `:2008-2010`). A float is
-///    square (rule 2) and casts the one `0 6px 14px rgba(0,0,0,.5)` shadow;
+///    `window_decorations` is X11/Wayland only, `:2008-2010`). A float has
+///    its own radius (rule 2) and casts the one `0 6px 14px` shadow;
 ///    drawn inside the window instead, that shadow's margin would be
 ///    frosted with the rest of the rect, since the blur view fills the
 ///    whole content view (`set_background_appearance`,
@@ -2266,8 +2266,8 @@ const fn float_ink(glass: u32, opaque: u32) -> Paint {
 /// A float's ground, edge, inner rule (under a head, over a footer), the
 /// cursor row and a row under the pointer (FL-14).
 pub const FLOAT_GROUND: Paint = float_ink(FLOAT_GLASS, FLOAT);
-pub const FLOAT_EDGE: Paint = float_ink(LINE2_GLASS, LINE2);
-pub const FLOAT_RULE: Paint = float_ink(LINE_GLASS, LINE);
+pub const FLOAT_EDGE: Paint = paint::HAIRLINE_STRONG;
+pub const FLOAT_RULE: Paint = paint::HAIRLINE;
 pub const FLOAT_SEL: Paint = float_ink(SELECTED_GLASS, SELECTED);
 pub const FLOAT_HOVER: Paint = float_ink(RAISED_GLASS, RAISED);
 /// A quick answer under the pointer on a float (a toast's buttons).
@@ -2290,51 +2290,52 @@ pub const CHOICE_MENU_MAX_W: f32 = 320.0;
 pub const MENU_PATH_TAIL: usize = 48;
 // ---------------------------------------------------------- Settings sheet
 //
-// **The Settings sheet** (`prefs.rs`) is a float at sheet size, in the
-// terminal's grammar: one face on the grid, square, rows and rules, no
-// cards and no iOS controls.
+// **The Settings sheet** (`prefs.rs`) is a float at sheet size: the
+// float's shell (radius `R_BLOCK`, the `FLOAT_EDGE` ring), Geist on the
+// space scale, rows and hairlines, no cards and no iOS controls.
 //
-// - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (`❯` in `TEXT_STRONG`,
-//   then the field), a `paint::LINE` under it, then one row per page
-//   — the `TEXT_STRONG` `❯` and `paint::SELECTION` on the page shown, `TEXT` on the
+// - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (the
+//   `search` icon, then the field), a `HAIRLINE` under it, then one
+//   `SETTINGS_NAV_ROW_H` row per page, radius `R_MENU_ROW` —
+//   `paint::SELECTED` and `TEXT_STRONG` on the page shown, `TEXT` on the
 //   rest — and `About` at the foot. ↑/↓ step pages while the sheet holds
 //   focus.
-// - **Content:** the page title in `TEXT_STRONG` `W_STRONG`, then groups a
-//   row apart: a group's label is a `TEXT_DIM` row (a provider's led by
-//   its logomark), its rows split by `paint::LINE` rules.
+// - **Content:** the page title in `TEXT_STRONG` `W_STRONG`, then groups
+//   `SETTINGS_GROUP_GAP` apart: a group's label is a `TEXT_DIM` row (a
+//   provider's led by its logomark), its rows split by rules.
 // - **Row:** the label (`TEXT`) over an optional hint (`TEXT_DIM`) at the
 //   left; the control right and centred.
 // - **Controls** are words on the row: an on/off setting is `on` in
-//   `TEXT_STRONG` at `W_STRONG` or `off` in `TEXT_DIM`; a two-way choice is a
-//   pair of tokens, the chosen one inverse; a longer list is the value and
-//   a chevron that opens a menu; a size is `‹ 14px ›`. Each is a tab stop
-//   with the one focus outline, `paint::HOVER` under the pointer.
+//   `TEXT_STRONG` or `off` in `TEXT_DIM`; a two-way choice is a pair of
+//   tokens, the chosen one inverse (`menu::token`); a longer list is the
+//   value and a chevron that opens a menu; a size is `‹ 14px ›`. Each is a
+//   tab stop with the one focus outline, `paint::RAISED` under the pointer.
 // - **About** is a list of facts: the key at the left, the value at the
 //   right in `TEXT_DIM`. A path copies on click.
 // - **Search** filters every page at once: matching rows keep their groups,
 //   each labelled `Page · Group`; pages with no match read `TEXT_DIM`.
 pub const SETTINGS_W: f32 = 760.0;
 pub const SETTINGS_H: f32 = 448.0;
-pub const SETTINGS_SIDEBAR_W: f32 = 24.0 * CH;
-pub const SETTINGS_NAV_ROW_H: f32 = ROW;
+pub const SETTINGS_SIDEBAR_W: f32 = 188.0;
+pub const SETTINGS_NAV_ROW_H: f32 = FLOAT_ROW_H;
 /// A setting row: one row in a quarter row of air each side, or the label
 /// and its hint (two rows) in the same.
 pub const SETTINGS_ROW_H: f32 = ROW + HALF_ROW;
 pub const SETTINGS_ROW_HINT_H: f32 = 2.0 * ROW + HALF_ROW;
-pub const SETTINGS_ROW_PAD_X: f32 = CH;
+pub const SETTINGS_ROW_PAD_X: f32 = SPACE_2;
 /// Between groups; a group's label sits directly on its rows.
 pub const SETTINGS_GROUP_GAP: f32 = ROW;
 pub const SETTINGS_TITLE_GAP: f32 = HALF_ROW;
 /// Every control in a row is one row high.
 pub const SETTINGS_CONTROL_H: f32 = ROW;
 /// The text-size stepper's value slot: `24px` never moves the `›`.
-pub const SETTINGS_STEPPER_VALUE_W: f32 = 6.0 * CH;
+pub const SETTINGS_STEPPER_VALUE_W: f32 = 48.0;
 /// A chooser's widest value before it truncates (a model's name).
-pub const SETTINGS_MENU_MAX_W: f32 = 28.0 * CH;
+pub const SETTINGS_MENU_MAX_W: f32 = 220.0;
 /// An About key's column, so every value starts on one edge.
-pub const SETTINGS_FACT_KEY_W: f32 = 14.0 * CH;
+pub const SETTINGS_FACT_KEY_W: f32 = 110.0;
 /// A typed field on a Settings row (Machines' ssh target).
-pub const SETTINGS_FIELD_W: f32 = 24.0 * CH;
+pub const SETTINGS_FIELD_W: f32 = 188.0;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents
@@ -2940,8 +2941,7 @@ mod tests {
     }
 
     /// Rule 3: the surfaces, darkest first, every one opaque and neutral
-    /// grey (no hue anywhere but state), the legacy names on their new
-    /// values, and no accent.
+    /// grey (no hue anywhere but state), and no accent.
     #[test]
     fn the_surface_ladder_is_ordered_and_grey() {
         let ladder = [
@@ -2976,11 +2976,6 @@ mod tests {
             [0x222222, 0x181818, 0x1e1e1e, 0x222222, 0x2a2a2a, 0x2e2e2e]
         );
         assert_eq!((PRIMARY, ON_PRIMARY), (TEXT_STRONG, 0x161616));
-        assert_eq!(
-            (PLANE, CHROME, BAND, BAND2, SELECTION, HUNK),
-            (CARD, FRAME, FIELD, RAISED, SELECTED, BAR),
-            "the legacy names sit on the new surfaces"
-        );
         // The hairlines are white at their stated opacities.
         let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
         for (line, opacity) in [
@@ -3093,10 +3088,6 @@ mod tests {
         assert_eq!(paint::HAIRLINE.rgba(), HAIRLINE);
         assert_eq!(paint::HAIRLINE_STRONG.rgba(), HAIRLINE_STRONG);
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
-        assert_eq!(
-            (paint::PLANE, paint::CHROME, paint::HOVER, paint::SELECTION),
-            (paint::CARD, paint::FRAME, paint::RAISED, paint::SELECTED)
-        );
         // A float is opaque on every platform: glass picks its own grey.
         assert!(paint::FLOAT.is_opaque());
         assert_eq!(
@@ -3132,7 +3123,7 @@ mod tests {
             [R_INLINE, R_SMALL, R_TAB, R_CONTROL, R_CHIP, R_BLOCK, R_PANE, R_PALETTE],
             [4.0, 5.0, 6.0, 7.0, 7.0, 8.0, 10.0, 12.0]
         );
-        assert_eq!((R_TIGHT, R_MENU_ROW), (2.0, R_CHIP));
+        assert_eq!((R_TIGHT, R_MENU_ROW), (2.0, R_TAB));
         const { assert!(SHADOW_FLOAT_Y > 0.0 && SHADOW_FLOAT_BLUR > 0.0) };
     }
 

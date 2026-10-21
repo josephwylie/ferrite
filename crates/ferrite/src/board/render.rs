@@ -23,7 +23,7 @@ use sw_board::shown::ink::{Ink, Inked, Piece};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::{
-    BAND, BLUE, CH, CHROME, CYAN, GREEN, LINE, LINE2, MAGENTA, ORANGE, PLANE, RED, ROW, SELECTION,
+    BLUE, CARD, CH, CYAN, FIELD, FRAME, GREEN, LINE, LINE2, MAGENTA, ORANGE, RED, ROW, SELECTED,
     TEXT, TEXT_DIM, TEXT_STRONG, W_STRONG, YELLOW,
 };
 
@@ -63,15 +63,15 @@ pub(crate) fn theme_named(want: &str) -> Theme {
 /// and the board's own colours picked beside them.
 pub(crate) fn ferrite_theme(plain: bool) -> Theme {
     let own = |rgb: u32| C::Rgb(rgb);
-    let ground = own(PLANE);
+    let ground = own(CARD);
     let text = own(TEXT);
     let mut pal = Pal {
         accent: own(TEXT_STRONG),
         panel_bg: ground,
-        sidebar_bg: own(CHROME),
-        active_row_bg: own(SELECTION),
-        selection_bg: own(SELECTION),
-        surface0: own(BAND),
+        sidebar_bg: own(FRAME),
+        active_row_bg: own(SELECTED),
+        selection_bg: own(SELECTED),
+        surface0: own(FIELD),
         surface1: own(LINE2),
         surface_dim: own(LINE),
         overlay0: own(TEXT_DIM),
@@ -141,7 +141,7 @@ pub(crate) fn ink(theme: &Theme, ink: Ink) -> u32 {
 /// quieter, or dim), its background ink, then reverse.
 fn colours(theme: &Theme, piece: &Piece) -> (u32, Option<u32>) {
     let text = ink(theme, Ink::Text);
-    let ground = theme.ground.drawn().unwrap_or(PLANE);
+    let ground = theme.ground.drawn().unwrap_or(CARD);
     let (mut fg, mut bg) = (text, None);
     if !theme.plain {
         fg = if piece.quiet {

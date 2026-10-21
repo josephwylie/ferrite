@@ -13,7 +13,7 @@ use sw_board::json::*;
 use super::BoardView;
 use crate::components::{self, Tip};
 use crate::theme::{
-    BAND2, CH, CHROME, CONTROL_H, ICON_CHEVRON, LINE, ON_PRIMARY, PLANE, ROW, TEXT, TEXT_DIM,
+    CARD, CH, CONTROL_H, FRAME, ICON_CHEVRON, LINE, ON_PRIMARY, RAISED, ROW, TEXT, TEXT_DIM,
     TEXT_STRONG, W_STRONG,
 };
 
@@ -37,7 +37,7 @@ impl BoardView {
         } else {
             "board-project-all"
         };
-        components::form_button_on(id, rgb(if selected { BAND2 } else { PLANE }).into(), cx)
+        components::form_button_on(id, rgb(if selected { RAISED } else { CARD }).into(), cx)
             .tab_stop(false)
             .h(px(CONTROL_H))
             .px(px(CH))
@@ -89,7 +89,7 @@ impl BoardView {
         let button = if primary {
             components::primary_button(id, disabled, cx)
         } else {
-            components::form_button_on(id, rgb(CHROME).into(), cx).disabled(disabled)
+            components::form_button_on(id, rgb(FRAME).into(), cx).disabled(disabled)
         };
         button
             .tab_stop(false)
@@ -284,7 +284,7 @@ impl BoardView {
         components::ChoiceMenu {
             id: "board-more".into(),
             anchor: gpui::Anchor::TopLeft,
-            trigger: components::form_button_on("board-more", rgb(CHROME).into(), cx)
+            trigger: components::form_button_on("board-more", rgb(FRAME).into(), cx)
                 .tab_stop(false)
                 .h(px(CONTROL_H))
                 .px(px(CH))

@@ -1343,7 +1343,14 @@ fn comment_body(id: String, body: &str, folded: bool, window: &Window) -> TextVi
         .mr(px(-SPACE_0_5))
         .whitespace_normal();
     if folded {
+        // The clamp clips the laid-out document to whole lines; the
+        // ellipsis comes from each paragraph's own clamp, so a body whose
+        // first paragraph runs past the clamp ends on `…` (pr-states.png).
+        // One that runs past it in a later block is cut without one, never
+        // with a stray `…` above the clip.
         view.max_lines(PR_BODY_LINES)
+            .line_clamp(PR_BODY_LINES)
+            .text_ellipsis()
     } else {
         view
     }

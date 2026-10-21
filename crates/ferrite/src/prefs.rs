@@ -5,12 +5,12 @@
 //! sheet`, WP-E).
 //!
 //! **The sheet recipe** (Settings, the Project editor, the image preview):
-//! a `VEIL` over the Cockpit; the sheet is the float at sheet size —
-//! `paint::FLOAT`, a 1px `paint::LINE2` edge, square, the float shadow; a
-//! `MODAL_HEAD_H` head (the title in `TEXT_STRONG` at `W_STRONG` and the one
-//! close control, `×` with the tooltip `Close esc`) over a `paint::LINE`; a
-//! scrolling body; a footer pinned under a `paint::LINE`. Inside: one face
-//! on the grid, rows and rules, words for controls.
+//! a `VEIL` over the Cockpit; the sheet is the float's shell at sheet size
+//! — `FLOAT_GROUND`, radius `R_BLOCK`, a 1px `FLOAT_EDGE` ring, the float
+//! shadow; a `MODAL_HEAD_H` head (the title in `TEXT_STRONG` at `W_STRONG`
+//! and the one close control, `×` with the tooltip `Close esc`) over a
+//! `FLOAT_RULE`; a scrolling body; a footer pinned under a `FLOAT_RULE`.
+//! Inside: rows and rules, words for controls.
 
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, Div, Entity, SharedString, Window};
@@ -58,10 +58,10 @@ fn sheet_frame(width: f32) -> Div {
         .w(px(width))
         .max_w(gpui::relative(MODAL_VIEWPORT_FRACTION))
         .overflow_hidden()
-        .rounded(px(R_PANE))
-        .bg(paint::FLOAT)
+        .rounded(px(R_BLOCK))
+        .bg(FLOAT_GROUND)
         .border_1()
-        .border_color(paint::LINE2)
+        .border_color(FLOAT_EDGE)
         .shadow(components::elevation(components::Elevation::Sheet))
 }
 
@@ -71,17 +71,15 @@ pub fn settings_sheet() -> Div {
     sheet(SETTINGS_W, SETTINGS_H)
 }
 
-/// A sheet's head: its title, then the close button, over a `paint::LINE`.
+/// A sheet's head: its title, then the close button, over a `FLOAT_RULE`.
 /// The close button's tooltip names `esc`; no keycap repeats it.
 pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
-    head_row(title, close)
-        .border_b_1()
-        .border_color(paint::LINE)
+    head_row(title, close).border_b_1().border_color(FLOAT_RULE)
 }
 
-/// The Settings head: `settings`, its close control, the same rule.
+/// The Settings head: `Settings`, its close control, the same rule.
 pub fn settings_head(close: impl IntoElement) -> Div {
-    sheet_head("settings", close)
+    sheet_head("Settings", close)
 }
 
 fn head_row(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
@@ -114,7 +112,7 @@ fn head_row(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
 }
 
 /// A sheet's close button, the one close control on every sheet: the close
-/// glyph in a 28px square, `paint::HOVER` under the pointer. `sheet_head`
+/// glyph in a 28px square, `paint::RAISED` under the pointer. `sheet_head`
 /// gives it its tooltip, `Close` with `esc` (esc closes it too); `label` is
 /// the longer name a screen reader hears.
 pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
@@ -127,7 +125,7 @@ pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
         .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_DIM))
 }
 
-/// The pinned footer under a `paint::LINE`: secondary actions left, the
+/// The pinned footer under a `FLOAT_RULE`: secondary actions left, the
 /// completing action right. It never scrolls with the body.
 pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
     div()
@@ -139,7 +137,7 @@ pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
         .px(px(MODAL_PAD))
         .py(px(MODAL_GAP))
         .border_t_1()
-        .border_color(paint::LINE)
+        .border_color(FLOAT_RULE)
         .child(left)
         .child(right)
 }
@@ -356,7 +354,7 @@ fn shown(pages: &[Page], selected: PageKey, query: &str) -> Shown {
 
 /// The Settings body under its head: the sidebar (the search line, the
 /// pages, `About` at the foot) beside the selected page, or the search's
-/// results, split by a `paint::LINE`.
+/// results, split by a `FLOAT_RULE`.
 pub fn body(
     pages: Vec<Page>,
     selected: PageKey,
@@ -389,7 +387,7 @@ pub fn body(
         .w(px(SETTINGS_SIDEBAR_W))
         .min_h_0()
         .border_r_1()
-        .border_color(paint::LINE)
+        .border_color(FLOAT_RULE)
         .pb(px(HALF_ROW))
         .child(search_field(search, window, cx))
         .child(
@@ -458,8 +456,8 @@ pub fn body(
         .child(content)
 }
 
-/// The search line atop the sidebar: the strong `❯` in its gutter, then the
-/// field, over a `paint::LINE` — the palette's own input line.
+/// The search line atop the sidebar: the `search` icon, then the field,
+/// over a `HAIRLINE` — the palette's own input line.
 fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     let focused = gpui::Focusable::focus_handle(search.read(cx), cx).is_focused(window);
     components::focused(
@@ -468,11 +466,16 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
             .flex()
             .flex_shrink_0()
             .items_center()
+            .gap(px(SPACE_2))
             .h(px(ROW + 2.0 * SPACE_1))
-            .px(px(CH))
+            .px(px(MENU_ROW_PAD_X))
             .border_b_1()
-            .border_color(paint::LINE)
-            .child(crate::menu::gutter(true))
+            .border_color(paint::HAIRLINE)
+            .child(crate::icons::icon(
+                crate::icons::SEARCH,
+                FIND_ICON,
+                TEXT_DIM,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -483,15 +486,15 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     )
 }
 
-/// A sidebar row: the page's name on the grid. The page shown is
-/// `paint::SELECTION` with the strong `❯` and `TEXT_STRONG`; the rest `TEXT`,
-/// `paint::HOVER` under the pointer. While a search runs, a page with no
+/// A sidebar row: the page's name, radius `R_MENU_ROW`. The page shown is
+/// `paint::SELECTED` in `TEXT_STRONG`; the rest `TEXT`,
+/// `paint::RAISED` under the pointer. While a search runs, a page with no
 /// match reads `TEXT_DIM`.
 fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     let (rest, hover): (gpui::Hsla, gpui::Hsla) = if selected {
-        (paint::SELECTION.into(), paint::SELECTION_HOVER.into())
+        (paint::SELECTED.into(), paint::SELECTION_HOVER.into())
     } else {
-        (gpui::rgba(TRANSPARENT).into(), paint::HOVER.into())
+        (gpui::rgba(TRANSPARENT).into(), paint::RAISED.into())
     };
     let ink = match (selected, hit) {
         (true, _) => TEXT_STRONG,
@@ -511,19 +514,19 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     .accessibility_label(key.title())
     .w_full()
     .h(px(SETTINGS_NAV_ROW_H))
-    .px(px(CH))
+    .px(px(MENU_ROW_PAD_X))
+    .rounded(px(R_MENU_ROW))
     .child(
         div()
             .flex()
             .flex_1()
             .items_center()
-            .child(crate::menu::gutter(selected))
             .child(components::form_label(key.title(), ink)),
     )
 }
 
 /// A group: its label (and a provider's mark) as a `TEXT_DIM` row, then
-/// its rows, each over a `paint::LINE` rule.
+/// its rows, each over a `FLOAT_RULE` hairline.
 fn group_rows(
     label: Option<SharedString>,
     group: &Group,
@@ -536,7 +539,7 @@ fn group_rows(
         .map(|row| {
             setting_row(row, window, cx)
                 .border_t_1()
-                .border_color(paint::LINE)
+                .border_color(FLOAT_RULE)
                 .into_any_element()
         })
         .collect();
@@ -675,7 +678,7 @@ pub fn choices<T: Clone + 'static>(
 }
 
 /// A choice from a list: the current value and a chevron, as wide as its
-/// value (at most `SETTINGS_MENU_MAX_W`), `paint::HOVER` under the pointer.
+/// value (at most `SETTINGS_MENU_MAX_W`), `paint::RAISED` under the pointer.
 /// The menu keeps every value, the standing one checked; search also
 /// indexes the hidden labels.
 pub fn chooser<T: Clone + 'static>(
@@ -783,7 +786,7 @@ fn toggle_face(checked: bool) -> (&'static str, u32) {
 
 /// An on/off setting: one word on the row — `on` in `TEXT_STRONG`, `off` dim —
 /// that flips the setting on a click, Enter or Space (a tab stop with the
-/// focus outline), `paint::HOVER` under the pointer. No iOS switch.
+/// focus outline), `paint::RAISED` under the pointer. No iOS switch.
 pub fn toggle(
     id: &'static str,
     title: &'static str,
@@ -818,14 +821,14 @@ pub fn toggle(
 /// One option of a short ladder (a two-way choice, a stepper's ends): a
 /// token one row high with a cell of padding. Chosen, it is inverse —
 /// `PRIMARY` with `ON_PRIMARY` at `W_STRONG`; the rest `TEXT_DIM`,
-/// `paint::HOVER` under the pointer. A tab stop.
+/// `paint::RAISED` under the pointer. A tab stop.
 pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (rest, hover, ink): (gpui::Hsla, gpui::Hsla, u32) = if selected {
         (rgb(PRIMARY).into(), rgb(TEXT).into(), ON_PRIMARY)
     } else {
         (
             gpui::rgba(TRANSPARENT).into(),
-            paint::HOVER.into(),
+            paint::RAISED.into(),
             TEXT_DIM,
         )
     };
@@ -864,7 +867,7 @@ pub fn stepper(
             let ink = if live { TEXT } else { TEXT_FAINT };
             let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
             let (hover, press): (gpui::Hsla, gpui::Hsla) = if live {
-                (paint::HOVER.into(), paint::PRESS.into())
+                (paint::RAISED.into(), paint::PRESS.into())
             } else {
                 (none, none)
             };
@@ -1138,17 +1141,17 @@ mod tests {
         assert_eq!(options.iter().filter(|(_, on, _)| *on).count(), 1);
     }
 
-    /// Terminal-native (WP-E): a sheet is the float at sheet size — the
-    /// float ground, the `LINE2` edge, square, the one float shadow — over
-    /// the veil.
+    /// A sheet is the float's shell at sheet size — the float ground, the
+    /// `FLOAT_EDGE` ring, radius `R_BLOCK`, the one float shadow — over the
+    /// veil.
     #[test]
     fn the_sheet_is_the_float_over_the_veil() {
         let mut drawn = sheet(SETTINGS_W, SETTINGS_H);
         let style = drawn.style();
-        assert_eq!(style.background, Some(paint::FLOAT.into()));
-        assert_eq!(style.border_color, Some(paint::LINE2.into()));
+        assert_eq!(style.background, Some(FLOAT_GROUND.into()));
+        assert_eq!(style.border_color, Some(FLOAT_EDGE.into()));
         assert_eq!(style.box_shadow, Some(components::float_shadow()));
-        assert_eq!(style.corner_radii.top_left, Some(px(R_PANE).into()));
+        assert_eq!(style.corner_radii.top_left, Some(px(R_BLOCK).into()));
         assert_eq!(veil().style().background, Some(gpui::rgba(VEIL).into()));
     }
 
@@ -1158,8 +1161,8 @@ mod tests {
     fn the_settings_sheet_is_the_sheet_recipe() {
         let mut drawn = settings_sheet();
         let style = drawn.style();
-        assert_eq!(style.background, Some(paint::FLOAT.into()));
-        assert_eq!(style.border_color, Some(paint::LINE2.into()));
+        assert_eq!(style.background, Some(FLOAT_GROUND.into()));
+        assert_eq!(style.border_color, Some(FLOAT_EDGE.into()));
         assert_eq!(style.box_shadow, Some(components::float_shadow()));
         for head in [settings_head(div()), sheet_head("Project", div())] {
             let mut head = head;
@@ -1169,7 +1172,7 @@ mod tests {
 
     #[test]
     fn rows_sit_on_the_grid_and_the_sheet_fits_its_pages() {
-        assert_eq!(SETTINGS_NAV_ROW_H, ROW);
+        assert_eq!(SETTINGS_NAV_ROW_H, FLOAT_ROW_H);
         assert_eq!(SETTINGS_CONTROL_H, ROW);
         // A label and its hint are two rows; each row keeps a quarter row
         // of air above and below.

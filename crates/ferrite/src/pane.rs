@@ -1790,7 +1790,7 @@ pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
 /// One quick answer (F-7): `1 allow` in a 1px `paint::LINE2` box,
 /// `QUICK_ANSWER_H` (22px) outer — one line and its two borders — 1ch in
 /// from each side. The digit is `TEXT_DIM` on every waiting tile, the
-/// word `TEXT`; under the pointer the face blends to `paint::BAND2` and the
+/// word `TEXT`; under the pointer the face blends to `paint::RAISED` and the
 /// word to `TEXT_STRONG` over the one 150ms hover blend, the digit staying
 /// dim.
 pub(crate) fn quick_answer(
@@ -1799,8 +1799,11 @@ pub(crate) fn quick_answer(
     label: SharedString,
 ) -> Stateful<Div> {
     let hover = id.clone();
-    let ground =
-        crate::motion::hover_blend(&hover, rgba(TRANSPARENT).into(), theme::paint::BAND2.hsla());
+    let ground = crate::motion::hover_blend(
+        &hover,
+        rgba(TRANSPARENT).into(),
+        theme::paint::RAISED.hsla(),
+    );
     let word = crate::motion::hover_blend(&hover, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
     let selector = id.clone();
     // Its two runs, a cell of padding each side and its edge.
@@ -3358,13 +3361,13 @@ pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
         .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, TEXT_DIM))
 }
 
-/// A quiet control's button: no ground at rest, `paint::HOVER` under the
+/// A quiet control's button: no ground at rest, `paint::RAISED` under the
 /// pointer over the one 150ms blend, `paint::PRESS` pressed at once.
 fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::component::button::Button {
     components::faded_button(
         id,
         gpui::rgba(theme::TRANSPARENT).into(),
-        theme::paint::HOVER.into(),
+        theme::paint::RAISED.into(),
         theme::paint::PRESS.into(),
         rgb(TEXT_DIM).into(),
         cx,
@@ -3549,7 +3552,7 @@ pub fn menu_popover() -> Div {
     crate::menu::float().w_full().max_h(px(theme::MENU_MAX_H))
 }
 
-/// A `/` or `@` row in the float grammar: the cursor's `❯`, the name with
+/// A `/` or `@` row in the float grammar: the cursor row's fill, the name with
 /// its matches in `TEXT_STRONG`, the detail muted in its own column
 /// (`label_w` aligns the slash commands' descriptions), `↵` on the cursor
 /// row.
@@ -3936,7 +3939,7 @@ pub(crate) fn context_segments(
 /// window the provider has not reported is left out; when it reports
 /// neither, one line says so (`Limits not reported by this provider`) in
 /// place of two empty bars. Each block holds the rows' inset
-/// (`FLOAT_PAD_X`).
+/// (the panel's `PANEL_ROW_ICON_X`).
 ///
 /// The context bar is stacked by category when the provider says what
 /// fills the window, and its heading is a row that opens the legend: every
@@ -4007,7 +4010,7 @@ pub fn context_usage(
             .flex_col()
             .flex_shrink_0()
             .gap(px(theme::USAGE_CARD_ROW_GAP))
-            .px(px(theme::FLOAT_PAD_X))
+            .px(px(theme::PANEL_ROW_ICON_X))
     };
     let window =
         |label: &'static str, key: &'static str, fraction: f32, detail: Option<AnyElement>| {
@@ -4128,8 +4131,8 @@ pub fn context_usage(
         div()
             .id(id)
             .debug_selector(|| "context-window-toggle".into())
-            .mx(px(-theme::FLOAT_PAD_X))
-            .px(px(theme::FLOAT_PAD_X))
+            .mx(px(-theme::PANEL_ROW_ICON_X))
+            .px(px(theme::PANEL_ROW_ICON_X))
             .cursor_pointer()
             .hover_raised(key)
             .press_raised()
@@ -4276,7 +4279,7 @@ pub fn context_usage(
             .flex_shrink_0()
             .justify_between()
             .gap(px(theme::SPACE_3))
-            .px(px(theme::FLOAT_PAD_X))
+            .px(px(theme::PANEL_ROW_ICON_X))
             .child(
                 div()
                     .min_w_0()
@@ -5330,15 +5333,6 @@ pub(crate) fn image_facts(path: &std::path::Path) -> Option<ImageFacts> {
     })
 }
 
-/// States what a world says about an image it attached, as if read from
-/// the file: the parity world's screenshot weighs what its caption in the
-/// prototype says.
-pub(crate) fn state_image_facts(path: &std::path::Path, facts: ImageFacts) {
-    IMAGE_FACTS.with(|cache| {
-        cache.borrow_mut().insert(path.to_path_buf(), Some(facts));
-    });
-}
-
 fn read_image_facts(path: &std::path::Path) -> Option<ImageFacts> {
     use std::io::Read as _;
     let bytes = std::fs::metadata(path).ok()?.len();
@@ -6181,7 +6175,7 @@ impl gpui::RenderOnce for TestBar {
 /// `412 lines`, a failure, and its diffs (a later edit's folded behind `+
 /// show diff`). Under the pointer the row changes nothing but a path
 /// argument's underline: no ground, no chevron; the keyboard's disclosure
-/// target alone wears `paint::HOVER`.
+/// target alone wears `paint::RAISED`.
 ///
 /// Expanded from the keyboard, a call that is not a command shows the input
 /// where the call line could not show it whole, its output, and any
@@ -6287,7 +6281,7 @@ pub(crate) fn render_tool(
     if targeted {
         // The ground is the row's; the target's selector rides a layer over
         // it, so the row keeps its own.
-        line = line.bg(theme::paint::HOVER).child(
+        line = line.bg(theme::paint::RAISED).child(
             div()
                 .debug_selector(|| "tool-disclosure-keyboard-target".into())
                 .absolute()
@@ -6595,7 +6589,7 @@ fn group_duration(
 /// summary reads in `TEXT`, its failure count in `BLOCKED`. The whole line
 /// is the pointer's toggle — it lifts to `TEXT_STRONG` under the pointer,
 /// its chevron always shown, a quarter turned when open — and the
-/// keyboard's (`ToolDisclosure`), wearing `paint::HOVER` when targeted.
+/// keyboard's (`ToolDisclosure`), wearing `paint::RAISED` when targeted.
 ///
 /// Open, the calls hang under the summary one gutter in, each the row it
 /// would be on its own (its folds and details its own), on a 1px
@@ -6685,7 +6679,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
             })
             .children(overlay);
     if targeted {
-        header = header.bg(theme::paint::HOVER).child(
+        header = header.bg(theme::paint::RAISED).child(
             div()
                 .debug_selector(|| "tool-disclosure-keyboard-target".into())
                 .absolute()
@@ -7060,7 +7054,7 @@ pub struct Disclosure {
     pub overlay: Option<AnyElement>,
     /// The trailing chevron (`disclosure_chevron`, reasoning rows).
     pub chevron: Option<AnyElement>,
-    /// Keyboard cycling has landed on this row: it wears the `paint::HOVER`
+    /// Keyboard cycling has landed on this row: it wears the `paint::RAISED`
     /// ground so the operator sees which row Enter will toggle. The pointer
     /// never sets it, and no other row ever wears a ground.
     pub targeted: bool,
@@ -7074,7 +7068,7 @@ impl Disclosure {
     /// The row's keyboard-target ground, and its selector.
     fn ground(targeted: bool, row: Stateful<Div>) -> Stateful<Div> {
         row.when(targeted, |row| {
-            row.bg(theme::paint::HOVER)
+            row.bg(theme::paint::RAISED)
                 .debug_selector(|| "tool-disclosure-keyboard-target".into())
         })
     }
@@ -7181,65 +7175,12 @@ pub fn disclosure_chevron(expanded: bool, targeted: bool, eased: bool) -> AnyEle
 
 /// One side of a diff row: its line number, its kind, its code and the
 /// changed tokens' range in it (a removed line paired with an added one).
-/// `plain` draws the changed tokens in the row's own ink, their syntax
-/// colours dropped (only a stated mark asks for it, `WordMark`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DiffSide {
     pub kind: DiffKind,
     pub number: u32,
     pub body: String,
     pub words: Option<std::ops::Range<usize>>,
-    pub plain: bool,
-}
-
-/// A changed-token span stated for one diff line instead of the one
-/// `changed_words` derives: the line by its file (a path suffix), its kind
-/// and its number, the span by its text (the first occurrence in the line).
-///
-/// Only the prototype's world states marks (the parity capture and
-/// `--demo parity`). The approved prototype marks its
-/// diffs' changed tokens by hand, and no rule derives every one of them
-/// (it marks one pure insertion but not the next, and wraps a call's
-/// argument where the token diff sees the call), so its world states the
-/// prototype's own spans for the lines it shows; every other diff, and
-/// every other line, is marked by `changed_words`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WordMark {
-    pub path: &'static str,
-    pub added: bool,
-    pub number: u32,
-    pub text: &'static str,
-    pub plain: bool,
-}
-
-thread_local! {
-    /// The marks the prototype's world states (`set_word_marks`).
-    static WORD_MARKS: std::cell::RefCell<Vec<WordMark>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// State `marks` for the diffs drawn from here on (the prototype's world,
-/// captured or live; see `WordMark`).
-pub(crate) fn set_word_marks(marks: Vec<WordMark>) {
-    WORD_MARKS.with(|stated| *stated.borrow_mut() = marks);
-}
-
-/// `side` of the diff of `path` with the span stated for it, if any.
-fn stated_mark(path: &str, side: &mut DiffSide) {
-    WORD_MARKS.with(|stated| {
-        let stated = stated.borrow();
-        let found = stated.iter().find(|mark| {
-            path.ends_with(mark.path)
-                && mark.number == side.number
-                && mark.added == (side.kind == DiffKind::Added)
-                && side.kind != DiffKind::Context
-        });
-        if let Some(mark) = found {
-            if let Some(at) = side.body.find(mark.text) {
-                side.words = Some(at..at + mark.text.len());
-                side.plain = mark.plain;
-            }
-        }
-    });
 }
 
 /// A diff as rows. A `Unified` row is one side, numbered by the file it is
@@ -7506,7 +7447,6 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                         number,
                         body: body.clone(),
                         words: None,
-                        plain: false,
                     };
                     rows.push(if split {
                         DiffRow::Split {
@@ -7544,7 +7484,6 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                             number: old + index as u32,
                             body: (*body).to_owned(),
                             words: None,
-                            plain: false,
                         })
                         .collect();
                     let mut right: Vec<DiffSide> = added
@@ -7555,7 +7494,6 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                             number: new + index as u32,
                             body: (*body).to_owned(),
                             words: None,
-                            plain: false,
                         })
                         .collect();
                     for (i, j) in &pairs {
@@ -7565,9 +7503,6 @@ pub(super) fn diff_rows(diff: &Diff, cap: usize, split: bool) -> Vec<DiffRow> {
                                 right[*j].words = Some(became);
                             }
                         }
-                    }
-                    for side in left.iter_mut().chain(right.iter_mut()) {
-                        stated_mark(&diff.path, side);
                     }
                     old += removed.len() as u32;
                     new += added.len() as u32;
@@ -7617,24 +7552,10 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
             let wash: gpui::Hsla = rgb(wash >> 8).into();
             (words, wash.opacity(alpha))
         });
-    let syntax = match (&words, side.plain) {
-        // The changed tokens in the row's own ink: the syntax runs stop at
-        // the span and pick up after it.
-        (Some((words, _)), true) => syntax
-            .into_iter()
-            .flat_map(|(range, style)| {
-                [
-                    range.start..range.end.min(words.start),
-                    range.start.max(words.end)..range.end,
-                ]
-                .into_iter()
-                .filter(|part| !part.is_empty())
-                .map(move |part| (part, style))
-            })
-            .collect(),
+    let syntax = match &words {
         // The changed tokens are a span of their own: the runs break at
         // its edges, as the prototype's `.wa` / `.wr` breaks its line.
-        (Some((words, _)), false) => syntax
+        Some((words, _)) => syntax
             .into_iter()
             .flat_map(|(range, style)| {
                 let mut cuts = vec![range.start];
@@ -7649,7 +7570,7 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
                     .collect::<Vec<_>>()
             })
             .collect(),
-        _ => syntax,
+        None => syntax,
     };
     (syntax, words)
 }
