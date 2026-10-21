@@ -120,6 +120,12 @@ pub struct Finish {
 }
 
 impl Digest {
+    /// Main is mid-turn, or work runs behind it: its Subagents or its
+    /// background tasks.
+    pub fn at_work(&self) -> bool {
+        self.working || self.background_work
+    }
+
     /// Fold one Thread's digest. `shown` is the Subject the windows show
     /// for it; `boot` is the Server's clock zero.
     pub fn of(

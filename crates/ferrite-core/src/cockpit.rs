@@ -86,16 +86,20 @@ pub struct Cockpit {
     drawn: Option<Drawn>,
 }
 
-/// How long a Thread off screen stays streamed whole: flipping between
-/// Threads reads none of their history again (ADR 0032).
-const UNWATCH_AFTER: Duration = Duration::from_secs(30);
+/// How long a Thread off screen and no longer at work stays streamed
+/// whole: coming back to one within it reads none of its history again
+/// (ADR 0032). One drawn and at work stays however long it works.
+const UNWATCH_AFTER: Duration = Duration::from_secs(5 * 60);
 
-/// The Threads a window draws at Transcript level, and when each it no
-/// longer draws left the screen.
+/// The Threads a window draws at Transcript level, and since when each it
+/// no longer draws has been off screen and not at work.
 #[derive(Default)]
 struct Drawn {
     now: std::collections::BTreeSet<ThreadId>,
     left: HashMap<ThreadId, Instant>,
+    /// Held because they opened here, never yet drawn: their work keeps
+    /// none of them (the window mirrors only what it draws).
+    unseen: std::collections::BTreeSet<ThreadId>,
 }
 
 impl Drawn {
@@ -105,6 +109,7 @@ impl Drawn {
         }
         for thread in &threads {
             self.left.remove(thread);
+            self.unseen.remove(thread);
         }
         self.now = threads;
     }
@@ -114,6 +119,7 @@ impl Drawn {
     fn opened(&mut self, thread: ThreadId, at: Instant) {
         if !self.now.contains(&thread) {
             self.left.insert(thread, at);
+            self.unseen.insert(thread);
         }
     }
 
@@ -126,9 +132,21 @@ impl Drawn {
                 .is_some_and(|left| at.saturating_duration_since(*left) < UNWATCH_AFTER)
     }
 
+    /// `thread` is still at work off screen: its time away starts again,
+    /// if the window has drawn it.
+    fn keep(&mut self, thread: ThreadId, at: Instant) {
+        if self.unseen.contains(&thread) {
+            return;
+        }
+        if let Some(left) = self.left.get_mut(&thread) {
+            *left = at;
+        }
+    }
+
     fn retain(&mut self, open: &[ThreadId]) {
         self.now.retain(|thread| open.contains(thread));
         self.left.retain(|thread, _| open.contains(thread));
+        self.unseen.retain(|thread| open.contains(thread));
     }
 }
 
@@ -419,16 +437,17 @@ impl Cockpit {
     }
 
     /// The window draws exactly these Threads at Transcript level now. It
-    /// streams them whole while it does, and each for `UNWATCH_AFTER` after
-    /// it stops (ADR 0032).
+    /// streams them whole while it does, while each it stopped drawing is
+    /// at work, and for `UNWATCH_AFTER` after (ADR 0032).
     pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadId>) {
         self.drawn
             .get_or_insert_with(Drawn::default)
             .draws(threads.into_iter().collect(), crate::clock::instant());
     }
 
-    /// The Threads this window streams whole: those it drew at Transcript
-    /// level within `UNWATCH_AFTER`. Until it says what it draws, or while
+    /// The Threads this window streams whole: those it draws at Transcript
+    /// level, and those it drew that were at work within `UNWATCH_AFTER`.
+    /// Until it says what it draws, or while
     /// its Engine sends no digests to read the rest from, every open one.
     fn watched(&self) -> Vec<ThreadId> {
         let open = &self.shared.open;
@@ -444,6 +463,12 @@ impl Cockpit {
 
     /// Stream what the window draws, and let the rest go.
     fn follow_attention(&mut self) {
+        if let Some(drawn) = &mut self.drawn {
+            let now = crate::clock::instant();
+            for thread in self.mirrors.watched_at_work() {
+                drawn.keep(thread, now);
+            }
+        }
         let watched = self.watched();
         if let Some(drawn) = &mut self.drawn {
             drawn.retain(&self.shared.open);
