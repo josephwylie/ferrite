@@ -2839,16 +2839,21 @@ impl CockpitView {
                     .filter(|identity| matches!(identity, PaneIdentity::Draft(_)))
                     .map(pane_leaf)
                     .collect();
+                // Only a member with a Pane takes a slot: one without
+                // would leave a hole in the board, no card to paint it.
+                let seated = |member: &ThreadId| self.pane_for(*member).is_some();
                 if readers.is_empty()
                     && !drafts.is_empty()
                     && !self.cockpit.groups().has_custom_layout(group)
                 {
                     let mut all = self.cockpit.groups().get(group)?.members.clone();
+                    all.retain(seated);
                     all.extend(drafts.iter().copied());
                     return Some(Tree::grid(&all, bounds));
                 }
                 let persisted = self.cockpit.group_layout(group, bounds)?;
                 let mut panes = persisted.leaves();
+                panes.retain(seated);
                 panes.extend(drafts);
                 let base = match self.board_layouts.get(&board) {
                     Some(session) if !readers.is_empty() => session.clone(),
@@ -24209,6 +24214,67 @@ mod tests {
         for (count, width, height) in [(6, 1400., 900.), (9, 900., 600.)] {
             exercise_board(cx, count, width, height);
         }
+    }
+
+    /// Every slot of a Group's board paints a card (the CLI-park bug left
+    /// one empty, the glass showing through). A member parked in its Group
+    /// keeps its Pane, drawn parked; a member this window holds no Pane for
+    /// yet takes no slot, and the board closes up around the rest.
+    #[gpui::test]
+    fn every_slot_of_a_group_board_paints_a_card(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("board-no-hole", 3);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        core.apply_group(GroupChange::Join {
+            thread: threads[2],
+            group,
+            index: None,
+        })
+        .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        tick(cx);
+        let filled = |cx: &mut gpui::VisualTestContext, cards: usize| {
+            let (bounds, rects) = cx.update(|window, cx| {
+                let view = view.read(cx);
+                (view.board_bounds(window), view.pane_rects(window))
+            });
+            assert_eq!(rects.len(), cards, "one card per slot");
+            let area: f32 = rects.iter().map(|(_, rect)| rect.w * rect.h).sum();
+            let seams = (cards - 1) as f32 * crate::theme::BOARD_SEAM;
+            assert!(
+                area >= (bounds.w.min(bounds.h) - seams) * bounds.w.max(bounds.h) - 1.0,
+                "the cards fill the board, nothing left unpainted: {area} of {bounds:?}"
+            );
+        };
+
+        view.update(cx, |view, cx| {
+            view.cockpit.park(threads[1]).unwrap();
+            view.sync_panes(cx);
+            cx.notify();
+        });
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.cockpit.thread(threads[1]).is_none(), "parked");
+            assert!(view.pane_for(threads[1]).is_some(), "its Pane stays");
+        });
+        filled(cx, 3);
+
+        // The window's Panes trail the Roster for a moment after an act.
+        view.update(cx, |view, _| {
+            view.panes.retain(|pane| pane.thread() != Some(threads[1]));
+            let tree = view.board_tree(Board::Group(group)).unwrap();
+            assert_eq!(tree.leaves(), [threads[0], threads[2]]);
+        });
+        filled(cx, 2);
     }
 
     /// `count` Threads with a few lines each, grouped, at `width`×`height`.

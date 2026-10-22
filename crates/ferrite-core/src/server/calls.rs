@@ -97,7 +97,7 @@ impl Server {
                 })
                 .and_then(|_| thread_result(&self.engine, params.thread)),
             Method::ThreadClose(params) => self.open_thread(params.thread).and_then(|thread| {
-                self.execute(Op::Park { thread })?;
+                self.park(thread)?;
                 Ok(json!({ "thread": thread }))
             }),
             Method::AgentPrompt(params) => match self.prompt(&params) {
@@ -190,6 +190,18 @@ impl Server {
 
     pub(super) fn execute(&mut self, op: Op) -> Result<Option<Done>, ApiError> {
         self.engine.execute(&op).map_err(ApiError::from)
+    }
+
+    /// Park a Thread as the window's park does (`Cockpit::park_thread`),
+    /// with the same two commands: a Group member leaves its Group first,
+    /// so no window's board keeps a seat for a Thread that went away.
+    pub(super) fn park(&mut self, thread: ThreadId) -> Result<(), ApiError> {
+        if self.engine.groups().of(thread).is_some() {
+            self.execute(Op::Group {
+                change: (&crate::groups::GroupChange::Leave { thread }).into(),
+            })?;
+        }
+        self.execute(Op::Park { thread }).map(drop)
     }
 
     /// How many windows hear what the Server says to them all.
