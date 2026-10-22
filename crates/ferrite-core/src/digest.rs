@@ -45,6 +45,11 @@ pub struct Digest {
     /// Work runs behind Main: its Subagents, or its background tasks.
     #[serde(default)]
     pub background_work: bool,
+    /// The Thread is at work as the Server keeps its Session for: a turn,
+    /// queued or unanswered prompts, Decisions, Subagents or background
+    /// tasks (ADR 0032). A window holds its transcript as long.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_work: bool,
     /// Every pending Decision, in the order they are answered.
     #[serde(default)]
     pub pending: Vec<PendingEntry>,
@@ -120,12 +125,6 @@ pub struct Finish {
 }
 
 impl Digest {
-    /// Main is mid-turn, or work runs behind it: its Subagents or its
-    /// background tasks.
-    pub fn at_work(&self) -> bool {
-        self.working || self.background_work
-    }
-
     /// Fold one Thread's digest. `shown` is the Subject the windows show
     /// for it; `boot` is the Server's clock zero.
     pub fn of(
@@ -149,6 +148,8 @@ impl Digest {
             working_descendants,
             background_work: working_descendants > 0
                 || transcript.progress().working_background() > 0,
+            // The Server's verdict, from its Thread (`Engine::publish_digests`).
+            at_work: false,
             pending: pending
                 .iter()
                 .map(|pending| PendingEntry {
