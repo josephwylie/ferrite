@@ -4332,6 +4332,45 @@ fn a_thread_at_work_is_mirrored_though_never_drawn() {
     assert!(!shows(&window, thread, "on it"), "let go");
 }
 
+/// A small Thread's history never waits on a big one's: watched together,
+/// the small one is drawn first though the big one was asked for first.
+#[test]
+fn a_small_history_never_waits_on_a_big_one() {
+    let harness = start("histories-together");
+    let mut other = attach(&harness.address);
+    let (big, big_provider) = open(&mut other, &harness);
+    let (small, small_provider) = open(&mut other, &harness);
+    let long = "x".repeat(400 * 1024);
+    for _ in 0..16 {
+        big_provider.send(text(&format!("{long}\n\n"))).unwrap();
+        turn_ends(&big_provider);
+    }
+    small_provider.send(text("small\n\n")).unwrap();
+    turn_ends(&small_provider);
+    other.until_within(Duration::from_secs(30), |other| {
+        [big, small].iter().all(|thread| {
+            other
+                .digest(*thread)
+                .is_some_and(|digest| !digest.at_work && !digest.wall.lines.is_empty())
+        })
+    });
+
+    let mut window = attach(&harness.address);
+    window.watch(big, None);
+    window.watch(small, None);
+    let mut ended = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while ended.len() < 2 {
+        assert!(Instant::now() < deadline, "timed out: {ended:?}");
+        if let Ok(ServerMessage::HistoryEnd { thread, .. }) =
+            window.client.messages.recv_timeout(Duration::from_secs(1))
+        {
+            ended.push(thread);
+        }
+    }
+    assert_eq!(ended, vec![small, big]);
+}
+
 /// A window drawing a Thread it let go shows its transcript whole or not
 /// at all: a long history crossing the link in pieces never draws its
 /// oldest part on the way to the latest.
