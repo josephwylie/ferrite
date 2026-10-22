@@ -73,15 +73,22 @@ fn every_member_has_a_pane(window: &crate::cockpit::Cockpit, group: GroupId) {
 }
 
 /// Pump `window` until it holds every one of `threads` parked. At every
-/// frame on the way, none it holds parked still sits in a Group: the leave
-/// reaches it before the park, so its board never seats, nor focuses, a
-/// Thread that went away (`Server::park`).
+/// frame on the way, none it holds parked still sits in a Group, and the
+/// focus never rests on one: the leave reaches it before the park
+/// (`Server::park`), so its board never seats, nor focuses, a Thread that
+/// went away. Parked is the last thing it hears of a park, so what the
+/// test asserts after is the end state, not a moment on the way.
 fn pump_until_parked(window: &mut crate::cockpit::Cockpit, threads: &[ThreadId]) {
     pump_until(window, |window| {
         for &thread in threads {
+            let parked = window.thread(thread).is_none();
             assert!(
-                window.thread(thread).is_some() || window.groups().of(thread).is_none(),
+                !parked || window.groups().of(thread).is_none(),
                 "the window holds {thread} parked while still in its Group"
+            );
+            assert!(
+                !parked || window.roster().focused_thread() != Some(thread),
+                "the window focuses {thread}, parked"
             );
         }
         threads
@@ -111,7 +118,7 @@ fn an_api_park_of_a_member_of_the_shown_group_leaves_it() {
     window.focus(PaneIdentity::Thread(threads[0]));
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until_parked(&mut window, &threads[1..2]);
+    pump_until_parked(&mut window, std::slice::from_ref(&threads[1]));
 
     assert_eq!(members(&window, group), [threads[0], threads[2]]);
     assert_eq!(window.roster().view(), View::Group(group));
@@ -137,7 +144,7 @@ fn an_api_park_of_a_member_of_a_group_not_shown_leaves_it() {
     assert_eq!(window.roster().view(), View::Solo);
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until_parked(&mut window, &threads[1..2]);
+    pump_until_parked(&mut window, std::slice::from_ref(&threads[1]));
 
     assert_eq!(members(&window, group), [threads[0], threads[2]]);
     assert_eq!(window.roster().view(), View::Solo);
@@ -164,7 +171,7 @@ fn an_api_park_of_the_focused_member_lands_on_its_ordinal_survivor() {
     window.focus(PaneIdentity::Thread(threads[1]));
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until_parked(&mut window, &threads[1..2]);
+    pump_until_parked(&mut window, std::slice::from_ref(&threads[1]));
 
     assert_eq!(window.roster().view(), View::Group(group));
     assert_eq!(window.roster().focused_thread(), Some(threads[2]));
@@ -184,7 +191,7 @@ fn an_api_park_that_dissolves_the_shown_pair_lands_on_its_survivor() {
     window.focus(PaneIdentity::Thread(threads[1]));
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until_parked(&mut window, &threads[1..2]);
+    pump_until_parked(&mut window, std::slice::from_ref(&threads[1]));
 
     assert!(window.groups().get(group).is_none());
     assert_eq!(window.roster().view(), View::Solo);
@@ -202,7 +209,7 @@ fn an_api_revive_after_an_api_park_reopens_the_thread_outside_the_group() {
     window.focus(PaneIdentity::Thread(threads[0]));
     let mut caller = call(&harness);
     close(&mut caller, "1", threads[1]);
-    pump_until_parked(&mut window, &threads[1..2]);
+    pump_until_parked(&mut window, std::slice::from_ref(&threads[1]));
 
     let revived = caller.answer(
         "2",
@@ -271,4 +278,33 @@ fn closing_a_project_parks_its_members_out_of_their_groups() {
 
     assert!(window.groups().get(group).is_none());
     assert_eq!(window.roster().view(), View::Solo);
+}
+
+/// A member parked in its Group, then taken out of it: its Pane goes with
+/// its seat, whichever the window heard first, the park or the leave.
+#[test]
+fn a_seated_parked_member_that_leaves_loses_its_pane() {
+    let harness = start("api-park-unseat");
+    let (mut window, threads, group) = grouped(&harness, 3);
+    window.enter_group(group).unwrap();
+    window.focus(PaneIdentity::Thread(threads[0]));
+    let mut other = cockpit(&harness);
+    other.park(threads[1]).unwrap();
+    pump_until(&mut window, |window| window.thread(threads[1]).is_none());
+    assert!(window.roster().pane_of(threads[1]).is_some());
+
+    other
+        .apply_group(GroupChange::Leave { thread: threads[1] })
+        .unwrap();
+    pump_until(&mut window, |window| members(window, group).len() == 2);
+
+    assert!(window.roster().pane_of(threads[1]).is_none());
+    assert_eq!(
+        window.visible(),
+        [
+            PaneIdentity::Thread(threads[0]),
+            PaneIdentity::Thread(threads[2])
+        ]
+    );
+    assert_eq!(window.roster().focused_thread(), Some(threads[0]));
 }

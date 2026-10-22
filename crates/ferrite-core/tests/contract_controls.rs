@@ -76,7 +76,9 @@ impl Spawner for Native {
 /// effort, as across these tests: on Windows a file the Store just wrote
 /// may still be held (its writer's worker finishing a sync, a scanner
 /// reading it) when the test ends, and that is no failure of the test.
-struct Scratch(PathBuf);
+struct Scratch {
+    path: PathBuf,
+}
 
 impl Scratch {
     fn new(name: &str) -> Self {
@@ -84,19 +86,19 @@ impl Scratch {
         // A folder left by an earlier run whose process id this one reuses.
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
-        Self(path)
+        Self { path }
     }
 }
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.path);
     }
 }
 
 fn exercise_model_control(reject: bool) {
     let scratch = Scratch::new(&format!("ferrite-native-control-{reject}"));
-    let path = scratch.0.clone();
+    let path = &scratch.path;
     let native = Native::default();
     let mut cockpit = Cockpit::new(
         Store::open(path.join("store")).unwrap(),
@@ -162,7 +164,7 @@ fn rejected_native_model_control_preserves_the_session_and_header() {
 #[test]
 fn shared_cockpit_routes_capability_controls_without_replacing_or_finishing_session() {
     let scratch = Scratch::new("ferrite-native-route");
-    let path = scratch.0.clone();
+    let path = &scratch.path;
     let native = Native::default();
     let mut cockpit = Cockpit::new(
         Store::open(path.join("store")).unwrap(),

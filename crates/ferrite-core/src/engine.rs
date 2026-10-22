@@ -2122,14 +2122,14 @@ impl Engine {
             .threads
             .get(&thread)
             .is_some_and(|state| state.session.is_some());
-        let mut dissolved = Vec::new();
-        if grouped {
-            dissolved = self
-                .groups
+        let dissolved = if grouped {
+            self.groups
                 .apply(GroupChange::Leave { thread })
                 .map_err(|error| DeleteError::Io(io::Error::other(error)))?
-                .dissolved;
-        }
+                .dissolved
+        } else {
+            Vec::new()
+        };
 
         let deleted = (|| {
             if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =

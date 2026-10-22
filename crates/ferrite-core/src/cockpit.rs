@@ -58,7 +58,8 @@ pub struct Cockpit {
     /// and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
     pub(crate) roster: Roster,
-    /// The open Threads as the Roster last followed them.
+    /// The Threads the Roster holds a Pane for, as it last followed them:
+    /// the open ones, and the closed ones still seated (`sync_roster`).
     synced: Vec<ThreadId>,
     /// Each open Thread as the Engine's messages built it: what `thread`
     /// reads and `pump` reports.
@@ -342,7 +343,16 @@ impl Cockpit {
                 self.roster.insert_thread(*thread);
             }
         }
+        // A closed Thread its seat kept stays synced, so its Pane goes once
+        // the seat does, whichever of the two the window hears first.
+        let kept: Vec<ThreadId> = self
+            .synced
+            .iter()
+            .copied()
+            .filter(|thread| !open.contains(thread) && seated.contains(thread))
+            .collect();
         self.synced = open;
+        self.synced.extend(kept);
         if let Some(focused) = focused {
             self.follow_focused_member(focused);
         }
@@ -694,8 +704,12 @@ impl Cockpit {
     /// survivor is the one Thread still on screen, so that is where they
     /// land — never the Thread that left, and never a blank Cockpit.
     pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        // A Group it dissolved lands on its survivor as the act's arrival
-        // says so (`land_on_survivor`), here as in every window.
+        // The act's `dissolved` arrival lands a dissolved Group on its
+        // survivor (`land_on_survivor`), here as in every window. A Server
+        // older than that message says so only in its reply; by then the
+        // arrival may have healed the view to Solo, so the view the act
+        // found decides.
+        let view = self.roster.view();
         let applied = self.act(
             |engine| engine.apply_group(change.clone()),
             |server| match server.execute(Op::Group {
@@ -715,6 +729,13 @@ impl Cockpit {
                 Err(error) => Err(ApplyError::Io(error.message)),
             },
         )?;
+        if let Some(dissolved) = applied
+            .dissolved
+            .iter()
+            .find(|dissolved| view == View::Group(dissolved.group))
+        {
+            self.solo_on(dissolved.survivor);
+        }
         self.roster.heal_focus(&self.shared.groups);
         Ok(applied)
     }
@@ -723,9 +744,13 @@ impl Cockpit {
     /// survivor, the one Thread of it still on screen.
     fn land_on_survivor(&mut self, group: GroupId, survivor: ThreadId) {
         if self.roster.view() == View::Group(group) {
-            self.roster.set_view(View::Solo);
-            self.roster.focus(PaneIdentity::Thread(survivor));
+            self.solo_on(survivor);
         }
+    }
+
+    fn solo_on(&mut self, thread: ThreadId) {
+        self.roster.set_view(View::Solo);
+        self.roster.focus(PaneIdentity::Thread(thread));
     }
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
