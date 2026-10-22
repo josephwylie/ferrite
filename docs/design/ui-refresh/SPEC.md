@@ -336,7 +336,8 @@ The Parked, Working and Done lists are grouped as the tree is (§5.1.4):
 by Project in creation order (`other` last), then by home Group within
 the Project, with the same indents and guides. Their Project headings
 are plain: the folder and the label, with no fold and no summary. A
-Group row there opens the Group. The Needs-you list stays flat, in its
+Group row there is the tree's: a press opens the Group, and its chevron
+folds it, the same fold the tree holds. The Needs-you list stays flat, in its
 oldest-first queue order, because ⌘D walks that order.
 
 Row states:

@@ -1020,7 +1020,7 @@ impl NavChip {
             NavChip::Group(group) => nav::group_row_with_title(
                 group,
                 group.title.clone(),
-                nav::group_fold(group, 0),
+                nav::group_fold(group),
                 0,
                 &measure,
             ),
@@ -8810,27 +8810,6 @@ impl CockpitView {
             let numbers = space
                 .map(|space| SharedString::from(space.progress.clone()))
                 .filter(|numbers| !numbers.is_empty());
-            let label = space
-                .map(|space| SharedString::from(space.name.clone()))
-                .or_else(|| {
-                    key.and_then(|project| self.cockpit.registry().project(project))
-                        .map(|project| SharedString::from(project.title.to_lowercase()))
-                })
-                .or_else(|| {
-                    key.and_then(|_| {
-                        section_solos
-                            .iter()
-                            .map(|index| &solos[*index])
-                            .chain(
-                                section_groups
-                                    .iter()
-                                    .flat_map(|index| groups[*index].members.iter()),
-                            )
-                            .find_map(|row| row.project.as_deref().map(str::to_lowercase))
-                            .map(SharedString::from)
-                    })
-                })
-                .unwrap_or_else(|| SharedString::from("other"));
             let rows: Vec<&nav::ThreadRow> = section_solos
                 .iter()
                 .map(|index| &solos[*index])
@@ -8840,6 +8819,11 @@ impl CockpitView {
                         .flat_map(|index| groups[*index].members.iter()),
                 )
                 .collect();
+            let label = self.section_label(
+                key,
+                space.map(|space| SharedString::from(space.name.clone())),
+                rows.iter().copied(),
+            );
             let roll_up = nav::RollUp::of(rows.iter().copied());
             let count = rows.len();
             sections.push(nav::ProjectSection {
@@ -13328,33 +13312,67 @@ impl CockpitView {
     }
 
     /// A view's rows grouped as the tree groups them (`nav::ViewSection`):
-    /// under their Project, then under their home Group within it.
+    /// under their Project, then under their home Group within it. A
+    /// Group's fold is the tree's own.
     fn view_tree(&self, rows: Vec<nav::ThreadRow>) -> Vec<nav::ViewSection> {
         let groups = self.cockpit.groups();
-        nav::ViewSection::tree(rows, |row| {
-            let project = self.facts.get(row.thread).and_then(|facts| facts.project);
-            let label = project
-                .and_then(|project| self.cockpit.registry().project(project))
-                .map(|project| project.title.to_lowercase())
-                .or_else(|| row.project.as_deref().map(str::to_lowercase))
-                .unwrap_or_else(|| "other".to_string());
-            let group = groups.home(row.thread).and_then(|group| {
-                let order = groups.iter().position(|other| other.id == group.id)?;
-                Some((order, group.id, group.display_title().into()))
-            });
-            nav::ViewPlace {
-                project,
-                label: label.into(),
-                group,
-            }
-        })
+        nav::ViewSection::tree(
+            rows,
+            |row| nav::ViewPlace {
+                project: self.facts.get(row.thread).and_then(|facts| facts.project),
+                group: groups.home(row.thread).and_then(|group| {
+                    Some(nav::HomeGroup {
+                        order: groups.iter().position(|other| other.id == group.id)?,
+                        id: group.id,
+                        title: group.display_title().into(),
+                        folded: self.nav_folds.contains(&NavFold::Group(group.id)),
+                    })
+                }),
+            },
+            |project, rows| {
+                let space = project.and_then(|_| {
+                    self.projects
+                        .sidebar
+                        .heading(rows.iter().map(|row| row.thread))
+                        .map(|space| SharedString::from(space.name.clone()))
+                });
+                self.section_label(project, space, rows.iter().copied())
+            },
+        )
+    }
+
+    /// What heads a Project section, in the tree or a view's list: its
+    /// task space's name (ADR 0031), else the Project's title, else a row's
+    /// cached Project name, lowercased. `other` names no Project.
+    fn section_label<'a>(
+        &self,
+        key: Option<ProjectId>,
+        space: Option<SharedString>,
+        mut rows: impl Iterator<Item = &'a nav::ThreadRow>,
+    ) -> SharedString {
+        let Some(project) = key else {
+            return SharedString::from("other");
+        };
+        space
+            .or_else(|| {
+                self.cockpit
+                    .registry()
+                    .project(project)
+                    .map(|project| SharedString::from(project.title.to_lowercase()))
+            })
+            .or_else(|| {
+                rows.find_map(|row| row.project.as_deref().map(str::to_lowercase))
+                    .map(SharedString::from)
+            })
+            .unwrap_or_else(|| SharedString::from("other"))
     }
 
     /// A view's sections drawn as the tree draws its own: each a plain
     /// Project heading over its rows, one level in with the Project's
-    /// guide, each Group's row (a press opens it) over its members, one
-    /// level further with the Group's guide. `thread` draws a row and wires
-    /// its press, which differs by view.
+    /// guide, each Group's row (a press opens it, its chevron folds it as
+    /// the tree's does) over its members, one level further with the
+    /// Group's guide. `thread` draws a row and wires its press, which
+    /// differs by view.
     fn view_sections(
         &self,
         sections: &[nav::ViewSection],
@@ -13372,29 +13390,29 @@ impl CockpitView {
                     .collect();
                 for group in &section.groups {
                     let id = group.id;
-                    let members = group
-                        .members
-                        .iter()
-                        .map(|row| thread(self, row, nav::RowPlace::Row(2), cx))
-                        .collect();
                     let head = nav::group_row_with_title(
                         group,
                         group.title.clone(),
-                        nav::group_fold(group, 1),
+                        self.group_fold(group, cx),
                         1,
                         &nav::Measure::Text(cx),
                     )
-                    .on_click(cx.listener(
-                        move |view, _: &ClickEvent, _, cx| {
-                            view.enter_group(id, cx);
-                        },
-                    ));
-                    rows.push(
-                        nav::group_block(id)
-                            .child(head)
-                            .child(nav::members(id, 1, members))
-                            .into_any_element(),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            view.enter_group(id, cx)
+                        }),
                     );
+                    let mut block = nav::group_block(id).child(head);
+                    if !group.folded {
+                        let members = group
+                            .members
+                            .iter()
+                            .map(|row| thread(self, row, nav::RowPlace::Row(2), cx))
+                            .collect();
+                        block = block.child(nav::members(id, 1, members));
+                    }
+                    rows.push(block.into_any_element());
                 }
                 nav::section(index == 0)
                     .child(nav::view_project(
@@ -13760,15 +13778,7 @@ impl CockpitView {
         };
         let gap = DropTarget::GroupGap(full_index);
         let folded = group.folded;
-        // The triangle folds and stops there: the rest of the row opens the
-        // Group, and opening a folded Group leaves it folded.
-        let fold = nav::group_fold(group, depth).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.set_nav_fold(NavFold::Group(id), !folded, cx);
-            }),
-        );
+        let fold = self.group_fold(group, cx);
         let title = self.editable_group_title(id, group.title.clone(), cx);
         let head = nav::group_row_with_title(group, title, fold, depth, &nav::Measure::Text(cx));
         let chip = NavChip::Group(group.clone());
@@ -13862,6 +13872,20 @@ impl CockpitView {
                 ),
             )
             .into_any_element()
+    }
+
+    /// A Group row's chevron, wired: the triangle folds and stops there, so
+    /// the rest of the row opens the Group, and opening a folded Group
+    /// leaves it folded. The tree and the views share the fold.
+    fn group_fold(&self, group: &nav::GroupBlock, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (id, folded) = (group.id, group.folded);
+        nav::group_fold(group).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                view.set_nav_fold(NavFold::Group(id), !folded, cx);
+            }),
+        )
     }
 
     /// One Thread row, with the whole drag/drop and click wiring a row has

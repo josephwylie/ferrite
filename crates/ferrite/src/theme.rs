@@ -2494,11 +2494,13 @@ pub const NAV_MEMBER_X: f32 = 54.0;
 /// row's content moves in; its hover and selected fills keep the full
 /// width.
 pub const NAV_TREE_INDENT: f32 = 14.0;
-/// `#ffffff1a` — a tree guide: a 1px white line at 10%, down a Project's
-/// (or a Group's) children, stopping `NAV_GUIDE_TAIL` short of the last
-/// one's foot.
-pub const NAV_GUIDE: u32 = 0xffffff1a;
+/// A tree guide: the strong hairline (white at 10%), down a Project's (or
+/// a Group's) children. Structure, not state, so a hairline (rule 2).
+pub const NAV_GUIDE: Paint = paint::HAIRLINE_STRONG;
+/// 1px — a guide's width: a hairline's.
 pub const NAV_GUIDE_W: f32 = 1.0;
+/// 8px — how far short of its last row's foot a guide stops, so the tree
+/// reads as ending at that row rather than running into the next heading.
 pub const NAV_GUIDE_TAIL: f32 = SPACE_2;
 /// 17px — a Project's guide, under the middle of its folder icon.
 pub const NAV_PROJECT_GUIDE_X: f32 = NAV_ROW_PAD_X + NAV_ICON / 2.0 - NAV_GUIDE_W / 2.0;
@@ -2526,6 +2528,10 @@ pub fn nav_halo_box(dot: f32) -> f32 {
 /// blocked dot sits where a dot does, its halo `NAV_HALO` out round it.
 pub const NAV_SPINNER_AT: (f32, f32) = (2.0, 6.0);
 pub const NAV_SPINNER_AT_SMALL: (f32, f32) = (1.0, (NAV_ROW_H - NAV_LINE) / 2.0);
+/// A full-size mark on a one-line (30px) Thread row, centred on it: at
+/// the two-line row's x, the spinner's line and the dot centred.
+pub const NAV_SPINNER_AT_LINE: (f32, f32) = (NAV_SPINNER_AT.0, NAV_SPINNER_AT_SMALL.1);
+pub const NAV_DOT_AT_LINE: (f32, f32) = (NAV_DOT_AT.0, (NAV_ROW_H - NAV_DOT) / 2.0);
 pub const NAV_DOT_AT: (f32, f32) = (4.0, 13.0);
 pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
 pub const NAV_ICON_AT: (f32, f32) = (0.0, 8.0);
@@ -2566,6 +2572,8 @@ pub const NAV_RAIL_KEY_FS: f32 = 11.0;
 /// scrolling and while the pointer is over the nav, then lingers and fades
 /// as every thumb does (`MOTION_SCROLLBAR_LINGER_MS`).
 pub const NAV_SCROLLBAR_GUTTER: f32 = NAV_COL_PAD;
+/// 1px — off the space scale because the 6px hovered thumb must fit the
+/// 8px padding with even air on both sides: 1 + 6 + 1.
 pub const NAV_SCROLLBAR_INSET: f32 = 1.0;
 const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
 /// Narrow windows fold the nav (rule 2.7.7) — shown, never saved — once the

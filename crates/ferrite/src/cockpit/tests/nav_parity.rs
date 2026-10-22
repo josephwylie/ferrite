@@ -350,6 +350,80 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     );
 }
 
+/// §5.1.2: the Working view groups its rows as the tree does — under the
+/// Project's plain heading, a home Group's members under the Group's row
+/// with its guide, two levels in — and the Group's chevron folds it there
+/// as in the tree.
+#[gpui::test]
+fn the_working_view_groups_by_project_then_group(cx: &mut TestAppContext) {
+    use crate::theme::{NAV_TITLE_X, NAV_TREE_INDENT};
+    let (mut core, fake) = cockpit("nav-working-tree", 3);
+    let threads = core.threads();
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.change_settings(|settings| settings.smart_filtering = true, cx)
+    });
+    for stream in 0..3 {
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::TextDelta {
+                text: "thinking".into(),
+            })
+            .unwrap();
+    }
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.show_nav_view(nav::NavView::Working, None, cx)
+    });
+    tick(cx);
+    let at = |cx: &mut gpui::VisualTestContext, key: String| {
+        cx.debug_bounds(key.clone().leak())
+            .unwrap_or_else(|| panic!("{key} drawn"))
+    };
+    let heading = at(cx, "nav-view-project-0".into());
+    let group_row = at(cx, format!("nav-group-{}", group.get()));
+    assert!(heading.bottom() <= group_row.top());
+    let loose = at(cx, format!("nav-thread-{}", threads[2].get()));
+    assert!(loose.bottom() <= group_row.top(), "loose rows, then Groups");
+    let level = |cx: &mut gpui::VisualTestContext, thread: ThreadId| {
+        let row = at(cx, format!("nav-thread-{}", thread.get()));
+        let title = at(cx, format!("nav-title-{}", thread.get()));
+        f32::from(title.left() - row.left())
+    };
+    let one = level(cx, threads[2]);
+    assert!((one - (NAV_TITLE_X + NAV_TREE_INDENT)).abs() < 0.5, "{one}");
+    for member in [threads[0], threads[1]] {
+        let two = level(cx, member);
+        assert!(
+            (two - (NAV_TITLE_X + 2.0 * NAV_TREE_INDENT)).abs() < 0.5,
+            "a member, two levels in: {two}"
+        );
+        assert!(at(cx, format!("nav-thread-{}", member.get())).top() >= group_row.bottom());
+    }
+    at(cx, "nav-guide-project-0".into());
+    at(cx, format!("nav-guide-group-{}", group.get()));
+
+    let fold = at(cx, format!("nav-group-fold-{}", group.get()));
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view
+        .nav_folds
+        .contains(&NavFold::Group(group))));
+    assert!(
+        cx.debug_bounds(format!("nav-thread-{}", threads[0].get()).leak())
+            .is_none(),
+        "folded, its members hidden"
+    );
+}
+
 /// The nav's scrollbar sits in the column's right padding, beside the rows
 /// and never over them: its strip is the `NAV_SCROLLBAR_GUTTER` at the
 /// column's edge, and every row ends before it.
@@ -363,8 +437,10 @@ fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
     tick(cx);
     let column = cx.debug_bounds("nav-column").expect("the column");
     let bar = cx.debug_bounds("nav-scrollbar").expect("the scrollbar");
+    // The bar's strip is its layer's right `NAV_SCROLLBAR_GUTTER`: the
+    // layer reaches the column's edge, past the rows' padding.
     assert_eq!(bar.right(), column.right(), "at the column's edge");
-    let strip = column.right() - px(NAV_SCROLLBAR_GUTTER);
+    let strip = bar.right() - px(NAV_SCROLLBAR_GUTTER);
     for thread in threads {
         let row = cx
             .debug_bounds(format!("nav-thread-{}", thread.get()).leak())

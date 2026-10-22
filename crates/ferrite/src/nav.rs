@@ -283,66 +283,81 @@ pub struct SmartSections {
 pub struct ViewSection {
     pub label: SharedString,
     pub solos: Vec<ThreadRow>,
-    /// Never folded, never the board's: a view's Group is where its rows
-    /// live, not a door of its own.
+    /// Never the board's: a view's Group is where its rows live. It folds
+    /// as the tree's does.
     pub groups: Vec<GroupBlock>,
 }
 
-/// Where a view's row hangs (`ViewSection::tree`): its Project and that
-/// Project's label, and its home Group, if one claims it — the Group's
-/// place in the durable order, its id and its title.
+/// Where a view's row hangs (`ViewSection::tree`): its Project, and the
+/// home Group that claims it, if one does.
 pub struct ViewPlace {
     pub project: Option<ProjectId>,
-    pub label: SharedString,
-    pub group: Option<(usize, GroupId, SharedString)>,
+    pub group: Option<HomeGroup>,
+}
+
+/// A row's home Group, as a view lists it: its place in the durable order,
+/// its id, its title, and whether the tree holds it folded.
+pub struct HomeGroup {
+    pub order: usize,
+    pub id: GroupId,
+    pub title: SharedString,
+    pub folded: bool,
 }
 
 impl ViewSection {
     /// A view's `rows` by Project, in creation order with `Other` (no
     /// Project) last, then within each by home Group, in the durable
-    /// order. Rows keep the list's own order within their run.
-    pub fn tree(rows: Vec<ThreadRow>, place: impl Fn(&ThreadRow) -> ViewPlace) -> Vec<Self> {
+    /// order. Rows keep the list's own order within their run. `label`
+    /// names a Project's section from its rows.
+    pub fn tree(
+        rows: Vec<ThreadRow>,
+        place: impl Fn(&ThreadRow) -> ViewPlace,
+        label: impl Fn(Option<ProjectId>, &[&ThreadRow]) -> SharedString,
+    ) -> Vec<Self> {
         let mut placed: Vec<(ViewPlace, ThreadRow)> =
             rows.into_iter().map(|row| (place(&row), row)).collect();
         placed.sort_by_key(|(place, _)| (place.project.is_none(), place.project));
-        let mut sections: Vec<(Option<ProjectId>, ViewSection, Vec<usize>)> = Vec::new();
+        // Runs of one Project each: sorted, so a Project's rows are adjacent.
+        let mut runs: Vec<Vec<(ViewPlace, ThreadRow)>> = Vec::new();
         for (place, row) in placed {
-            if sections.last().map(|(project, ..)| *project) != Some(place.project) {
-                let section = ViewSection {
-                    label: place.label.clone(),
-                    solos: Vec::new(),
-                    groups: Vec::new(),
-                };
-                sections.push((place.project, section, Vec::new()));
+            match runs.last_mut() {
+                Some(run) if run[0].0.project == place.project => run.push((place, row)),
+                _ => runs.push(vec![(place, row)]),
             }
-            let (_, section, orders) = sections.last_mut().expect("just pushed");
-            let Some((order, id, title)) = place.group else {
-                section.solos.push(row);
-                continue;
-            };
-            let at = match section.groups.iter().position(|group| group.id == id) {
-                Some(at) => at,
-                None => {
-                    let at = orders.partition_point(|other| *other < order);
-                    orders.insert(at, order);
-                    section.groups.insert(
-                        at,
-                        GroupBlock {
-                            id,
-                            title,
-                            members: Vec::new(),
-                            folded: false,
-                            selected: false,
-                        },
-                    );
-                    at
-                }
-            };
-            section.groups[at].members.push(row);
         }
-        sections
-            .into_iter()
-            .map(|(_, section, _)| section)
+        runs.into_iter()
+            .map(|run| {
+                let project = run[0].0.project;
+                let all: Vec<&ThreadRow> = run.iter().map(|(_, row)| row).collect();
+                let label = label(project, &all);
+                let mut solos = Vec::new();
+                let mut groups: Vec<(usize, GroupBlock)> = Vec::new();
+                for (place, row) in run {
+                    let Some(home) = place.group else {
+                        solos.push(row);
+                        continue;
+                    };
+                    match groups.iter_mut().find(|(_, group)| group.id == home.id) {
+                        Some((_, group)) => group.members.push(row),
+                        None => groups.push((
+                            home.order,
+                            GroupBlock {
+                                id: home.id,
+                                title: home.title,
+                                members: vec![row],
+                                folded: home.folded,
+                                selected: false,
+                            },
+                        )),
+                    }
+                }
+                groups.sort_by_key(|(order, _)| *order);
+                ViewSection {
+                    label,
+                    solos,
+                    groups: groups.into_iter().map(|(_, group)| group).collect(),
+                }
+            })
             .collect()
     }
 }
@@ -901,8 +916,8 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
     let (left, top) = match seat {
         MarkSeat::TwoLine if spinner => NAV_SPINNER_AT,
         MarkSeat::TwoLine if dot => NAV_DOT_AT,
-        MarkSeat::OneLine if spinner => (NAV_SPINNER_AT.0, NAV_SPINNER_AT_SMALL.1),
-        MarkSeat::OneLine if dot => (NAV_DOT_AT.0, (NAV_ROW_H - NAV_DOT) / 2.0),
+        MarkSeat::OneLine if spinner => NAV_SPINNER_AT_LINE,
+        MarkSeat::OneLine if dot => NAV_DOT_AT_LINE,
         MarkSeat::Member if spinner => NAV_SPINNER_AT_SMALL,
         MarkSeat::Member if dot => NAV_DOT_AT_SMALL,
         _ => NAV_ICON_AT,
@@ -1417,17 +1432,11 @@ pub fn nav_tree(scroll: &ScrollHandle) -> Stateful<Div> {
 /// the tree scrolls and while the pointer is over the nav (`revealed`),
 /// then lingers and fades. A sibling of the tree, laid after it.
 pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
-    div()
+    components::scrollbar_layer()
         .debug_selector(|| "nav-scrollbar".into())
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left_0()
         .right(px(-NAV_COL_PAD))
         .child(
-            crate::scrollbar::Scrollbar::vertical(scroll)
-                .id("nav-scrollbar")
-                .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover)
+            components::scrollbar_bar("nav-scrollbar", scroll)
                 .gutter(px(NAV_SCROLLBAR_GUTTER), px(NAV_SCROLLBAR_INSET))
                 .revealed(revealed),
         )
@@ -1494,7 +1503,7 @@ pub fn group_row(row: &GroupBlock, depth: usize) -> Stateful<Div> {
     group_row_with_title(
         row,
         row.title.clone(),
-        group_fold(row, depth),
+        group_fold(row),
         depth,
         &Measure::Cells(7.0),
     )
@@ -1502,7 +1511,8 @@ pub fn group_row(row: &GroupBlock, depth: usize) -> Stateful<Div> {
 
 /// `group_row` with the title leaf and the chevron supplied by the caller
 /// — the cockpit hands in a click-to-rename wrapper, or the live editor
-/// while renaming, and wires the chevron's press. The title box is pinned
+/// while renaming, and wires the chevron's press. The row lays the chevron
+/// at its own depth. The title box is pinned
 /// (`fitted`), so the title truncates and renaming never moves the row.
 pub fn group_row_with_title(
     row: &GroupBlock,
@@ -1536,7 +1546,7 @@ pub fn group_row_with_title(
         .h(px(NAV_ROW_H))
         .pl(px(RowPlace::Row(depth).title_x()))
         .pr(px(NAV_ROW_PAD_X))
-        .child(fold)
+        .child(div().absolute().top_0().left(px(indent(depth))).child(fold))
         .child(fitted(
             RowPlace::Row(depth).text_w() - right_w,
             FS_UI,
@@ -1557,12 +1567,12 @@ pub fn group_row_with_title(
         )
 }
 
-/// A Group row's chevron, at x 11 (`depth` levels in, that much further):
+/// A Group row's chevron, at x 11 from where its row's content starts:
 /// `chevron-down` open, `chevron-right` folded (`TEXT_MUTED` on the shown
 /// Group, `TEXT_DIM` otherwise). A control of its own — the cockpit wires
 /// its press to the fold, which stops there, so the rest of the row still
 /// opens the Group.
-pub fn group_fold(row: &GroupBlock, depth: usize) -> Stateful<Div> {
+pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
     let id = row.id;
     let glyph = if row.folded {
         icons::CHEVRON_RIGHT
@@ -1574,9 +1584,7 @@ pub fn group_fold(row: &GroupBlock, depth: usize) -> Stateful<Div> {
         .id(("nav-group-fold", id.get() as usize))
         .debug_selector(move || format!("nav-group-fold-{}", id.get()))
         .absolute()
-        .left(px(
-            indent(depth) + NAV_CHEVRON_X + NAV_CHEVRON / 2.0 - hit / 2.0
-        ))
+        .left(px(NAV_CHEVRON_X + NAV_CHEVRON / 2.0 - hit / 2.0))
         .top(px(SPACE_1))
         .size(px(hit))
         .flex()
@@ -1629,7 +1637,7 @@ pub fn branch(guide: String, guide_x: f32, rows: Vec<AnyElement>) -> Div {
                 .top_0()
                 .bottom(px(NAV_GUIDE_TAIL))
                 .w(px(NAV_GUIDE_W))
-                .bg(rgba(NAV_GUIDE)),
+                .bg(NAV_GUIDE),
         )
         .children(rows)
 }
@@ -2479,21 +2487,26 @@ mod tests {
             (6, Some(1), Some(1)),
         ];
         let rows = places.iter().map(|(id, ..)| row(*id)).collect();
-        let tree = ViewSection::tree(rows, |row| {
-            let (_, owner, group) = places
-                .iter()
-                .find(|(id, ..)| *id == row.thread.get())
-                .copied()
-                .unwrap();
-            ViewPlace {
-                project: owner.map(project),
-                label: owner.map_or("other".into(), |id| format!("p{id}").into()),
-                group: group.map(|order| {
-                    let id = GroupId::new(order as u64 + 10);
-                    (order, id, format!("g{order}").into())
-                }),
-            }
-        });
+        let tree = ViewSection::tree(
+            rows,
+            |row| {
+                let (_, owner, group) = places
+                    .iter()
+                    .find(|(id, ..)| *id == row.thread.get())
+                    .copied()
+                    .unwrap();
+                ViewPlace {
+                    project: owner.map(project),
+                    group: group.map(|order| HomeGroup {
+                        order,
+                        id: GroupId::new(order as u64 + 10),
+                        title: format!("g{order}").into(),
+                        folded: false,
+                    }),
+                }
+            },
+            |owner, _| owner.map_or("other".into(), |id| format!("p{}", id.get()).into()),
+        );
         let ids = |rows: &[ThreadRow]| rows.iter().map(|row| row.thread.get()).collect::<Vec<_>>();
         let labels: Vec<&str> = tree.iter().map(|section| section.label.as_ref()).collect();
         assert_eq!(labels, ["p1", "p2", "other"], "creation order, Other last");
@@ -2502,10 +2515,15 @@ mod tests {
         assert_eq!(groups, ["g0", "g1"], "its Groups in the durable order");
         assert_eq!(ids(&tree[0].groups[0].members), [5]);
         assert_eq!(ids(&tree[0].groups[1].members), [2, 6], "the list's order");
-        assert!(tree[0].groups.iter().all(|g| !g.folded && !g.selected));
+        assert!(
+            tree[0].groups.iter().all(|g| !g.selected),
+            "never the board's"
+        );
         assert_eq!(ids(&tree[1].solos), [1]);
         assert_eq!(ids(&tree[2].solos), [3]);
-        assert!(ViewSection::tree(Vec::new(), |_| unreachable!()).is_empty());
+        assert!(
+            ViewSection::tree(Vec::new(), |_| unreachable!(), |_, _| unreachable!()).is_empty()
+        );
     }
 
     /// A row is only as tall as its content (§5.1.5): with nothing for
