@@ -1,5 +1,6 @@
 //! Parent-owned acceptance tests for native controls through the shared Cockpit.
 use std::io;
+use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 
 use ferrite_core::cockpit::{Cockpit, SpawnRequest, Spawner};
@@ -71,12 +72,31 @@ impl Spawner for Native {
     }
 }
 
+/// A folder of the test's own, removed once it is done. Removal is best
+/// effort, as across these tests: on Windows a file the Store just wrote
+/// may still be held (its writer's worker finishing a sync, a scanner
+/// reading it) when the test ends, and that is no failure of the test.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        // A folder left by an earlier run whose process id this one reuses.
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn exercise_model_control(reject: bool) {
-    let path = std::env::temp_dir().join(format!(
-        "ferrite-native-control-{}-{reject}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&path).unwrap();
+    let scratch = Scratch::new(&format!("ferrite-native-control-{reject}"));
+    let path = scratch.0.clone();
     let native = Native::default();
     let mut cockpit = Cockpit::new(
         Store::open(path.join("store")).unwrap(),
@@ -127,8 +147,6 @@ fn exercise_model_control(reject: bool) {
             Some("native-session")
         );
     }
-    drop(cockpit);
-    std::fs::remove_dir_all(path).unwrap();
 }
 
 #[test]
@@ -143,7 +161,8 @@ fn rejected_native_model_control_preserves_the_session_and_header() {
 
 #[test]
 fn shared_cockpit_routes_capability_controls_without_replacing_or_finishing_session() {
-    let path = std::env::temp_dir().join(format!("ferrite-native-route-{}", std::process::id()));
+    let scratch = Scratch::new("ferrite-native-route");
+    let path = scratch.0.clone();
     let native = Native::default();
     let mut cockpit = Cockpit::new(
         Store::open(path.join("store")).unwrap(),
@@ -174,6 +193,4 @@ fn shared_cockpit_routes_capability_controls_without_replacing_or_finishing_sess
         cockpit.thread(thread).unwrap().transcript().session_id(),
         Some("native-session")
     );
-    drop(cockpit);
-    std::fs::remove_dir_all(path).unwrap();
 }

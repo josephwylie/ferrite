@@ -72,6 +72,24 @@ fn every_member_has_a_pane(window: &crate::cockpit::Cockpit, group: GroupId) {
     }
 }
 
+/// Pump `window` until it holds every one of `threads` parked. At every
+/// frame on the way, none it holds parked still sits in a Group: the leave
+/// reaches it before the park, so its board never seats, nor focuses, a
+/// Thread that went away (`Server::park`).
+fn pump_until_parked(window: &mut crate::cockpit::Cockpit, threads: &[ThreadId]) {
+    pump_until(window, |window| {
+        for &thread in threads {
+            assert!(
+                window.thread(thread).is_some() || window.groups().of(thread).is_none(),
+                "the window holds {thread} parked while still in its Group"
+            );
+        }
+        threads
+            .iter()
+            .all(|thread| window.thread(*thread).is_none())
+    });
+}
+
 /// Park `thread` as an agent does: `thread.close` on the API.
 fn close(caller: &mut Caller, id: &str, thread: ThreadId) {
     let closed = caller.answer(id, "thread.close", serde_json::json!({ "thread": thread }));
@@ -93,7 +111,7 @@ fn an_api_park_of_a_member_of_the_shown_group_leaves_it() {
     window.focus(PaneIdentity::Thread(threads[0]));
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until(&mut window, |window| window.thread(threads[1]).is_none());
+    pump_until_parked(&mut window, &threads[1..2]);
 
     assert_eq!(members(&window, group), [threads[0], threads[2]]);
     assert_eq!(window.roster().view(), View::Group(group));
@@ -119,7 +137,7 @@ fn an_api_park_of_a_member_of_a_group_not_shown_leaves_it() {
     assert_eq!(window.roster().view(), View::Solo);
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until(&mut window, |window| window.thread(threads[1]).is_none());
+    pump_until_parked(&mut window, &threads[1..2]);
 
     assert_eq!(members(&window, group), [threads[0], threads[2]]);
     assert_eq!(window.roster().view(), View::Solo);
@@ -146,7 +164,7 @@ fn an_api_park_of_the_focused_member_lands_on_its_ordinal_survivor() {
     window.focus(PaneIdentity::Thread(threads[1]));
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until(&mut window, |window| window.thread(threads[1]).is_none());
+    pump_until_parked(&mut window, &threads[1..2]);
 
     assert_eq!(window.roster().view(), View::Group(group));
     assert_eq!(window.roster().focused_thread(), Some(threads[2]));
@@ -166,7 +184,7 @@ fn an_api_park_that_dissolves_the_shown_pair_lands_on_its_survivor() {
     window.focus(PaneIdentity::Thread(threads[1]));
 
     close(&mut call(&harness), "1", threads[1]);
-    pump_until(&mut window, |window| window.thread(threads[1]).is_none());
+    pump_until_parked(&mut window, &threads[1..2]);
 
     assert!(window.groups().get(group).is_none());
     assert_eq!(window.roster().view(), View::Solo);
@@ -184,7 +202,7 @@ fn an_api_revive_after_an_api_park_reopens_the_thread_outside_the_group() {
     window.focus(PaneIdentity::Thread(threads[0]));
     let mut caller = call(&harness);
     close(&mut caller, "1", threads[1]);
-    pump_until(&mut window, |window| window.thread(threads[1]).is_none());
+    pump_until_parked(&mut window, &threads[1..2]);
 
     let revived = caller.answer(
         "2",
@@ -192,12 +210,15 @@ fn an_api_revive_after_an_api_park_reopens_the_thread_outside_the_group() {
         serde_json::json!({ "thread": threads[1] }),
     );
     assert!(revived.get("result").is_some(), "{revived}");
-    pump_until(&mut window, |window| window.thread(threads[1]).is_some());
+    // Its Pane, not its mirror: the Thread's state may land a read before
+    // the Roster that opens it.
+    pump_until(&mut window, |window| {
+        window.roster().pane_of(threads[1]).is_some()
+    });
 
     assert_eq!(members(&window, group), [threads[0], threads[2]]);
     assert_eq!(window.roster().view(), View::Group(group));
     assert_eq!(window.roster().focused_thread(), Some(threads[0]));
-    assert!(window.roster().pane_of(threads[1]).is_some());
     every_member_has_a_pane(&window, group);
 }
 
@@ -246,7 +267,7 @@ fn closing_a_project_parks_its_members_out_of_their_groups() {
         serde_json::json!({ "project": crate::api::project_id(project) }),
     );
     assert!(closed.get("result").is_some(), "{closed}");
-    pump_until(&mut window, |window| window.threads().is_empty());
+    pump_until_parked(&mut window, &threads);
 
     assert!(window.groups().get(group).is_none());
     assert_eq!(window.roster().view(), View::Solo);

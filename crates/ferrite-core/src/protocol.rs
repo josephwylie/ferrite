@@ -775,6 +775,13 @@ pub enum ServerMessage {
         revision: u64,
         groups: serde_json::Value,
     },
+    /// A Group left with one member, gone: ahead of the Groups without it,
+    /// so every window showing it lands on its survivor, as the window
+    /// that dissolved it does, whatever else it hears in between.
+    Dissolved {
+        group: GroupId,
+        survivor: ThreadId,
+    },
     Registry {
         revision: u64,
         registry: serde_json::Value,
