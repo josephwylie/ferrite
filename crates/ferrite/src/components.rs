@@ -1885,17 +1885,24 @@ pub fn scrollbar(
     id: impl Into<ElementId>,
     scroll: &(impl gpui::base::ScrollbarHandle + Clone),
 ) -> gpui::Div {
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .child(
-            crate::scrollbar::Scrollbar::vertical(scroll)
-                .id(id)
-                .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover),
-        )
+    scrollbar_layer().child(scrollbar_bar(id, scroll))
+}
+
+/// The overlay the bar hangs in: over the whole scroller, taking no
+/// layout. A scroller with a padding of its own to lay the bar in (the
+/// nav's) moves its edge out.
+pub fn scrollbar_layer() -> gpui::Div {
+    div().absolute().top_0().left_0().right_0().bottom_0()
+}
+
+/// The vertical bar itself, in hover mode (see `scrollbar`).
+pub fn scrollbar_bar(
+    id: impl Into<ElementId>,
+    scroll: &(impl gpui::base::ScrollbarHandle + Clone),
+) -> crate::scrollbar::Scrollbar {
+    crate::scrollbar::Scrollbar::vertical(scroll)
+        .id(id)
+        .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover)
 }
 
 #[cfg(test)]

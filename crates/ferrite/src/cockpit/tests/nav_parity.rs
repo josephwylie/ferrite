@@ -246,6 +246,216 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds(row(threads[2])).is_some());
 }
 
+/// §5.1.4, the tree with guides: everything inside a Project hangs one
+/// `NAV_TREE_INDENT` under its heading — its loose rows, its Group rows —
+/// and a Group's members one more under the Group, while every row keeps
+/// the column's full width for its fills. A guide runs down from under the
+/// Project's folder icon, and one from under the Group's chevron, each to
+/// `NAV_GUIDE_TAIL` short of its last row's foot. The shown Group's
+/// one-line members move in with their Group.
+#[gpui::test]
+fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
+    use crate::theme::{
+        NAV_GROUP_GUIDE_X, NAV_GUIDE_TAIL, NAV_GUIDE_W, NAV_MEMBER_X, NAV_PROJECT_GUIDE_X,
+        NAV_ROW_H, NAV_TITLE_X, NAV_TREE_INDENT,
+    };
+    let (mut core, _fake) = cockpit("nav-tree-guides", 3);
+    let threads = sorted_threads(&core);
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    // The panel off, so the board leaves the nav its full column at 1000.
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    view.update(cx, |view, cx| view.focus_thread(threads[2], cx));
+    tick(cx);
+    let at = |cx: &mut gpui::VisualTestContext, key: String| {
+        cx.debug_bounds(key.clone().leak())
+            .unwrap_or_else(|| panic!("{key} drawn"))
+    };
+    let close = |a: Pixels, b: f32, what: &str| {
+        assert!((a - px(b)).abs() < px(0.5), "{what}: {a:?} vs {b}");
+    };
+    let heading = at(cx, "nav-project-section-0".into());
+    let left = f32::from(heading.left());
+    let indent = |cx: &mut gpui::VisualTestContext, thread: ThreadId| {
+        let row = at(cx, format!("nav-thread-{}", thread.get()));
+        let title = at(cx, format!("nav-title-{}", thread.get()));
+        assert_eq!(row.left(), heading.left(), "the fill keeps the full width");
+        assert_eq!(row.size.width, heading.size.width);
+        (row, f32::from(title.left() - row.left()))
+    };
+    let (loose, x) = indent(cx, threads[2]);
+    close(
+        px(x),
+        NAV_TITLE_X + NAV_TREE_INDENT,
+        "a loose row, one level in",
+    );
+    let group_row = at(cx, format!("nav-group-{}", group.get()));
+    let chevron = at(cx, format!("nav-group-fold-{}", group.get()));
+    assert!(
+        (chevron.center().x - px(left + NAV_TREE_INDENT + NAV_GROUP_GUIDE_X)).abs() <= px(1.0),
+        "the Group's chevron, one level in, over its guide: {chevron:?}"
+    );
+    let (first, x) = indent(cx, threads[0]);
+    close(
+        px(x),
+        NAV_TITLE_X + 2.0 * NAV_TREE_INDENT,
+        "a member, two in",
+    );
+    let (last, _) = indent(cx, threads[1]);
+    assert!(loose.top() < group_row.top() && group_row.bottom() <= first.top());
+
+    let guide = at(cx, "nav-guide-project-0".into());
+    close(
+        guide.left(),
+        left + NAV_PROJECT_GUIDE_X,
+        "the Project's guide",
+    );
+    close(guide.size.width, NAV_GUIDE_W, "1px");
+    assert_eq!(guide.top(), heading.bottom(), "from under the heading");
+    close(
+        guide.bottom(),
+        f32::from(last.bottom()) - NAV_GUIDE_TAIL,
+        "to short of the Project's last row",
+    );
+    let guide = at(cx, format!("nav-guide-group-{}", group.get()));
+    close(
+        guide.left(),
+        left + NAV_TREE_INDENT + NAV_GROUP_GUIDE_X,
+        "the Group's guide, under its chevron",
+    );
+    assert_eq!(guide.top(), group_row.bottom(), "from under the Group row");
+    close(
+        guide.bottom(),
+        f32::from(last.bottom()) - NAV_GUIDE_TAIL,
+        "to short of its last member",
+    );
+
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    let (member, x) = indent(cx, threads[0]);
+    close(
+        member.size.height,
+        NAV_ROW_H,
+        "the shown Group's member is one line",
+    );
+    close(
+        px(x),
+        NAV_MEMBER_X + NAV_TREE_INDENT,
+        "and moves in with its Group",
+    );
+}
+
+/// §5.1.2: the Working view groups its rows as the tree does — under the
+/// Project's plain heading, a home Group's members under the Group's row
+/// with its guide, two levels in — and the Group's chevron folds it there
+/// as in the tree.
+#[gpui::test]
+fn the_working_view_groups_by_project_then_group(cx: &mut TestAppContext) {
+    use crate::theme::{NAV_TITLE_X, NAV_TREE_INDENT};
+    let (mut core, fake) = cockpit("nav-working-tree", 3);
+    let threads = core.threads();
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.change_settings(|settings| settings.smart_filtering = true, cx)
+    });
+    for stream in 0..3 {
+        fake.streams.borrow()[stream]
+            .send(SessionEvent::TextDelta {
+                text: "thinking".into(),
+            })
+            .unwrap();
+    }
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.show_nav_view(nav::NavView::Working, None, cx)
+    });
+    tick(cx);
+    let at = |cx: &mut gpui::VisualTestContext, key: String| {
+        cx.debug_bounds(key.clone().leak())
+            .unwrap_or_else(|| panic!("{key} drawn"))
+    };
+    let heading = at(cx, "nav-view-project-0".into());
+    let group_row = at(cx, format!("nav-group-{}", group.get()));
+    assert!(heading.bottom() <= group_row.top());
+    let loose = at(cx, format!("nav-thread-{}", threads[2].get()));
+    assert!(loose.bottom() <= group_row.top(), "loose rows, then Groups");
+    let level = |cx: &mut gpui::VisualTestContext, thread: ThreadId| {
+        let row = at(cx, format!("nav-thread-{}", thread.get()));
+        let title = at(cx, format!("nav-title-{}", thread.get()));
+        f32::from(title.left() - row.left())
+    };
+    let one = level(cx, threads[2]);
+    assert!((one - (NAV_TITLE_X + NAV_TREE_INDENT)).abs() < 0.5, "{one}");
+    for member in [threads[0], threads[1]] {
+        let two = level(cx, member);
+        assert!(
+            (two - (NAV_TITLE_X + 2.0 * NAV_TREE_INDENT)).abs() < 0.5,
+            "a member, two levels in: {two}"
+        );
+        assert!(at(cx, format!("nav-thread-{}", member.get())).top() >= group_row.bottom());
+    }
+    at(cx, "nav-guide-project-0".into());
+    at(cx, format!("nav-guide-group-{}", group.get()));
+
+    let fold = at(cx, format!("nav-group-fold-{}", group.get()));
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view
+        .nav_folds
+        .contains(&NavFold::Group(group))));
+    assert!(
+        cx.debug_bounds(format!("nav-thread-{}", threads[0].get()).leak())
+            .is_none(),
+        "folded, its members hidden"
+    );
+}
+
+/// The nav's scrollbar sits in the column's right padding, beside the rows
+/// and never over them: its strip is the `NAV_SCROLLBAR_GUTTER` at the
+/// column's edge, and every row ends before it.
+#[gpui::test]
+fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
+    use crate::theme::NAV_SCROLLBAR_GUTTER;
+    let (core, _fake) = cockpit("nav-scrollbar-gutter", 2);
+    let threads = sorted_threads(&core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    // The panel off, so the board leaves the nav its full column at 1000.
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let column = cx.debug_bounds("nav-column").expect("the column");
+    let bar = cx.debug_bounds("nav-scrollbar").expect("the scrollbar");
+    // The bar's strip is its layer's right `NAV_SCROLLBAR_GUTTER`: the
+    // layer reaches the column's edge, past the rows' padding.
+    assert_eq!(bar.right(), column.right(), "at the column's edge");
+    let strip = bar.right() - px(NAV_SCROLLBAR_GUTTER);
+    for thread in threads {
+        let row = cx
+            .debug_bounds(format!("nav-thread-{}", thread.get()).leak())
+            .expect("a row");
+        assert!(row.right() <= strip, "{row:?} ends before the strip");
+    }
+    let heading = cx.debug_bounds("nav-project-section-0").unwrap();
+    assert!(heading.right() <= strip);
+}
+
 /// N-8 (SPEC §5.1): no seam beside the nav — the card's edge separates —
 /// so the board starts at the column's right edge, open and folded.
 #[gpui::test]

@@ -726,14 +726,15 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
                 crate::nav::Measure::Text(cx).ui(word, FS_META, W_BODY) + NAV_WORD_GAP
             })
         });
-        let expected =
-            crate::nav::WIDTH - 2.0 * NAV_COL_PAD - NAV_MEMBER_X - NAV_ROW_PAD_X - word_w;
+        // The shown Group hangs one level into its Project's tree.
+        let member_x = NAV_MEMBER_X + crate::theme::NAV_TREE_INDENT;
+        let expected = crate::nav::WIDTH - 2.0 * NAV_COL_PAD - member_x - NAV_ROW_PAD_X - word_w;
         assert!(
             (title.size.width - px(expected)).abs() < px(0.5),
             "the title takes what its word leaves: {title:?}, {expected}"
         );
         assert!(
-            (title.left() - (whole_row.left() + px(NAV_MEMBER_X))).abs() < px(0.5),
+            (title.left() - (whole_row.left() + px(member_x))).abs() < px(0.5),
             "the title starts after the mark"
         );
         if word.is_some() {

@@ -2455,7 +2455,7 @@ pub const NAV_HEAD_PAD_R: f32 = SPACE_1;
 /// labels of views, headings and Projects start here.
 pub const NAV_ROW_PAD_X: f32 = 10.0;
 /// 30px — a one-line row: a view, a Project heading, a Group, a shown
-/// Group's member.
+/// Group's member, and a Thread row with nothing for line 2.
 pub const NAV_ROW_H: f32 = 30.0;
 /// 44px — a two-line Thread row: its title, then its branch or reason.
 pub const NAV_ROW2_H: f32 = 44.0;
@@ -2478,10 +2478,29 @@ pub const NAV_TOGGLE_GLYPH: f32 = 16.0;
 /// 35px — where a Thread row's title starts (`padding: 0 10 0 35`); its
 /// mark sits in the 10–24 column before it.
 pub const NAV_TITLE_X: f32 = 35.0;
-/// 54px — where a shown Group's member title starts; its mark at 35.
+/// 54px — where a shown Group's member title starts at the tree's root;
+/// its mark at 35. One level in, both move `NAV_TREE_INDENT` with it.
 pub const NAV_MEMBER_X: f32 = 54.0;
-/// 16px — a not-shown Group's two-line members, indented under it.
-pub const NAV_NEST: f32 = 16.0;
+/// 14px — one level of the tree (§5.1.4): everything inside a Project
+/// (its Threads, its Group rows and their members) sits one level under
+/// its heading, and a Group's members one more under the Group. Only a
+/// row's content moves in; its hover and selected fills keep the full
+/// width.
+pub const NAV_TREE_INDENT: f32 = 14.0;
+/// A tree guide: the strong hairline (white at 10%), down a Project's (or
+/// a Group's) children. Structure, not state, so a hairline (rule 2).
+pub const NAV_GUIDE: Paint = paint::HAIRLINE_STRONG;
+/// 1px — a guide's width: a hairline's.
+pub const NAV_GUIDE_W: f32 = 1.0;
+/// 8px — how far short of its last row's foot a guide stops, so the tree
+/// reads as ending at that row rather than running into the next heading.
+pub const NAV_GUIDE_TAIL: f32 = SPACE_2;
+/// 17px — a Project's guide, under the middle of its folder icon.
+pub const NAV_PROJECT_GUIDE_X: f32 = NAV_ROW_PAD_X + NAV_ICON / 2.0 - NAV_GUIDE_W / 2.0;
+/// 17px — a Group's guide, under the middle of its chevron (at 17, so on
+/// the whole pixel layout snaps it to), at the tree's root; a Group one
+/// level in has it `NAV_TREE_INDENT` further.
+pub const NAV_GROUP_GUIDE_X: f32 = NAV_CHEVRON_X + NAV_CHEVRON / 2.0;
 /// 8px — between a row's title and what sits at its right.
 pub const NAV_WORD_GAP: f32 = SPACE_2;
 /// 6px — between two Project sections.
@@ -2502,6 +2521,10 @@ pub fn nav_halo_box(dot: f32) -> f32 {
 /// blocked dot sits where a dot does, its halo `NAV_HALO` out round it.
 pub const NAV_SPINNER_AT: (f32, f32) = (2.0, 6.0);
 pub const NAV_SPINNER_AT_SMALL: (f32, f32) = (1.0, (NAV_ROW_H - NAV_LINE) / 2.0);
+/// A full-size mark on a one-line (30px) Thread row, centred on it: at
+/// the two-line row's x, the spinner's line and the dot centred.
+pub const NAV_SPINNER_AT_LINE: (f32, f32) = (NAV_SPINNER_AT.0, NAV_SPINNER_AT_SMALL.1);
+pub const NAV_DOT_AT_LINE: (f32, f32) = (NAV_DOT_AT.0, (NAV_ROW_H - NAV_DOT) / 2.0);
 pub const NAV_DOT_AT: (f32, f32) = (4.0, 13.0);
 pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
 pub const NAV_ICON_AT: (f32, f32) = (0.0, 8.0);
@@ -2535,6 +2558,17 @@ pub const NAV_DROP_BAND: f32 = SPACE_1;
 pub const NAV_FOLDED_W: f32 = 52.0;
 pub const NAV_RAIL_CELL: f32 = 32.0;
 pub const NAV_RAIL_KEY_FS: f32 = 11.0;
+/// The nav's scrollbar is the overlay every scroller has, laid in the
+/// column's right padding (`NAV_COL_PAD`) rather than over the rows, so it
+/// never covers a row's count or cuts its fill: an 8px hit strip with the
+/// thumb `NAV_SCROLLBAR_INSET` from the column's edge. It shows while
+/// scrolling and while the pointer is over the nav, then lingers and fades
+/// as every thumb does (`MOTION_SCROLLBAR_LINGER_MS`).
+pub const NAV_SCROLLBAR_GUTTER: f32 = NAV_COL_PAD;
+/// 1px — off the space scale because the 6px hovered thumb must fit the
+/// 8px padding with even air on both sides: 1 + 6 + 1.
+pub const NAV_SCROLLBAR_INSET: f32 = 1.0;
+const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
 /// Narrow windows fold the nav (rule 2.7.7) — shown, never saved — once the
 /// board beside the full column would be narrower than this, or a board
 /// cell narrower than the L2 floor (`INSTRUMENTS_WIDTH`). It unfolds only
