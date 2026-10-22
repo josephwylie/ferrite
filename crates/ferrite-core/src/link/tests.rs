@@ -29,11 +29,6 @@ fn text(thread: u64, seq: u64, text: &str) -> ServerMessage {
     }
 }
 
-/// The next message an outbox sends.
-fn sent(outbox: &mut Outbox) -> Option<ServerMessage> {
-    outbox.pop()
-}
-
 fn roster(open: &[u64], revision: u64) -> ServerMessage {
     ServerMessage::Roster {
         revision,
@@ -82,7 +77,7 @@ fn waiting_deltas_of_one_thread_merge_without_loss() {
     outbox.push(text(2, 2, " thread")).unwrap();
     outbox.push(text(1, 3, "the parser")).unwrap();
 
-    let sent: Vec<_> = std::iter::from_fn(|| sent(&mut outbox)).collect();
+    let sent: Vec<_> = std::iter::from_fn(|| outbox.pop()).collect();
     assert_eq!(
         sent,
         vec![
@@ -103,9 +98,9 @@ fn a_state_message_supersedes_its_waiting_kind_without_overtaking() {
     outbox.push(text(1, 9, "last words")).unwrap();
     outbox.push(roster(&[], 2)).unwrap();
 
-    assert_eq!(sent(&mut outbox), Some(text(1, 9, "last words")));
-    assert_eq!(sent(&mut outbox), Some(roster(&[], 2)));
-    assert_eq!(sent(&mut outbox), None);
+    assert_eq!(outbox.pop(), Some(text(1, 9, "last words")));
+    assert_eq!(outbox.pop(), Some(roster(&[], 2)));
+    assert_eq!(outbox.pop(), None);
 }
 
 #[test]
@@ -124,7 +119,7 @@ fn a_client_too_far_behind_is_lagged_and_nothing_more_is_queued() {
     assert_eq!(lagged, Lagged);
     assert!(seq as usize * chunk.len() >= LAGGED_BYTES);
     assert!(outbox.lagged());
-    assert_eq!(sent(&mut outbox), None);
+    assert_eq!(outbox.pop(), None);
     assert_eq!(outbox.push(roster(&[1], 1)), Err(Lagged));
 }
 
@@ -361,7 +356,7 @@ fn a_live_input_never_merges() {
     outbox.push(text(1, 1, "a")).unwrap();
     outbox.push(live.clone()).unwrap();
     outbox.push(text(1, 3, "b")).unwrap();
-    let sent: Vec<_> = std::iter::from_fn(|| sent(&mut outbox)).collect();
+    let sent: Vec<_> = std::iter::from_fn(|| outbox.pop()).collect();
     assert_eq!(sent, vec![text(1, 1, "a"), live, text(1, 3, "b")]);
 }
 
@@ -375,13 +370,13 @@ fn a_history_waits_its_turn_outside_the_lag_limit() {
     outbox.push(text(1, 1, "a")).unwrap();
     outbox.history(ThreadId::new(1), history).unwrap();
     outbox.push(text(1, 2, "b")).unwrap();
-    assert_eq!(sent(&mut outbox), Some(text(1, 1, "a")));
-    assert_eq!(sent(&mut outbox), None, "the history is still being read");
+    assert_eq!(outbox.pop(), Some(text(1, 1, "a")));
+    assert_eq!(outbox.pop(), None, "the history is still being read");
     pieces.send(text(1, 9, "the history")).unwrap();
     drop(pieces);
-    assert_eq!(sent(&mut outbox), Some(text(1, 9, "the history")));
-    assert_eq!(sent(&mut outbox), Some(text(1, 2, "b")));
-    assert_eq!(sent(&mut outbox), None);
+    assert_eq!(outbox.pop(), Some(text(1, 9, "the history")));
+    assert_eq!(outbox.pop(), Some(text(1, 2, "b")));
+    assert_eq!(outbox.pop(), None);
 }
 
 /// No other Thread waits on a history: what another Thread is sent goes
@@ -393,8 +388,8 @@ fn another_threads_messages_pass_a_history_still_being_read() {
     outbox.history(ThreadId::new(1), history).unwrap();
     outbox.push(text(1, 1, "after its history")).unwrap();
     outbox.push(text(2, 1, "another Thread")).unwrap();
-    assert_eq!(sent(&mut outbox), Some(text(2, 1, "another Thread")));
-    assert_eq!(sent(&mut outbox), None, "Thread 1 waits on its history");
+    assert_eq!(outbox.pop(), Some(text(2, 1, "another Thread")));
+    assert_eq!(outbox.pop(), None, "Thread 1 waits on its history");
 }
 
 /// Histories read at once take turns: a small one never waits for a big
@@ -411,8 +406,44 @@ fn histories_take_turns() {
     }
     small.send(text(2, 1, "small")).unwrap();
     drop(small);
-    let first: Vec<_> = (0..2).filter_map(|_| sent(&mut outbox)).collect();
-    assert!(first.contains(&text(2, 1, "small")), "{first:?}");
+    assert_eq!(outbox.pop(), Some(text(1, 1, "big")));
+    assert_eq!(outbox.pop(), Some(text(2, 1, "small")), "its turn");
+}
+
+/// A history's pieces and other messages take turns: neither waits for
+/// the other to run out.
+#[test]
+fn pieces_and_messages_take_turns() {
+    let mut outbox = Outbox::default();
+    let (pieces, history) = mpsc::sync_channel(8);
+    outbox.history(ThreadId::new(1), history).unwrap();
+    for seq in 1..=3 {
+        pieces.send(text(1, seq, "piece")).unwrap();
+    }
+    outbox.push(text(2, 1, "a")).unwrap();
+    outbox.push(text(3, 1, "b")).unwrap();
+    assert_eq!(outbox.pop(), Some(text(1, 1, "piece")));
+    assert_eq!(outbox.pop(), Some(text(2, 1, "a")));
+    assert_eq!(outbox.pop(), Some(text(1, 2, "piece")));
+    assert_eq!(outbox.pop(), Some(text(3, 1, "b")));
+}
+
+/// A Thread's histories go one at a time, in order: one asked for again
+/// before the first is sent waits for it, never mixes its pieces in.
+#[test]
+fn a_threads_second_history_waits_for_its_first() {
+    let mut outbox = Outbox::default();
+    let (first, first_history) = mpsc::sync_channel(8);
+    let (second, second_history) = mpsc::sync_channel(8);
+    outbox.history(ThreadId::new(1), first_history).unwrap();
+    outbox.history(ThreadId::new(1), second_history).unwrap();
+    second.send(text(1, 1, "second")).unwrap();
+    drop(second);
+    first.send(text(1, 2, "first")).unwrap();
+    assert_eq!(outbox.pop(), Some(text(1, 2, "first")));
+    assert_eq!(outbox.pop(), None, "the first is still being read");
+    drop(first);
+    assert_eq!(outbox.pop(), Some(text(1, 1, "second")));
 }
 
 /// A connection the Server lets go ends its threads and closes its

@@ -517,8 +517,8 @@ impl Server {
     }
 
     /// Stream a Thread to a client: from the ring when it resumes this boot
-    /// within it, otherwise its history first, which the client's writer
-    /// thread reads from the log and sends in pieces.
+    /// within it, otherwise its history first, read from the log on a
+    /// thread of its own and sent in pieces as they come.
     fn watch(&mut self, id: ClientId, thread: ThreadId, resume: Option<protocol::Resume>) {
         self.broadcast();
         let missed = resume
@@ -542,7 +542,7 @@ impl Server {
                 };
                 if client
                     .connection
-                    .defer(thread, Box::new(move |send| history.send(send)))
+                    .history(thread, Box::new(move |send| history.send(send)))
                     .is_err()
                 {
                     self.lagged(id);
