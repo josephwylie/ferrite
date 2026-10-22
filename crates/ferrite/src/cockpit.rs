@@ -24197,12 +24197,12 @@ mod tests {
         }
     }
 
-    /// A member that lost its Pane while keeping its seat (a bare park
-    /// takes a seated Pane away, `Cockpit::park`) takes no slot: the board
-    /// closes up around the rest instead of leaving a hole with no card in
-    /// it, the glass showing through (the CLI-park bug).
+    /// Every slot of a Group's board paints a card (the CLI-park bug left
+    /// one empty, the glass showing through). A member parked in its Group
+    /// keeps its Pane, drawn parked; a member this window holds no Pane for
+    /// yet takes no slot, and the board closes up around the rest.
     #[gpui::test]
-    fn a_member_without_a_pane_leaves_no_hole_in_the_board(cx: &mut TestAppContext) {
+    fn every_slot_of_a_group_board_paints_a_card(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("board-no-hole", 3);
         let threads = core.threads();
         let group = core
@@ -24223,6 +24223,19 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1400.), px(900.)));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         tick(cx);
+        let filled = |cx: &mut gpui::VisualTestContext, cards: usize| {
+            let (bounds, rects) = cx.update(|window, cx| {
+                let view = view.read(cx);
+                (view.board_bounds(window), view.pane_rects(window))
+            });
+            assert_eq!(rects.len(), cards, "one card per slot");
+            let area: f32 = rects.iter().map(|(_, rect)| rect.w * rect.h).sum();
+            let seams = (cards - 1) as f32 * crate::theme::BOARD_SEAM;
+            assert!(
+                area >= (bounds.w.min(bounds.h) - seams) * bounds.w.max(bounds.h) - 1.0,
+                "the cards fill the board, nothing left unpainted: {area} of {bounds:?}"
+            );
+        };
 
         view.update(cx, |view, cx| {
             view.cockpit.park(threads[1]).unwrap();
@@ -24230,28 +24243,19 @@ mod tests {
             cx.notify();
         });
         tick(cx);
-
         view.read_with(cx, |view, _| {
-            assert_eq!(
-                view.cockpit.groups().get(group).unwrap().members.len(),
-                3,
-                "the seat is kept"
-            );
+            assert!(view.cockpit.thread(threads[1]).is_none(), "parked");
+            assert!(view.pane_for(threads[1]).is_some(), "its Pane stays");
+        });
+        filled(cx, 3);
+
+        // The window's Panes trail the Roster for a moment after an act.
+        view.update(cx, |view, _| {
+            view.panes.retain(|pane| pane.thread() != Some(threads[1]));
             let tree = view.board_tree(Board::Group(group)).unwrap();
             assert_eq!(tree.leaves(), [threads[0], threads[2]]);
         });
-        let (bounds, rects) = cx.update(|window, cx| {
-            let view = view.read(cx);
-            (view.board_bounds(window), view.pane_rects(window))
-        });
-        assert_eq!(rects.len(), 2, "one card per slot");
-        let area: f32 = rects.iter().map(|(_, rect)| rect.w * rect.h).sum();
-        let seam = crate::theme::BOARD_SEAM;
-        assert!(
-            area >= (bounds.w - seam) * bounds.h - 1.0
-                || area >= bounds.w * (bounds.h - seam) - 1.0,
-            "the cards fill the board, nothing left unpainted: {area} of {bounds:?}"
-        );
+        filled(cx, 2);
     }
 
     /// `count` Threads with a few lines each, grouped, at `width`×`height`.

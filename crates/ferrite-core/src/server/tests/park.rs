@@ -1,5 +1,5 @@
 //! A Thread parked by an API caller (`thread.close`, `ferrite thread
-//! park`) as a window parks one (ADR 0027): a Group member leaves its
+//! close`) as a window parks one (ADR 0027): a Group member leaves its
 //! Group first, and every window showing that Group follows, its board
 //! left whole.
 
@@ -52,6 +52,7 @@ fn grouped(harness: &Harness, n: usize) -> (crate::cockpit::Cockpit, Vec<ThreadI
     (window, threads, group)
 }
 
+/// `group`'s members as `window` holds them, in order; none once it is gone.
 fn members(window: &crate::cockpit::Cockpit, group: GroupId) -> Vec<ThreadId> {
     window
         .groups()
@@ -71,6 +72,7 @@ fn every_member_has_a_pane(window: &crate::cockpit::Cockpit, group: GroupId) {
     }
 }
 
+/// Park `thread` as an agent does: `thread.close` on the API.
 fn close(caller: &mut Caller, id: &str, thread: ThreadId) {
     let closed = caller.answer(id, "thread.close", serde_json::json!({ "thread": thread }));
     assert_eq!(
@@ -199,12 +201,11 @@ fn an_api_revive_after_an_api_park_reopens_the_thread_outside_the_group() {
     every_member_has_a_pane(&window, group);
 }
 
-/// A park that keeps the member's seat (a window's bare `park`, as an
-/// older one sends): the window showing the Group keeps its Pane, now the
-/// parked tile, rather than a slot with nothing in it — and a revive
-/// wakes it in that slot.
+/// A park that keeps the member in its Group (a window's bare `park`):
+/// the window showing the Group keeps its Pane, drawn parked, rather than
+/// a slot with nothing in it — and a revive wakes it in that slot.
 #[test]
-fn a_member_parked_in_its_seat_keeps_its_tile_on_the_board() {
+fn a_member_parked_in_its_group_keeps_its_pane_on_the_board() {
     let harness = start("api-park-seat");
     let (mut window, threads, group) = grouped(&harness, 3);
     window.enter_group(group).unwrap();
