@@ -195,11 +195,16 @@ impl Server {
     /// Park a Thread as the window's park does (`Cockpit::park_thread`),
     /// with the same two commands: a Group member leaves its Group first,
     /// so no window's board keeps a seat for a Thread that went away.
+    /// The leave reaches the windows before the park, as each of a window's
+    /// commands does: published together, the Roster that closes the Thread
+    /// goes out ahead of the Groups it left, and a window between the two
+    /// holds a closed Thread in its Group, its focus still on it.
     pub(super) fn park(&mut self, thread: ThreadId) -> Result<(), ApiError> {
         if self.engine.groups().of(thread).is_some() {
             self.execute(Op::Group {
                 change: (&crate::groups::GroupChange::Leave { thread }).into(),
             })?;
+            self.broadcast();
         }
         self.execute(Op::Park { thread }).map(drop)
     }

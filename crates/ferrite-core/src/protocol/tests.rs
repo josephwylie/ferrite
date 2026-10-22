@@ -1399,6 +1399,13 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "dissolved",
+            Sample::Server(ServerMessage::Dissolved {
+                group: GroupId::new(3),
+                survivor: thread,
+            }),
+        ),
+        (
             "registry",
             Sample::Server(ServerMessage::Registry {
                 revision: 11,
