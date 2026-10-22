@@ -722,7 +722,7 @@ impl CockpitView {
             .is_empty()
         });
         let facts = focused.and_then(|thread| self.facts.get(thread));
-        // The changes show in the Solo panel, so only where it can show.
+        // The changes show in the panel, so only where it has a Thread.
         let changed = facts.is_some_and(|facts| !facts.changed_files.is_empty())
             && self.panel_candidate().is_some();
         let pr = facts.and_then(|facts| facts.pr.reading.as_ref());
@@ -904,6 +904,13 @@ impl CockpitView {
             "",
             bound_chord("cockpit::ToggleNav"),
             Command::ToggleSidebar,
+        );
+        add(
+            self.panel_candidate().is_some(),
+            "Toggle panel".into(),
+            "",
+            bound_chord("cockpit::TogglePanel"),
+            Command::TogglePanel,
         );
         add(
             !self.panes.is_empty(),
@@ -1145,6 +1152,7 @@ impl CockpitView {
             Command::EditProject(project) => self.open_project_editor(project, cx),
             Command::Settings => self.open_settings(&OpenSettings, window, cx),
             Command::ToggleSidebar => self.toggle_nav_now(cx),
+            Command::TogglePanel => self.toggle_panel_now(cx),
             Command::FullscreenPane => self.toggle_fullscreen(&ToggleFullscreen, window, cx),
             Command::TextLarger => self.step_text_size(1, cx),
             Command::TextSmaller => self.step_text_size(-1, cx),

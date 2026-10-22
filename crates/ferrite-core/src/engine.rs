@@ -461,8 +461,9 @@ impl Tune {
 /// refused.
 const TUNE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long a Session may stay at rest before it ends (ADR 0032).
-const END_AFTER: Duration = Duration::from_secs(10 * 60);
+/// How long a Thread at rest stays held: its Session on the Server, its
+/// transcript in a window (ADR 0032).
+pub(crate) const HELD_AT_REST: Duration = Duration::from_secs(5 * 60);
 
 struct PendingBootstrap {
     prompt: String,
@@ -998,17 +999,23 @@ impl Thread {
         self.settled_at = Some(crate::clock::instant());
     }
 
-    /// Whether its Session has outlived its use at `now` (ADR 0032): at
-    /// rest for `END_AFTER`, or at all on a `stale` CLI, and holding no
-    /// work it will start itself. Starts the count on the first call at
-    /// rest.
+    /// At work: not at rest, or holding work it will start itself. What
+    /// keeps its Session, and what every window holds its transcript for
+    /// (ADR 0032).
+    fn at_work(&self) -> bool {
+        self.scheduled_work || !self.at_rest()
+    }
+
+    /// Whether its Session has outlived its use at `now` (ADR 0032): not
+    /// at work for `HELD_AT_REST`, or at all on a `stale` CLI. Starts the
+    /// count on the first call at rest.
     fn outlived_use(&mut self, now: Instant, stale: bool) -> bool {
-        if self.session.is_none() || self.scheduled_work || !self.at_rest() {
+        if self.session.is_none() || self.at_work() {
             self.settled_at = None;
             return false;
         }
         let since = *self.settled_at.get_or_insert(now);
-        stale || now.saturating_duration_since(since) >= END_AFTER
+        stale || now.saturating_duration_since(since) >= HELD_AT_REST
     }
 
     /// Whether the model and effort can change now: not mid-turn, not
@@ -4454,6 +4461,25 @@ impl Engine {
         live.push(WireInput::Live(Live::RateLimits {
             limits: transcript.rate_limits().into(),
         }));
+        // The turn as it stands: a replay never reads one as running, so a
+        // watch mid-turn is told it is, as its provider said it.
+        use crate::transcript::Status;
+        let state = match transcript.status() {
+            Status::Streaming => Some(crate::RunState::Running),
+            Status::Blocked => Some(crate::RunState::RequiresAction),
+            Status::Idle | Status::Closed => None,
+        };
+        if let Some(protocol::Outgoing::Input(input)) = state.map(|state| {
+            protocol::outgoing(
+                &ActivityInput::Main {
+                    input: Input::Event(SessionEvent::RunState { state }),
+                    at: crate::clock::instant(),
+                },
+                None,
+            )
+        }) {
+            live.push(input);
+        }
         Some(History {
             thread,
             log,
@@ -4711,21 +4737,20 @@ impl Engine {
         for (&id, thread) in self.threads.iter().filter(|(_, thread)| thread.held) {
             let published = self.published.entry(id).or_default();
             let shown = self.visible_subjects.get(&id);
+            let at_work = thread.at_work();
             let current = published
                 .digest
                 .as_ref()
-                .is_some_and(|digest| digest.shows(shown));
+                .is_some_and(|digest| digest.shows(shown) && digest.at_work == at_work);
             if !published.digest_owed && current {
                 continue;
             }
             let activity = thread.activity.view();
-            let due = published
-                .digest
-                .as_ref()
-                .is_none_or(|digest| digest.outdated_by(activity, shown))
-                || published
-                    .digest_at
-                    .is_none_or(|at| now.saturating_duration_since(at) >= DIGEST_REFOLD);
+            let due = published.digest.as_ref().is_none_or(|digest| {
+                digest.outdated_by(activity, shown) || digest.at_work != at_work
+            }) || published
+                .digest_at
+                .is_none_or(|at| now.saturating_duration_since(at) >= DIGEST_REFOLD);
             if !due {
                 continue;
             }
@@ -4733,7 +4758,10 @@ impl Engine {
             // A Thread's first digest starts no throttle: what streams next
             // lands at once.
             published.digest_at = published.digest.is_some().then_some(now);
-            let digest = Digest::of(id, activity, shown, self.boot);
+            let digest = Digest {
+                at_work,
+                ..Digest::of(id, activity, shown, self.boot)
+            };
             if published.digest.as_ref() != Some(&digest) {
                 published.digest = Some(digest.clone());
                 self.outbox

@@ -1,14 +1,21 @@
-//! The Solo view's right panel (SPEC §5.6): a fixed column on the frame,
-//! right of the board and outside it — not the Beside slot, which still
-//! opens inside the board (ADR 0021). Its head sits in the head row over
-//! it: the `Changes`, `PR` and `Context` tabs and the button that hides
-//! it. Under the head, the shown tab's body; under every tab, the foot's
-//! context meter.
+//! The right panel (SPEC §5.6): a fixed column on the frame, right of the
+//! board and outside it — not the Beside slot, which still opens inside
+//! the board (ADR 0021). Its head sits in the head row over it: the
+//! `Changes`, `PR` and `Context` tabs and the toggle that hides it. Under
+//! the head, the shown tab's body; under every tab, the foot's context
+//! meter.
 //!
-//! When it shows (`panel_thread`): in Solo, on a Thread's Pane, with
-//! nothing open beside it, while the window has room (`PANEL_SHOW_W`,
-//! held down to `PANEL_HIDE_W`) and the operator has not hidden it
-//! (`Settings::panel_shown`, ⌥⌘B). Hidden, the board takes its width.
+//! When it shows (`panel_thread`): for the focused Thread, in every view —
+//! Solo, a Group (the focused Pane's Thread), a fullscreen Pane, with
+//! something open beside the Pane — while the operator has it on
+//! (`Settings::panel_shown`, ⌥⌘B). There are no size rules: hidden, the
+//! board takes its width; shown, the board gives it up, however narrow.
+//! A draft, the empty board and the Projects coordinator have no Thread,
+//! so no panel.
+//!
+//! One toggle (`panel_toggle`) sits at the head row's right end either
+//! way: the panel head's last control while it shows, the view head's
+//! while it is hidden.
 //!
 //! One function per tab draws its body (`panel_changes`, `panel_context`,
 //! and the PR tab's `panel_pr`, in `pr_tab`, which also reads it): 7b adds
@@ -31,55 +38,32 @@ pub(crate) enum PanelTab {
 }
 
 /// The panel's own state on the cockpit.
+#[derive(Default)]
 pub(crate) struct Panel {
     /// The last tab each Thread's panel showed.
     tabs: std::collections::HashMap<ThreadId, PanelTab>,
-    /// The window is too narrow for it (`fit_panel`): hidden, never saved.
-    /// True until the first frame measures, so a narrow window never
-    /// flashes it.
-    narrow: std::cell::Cell<bool>,
-    /// ⌥⌘B while the window is too narrow: the operator's override, for
-    /// the session (another ⌥⌘B gives the narrow rule back). Never saved.
-    forced_open: bool,
     /// The Changes tab's unfolded files and their hunks.
     hunks: hunks::Hunks,
-}
-
-impl Default for Panel {
-    fn default() -> Self {
-        Self {
-            tabs: Default::default(),
-            narrow: std::cell::Cell::new(true),
-            forced_open: false,
-            hunks: Default::default(),
-        }
-    }
 }
 
 impl CockpitView {
     /// The Thread whose panel shows this frame (see the module doc), if
     /// any.
     pub(super) fn panel_thread(&self) -> Option<ThreadId> {
-        let wanted =
-            self.prefs.settings.panel_shown && (!self.panel.narrow.get() || self.panel.forced_open);
-        wanted.then(|| self.panel_candidate()).flatten()
+        self.prefs
+            .settings
+            .panel_shown
+            .then(|| self.panel_candidate())
+            .flatten()
     }
 
-    /// The Thread the panel would show for, room and the operator allowing:
-    /// the Solo Pane's, with nothing beside it.
+    /// The Thread the panel is for, shown or hidden: the focused Pane's.
+    /// None on a draft, the empty board and the Projects coordinator.
     pub(super) fn panel_candidate(&self) -> Option<ThreadId> {
-        if self.cockpit.roster().view() != View::Solo
-            || self.projects.coordinator_shown()
-            || self.empty_board_shown()
-            || self.solo_pair().is_some()
-        {
+        if self.projects.coordinator_shown() || self.empty_board_shown() {
             return None;
         }
-        let pane = self.panes.get(self.focused())?;
-        if pane.preview.document().is_some() {
-            return None;
-        }
-        pane.thread()
+        self.panes.get(self.focused())?.thread()
     }
 
     /// What the board leaves at its right: the panel's column, or the
@@ -92,40 +76,20 @@ impl CockpitView {
         }
     }
 
-    /// Once per frame, before the board is measured: whether the window
-    /// has room for the panel, held between `PANEL_HIDE_W` and
-    /// `PANEL_SHOW_W` so a resize across the line does not flicker it.
-    pub(super) fn fit_panel(&self, window: &Window) {
-        use crate::theme::{PANEL_HIDE_W, PANEL_SHOW_W};
-        let width = f32::from(window.viewport_size().width);
-        let floor = if self.panel.narrow.get() {
-            PANEL_SHOW_W
-        } else {
-            PANEL_HIDE_W
-        };
-        self.panel.narrow.set(width < floor);
-    }
-
     /// The tab `thread`'s panel shows.
     pub(crate) fn panel_tab(&self, thread: ThreadId) -> PanelTab {
         self.panel.tabs.get(&thread).copied().unwrap_or_default()
     }
 
-    /// ⌥⌘B and the head's hide button: show or hide the panel. While the
-    /// window is too narrow for it, the flip is an override that is shown
-    /// and never saved; otherwise it is the setting, saved.
+    /// ⌥⌘B, the View menu, the palette and the head's toggle: show or
+    /// hide the panel, saved.
     pub(super) fn toggle_panel(&mut self, _: &TogglePanel, _: &mut Window, cx: &mut Context<Self>) {
         self.toggle_panel_now(cx);
     }
 
-    fn toggle_panel_now(&mut self, cx: &mut Context<Self>) {
-        if self.prefs.settings.panel_shown && self.panel.narrow.get() {
-            self.panel.forced_open = !self.panel.forced_open;
-        } else {
-            self.panel.forced_open = false;
-            let shown = !self.prefs.settings.panel_shown;
-            self.change_settings(|settings| settings.panel_shown = shown, cx);
-        }
+    pub(super) fn toggle_panel_now(&mut self, cx: &mut Context<Self>) {
+        let shown = !self.prefs.settings.panel_shown;
+        self.change_settings(|settings| settings.panel_shown = shown, cx);
         cx.notify();
     }
 
@@ -138,25 +102,36 @@ impl CockpitView {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        if self.panel_thread().is_none() {
-            if !self.prefs.settings.panel_shown {
-                self.change_settings(|settings| settings.panel_shown = true, cx);
-            }
-            if self.panel.narrow.get() {
-                self.panel.forced_open = true;
-            }
+        if !self.prefs.settings.panel_shown {
+            self.change_settings(|settings| settings.panel_shown = true, cx);
         }
         self.select_panel_tab(thread, tab, cx);
     }
 
-    /// The Solo head's branch chip (SPEC §5.2): the panel's Changes tab,
-    /// or — when the panel already shows Changes — the panel hidden.
-    pub(crate) fn panel_changes_door(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.panel_thread() == Some(thread) && self.panel_tab(thread) == PanelTab::Changes {
-            self.toggle_panel_now(cx);
-        } else {
-            self.open_panel_tab(thread, PanelTab::Changes, cx);
-        }
+    /// The head row's one panel toggle (SPEC §5.6): the nav head's sidebar
+    /// toggle's twin (`nav::icon_button`), the `panel-right` glyph, its
+    /// tooltip and chord read from the keymap. The panel head draws it
+    /// while the panel shows, the view head while it is hidden, both with
+    /// its right edge `panel_toggle_inset` in from the window's.
+    pub(super) fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_TAB};
+        crate::nav::icon_button(
+            "panel-toggle",
+            icons::PANEL_RIGHT,
+            NAV_TOGGLE_GLYPH,
+            ICON_BUTTON,
+            R_TAB,
+        )
+        .occlude()
+        .tooltip(crate::menu::action_tooltip(
+            "Toggle panel",
+            "cockpit::TogglePanel",
+        ))
+        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.toggle_panel_now(cx);
+        }))
+        .into_any_element()
     }
 
     fn select_panel_tab(&mut self, thread: ThreadId, tab: PanelTab, cx: &mut Context<Self>) {
@@ -238,9 +213,9 @@ impl CockpitView {
         )
     }
 
-    /// The head (46, in the head row): the three tabs, then the button
-    /// that hides the panel. On Windows it stops short of the caption
-    /// buttons, which keep the row's right end.
+    /// The head (46, in the head row): the three tabs, then the toggle.
+    /// On Windows it stops short of the caption buttons, which keep the
+    /// row's right end.
     fn panel_head(&self, thread: ThreadId, shown: PanelTab, cx: &mut Context<Self>) -> Div {
         use crate::theme::*;
         let facts = self.facts.get(thread);
@@ -295,17 +270,13 @@ impl CockpitView {
                 .child(SharedString::from(format!("#{number}")))
                 .into_any_element()
         });
-        let hide_id = gpui::ElementId::from("panel-hide");
-        let hide_key = crate::pointer::hover_key(&hide_id);
         div()
             .flex()
             .flex_shrink_0()
             .items_center()
             .gap(px(SPACE_1))
             .h(px(WIN_CHROME_H))
-            .when(crate::titlebar::CUSTOM, |head| {
-                head.pr(px(3. * CAPTION_W - PANEL_PAD_R))
-            })
+            .pr(px(panel_toggle_inset() - PANEL_PAD_R))
             .child(
                 div()
                     .flex()
@@ -316,28 +287,7 @@ impl CockpitView {
                     .child(tab(PanelTab::Pr, "PR", pr_number))
                     .child(tab(PanelTab::Context, "Context", None)),
             )
-            .child(
-                div()
-                    .id(hide_id)
-                    .debug_selector(|| "panel-hide".into())
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .size(px(ICON_BUTTON))
-                    .rounded(px(R_TAB))
-                    .occlude()
-                    .hover_control(hide_key)
-                    .press_control()
-                    .tooltip(crate::menu::action_tooltip(
-                        "Hide panel",
-                        "cockpit::TogglePanel",
-                    ))
-                    .child(icon(icons::PANEL_RIGHT, ICON_BUTTON_GLYPH, TEXT_DIM))
-                    .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                        view.toggle_panel_now(cx);
-                    })),
-            )
+            .child(self.panel_toggle(cx))
     }
 
     /// The Changes tab: the branch row, the section line, one block per
@@ -708,6 +658,18 @@ impl CockpitView {
                 )
                 .children(meter),
         )
+    }
+}
+
+/// How far in from the window's right edge the panel toggle's right edge
+/// sits, shown or hidden: the panel's own padding, or on Windows just left
+/// of the caption buttons.
+pub(super) fn panel_toggle_inset() -> f32 {
+    use crate::theme::{CAPTION_W, PANEL_PAD_R};
+    if crate::titlebar::CUSTOM {
+        3. * CAPTION_W
+    } else {
+        PANEL_PAD_R
     }
 }
 

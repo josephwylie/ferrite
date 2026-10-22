@@ -42,6 +42,14 @@ mod remote;
 mod shared;
 mod status;
 
+/// The focused member of the Group on view before an arrival: the Group,
+/// its members then, and where the focused one sat (`sync_roster`).
+struct FocusedMember {
+    group: GroupId,
+    members: Vec<ThreadId>,
+    ordinal: usize,
+}
+
 pub struct Cockpit {
     link: Link,
     /// What a parked Thread says.
@@ -92,20 +100,17 @@ pub struct Cockpit {
     drawn: Option<Drawn>,
 }
 
-/// How long a Thread off screen and no longer at work stays streamed
-/// whole: coming back to one within it reads none of its history again
-/// (ADR 0032). One drawn and at work stays however long it works.
-const UNWATCH_AFTER: Duration = Duration::from_secs(5 * 60);
+/// How long a Thread off screen and at rest stays streamed whole: as long
+/// as the Server keeps its Session (ADR 0032). One at work stays however
+/// long it works, drawn here or not.
+const UNWATCH_AFTER: Duration = crate::engine::HELD_AT_REST;
 
-/// The Threads a window draws at Transcript level, and since when each it
-/// no longer draws has been off screen and not at work.
+/// The Threads a window draws at Transcript level, and since when each
+/// other it holds has been off screen and at rest.
 #[derive(Default)]
 struct Drawn {
     now: std::collections::BTreeSet<ThreadId>,
     left: HashMap<ThreadId, Instant>,
-    /// Held because they opened here, never yet drawn: their work keeps
-    /// none of them (the window mirrors only what it draws).
-    unseen: std::collections::BTreeSet<ThreadId>,
 }
 
 impl Drawn {
@@ -115,17 +120,16 @@ impl Drawn {
         }
         for thread in &threads {
             self.left.remove(thread);
-            self.unseen.remove(thread);
         }
         self.now = threads;
     }
 
-    /// A Thread that opened while the window is up is one the operator is
-    /// about to look at: it is held as if it had just left the screen.
-    fn opened(&mut self, thread: ThreadId, at: Instant) {
+    /// Hold `thread` as if it had just left the screen: one that opened
+    /// while the window is up, which the operator is about to look at, or
+    /// one at work, whose time at rest starts again.
+    fn hold(&mut self, thread: ThreadId, at: Instant) {
         if !self.now.contains(&thread) {
             self.left.insert(thread, at);
-            self.unseen.insert(thread);
         }
     }
 
@@ -138,21 +142,9 @@ impl Drawn {
                 .is_some_and(|left| at.saturating_duration_since(*left) < UNWATCH_AFTER)
     }
 
-    /// `thread` is still at work off screen: its time away starts again,
-    /// if the window has drawn it.
-    fn keep(&mut self, thread: ThreadId, at: Instant) {
-        if self.unseen.contains(&thread) {
-            return;
-        }
-        if let Some(left) = self.left.get_mut(&thread) {
-            *left = at;
-        }
-    }
-
     fn retain(&mut self, open: &[ThreadId]) {
         self.now.retain(|thread| open.contains(thread));
         self.left.retain(|thread, _| open.contains(thread));
-        self.unseen.retain(|thread| open.contains(thread));
     }
 }
 
@@ -327,12 +319,22 @@ impl Cockpit {
         }
     }
 
-    /// The Roster follows the open Threads: a Thread that opened gets a
-    /// Pane at the end, one that closed loses its own. A Thread a Draft is
-    /// starting takes the Draft's slot when it settles instead.
-    fn sync_roster(&mut self) {
+    /// The Roster follows the open Threads and the Groups, whoever changed
+    /// them — this window, another, or an API caller. A Thread that opened
+    /// gets a Pane at the end (a Thread a Draft is starting takes the
+    /// Draft's slot when it settles instead); one that closed loses its
+    /// own unless it still sits in the Group on view (`seated`), where its
+    /// Pane draws it parked, as entering the Group does (`enter_group`):
+    /// the Group's Layout never holds a slot with no Pane to paint. The
+    /// focus follows the focused member (`follow_focused_member`).
+    fn sync_roster(&mut self, focused: Option<FocusedMember>) {
         let open = self.shared.open.clone();
-        for gone in self.synced.iter().filter(|thread| !open.contains(thread)) {
+        let seated = self.seated();
+        for gone in self
+            .synced
+            .iter()
+            .filter(|thread| !open.contains(thread) && !seated.contains(thread))
+        {
             self.roster.remove_thread(*gone);
         }
         for thread in open.iter().filter(|thread| !self.synced.contains(thread)) {
@@ -341,6 +343,77 @@ impl Cockpit {
             }
         }
         self.synced = open;
+        if let Some(focused) = focused {
+            self.follow_focused_member(focused);
+        }
+        self.roster.heal_focus(&self.shared.groups);
+    }
+
+    /// The members sitting in the Group on view, each holding a slot of its
+    /// Layout: none in Solo, and not the one whose leave waits on a draft.
+    fn seated(&self) -> Vec<ThreadId> {
+        let View::Group(group) = self.roster.view() else {
+            return Vec::new();
+        };
+        let leaving = self.roster.pending_leave(group);
+        self.shared
+            .groups
+            .get(group)
+            .map(|group| {
+                group
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(|member| Some(*member) != leaving)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The Group on view's focused member, before an arrival.
+    fn focused_member(&self) -> Option<FocusedMember> {
+        let View::Group(group) = self.roster.view() else {
+            return None;
+        };
+        let focused = self.roster.focused_thread()?;
+        let members = self.shared.groups.get(group)?.members.clone();
+        let ordinal = members.iter().position(|member| *member == focused)?;
+        Some(FocusedMember {
+            group,
+            members,
+            ordinal,
+        })
+    }
+
+    /// The focused member that left the Group on view hands focus to its
+    /// ordinal survivor, as closing its Pane does (`close_thread`); a pair
+    /// it dissolved leaves Solo on its survivor.
+    fn follow_focused_member(&mut self, before: FocusedMember) {
+        let focused = before.members[before.ordinal];
+        if self.roster.view() != View::Group(before.group) {
+            return;
+        }
+        match self.shared.groups.get(before.group) {
+            Some(group) if !group.members.contains(&focused) => {
+                self.focus_ordinal_survivor(before.group, before.ordinal);
+            }
+            Some(_) => {}
+            // Dissolved: Solo, on the focused Pane while it is still
+            // there, else on the member left standing.
+            None => {
+                self.roster.set_view(View::Solo);
+                if self.roster.pane_of(focused).is_none() {
+                    if let Some(survivor) = before
+                        .members
+                        .iter()
+                        .copied()
+                        .find(|member| self.roster.pane_of(*member).is_some())
+                    {
+                        self.roster.focus(PaneIdentity::Thread(survivor));
+                    }
+                }
+            }
+        }
     }
 
     /// Bring this window up to the Engine after one of its own acts. What
@@ -385,6 +458,7 @@ impl Cockpit {
 
     fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
         let open_before = self.shared.open.clone();
+        let focused = self.focused_member();
         let attached = arrived
             .iter()
             .any(|arrival| matches!(arrival, remote::Arrival::Attached { .. }));
@@ -429,14 +503,14 @@ impl Cockpit {
             }
             self.bootstrap_results.push(result);
         }
-        self.sync_roster();
+        self.sync_roster(focused);
         // What a Server's snapshot lists is not new.
         if !attached {
             let now = crate::clock::instant();
             if let Some(drawn) = &mut self.drawn {
                 for &thread in &self.shared.open {
                     if !open_before.contains(&thread) {
-                        drawn.opened(thread, now);
+                        drawn.hold(thread, now);
                     }
                 }
             }
@@ -445,8 +519,8 @@ impl Cockpit {
     }
 
     /// The window draws exactly these Threads at Transcript level now. It
-    /// streams them whole while it does, while each it stopped drawing is
-    /// at work, and for `UNWATCH_AFTER` after (ADR 0032).
+    /// streams them whole while it does, and each other while it is at work
+    /// and for `UNWATCH_AFTER` after (ADR 0032).
     pub fn draws_transcripts(&mut self, threads: impl IntoIterator<Item = ThreadId>) {
         self.drawn
             .get_or_insert_with(Drawn::default)
@@ -454,7 +528,7 @@ impl Cockpit {
     }
 
     /// The Threads this window streams whole: those it draws at Transcript
-    /// level, and those it drew that were at work within `UNWATCH_AFTER`.
+    /// level, and those drawn or at work within `UNWATCH_AFTER`.
     /// Until it says what it draws, or while
     /// its Engine sends no digests to read the rest from, every open one.
     fn watched(&self) -> Vec<ThreadId> {
@@ -473,8 +547,8 @@ impl Cockpit {
     fn follow_attention(&mut self) {
         if let Some(drawn) = &mut self.drawn {
             let now = crate::clock::instant();
-            for thread in self.mirrors.watched_at_work() {
-                drawn.keep(thread, now);
+            for thread in self.mirrors.at_work() {
+                drawn.hold(thread, now);
             }
         }
         let watched = self.watched();
@@ -628,6 +702,9 @@ impl Cockpit {
     /// survivor is the one Thread still on screen, so that is where they
     /// land — never the Thread that left, and never a blank Cockpit.
     pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
+        // The view as the act found it: the arrival already healed a
+        // dissolved Group's view to Solo (`sync_roster`).
+        let view = self.roster.view();
         let applied = self.act(
             |engine| engine.apply_group(change.clone()),
             |server| match server.execute(Op::Group {
@@ -647,7 +724,7 @@ impl Cockpit {
                 Err(error) => Err(ApplyError::Io(error.message)),
             },
         )?;
-        if let View::Group(active) = self.roster.view() {
+        if let View::Group(active) = view {
             if let Some(dissolved) = applied
                 .dissolved
                 .iter()
@@ -663,14 +740,15 @@ impl Cockpit {
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
     /// keeps nothing in memory until it is opened again. A parked Group
-    /// member's tile (`enter_group`) has a Pane and no Session: parking it
-    /// again only takes the Pane away.
+    /// member's Pane (`enter_group`) has no Session: parking it again
+    /// takes the Pane away once it no longer sits in the Group on view
+    /// (`park_thread` leaves first); while it does, its slot keeps it.
     pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
         let parked = self.act(
             |engine| engine.park(thread),
             |server| run(server, Op::Park { thread }),
         );
-        if !self.shared.open.contains(&thread) {
+        if !self.shared.open.contains(&thread) && !self.seated().contains(&thread) {
             self.roster.remove_thread(thread);
         }
         parked
@@ -2663,14 +2741,21 @@ impl Cockpit {
                 .map_err(CloseError::Group)?;
             // A dissolved Group already landed on its survivor.
             if !applied.dissolved.iter().any(|item| item.group == group) {
-                if let Some(group) = self.shared.groups.get(group) {
-                    let next = group.members[ordinal.min(group.members.len() - 1)];
-                    self.roster.focus(PaneIdentity::Thread(next));
-                }
+                self.focus_ordinal_survivor(group, ordinal);
             }
             return Ok(());
         }
         self.park_noted(thread)
+    }
+
+    /// Focus the member of `group` that took `ordinal` when one left it
+    /// (the last, when the leaver was): closing the middle Pane of three
+    /// leaves the pointer where it was, the way closing a browser tab does.
+    fn focus_ordinal_survivor(&mut self, group: GroupId, ordinal: usize) {
+        if let Some(group) = self.shared.groups.get(group) {
+            let next = group.members[ordinal.min(group.members.len() - 1)];
+            self.roster.focus(PaneIdentity::Thread(next));
+        }
     }
 
     /// Solo's park. Parked even on a flush error — the Session is gone

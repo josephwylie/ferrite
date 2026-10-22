@@ -119,7 +119,7 @@ impl Server {
     pub(super) fn close_project(&mut self, project: ProjectId) -> Result<Value, ApiError> {
         let threads = self.threads_of(project);
         for &thread in &threads {
-            self.execute(Op::Park { thread })?;
+            self.park(thread)?;
         }
         let mut answer = self.project_result(project)?;
         answer["parked"] = json!(threads);
@@ -183,7 +183,7 @@ impl Server {
         let threads = self.engine.threads_in_worktree(path).map_err(failed)?;
         for &thread in &threads {
             if self.engine.thread(thread).is_some() {
-                self.execute(Op::Park { thread })?;
+                self.park(thread)?;
             }
         }
         workspace::remove_worktree(&checkout.repo, path).map_err(failed)?;

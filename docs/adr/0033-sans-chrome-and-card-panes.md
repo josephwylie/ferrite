@@ -146,6 +146,33 @@ controls. A thin bar along the bottom shows usage.
   panel opens the Review). It overrides ADR 0003 and 0007's "proportional
   prose stays": the transcript stays mono.
 
+## Amendment (2026-10-22): the panel follows the focused Thread
+
+The operator's decisions after the refresh merged:
+- **The panel follows the focused Thread in every view.** It shows in
+  Solo, in a fullscreen Pane, in a Group (the focused Pane's Thread;
+  focusing another Pane switches it, and each Thread keeps its last tab)
+  and with the Beside slot open. It does not show on a draft, the empty
+  board or the Projects coordinator: there is no Thread. This reverses
+  "never shown on a Group or beside an open Beside slot" above.
+- **No size rules.** The width rules (show from about 1280px, hide under
+  about 1180px, the session-only override) are gone. The panel shows
+  exactly when the operator has it on (`panel_shown`, persisted, default
+  on) and there is a Thread. The operator decides when they have lost
+  too much room; the board narrows, the nav folds to its rail, and a
+  Group may fall to wall tiles. `WINDOW_MIN` is unchanged.
+- **One toggle.** A single `panel-right` icon button, the sidebar
+  toggle's twin, sits at the head row's right end whether the panel is
+  shown (the panel head's) or hidden (the view head's), in Solo and
+  Group alike. `Toggle Panel` joins the View menu beside `Toggle
+  Sidebar`, and `Toggle panel` the palette.
+- **The branch chip is removed.** The Solo head is the title and the
+  Project; the branch and its diffstat live in the panel's Changes tab.
+  This amends "Solo gets a head" above.
+- **Queued prompts in Groups.** The focused Group Pane's compact
+  Composer gains Solo's queued row above its input, amending "A Group
+  Pane's compact Composer shows the input only".
+
 ## Amendment (2026-10-22, the nav as a tree with guides)
 
 In the refreshed nav a Project heading, its Threads and its Groups sat at

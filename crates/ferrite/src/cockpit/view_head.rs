@@ -1,9 +1,11 @@
 //! The view head (SPEC §5.2): the head row's slot over the board.
 //!
-//! Solo names the focused Thread — its title (a double-click renames it),
-//! its Project, and at the right the branch chip, which opens the right
-//! panel's Changes tab. A Group names itself — its title, `<project> · N
+//! Solo names the focused Thread — its title (a double-click renames it)
+//! and its Project. A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
+//! While the panel is hidden and there is a focused Thread for it, the
+//! head ends in the panel toggle (`panel_toggle`), where the panel head's
+//! sits while it shows; the branch and its diffstat are the panel's.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (`titlebar::strip`), over the frame the board column already paints
@@ -13,7 +15,6 @@
 //! their region out of the strip's `Drag` hit test the same way).
 
 use super::*;
-use crate::components::Tip as _;
 use crate::{components, icons, theme};
 
 impl CockpitView {
@@ -23,16 +24,26 @@ impl CockpitView {
         if self.empty_board_shown() || self.projects.coordinator_shown() {
             return None;
         }
-        // Solo's chip stands 4px in; a Group's button meets its cards' edge.
-        let (parts, pad_right) = match self.cockpit.roster().view() {
-            View::Solo => (self.solo_head(cx)?, theme::VIEW_HEAD_PAD_R),
-            View::Group(group) => (self.group_view_head(group, cx)?, 0.),
+        let mut parts = match self.cockpit.roster().view() {
+            View::Solo => self.solo_head(cx)?,
+            View::Group(group) => self.group_view_head(group, cx)?,
         };
-        // The head stops where the board does: at the panel's left edge
-        // while it shows (its head holds the row's right end, caption
-        // buttons and all), else before Windows' caption buttons.
-        let right = if crate::titlebar::CUSTOM && self.panel_thread().is_none() {
-            3. * theme::CAPTION_W
+        // Hidden, the panel's toggle ends the head while there is a Thread
+        // to show it for.
+        let shown = self.panel_thread().is_some();
+        let toggle = !shown && self.panel_candidate().is_some();
+        if toggle {
+            parts.push(control(self.panel_toggle(cx)));
+        }
+        // The head stops where the board does while the panel shows (its
+        // head holds the row's right end, toggle, caption buttons and all);
+        // else it runs to the toggle's place, or with no toggle to the
+        // board's edge. On Windows the caption buttons keep the row's
+        // right end either way.
+        let right = if shown {
+            self.board_right()
+        } else if toggle || crate::titlebar::CUSTOM {
+            super::panel::panel_toggle_inset()
         } else {
             self.board_right()
         };
@@ -48,7 +59,6 @@ impl CockpitView {
                 .items_center()
                 .gap(px(theme::VIEW_HEAD_GAP))
                 .pl(px(theme::VIEW_HEAD_PAD_L))
-                .pr(px(pad_right))
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
@@ -58,27 +68,17 @@ impl CockpitView {
         )
     }
 
-    /// Solo: the focused Thread's title, its Project, a spacer, and the
-    /// branch chip while it has a Workspace and a branch to name.
+    /// Solo: the focused Thread's title, its Project, and a spacer.
     fn solo_head(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
         let thread = self.focused_thread()?;
-        let facts = self.facts.get(thread);
         let mut parts = vec![self.view_title(thread, cx)];
         parts.extend(
-            facts
+            self.facts
+                .get(thread)
                 .and_then(|facts| facts.project_label.clone())
                 .map(head_meta),
         );
         parts.push(div().flex_1().into_any_element());
-        let bound = self
-            .cockpit
-            .thread(thread)
-            .is_some_and(|open| open.workspace().is_some());
-        let branch = facts.and_then(|facts| facts.branch.clone());
-        if let (true, Some(branch)) = (bound, branch) {
-            let totals = facts.and_then(|facts| facts.diff_totals());
-            parts.push(self.branch_chip(thread, branch, totals, cx));
-        }
         Some(parts)
     }
 
@@ -117,71 +117,6 @@ impl CockpitView {
                 }),
             )
             .into_any_element()
-    }
-
-    /// The branch chip: `branch` icon, the branch, and the Thread's summed
-    /// diffstat in Geist Mono, on `RAISED`. A click opens the panel's
-    /// Changes tab, or hides the panel already on it (`panel_changes_door`).
-    fn branch_chip(
-        &self,
-        thread: ThreadId,
-        branch: SharedString,
-        totals: Option<(usize, usize)>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let stat = |text: String, ink: u32| {
-            div()
-                .flex_shrink_0()
-                .font_family(theme::FONT_CODE)
-                .text_size(px(theme::FS_META))
-                .text_color(rgb(ink))
-                .child(text)
-        };
-        let mut chip = components::faded_button(
-            ("branch-chip", thread.get() as usize),
-            theme::paint::RAISED.into(),
-            theme::paint::SELECTED.into(),
-            theme::paint::PRESS.into(),
-            rgb(theme::TEXT).into(),
-            cx,
-        )
-        .debug_selector(|| "branch-chip".into())
-        .flex_shrink_0()
-        .h(px(theme::CONTROL_H))
-        .px(px(theme::CONTROL_CHIP_PAD_X))
-        .rounded(px(theme::R_CONTROL))
-        .accessibility_label("Changes")
-        .tip("Changes");
-        let mut row = div()
-            .flex()
-            .items_center()
-            .gap(px(theme::CONTROL_CHIP_GAP))
-            .child(icons::icon(
-                icons::BRANCH,
-                theme::CONTROL_CHIP_ICON,
-                theme::TEXT_DIM,
-            ))
-            .child(
-                div()
-                    .debug_selector(|| "branch-chip-name".into())
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(theme::FS_LABEL))
-                    .text_color(rgb(theme::TEXT))
-                    .child(branch),
-            );
-        if let Some((added, removed)) = totals {
-            row = row
-                .child(stat(format!("+{added}"), theme::RUNNING))
-                .child(stat(format!("\u{2212}{removed}"), theme::BLOCKED));
-        }
-        chip = chip.child(components::tabular(row));
-        control(
-            chip.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.panel_changes_door(thread, cx);
-            })),
-        )
     }
 
     /// A Group: its title, `<project> · N threads`, a spacer, and `New

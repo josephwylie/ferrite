@@ -3,6 +3,8 @@
 //! rebuilding from history.
 
 use std::path::Path;
+
+use crate::engine::HELD_AT_REST;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -18,6 +20,7 @@ use crate::{Decision, DecisionAnswer, SessionEvent};
 
 #[cfg(unix)]
 mod herdr;
+mod park;
 
 pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fs-{}-{name}", std::process::id()));
@@ -1743,9 +1746,6 @@ fn running(agent: &Sender<SessionEvent>) -> bool {
         .is_ok()
 }
 
-/// Ten minutes on the clock, as the ADR says an idle agent may last.
-const TEN_MINUTES: Duration = Duration::from_secs(10 * 60);
-
 /// A Thread whose agent named its conversation `claude-1` and has nothing
 /// to do, on a clock frozen for the test: the Engine, the Thread, the
 /// agent and the clock.
@@ -1776,11 +1776,11 @@ fn at_rest(
     (engine, thread, agent, clock)
 }
 
-/// An agent with nothing to do for ten minutes stops, and nothing shows
+/// An agent with nothing to do for its span at rest stops, and nothing shows
 /// it: the transcript, status and generation stand, and the next prompt
 /// starts one on the same conversation.
 #[test]
-fn an_agent_settled_ten_minutes_stops_without_a_trace() {
+fn an_agent_settled_its_span_stops_without_a_trace() {
     let (spawner, started, providers) = recorded();
     let (mut engine, thread, agent, clock) = at_rest("settled-stops", spawner, &providers);
     let seen = |engine: &Engine| {
@@ -1795,9 +1795,9 @@ fn an_agent_settled_ten_minutes_stops_without_a_trace() {
     };
     let before = seen(&engine);
 
-    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    clock.advance(HELD_AT_REST - Duration::from_secs(1));
     engine.pump();
-    assert!(running(&agent), "not yet ten minutes");
+    assert!(running(&agent), "not yet its span");
     engine.pump();
     clock.advance(Duration::from_secs(1));
     engine.pump();
@@ -1817,7 +1817,7 @@ fn an_agent_settled_ten_minutes_stops_without_a_trace() {
 }
 
 /// A provider's CLI replaced on disk ends its settled agents at once, as
-/// unseen as ten minutes would, so the next start runs the new release.
+/// unseen as its span at rest would, so the next start runs the new release.
 #[test]
 fn an_updated_cli_ends_a_settled_agent_without_a_trace() {
     let (spawner, providers) = spawn();
@@ -1833,13 +1833,13 @@ fn an_updated_cli_ends_a_settled_agent_without_a_trace() {
 /// Work in flight holds the agent however long it runs, and its ten
 /// minutes count from when the work settled, not from before it.
 #[test]
-fn work_in_flight_keeps_the_agent_and_restarts_its_ten_minutes() {
+fn work_in_flight_keeps_the_agent_and_restarts_its_span() {
     let (spawner, providers) = spawn();
     let (mut engine, _thread, agent, clock) = at_rest("in-flight", spawner, &providers);
     let background = |tasks: Vec<crate::progress::BackgroundTask>| SessionEvent::Progress {
         event: crate::progress::ProgressEvent::BackgroundSnapshot { tasks },
     };
-    clock.advance(TEN_MINUTES / 2);
+    clock.advance(HELD_AT_REST / 2);
     engine.pump();
     agent
         .send(background(vec![crate::progress::BackgroundTask {
@@ -1850,27 +1850,27 @@ fn work_in_flight_keeps_the_agent_and_restarts_its_ten_minutes() {
         }]))
         .unwrap();
     engine.pump();
-    clock.advance(TEN_MINUTES);
+    clock.advance(HELD_AT_REST);
     engine.pump();
     assert!(running(&agent), "a background task holds it");
 
     agent.send(background(Vec::new())).unwrap();
     engine.pump();
-    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    clock.advance(HELD_AT_REST - Duration::from_secs(1));
     engine.pump();
-    assert!(running(&agent), "ten minutes count from the settle");
+    assert!(running(&agent), "its span counts from the settle");
     clock.advance(Duration::from_secs(1));
     engine.pump();
     assert!(!running(&agent), "the agent stopped");
 }
 
 /// Asking an agent something it answers in its own time (a control, a
-/// file search) is using it: its ten minutes count from the ask.
+/// file search) is using it: its its span at rest count from the ask.
 #[test]
 fn an_ask_restarts_the_agents_ten_minutes() {
     let (spawner, providers) = spawn();
     let (mut engine, thread, agent, clock) = at_rest("asked", spawner, &providers);
-    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    clock.advance(HELD_AT_REST - Duration::from_secs(1));
     engine.pump();
     engine
         .control(thread, crate::SessionControl::RefreshMcp)
@@ -1879,10 +1879,10 @@ fn an_ask_restarts_the_agents_ten_minutes() {
     engine.pump();
     assert!(running(&agent), "a control was just asked of it");
 
-    clock.advance(TEN_MINUTES - Duration::from_secs(2));
+    clock.advance(HELD_AT_REST - Duration::from_secs(2));
     engine.pump();
     let _answer = engine.search_files(thread, "main.rs").unwrap();
-    clock.advance(TEN_MINUTES - Duration::from_secs(1));
+    clock.advance(HELD_AT_REST - Duration::from_secs(1));
     engine.pump();
     assert!(running(&agent), "a file search was just asked of it");
     clock.advance(Duration::from_secs(1));
@@ -1900,7 +1900,7 @@ fn scheduled_work_keeps_the_agent() {
         .send(SessionEvent::ScheduledWork { pending: true })
         .unwrap();
     engine.pump();
-    clock.advance(TEN_MINUTES * 3);
+    clock.advance(HELD_AT_REST * 3);
     engine.pump();
     assert!(running(&agent), "scheduled work holds it");
 
@@ -1908,7 +1908,7 @@ fn scheduled_work_keeps_the_agent() {
         .send(SessionEvent::ScheduledWork { pending: false })
         .unwrap();
     engine.pump();
-    clock.advance(TEN_MINUTES);
+    clock.advance(HELD_AT_REST);
     engine.pump();
     assert!(!running(&agent), "the agent stopped");
 }
@@ -4171,11 +4171,10 @@ fn a_stream_digests_four_times_a_second_and_a_decision_at_once() {
     );
 }
 
-/// A window mirrors only the Threads it draws at Transcript level (ADR
-/// 0032). One off screen reads from its digest — what it does, the Decision
-/// it waits on — and holds none of its transcript; drawn, its history
-/// arrives; five minutes off screen and settled, the window lets it go
-/// again.
+/// A window mirrors the settled Threads it draws at Transcript level (ADR
+/// 0032). One off screen reads from its digest and holds none of its
+/// transcript; drawn, its history arrives; five minutes off screen, the
+/// window lets it go again.
 #[test]
 fn a_window_mirrors_only_the_threads_it_draws() {
     let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
@@ -4185,24 +4184,21 @@ fn a_window_mirrors_only_the_threads_it_draws() {
     let mut window = cockpit(&harness);
     window.send(thread, "go".into());
     provider.send(text("on it\n\n")).unwrap();
-    provider.send(decision()).unwrap();
+    turn_ends(&provider);
 
+    pump_until(&mut window, |window| digest_says(window, thread, "on it"));
     pump_until(&mut window, |window| {
         window
             .thread(thread)
-            .is_some_and(|open| open.pending().is_some())
+            .is_some_and(|open| !open.digest().at_work)
     });
-    pump_until(&mut window, |window| digest_says(window, thread, "on it"));
+    // Held while it worked, and as long after as the Server holds it.
+    clock.advance(HELD_AT_REST);
+    window.pump();
     assert!(!shows(&window, thread, "on it"), "no transcript off screen");
 
     window.draws_transcripts([thread]);
     pump_until(&mut window, |window| shows(window, thread, "on it"));
-    turn_ends(&provider);
-    pump_until(&mut window, |window| {
-        window
-            .thread(thread)
-            .is_some_and(|open| !open.digest().working)
-    });
     clock.advance(Duration::from_secs(31 * 60));
     window.pump();
     assert!(
@@ -4248,7 +4244,7 @@ fn a_thread_at_work_stays_mirrored_off_screen() {
     pump_until(&mut window, |window| {
         window
             .thread(thread)
-            .is_some_and(|open| !open.digest().working)
+            .is_some_and(|open| !open.digest().at_work)
     });
     clock.advance(Duration::from_secs(5 * 60 - 1));
     window.pump();
@@ -4261,13 +4257,43 @@ fn a_thread_at_work_stays_mirrored_off_screen() {
     assert!(!shows(&window, thread, "on it"), "let go");
 }
 
-/// A Thread another window opens is held here as one just off screen,
-/// but never drawn here its work keeps it no longer: the window mirrors
-/// only what it draws.
+/// A Thread watched mid-turn reads as it is: working, as its digest said
+/// before its history arrived, never idle until its next event.
 #[test]
-fn a_thread_opened_elsewhere_is_not_kept_for_its_work() {
+fn a_thread_watched_mid_turn_reads_working() {
+    let harness = start("watched-mid-turn");
+    let mut other = attach(&harness.address);
+    let (thread, provider) = open(&mut other, &harness);
+    provider
+        .send(SessionEvent::RunState {
+            state: crate::RunState::Running,
+        })
+        .unwrap();
+    provider.send(text("thinking\n\n")).unwrap();
+    other.until(|other| {
+        other.digest(thread).is_some_and(|digest| {
+            digest
+                .wall
+                .lines
+                .iter()
+                .any(|line| line.text.contains("thinking"))
+        })
+    });
+
+    // Attached mid-turn: what it reads of the turn comes in the history.
+    let mut window = cockpit(&harness);
+    pump_until(&mut window, |window| shows(window, thread, "thinking"));
+    let status = window.thread(thread).map(|open| open.turn().status);
+    assert_eq!(status, Some(crate::transcript::Status::Streaming));
+}
+
+/// A Thread at work is streamed whole whether or not this window has
+/// drawn it: the operator opens it to find it as it is, never loading.
+/// Five minutes after it settles the window lets it go.
+#[test]
+fn a_thread_at_work_is_mirrored_though_never_drawn() {
     let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
-    let harness = start("opened-unseen");
+    let harness = start("working-unseen");
     let mut window = cockpit(&harness);
     window.draws_transcripts([]);
     let mut other = attach(&harness.address);
@@ -4280,16 +4306,70 @@ fn a_thread_opened_elsewhere_is_not_kept_for_its_work() {
         },
     );
     provider.send(text("on it\n\n")).unwrap();
-    pump_until(&mut window, |window| shows(window, thread, "on it"));
     pump_until(&mut window, |window| {
         window
             .thread(thread)
             .is_some_and(|open| open.digest().working)
     });
 
-    clock.advance(Duration::from_secs(5 * 60));
+    clock.advance(Duration::from_secs(20 * 60));
     window.pump();
-    assert!(!shows(&window, thread, "on it"), "let go though it works");
+    pump_until(&mut window, |window| shows(window, thread, "on it"));
+
+    turn_ends(&provider);
+    pump_until(&mut window, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| !open.digest().at_work)
+    });
+    clock.advance(Duration::from_secs(5 * 60 - 1));
+    window.pump();
+    assert!(
+        shows(&window, thread, "on it"),
+        "kept a while after it settles"
+    );
+    clock.advance(Duration::from_secs(1));
+    window.pump();
+    assert!(!shows(&window, thread, "on it"), "let go");
+}
+
+/// A small Thread's history never waits on a big one's: watched together,
+/// the small one is drawn first though the big one was asked for first.
+#[test]
+fn a_small_history_never_waits_on_a_big_one() {
+    let harness = start("histories-together");
+    let mut other = attach(&harness.address);
+    let (big, big_provider) = open(&mut other, &harness);
+    let (small, small_provider) = open(&mut other, &harness);
+    let long = "x".repeat(400 * 1024);
+    for _ in 0..16 {
+        big_provider.send(text(&format!("{long}\n\n"))).unwrap();
+        turn_ends(&big_provider);
+    }
+    small_provider.send(text("small\n\n")).unwrap();
+    turn_ends(&small_provider);
+    other.until_within(Duration::from_secs(30), |other| {
+        [big, small].iter().all(|thread| {
+            other
+                .digest(*thread)
+                .is_some_and(|digest| !digest.at_work && !digest.wall.lines.is_empty())
+        })
+    });
+
+    let mut window = attach(&harness.address);
+    window.watch(big, None);
+    window.watch(small, None);
+    let mut ended = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while ended.len() < 2 {
+        assert!(Instant::now() < deadline, "timed out: {ended:?}");
+        if let Ok(ServerMessage::HistoryEnd { thread, .. }) =
+            window.client.messages.recv_timeout(Duration::from_secs(1))
+        {
+            ended.push(thread);
+        }
+    }
+    assert_eq!(ended, vec![small, big]);
 }
 
 /// A window drawing a Thread it let go shows its transcript whole or not
@@ -4300,8 +4380,13 @@ fn a_thread_drawn_again_arrives_whole() {
     let harness = start("arrives-whole");
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
-    let mut window = cockpit(&harness);
-    window.send(thread, "go".into());
+    other.command(
+        2,
+        Op::Send {
+            thread,
+            text: "go".into(),
+        },
+    );
     let long = "x".repeat(400 * 1024);
     // Turns of their own, so the log holds them as inputs of their own.
     provider.send(text(&format!("oldest {long}\n\n"))).unwrap();
@@ -4311,7 +4396,21 @@ fn a_thread_drawn_again_arrives_whole() {
     }
     turn_ends(&provider);
     provider.send(text("latest\n\n")).unwrap();
+    turn_ends(&provider);
+    other.until_within(Duration::from_secs(30), |other| {
+        other.digest(thread).is_some_and(|digest| {
+            !digest.at_work
+                && digest
+                    .wall
+                    .lines
+                    .iter()
+                    .any(|line| line.text.contains("latest"))
+        })
+    });
+    // A window that comes to it settled holds none of it until it draws it.
+    let mut window = cockpit(&harness);
     pump_until(&mut window, |window| digest_says(window, thread, "latest"));
+    assert!(!shows(&window, thread, "latest"));
 
     // Drawn every frame as fast as the window can, as the app draws while
     // the pieces cross.
@@ -4336,6 +4435,7 @@ fn a_window_attaching_streams_no_thread_it_does_not_draw() {
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
     provider.send(text("before the window\n\n")).unwrap();
+    turn_ends(&provider);
     other.until(|other| {
         other
             .digest(thread)
@@ -4436,7 +4536,7 @@ fn a_thread_nobody_uses_holds_only_its_digest_until_used() {
     let generation = engine.thread(thread).unwrap().generation();
     engine.set_watched(BTreeSet::new());
     let let_go = |engine: &mut Engine| {
-        clock.advance(TEN_MINUTES);
+        clock.advance(HELD_AT_REST);
         engine.pump();
         engine.take_messages();
     };
@@ -4553,7 +4653,7 @@ fn let_go(
     });
     let before = said_in(&engine, thread);
     engine.set_watched(BTreeSet::new());
-    clock.advance(TEN_MINUTES);
+    clock.advance(HELD_AT_REST);
     engine.pump();
     engine.take_messages();
     assert!(said_in(&engine, thread).is_empty(), "let go");
