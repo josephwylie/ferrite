@@ -332,6 +332,13 @@ a 10px gap, a label in `TEXT_MUTED`, and a trailing item:
 - With `smart_filtering` on, its `working N` and `done N` rows join this
   group in the same style.
 
+The Parked, Working and Done lists are grouped as the tree is (§5.1.4):
+by Project in creation order (`other` last), then by home Group within
+the Project, with the same indents and guides. Their Project headings
+are plain: the folder and the label, with no fold and no summary. A
+Group row there opens the Group. The Needs-you list stays flat, in its
+oldest-first queue order, because ⌘D walks that order.
+
 Row states:
 - rest: `TEXT_MUTED`;
 - hover: `RAISED` fill, `TEXT`;
@@ -345,16 +352,34 @@ The existing `groups` section (Groups spanning Projects) keeps its own
 heading in this style, above `Projects`. The machine heading (ADR 0026)
 and the group-error notice keep their places, restyled in this type.
 
-**5.1.4 Project heading (30).** A `folder` icon in `TEXT_DIM`, the
-lowercased Project label in 13/500 `TEXT`, and a right-aligned summary in
-12 `TEXT_DIM`: the section branch's ahead/behind (`↑715`, `↑1 ↓5`).
-Clicking it folds the Project. A folded Project with nothing working or
-blocked shows as one row (`workmate 1`). The branch name moves from this
-heading to each row's line 2. The Projects (ADR 0031) `space_numbers`
-line stays under its heading, in 12 `TEXT_DIM`.
+**5.1.4 Project heading (30) and its tree.** A `folder` icon in
+`TEXT_DIM`, the lowercased Project label in 13/500 `TEXT`, and a
+right-aligned summary in 12 `TEXT_DIM`: the section branch's
+ahead/behind (`↑715`, `↑1 ↓5`). Clicking it folds the Project. A folded
+Project with nothing working or blocked shows as one row (`workmate 1`).
+The branch name moves from this heading to each row's line 2. The
+Projects (ADR 0031) `space_numbers` line stays under its heading, in 12
+`TEXT_DIM`.
 
-**5.1.5 Thread row (44, two lines).** Padding 0 10 0 35, radius 7. It
-replaces today's one-line row with `├ └` leads.
+Everything inside a Project reads as one unit, a tree with guides (the
+operator's choice, `nav-full.html` variant 1):
+- its Threads, its Group rows and their members sit one level,
+  `NAV_TREE_INDENT` (14px), under the heading;
+- a 1px guide in white at 10% (`NAV_GUIDE`) runs from under the
+  heading's folder icon (`NAV_PROJECT_GUIDE_X`, 17) down to
+  `NAV_GUIDE_TAIL` (8px) short of the Project's last row's foot;
+- rows keep their full-width hover and selected fills, which cover the
+  guide: only their content moves in.
+
+The Groups section (Groups spanning Projects) has no folder to hang
+from, so its Groups stay at the root, with no Project guide.
+
+**5.1.5 Thread row (44, two lines; 30 with no line 2).** Padding 0 10 0
+35 at the root, plus `NAV_TREE_INDENT` per level of the tree (§5.1.4),
+radius 7. It replaces today's one-line row with `├ └` leads. A row is
+only as tall as its content: with nothing for line 2 (no branch, no
+state words, no PR label, no task lines) it is one 30px line, its mark
+centred on it.
 - **Mark** at x 10–24, centred on line 1. The face (§6) comes from
   `RowStatus`:
 
@@ -395,17 +420,22 @@ replaces today's one-line row with `├ └` leads.
 
 **5.1.6 Group row (30) and members.**
 - **The row.** A chevron at x 11 (`chevron-right` folded,
-  `chevron-down` open), then the Group title. At the right, the roll-up:
+  `chevron-down` open), then the Group title, both moved in a level
+  inside a Project. At the right, the roll-up:
   the worst state's word in its ink (`1 failed`, `2 need you`), then
   `· N` members in `TEXT_DIM`.
+- **Its members** nest one level further, with their own guide from under
+  the Group's chevron (`NAV_GROUP_GUIDE_X`, 17 plus the Group's indent)
+  to 8px short of the last member's foot.
 - **When the Group is the shown view.** The row takes the selected style
   and lists its members as 30px one-line rows:
-  - padding-left 54, with the mark (5.1.5) at x 35;
+  - padding-left 54, with the mark (5.1.5) at x 35, both plus the
+    Group's own indent (68 and 49 inside a Project);
   - the title in `TEXT` (the focused Pane's in `TEXT_STRONG`);
   - the state word right-aligned (`1m`, `needs you`, `failed`, `done`) in
     its ink, or `TEXT_DIM`.
-- **When the Group is not shown.** Members are two-line Thread rows,
-  indented 16, as today's tree nests them.
+- **When the Group is not shown.** Members are Thread rows (§5.1.5) one
+  level, 14px, under the Group row.
 
 **5.1.7 Rail (folded).** ⌘B or the toggle folds the nav to a 52px rail
 (ADR 0015's rail, re-measured):
@@ -420,6 +450,13 @@ rail's top. The canvas doesn't draw the rail; build it from these rules.
 wordmark moves here from the bar, without its accent), and the `gear`
 icon button. On macOS the gear stays in the app menu too. Elsewhere it
 moves here from the bar.
+
+**5.1.9 Scrollbar.** The tree's scrollbar is the overlay thumb, laid in
+the column's 8px right padding (`NAV_SCROLLBAR_GUTTER`) rather than over
+the rows, so it never covers a count or cuts a selected row's fill. It
+shows while the tree scrolls and while the pointer is over the nav, then
+lingers and fades like every thumb (`MOTION_SCROLLBAR_LINGER_MS`; reduced
+motion drops the fade).
 
 Ordering, the attention sort, hold-under-pointer, drag-to-Group, the
 `loose_ground` drop zone and the auto-rail are unchanged.

@@ -37,7 +37,6 @@ const THUMB_INSET: Pixels = px(theme::SCROLLBAR_INSET);
 
 const THUMB_ACTIVE_WIDTH: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER);
 const THUMB_ACTIVE_RADIUS: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER / 2.);
-const THUMB_ACTIVE_INSET: Pixels = px(theme::SCROLLBAR_INSET);
 
 /// C26: a thumb holds `MOTION_SCROLLBAR_LINGER_MS` (1.4s) after the last
 /// scroll frame, then fades over the one hover blend (150ms): gone by 1.55s.
@@ -266,6 +265,12 @@ pub struct Scrollbar {
     /// This is used to limit the update rate of the scrollbar when it is
     /// being dragged for some complex interactions for reducing CPU usage.
     max_fps: usize,
+    /// The hit strip's width and the thumb's inset from the edge
+    /// (`gutter`).
+    gutter: Pixels,
+    inset: Pixels,
+    /// The pointer is over the scroller (`revealed`).
+    revealed: bool,
 }
 
 impl Scrollbar {
@@ -282,6 +287,9 @@ impl Scrollbar {
             scroll_handle: Rc::new(scroll_handle.clone()),
             max_fps: 120,
             scroll_size: None,
+            gutter: WIDTH,
+            inset: THUMB_INSET,
+            revealed: false,
         }
     }
 
@@ -308,6 +316,22 @@ impl Scrollbar {
     /// Set the scrollbar show mode [`ScrollbarShow`], if not set use the `cx.theme().scrollbar_mode`.
     pub fn scrollbar_show(mut self, scrollbar_show: ScrollbarShow) -> Self {
         self.scrollbar_show = Some(scrollbar_show);
+        self
+    }
+
+    /// A narrower hit strip than `SCROLLBAR_GUTTER`, the thumb `inset`
+    /// from the edge: for a scroller that lays its bar in a padding of its
+    /// own (the nav's, `NAV_SCROLLBAR_GUTTER`).
+    pub fn gutter(mut self, gutter: Pixels, inset: Pixels) -> Self {
+        self.gutter = gutter;
+        self.inset = inset;
+        self
+    }
+
+    /// The pointer is over the scroller: the thin thumb shows, and once
+    /// the pointer leaves it lingers and fades as after a scroll (C26).
+    pub fn revealed(mut self, revealed: bool) -> Self {
+        self.revealed = revealed;
         self
     }
 
@@ -341,53 +365,48 @@ impl Scrollbar {
     }
 
     // No track and no border in any state: only the thumb is ever ink.
-    fn thumb(
-        ink: u32,
-        (width, inset, radius): (Pixels, Pixels, Pixels),
-    ) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+    fn thumb(ink: u32, (width, radius): (Pixels, Pixels)) -> (Hsla, Hsla, Hsla, Pixels, Pixels) {
         (
             rgb(ink).into(),
             transparent_black(),
             transparent_black(),
             width,
-            inset,
             radius,
         )
     }
 
-    fn style_for_active(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+    fn style_for_active(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels) {
         Self::thumb(
             theme::SCROLLBAR_HOVER,
-            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
+            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_RADIUS),
         )
     }
 
-    fn style_for_hovered_thumb(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+    fn style_for_hovered_thumb(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels) {
         Self::thumb(
             theme::SCROLLBAR_HOVER,
-            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
+            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_RADIUS),
         )
     }
 
-    fn style_for_hovered_bar(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+    fn style_for_hovered_bar(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels) {
         Self::thumb(
             theme::SCROLLBAR_HOVER,
-            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
+            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_RADIUS),
         )
     }
 
     // Scrolling shows the thin thumb in every mode; the pointer widens it.
-    fn style_for_normal(&self, _: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
-        Self::thumb(theme::SCROLLBAR, (THUMB_WIDTH, THUMB_INSET, THUMB_RADIUS))
+    fn style_for_normal(&self, _: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels) {
+        Self::thumb(theme::SCROLLBAR, (THUMB_WIDTH, THUMB_RADIUS))
     }
 
-    fn style_for_idle(&self, _: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+    fn style_for_idle(&self, _: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels) {
         (
             transparent_black(),
             transparent_black(),
             transparent_black(),
             THUMB_WIDTH,
-            THUMB_INSET,
             THUMB_RADIUS,
         )
     }
@@ -512,7 +531,7 @@ impl Element for Scrollbar {
 
             // The horizontal scrollbar is set avoid overlapping with the vertical scrollbar, if the vertical scrollbar is visible.
             let margin_end = if has_both && !is_vertical {
-                WIDTH
+                self.gutter
             } else {
                 px(0.)
             };
@@ -531,23 +550,26 @@ impl Element for Scrollbar {
 
             let bounds = Bounds {
                 origin: if is_vertical {
-                    point(hitbox.origin.x + hitbox.size.width - WIDTH, hitbox.origin.y)
+                    point(
+                        hitbox.origin.x + hitbox.size.width - self.gutter,
+                        hitbox.origin.y,
+                    )
                 } else {
                     point(
                         hitbox.origin.x,
-                        hitbox.origin.y + hitbox.size.height - WIDTH,
+                        hitbox.origin.y + hitbox.size.height - self.gutter,
                     )
                 },
                 size: gpui::Size {
                     width: if is_vertical {
-                        WIDTH
+                        self.gutter
                     } else {
                         hitbox.size.width
                     },
                     height: if is_vertical {
                         hitbox.size.height
                     } else {
-                        WIDTH
+                        self.gutter
                     },
                 },
             };
@@ -559,7 +581,7 @@ impl Element for Scrollbar {
             let is_hovered_on_thumb = state.get().hovered_on_thumb == Some(axis);
             let is_offset_changed = state.get().last_scroll_offset != self.scroll_handle.offset();
 
-            let (thumb_bg, bar_bg, bar_border, thumb_width, inset, radius) =
+            let (thumb_bg, bar_bg, bar_border, thumb_width, radius) =
                 if state.get().dragged_axis == Some(axis) {
                     Self::style_for_active(cx)
                 } else if is_hover_to_show && (is_hovered_on_bar || is_hovered_on_thumb) {
@@ -578,8 +600,13 @@ impl Element for Scrollbar {
                     }
                 } else {
                     let mut idle_state = self.style_for_idle(cx);
-                    // Hold 1.4s, then fade out over 150ms (C26).
-                    if let Some(last_time) = state.get().last_scroll_time {
+                    if self.revealed && !is_hovered_on_bar {
+                        // Shown while the pointer is over the scroller; its
+                        // leaving starts the linger.
+                        state.set(state.get().with_last_scroll_time(Some(Instant::now())));
+                        idle_state = self.style_for_normal(cx);
+                    } else if let Some(last_time) = state.get().last_scroll_time {
+                        // Hold 1.4s, then fade out over 150ms (C26).
                         let elapsed = Instant::now().duration_since(last_time).as_secs_f32();
                         if is_hovered_on_bar {
                             state.set(state.get().with_last_scroll_time(Some(Instant::now())));
@@ -615,10 +642,18 @@ impl Element for Scrollbar {
                     idle_state
                 };
 
+            // Every style keeps the scroller's one inset.
+            let inset = self.inset;
             // The clickable area of the thumb
             let thumb_length = thumb_end - thumb_start - inset * 2;
-            let thumb_bounds =
-                thumb_hit_bounds(bounds, is_vertical, inset, thumb_start, thumb_length);
+            let thumb_bounds = thumb_hit_bounds(
+                bounds,
+                is_vertical,
+                self.gutter,
+                inset,
+                thumb_start,
+                thumb_length,
+            );
 
             // The actual render area of the thumb
             let thumb_fill_bounds = if is_vertical {
@@ -922,6 +957,7 @@ impl Element for Scrollbar {
 fn thumb_hit_bounds(
     bounds: Bounds<Pixels>,
     is_vertical: bool,
+    gutter: Pixels,
     inset: Pixels,
     thumb_start: Pixels,
     thumb_length: Pixels,
@@ -931,13 +967,13 @@ fn thumb_hit_bounds(
     // leaves the opposite padding acting as a track click instead of a drag.
     if is_vertical {
         Bounds::new(
-            bounds.top_right() + point(-WIDTH, inset + thumb_start),
-            size(WIDTH, thumb_length),
+            bounds.top_right() + point(-gutter, inset + thumb_start),
+            size(gutter, thumb_length),
         )
     } else {
         Bounds::new(
-            bounds.bottom_left() + point(inset + thumb_start, -WIDTH),
-            size(thumb_length, WIDTH),
+            bounds.bottom_left() + point(inset + thumb_start, -gutter),
+            size(thumb_length, gutter),
         )
     }
 }
@@ -1005,10 +1041,10 @@ mod tests {
     #[test]
     fn thumb_hover_bounds_stay_inside_click_and_cursor_gutter() {
         let bounds = Bounds::new(point(px(200.) - WIDTH, px(0.)), size(WIDTH, px(300.)));
-        let inset = THUMB_ACTIVE_INSET;
+        let inset = THUMB_INSET;
         let thumb_start = px(0.);
         let thumb_length = px(92.);
-        let thumb_bounds = thumb_hit_bounds(bounds, true, inset, thumb_start, thumb_length);
+        let thumb_bounds = thumb_hit_bounds(bounds, true, WIDTH, inset, thumb_start, thumb_length);
         let edge = point(thumb_bounds.left() + px(1.), px(20.));
         assert!(thumb_bounds.contains(&edge));
         assert!(

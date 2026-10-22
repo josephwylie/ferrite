@@ -145,3 +145,32 @@ controls. A thin bar along the bottom shows usage.
   rail's width becomes 52px), ADR 0002 (strip overflow) and ADR 0021 (the
   panel opens the Review). It overrides ADR 0003 and 0007's "proportional
   prose stays": the transcript stays mono.
+
+## Amendment (2026-10-22, the nav as a tree with guides)
+
+In the refreshed nav a Project heading, its Threads and its Groups sat at
+nearly the same level, so it was hard to see which rows belonged to which
+Project. From a mockup of four options (`nav-full.html`: today, a tree
+with guides, Project cards, sections) the operator chose the **tree with
+guides**. Everything inside a Project sits one 14px level
+(`NAV_TREE_INDENT`) under its heading, and a Group's members sit one more
+under the Group. A 1px guide in white at 10% (`NAV_GUIDE`) runs down from
+under the Project's folder icon, and another from under the Group's
+chevron. Each stops 8px short of the last row's foot. Rows keep their
+full-width fills, so only their content moves in. This is structure
+drawn with a hairline, not colour, so rule "colour is state" holds.
+
+With it:
+- a Thread row with nothing for line 2 is 30px, not 44;
+- the Parked, Working and Done views group their rows the same way, by
+  Project and then by Group, with plain headings;
+- the Needs-you view stays a flat queue, oldest first, because ⌘D walks
+  it;
+- the nav's scrollbar moves into the column's right padding, so it no
+  longer covers row counts. It shows while scrolling or while the pointer
+  is over the nav, then fades.
+
+The cards and sections variants were declined: cards add surfaces to the
+frame, and sections separate Projects without tying a Group to its
+Project. SPEC §5.1.2 and §5.1.4–5.1.6 (and the new §5.1.9) carry the
+values.
