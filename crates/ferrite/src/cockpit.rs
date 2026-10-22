@@ -2839,16 +2839,21 @@ impl CockpitView {
                     .filter(|identity| matches!(identity, PaneIdentity::Draft(_)))
                     .map(pane_leaf)
                     .collect();
+                // Only a member with a Pane takes a slot: one without
+                // would leave a hole in the board, no card to paint it.
+                let seated = |member: &ThreadId| self.pane_for(*member).is_some();
                 if readers.is_empty()
                     && !drafts.is_empty()
                     && !self.cockpit.groups().has_custom_layout(group)
                 {
                     let mut all = self.cockpit.groups().get(group)?.members.clone();
+                    all.retain(seated);
                     all.extend(drafts.iter().copied());
                     return Some(Tree::grid(&all, bounds));
                 }
                 let persisted = self.cockpit.group_layout(group, bounds)?;
                 let mut panes = persisted.leaves();
+                panes.retain(seated);
                 panes.extend(drafts);
                 let base = match self.board_layouts.get(&board) {
                     Some(session) if !readers.is_empty() => session.clone(),
@@ -24190,6 +24195,63 @@ mod tests {
         for (count, width, height) in [(6, 1400., 900.), (9, 900., 600.)] {
             exercise_board(cx, count, width, height);
         }
+    }
+
+    /// A member that lost its Pane while keeping its seat (a bare park
+    /// takes a seated Pane away, `Cockpit::park`) takes no slot: the board
+    /// closes up around the rest instead of leaving a hole with no card in
+    /// it, the glass showing through (the CLI-park bug).
+    #[gpui::test]
+    fn a_member_without_a_pane_leaves_no_hole_in_the_board(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("board-no-hole", 3);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        core.apply_group(GroupChange::Join {
+            thread: threads[2],
+            group,
+            index: None,
+        })
+        .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        tick(cx);
+
+        view.update(cx, |view, cx| {
+            view.cockpit.park(threads[1]).unwrap();
+            view.sync_panes(cx);
+            cx.notify();
+        });
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().members.len(),
+                3,
+                "the seat is kept"
+            );
+            let tree = view.board_tree(Board::Group(group)).unwrap();
+            assert_eq!(tree.leaves(), [threads[0], threads[2]]);
+        });
+        let (bounds, rects) = cx.update(|window, cx| {
+            let view = view.read(cx);
+            (view.board_bounds(window), view.pane_rects(window))
+        });
+        assert_eq!(rects.len(), 2, "one card per slot");
+        let area: f32 = rects.iter().map(|(_, rect)| rect.w * rect.h).sum();
+        let seam = crate::theme::BOARD_SEAM;
+        assert!(
+            area >= (bounds.w - seam) * bounds.h - 1.0
+                || area >= bounds.w * (bounds.h - seam) - 1.0,
+            "the cards fill the board, nothing left unpainted: {area} of {bounds:?}"
+        );
     }
 
     /// `count` Threads with a few lines each, grouped, at `width`×`height`.

@@ -18,6 +18,7 @@ use crate::{Decision, DecisionAnswer, SessionEvent};
 
 #[cfg(unix)]
 mod herdr;
+mod park;
 
 pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fs-{}-{name}", std::process::id()));
