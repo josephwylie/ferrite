@@ -197,6 +197,7 @@ fn digest() -> crate::digest::Digest {
         operator_turn: true,
         working_descendants: 1,
         background_work: true,
+        at_work: false,
         pending: vec![PendingEntry {
             thread: ThreadId::new(4),
             subject: None,

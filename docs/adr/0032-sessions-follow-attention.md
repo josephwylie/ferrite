@@ -24,8 +24,10 @@ decided independently:
 
 - **Whether its Session runs.** Boot starts none, except to deliver a queued
   prompt. A Session starts on a send, a control that needs one, or the first
-  keystroke in the Thread's Composer. It ends after 10 minutes settled: no
-  turn, queued prompt, Decision, working Subagent or background task. A
+  keystroke in the Thread's Composer. It ends after 5 minutes settled: no
+  turn, queued prompt, Decision, working Subagent or background task.
+  (Amended 2026-10-22: 5 minutes, not 10, the one span a window holds a
+  Thread's transcript too.) A
   Session that has scheduled work Ferrite cannot observe stays up until it
   exits: Claude's `ScheduleWakeup`, `CronCreate`, `Monitor` or an ambient
   task; a Codex goal that is `active`.
@@ -39,10 +41,11 @@ decided independently:
   other surface (nav rows, Wall cards, the bell, toasts, needs-you) reads a
   per-Thread digest the Server computes and sends to every window; Decisions
   already go to every window. Open no longer means mirrored. A window
-  unwatches what it stops drawing. (Amended 2026-10-21: five minutes after
-  it stops drawing it or the Thread stops working, whichever is later — a
-  turn, Subagents or background tasks — so the operator comes back to a
-  Thread as it is, never to a reload.)
+  unwatches what it stops drawing. (Amended 2026-10-21, 2026-10-22: the
+  window holds a Thread by the Server's own rule — drawn or not, while it
+  is at work as its Session is kept, and 5 minutes after it is left or
+  settles — so the operator comes back to a Thread as it is, never to a
+  reload. The digest carries the Server's verdict.)
 
 Ending and restarting a Session is invisible. Waking adds no transcript row
 and changes no status, unlike a revive or a Session that closed. A prompt sent
