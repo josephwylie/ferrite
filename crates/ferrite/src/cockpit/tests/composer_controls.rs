@@ -462,17 +462,22 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     });
     // The smallest 2×2 boards whose cells still read as transcripts (R12:
     // 300 wide, 360 tall, under the 46px head row and over the 30px bar and
-    // the frame); anything smaller is the wall, with no Composer.
+    // the frame); anything smaller is the wall, with no Composer. The panel
+    // is off, so the board is the window less the nav.
+    hide_panel(&view, cx);
     for (width, height) in [(900., 812.), (1000., 830.)] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);
-        for namespace in [&namespace, &other_namespace] {
-            assert!(
-                cx.debug_bounds(format!("composer-queue-{namespace}").leak())
-                    .is_none(),
-                "the compact box draws no queue rows"
-            );
-        }
+        assert!(
+            cx.debug_bounds(format!("composer-queue-{namespace}").leak())
+                .is_some(),
+            "the focused box draws its queued row"
+        );
+        assert!(
+            cx.debug_bounds(format!("composer-queue-{other_namespace}").leak())
+                .is_none(),
+            "an unfocused box draws none"
+        );
         let other_cell = cx.update(|window, cx| {
             view.read(cx)
                 .pane_rects(window)
@@ -673,4 +678,76 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].composer.read(cx).is_empty(), "sent");
     });
+}
+
+/// SPEC §5.9 item 5: the focused Group Pane's compact box carries Solo's
+/// queued row above its input, growing only while something is queued;
+/// ⌫ on its empty line drops the prompt. An unfocused Pane says it in its
+/// placeholder instead.
+#[gpui::test]
+fn the_focused_group_pane_shows_its_queue_and_backspace_drops_it(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("group-queue-row", 2);
+    let threads = core.threads().to_vec();
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    let focus = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext, thread| {
+        view.update(cx, |view, cx| {
+            let index = view.pane_for(thread).unwrap();
+            view.focus_pane(index);
+            cx.notify();
+        });
+        tick(cx);
+    };
+    focus(&view, cx, threads[0]);
+    let queued = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.cockpit
+                .thread(threads[0])
+                .and_then(|open| open.queued().map(str::to_string))
+        })
+    };
+    // The focused Pane's live input line.
+    let focused_line =
+        |cx: &mut gpui::VisualTestContext| cx.debug_bounds("focused-prompt-editor").expect("live");
+    let before = focused_line(cx);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "working".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("queued-0").is_none(), "nothing queued yet");
+    cx.simulate_input("also this");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(queued(&view, cx).as_deref(), Some("also this"));
+    let row = cx.debug_bounds("queued-0").expect("the queued row");
+    let after = focused_line(cx);
+    assert!(row.bottom() <= after.top(), "above the input");
+    assert_eq!(
+        after.top() - before.top(),
+        px(0.),
+        "the box grows upward, the input stays put"
+    );
+    assert!(cx.debug_bounds("queued-close").is_some(), "with its close");
+
+    // Unfocused, the Pane counts it in its placeholder; focused again, the
+    // row is back.
+    focus(&view, cx, threads[1]);
+    assert!(
+        cx.debug_bounds("queued-0").is_none(),
+        "the focused Pane's only"
+    );
+    assert!(cx.debug_bounds("composer-flat-facts").is_some());
+    focus(&view, cx, threads[0]);
+    assert!(cx.debug_bounds("queued-0").is_some());
+
+    cx.simulate_keystrokes("backspace");
+    tick(cx);
+    assert_eq!(queued(&view, cx), None, "⌫ on the empty line drops it");
+    assert!(cx.debug_bounds("queued-0").is_none(), "and the row goes");
 }

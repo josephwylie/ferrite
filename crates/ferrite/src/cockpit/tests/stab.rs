@@ -555,6 +555,7 @@ fn a_tile_head_names_no_branch_and_no_state(cx: &mut TestAppContext) {
 fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("l2-tail-inside", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(560.), px(700.)));
     fake.streams.borrow()[0]

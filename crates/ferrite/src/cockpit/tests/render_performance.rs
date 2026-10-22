@@ -323,6 +323,7 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     std::fs::write(&file, "guide\n").unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     // The column stays open, so the narrowest window below leaves the Pane
     // narrower than the line (folded, the nav gives the board its width).
     hold_nav_open(&view, cx);
@@ -596,6 +597,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     let (core, fake) = cockpit("selection-resize-reflow", 1);
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
 
@@ -1014,6 +1016,7 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
         })
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     let mut heights = Vec::new();
     for width in [1200., 700.] {

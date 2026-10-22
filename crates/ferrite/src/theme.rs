@@ -852,16 +852,14 @@ pub const WIN_CHROME_H: f32 = TITLEBAR_H;
 pub const TITLEBAR_H: f32 = 46.0;
 pub const STATUS_BAR_H: f32 = 30.0;
 /// The view head in the head row over the board (SPEC §5.2): padded
-/// `VIEW_HEAD_PAD_L` / `VIEW_HEAD_PAD_R` (6 / 4; a Group's 0 at the right)
-/// inside the board's
-/// column, its parts `VIEW_HEAD_GAP` (10) apart — the title (`FS_TITLE`
-/// 600), the Project in `TEXT_DIM`, a spacer, then the branch chip (Solo)
-/// or `New thread` (Group). The chip is `CONTROL_H` at `R_CONTROL` on
-/// `RAISED`, padded `CONTROL_CHIP_PAD_X` (10), its icon, branch and
-/// diffstat `CONTROL_CHIP_GAP` (6) apart, the icon `CONTROL_CHIP_ICON`
+/// `VIEW_HEAD_PAD_L` (6) inside the board's column, its parts
+/// `VIEW_HEAD_GAP` (10) apart — the title (`FS_TITLE` 600), the Project in
+/// `TEXT_DIM`, a spacer, then `New thread` (Group) and, while the panel is
+/// hidden, the panel toggle. A secondary button is `CONTROL_H` at
+/// `R_CONTROL` on `RAISED`, padded `CONTROL_CHIP_PAD_X` (10), its icon
+/// and label `CONTROL_CHIP_GAP` (6) apart, the icon `CONTROL_CHIP_ICON`
 /// (13). Off the scale: the mockups' head.
 pub const VIEW_HEAD_PAD_L: f32 = SPACE_1_5;
-pub const VIEW_HEAD_PAD_R: f32 = SPACE_1;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
 pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
 pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
@@ -881,9 +879,9 @@ pub const GRID_PAD: f32 = 10.0;
 /// has none: the nav's own padding is the gutter there.
 pub const BOARD_PAD: f32 = SPACE_2;
 
-// ------------------------------------------------------------ Solo panel
+// ----------------------------------------------------------------- panel
 
-/// 304px — the Solo view's right panel (SPEC §5.6), a fixed column on the
+/// 304px — the right panel (SPEC §5.6), a fixed column on the
 /// frame outside the board; padding 0 10 8 8 (`PANEL_PAD_*`, the right a
 /// step wider than the gutter, as the nav's). Off the space scale: the
 /// mockups' column.
@@ -891,12 +889,6 @@ pub const PANEL_W: f32 = 304.0;
 pub const PANEL_PAD_L: f32 = SPACE_2;
 pub const PANEL_PAD_R: f32 = 10.0;
 pub const PANEL_PAD_B: f32 = SPACE_2;
-/// The window widths the panel shows from and hides under (SPEC §4,
-/// §5.6): it shows by default from about 1280px and, once shown, stays
-/// down to about 1180px, so a window resized across the line does not
-/// flicker. The panel goes before the nav folds to its rail.
-pub const PANEL_SHOW_W: f32 = 1280.0;
-pub const PANEL_HIDE_W: f32 = 1180.0;
 /// 28px — a panel tab in the head row (r7, 12.5/500), 10px inline padding,
 /// 6px to its count; 2px between tabs.
 pub const PANEL_TAB_H: f32 = 28.0;

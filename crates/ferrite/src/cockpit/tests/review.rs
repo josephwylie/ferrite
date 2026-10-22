@@ -286,8 +286,8 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
         "the button opens the Review"
     );
     assert!(
-        cx.debug_bounds("panel").is_none(),
-        "the panel never shows with the Beside slot open"
+        cx.debug_bounds("panel").is_some(),
+        "the panel stays with the Beside slot open"
     );
     let first = cx.debug_bounds("review-line-0").expect("drawn");
     let last = cx.debug_bounds("review-line-2").expect("drawn");

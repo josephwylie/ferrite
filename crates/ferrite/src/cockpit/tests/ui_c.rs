@@ -9,6 +9,7 @@ use super::*;
 fn the_solo_thread_is_named_by_the_view_head_and_meters_its_plan(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("head-one-row", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     view.update(cx, |view, cx| {

@@ -1,14 +1,16 @@
 //! The compact Composer (SPEC §5.9 item 5): a Group Pane's input box.
 //!
-//! Solo's Composer (`box_composer`) carries the queued row and the
-//! toolbar; a Group Pane's is input only. One 38px box,
+//! Solo's Composer (`box_composer`) carries the toolbar; a Group Pane's is
+//! the input, and on the focused Pane the queued row. One 38px input row,
 //! `COMPACT_COMPOSER_INSET` in from the card's sides and foot, at `R_BLOCK`
 //! on `FIELD_COMPACT`, inside a 1px ring just outside it (`COMPACT_RING`,
-//! `COMPACT_RING_FOCUSED` on the focused Pane). The input is Geist 13; its
+//! `COMPACT_RING_FOCUSED` on the focused Pane). While something is queued
+//! the focused Pane's box grows by Solo's queued row (`queued_row`, its
+//! hairline under it) above the input. The input is Geist 13; its
 //! placeholder is the state's (`placeholder`), or on an unfocused Pane its
 //! flat facts (`1 attachment · 2 queued`) when it has any. The focused Pane
-//! alone shows the 24px send circle (`send_button`). No chips: the mode, model and effort
-//! live in Solo and in a Decision's context word.
+//! alone shows the 24px send circle (`send_button`). No chips: the mode,
+//! model and effort live in Solo and in a Decision's context word.
 
 use super::*;
 
@@ -34,6 +36,7 @@ pub(super) fn compact_composer(
         focused,
         drop_target,
         toolbar,
+        unqueue,
         ..
     } = stack;
     // Only the focused cell's Composer is live (C4): the others say what
@@ -68,6 +71,11 @@ pub(super) fn compact_composer(
             line.debug_selector(|| "composer-flat-facts".into())
         })
         .when(empty, |line| line.child(ghost_row(ghost, 0.)));
+    // The queue is the focused Pane's to see and drop; the others count it
+    // in their placeholder.
+    let queue = focused
+        .then(|| queued_row(&queued, &namespace, unqueue))
+        .flatten();
     let input = div()
         .debug_selector(move || {
             format!(
@@ -87,34 +95,15 @@ pub(super) fn compact_composer(
         theme::COMPACT_RING
     };
     let geometry = view.geometry.clone();
-    let field = div()
-        .debug_selector(|| "composer-block".into())
-        .when(drop_target, |field| {
-            field.debug_selector(|| "composer-drop-target".into())
-        })
-        .when(!live, |field| {
-            field.debug_selector(|| "composer-flat".into())
-        })
-        .relative()
+    let row = div()
         .flex()
         .items_center()
         .gap(px(theme::SPACE_2))
         .min_h(px(theme::COMPACT_COMPOSER_H))
         .min_w_0()
-        .mx(px(theme::COMPACT_COMPOSER_INSET))
         .py(px((theme::COMPACT_COMPOSER_H - theme::COMPOSER_ROW_H) / 2.0))
         .pl(px(theme::COMPACT_COMPOSER_PAD_L))
         .pr(px(theme::COMPACT_COMPOSER_PAD_R))
-        .rounded(px(theme::R_BLOCK))
-        .bg(theme::paint::FIELD_COMPACT)
-        .font_family(theme::FONT_UI)
-        .font_weight(theme::W_BODY)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT))
-        .when(decision.is_some(), |field| field.key_context("Decision"))
-        // Its ring takes no layout, so the box keeps its 38.
-        .child(components::outer_ring(theme::R_BLOCK, rgba(ring)))
         .child(input)
         // The send circle, wired in the cockpit: the focused Pane's only.
         // It rides a row-high slot (overflowing it), so focus never
@@ -127,6 +116,31 @@ pub(super) fn compact_composer(
                 .h(px(theme::COMPOSER_ROW_H))
                 .child(send)
         }));
+    let field = div()
+        .debug_selector(|| "composer-block".into())
+        .when(drop_target, |field| {
+            field.debug_selector(|| "composer-drop-target".into())
+        })
+        .when(!live, |field| {
+            field.debug_selector(|| "composer-flat".into())
+        })
+        .relative()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .mx(px(theme::COMPACT_COMPOSER_INSET))
+        .rounded(px(theme::R_BLOCK))
+        .bg(theme::paint::FIELD_COMPACT)
+        .font_family(theme::FONT_UI)
+        .font_weight(theme::W_BODY)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(TEXT))
+        .when(decision.is_some(), |field| field.key_context("Decision"))
+        // Its ring takes no layout, so the box keeps its 38.
+        .child(components::outer_ring(theme::R_BLOCK, rgba(ring)))
+        .children(queue)
+        .child(row);
     let mut field = components::on_bounds(field, move |bounds, _, _| {
         geometry.set(PaneGeometry {
             composer: Some(bounds),
