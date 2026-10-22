@@ -4743,17 +4743,19 @@ fn an_act_that_writes_reads_a_let_go_thread_back_first() {
     assert!(said.len() > before.len(), "{said:?}");
 }
 
-/// The old Server's endpoint, gone as `exec` would take it: a Unix
-/// socket's file stays behind a thread's Server, a Windows pipe never does.
+/// The old Server's endpoint, gone as `exec` would take it: its socket's
+/// file stays behind a test thread's Server.
+#[cfg(unix)]
 fn gone(address: &Path) {
-    match std::fs::remove_file(address) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => panic!("{error}"),
-        _ => {}
-    }
+    std::fs::remove_file(address).unwrap();
 }
 
 /// A window that asks for a restart sees it through: restarting, then
 /// restarted once it reaches the successor, with the version it runs.
+// A successor takes the store as `exec` hands it over (Unix): a Windows
+// Server waits for its predecessor's process to end, which a test's own
+// thread never does.
+#[cfg(unix)]
 #[test]
 fn a_window_sees_its_restart_through() {
     use crate::cockpit::ServerRestart;
@@ -4801,6 +4803,10 @@ fn a_window_sees_its_restart_through() {
 
 /// A restart the window does not see come back in time reads as failed,
 /// with why, rather than as nothing at all; back at last, restarted.
+// A successor takes the store as `exec` hands it over (Unix): a Windows
+// Server waits for its predecessor's process to end, which a test's own
+// thread never does.
+#[cfg(unix)]
 #[test]
 fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     use crate::cockpit::ServerRestart;
