@@ -29,12 +29,9 @@ fn text(thread: u64, seq: u64, text: &str) -> ServerMessage {
     }
 }
 
-/// The next message an outbox sends, which is no deferred one.
+/// The next message an outbox sends.
 fn sent(outbox: &mut Outbox) -> Option<ServerMessage> {
-    match outbox.pop()? {
-        Next::Message(message) => Some(message),
-        Next::Deferred(_) => panic!("a deferred entry where a message was due"),
-    }
+    outbox.pop()
 }
 
 fn roster(open: &[u64], revision: u64) -> ServerMessage {
@@ -368,17 +365,54 @@ fn a_live_input_never_merges() {
     assert_eq!(sent, vec![text(1, 1, "a"), live, text(1, 3, "b")]);
 }
 
-/// A deferred entry keeps its place: nothing merges across it, and the
-/// bytes it will send never count toward the lag limit.
+/// A history keeps its place for its Thread: nothing merges across it,
+/// what that Thread is sent after it waits for it, and the bytes it sends
+/// never count toward the lag limit.
 #[test]
-fn a_deferred_entry_waits_its_turn_outside_the_lag_limit() {
+fn a_history_waits_its_turn_outside_the_lag_limit() {
     let mut outbox = Outbox::default();
+    let (pieces, history) = mpsc::sync_channel(4);
     outbox.push(text(1, 1, "a")).unwrap();
-    outbox.defer(Box::new(|_| Ok(()))).unwrap();
+    outbox.history(ThreadId::new(1), history).unwrap();
     outbox.push(text(1, 2, "b")).unwrap();
     assert_eq!(sent(&mut outbox), Some(text(1, 1, "a")));
-    assert!(matches!(outbox.pop(), Some(Next::Deferred(_))));
+    assert_eq!(sent(&mut outbox), None, "the history is still being read");
+    pieces.send(text(1, 9, "the history")).unwrap();
+    drop(pieces);
+    assert_eq!(sent(&mut outbox), Some(text(1, 9, "the history")));
     assert_eq!(sent(&mut outbox), Some(text(1, 2, "b")));
+    assert_eq!(sent(&mut outbox), None);
+}
+
+/// No other Thread waits on a history: what another Thread is sent goes
+/// past one still being read.
+#[test]
+fn another_threads_messages_pass_a_history_still_being_read() {
+    let mut outbox = Outbox::default();
+    let (_pieces, history) = mpsc::sync_channel::<ServerMessage>(4);
+    outbox.history(ThreadId::new(1), history).unwrap();
+    outbox.push(text(1, 1, "after its history")).unwrap();
+    outbox.push(text(2, 1, "another Thread")).unwrap();
+    assert_eq!(sent(&mut outbox), Some(text(2, 1, "another Thread")));
+    assert_eq!(sent(&mut outbox), None, "Thread 1 waits on its history");
+}
+
+/// Histories read at once take turns: a small one never waits for a big
+/// one to finish.
+#[test]
+fn histories_take_turns() {
+    let mut outbox = Outbox::default();
+    let (big, big_history) = mpsc::sync_channel(8);
+    let (small, small_history) = mpsc::sync_channel(8);
+    outbox.history(ThreadId::new(1), big_history).unwrap();
+    outbox.history(ThreadId::new(2), small_history).unwrap();
+    for seq in 1..=6 {
+        big.send(text(1, seq, "big")).unwrap();
+    }
+    small.send(text(2, 1, "small")).unwrap();
+    drop(small);
+    let first: Vec<_> = (0..2).filter_map(|_| sent(&mut outbox)).collect();
+    assert!(first.contains(&text(2, 1, "small")), "{first:?}");
 }
 
 /// A connection the Server lets go ends its threads and closes its

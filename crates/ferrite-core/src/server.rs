@@ -542,7 +542,7 @@ impl Server {
                 };
                 if client
                     .connection
-                    .defer(Box::new(move |send| history.send(send)))
+                    .defer(thread, Box::new(move |send| history.send(send)))
                     .is_err()
                 {
                     self.lagged(id);

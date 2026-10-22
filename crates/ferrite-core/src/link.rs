@@ -8,15 +8,17 @@
 //! a state message (a Thread's state, the Roster, the Groups …) supersedes
 //! the one of its kind still waiting and joins the back; and a client that
 //! falls more than [`LAGGED_BYTES`] behind is closed `lagged` and
-//! reconnects. What is too large to queue — a Thread's history — waits as a
-//! [`Deferred`] that the writer thread produces as it sends.
+//! reconnects. What is too large to queue — a Thread's history — is read on
+//! a thread of its own ([`Deferred`]) and waits in the queue as its pieces
+//! arrive: what that Thread is sent after it waits for it, every other
+//! Thread's messages go past, and histories read at once take turns.
 //! A reconnecting client resumes each Thread from the [`Ring`], the last
 //! [`RING_BYTES`] of its inputs, or rebuilds it from history.
 
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
@@ -125,6 +127,8 @@ pub fn relay(from: &mut dyn Read, to: &mut dyn Write) -> io::Result<()> {
 pub struct Outbox {
     queue: VecDeque<Waiting>,
     bytes: usize,
+    /// Each history's next id, so turns are taken by it.
+    next_history: u64,
     lagged: bool,
     /// The Server let the connection go: the writer stops.
     closed: bool,
@@ -132,32 +136,70 @@ pub struct Outbox {
     finished: bool,
 }
 
-/// Messages made only as they are sent, on the connection's writer thread:
-/// a Thread's whole history, read from its log and sent in pieces. What it
-/// sends never counts against [`LAGGED_BYTES`]; it is handed each message
-/// to send in turn.
+/// A Thread's history, made on a thread of its own: read from its log and
+/// handed over in pieces, each message in turn. What it sends never counts
+/// against [`LAGGED_BYTES`].
 pub type Deferred =
     Box<dyn FnOnce(&mut dyn FnMut(ServerMessage) -> io::Result<()>) -> io::Result<()> + Send>;
 
 /// What waits to be sent.
-pub enum Next {
+enum Entry {
     Message(ServerMessage),
-    Deferred(Deferred),
+    History(History),
+}
+
+/// A history being read: its pieces as they arrive, the one taken but not
+/// yet sent, and how many it has sent (histories take turns by it).
+struct History {
+    thread: ThreadId,
+    pieces: Receiver<ServerMessage>,
+    ready: Option<ServerMessage>,
+    sent: u64,
+    id: u64,
+}
+
+impl History {
+    /// Its next piece, if one has arrived; `Err` once it has sent its last.
+    fn next(&mut self) -> Result<bool, ()> {
+        if self.ready.is_none() {
+            match self.pieces.try_recv() {
+                Ok(piece) => self.ready = Some(piece),
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => return Err(()),
+            }
+        }
+        Ok(self.ready.is_some())
+    }
 }
 
 struct Waiting {
-    next: Next,
+    entry: Entry,
     bytes: usize,
 }
 
 impl Waiting {
     fn message(&self) -> Option<&ServerMessage> {
-        match &self.next {
-            Next::Message(message) => Some(message),
-            Next::Deferred(_) => None,
+        match &self.entry {
+            Entry::Message(message) => Some(message),
+            Entry::History(_) => None,
         }
     }
 }
+
+/// The Thread a message is of, when it must follow that Thread's history:
+/// what a mirror applies in order.
+fn after_history(message: &ServerMessage) -> Option<ThreadId> {
+    match message {
+        ServerMessage::Input { thread, .. }
+        | ServerMessage::ToolDraft { thread, .. }
+        | ServerMessage::History { thread, .. }
+        | ServerMessage::HistoryEnd { thread, .. } => Some(*thread),
+        _ => None,
+    }
+}
+
+/// How many pieces of a history wait to be sent at most, read ahead.
+const HISTORY_PIECES_AHEAD: usize = 2;
 
 /// The connection fell more than [`LAGGED_BYTES`] behind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,7 +255,7 @@ impl Outbox {
             }
         }
         if let Some(Waiting {
-            next: Next::Message(last),
+            entry: Entry::Message(last),
             bytes: last_bytes,
         }) = self.queue.back_mut()
         {
@@ -226,20 +268,31 @@ impl Outbox {
         }
         self.bytes += bytes;
         self.queue.push_back(Waiting {
-            next: Next::Message(message),
+            entry: Entry::Message(message),
             bytes,
         });
         self.check()
     }
 
-    /// Queue what the writer thread will make as it sends: in order with
-    /// everything else, but outside the lag limit.
-    pub fn defer(&mut self, deferred: Deferred) -> Result<(), Lagged> {
+    /// Queue `thread`'s history, its pieces arriving on `pieces` until it
+    /// closes: in order for that Thread, but outside the lag limit.
+    pub fn history(
+        &mut self,
+        thread: ThreadId,
+        pieces: Receiver<ServerMessage>,
+    ) -> Result<(), Lagged> {
         if self.lagged {
             return Err(Lagged);
         }
+        self.next_history += 1;
         self.queue.push_back(Waiting {
-            next: Next::Deferred(deferred),
+            entry: Entry::History(History {
+                thread,
+                pieces,
+                ready: None,
+                sent: 0,
+                id: self.next_history,
+            }),
             bytes: 0,
         });
         Ok(())
@@ -255,10 +308,56 @@ impl Outbox {
         Ok(())
     }
 
-    pub fn pop(&mut self) -> Option<Next> {
-        let waiting = self.queue.pop_front()?;
-        self.bytes -= waiting.bytes;
-        Some(waiting.next)
+    /// The next message to send, if one can go now: the first waiting
+    /// message no unfinished history of its Thread holds back, else a
+    /// piece from the history that has sent the fewest. `None` while
+    /// everything waits on a history still being read.
+    pub fn pop(&mut self) -> Option<ServerMessage> {
+        let mut held: Vec<ThreadId> = Vec::new();
+        let mut turn: Option<(u64, u64)> = None;
+        let mut index = 0;
+        while index < self.queue.len() {
+            match &mut self.queue[index].entry {
+                Entry::History(history) => match history.next() {
+                    Err(()) => {
+                        self.queue.remove(index);
+                        continue;
+                    }
+                    Ok(ready) => {
+                        held.push(history.thread);
+                        if ready && turn.is_none_or(|(sent, _)| history.sent < sent) {
+                            turn = Some((history.sent, history.id));
+                        }
+                    }
+                },
+                Entry::Message(message) => {
+                    if after_history(message).is_none_or(|thread| !held.contains(&thread)) {
+                        let waiting = self.queue.remove(index).expect("in the queue");
+                        self.bytes -= waiting.bytes;
+                        let Entry::Message(message) = waiting.entry else {
+                            unreachable!("a message was found here")
+                        };
+                        return Some(message);
+                    }
+                }
+            }
+            index += 1;
+        }
+        let (_, id) = turn?;
+        self.queue
+            .iter_mut()
+            .find_map(|waiting| match &mut waiting.entry {
+                Entry::History(history) if history.id == id => {
+                    history.sent += 1;
+                    history.ready.take()
+                }
+                _ => None,
+            })
+    }
+
+    /// Whether nothing waits to be sent, history or message.
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
     }
 
     pub fn lagged(&self) -> bool {
@@ -399,9 +498,9 @@ impl Connection {
                                 break Some(next);
                             }
                             if waiting.lagged() {
-                                break Some(Next::Message(lagged()));
+                                break Some(lagged());
                             }
-                            if waiting.closed {
+                            if waiting.closed && waiting.is_empty() {
                                 break None;
                             }
                             waiting = ready.wait(waiting).unwrap_or_else(|e| e.into_inner());
@@ -410,16 +509,13 @@ impl Connection {
                     // Whether to keep sending.
                     let sent = match next {
                         None => Ok(false),
-                        Some(Next::Message(message)) => {
+                        Some(message) => {
                             let closing = matches!(
                                 message,
                                 ServerMessage::Welcome { error: Some(_), .. }
                             ) || matches!(&message, ServerMessage::Reply { error: Some(error), .. }
                                         if error.code == ErrorCode::Lagged);
                             send(&mut writer, &message).map(|()| !closing)
-                        }
-                        Some(Next::Deferred(deferred)) => {
-                            deferred(&mut |message| send(&mut writer, &message)).map(|()| true)
                         }
                     };
                     if !matches!(sent, Ok(true)) {
@@ -453,9 +549,38 @@ impl Connection {
         self.queue(|outbox| outbox.push(message))
     }
 
-    /// Queue what the writer thread makes as it sends ([`Deferred`]).
-    pub fn defer(&self, deferred: Deferred) -> Result<(), Lagged> {
-        self.queue(|outbox| outbox.defer(deferred))
+    /// Read `thread`'s history on a thread of its own ([`Deferred`]),
+    /// queueing its pieces as they come. A few wait at most, so a slow
+    /// client holds the reading back rather than the memory growing.
+    pub fn defer(&self, thread: ThreadId, deferred: Deferred) -> Result<(), Lagged> {
+        let (pieces, history) = mpsc::sync_channel(HISTORY_PIECES_AHEAD);
+        self.queue(|outbox| outbox.history(thread, history))?;
+        let shared = self.shared.clone();
+        let wake = move || {
+            let (lock, ready) = &*shared;
+            drop(lock.lock().unwrap_or_else(|e| e.into_inner()));
+            ready.notify_all();
+        };
+        let hand = |pieces: &SyncSender<ServerMessage>, message| {
+            pieces
+                .send(message)
+                .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))
+        };
+        let spawned = std::thread::Builder::new()
+            .name(format!("ferrite-history-{thread}"))
+            .spawn(move || {
+                let _ = deferred(&mut |message| {
+                    hand(&pieces, message)?;
+                    wake();
+                    Ok(())
+                });
+                drop(pieces);
+                wake();
+            });
+        if let Err(error) = spawned {
+            crate::log!("thread {thread}: its history could not be read: {error}");
+        }
+        Ok(())
     }
 
     fn queue(&self, push: impl FnOnce(&mut Outbox) -> Result<(), Lagged>) -> Result<(), Lagged> {
