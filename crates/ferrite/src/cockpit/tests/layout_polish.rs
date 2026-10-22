@@ -159,6 +159,7 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
     let group = group_all(&mut core);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     // 830 tall: a 2×2 under the 46px head row and the 30px bar still
     // reads as transcripts (R12: 360 tall).
     cx.simulate_resize(gpui::size(px(1200.), px(830.)));

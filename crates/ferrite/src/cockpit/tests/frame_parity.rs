@@ -558,9 +558,9 @@ fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
         )
     });
     assert_eq!(line, Some(3));
-    // The reader takes the panel's place (SPEC §5.6): the board it halves
-    // runs to the window's gutter.
-    let board = whole + crate::theme::PANEL_W - crate::theme::BOARD_PAD;
+    // The panel stays beside it (SPEC §5.6): the reader halves the board
+    // the Pane had.
+    let board = whole;
     assert!(
         (half - (board - crate::theme::BOARD_SEAM) / 2.0).abs() <= 1.0,
         "half and half: {half} of {board}"
@@ -678,11 +678,11 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
 }
 
 /// SPEC §5.9: a 2×2 Group is four equal cards `GRID_GAP` apart on the
-/// frame, its seams the gutters' centre lines: a 9px grab band and a
+/// frame, flush with the panel's column, its seams the gutters' centre lines: a 9px grab band and a
 /// `SEAM_LINE_W` line, both centred in the 8px gutter.
 #[gpui::test]
 fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
-    use crate::theme::{BOARD_PAD, GRID_GAP, SEAM_LINE_W, STATUS_BAR_H, WIN_CHROME_H};
+    use crate::theme::{BOARD_PAD, GRID_GAP, PANEL_W, SEAM_LINE_W, STATUS_BAR_H, WIN_CHROME_H};
     let (view, _fake, cx, _group) = board_of("frame-group-cards", 4, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(960.)));
     tick(cx);
@@ -699,7 +699,8 @@ fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
     assert!(near(tl.x, nav::WIDTH) && near(tl.y, WIN_CHROME_H), "{tl:?}");
     assert!(near(tr.x - (tl.x + tl.w), GRID_GAP), "{tl:?} {tr:?}");
     assert!(near(bl.y - (tl.y + tl.h), GRID_GAP), "{tl:?} {bl:?}");
-    assert!(near(br.x + br.w, 1600. - BOARD_PAD), "{br:?}");
+    // The focused Pane's panel stands right of the board (SPEC §5.6).
+    assert!(near(br.x + br.w, 1600. - PANEL_W), "{br:?}");
     assert!(near(br.y + br.h, 960. - STATUS_BAR_H - BOARD_PAD), "{br:?}");
     assert!(
         near(tl.w, tr.w) && near(tl.h, bl.h),

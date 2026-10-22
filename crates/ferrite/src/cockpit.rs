@@ -9915,7 +9915,6 @@ impl CockpitView {
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
-        self.fit_panel(window);
         self.update_auto_rail(window);
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_cli_updates(window, cx);
@@ -10608,7 +10607,7 @@ impl CockpitView {
                 self.maximized,
             ))
             .children(self.view_head(cx))
-            // The Solo panel over the strip's right end: its tabs take
+            // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag.
             .children(self.panel_element(window, cx))
             .children(self.plan_card_element(window, cx))
@@ -10891,7 +10890,8 @@ impl CockpitView {
                 .then(|| self.quick_answers(index, cx))
                 .flatten(),
             toolbar: l1.then(|| self.composer_toolbar(index, cx)).flatten(),
-            unqueue: (l1 && !self.grid_board()).then(|| {
+            // The Composer decides whether it draws the queued row.
+            unqueue: l1.then(|| {
                 pane::queued_close(cx)
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
@@ -15082,6 +15082,7 @@ mod tests {
     fn a_thread_row_is_two_lines_on_one_edge(cx: &mut TestAppContext) {
         let (core, _) = cockpit("nav-age-align", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         cx.run_until_parked();
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -15416,6 +15417,7 @@ mod tests {
         use crate::theme::{BOARD_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH};
         let (core, _fake) = cockpit("nav-auto-rail", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         let saved = view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed);
         let threshold = NAV_WIDTH + BOARD_PAD + NAV_AUTO_RAIL_BOARD_W;
         cx.simulate_resize(gpui::size(px(720.), px(900.)));
@@ -15519,6 +15521,7 @@ mod tests {
     fn a_project_section_draws_one_row_grammar_and_no_filter_row(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("nav-thread-order", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let key = ferrite_core::activity::AgentKey::new(Provider::Claude, "nav", "child");
         let mut info = ferrite_core::activity::AgentInfo::new(key);
@@ -15780,6 +15783,17 @@ mod tests {
     /// so a test can stand a narrow board beside it.
     fn hold_nav_open(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
         view.update(cx, |view, _| view.nav_forced_open = true);
+    }
+
+    /// Turn the panel off, for a test whose geometry is the board without
+    /// it: the panel shows at any width (SPEC §5.6), so a narrow window's
+    /// board, nav and Levels are otherwise the panel's business. In
+    /// memory only: the suite's windows share one settings file.
+    fn hide_panel(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+        view.update(cx, |view, cx| {
+            view.prefs.settings.panel_shown = false;
+            cx.notify();
+        });
     }
 
     fn tick(cx: &mut gpui::VisualTestContext) {
@@ -18644,6 +18658,7 @@ mod tests {
     fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("reasoning-details", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
+        hide_panel(&view, cx);
         hold_nav_open(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let body = "The provider supplied these additional details.";
@@ -19572,14 +19587,14 @@ mod tests {
             Some(document)
         );
         assert!(
-            cx.debug_bounds("panel").is_none(),
-            "the reader beside the Pane takes the panel's place"
+            cx.debug_bounds("panel").is_some(),
+            "the panel stays beside the reader"
         );
         view.update(cx, |view, cx| view.close_reader(0, cx));
         tick(cx);
         let code = cx
             .debug_bounds("panel-file-1")
-            .expect("a non-Markdown file is listed too, the panel back");
+            .expect("a non-Markdown file is listed too");
         cx.simulate_click(code.center(), gpui::Modifiers::none());
         tick(cx);
         assert_eq!(
@@ -20461,6 +20476,7 @@ mod tests {
         core.park(threads[0]).unwrap();
         core.park(threads[1]).unwrap();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
@@ -20690,6 +20706,7 @@ mod tests {
             ]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let parked = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -20781,6 +20798,7 @@ mod tests {
             cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         hold_nav_open(&view, cx);
         // Sized so the Transcript threshold sits between the two nav
         // widths: a wall tile beside the full column, Transcript without it.
@@ -23896,6 +23914,7 @@ mod tests {
         let view = root.read_with(cx, |root, cx| {
             crate::loops_overlay::testing::cockpit(root.view(), cx)
         });
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1200.), px(700.)));
         let files = vec![
             here().join("screen shot.png"),
@@ -24217,6 +24236,7 @@ mod tests {
         }
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         // The column stays open: this is the board's seams, and folding the
         // nav away (rule 2.7.7) as a drag narrows a flush cell under the
         // instruments floor would move every band under the pointer mid-test.
@@ -24647,6 +24667,7 @@ mod tests {
         core.park(threads[1]).unwrap();
         cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         cx.run_until_parked();
 
@@ -24753,6 +24774,7 @@ mod tests {
         core.rename_thread(threads[2], "Durable drag title")
             .unwrap();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         cx.run_until_parked();
 
@@ -24785,7 +24807,8 @@ mod tests {
     fn a_hundred_member_group_remains_reachable_through_nav_scroll(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("group-nav-scroll", 100);
         group_all(&mut core);
-        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        hide_panel(&view, cx);
         cx.simulate_resize(gpui::size(px(1000.), px(320.)));
         cx.run_until_parked();
         let before = cx.debug_bounds("nav-thread-100").unwrap();

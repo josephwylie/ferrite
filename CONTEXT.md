@@ -66,9 +66,12 @@ _Avoid_: dashboard, workspace (see Workspace binding).
 The default Cockpit view: exactly the focused Thread's Pane.
 
 **Panel**
-The Solo view's right column, beside the board: the Thread's changes, its
-pull request and its context, one tab each. Hidden on a Group, when the
-window is narrow, and while something is open beside the Pane.
+The right column, beside the board: the focused Thread's changes, its
+pull request and its context, one tab each. It follows the focused Thread
+in every view (Solo, a Group's focused Pane, a fullscreen Pane, with
+something open beside it), shown while the operator has it on; there is
+none without a Thread (a draft, the empty board, the Projects
+coordinator).
 _Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
 board).
 

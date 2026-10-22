@@ -571,6 +571,7 @@ fn the_bar_fits_a_narrow_pane(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("find-narrow", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(600.), px(700.)));
     say(&fake, "A needle in a narrow Pane.\n\n");

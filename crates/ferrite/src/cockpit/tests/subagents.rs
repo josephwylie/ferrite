@@ -498,6 +498,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
     let (core, fake) = cockpit("subagents-responsive-tabs", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     for name in ["Atlas", "Cedar", "Finch", "Juniper", "Rowan"] {
@@ -713,6 +714,7 @@ fn an_open_done_menu_resolves_a_subject_alias_before_selecting_it(cx: &mut TestA
     let (core, fake) = cockpit("subagents-stale-menu-alias", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(640.), px(800.)));
     cx.simulate_keystrokes("cmd-shift-enter");

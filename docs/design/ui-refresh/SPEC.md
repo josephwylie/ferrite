@@ -49,13 +49,14 @@ Everything *around* the transcript becomes calmer and more modern:
 - **No accent.** Steel blue is retired, and hue is kept for state only.
 - **Two-line sidebar.** The nav becomes a two-line Thread list with
   branch, diffstat and state reason.
-- **A real Pane head.** The Pane gains a head: title and branch chip in
+- **A real Pane head.** The Pane gains a head: title and Project in
   Solo; a tab strip of Main plus live Subagents.
 - **Composer box.** The Composer becomes a rounded box that holds the
   permission mode, model and effort, so the bar no longer carries a
   status line.
-- **Right panel.** A right panel in Solo shows the Thread's changes, its
-  pull request (checks, merge state, review comments) and its context.
+- **Right panel.** A right panel shows the focused Thread's changes, its
+  pull request (checks, merge state, review comments) and its context,
+  in every view.
 - **A calmer bar.** The bar keeps only views and vitals.
 - **Group cards.** A Group is a grid of the same cards, each with a
   speaking head.
@@ -263,8 +264,9 @@ spinners, `●`, `❯`.
 ```
 ┌──────────────┬──────────────────────────────────────────┬─────────────┐
 │ Nav 264      │ View head 46                             │ Panel 304   │
-│  head 46     ├──────────────────────────────────────────┤ (Solo,      │
-│  views       │ Pane card (radius 10)                    │  toggled)   │
+│  head 46     ├──────────────────────────────────────────┤ (focused    │
+│  views       │ Pane card (radius 10)                    │  Thread,    │
+│              │                                          │  toggled)   │
 │  projects    │  tab strip 38                            │             │
 │  …           │  transcript (mono)                       │             │
 │  foot        │  Composer box                            │             │
@@ -288,9 +290,13 @@ spinners, `●`, `❯`.
 - **Fixed heights.** Head row 46, tab strip 38, bar 30
   (`STATUS_BAR_H` 24 → 30). Nav rows are 30 (one line) or 44 (two lines),
   and panel rows are 48.
-- **Narrow windows.** The panel hides first, at about 1180px wide. The
-  nav then folds to its rail by the existing auto-rail rule
-  (`update_auto_rail`), with its threshold re-tuned for 264px.
+- **Narrow windows.** There are no size rules for the panel (amended
+  2026-10-22, ADR 0033): it shows whenever the operator has it on and
+  there is a Thread to show, at any width. A narrow window just narrows
+  the board; the nav folds to its rail by the existing auto-rail rule
+  (`update_auto_rail`, its threshold tuned for 264px), and a Group's
+  cells may fall to wall tiles. The operator hides the panel when they
+  want the room back.
 - **Window minimum.** `WINDOW_MIN` stays 640×420.
 
 ## 5. Components
@@ -432,12 +438,10 @@ Thread). Left to right:
   renames, as `pane_title` does.
 - **Project.** The Project label in `TEXT_DIM`.
 - A spacer.
-- **Branch chip.** Height 28, radius 7, `RAISED`, padding 0 10. It holds
-  a `branch` icon 13, the branch in Geist 12.5 `TEXT`, and the summed
-  `changed_files` diffstat in Geist Mono 12. Clicking it opens the
-  panel's Changes tab, or toggles the panel if it is already on Changes.
-  The chip is hidden for a Thread with no Workspace binding.
-There is no PR button in the head. The pull request lives in the
+- **Panel toggle**, while the panel is hidden (§5.6).
+There is no branch chip (removed 2026-10-22): the branch and its
+diffstat live in the panel's Changes tab. There is no PR button in the
+head. The pull request lives in the
 panel's PR tab (§5.6.2), and Ferrite does not create pull requests.
 
 **Group:**
@@ -446,6 +450,7 @@ panel's PR tab (§5.6.2), and Ferrite does not create pull requests.
 - a spacer;
 - `+ New thread`, a secondary button (28, radius 7, `RAISED`, 12.5/500
   `TEXT_STRONG`). It starts a draft in this Group (the existing act).
+- **Panel toggle**, while the panel is hidden (§5.6).
 
 There is no layout switch: the Layout is the split tree, resized at its
 seams and rearranged by dragging Pane heads (CONTEXT.md).
@@ -585,7 +590,7 @@ Inside the box, top to bottom:
 The mode, model and effort leave the bar. `ctx` and the files chip move
 to the panel (§5.6).
 
-### 5.6 Right panel (Solo, new)
+### 5.6 Right panel (new)
 
 The panel is a fixed column, 304 wide, padding 0 10 8 8, on `FRAME`,
 with no border. It is not the Beside slot: the Reader, Review and Thread
@@ -600,9 +605,18 @@ still open beside the Pane inside the board (ADR 0021).
     branch has one, and nothing otherwise.
   - The panel remembers the last tab per Thread. A new Thread opens on
     `Changes`.
-  - At the right, a `panel-right` icon button hides the panel.
-  - A new act `TogglePanel` shows and hides it. Bind an unused chord
-    (`alt-cmd-b` is free today) and read it from the keymap.
+  - At the right, the **panel toggle**: one `panel-right` icon button,
+    the nav head's sidebar toggle's twin (28, radius 6, the glyph 16 in
+    `TEXT_DIM`, `RAISED` under the pointer), tooltip `Toggle panel ⌥⌘B`
+    with the chord read from the keymap. It sits in the same place
+    whether the panel shows or not: shown, it ends the panel head;
+    hidden, it ends the view head, at the head row's far right over the
+    board. It shows in Solo and Group heads alike whenever there is a
+    focused Thread. On Windows the caption buttons keep the row's right
+    end, the toggle just left of them.
+  - The act `TogglePanel` (⌥⌘B) shows and hides it, from the toggle, the
+    View menu's `Toggle Panel` (beside `Toggle Sidebar`) and the
+    palette's `Toggle panel`.
   - The panel's visibility is a persisted setting, beside
     `nav_collapsed`.
 - **Changes tab.**
@@ -635,10 +649,14 @@ still open beside the Pane inside the board (ADR 0021).
   with `84k / 200k` at the right. Under it, a 6px segmented meter (2px
   gaps, radius 2) in the `CTX_*` inks. It turns `ATTENTION` past the
   existing warn fraction (.60) and `BLOCKED` past full (.85).
-- **When it shows.** By default it is shown in Solo when the window is
-  at least about 1280 wide. It is never shown on a Group, and never when
-  the Beside slot is open. When the panel hides, the Pane takes its
-  width.
+- **When it shows** (amended 2026-10-22). It follows the focused Thread
+  in every view: Solo, a fullscreen Pane (⌘⇧⏎ or the fill button), a
+  Group (the focused Pane's Thread; focusing another Pane switches it,
+  and each Thread keeps its last tab), and with the Beside slot open.
+  It shows exactly when the operator has it on (`panel_shown`, default
+  on) and there is a Thread: never on a draft, the empty board or the
+  Projects coordinator. There are no size rules (§4). When the panel
+  hides, the board takes its width.
 - **What it replaces.** The bar's `ctx` meter and its card
   (`context_usage_element`), and the files chip and its card
   (`changed_files_element`), are removed.
@@ -908,7 +926,13 @@ Top to bottom:
 
    Solo shows the same strip.
 5. **Compact Composer (38).** Margin 0 10 10, radius 8, `FIELD_COMPACT`
-   ground, ring 6% (12% when focused). It is input only.
+   ground, ring 6% (12% when focused). It is the input, and on the
+   focused Pane the queue.
+   - **Queued row** (amended 2026-10-22), on the focused Pane while
+     anything is queued: Solo's queued row (§5.5: `Queued` · the prompt
+     · `+N` · a close button), above the input, with its hairline. The
+     box grows by it only while something is queued. ↑ and ⌫ act on it
+     as in Solo.
    - The placeholder is chosen by state (§5.5).
    - An unfocused Pane shows its flat facts (`flat_facts`,
      `1 attachment · 2 queued`) as the placeholder text when it has any.
@@ -957,7 +981,7 @@ Nothing new moves.
 | Need | Status | Work |
 | --- | --- | --- |
 | Per-Thread branch for nav line 2 | Exists: `ThreadFacts.branch`, `.status` | Draw it |
-| Per-Thread diffstat (nav, branch chip, panel) | Exists as agent-edit totals: `ThreadFacts.changed_files` (`FileChange{path, added, removed}`) | Sum it. It counts the agent's edits, not a git diff against the base. That is acceptable for v1; name it as such in a doc line. |
+| Per-Thread diffstat (nav, panel) | Exists as agent-edit totals: `ThreadFacts.changed_files` (`FileChange{path, added, removed}`) | Sum it. It counts the agent's edits, not a git diff against the base. That is acceptable for v1; name it as such in a doc line. |
 | PR label | Exists: `PrWatch` (`#123 ✓`) | Draw it on nav line 2 and as the PR tab's number |
 | PR tab | Exists: the Review's forge read, `Cockpit::review_pull_request` → `forge::PrSnapshot` (title, body, state, draft, head and base, merge, sync, checks, comments with findings, resolved, outdated, replies) | Fetch it for the panel, off the UI thread, on `PrWatch`'s cadence while the tab is visible. Per-check durations and links, the review decision (approved or changes requested) and the PR's author are **not** in the snapshot. v1 leaves them out; adding them is an extension of `forge.rs`'s `gh` query. |
 | Needs-you queue and Notices list | Exists: `Cockpit::needs_you()`, `notices_float` rows | A view in the nav |

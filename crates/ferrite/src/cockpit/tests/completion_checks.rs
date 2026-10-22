@@ -76,6 +76,7 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
     let (core, fake) = cockpit("question-retry-reference", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(740.), px(1200.)));
     cx.simulate_input("draft  untouched");
@@ -230,6 +231,7 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
 fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("reading-anchor-reference", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(900.)));
     let paragraph = "Earlier material with enough words to reflow when the pane becomes narrower. ";
@@ -634,6 +636,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
     use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
     let (core, fake) = cockpit("approval-long-command-island", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(900.), px(600.)));
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());

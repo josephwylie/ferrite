@@ -173,6 +173,7 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
         .group
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let row = |thread: ThreadId| -> &'static str { format!("nav-thread-{}", thread.get()).leak() };

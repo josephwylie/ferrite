@@ -165,7 +165,8 @@ fn copy_html_puts_the_page_on_the_clipboard(cx: &mut TestAppContext) {
 fn a_visual_opens_its_page_once_however_often_it_draws(cx: &mut TestAppContext) {
     let engine = install_fake(cx);
     let (core, fake) = cockpit("vis-once", 1);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(720.), px(1400.)));
     fake.streams.borrow()[0]
         .send(started("v1", "<p>hi</p>"))

@@ -175,6 +175,7 @@ fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);

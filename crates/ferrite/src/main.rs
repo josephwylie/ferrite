@@ -649,7 +649,7 @@ fn load_bindings(table: Vec<keymap::Binding>, cx: &mut App) -> Vec<KeyBinding> {
 fn app_menus() -> Vec<Menu> {
     use cockpit::{
         CloseThread, NewGroup, NewThread, NewWorktreeThread, NextDecision, NextPane, OpenSettings,
-        PreviousPane, ReopenThread, ToggleFullscreen, ToggleNav, ToggleNotifications,
+        PreviousPane, ReopenThread, ToggleFullscreen, ToggleNav, ToggleNotifications, TogglePanel,
     };
     vec![
         Menu {
@@ -702,6 +702,7 @@ fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Review Branch", palette::ReviewBranch),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
+                MenuItem::action("Toggle Panel", TogglePanel),
                 MenuItem::action("Needs You", ToggleNotifications),
                 MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
                 MenuItem::separator(),
@@ -801,6 +802,32 @@ mod tests {
             item,
             gpui::MenuItem::Action { name, action, .. }
                 if name == "Find\u{2026}" && action.partial_eq(&find::Open)
+        )));
+    }
+
+    /// The View menu toggles the panel beside the sidebar, its chord read
+    /// from the same action's binding.
+    #[test]
+    fn the_view_menu_toggles_the_panel() {
+        let view = app_menus()
+            .into_iter()
+            .find(|menu| menu.name == "View")
+            .expect("a View menu");
+        let names: Vec<&str> = view
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                gpui::MenuItem::Action { name, .. } => Some(name.as_ref()),
+                _ => None,
+            })
+            .collect();
+        let sidebar = names.iter().position(|name| *name == "Toggle Sidebar");
+        let panel = names.iter().position(|name| *name == "Toggle Panel");
+        assert_eq!(panel, sidebar.map(|at| at + 1), "beside the sidebar's");
+        assert!(view.items.iter().any(|item| matches!(
+            item,
+            gpui::MenuItem::Action { name, action, .. }
+                if name == "Toggle Panel" && action.partial_eq(&crate::cockpit::TogglePanel)
         )));
     }
 
