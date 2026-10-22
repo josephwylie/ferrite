@@ -10890,8 +10890,8 @@ impl CockpitView {
                 .then(|| self.quick_answers(index, cx))
                 .flatten(),
             toolbar: l1.then(|| self.composer_toolbar(index, cx)).flatten(),
-            // Solo's box and the focused Group Pane's draw the queued row.
-            unqueue: (l1 && (focused || !self.grid_board())).then(|| {
+            // The Composer decides whether it draws the queued row.
+            unqueue: l1.then(|| {
                 pane::queued_close(cx)
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();

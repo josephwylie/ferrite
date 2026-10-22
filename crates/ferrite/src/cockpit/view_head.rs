@@ -28,18 +28,22 @@ impl CockpitView {
             View::Solo => self.solo_head(cx)?,
             View::Group(group) => self.group_view_head(group, cx)?,
         };
-        // The head stops where the board does while the panel shows (its
-        // head holds the row's right end, toggle, caption buttons and all).
-        // Hidden, the head runs to the toggle's place, and holds the toggle
-        // when there is a Thread to show the panel for; on Windows the
-        // caption buttons keep the row's right end either way.
-        let right = if self.panel_thread().is_some() {
-            self.board_right()
-        } else if self.panel_candidate().is_some() {
+        // Hidden, the panel's toggle ends the head while there is a Thread
+        // to show it for.
+        let shown = self.panel_thread().is_some();
+        let toggle = !shown && self.panel_candidate().is_some();
+        if toggle {
             parts.push(control(self.panel_toggle(cx)));
+        }
+        // The head stops where the board does while the panel shows (its
+        // head holds the row's right end, toggle, caption buttons and all);
+        // else it runs to the toggle's place, or with no toggle to the
+        // board's edge. On Windows the caption buttons keep the row's
+        // right end either way.
+        let right = if shown {
+            self.board_right()
+        } else if toggle || crate::titlebar::CUSTOM {
             super::panel::panel_toggle_inset()
-        } else if crate::titlebar::CUSTOM {
-            3. * theme::CAPTION_W
         } else {
             self.board_right()
         };

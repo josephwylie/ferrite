@@ -2472,7 +2472,8 @@ pub const NAV_HEADING_H: f32 = 26.0;
 pub const NAV_HEADING_PAD_R: f32 = SPACE_1_5;
 pub const NAV_HEADING_BUTTON: f32 = 22.0;
 pub const NAV_HEADING_GLYPH: f32 = 13.0;
-/// 16px — the sidebar toggle's and the gear's glyph, in an `ICON_BUTTON`.
+/// 16px — the sidebar toggle's and the gear's glyph, in an `ICON_BUTTON`;
+/// the panel toggle, the sidebar toggle's twin, shares it.
 pub const NAV_TOGGLE_GLYPH: f32 = 16.0;
 /// 35px — where a Thread row's title starts (`padding: 0 10 0 35`); its
 /// mark sits in the 10–24 column before it.

@@ -682,7 +682,7 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
 
 /// SPEC §5.9 item 5: the focused Group Pane's compact box carries Solo's
 /// queued row above its input, growing only while something is queued;
-/// ⌫ on its empty line drops the prompt. An unfocused Pane says it in its
+/// ↑ takes the prompt back and ⌫ on its empty line drops it. An unfocused Pane says it in its
 /// placeholder instead.
 #[gpui::test]
 fn the_focused_group_pane_shows_its_queue_and_backspace_drops_it(cx: &mut TestAppContext) {
@@ -745,6 +745,18 @@ fn the_focused_group_pane_shows_its_queue_and_backspace_drops_it(cx: &mut TestAp
     assert!(cx.debug_bounds("composer-flat-facts").is_some());
     focus(&view, cx, threads[0]);
     assert!(cx.debug_bounds("queued-0").is_some());
+
+    // ↑ takes the prompt back to edit, as in Solo; ⏎ queues it again.
+    cx.simulate_keystrokes("up");
+    tick(cx);
+    assert_eq!(queued(&view, cx), None, "↑ takes it back");
+    let pane = view.read_with(cx, |view, _| view.pane_for(threads[0]).unwrap());
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[pane].composer.read(cx).text(), "also this");
+    });
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(queued(&view, cx).as_deref(), Some("also this"));
 
     cx.simulate_keystrokes("backspace");
     tick(cx);
