@@ -925,29 +925,45 @@ struct OutputTail {
     last: String,
 }
 impl OutputTail {
+    /// The most of an open line kept: its latest bytes.
+    const KEPT: usize = 2048;
+
     fn push(&mut self, text: &str) -> Option<String> {
-        for ch in text.chars() {
-            if matches!(ch, '\n' | '\r') {
+        let mut segments = text.split(['\n', '\r']).peekable();
+        while let Some(segment) = segments.next() {
+            self.extend(segment);
+            if segments.peek().is_some() {
                 let line = crate::progress::one_line(&self.line, RESULT_CHARS);
                 if !line.is_empty() {
                     self.last = line;
                 }
                 self.line.clear();
-            } else {
-                self.line.push(ch);
-                if self.line.len() > 2048 {
-                    let mut start = self.line.len() - 2048;
-                    while !self.line.is_char_boundary(start) {
-                        start += 1;
-                    }
-                    self.line.drain(..start);
-                }
             }
         }
         let line = crate::progress::one_line(&self.line, RESULT_CHARS);
         let line = if line.is_empty() { &self.last } else { &line };
         (!line.is_empty()).then(|| line.clone())
     }
+
+    /// Add to the open line, keeping its latest `KEPT` bytes: one copy of
+    /// what is kept, never one per character past it.
+    fn extend(&mut self, segment: &str) {
+        let segment = tail_of(segment, Self::KEPT);
+        self.line.push_str(segment);
+        if self.line.len() > Self::KEPT {
+            let start = self.line.len() - tail_of(&self.line, Self::KEPT).len();
+            self.line.drain(..start);
+        }
+    }
+}
+
+/// The last `bytes` of `text` at most, from a character boundary.
+fn tail_of(text: &str, bytes: usize) -> &str {
+    let mut start = text.len().saturating_sub(bytes);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
 }
 
 /// Runtime observations travel separately from replayable content. Activity
@@ -2849,6 +2865,24 @@ fn link_at(rest: &str) -> Option<(&str, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A command's output tail reads its latest line, however long the
+    /// output, keeping the last 2 KB of a line with no end yet.
+    #[test]
+    fn an_output_tail_takes_a_long_line_in_its_stride() {
+        let mut tail = OutputTail::default();
+        let long = "x".repeat(4 * 1024 * 1024);
+        assert!(tail.push(&long).is_some());
+        assert_eq!(tail.line.len(), 2048);
+        assert_eq!(
+            tail.push("tail end\nnext").as_deref(),
+            Some("next"),
+            "the open line after the newline"
+        );
+        assert_eq!(tail.push("\n").as_deref(), Some("next"));
+        assert_eq!(tail.last, "next");
+        assert_eq!(tail.push("caf\u{e9}").as_deref(), Some("caf\u{e9}"));
+    }
     use crate::Decision;
 
     /// Codex's patch item names its file and its edit before it runs (and
