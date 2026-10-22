@@ -999,12 +999,18 @@ impl Thread {
         self.settled_at = Some(crate::clock::instant());
     }
 
-    /// Whether its Session has outlived its use at `now` (ADR 0032): at
-    /// rest for `HELD_AT_REST`, or at all on a `stale` CLI, and holding no
-    /// work it will start itself. Starts the count on the first call at
-    /// rest.
+    /// At work: not at rest, or holding work it will start itself. What
+    /// keeps its Session, and what every window holds its transcript for
+    /// (ADR 0032).
+    fn at_work(&self) -> bool {
+        self.scheduled_work || !self.at_rest()
+    }
+
+    /// Whether its Session has outlived its use at `now` (ADR 0032): not
+    /// at work for `HELD_AT_REST`, or at all on a `stale` CLI. Starts the
+    /// count on the first call at rest.
     fn outlived_use(&mut self, now: Instant, stale: bool) -> bool {
-        if self.session.is_none() || self.scheduled_work || !self.at_rest() {
+        if self.session.is_none() || self.at_work() {
             self.settled_at = None;
             return false;
         }
@@ -4457,10 +4463,11 @@ impl Engine {
         }));
         // The turn as it stands: a replay never reads one as running, so a
         // watch mid-turn is told it is, as its provider said it.
+        use crate::transcript::Status;
         let state = match transcript.status() {
-            crate::transcript::Status::Streaming => Some(crate::RunState::Running),
-            crate::transcript::Status::Blocked => Some(crate::RunState::RequiresAction),
-            crate::transcript::Status::Idle | crate::transcript::Status::Closed => None,
+            Status::Streaming => Some(crate::RunState::Running),
+            Status::Blocked => Some(crate::RunState::RequiresAction),
+            Status::Idle | Status::Closed => None,
         };
         if let Some(protocol::Outgoing::Input(input)) = state.map(|state| {
             protocol::outgoing(
@@ -4730,7 +4737,7 @@ impl Engine {
         for (&id, thread) in self.threads.iter().filter(|(_, thread)| thread.held) {
             let published = self.published.entry(id).or_default();
             let shown = self.visible_subjects.get(&id);
-            let at_work = !thread.at_rest();
+            let at_work = thread.at_work();
             let current = published
                 .digest
                 .as_ref()

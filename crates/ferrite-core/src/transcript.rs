@@ -2866,6 +2866,8 @@ fn link_at(rest: &str) -> Option<(&str, usize)> {
 mod tests {
     use super::*;
 
+    use crate::Decision;
+
     /// A command's output tail reads its latest line, however long the
     /// output, keeping the last 2 KB of a line with no end yet.
     #[test]
@@ -2882,8 +2884,18 @@ mod tests {
         assert_eq!(tail.push("\n").as_deref(), Some("next"));
         assert_eq!(tail.last, "next");
         assert_eq!(tail.push("caf\u{e9}").as_deref(), Some("caf\u{e9}"));
+
+        // Cut at a character, never inside one; a carriage return starts
+        // the line over.
+        let mut tail = OutputTail::default();
+        tail.push(&"\u{e9}".repeat(2000));
+        assert!(
+            (2047..=2048).contains(&tail.line.len()),
+            "{}",
+            tail.line.len()
+        );
+        assert_eq!(tail.push("\rnew").as_deref(), Some("new"));
     }
-    use crate::Decision;
 
     /// Codex's patch item names its file and its edit before it runs (and
     /// before an approval it waits on is answered): `Update(NOTES.md)` and

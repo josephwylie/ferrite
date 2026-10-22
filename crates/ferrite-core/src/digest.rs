@@ -46,8 +46,9 @@ pub struct Digest {
     #[serde(default)]
     pub background_work: bool,
     /// The Thread is at work as the Server keeps its Session for: a turn,
-    /// queued or unanswered prompts, Decisions, Subagents or background
-    /// tasks (ADR 0032). A window holds its transcript as long.
+    /// queued or unanswered prompts, Decisions, Subagents, background tasks
+    /// or work it will start itself (ADR 0032). A window holds its
+    /// transcript as long. Only the Server says so.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub at_work: bool,
     /// Every pending Decision, in the order they are answered.

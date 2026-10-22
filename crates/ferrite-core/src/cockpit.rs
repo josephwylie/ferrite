@@ -116,9 +116,10 @@ impl Drawn {
         self.now = threads;
     }
 
-    /// A Thread that opened while the window is up is one the operator is
-    /// about to look at: it is held as if it had just left the screen.
-    fn opened(&mut self, thread: ThreadId, at: Instant) {
+    /// Hold `thread` as if it had just left the screen: one that opened
+    /// while the window is up, which the operator is about to look at, or
+    /// one at work, whose time at rest starts again.
+    fn hold(&mut self, thread: ThreadId, at: Instant) {
         if !self.now.contains(&thread) {
             self.left.insert(thread, at);
         }
@@ -131,14 +132,6 @@ impl Drawn {
                 .left
                 .get(&thread)
                 .is_some_and(|left| at.saturating_duration_since(*left) < UNWATCH_AFTER)
-    }
-
-    /// `thread` is at work off screen: it is held, its time at rest
-    /// starting again.
-    fn keep(&mut self, thread: ThreadId, at: Instant) {
-        if !self.now.contains(&thread) {
-            self.left.insert(thread, at);
-        }
     }
 
     fn retain(&mut self, open: &[ThreadId]) {
@@ -427,7 +420,7 @@ impl Cockpit {
             if let Some(drawn) = &mut self.drawn {
                 for &thread in &self.shared.open {
                     if !open_before.contains(&thread) {
-                        drawn.opened(thread, now);
+                        drawn.hold(thread, now);
                     }
                 }
             }
@@ -465,7 +458,7 @@ impl Cockpit {
         if let Some(drawn) = &mut self.drawn {
             let now = crate::clock::instant();
             for thread in self.mirrors.at_work() {
-                drawn.keep(thread, now);
+                drawn.hold(thread, now);
             }
         }
         let watched = self.watched();

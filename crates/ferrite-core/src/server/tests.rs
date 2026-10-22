@@ -3,6 +3,8 @@
 //! rebuilding from history.
 
 use std::path::Path;
+
+use crate::engine::HELD_AT_REST;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -1743,9 +1745,6 @@ fn running(agent: &Sender<SessionEvent>) -> bool {
         .is_ok()
 }
 
-/// Ten minutes on the clock, as the ADR says an idle agent may last.
-use crate::engine::HELD_AT_REST;
-
 /// A Thread whose agent named its conversation `claude-1` and has nothing
 /// to do, on a clock frozen for the test: the Engine, the Thread, the
 /// agent and the clock.
@@ -1776,11 +1775,11 @@ fn at_rest(
     (engine, thread, agent, clock)
 }
 
-/// An agent with nothing to do for ten minutes stops, and nothing shows
+/// An agent with nothing to do for its span at rest stops, and nothing shows
 /// it: the transcript, status and generation stand, and the next prompt
 /// starts one on the same conversation.
 #[test]
-fn an_agent_settled_ten_minutes_stops_without_a_trace() {
+fn an_agent_settled_its_span_stops_without_a_trace() {
     let (spawner, started, providers) = recorded();
     let (mut engine, thread, agent, clock) = at_rest("settled-stops", spawner, &providers);
     let seen = |engine: &Engine| {
@@ -1797,7 +1796,7 @@ fn an_agent_settled_ten_minutes_stops_without_a_trace() {
 
     clock.advance(HELD_AT_REST - Duration::from_secs(1));
     engine.pump();
-    assert!(running(&agent), "not yet ten minutes");
+    assert!(running(&agent), "not yet its span");
     engine.pump();
     clock.advance(Duration::from_secs(1));
     engine.pump();
@@ -1817,7 +1816,7 @@ fn an_agent_settled_ten_minutes_stops_without_a_trace() {
 }
 
 /// A provider's CLI replaced on disk ends its settled agents at once, as
-/// unseen as ten minutes would, so the next start runs the new release.
+/// unseen as its span at rest would, so the next start runs the new release.
 #[test]
 fn an_updated_cli_ends_a_settled_agent_without_a_trace() {
     let (spawner, providers) = spawn();
@@ -1833,7 +1832,7 @@ fn an_updated_cli_ends_a_settled_agent_without_a_trace() {
 /// Work in flight holds the agent however long it runs, and its ten
 /// minutes count from when the work settled, not from before it.
 #[test]
-fn work_in_flight_keeps_the_agent_and_restarts_its_ten_minutes() {
+fn work_in_flight_keeps_the_agent_and_restarts_its_span() {
     let (spawner, providers) = spawn();
     let (mut engine, _thread, agent, clock) = at_rest("in-flight", spawner, &providers);
     let background = |tasks: Vec<crate::progress::BackgroundTask>| SessionEvent::Progress {
@@ -1858,14 +1857,14 @@ fn work_in_flight_keeps_the_agent_and_restarts_its_ten_minutes() {
     engine.pump();
     clock.advance(HELD_AT_REST - Duration::from_secs(1));
     engine.pump();
-    assert!(running(&agent), "ten minutes count from the settle");
+    assert!(running(&agent), "its span counts from the settle");
     clock.advance(Duration::from_secs(1));
     engine.pump();
     assert!(!running(&agent), "the agent stopped");
 }
 
 /// Asking an agent something it answers in its own time (a control, a
-/// file search) is using it: its ten minutes count from the ask.
+/// file search) is using it: its its span at rest count from the ask.
 #[test]
 fn an_ask_restarts_the_agents_ten_minutes() {
     let (spawner, providers) = spawn();
@@ -4244,7 +4243,7 @@ fn a_thread_at_work_stays_mirrored_off_screen() {
     pump_until(&mut window, |window| {
         window
             .thread(thread)
-            .is_some_and(|open| !open.digest().working)
+            .is_some_and(|open| !open.digest().at_work)
     });
     clock.advance(Duration::from_secs(5 * 60 - 1));
     window.pump();
@@ -4264,14 +4263,24 @@ fn a_thread_watched_mid_turn_reads_working() {
     let harness = start("watched-mid-turn");
     let mut other = attach(&harness.address);
     let (thread, provider) = open(&mut other, &harness);
-    let mut window = cockpit(&harness);
-    window.draws_transcripts([]);
     provider
         .send(SessionEvent::RunState {
             state: crate::RunState::Running,
         })
         .unwrap();
-    provider.send(text("thinking")).unwrap();
+    provider.send(text("thinking\n\n")).unwrap();
+    other.until(|other| {
+        other.digest(thread).is_some_and(|digest| {
+            digest
+                .wall
+                .lines
+                .iter()
+                .any(|line| line.text.contains("thinking"))
+        })
+    });
+
+    // Attached mid-turn: what it reads of the turn comes in the history.
+    let mut window = cockpit(&harness);
     pump_until(&mut window, |window| shows(window, thread, "thinking"));
     let status = window.thread(thread).map(|open| open.turn().status);
     assert_eq!(status, Some(crate::transcript::Status::Streaming));
