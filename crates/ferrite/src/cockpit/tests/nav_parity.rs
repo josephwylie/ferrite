@@ -270,6 +270,8 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
         .group
         .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    // The panel off, so the board leaves the nav its full column at 1000.
+    hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| view.focus_thread(threads[2], cx));
     tick(cx);
@@ -433,7 +435,9 @@ fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
     use crate::theme::NAV_SCROLLBAR_GUTTER;
     let (core, _fake) = cockpit("nav-scrollbar-gutter", 2);
     let threads = sorted_threads(&core);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    // The panel off, so the board leaves the nav its full column at 1000.
+    hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
     let column = cx.debug_bounds("nav-column").expect("the column");
