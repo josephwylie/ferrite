@@ -5081,6 +5081,7 @@ impl CockpitView {
             ),
         ];
         about.splice(1..1, self.ferrite_update_rows(window, cx));
+        about.insert(1, self.server_status_row(window, cx));
         let mut about = vec![prefs::Group::new(None).rows(about)];
         let server = self.server_rows(window, cx);
         about.extend(machines);
@@ -9910,6 +9911,7 @@ impl CockpitView {
         self.present_cli_updates(window, cx);
         self.present_ferrite_update(window, cx);
         self.present_server(window, cx);
+        self.present_restart(window, cx);
         self.present_unreadable_settings(window, cx);
         self.present_user_commands(window, cx);
         self.present_allowance_warnings(window, cx);

@@ -33,7 +33,7 @@ use crate::workspace::registry::{ProjectId, Registry};
 use crate::workspace::WorkspaceChoice;
 use crate::{Decision, DecisionAnswer, ModelInfo, ThreadId};
 pub use mirror::ThreadView;
-pub use remote::{Attach, Endpoint, ServerState};
+pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 pub use status::{ServerStatus, StatusRow};
 
 pub(crate) mod mirror;
@@ -274,7 +274,27 @@ impl Cockpit {
     /// Restart the Server into its executable as it is on disk now — at
     /// once, or once every agent is idle — and resume every open Thread.
     pub fn restart_server(&mut self, when: When) -> io::Result<()> {
-        self.server_command(Op::Restart { when })
+        // Asked again while one is under way: that one is the restart.
+        if matches!(self.server_restart(), Some(ServerRestart::Restarting)) {
+            return Ok(());
+        }
+        let result = self.server_command(Op::Restart { when });
+        if let Link::Server(server) = &mut self.link {
+            match &result {
+                Ok(()) => server.restarting(),
+                Err(error) => server.restart_refused(error.to_string()),
+            }
+        }
+        result
+    }
+
+    /// A restart of the Server, as far as this window has seen it through:
+    /// asked for or heard of, back on a new boot, or failed and why.
+    pub fn server_restart(&self) -> Option<&ServerRestart> {
+        match &self.link {
+            Link::Server(server) => server.restart(),
+            Link::InProcess(_) => None,
+        }
     }
 
     fn server_command(&mut self, op: Op) -> io::Result<()> {

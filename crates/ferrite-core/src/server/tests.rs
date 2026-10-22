@@ -178,7 +178,15 @@ fn start_gated(name: &str) -> (Harness, Sender<()>) {
 
 /// A Server whose Projects run `projects`, when given, for their hooks.
 fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>, projects: Option<PathBuf>) -> Harness {
-    let dir = scratch(name);
+    serve_in(scratch(name), gate, projects)
+}
+
+/// `serve`, on the Store already in `dir`: a restart's successor.
+fn serve_in(
+    dir: PathBuf,
+    gate: Option<Arc<Mutex<Receiver<()>>>>,
+    projects: Option<PathBuf>,
+) -> Harness {
     let store = dir.join("threads");
     let projects = projects.map(|program| {
         let env = super::projects::environment(&store, Path::new("/bin/ferrite"), &program);
@@ -4733,4 +4741,110 @@ fn an_act_that_writes_reads_a_let_go_thread_back_first() {
     let said = said_in(&engine, thread);
     assert_eq!(said[..before.len()], before[..], "on its history");
     assert!(said.len() > before.len(), "{said:?}");
+}
+
+/// The old Server's endpoint, gone as `exec` would take it: its socket's
+/// file stays behind a test thread's Server.
+#[cfg(unix)]
+fn gone(address: &Path) {
+    std::fs::remove_file(address).unwrap();
+}
+
+/// A window that asks for a restart sees it through: restarting, then
+/// restarted once it reaches the successor, with the version it runs.
+// A successor takes the store as `exec` hands it over (Unix): a Windows
+// Server waits for its predecessor's process to end, which a test's own
+// thread never does.
+#[cfg(unix)]
+#[test]
+fn a_window_sees_its_restart_through() {
+    use crate::cockpit::ServerRestart;
+    let harness = start("restart-seen");
+    let mut window = cockpit(&harness);
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Attached { .. })
+        )
+    });
+
+    window.restart_server(When::Now).unwrap();
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    harness
+        .relaunched
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(harness.server.join().unwrap(), 0);
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Detached { .. })
+        )
+    });
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    // Pressed again while it is down: the restart under way is the one.
+    window.restart_server(When::Now).unwrap();
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+
+    // `exec` closes the old Server's sockets; this thread's stay open.
+    gone(&harness.address);
+    gone(&harness.api);
+    let _successor = serve_in(harness.dir.clone(), None, None);
+    pump_until_within(&mut window, Duration::from_secs(10), |window| {
+        window.server_restart() != Some(&ServerRestart::Restarting)
+    });
+    assert_eq!(
+        window.server_restart(),
+        Some(&ServerRestart::Restarted {
+            version: "0.9.0".into()
+        })
+    );
+}
+
+/// A restart the window does not see come back in time reads as failed,
+/// with why, rather than as nothing at all; back at last, restarted.
+// A successor takes the store as `exec` hands it over (Unix): a Windows
+// Server waits for its predecessor's process to end, which a test's own
+// thread never does.
+#[cfg(unix)]
+#[test]
+fn a_restart_not_back_in_time_reads_failed_until_it_is() {
+    use crate::cockpit::ServerRestart;
+    let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
+    let harness = start("restart-lost");
+    let mut window = cockpit(&harness);
+    pump_until(&mut window, |window| {
+        matches!(
+            window.server(),
+            Some(crate::cockpit::ServerState::Attached { .. })
+        )
+    });
+
+    window.restart_server(When::Now).unwrap();
+    harness
+        .relaunched
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    clock.advance(Duration::from_secs(29));
+    window.pump();
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    clock.advance(Duration::from_secs(1));
+    window.pump();
+    assert!(
+        matches!(window.server_restart(), Some(ServerRestart::Failed { .. })),
+        "{:?}",
+        window.server_restart()
+    );
+
+    // Back at last on a new boot: it did restart, and now reads so.
+    assert_eq!(harness.server.join().unwrap(), 0);
+    gone(&harness.address);
+    gone(&harness.api);
+    let _successor = serve_in(harness.dir.clone(), None, None);
+    pump_until_within(&mut window, Duration::from_secs(10), |window| {
+        matches!(
+            window.server_restart(),
+            Some(ServerRestart::Restarted { .. })
+        )
+    });
 }
