@@ -4771,6 +4771,9 @@ fn a_window_sees_its_restart_through() {
         )
     });
     assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
+    // Pressed again while it is down: the restart under way is the one.
+    window.restart_server(When::Now).unwrap();
+    assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
 
     // `exec` closes the old Server's sockets; this thread's stay open.
     std::fs::remove_file(&harness.address).unwrap();

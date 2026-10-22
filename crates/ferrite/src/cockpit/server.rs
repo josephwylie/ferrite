@@ -46,8 +46,9 @@ pub(crate) struct ServerBands {
     updating: bool,
     /// The restart onto this build is asked for once per run.
     restart_asked: bool,
-    /// The Server's state as the pump last saw it.
+    /// The Server's state, and its restart, as the pump last saw them.
     seen: Option<ServerState>,
+    restart_seen: Option<ServerRestart>,
     /// The restart the window last said something about.
     restart: Option<ServerRestart>,
 }
@@ -66,10 +67,13 @@ impl CockpitView {
     /// the nav's glyph are drawn from the state alone.
     pub(super) fn server_moved(&mut self) -> bool {
         let now = self.cockpit.server();
-        if self.server_bands.seen == now {
+        // A restart that times out moves no state but its own.
+        let restart = self.cockpit.server_restart().cloned();
+        if self.server_bands.seen == now && self.server_bands.restart_seen == restart {
             return false;
         }
         self.server_bands.seen = now;
+        self.server_bands.restart_seen = restart;
         true
     }
 
@@ -78,6 +82,12 @@ impl CockpitView {
     pub(super) fn present_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.cockpit.server() {
             None => {}
+            // Down mid-restart: the restart's own notice says so.
+            Some(ServerState::Detached { .. })
+                if matches!(
+                    self.cockpit.server_restart(),
+                    Some(ServerRestart::Restarting)
+                ) => {}
             Some(ServerState::Detached { reason, attention }) => {
                 self.server_bands.restart_asked = false;
                 if std::mem::take(&mut self.server_bands.updating) {
@@ -198,84 +208,108 @@ impl CockpitView {
             return;
         }
         self.server_bands.restart = restart.clone();
+        window.remove_notification::<Restarting>(cx);
         let Some(restart) = restart else {
             return;
         };
         if std::mem::take(&mut self.server_bands.updating) {
             window.remove_notification::<Updating>(cx);
         }
-        window.remove_notification::<Restarting>(cx);
-        let (kind, title, message, stays) = match restart {
+        // Each: what it is, what it says, whether it stays up, and whether a
+        // click restarts (again).
+        let (kind, title, message, stays, restarts) = match restart {
             ServerRestart::Restarting => (
                 NotificationType::Info,
                 "Restarting Ferrite’s server…".to_string(),
                 "Your agents stop for a moment; their Threads resume.".to_string(),
                 true,
+                false,
+            ),
+            ServerRestart::Restarted { version } if self.server_older() => (
+                NotificationType::Warning,
+                "Ferrite’s server restarted on an older build".to_string(),
+                format!("It runs {version}, not the installed build. Click to restart again."),
+                true,
+                true,
             ),
             ServerRestart::Restarted { version } => (
                 NotificationType::Success,
                 "Ferrite’s server restarted".to_string(),
-                format!("It runs {version}, the installed build. Every open Thread resumed."),
+                format!("It runs {version}, the installed build."),
+                false,
                 false,
             ),
             ServerRestart::Failed { reason } => (
                 NotificationType::Error,
                 "Ferrite’s server did not restart".to_string(),
-                format!("{reason}."),
+                format!("{reason}. Click to try again."),
+                true,
                 true,
             ),
         };
+        let view = cx.entity().downgrade();
         window.push_notification(
             Notification::new()
                 .id::<Restarting>()
                 .title(title)
                 .message(message)
                 .with_type(kind)
-                .autohide(!stays),
+                .autohide(!stays)
+                .when(restarts, |notice| {
+                    notice.on_click(move |_, window, cx| {
+                        view.update(cx, |view, cx| view.restart_server(window, cx))
+                            .ok();
+                    })
+                }),
             cx,
         );
     }
 
-    /// Where the Server stands, for Settings › About: up to date, an older
-    /// build with the restart that fixes it, restarting, or not running.
-    pub(super) fn server_status_row(&self, window: &Window, cx: &Context<Self>) -> prefs::Row {
-        let restarting = matches!(
+    /// Where the Server stands, in one wording for Settings › About and
+    /// Settings › Server: its build and uptime and whether it is the
+    /// installed one, restarting, or not running.
+    fn server_standing(&self) -> String {
+        if matches!(
             self.cockpit.server_restart(),
             Some(ServerRestart::Restarting)
-        );
-        let (status, older) = match self.cockpit.server() {
-            None => ("this window runs its agents itself".to_string(), false),
-            Some(_) if restarting => ("restarting…".to_string(), false),
-            Some(ServerState::Detached { reason, .. }) => (format!("not running: {reason}"), false),
+        ) {
+            return "restarting…".to_string();
+        }
+        match self.cockpit.server() {
+            None => "This window runs without a separate server".to_string(),
+            Some(ServerState::Detached { reason, .. }) => format!("not running: {reason}"),
             Some(ServerState::Attached { server, since }) => {
-                if self.server_is_older(&server, since) {
-                    (
-                        format!(
-                            "{} · an older build: restart to run the installed one",
-                            server.version
-                        ),
-                        true,
-                    )
+                let build = if self.server_is_older(&server, since) {
+                    "an older build: restart to use the installed one"
                 } else {
-                    (
-                        format!(
-                            "{} · up to date · up {}",
-                            server.version,
-                            uptime(since.elapsed())
-                        ),
-                        false,
-                    )
-                }
+                    "the installed build"
+                };
+                format!(
+                    "{} · up {} · {build}",
+                    server.version,
+                    uptime(since.elapsed())
+                )
             }
-        };
+        }
+    }
+
+    /// Whether the attached Server is an older build of this executable.
+    fn server_older(&self) -> bool {
+        matches!(self.cockpit.server(), Some(ServerState::Attached { server, since })
+            if self.server_is_older(&server, since))
+    }
+
+    /// Settings › About's Server row: where it stands, as it changes, and
+    /// the restart onto this build when it is an older one.
+    pub(super) fn server_status_row(&self, window: &Window, cx: &Context<Self>) -> prefs::Row {
         let handle = window.window_handle();
         let view = cx.entity().downgrade();
         prefs::action(
             "settings-about-server",
             "Server",
-            status.clone(),
-            status.into(),
-            older.then(|| "Restart".into()),
+            self.server_standing(),
+            SharedString::default(),
+            self.server_older().then(|| "Restart".into()),
             move |cx| {
                 let view = view.clone();
                 let _ = handle.update(cx, |_, window, cx| {
@@ -293,6 +327,9 @@ impl CockpitView {
         }
         if std::mem::take(&mut self.server_bands.updating) {
             window.remove_notification::<Updating>(cx);
+        }
+        if self.server_bands.restart.take().is_some() {
+            window.remove_notification::<Restarting>(cx);
         }
     }
 
@@ -402,29 +439,19 @@ impl CockpitView {
                 "This window runs without a separate server".into(),
             )];
         };
-        let status: SharedString = match state {
-            ServerState::Attached { server, since } => {
-                let live = self.cockpit.live_sessions(Provider::Claude)
-                    + self.cockpit.live_sessions(Provider::Codex);
-                let sessions = match live {
-                    1 => "1 live session".to_string(),
-                    n => format!("{n} live sessions"),
-                };
-                let mut status = format!(
-                    "{} · up {} · {sessions}",
-                    server.version,
-                    uptime(since.elapsed())
-                );
-                if self.server_is_older(&server, since) {
-                    status.push_str(" · restart to use the installed build");
-                }
-                if std::env::current_exe().is_ok_and(|exe| exe != server.executable) {
-                    status.push_str(&format!(" · runs {}", server.executable.display()));
-                }
-                status.into()
+        let mut status = self.server_standing();
+        if let ServerState::Attached { server, .. } = state {
+            let live = self.cockpit.live_sessions(Provider::Claude)
+                + self.cockpit.live_sessions(Provider::Codex);
+            status.push_str(&match live {
+                1 => " · 1 live session".to_string(),
+                n => format!(" · {n} live sessions"),
+            });
+            if std::env::current_exe().is_ok_and(|exe| exe != server.executable) {
+                status.push_str(&format!(" · runs {}", server.executable.display()));
             }
-            ServerState::Detached { reason, .. } => format!("not running: {reason}").into(),
-        };
+        }
+        let status: SharedString = status.into();
         let handle = window.window_handle();
         let act = |view: gpui::WeakEntity<Self>,
                    run: fn(&mut Self, &mut Window, &mut Context<Self>)| {

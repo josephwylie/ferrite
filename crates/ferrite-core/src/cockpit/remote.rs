@@ -931,17 +931,15 @@ impl Remote {
     /// A restart not back within `RESTART_TIMEOUT` did not happen, as far
     /// as anyone can tell from here.
     fn time_out_restart(&mut self) {
-        let Some((ServerRestart::Restarting, from, asked)) = &self.restart else {
+        let Some((ServerRestart::Restarting, _, asked)) = &self.restart else {
             return;
         };
         if crate::clock::instant().saturating_duration_since(*asked) < RESTART_TIMEOUT {
             return;
         }
+        // Attached to another boot, it would read restarted (`attached`).
         let reason = match &self.attachment {
-            Some(attachment) if Some(&attachment.boot_id) == from.as_ref() => {
-                "the server is still the one from before: it did not restart".to_string()
-            }
-            Some(_) => return,
+            Some(_) => "the server is still the one from before: it did not restart".to_string(),
             None => format!("the server did not come back: {}", self.detached),
         };
         self.restart_refused(reason);

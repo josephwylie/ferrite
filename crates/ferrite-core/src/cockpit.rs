@@ -273,6 +273,10 @@ impl Cockpit {
     /// Restart the Server into its executable as it is on disk now — at
     /// once, or once every agent is idle — and resume every open Thread.
     pub fn restart_server(&mut self, when: When) -> io::Result<()> {
+        // Asked again while one is under way: that one is the restart.
+        if matches!(self.server_restart(), Some(ServerRestart::Restarting)) {
+            return Ok(());
+        }
         let result = self.server_command(Op::Restart { when });
         if let Link::Server(server) = &mut self.link {
             match &result {
