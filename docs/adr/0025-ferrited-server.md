@@ -384,9 +384,10 @@ over live processes.
   "now" reads as interrupted.
 - The window sees a restart through (amended 2026-10-22). It says
   "restarting" from the moment it asks, or hears `restarting`. When it
-  reaches a new `boot_id` it says "restarted", naming the version and
-  whether it is the installed build. If 30 s pass without a new boot, it
-  says why it failed. Asking again while one is under way changes
+  reaches a new `boot_id` it says "restarted", naming the version and,
+  for a Server running its own executable, whether that is the installed
+  build. If 30 s pass without a new boot, it says why it failed, and a new
+  boot after that still reads restarted. Asking again while one is under way changes
   nothing. Settings › About shows the Server's build, live, the same way
   Settings › Server does. The older-build band restarts on a click.
 - With ADR 0023: on macOS the installer replaces the bundle under a

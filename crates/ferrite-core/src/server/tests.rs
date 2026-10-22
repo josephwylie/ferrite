@@ -4790,10 +4790,10 @@ fn a_window_sees_its_restart_through() {
     );
 }
 
-/// A restart the window never sees come back reads as failed, with why,
-/// rather than as nothing at all.
+/// A restart the window does not see come back in time reads as failed,
+/// with why, rather than as nothing at all; back at last, restarted.
 #[test]
-fn a_restart_that_never_comes_back_reads_failed() {
+fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     use crate::cockpit::ServerRestart;
     let clock = crate::clock::ThreadFixture::install(chrono::Local::now());
     let harness = start("restart-lost");
@@ -4820,4 +4820,16 @@ fn a_restart_that_never_comes_back_reads_failed() {
         "{:?}",
         window.server_restart()
     );
+
+    // Back at last on a new boot: it did restart, and now reads so.
+    assert_eq!(harness.server.join().unwrap(), 0);
+    std::fs::remove_file(&harness.address).unwrap();
+    std::fs::remove_file(&harness.api).unwrap();
+    let _successor = serve_in(harness.dir.clone(), None, None);
+    pump_until_within(&mut window, Duration::from_secs(10), |window| {
+        matches!(
+            window.server_restart(),
+            Some(ServerRestart::Restarted { .. })
+        )
+    });
 }

@@ -35,6 +35,17 @@ struct Updating;
 /// A restart, as the window sees it through.
 struct Restarting;
 
+/// Which build a Server runs, as this window can tell it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Build {
+    /// This window's own executable, as installed.
+    Installed,
+    /// An older build of this window's executable.
+    Older,
+    /// Another executable, or a machine's: not this window's to judge.
+    Other,
+}
+
 /// What the window has said about its Server this run.
 #[derive(Default)]
 pub(crate) struct ServerBands {
@@ -225,7 +236,7 @@ impl CockpitView {
                 true,
                 false,
             ),
-            ServerRestart::Restarted { version } if self.server_older() => (
+            ServerRestart::Restarted { version } if self.server_build() == Some(Build::Older) => (
                 NotificationType::Warning,
                 "Ferrite’s server restarted on an older build".to_string(),
                 format!("It runs {version}, not the installed build. Click to restart again."),
@@ -235,7 +246,10 @@ impl CockpitView {
             ServerRestart::Restarted { version } => (
                 NotificationType::Success,
                 "Ferrite’s server restarted".to_string(),
-                format!("It runs {version}, the installed build."),
+                match self.server_build() {
+                    Some(Build::Installed) => format!("It runs {version}, the installed build."),
+                    _ => format!("It runs {version}."),
+                },
                 false,
                 false,
             ),
@@ -256,9 +270,17 @@ impl CockpitView {
                 .with_type(kind)
                 .autohide(!stays)
                 .when(restarts, |notice| {
+                    // Down, there is nothing to restart: reach for it again.
                     notice.on_click(move |_, window, cx| {
-                        view.update(cx, |view, cx| view.restart_server(window, cx))
-                            .ok();
+                        view.update(cx, |view, cx| {
+                            if matches!(view.cockpit.server(), Some(ServerState::Attached { .. })) {
+                                view.restart_server(window, cx);
+                            } else {
+                                view.cockpit.retry_server();
+                                cx.notify();
+                            }
+                        })
+                        .ok();
                     })
                 }),
             cx,
@@ -279,24 +301,33 @@ impl CockpitView {
             None => "This window runs without a separate server".to_string(),
             Some(ServerState::Detached { reason, .. }) => format!("not running: {reason}"),
             Some(ServerState::Attached { server, since }) => {
-                let build = if self.server_is_older(&server, since) {
-                    "an older build: restart to use the installed one"
-                } else {
-                    "the installed build"
-                };
-                format!(
-                    "{} · up {} · {build}",
-                    server.version,
-                    uptime(since.elapsed())
-                )
+                let up = format!("{} · up {}", server.version, uptime(since.elapsed()));
+                match self.server_build() {
+                    Some(Build::Older) => {
+                        format!("{up} · an older build: restart to use the installed one")
+                    }
+                    Some(Build::Installed) => format!("{up} · the installed build"),
+                    _ => up,
+                }
             }
         }
     }
 
-    /// Whether the attached Server is an older build of this executable.
-    fn server_older(&self) -> bool {
-        matches!(self.cockpit.server(), Some(ServerState::Attached { server, since })
-            if self.server_is_older(&server, since))
+    /// Which build the attached Server runs, as far as this window can
+    /// tell: `None` unattached.
+    fn server_build(&self) -> Option<Build> {
+        let Some(ServerState::Attached { server, since }) = self.cockpit.server() else {
+            return None;
+        };
+        let ours = self.cockpit.machine().is_none()
+            && std::env::current_exe().is_ok_and(|exe| exe == server.executable);
+        Some(if !ours {
+            Build::Other
+        } else if self.server_is_older(&server, since) {
+            Build::Older
+        } else {
+            Build::Installed
+        })
     }
 
     /// Settings › About's Server row: where it stands, as it changes, and
@@ -309,7 +340,7 @@ impl CockpitView {
             "Server",
             self.server_standing(),
             SharedString::default(),
-            self.server_older().then(|| "Restart".into()),
+            (self.server_build() == Some(Build::Older)).then(|| "Restart".into()),
             move |cx| {
                 let view = view.clone();
                 let _ = handle.update(cx, |_, window, cx| {
@@ -384,7 +415,6 @@ impl CockpitView {
         cx: &mut Context<Self>,
         act: impl FnOnce(&mut Self) -> std::io::Result<()> + 'static,
     ) {
-        ferrite_core::log!("asked the server to {verb}");
         let done = move |view: &mut Self, result: std::io::Result<()>| {
             if let Err(error) = result {
                 view.group_error = Some(format!("the server did not {verb}: {error}").into());
@@ -406,9 +436,7 @@ impl CockpitView {
             cx,
         );
         cx.spawn_in(window, async move |view, cx| {
-            let answer = answer.await;
-            ferrite_core::log!("the operator answered {verb} with {answer:?}");
-            if answer == Ok(0) {
+            if answer.await == Ok(0) {
                 let _ = view.update(cx, |view, cx| {
                     let result = act(view);
                     done(view, result);
@@ -434,10 +462,7 @@ impl CockpitView {
     /// Settings › Server, for a window attached to one.
     pub(super) fn server_rows(&self, window: &Window, cx: &Context<Self>) -> Vec<prefs::Row> {
         let Some(state) = self.cockpit.server() else {
-            return vec![prefs::fact(
-                "Server",
-                "This window runs without a separate server".into(),
-            )];
+            return vec![prefs::fact("Server", self.server_standing().into())];
         };
         let mut status = self.server_standing();
         if let ServerState::Attached { server, .. } = state {

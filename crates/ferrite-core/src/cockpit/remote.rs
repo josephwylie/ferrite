@@ -91,6 +91,15 @@ pub enum ServerRestart {
     Failed { reason: String },
 }
 
+/// A restart being seen through: where it stands, the boot it restarts
+/// away from (none for one the Server refused: nothing restarts), and
+/// when it was asked for.
+struct Watch {
+    state: ServerRestart,
+    from: Option<String>,
+    asked: Instant,
+}
+
 /// How long a restart is given to come back before the window says it
 /// did not.
 const RESTART_TIMEOUT: Duration = Duration::from_secs(30);
@@ -147,9 +156,8 @@ pub(crate) struct Remote {
     backoff: Duration,
     /// The boot the window's mirrors were built from.
     last_boot: Option<String>,
-    /// A restart being seen through, the boot it restarts away from, and
-    /// when it was asked for.
-    restart: Option<(ServerRestart, Option<String>, Instant)>,
+    /// The restart being seen through.
+    restart: Option<Watch>,
     next_request: u64,
     /// What the Server said while an act waited for its reply.
     inbox: VecDeque<ServerMessage>,
@@ -783,9 +791,16 @@ impl Remote {
             .checked_sub(Duration::from_millis(uptime_ms.unwrap_or(0)))
             .unwrap_or(now);
         let new_boot = self.last_boot.as_ref() != Some(&snapshot.boot_id);
-        if let Some((state @ ServerRestart::Restarting, from, _)) = &mut self.restart {
-            if from.as_ref() != Some(&snapshot.boot_id) {
-                *state = ServerRestart::Restarted {
+        // A new boot sees a restart through, even one that came back
+        // after the window said it had not.
+        if let Some(watch) = &mut self.restart {
+            if !matches!(watch.state, ServerRestart::Restarted { .. })
+                && watch
+                    .from
+                    .as_ref()
+                    .is_some_and(|from| *from != snapshot.boot_id)
+            {
+                watch.state = ServerRestart::Restarted {
                     version: server.version.clone(),
                 };
                 crate::log!("the Ferrite server restarted: {}", server.version);
@@ -901,7 +916,11 @@ impl Remote {
     /// A restart is under way: seen through once the window reaches a new
     /// boot. Asked for again while one is, it keeps the first's clock.
     pub(crate) fn restarting(&mut self) {
-        if matches!(self.restart, Some((ServerRestart::Restarting, ..))) {
+        if self
+            .restart
+            .as_ref()
+            .is_some_and(|watch| watch.state == ServerRestart::Restarting)
+        {
             return;
         }
         let from = self
@@ -910,39 +929,50 @@ impl Remote {
             .map(|attachment| attachment.boot_id.clone())
             .or_else(|| self.last_boot.clone());
         crate::log!("the Ferrite server is restarting");
-        self.restart = Some((ServerRestart::Restarting, from, crate::clock::instant()));
+        self.restart = Some(Watch {
+            state: ServerRestart::Restarting,
+            from,
+            asked: crate::clock::instant(),
+        });
     }
 
     /// The Server refused the restart.
     pub(crate) fn restart_refused(&mut self, reason: String) {
         crate::log!("the Ferrite server did not restart: {reason}");
-        self.restart = Some((
-            ServerRestart::Failed { reason },
-            None,
-            crate::clock::instant(),
-        ));
+        self.restart = Some(Watch {
+            state: ServerRestart::Failed { reason },
+            from: None,
+            asked: crate::clock::instant(),
+        });
     }
 
     /// The restart as far as the window has seen it through.
     pub(crate) fn restart(&self) -> Option<&ServerRestart> {
-        self.restart.as_ref().map(|(state, ..)| state)
+        self.restart.as_ref().map(|watch| &watch.state)
     }
 
     /// A restart not back within `RESTART_TIMEOUT` did not happen, as far
     /// as anyone can tell from here.
     fn time_out_restart(&mut self) {
-        let Some((ServerRestart::Restarting, _, asked)) = &self.restart else {
+        let detached = &self.detached;
+        let attached = self.attachment.is_some();
+        let Some(watch) = &mut self.restart else {
             return;
         };
-        if crate::clock::instant().saturating_duration_since(*asked) < RESTART_TIMEOUT {
+        if watch.state != ServerRestart::Restarting
+            || crate::clock::instant().saturating_duration_since(watch.asked) < RESTART_TIMEOUT
+        {
             return;
         }
         // Attached to another boot, it would read restarted (`attached`).
-        let reason = match &self.attachment {
-            Some(_) => "the server is still the one from before: it did not restart".to_string(),
-            None => format!("the server did not come back: {}", self.detached),
+        let reason = if attached {
+            "Still the same server after 30 s".to_string()
+        } else {
+            format!("Not back after 30 s ({detached})")
         };
-        self.restart_refused(reason);
+        crate::log!("the Ferrite server did not restart: {reason}");
+        // The boot it left stays known: a late new one still reads restarted.
+        watch.state = ServerRestart::Failed { reason };
     }
 
     /// First sends the Server will never answer now: each Draft hears it
