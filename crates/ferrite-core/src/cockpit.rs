@@ -43,10 +43,10 @@ mod shared;
 mod status;
 
 /// The focused member of the Group on view before an arrival: the Group,
-/// its members then, and where the focused one sat (`sync_roster`).
+/// the member, and where it sat (`sync_roster`).
 struct FocusedMember {
     group: GroupId,
-    members: Vec<ThreadId>,
+    thread: ThreadId,
     ordinal: usize,
 }
 
@@ -58,7 +58,8 @@ pub struct Cockpit {
     /// and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
     pub(crate) roster: Roster,
-    /// The open Threads as the Roster last followed them.
+    /// The Threads the Roster holds a Pane for, as it last followed them:
+    /// the open ones, and the closed ones still seated (`sync_roster`).
     synced: Vec<ThreadId>,
     /// Each open Thread as the Engine's messages built it: what `thread`
     /// reads and `pump` reports.
@@ -342,7 +343,16 @@ impl Cockpit {
                 self.roster.insert_thread(*thread);
             }
         }
+        // A closed Thread its seat kept stays synced, so its Pane goes once
+        // the seat does, whichever of the two the window hears first.
+        let kept: Vec<ThreadId> = self
+            .synced
+            .iter()
+            .copied()
+            .filter(|thread| !open.contains(thread) && seated.contains(thread))
+            .collect();
         self.synced = open;
+        self.synced.extend(kept);
         if let Some(focused) = focused {
             self.follow_focused_member(focused);
         }
@@ -375,44 +385,33 @@ impl Cockpit {
         let View::Group(group) = self.roster.view() else {
             return None;
         };
-        let focused = self.roster.focused_thread()?;
-        let members = self.shared.groups.get(group)?.members.clone();
-        let ordinal = members.iter().position(|member| *member == focused)?;
+        let thread = self.roster.focused_thread()?;
+        let ordinal = self
+            .shared
+            .groups
+            .get(group)?
+            .members
+            .iter()
+            .position(|member| *member == thread)?;
         Some(FocusedMember {
             group,
-            members,
+            thread,
             ordinal,
         })
     }
 
     /// The focused member that left the Group on view hands focus to its
-    /// ordinal survivor, as closing its Pane does (`close_thread`); a pair
-    /// it dissolved leaves Solo on its survivor.
+    /// ordinal survivor, as closing its Pane does (`close_thread`). A pair
+    /// it dissolved already landed on its survivor (`land_on_survivor`).
     fn follow_focused_member(&mut self, before: FocusedMember) {
-        let focused = before.members[before.ordinal];
-        if self.roster.view() != View::Group(before.group) {
-            return;
-        }
-        match self.shared.groups.get(before.group) {
-            Some(group) if !group.members.contains(&focused) => {
-                self.focus_ordinal_survivor(before.group, before.ordinal);
-            }
-            Some(_) => {}
-            // Dissolved: Solo, on the focused Pane while it is still
-            // there, else on the member left standing.
-            None => {
-                self.roster.set_view(View::Solo);
-                if self.roster.pane_of(focused).is_none() {
-                    if let Some(survivor) = before
-                        .members
-                        .iter()
-                        .copied()
-                        .find(|member| self.roster.pane_of(*member).is_some())
-                    {
-                        self.roster.focus(PaneIdentity::Thread(survivor));
-                    }
-                }
-            }
+        if self.roster.view() == View::Group(before.group)
+            && self
+                .shared
+                .groups
+                .get(before.group)
+                .is_some_and(|group| !group.members.contains(&before.thread))
+        {
+            self.focus_ordinal_survivor(before.group, before.ordinal);
         }
     }
 
@@ -604,6 +603,9 @@ impl Cockpit {
         }
         match &message {
             ServerMessage::Focus { thread } => self.asked.push(Asked::Focus(*thread)),
+            ServerMessage::Dissolved { group, survivor } => {
+                self.land_on_survivor(*group, *survivor);
+            }
             ServerMessage::Notification {
                 title,
                 body,
@@ -702,8 +704,11 @@ impl Cockpit {
     /// survivor is the one Thread still on screen, so that is where they
     /// land — never the Thread that left, and never a blank Cockpit.
     pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        // The view as the act found it: the arrival already healed a
-        // dissolved Group's view to Solo (`sync_roster`).
+        // The act's `dissolved` arrival lands a dissolved Group on its
+        // survivor (`land_on_survivor`), here as in every window. A Server
+        // older than that message says so only in its reply; by then the
+        // arrival may have healed the view to Solo, so the view the act
+        // found decides.
         let view = self.roster.view();
         let applied = self.act(
             |engine| engine.apply_group(change.clone()),
@@ -724,18 +729,28 @@ impl Cockpit {
                 Err(error) => Err(ApplyError::Io(error.message)),
             },
         )?;
-        if let View::Group(active) = view {
-            if let Some(dissolved) = applied
-                .dissolved
-                .iter()
-                .find(|dissolved| dissolved.group == active)
-            {
-                self.roster.set_view(View::Solo);
-                self.roster.focus(PaneIdentity::Thread(dissolved.survivor));
-            }
+        if let Some(dissolved) = applied
+            .dissolved
+            .iter()
+            .find(|dissolved| view == View::Group(dissolved.group))
+        {
+            self.solo_on(dissolved.survivor);
         }
         self.roster.heal_focus(&self.shared.groups);
         Ok(applied)
+    }
+
+    /// The Group on view dissolved, by whoever's act: Solo, on its
+    /// survivor, the one Thread of it still on screen.
+    fn land_on_survivor(&mut self, group: GroupId, survivor: ThreadId) {
+        if self.roster.view() == View::Group(group) {
+            self.solo_on(survivor);
+        }
+    }
+
+    fn solo_on(&mut self, thread: ThreadId) {
+        self.roster.set_view(View::Solo);
+        self.roster.focus(PaneIdentity::Thread(thread));
     }
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread

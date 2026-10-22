@@ -22,7 +22,9 @@ use crate::activity::{
     PendingDecision, Subject,
 };
 use crate::digest::Digest;
-use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
+use crate::groups::{
+    Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
+};
 use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
@@ -1230,7 +1232,18 @@ impl Engine {
     /// A Group change (#28). What it does to each window's view is the
     /// window's (`Cockpit::apply_group`).
     pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        self.groups.apply(change)
+        let applied = self.groups.apply(change)?;
+        self.tell_dissolved(&applied.dissolved);
+        Ok(applied)
+    }
+
+    /// Each Group a change dissolved, and its survivor, for every window.
+    fn tell_dissolved(&mut self, dissolved: &[Dissolved]) {
+        self.outbox
+            .extend(dissolved.iter().map(|dissolved| ServerMessage::Dissolved {
+                group: dissolved.group,
+                survivor: dissolved.survivor,
+            }));
     }
 
     pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
@@ -2109,11 +2122,14 @@ impl Engine {
             .threads
             .get(&thread)
             .is_some_and(|state| state.session.is_some());
-        if grouped {
+        let dissolved = if grouped {
             self.groups
                 .apply(GroupChange::Leave { thread })
-                .map_err(|error| DeleteError::Io(io::Error::other(error)))?;
-        }
+                .map_err(|error| DeleteError::Io(io::Error::other(error)))?
+                .dissolved
+        } else {
+            Vec::new()
+        };
 
         let deleted = (|| {
             if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
@@ -2162,6 +2178,7 @@ impl Engine {
             }
             return Err(error);
         }
+        self.tell_dissolved(&dissolved);
         Ok(())
     }
 
