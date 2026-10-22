@@ -4743,6 +4743,15 @@ fn an_act_that_writes_reads_a_let_go_thread_back_first() {
     assert!(said.len() > before.len(), "{said:?}");
 }
 
+/// The old Server's endpoint, gone as `exec` would take it: a Unix
+/// socket's file stays behind a thread's Server, a Windows pipe never does.
+fn gone(address: &Path) {
+    match std::fs::remove_file(address) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => panic!("{error}"),
+        _ => {}
+    }
+}
+
 /// A window that asks for a restart sees it through: restarting, then
 /// restarted once it reaches the successor, with the version it runs.
 #[test]
@@ -4776,8 +4785,8 @@ fn a_window_sees_its_restart_through() {
     assert_eq!(window.server_restart(), Some(&ServerRestart::Restarting));
 
     // `exec` closes the old Server's sockets; this thread's stay open.
-    std::fs::remove_file(&harness.address).unwrap();
-    std::fs::remove_file(&harness.api).unwrap();
+    gone(&harness.address);
+    gone(&harness.api);
     let _successor = serve_in(harness.dir.clone(), None, None);
     pump_until_within(&mut window, Duration::from_secs(10), |window| {
         window.server_restart() != Some(&ServerRestart::Restarting)
@@ -4823,8 +4832,8 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
 
     // Back at last on a new boot: it did restart, and now reads so.
     assert_eq!(harness.server.join().unwrap(), 0);
-    std::fs::remove_file(&harness.address).unwrap();
-    std::fs::remove_file(&harness.api).unwrap();
+    gone(&harness.address);
+    gone(&harness.api);
     let _successor = serve_in(harness.dir.clone(), None, None);
     pump_until_within(&mut window, Duration::from_secs(10), |window| {
         matches!(
