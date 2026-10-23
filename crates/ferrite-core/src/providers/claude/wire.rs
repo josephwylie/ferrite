@@ -390,6 +390,9 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                             tasks: tasks
                                 .iter()
                                 .filter(|task| task["ambient"] != true)
+                                // A background agent is a Subagent with its
+                                // own tab and stop; it is not a chip too.
+                                .filter(|task| task["task_type"] != "local_agent")
                                 .filter_map(|task| {
                                     Some(crate::progress::BackgroundTask {
                                         id: task.get("task_id")?.as_str()?.into(),

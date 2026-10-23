@@ -7,8 +7,8 @@ use serde_json::json;
 use support::*;
 
 #[test]
-fn claude_background_snapshots_replace_tasks_and_exclude_ambient_work() {
-    let first = json!({"type":"system","subtype":"background_tasks_changed","session_id":"root","uuid":"snapshot-1","tasks":[{"task_id":"work","task_type":"local_bash","description":"Build","ambient":false},{"task_id":"ambient","task_type":"local_bash","description":"Poll","ambient":true}]});
+fn claude_background_snapshots_replace_tasks_and_exclude_ambient_work_and_agents() {
+    let first = json!({"type":"system","subtype":"background_tasks_changed","session_id":"root","uuid":"snapshot-1","tasks":[{"task_id":"work","task_type":"local_bash","description":"Build","ambient":false},{"task_id":"ambient","task_type":"local_bash","description":"Poll","ambient":true},{"task_id":"agent","task_type":"local_agent","description":"Review","ambient":false}]});
     let r = Replay::new("claude", vec![first.clone()]);
     let a = fold(r.drain());
     let tasks = a.view().main().transcript().progress().background();
