@@ -2122,8 +2122,8 @@ pub const SLASH_MENU_W: f32 = PALETTE_W;
 /// row.
 pub const MODEL_PICKER_W: f32 = 520.0;
 /// A form field or a sheet's text button: one row in a cell of padding,
-/// inside a 1px `paint::LINE2` box (`CONTROL_FOCUS` while a field holds the
-/// caret).
+/// inside a 1px edge at `R_CONTROL` (a field's the `FIELD_RING` hairline,
+/// `CONTROL_FOCUS` while it holds the caret).
 pub const FORM_CONTROL_H: f32 = ROW + 2.0 * SPACE_1 + 2.0;
 pub const FORM_FIELD_PAD_X: f32 = CH;
 pub const FORM_BUTTON_PAD_X: f32 = CH;

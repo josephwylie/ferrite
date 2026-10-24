@@ -66,9 +66,10 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
 }
 
 /// The Project name row: its label as a `TEXT_DIM` row over a field — a
-/// 1px `paint::LINE2` box a cell in, one row high, the strong edge while
-/// the keyboard is in it — recognizable before the live editor holds any
-/// text.
+/// box a cell in, one row high, rounded as every control is (`R_CONTROL`)
+/// and ringed with the Composer's hairline (`FIELD_RING`), the strong edge
+/// (`CONTROL_FOCUS`) while the keyboard is in it — recognizable before the
+/// live editor holds any text.
 pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
     field("Name".into(), editor, focused, "project-name-focused")
 }
@@ -102,14 +103,15 @@ fn field(
                 .h(px(FORM_CONTROL_H))
                 .flex_shrink_0()
                 .px(px(FORM_FIELD_PAD_X))
+                .rounded(px(R_CONTROL))
                 .border_1()
                 .map(|field| {
                     if focused {
                         field
-                            .border_color(rgb(TEXT_STRONG))
+                            .border_color(rgb(CONTROL_FOCUS))
                             .debug_selector(|| focused_selector.into())
                     } else {
-                        field.border_color(paint::LINE2)
+                        field.border_color(gpui::rgba(FIELD_RING))
                     }
                 })
                 .child(div().min_w_0().flex_1().child(editor)),
