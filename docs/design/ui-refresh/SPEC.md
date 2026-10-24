@@ -720,9 +720,11 @@ still open beside the Pane inside the board (ADR 0021).
 #### 5.6.2 PR tab
 
 A read-only view of the branch's pull request, designed to answer at a
-glance "can this merge, and what's in the way". Mockups: `solo.png` (open,
-checks running) and `pr-states.png` (failing with conflicts, merged, no
-PR). It is fed by the Review's forge read
+glance "can this merge, and what's in the way", and to say what it is.
+Mockups: `solo.png` (open, checks running) and `pr-states.png` (failing
+with conflicts, merged, no PR); the description (item 3) came after them,
+and the `refresh-pr-described` scenes draw it. It is fed by the Review's
+forge read
 (`Cockpit::review_pull_request` → `forge::PrSnapshot` → `WirePr`), the
 same snapshot the Review's PR scope shows. Nothing new is fetched from
 GitHub.
@@ -773,7 +775,23 @@ section heads' inset; under the pointer its `RAISED` hover ground reaches
    | `sync` Behind | `arrow-down` `ATTENTION`, `N commit(s) to pull` |
    | `sync` InSync | `check-circle` `TEXT_DIM`, `In sync with your branch` |
    | Merged | `git-merge` `TEXT`, `Merged into <base>` (it replaces the merge and sync rows) |
-3. **Checks.**
+3. **Description.** The PR's body, as its author wrote it. It is how
+   the tab says what the pull request *is*, not only whether it can
+   merge. With an empty body there is no section.
+   - Heading (30): `Description` 12/500 `TEXT_DIM`, with nothing at the
+     right.
+   - Body: Markdown set small, as a comment's (12.5/18 `TEXT`, inline
+     code as chips). Headings stay at the body's size in 600
+     `TEXT_STRONG`, with a paragraph's gap more above them than below.
+     A list's markers hang dim in a 16px box. The text sits at the
+     heading's 2px inset.
+   - It is clamped to 5 lines, which is typically its opening heading
+     and the first lines under it. A `Show more` row (30, a chevron and
+     the words in 12.5 `TEXT_DIM`, as `N resolved`) follows only when the
+     clamp cuts something. Unfolded, the whole body shows and the row
+     reads `Show less`, its chevron turned. The Thread keeps the choice,
+     like the tab's other unfolds.
+4. **Checks.**
    - Heading (30): `Checks` 12/500 `TEXT_DIM`, with the count at the
      right.
    - One 30px row per check:
@@ -788,7 +806,7 @@ section heads' inset; under the pointer its `RAISED` hover ground reaches
      Otherwise it opens the PR.
    - After 8 rows, a `Show N more` row. `checks_truncated` adds `· more on
      GitHub`.
-4. **Comments.**
+5. **Comments.**
    - Heading (30): `Comments` with `N · M unresolved` at the right, or
      `N · all resolved`.
    - Unresolved items come first, newest first. Each is a card: radius 8,
@@ -811,7 +829,7 @@ section heads' inset; under the pointer its `RAISED` hover ground reaches
      in `TEXT_DIM`. It expands to the same cards at 60% ink, the chevron
      turning a quarter (`motion::CHEVRON`).
    - `comments_truncated` adds a last row, `More on GitHub`.
-5. **`Review PR`.** A secondary full-width button (32, radius 7,
+6. **`Review PR`.** A secondary full-width button (32, radius 7,
    `RAISED`, 12.5/500 `TEXT_STRONG`). It opens the Review beside the Pane
    in its PR scope (ADR 0021), where findings can be read against the
    diff.

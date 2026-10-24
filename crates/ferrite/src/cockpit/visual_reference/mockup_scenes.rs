@@ -39,19 +39,26 @@ enum Shot {
     PrMerged,
     /// pr-states.png, third column: the PR tab with no pull request.
     PrNone,
+    /// No mockup: the PR tab on a pull request with a description, folded
+    /// to its first lines, and a head branch too long for its line.
+    PrDescribed,
+    /// The same, its description unfolded.
+    PrDescribedOpen,
     /// command-search.png: the palette over WORK with `supp` typed, the
     /// cursor on Supplier Price Review.
     Palette,
 }
 
 /// Every refresh state, with the shot it takes.
-const SHOTS: [(&str, Shot); 7] = [
+const SHOTS: [(&str, Shot); 9] = [
     ("refresh-solo", Shot::Solo),
     ("refresh-solo-changes", Shot::SoloChanges),
     ("refresh-group", Shot::Group),
     ("refresh-pr-failing", Shot::PrFailing),
     ("refresh-pr-merged", Shot::PrMerged),
     ("refresh-pr-none", Shot::PrNone),
+    ("refresh-pr-described", Shot::PrDescribed),
+    ("refresh-pr-described-open", Shot::PrDescribedOpen),
     ("refresh-palette", Shot::Palette),
 ];
 
@@ -64,9 +71,13 @@ impl Shot {
     fn look(self) -> Look {
         match self {
             Shot::Group | Shot::Palette => Look::Group,
-            Shot::Solo | Shot::SoloChanges | Shot::PrFailing | Shot::PrMerged | Shot::PrNone => {
-                Look::Solo
-            }
+            Shot::Solo
+            | Shot::SoloChanges
+            | Shot::PrFailing
+            | Shot::PrMerged
+            | Shot::PrNone
+            | Shot::PrDescribed
+            | Shot::PrDescribedOpen => Look::Solo,
         }
     }
 
@@ -76,6 +87,7 @@ impl Shot {
             Shot::PrFailing => Pr::Failing,
             Shot::PrMerged => Pr::Merged,
             Shot::PrNone => Pr::None,
+            Shot::PrDescribed | Shot::PrDescribedOpen => Pr::Described,
             Shot::Solo | Shot::SoloChanges | Shot::Group | Shot::Palette => Pr::Open,
         }
     }
@@ -84,7 +96,12 @@ impl Shot {
     fn panel(self) -> Option<PanelTab> {
         match self {
             Shot::SoloChanges => Some(PanelTab::Changes),
-            Shot::Solo | Shot::PrFailing | Shot::PrMerged | Shot::PrNone => Some(PanelTab::Pr),
+            Shot::Solo
+            | Shot::PrFailing
+            | Shot::PrMerged
+            | Shot::PrNone
+            | Shot::PrDescribed
+            | Shot::PrDescribedOpen => Some(PanelTab::Pr),
             Shot::Group | Shot::Palette => None,
         }
     }
@@ -174,6 +191,9 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         }
         if shot == Shot::SoloChanges {
             unfold_file(view, cast.memory, "scheduled_work.rs", cx);
+        }
+        if shot == Shot::PrDescribedOpen {
+            view.fixture_unfold_description(cast.memory);
         }
         if shot == Shot::Palette {
             view.open_palette(PaletteScope::All, "supp", window, cx);

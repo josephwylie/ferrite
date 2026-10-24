@@ -980,6 +980,12 @@ pub const PR_CODE_CHIP: u32 = 0x333333;
 pub const PR_BODY_LH: f32 = 18.0;
 /// The lines a folded comment body shows.
 pub const PR_BODY_LINES: usize = 3;
+/// 16px — where a list item's text starts in a comment or the description,
+/// its marker hanging dim in the box before it, 6px short of the text.
+pub const PR_LIST_HANG: f32 = 16.0;
+/// The lines the folded description shows: its opening heading, if it has
+/// one, and the first lines under it.
+pub const PR_DESCRIPTION_LINES: usize = 5;
 /// How far a flush row's hover ground (a check, `Show more`, `N resolved`)
 /// reaches past the column either side: its content keeps the section
 /// heads' inset, and the ground still clears it.
