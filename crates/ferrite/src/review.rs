@@ -2319,6 +2319,19 @@ impl ReviewView {
         self.pick(head, true, cx);
     }
 
+    /// The comment field open under the pick, `words` typed in it.
+    pub(crate) fn stage_comment(
+        &mut self,
+        words: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_editor(window, cx);
+        if let Some(editor) = &self.editor {
+            editor.update(cx, |editor, cx| editor.set(words.to_string(), cx));
+        }
+    }
+
     /// The PR tab open on `pr`.
     pub(crate) fn stage_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
         self.pr_open = true;
