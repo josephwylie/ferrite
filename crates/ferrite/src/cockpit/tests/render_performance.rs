@@ -2196,9 +2196,16 @@ fn reduced_motion_still_advances_a_working_clock(cx: &mut TestAppContext) {
 /// A path the pointer rests on keeps its underline while its transcript
 /// streams: the Cockpit around the cached transcript redraws on every step
 /// of the working Thread's loops without drawing the transcript, and the
-/// hover must outlive those frames.
+/// hover must outlive those frames and the transcript's own next draw.
+///
+/// The stream runs on along the link's own line, so the link stays under
+/// the pointer: a new paragraph would lift the tail-following transcript
+/// and carry the link out from under it, a leave the blend rightly fades.
+/// The wall clock is held, as the working clock's turnover would otherwise
+/// draw a frame inside the test's last step on some runs and not others.
 #[gpui::test]
 fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
     crate::motion::testing::drive();
     let (mut core, fake, workspace) = bound_cockpit("hovered-link-streams", Provider::Claude);
     let file = workspace.join("docs").join("guide.md");
@@ -2209,21 +2216,25 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(700.)));
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "See [guide](docs/guide.md:12) for the notes.\n\n".into(),
-        })
-        .unwrap();
+    let stream = |text: &str| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: text.into() })
+            .unwrap();
+    };
+    stream("See [guide](docs/guide.md:12) for the notes");
     tick(cx);
     tick(cx);
     // The loops redraw the Cockpit and reuse the cached transcript, whose
     // selectors a test window keeps only for a frame that drew it.
-    cx.update(|window, _| window.refresh());
-    cx.run_until_parked();
-    let link = debug_bounds(cx, format!("file-attachment-{}", file.display()))
-        .or_else(|| debug_bounds(cx, "inline-file".to_string()))
-        .expect("the transcript draws the link");
-    cx.simulate_mouse_move(link.center(), None, gpui::Modifiers::none());
+    let link = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        debug_bounds(cx, format!("file-attachment-{}", file.display()))
+            .or_else(|| debug_bounds(cx, "inline-file".to_string()))
+            .expect("the transcript draws the link")
+    };
+    let before = link(cx);
+    cx.simulate_mouse_move(before.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
     cockpit_renders_over(cx, 300);
     let underlined = |cx: &mut gpui::VisualTestContext| {
@@ -2234,15 +2245,18 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     assert!(underlined(cx), "the premise: the link is underlined");
     // The working loops redraw the Cockpit; the cached transcript is reused.
     cockpit_renders_over(cx, 600);
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "One more streamed line.\n\n".into(),
-        })
-        .unwrap();
+    stream(", and a few more words.");
     tick(cx);
+    // Past a fade: a hover lost on that draw has faded out by now.
+    cockpit_renders_over(cx, 300);
     assert!(
         underlined(cx),
         "the transcript drew again under the pointer and lost the link's underline"
+    );
+    assert_eq!(
+        link(cx),
+        before,
+        "the premise: the link stayed under the pointer"
     );
 }
 
@@ -2560,14 +2574,40 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
     assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
 }
 
-/// The Needs-you toast (FL-18) rises in over `motion::TOAST_IN` and, when it
-/// goes on its own, fades away over `TOAST_OUT` as a face with no answers
-/// to press — frames only while it moves.
-#[gpui::test]
-fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
+/// One display frame: the clock moves on 16ms and the frame the window
+/// asked for, if it asked for one, is delivered (`1`; `0` when it asked
+/// for none, however many of its animations asked). With `rebuild_nav`,
+/// the nav part is rebuilt alone first, as a row's hover or a working
+/// row's clock does.
+fn display_frame(
+    view: &Entity<CockpitView>,
+    rebuild_nav: bool,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    if rebuild_nav {
+        view.update(cx, |view, cx| view.notify_part(super::parts::Part::Nav, cx));
+    }
+    cx.executor().advance_clock(Duration::from_millis(16));
+    cx.run_until_parked();
+    (display_frames(cx) > 0).into()
+}
+
+/// A finished Thread off the board toasts: the toast rises in and, when
+/// it times out, its face fades out where it stood. The clock moves a
+/// display frame at a time across both, as a display delivers them, so
+/// each fade starts where the clock is: a single jump across the toast's
+/// timeout would draw its going at the timeout and then skip the frames
+/// a stalled display skips. What the operator sees is asserted on every
+/// frame — the toast up, then its face up until `TOAST_OUT` has passed.
+/// The rise and the fade frame counts.
+fn needs_you_toast_comes_and_goes(
+    name: &str,
+    rebuild_nav: bool,
+    cx: &mut TestAppContext,
+) -> (usize, usize) {
     crate::motion::testing::drive();
     // A board of two, and a third Thread off it, working.
-    let (mut core, fake) = cockpit("toast-motion", 3);
+    let (mut core, fake) = cockpit(name, 3);
     let threads = core.threads().to_vec();
     core.apply_group(GroupChange::Create {
         first: threads[0],
@@ -2578,7 +2618,7 @@ fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
     core.send(threads[2], "task".into());
     core.pump();
     core.enter_group(group).unwrap();
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     settle(cx);
@@ -2590,35 +2630,69 @@ fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     settle(cx);
+    if rebuild_nav {
+        // The recipe that first looked like starvation: the nav rebuilt
+        // alone a few times while the finish waits out its delay.
+        for _ in 0..11 {
+            display_frame(&view, true, cx);
+        }
+    }
     let toast: &'static str = format!("toast-{}", threads[2].get()).leak();
+
+    // It rings once the finish has waited out its delay.
     cx.executor()
-        .advance_clock(crate::notifications::ALERT_DELAY);
-    tick(cx);
-    assert!(cx.debug_bounds(toast).is_some(), "the toast is up");
-    let rising = frames_over(cx, theme::MOTION_TOAST_IN_MS + 32);
-    assert!(rising > 0, "it rises in");
+        .advance_clock(crate::notifications::ALERT_DELAY / 2);
+    cx.run_until_parked();
+    let mut waited = 0;
+    while cx.debug_bounds(toast).is_none() {
+        display_frame(&view, rebuild_nav, cx);
+        waited += 1;
+        assert!(waited < 120, "the toast never came");
+    }
+    let mut rising = 0;
+    for _ in 0..(theme::MOTION_TOAST_IN_MS + 32) / 16 {
+        rising += display_frame(&view, rebuild_nav, cx);
+        assert!(cx.debug_bounds(toast).is_some(), "it stays up as it rises");
+    }
+    assert!(
+        rising + 1 >= (theme::MOTION_TOAST_IN_MS / 16) as usize,
+        "it rises in a frame at a time: {rising}"
+    );
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 
     // It times out, the window drawing a frame at a time.
     cx.executor()
-        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_millis(200));
+        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_secs(1));
     cx.run_until_parked();
     let mut waited = 0;
     while cx.debug_bounds(toast).is_some() {
-        frames_over(cx, 16);
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
+        display_frame(&view, rebuild_nav, cx);
         waited += 1;
-        assert!(waited < 30, "the toast never timed out");
+        assert!(waited < 120, "the toast never timed out");
     }
+    // It went at most a frame ago.
+    let went = cx.executor().now();
     assert!(
         cx.debug_bounds("toast-leaving").is_some(),
         "its face fades out where it stood"
     );
     let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
     assert!(cx.debug_bounds(open).is_none(), "with nothing to press");
-    let leaving = frames_over(cx, theme::MOTION_TOAST_OUT_MS + 32);
-    assert!(leaving > 1, "it fades out a frame at a time: {leaving}");
+    let mut leaving = 0;
+    for _ in 0..(theme::MOTION_TOAST_OUT_MS + 32) / 16 {
+        leaving += display_frame(&view, rebuild_nav, cx);
+        let shown = cx.executor().now() - went + Duration::from_millis(16);
+        if shown < crate::motion::TOAST_OUT.duration() {
+            assert!(
+                cx.debug_bounds("toast-leaving").is_some(),
+                "its face is drawn until it has faded: gone at {shown:?}"
+            );
+        }
+    }
+    assert!(
+        leaving + 1 >= (theme::MOTION_TOAST_OUT_MS / 16) as usize,
+        "it fades out a frame at a time: {leaving}"
+    );
     assert_eq!(display_frames(cx), 0, "gone: no more frames");
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
@@ -2626,7 +2700,127 @@ fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
         cx.debug_bounds("toast-leaving").is_none(),
         "and its face is gone"
     );
+    (rising, leaving)
+}
+
+/// The Needs-you toast (FL-18) rises in over `motion::TOAST_IN` and, when it
+/// goes on its own, fades away over `TOAST_OUT` as a face with no answers
+/// to press — frames only while it moves.
+#[gpui::test]
+fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
+    let (rising, leaving) = needs_you_toast_comes_and_goes("toast-motion", false, cx);
     eprintln!("NEEDS_YOU_TOAST rising={rising} leaving={leaving}");
+}
+
+/// The nav rebuilt alone — before the toast comes, and on every frame of
+/// its rise and its fade — starves neither: a part's rebuild redraws the
+/// Cockpit around it (its ancestors are dirtied with it), which draws the
+/// floats again, and each one-shot asks for its next frame there.
+#[gpui::test]
+fn nav_rebuilds_starve_no_toast_frame(cx: &mut TestAppContext) {
+    let (rising, leaving) = needs_you_toast_comes_and_goes("toast-motion-nav", true, cx);
+    eprintln!("NEEDS_YOU_TOAST_NAV rising={rising} leaving={leaving}");
+}
+
+/// Plays out a one-shot of `ms` a display frame at a time, the nav rebuilt
+/// alone before each frame: it asks for a frame on every one but about its
+/// last, and for none once it has landed.
+fn plays_beside_nav_rebuilds(
+    view: &Entity<CockpitView>,
+    ms: u64,
+    what: &str,
+    cx: &mut gpui::VisualTestContext,
+) {
+    let mut frames = 0;
+    for _ in 0..(ms + 32) / 16 {
+        frames += display_frame(view, true, cx);
+    }
+    eprintln!("NAV_REBUILDS {what} frames={frames}");
+    assert!(
+        frames + 2 >= (ms / 16) as usize,
+        "{what}: a part's rebuild starved its frames: {frames} in {ms}ms"
+    );
+    assert_eq!(display_frame(view, true, cx), 0, "{what}: landed, no frame");
+}
+
+/// A part's rebuild landing mid-entrance — the nav rebuilt alone on every
+/// frame — starves no `motion::Played` entrance the Cockpit draws: a menu,
+/// the palette, a sheet. The part's ancestors are dirtied with it, so the
+/// Cockpit around it draws again and each entrance asks there for its
+/// next frame.
+#[gpui::test]
+fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("nav-rebuild-entrances", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_MENU_IN_MS, "menu", cx);
+    cx.simulate_keystrokes("escape");
+    cockpit_renders_over(cx, 300);
+
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_DIALOG_IN_MS, "palette", cx);
+    cx.simulate_keystrokes("escape");
+    cockpit_renders_over(cx, 300);
+
+    view.update(cx, |view, cx| view.toggle_settings(cx));
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_DIALOG_IN_MS, "settings sheet", cx);
+}
+
+/// The Panel's ride and a reader's slide with the nav rebuilt alone on
+/// every frame: each still moves on every frame until it lands, then asks
+/// for none.
+#[gpui::test]
+fn nav_rebuilds_starve_no_ride(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("nav-rebuild-panel", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    let mut widths = vec![crate::theme::PANEL_W];
+    for _ in 0..(theme::MOTION_RESIZE_MS + 32) / 16 {
+        display_frame(&view, true, cx);
+        widths.extend(panel_width(cx));
+    }
+    assert!(
+        widths.len() + 2 >= (theme::MOTION_RESIZE_MS / 16) as usize,
+        "it rode out a frame at a time: {widths:?}"
+    );
+    assert!(
+        widths.windows(2).all(|pair| pair[1] < pair[0]),
+        "and moved on every frame: {widths:?}"
+    );
+    assert_eq!(panel_width(cx), None, "gone once it has ridden out");
+    assert_eq!(display_frame(&view, true, cx), 0, "landed, no frame");
+}
+
+#[gpui::test]
+fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
+    let (view, _fake, _threads, cx) = group_board("nav-rebuild-review", &[], cx);
+    view.update(cx, |view, cx| {
+        let composer = view.panes[0].composer.clone();
+        let reading = view.prefs.settings.reading_size;
+        let review = cx.new(|cx| {
+            crate::review::ReviewView::new(
+                composer,
+                ferrite_reviewr::model::Scope::Uncommitted,
+                reading,
+                cx,
+            )
+        });
+        view.panes[0].review.show(review, "main".into());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_SLOT_OPEN_MS, "review open", cx);
 }
 
 /// The palette comes in on `dialog-in` over its veil darkening in: frames
