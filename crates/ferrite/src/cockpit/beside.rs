@@ -4,11 +4,11 @@
 //!
 //! A reader and a review take the reader slot the Pane already has
 //! (`attachment_preview::Preview`'s document, laid out by `board_tree`): in
-//! Solo the board becomes `Pane | reader`, in a Group the Pane's own cell
-//! splits, half and half (`READER_SHARE`), the seam between them dragging
-//! like any other (22–78%). Escape in the reader, its ×, or ⌘W while it
-//! holds focus closes it, and the tree it was spliced into closes back over
-//! it, restoring the board as it was.
+//! Solo the board becomes `Pane | reader`, in a Group (or a fullscreen
+//! Pane) the Pane's own cell splits, half and half (`READER_SHARE`), the
+//! seam between them dragging like any other (22–78%). Escape in the
+//! reader, its ×, or ⌘W while it holds focus closes it, and the tree it was
+//! spliced into closes back over it, restoring the board as it was.
 //!
 //! The slot slides (`ReaderSlides`). Opening, its split's share rides a
 //! `motion::Reveal` from nothing to rest (`Tree::reveal`) over `SLOT_OPEN`:

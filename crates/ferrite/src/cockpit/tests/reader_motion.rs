@@ -301,3 +301,47 @@ fn reduced_motion_snaps_the_reader(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.panes[0].preview.shown().is_none()));
     assert_eq!(frame(cx), 0);
 }
+
+/// A fullscreen Pane's own cell fills the board, so a reader opened from
+/// it splits that cell, where it can be seen, and slides like any other;
+/// closed, the Pane fills the board again.
+#[gpui::test]
+fn a_fullscreen_pane_splits_its_cell_with_its_reader(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, _fake) = cockpit("reader-fullscreen", 2);
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    tick(cx);
+    settle(cx);
+    let whole = pane(&view, 0, cx);
+    let file = source("reader-fullscreen-file", 40);
+
+    read(&view, &file, None, cx);
+    at(MOTION_SLOT_OPEN_MS / 4, cx);
+    let opening = pane(&view, 0, cx).w;
+    assert!(opening < whole.w - 1.0, "the Pane gives way: {opening}");
+    settle(cx);
+    assert!(near(pane(&view, 0, cx).w, (whole.w - BOARD_SEAM) / 2.0));
+    assert!(
+        cx.debug_bounds("reader-head").is_some(),
+        "the reader is in sight"
+    );
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).pane_rects(window).len()),
+        1,
+        "still the one Pane"
+    );
+
+    close(&view, cx);
+    settle(cx);
+    assert_eq!(pane(&view, 0, cx), whole, "the Pane fills the board again");
+    assert!(cx.debug_bounds("reader-head").is_none());
+}

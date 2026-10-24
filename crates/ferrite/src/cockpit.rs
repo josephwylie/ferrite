@@ -2796,11 +2796,15 @@ impl CockpitView {
     }
 
     /// The board on screen, when a tree lays it out: the Group being
-    /// shown, or Solo while its one Pane has a reader slot. Fullscreen and
-    /// a plain Solo Pane have none.
+    /// shown, or Solo — or a fullscreen Pane, its own cell filling the
+    /// board — while its one Pane has a reader slot. A plain Solo or
+    /// fullscreen Pane has none.
     fn board(&self) -> Option<Board> {
-        if self.cockpit.roster().fullscreen().is_some() {
-            return None;
+        if let Some(shown) = self.cockpit.roster().fullscreen() {
+            return self
+                .index_of(shown)
+                .filter(|index| self.has_reader(*index))
+                .map(|_| Board::Solo(shown));
         }
         if let Some((owner, _)) = self.solo_pair() {
             return Some(Board::Solo(owner));
@@ -2952,7 +2956,8 @@ impl CockpitView {
     /// Every visible Pane's rect on the board, in window coordinates —
     /// from the board's tree as this frame draws it (or, measuring at rest,
     /// where every reader's slide ends), or the one Solo cell. Reader slots
-    /// are no Panes and are left out. Fullscreen is the whole board.
+    /// are no Panes and are left out. Fullscreen is the whole board, split
+    /// with its reader.
     fn pane_rects(&self, window: &Window) -> Vec<(usize, layout::Rect)> {
         let bounds = self.board_bounds(window);
         if self.projects.coordinator_shown() {
@@ -2972,12 +2977,6 @@ impl CockpitView {
                 })
                 .unwrap_or_default();
         }
-        if let Some(identity) = self.cockpit.roster().fullscreen() {
-            return self
-                .index_of(identity)
-                .map(|index| vec![(index, bounds)])
-                .unwrap_or_default();
-        }
         if let Some(board) = self.board() {
             let Some(tree) = self.board_tree(board) else {
                 return Vec::new();
@@ -2995,6 +2994,12 @@ impl CockpitView {
                     Slot::Reader(_) => None,
                 })
                 .collect();
+        }
+        if let Some(identity) = self.cockpit.roster().fullscreen() {
+            return self
+                .index_of(identity)
+                .map(|index| vec![(index, bounds)])
+                .unwrap_or_default();
         }
         // Solo is one Pane — or a pending pair (a draft beside its Thread),
         // laid out on the same default grid a Group gets.
@@ -10311,9 +10316,10 @@ impl CockpitView {
         } else if self.empty_shown && fullscreen.is_none() {
             // Shown on purpose while Threads stay open (`show_empty_board`).
             frame().flex().child(self.empty_board(cx))
-        } else if let Some(index) = fullscreen {
-            // The fullscreened Pane takes the whole window. The other Panes
-            // are not laid out at all — hidden siblings would still cost
+        } else if let Some(index) = fullscreen.filter(|index| !self.has_reader(*index)) {
+            // The fullscreened Pane takes the whole window (with a reader,
+            // its own cell splits: the board below). The other Panes are
+            // not laid out at all — hidden siblings would still cost
             // layout — while their Sessions keep streaming through the pump
             // regardless (#20).
             frame()
