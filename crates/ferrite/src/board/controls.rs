@@ -13,11 +13,13 @@ use sw_board::json::*;
 use super::BoardView;
 use crate::components::{self, Tip};
 use crate::theme::{
-    paint, CH, CONTROL_H, ICON_CHEVRON, ON_PRIMARY, ROW, SPACE_3, TEXT, TEXT_DIM, TEXT_STRONG,
+    paint, CH, CONTROL_H, ICON_CHEVRON, ON_PRIMARY, SPACE_1, SPACE_3, TEXT, TEXT_DIM, TEXT_STRONG,
     W_STRONG,
 };
 
-pub(super) const HEIGHT: f32 = ROW * 3.;
+/// The controls' two rows of `CONTROL_H` buttons, `SPACE_1` above, between
+/// and below them, so no button touches a hairline or its neighbour.
+pub(super) const HEIGHT: f32 = 2. * CONTROL_H + 3. * SPACE_1;
 
 #[derive(Default)]
 pub(super) struct Controls {
@@ -189,6 +191,8 @@ impl BoardView {
             .h(px(HEIGHT))
             .text_color(rgb(TEXT))
             .px(px(SPACE_3))
+            .py(px(SPACE_1))
+            .gap(px(SPACE_1))
             .border_b_1()
             .border_color(paint::LINE)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -197,7 +201,7 @@ impl BoardView {
                     .flex()
                     .items_center()
                     .gap(px(CH * 2.))
-                    .h(px(HEIGHT / 2.))
+                    .h(px(CONTROL_H))
                     .child(selected)
                     .child(actions.items_center().gap(px(CH / 2.)).flex_shrink_0()),
             )
@@ -205,7 +209,7 @@ impl BoardView {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(HEIGHT / 2.))
+                    .h(px(CONTROL_H))
                     .gap(px(CH))
                     .child(self.role_picker("worker.agent", "Developer", disabled, cx))
                     .child(self.role_picker("reviewer.agent", "Reviewer", disabled, cx))
@@ -373,7 +377,10 @@ impl BoardView {
                 .tab_stop(false)
                 .debug_selector(move || name.into())
                 .h(px(CONTROL_H))
-                .px(px(CH / 2.))
+                .px(px(CH))
+                // The row's first label stands on the controls' text edge,
+                // its ground reaching out past it (`aim_strip` does the same).
+                .when(name == "worker.agent", |button| button.ml(px(-CH)))
                 .max_w(px(29. * CH))
                 .gap(px(CH / 2.))
                 .disabled(disabled || setting.is_none() || archived)

@@ -130,6 +130,9 @@ impl BoardView {
             .debug_selector(|| "board-aim".into())
             .h(px(CONTROL_H))
             .px(px(CH))
+            // Its name stands on the board's text edge (the selected task's
+            // id under it, the list's words), its ground reaching past it.
+            .ml(px(-CH))
             .max_w(px(30. * CH))
             .accessibility_label("Project for new tasks")
             .child(

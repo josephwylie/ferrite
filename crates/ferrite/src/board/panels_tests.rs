@@ -165,9 +165,10 @@ fn shown(cx: &mut TestAppContext, state: State, columns: usize, rows: usize) -> 
 impl Shown<'_> {
     fn fit(&mut self, columns: usize, rows: usize) {
         self.view.update(self.cx, |view, cx| {
+            let inset = super::runtime::GRID_INSET;
             view.fit(
-                (columns as f32 + 0.5) * CH,
-                (rows as f32 + 0.5) * ROW + super::controls::HEIGHT,
+                (columns as f32 + 0.5) * CH + 2. * inset,
+                (rows as f32 + 0.5) * ROW + inset + super::controls::HEIGHT,
             );
             cx.notify();
         });
