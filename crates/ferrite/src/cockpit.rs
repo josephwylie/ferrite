@@ -14342,6 +14342,7 @@ mod tests {
     mod interaction_regressions;
     mod layout_polish;
     mod leaving;
+    mod link_clicks;
     mod loops_overlay;
     mod machines;
     mod nav_parity;

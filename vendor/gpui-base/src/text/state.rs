@@ -477,6 +477,7 @@ impl TextViewState {
 
     /// Whether this view has a view-local selection (select-all, multi-click, or override),
     /// independent of the window-level selection.
+    #[cfg(test)]
     pub(super) fn has_view_selection(&self) -> bool {
         self.select_all
             || self.multi_click_selection.is_some()
@@ -564,10 +565,6 @@ impl TextViewState {
             return None;
         }
         self.selection_adapter.selection_points(cx)
-    }
-
-    pub(crate) fn has_selection(&self, cx: &App) -> bool {
-        self.has_view_selection() || self.selection_points(cx).is_some()
     }
 
     pub(super) fn on_action_select_all(
