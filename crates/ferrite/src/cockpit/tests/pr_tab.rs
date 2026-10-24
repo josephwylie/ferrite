@@ -280,3 +280,25 @@ fn a_hidden_tab_makes_no_forge_reads(cx: &mut TestAppContext) {
     }
     assert_eq!(reads(&view, cx), 0, "the panel hidden: never");
 }
+
+/// Before the first read lands, with no reading of the nav label's to go
+/// on, the tab says it is checking rather than that there is no pull
+/// request.
+#[gpui::test]
+fn the_first_read_says_it_is_checking(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("pr-tab-checking", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(960.)));
+    open_tab(&view, thread, PanelTab::Pr, cx);
+    assert!(shows(cx, "panel-no-pr"), "nobody asking: no pull request");
+    view.update(cx, |view, cx| {
+        view.pr_tab.hold_first_read(thread);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(shows(cx, "panel-pr-checking"));
+    assert!(!shows(cx, "panel-no-pr"));
+}

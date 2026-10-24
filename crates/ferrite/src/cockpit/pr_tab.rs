@@ -11,7 +11,8 @@
 //! the operator's focus — never while it is hidden (`tend_pr_tab`). The last
 //! snapshot stays on screen while the next is read, the `refresh` icon
 //! turning; before the first lands, the tab says what the nav label's
-//! reading knows (`PrWatch`): the head, or no pull request. Each snapshot also moves that label: its
+//! reading knows (`PrWatch`): the head, or — the label knowing nothing
+//! either — that it is checking. Each snapshot also moves that label: its
 //! checks and state are the newer word.
 //!
 //! The snapshot has no per-check page or duration, no review decision and
@@ -100,6 +101,19 @@ impl PrTab {
     #[cfg(test)]
     pub(crate) fn fetching(&self, thread: ThreadId) -> bool {
         self.reads.get(&thread).is_some_and(|read| read.fetching)
+    }
+
+    /// Hold a first read of `thread`'s pull request out, as though `gh`
+    /// were still answering.
+    #[cfg(test)]
+    pub(crate) fn hold_first_read(&mut self, thread: ThreadId) {
+        self.reads.insert(
+            thread,
+            PrRead {
+                fetching: true,
+                ..PrRead::default()
+            },
+        );
     }
 
     fn unfolded(&self, thread: ThreadId, unfold: &Unfold) -> bool {
@@ -279,7 +293,10 @@ impl CockpitView {
                         .child(self.pr_head(thread, pill, reading.number, None, fetching, cx))
                         .into_any_element()
                 }
-                // Nor has the label's: no pull request, as far as is known.
+                // Nor has the label's: say it is asking rather than claim
+                // there is none.
+                None if fetching => checking(),
+                // Nobody is asking: no pull request, as far as is known.
                 None => self.no_pr(thread, Absent::NoPr),
             },
         }
@@ -453,15 +470,9 @@ impl CockpitView {
             });
             let (mark, word, word_ink) = check_face(check.status);
             section = section.child(
-                div()
-                    .id(("pr-check", index))
+                flush_row(gpui::ElementId::from(("pr-check", index)), SPACE_0_5)
                     .debug_selector(move || format!("pr-check-{index}"))
-                    .flex()
-                    .items_center()
                     .gap(px(PR_ROW_GAP))
-                    .h(px(PANEL_SECTION_H))
-                    .px(px(SPACE_0_5))
-                    .cursor_pointer()
                     .child(mark)
                     .child(
                         div()
@@ -522,29 +533,14 @@ impl CockpitView {
         }
         if !resolved.is_empty() {
             let unfolded = self.pr_tab.unfolded(thread, &Unfold::Resolved);
-            let chevron = if unfolded {
-                icons::CHEVRON_DOWN
-            } else {
-                icons::CHEVRON_RIGHT
-            };
+            let words = format!("{} resolved", resolved.len());
             cards = cards.child(
-                div()
-                    .id("pr-resolved")
-                    .debug_selector(|| "pr-resolved".into())
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .h(px(PANEL_SECTION_H))
-                    .px(px(SPACE_1))
-                    .cursor_pointer()
-                    .text_size(px(FS_LABEL))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(icon(chevron, ICON_CHEVRON, TEXT_DIM))
-                    .child(SharedString::from(format!("{} resolved", resolved.len())))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                fold_row("pr-resolved", unfolded, words).on_click(cx.listener(
+                    move |view, _: &ClickEvent, _, cx| {
                         view.pr_tab.toggle(thread, Unfold::Resolved);
                         cx.notify();
-                    })),
+                    },
+                )),
             );
             if unfolded {
                 for (index, comment) in resolved.iter().enumerate() {
@@ -917,20 +913,61 @@ fn section_head(selector: &'static str, name: &'static str, count: String) -> Di
         .child(SharedString::from(count))
 }
 
-/// A quiet 30px row (`Show N more`, `More on GitHub`).
-fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
+/// A 30px row a click opens or unfolds, its content `inset` into the
+/// column as the section heads' is: under the pointer its hover ground
+/// reaches `PR_ROW_BLEED` past the column either side, so the mark or text
+/// keeps its place and the ground still clears it.
+fn flush_row(id: gpui::ElementId, inset: f32) -> Stateful<Div> {
     use crate::theme::*;
+    let key = crate::pointer::hover_key(&id);
     div()
         .id(id)
-        .debug_selector(move || id.into())
         .flex()
+        .flex_shrink_0()
         .items_center()
         .h(px(PANEL_SECTION_H))
-        .px(px(SPACE_1))
-        .cursor_pointer()
+        .mx(px(-PR_ROW_BLEED))
+        .px(px(inset + PR_ROW_BLEED))
+        .rounded(px(R_CONTROL))
+        .hover_row(key)
+        .press_row()
+}
+
+/// A quiet row (`Show N more`, `More on GitHub`).
+fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
+    use crate::theme::*;
+    flush_row(id.into(), SPACE_1)
+        .debug_selector(move || id.into())
         .text_size(px(FS_LABEL))
         .text_color(rgb(TEXT_DIM))
         .child(SharedString::from(words))
+}
+
+/// A fold's quiet row (`N resolved`, `Show more`): its chevron turning a
+/// quarter as it unfolds, then its words.
+fn fold_row(id: &'static str, unfolded: bool, words: impl Into<SharedString>) -> Stateful<Div> {
+    use crate::theme::*;
+    flush_row(id.into(), SPACE_1)
+        .debug_selector(move || id.into())
+        .gap(px(SPACE_2))
+        .text_size(px(FS_LABEL))
+        .text_color(rgb(TEXT_DIM))
+        .child(super::panel::fold_chevron(unfolded, ICON_CHEVRON, TEXT_DIM))
+        .child(words.into())
+}
+
+/// The first read is out and nothing is known yet: a quiet line where the
+/// tab will draw, as the Context tab's before its first reading.
+fn checking() -> AnyElement {
+    use crate::theme::*;
+    div()
+        .debug_selector(|| "panel-pr-checking".into())
+        .pt(px(SPACE_2))
+        .px(px(PANEL_ROW_ICON_X))
+        .text_size(px(FS_META))
+        .text_color(rgb(TEXT_DIM))
+        .child("Checking for a pull request\u{2026}")
+        .into_any_element()
 }
 
 /// A row's mark: a 15px icon, or the braille spinner centred in its box.

@@ -980,6 +980,10 @@ pub const PR_CODE_CHIP: u32 = 0x333333;
 pub const PR_BODY_LH: f32 = 18.0;
 /// The lines a folded comment body shows.
 pub const PR_BODY_LINES: usize = 3;
+/// How far a flush row's hover ground (a check, `Show more`, `N resolved`)
+/// reaches past the column either side: its content keeps the section
+/// heads' inset, and the ground still clears it.
+pub const PR_ROW_BLEED: f32 = SPACE_1;
 /// 26px — a reply's indent under its comment.
 pub const PR_REPLY_INDENT: f32 = 26.0;
 /// The ink a resolved comment card keeps.

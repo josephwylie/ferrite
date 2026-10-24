@@ -727,7 +727,10 @@ PR). It is fed by the Review's forge read
 same snapshot the Review's PR scope shows. Nothing new is fetched from
 GitHub.
 
-Top to bottom, with 14px between sections:
+Top to bottom, with 14px between sections. A row that a click opens or
+unfolds (a check, `Show N more`, `N resolved`, `Show more`) keeps the
+section heads' inset; under the pointer its `RAISED` hover ground reaches
+4px past the column on either side, so the ground clears its mark.
 
 1. **PR head** (padding 2 2 14).
    - **Line 1.** A state pill (22 high, radius 11, padding 0 9 0 7,
@@ -805,7 +808,8 @@ Top to bottom, with 14px between sections:
      - **Outdated** findings show `outdated` in `TEXT_DIM` beside the
        kind.
    - Resolved items fold into one 30px row: a chevron and `N resolved`
-     in `TEXT_DIM`. It expands to the same cards at 60% ink.
+     in `TEXT_DIM`. It expands to the same cards at 60% ink, the chevron
+     turning a quarter (`motion::CHEVRON`).
    - `comments_truncated` adds a last row, `More on GitHub`.
 5. **`Review PR`.** A secondary full-width button (32, radius 7,
    `RAISED`, 12.5/500 `TEXT_STRONG`). It opens the Review beside the Pane
@@ -825,7 +829,9 @@ them here.`
 **Loading:** the last snapshot stays on screen while a new one is
 fetched. The `refresh` icon spins (reduced motion: it dims). The first
 fetch shows the PR head from `PrWatch`'s reading (number, state), then
-fills in the rest.
+fills in the rest. With no reading of `PrWatch`'s either, it says
+`Checking for a pull request…` in 12 `TEXT_DIM`, where the Context tab
+says `Context not reported yet`, rather than claim there is none.
 
 **Freshness:** read the snapshot when the tab is opened, then on
 `PrWatch`'s cadence (`AUTO_EVERY`, 30s) while the tab is visible and the
