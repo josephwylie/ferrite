@@ -2493,6 +2493,109 @@ fn nav_rebuilds_starve_no_toast_frame(cx: &mut TestAppContext) {
     eprintln!("NEEDS_YOU_TOAST_NAV rising={rising} leaving={leaving}");
 }
 
+/// Plays out a one-shot of `ms` a display frame at a time, the nav rebuilt
+/// alone before each frame: it asks for a frame on every one but about its
+/// last, and for none once it has landed.
+fn plays_beside_nav_rebuilds(
+    view: &Entity<CockpitView>,
+    ms: u64,
+    what: &str,
+    cx: &mut gpui::VisualTestContext,
+) {
+    let mut frames = 0;
+    for _ in 0..(ms + 32) / 16 {
+        frames += display_frame(view, true, cx);
+    }
+    eprintln!("NAV_REBUILDS {what} frames={frames}");
+    assert!(
+        frames + 2 >= (ms / 16) as usize,
+        "{what}: a part's rebuild starved its frames: {frames} in {ms}ms"
+    );
+    assert_eq!(display_frame(view, true, cx), 0, "{what}: landed, no frame");
+}
+
+/// A part's rebuild landing mid-entrance — the nav rebuilt alone on every
+/// frame — starves no `motion::Played` entrance the Cockpit draws: a menu,
+/// the palette, a sheet. The part's ancestors are dirtied with it, so the
+/// Cockpit around it draws again and each entrance asks there for its
+/// next frame.
+#[gpui::test]
+fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("nav-rebuild-entrances", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_MENU_IN_MS, "menu", cx);
+    cx.simulate_keystrokes("escape");
+    cockpit_renders_over(cx, 300);
+
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_DIALOG_IN_MS, "palette", cx);
+    cx.simulate_keystrokes("escape");
+    cockpit_renders_over(cx, 300);
+
+    view.update(cx, |view, cx| view.toggle_settings(cx));
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_DIALOG_IN_MS, "settings sheet", cx);
+}
+
+/// The Panel's ride and a reader's slide with the nav rebuilt alone on
+/// every frame: each still moves on every frame until it lands, then asks
+/// for none.
+#[gpui::test]
+fn nav_rebuilds_starve_no_ride(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("nav-rebuild-panel", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    let mut widths = vec![crate::theme::PANEL_W];
+    for _ in 0..(theme::MOTION_RESIZE_MS + 32) / 16 {
+        display_frame(&view, true, cx);
+        widths.extend(panel_width(cx));
+    }
+    assert!(
+        widths.len() + 2 >= (theme::MOTION_RESIZE_MS / 16) as usize,
+        "it rode out a frame at a time: {widths:?}"
+    );
+    assert!(
+        widths.windows(2).all(|pair| pair[1] < pair[0]),
+        "and moved on every frame: {widths:?}"
+    );
+    assert_eq!(panel_width(cx), None, "gone once it has ridden out");
+    assert_eq!(display_frame(&view, true, cx), 0, "landed, no frame");
+}
+
+#[gpui::test]
+fn nav_rebuilds_starve_no_reader_slide(cx: &mut TestAppContext) {
+    let (view, _fake, _threads, cx) = group_board("nav-rebuild-reader", &[], cx);
+    let dir = scratch("nav-rebuild-reader-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.md");
+    std::fs::write(&file, "# Notes\n\nA line of notes.\n").unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_beside(
+                beside::Beside::Reader {
+                    path: file.clone(),
+                    line: None,
+                },
+                window,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_SLOT_OPEN_MS, "reader open", cx);
+}
+
 /// The palette comes in on `dialog-in` over its veil darkening in: frames
 /// while it does, no Pane rebuilt for them, none once it has landed.
 #[gpui::test]
