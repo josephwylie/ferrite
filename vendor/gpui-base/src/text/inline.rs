@@ -6,10 +6,10 @@ use std::{
 };
 
 use gpui::{
-    App, BorderStyle, Bounds, ClickEvent, CursorStyle, Edges, Element, ElementId, GlobalElementId,
-    Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-    MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    SharedString, StyledText, TextLayout, Window, point, px, quad,
+    App, BorderStyle, Bounds, ClickEvent, CursorStyle, Edges, Element, ElementId, Global,
+    GlobalElementId, Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
+    LayoutId, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, SharedString, StyledText, TextLayout, Window, point, px, quad,
 };
 
 use crate::{
@@ -54,6 +54,26 @@ pub(crate) struct InlineState {
     // Wrapped/custom inline fragments retain offsets into the original run.
     pub(super) fragments: Vec<(Range<usize>, Arc<Mutex<InlineState>>)>,
     source: Option<InlineSource>,
+}
+
+/// Ferrite: how far a press may wander before it is a drag, not a link
+/// click. A trackpad press and release rarely land on the same pixel; past
+/// this the gesture selects instead (GPUI's own drag threshold is 2px).
+const LINK_CLICK_SLOP: Pixels = px(4.);
+
+/// Ferrite: the press a link click began with, kept until its release. It
+/// is the app's, not an inline's: a streaming answer re-parses between press
+/// and release, and the inline painted at release is a new one.
+#[derive(Default)]
+struct LinkPress(Option<PressedLink>);
+
+impl Global for LinkPress {}
+
+#[derive(Clone, Debug)]
+struct PressedLink {
+    url: SharedString,
+    button: MouseButton,
+    position: Point<Pixels>,
 }
 
 #[derive(Clone, Debug)]
@@ -1087,46 +1107,83 @@ impl Element for Inline {
             }
         });
 
-        if !is_selection {
-            // click to open link
-            window.on_mouse_event({
-                let links = self.links.clone();
-                let text_layout = text_layout.clone();
-                let hitbox = hitbox.clone();
-                let text_view_state = GlobalState::global(cx).text_view_state().cloned();
-                let link_click_handler = self.link_click_handler.clone();
-
-                move |event: &MouseUpEvent, phase, window, cx| {
-                    if !phase.bubble() || !hitbox.is_hovered(window) {
-                        return;
-                    }
-                    if text_view_state
-                        .as_ref()
-                        .is_some_and(|state| state.read(cx).has_selection(cx))
-                    {
-                        return;
-                    }
-
-                    if let Some(link) =
-                        Self::link_for_position(&text_layout, &links, event.position)
-                    {
-                        TextSelection::end(window, cx);
-                        cx.stop_propagation();
-                        let click = ClickEvent::Mouse(MouseClickEvent {
-                            down: MouseDownEvent {
-                                button: event.button,
-                                position: event.position,
-                                modifiers: event.modifiers,
-                                click_count: event.click_count,
-                                first_mouse: false,
-                            },
-                            up: event.clone(),
-                        });
-                        handle_link_click(&link_click_handler, link.url, click, window, cx);
-                    }
+        // Ferrite: a link opens on a click, a press and release on the same
+        // link within `LINK_CLICK_SLOP` of each other. The press is what
+        // decides, not whether a selection exists at release: the window
+        // selection begins on every press, so a pixel of wobble was a
+        // "selection" that refused the link, and a link painted under a
+        // highlight registered no release handler at all, so a tap (press
+        // and release with no frame between) on it did nothing. A press that
+        // wanders further is a drag and selects; one that starts elsewhere
+        // and ends on a link selects too.
+        window.on_mouse_event({
+            let links = self.links.clone();
+            let text_layout = text_layout.clone();
+            let hitbox = hitbox.clone();
+            move |event: &MouseDownEvent, phase, window, cx| {
+                // Every press forgets the last one; the inline under it
+                // records it if it lands on a link.
+                if phase.capture() {
+                    cx.default_global::<LinkPress>().0 = None;
+                    return;
                 }
-            });
-        }
+                if event.click_count > 1 || !hitbox.is_hovered(window) {
+                    return;
+                }
+                cx.default_global::<LinkPress>().0 =
+                    Self::link_for_position(&text_layout, &links, event.position).map(|link| {
+                        PressedLink {
+                            url: link.url,
+                            button: event.button,
+                            position: event.position,
+                        }
+                    });
+            }
+        });
+        window.on_mouse_event({
+            let links = self.links.clone();
+            let text_layout = text_layout.clone();
+            let hitbox = hitbox.clone();
+            let link_click_handler = self.link_click_handler.clone();
+
+            move |event: &MouseUpEvent, phase, window, cx| {
+                if !phase.bubble() || !hitbox.is_hovered(window) {
+                    return;
+                }
+                let Some(pressed) = cx.default_global::<LinkPress>().0.take() else {
+                    return;
+                };
+                let Some(link) = Self::link_for_position(&text_layout, &links, event.position)
+                else {
+                    return;
+                };
+                if link.url != pressed.url
+                    || event.button != pressed.button
+                    || (event.position - pressed.position).magnitude()
+                        > f64::from(LINK_CLICK_SLOP)
+                {
+                    return;
+                }
+                // The press began a selection at the link; a click leaves
+                // nothing highlighted (the press already let go of any
+                // earlier highlight). Other buttons never selected.
+                if event.button == MouseButton::Left {
+                    TextSelection::clear(window, cx);
+                }
+                cx.stop_propagation();
+                let click = ClickEvent::Mouse(MouseClickEvent {
+                    down: MouseDownEvent {
+                        button: pressed.button,
+                        position: pressed.position,
+                        modifiers: event.modifiers,
+                        click_count: event.click_count,
+                        first_mouse: false,
+                    },
+                    up: event.clone(),
+                });
+                handle_link_click(&link_click_handler, link.url, click, window, cx);
+            }
+        });
     }
 }
 
