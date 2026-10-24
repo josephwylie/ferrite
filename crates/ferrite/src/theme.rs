@@ -1863,7 +1863,10 @@ pub const EMPTY_PAD_X: f32 = 4.0 * CH;
 pub const EMPTY_BANNER_GAP: f32 = 3.0 * CH;
 pub const EMPTY_MARK_H: f32 = 3.0 * ROW;
 /// A command row (fit-content): the `❯` column, the verb's 30 cells, the
-/// key's 10 right-aligned, a cell of padding after it.
+/// key's 10 right-aligned, a cell of padding after it. A row's band (the
+/// selection, a recent row's hover) hangs `EMPTY_ROW_INSET` outside the
+/// text's edge, so its rounded fill clears the `❯`.
+pub const EMPTY_ROW_INSET: f32 = SPACE_2;
 pub const EMPTY_VERB_W: f32 = 30.0 * CH;
 pub const EMPTY_KEY_W: f32 = 10.0 * CH;
 /// A recent row (fit-content, 68 cells under the hover band): two cells of
