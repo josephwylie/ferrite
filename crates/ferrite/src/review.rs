@@ -387,6 +387,8 @@ pub(crate) struct ReviewView {
     dragging: bool,
     /// The comment being written under the pick.
     editor: Option<Entity<Composer>>,
+    /// Whether that field holds the keyboard, as this frame found it.
+    editor_focused: bool,
     /// The commits scope's list; `None` while it is being read.
     commits: Option<Vec<CommitRow>>,
     /// The listed commit the arrows are on.
@@ -444,6 +446,7 @@ impl ReviewView {
             selection: None,
             dragging: false,
             editor: None,
+            editor_focused: false,
             commits: None,
             commit_pick: 0,
             commit_anchor: None,
@@ -1577,41 +1580,59 @@ impl ReviewView {
             stack = stack.child(self.comment_row(id, &comment, cx));
         }
         if let Some(editor) = self.editor.as_ref().filter(|_| last_picked) {
+            // The field's two verbs are chrome, set as the footer's key
+            // hints are: each its own `TOKEN_H` target, apart.
+            let verb = |id: &'static str, words: &'static str| {
+                div()
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .h(px(TOKEN_H))
+                    .px(px(TOKEN_PAD_X))
+                    .rounded(px(R_SMALL))
+                    .font_family(FONT_UI)
+                    .text_size(px(FS_META))
+                    .text_color(rgb(TEXT_DIM))
+                    .hover_control(self.hover_key(id.into(), cx))
+                    .child(words)
+            };
             stack = stack.child(
                 div()
                     .debug_selector(|| "review-comment-field".into())
                     .flex()
                     .items_center()
-                    .gap(px(SPACE_2))
+                    .gap(px(SPACE_1))
                     .py(px(self.grid.half() / 2.))
                     .pl(px(indent))
                     .pr(px(cell))
                     .bg(paint::RAISED)
+                    // The field holding the keyboard wears the focus ring,
+                    // so it never reads as a comment already made.
+                    .when(self.editor_focused, |field| {
+                        field.map(|mut field| {
+                            let style = std::mem::take(field.style());
+                            *field.style() = crate::components::control_focus(style);
+                            field
+                        })
+                    })
                     .child(div().min_w_0().flex_1().child(editor.clone()))
                     .child(
-                        div()
-                            .id("review-comment-save")
-                            .debug_selector(|| "review-comment-save".into())
-                            .flex_shrink_0()
-                            .text_color(rgb(TEXT_DIM))
-                            .hover_control("review-comment-save")
-                            .child("\u{21b5} add")
-                            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                        verb("review-comment-save", "\u{21b5} add").on_click(cx.listener(
+                            |view, _: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
                                 view.save(window, cx);
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        div()
-                            .id("review-comment-cancel")
-                            .flex_shrink_0()
-                            .text_color(rgb(TEXT_DIM))
-                            .hover_control("review-comment-cancel")
-                            .child("esc cancel")
-                            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                        verb("review-comment-cancel", "esc cancel").on_click(cx.listener(
+                            |view, _: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
                                 view.close_editor(window, cx);
-                            })),
+                            },
+                        )),
                     ),
             );
         }
@@ -2477,7 +2498,11 @@ impl Focusable for ReviewView {
 }
 
 impl Render for ReviewView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.editor_focused = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.focus_handle(cx).is_focused(window));
         let footer: &[(&str, &str)] = if self.bases.is_some() {
             &BASE_FOOTER
         } else if self.search.is_some() {
