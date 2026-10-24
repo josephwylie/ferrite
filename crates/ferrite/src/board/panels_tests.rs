@@ -1189,6 +1189,45 @@ fn a_click_selects_a_row_and_folds_a_heading(cx: &mut TestAppContext) {
     assert_eq!(b.state(|s| s.sel.clone()), "proj/1");
 }
 
+/// A row a click would select, or a heading it would fold, wears the row
+/// role's hover ground over the list's columns and its lines; the selected
+/// row, a list locked by a draft and the menu, where a click does nothing,
+/// wear none.
+#[gpui::test]
+fn the_rows_a_click_acts_on_take_the_hover_ground(cx: &mut TestAppContext) {
+    let mut b = shown(cx, state(tasks(), vec![]), 120, 40);
+    b.select("proj/1");
+    let lines = b.lines();
+    let row = line_of(&lines, "Ship it");
+    let ground =
+        b.cx.debug_bounds("board-row-proj/15")
+            .expect("a row a click selects has its ground");
+    let top = b.cell(0, row).y - px(ROW / 2.);
+    assert_eq!(ground.origin.y, top, "it starts on the row's line");
+    let wide = b.state(|s| s.list_at.expect("the list is drawn").1);
+    let width = f32::from(ground.size.width);
+    assert!(
+        (width - wide as f32 * CH).abs() < 1.,
+        "the list's columns: {width}"
+    );
+    assert!(
+        b.cx.debug_bounds("board-row-proj/1").is_none(),
+        "the selected row takes none"
+    );
+
+    b.state(|s| s.input.insert("Half typed"));
+    assert!(
+        b.cx.debug_bounds("board-row-proj/15").is_none(),
+        "a draft locks the list"
+    );
+    b.state(|s| s.input.set_text(""));
+    b.press("?");
+    assert!(
+        b.cx.debug_bounds("board-row-proj/15").is_none(),
+        "the menu takes no click"
+    );
+}
+
 #[gpui::test]
 fn with_a_draft_a_click_selects_nothing_and_says_why(cx: &mut TestAppContext) {
     let mut b = shown(cx, state(tasks(), vec![]), 120, 40);

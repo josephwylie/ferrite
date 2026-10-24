@@ -430,6 +430,10 @@ impl Render for BoardView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let screen = self.screen();
         let lines = self.pointer.frame(screen);
+        let grounds = match self.board.as_ref() {
+            Some(board) => self.pointer.grounds(&board.state),
+            None => Vec::new(),
+        };
         let theme = self.board.as_ref().map(|board| &board.theme);
         // The reading plane under the board, popup too: its greys are held
         // readable on it; a named theme paints its own ground.
@@ -465,6 +469,7 @@ impl Render for BoardView {
                     .relative()
                     .flex()
                     .flex_col()
+                    .children(grounds)
                     .children(rows)
                     .child(self.pointer.layer()),
             )
