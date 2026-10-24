@@ -74,3 +74,16 @@ the turn), as does ⌘W while the viewer holds focus, and the keyboard
 returns to the Pane. The head keeps the original one click away, opened
 by the OS at its canonical file URL. An image that cannot be read says
 so quietly in the slot.
+
+## Amendment (2026-10-24, later): previews open in the Panel
+
+The reader slot beside the Pane is the Review's alone now (ADR 0021).
+Every file preview — text at a line, rendered Markdown, a command's
+output, an image — opens in the right Panel's Preview tab (SPEC §5.6.3),
+which widens while it shows. The Pane still owns its preview
+(`preview::Preview`), shared by its Composer, transcript and rendered
+documents; `Preview::open` is the one way a file opens, image or not, so a
+non-image chip, a sent file and a binary file open there too: a file the
+preview cannot show says so, with its original a click away. The image
+viewer is unchanged; its inset is the preview card's.
+
