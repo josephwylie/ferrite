@@ -1874,11 +1874,18 @@ impl ReviewView {
                     WireCheckStatus::Running | WireCheckStatus::Pending => ("\u{25cb}", YELLOW),
                     WireCheckStatus::Skipped | WireCheckStatus::Unknown => ("\u{2013}", TEXT_DIM),
                 };
+                // The marks differ in width: a box of their own keeps the
+                // names on one edge.
                 body = body.child(
                     div()
                         .flex()
-                        .gap(px(cell))
-                        .child(div().text_color(rgb(color)).child(glyph))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .w(px(2. * cell))
+                                .text_color(rgb(color))
+                                .child(glyph),
+                        )
                         .child(
                             div()
                                 .text_color(rgb(TEXT))
@@ -1904,6 +1911,7 @@ impl ReviewView {
                 .debug_selector(move || format!("review-pr-comment-{index}"))
                 .mt(px(self.grid.half()))
                 .p(px(cell))
+                .rounded(px(R_BLOCK))
                 .bg(paint::RAISED)
                 // A review or a comment is anchored to its own kind's
                 // word: only a finding's place is worth a second mention.
