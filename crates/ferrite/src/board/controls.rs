@@ -107,6 +107,7 @@ impl BoardView {
             .px(px(CH))
             .disabled(disabled)
             .accessibility_label(label)
+            .tip_with_key(label, Some(chord(key)))
             .child(
                 components::text_ui()
                     .text_color(rgb(if disabled {
@@ -187,9 +188,14 @@ impl BoardView {
                         .font_weight(W_STRONG)
                         .child(task.t("title")),
                 ),
+            // Before its first read the board has no tasks to choose from.
             _ => div()
                 .flex_1()
-                .child(components::text_meta().child("Select a task")),
+                .child(components::text_meta().child(if state.is_none() {
+                    "Loading tasks…"
+                } else {
+                    "Select a task"
+                })),
         };
         components::text_ui()
             .flex()
@@ -224,7 +230,7 @@ impl BoardView {
                     .child(self.action_button(
                         "board-talk",
                         if state.is_some_and(|s| s.reply) {
-                            "Coordinator"
+                            "Back to Coordinator"
                         } else {
                             "Talk about task"
                         },
@@ -433,5 +439,38 @@ impl BoardView {
             }),
         }
         .into_any_element()
+    }
+}
+
+/// A board key as a tooltip spells it (`components::spell_chord`): its
+/// first chord (`ctrl+l` → `⌃L`, `tab` → `⇥`), or the character it is typed
+/// as (`space`, `y`).
+fn chord(key: K) -> String {
+    let key = entry(key);
+    let typed = match key.keys.first() {
+        Some(chord) => chord.replace('+', "-"),
+        None => match key.raw.first().copied() {
+            Some(" ") | None => "space".into(),
+            Some(raw) => raw.into(),
+        },
+    };
+    components::spell_chord(&typed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each button's tooltip names the key that does the same, as the
+    /// window's tooltips spell keys.
+    #[test]
+    fn board_keys_are_spelled_as_tooltips_spell_keys() {
+        let spelled = |key| components::chord_text(&chord(key));
+        assert_eq!(spelled(K::Delegate), "\u{21e5}");
+        assert_eq!(spelled(K::Enter), "\u{23ce}");
+        assert_eq!(spelled(K::Panel), "\u{2325}T");
+        assert_eq!(spelled(K::Talk), "space");
+        assert_eq!(spelled(K::Back), "esc");
+        assert_eq!(spelled(K::SayYes), "Y");
     }
 }

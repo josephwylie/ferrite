@@ -98,11 +98,19 @@ pub fn faded_button(
 /// and an element carries one: the blend's. This one is gpui's own.
 pub trait Tip {
     fn tip(self, text: impl Into<SharedString>) -> Self;
+    /// The verb and its key (`menu::tooltip_with_key`): `Open agent ⏎`.
+    fn tip_with_key(self, label: impl Into<SharedString>, key: Option<String>) -> Self;
 }
 
 impl Tip for Button {
     fn tip(mut self, text: impl Into<SharedString>) -> Self {
         self.interactivity().tooltip(crate::menu::tooltip(text));
+        self
+    }
+
+    fn tip_with_key(mut self, label: impl Into<SharedString>, key: Option<String>) -> Self {
+        self.interactivity()
+            .tooltip(crate::menu::tooltip_with_key(label, key));
         self
     }
 }
