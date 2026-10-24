@@ -32,11 +32,11 @@ use self::{
     scroll::TranscriptScroll,
 };
 use crate::{
-    attachment_preview::Preview,
     file_links::{PathTarget, TargetContext},
     hover_card::{CardStat, HoverCard},
     pane::{self, DisclosureId, DisclosureState, Grid},
     pointer::Pointer,
+    preview::Preview,
     rich::TextCache,
     select::{RunText, TextRuns, TranscriptText},
     theme,

@@ -140,7 +140,7 @@ pub struct Composer {
     files_focus: FocusHandle,
     line: Line,
     files: Vec<PathBuf>,
-    /// Review comments gathered from the reader beside this Pane (ADR
+    /// Review comments gathered from the Review beside this Pane (ADR
     /// 0021): one attachment on the shelf, sent after the line's text.
     review: CommentStore,
     /// Mention tokens (`@rel/path`) the operator picked from the `@` menu:
@@ -292,7 +292,7 @@ impl Composer {
 
     pub fn attachments(
         entity: &Entity<Self>,
-        preview: &crate::attachment_preview::Preview,
+        preview: &crate::preview::Preview,
         cx: &App,
     ) -> Option<gpui::AnyElement> {
         let composer = entity.read(cx);

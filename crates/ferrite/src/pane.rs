@@ -74,12 +74,11 @@ pub struct PaneView {
     /// Built once; the wall must not format names per frame.
     pub name: SharedString,
     pub composer: Entity<Composer>,
-    pub preview: crate::attachment_preview::Preview,
+    pub preview: crate::preview::Preview,
     pub controls_focus: FocusHandle,
     pub selected: Subject,
     pub generation: u64,
     pub rich: crate::rich::TextCache,
-    pub document_rich: crate::rich::TextCache,
     pub agent_menu_open: bool,
     pub subject_strip_width: f32,
     pub tab_interaction: crate::cockpit::subagents::TabInteraction,
@@ -104,14 +103,13 @@ pub struct PaneView {
     /// What the working line reads besides its transcript, as of this
     /// Pane's last render (`working_line`).
     pub(crate) working: std::cell::Cell<WorkingFacts>,
-    /// The reader beside this Pane scrolls on its own (`cockpit/beside.rs`):
-    /// kept here so its position survives every frame, and so opening it at
-    /// a line can scroll that line into view.
-    pub reader_scroll: gpui::UniformListScrollHandle,
-    /// A rendered Markdown document's own scroll in the reader.
-    pub reader_markdown_scroll: gpui::ScrollHandle,
-    /// The reader's find bar, while it is open.
-    pub reader_find: Option<crate::cockpit::beside::ReaderFind>,
+    /// What the Panel keeps of this Pane's preview (`cockpit/panel/
+    /// preview.rs`): its scroll, its find bar, whether its tab is the one
+    /// shown. Kept on the Pane, so a draft's first send — which makes the
+    /// Pane a Thread's — keeps it as it was.
+    pub preview_tab: crate::cockpit::panel::preview::PreviewTab,
+    /// The Review beside this Pane on the board (`cockpit/beside.rs`).
+    pub review: crate::cockpit::beside::ReviewSlot,
 }
 
 /// A Pane's last laid-out card and Composer bounds, recorded in prepaint.
@@ -204,7 +202,7 @@ impl BandChip {
 
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
-        let preview = crate::attachment_preview::Preview::new(cx);
+        let preview = crate::preview::Preview::new(cx);
         let rich = crate::rich::TextCache::default();
         let transcript_preview = preview.clone();
         let transcript_rich = rich.clone();
@@ -228,7 +226,6 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
-            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -250,9 +247,8 @@ impl PaneView {
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
-            reader_scroll: gpui::UniformListScrollHandle::new(),
-            reader_markdown_scroll: gpui::ScrollHandle::new(),
-            reader_find: None,
+            preview_tab: Default::default(),
+            review: crate::cockpit::beside::ReviewSlot::new(cx),
         }
     }
 
@@ -263,7 +259,7 @@ impl PaneView {
         binding: DraftBinding,
         cx: &mut Context<T>,
     ) -> Self {
-        let preview = crate::attachment_preview::Preview::new(cx);
+        let preview = crate::preview::Preview::new(cx);
         let rich = crate::rich::TextCache::default();
         let transcript_preview = preview.clone();
         let transcript_rich = rich.clone();
@@ -287,7 +283,6 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
-            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -309,9 +304,8 @@ impl PaneView {
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
-            reader_scroll: gpui::UniformListScrollHandle::new(),
-            reader_markdown_scroll: gpui::ScrollHandle::new(),
-            reader_find: None,
+            preview_tab: Default::default(),
+            review: crate::cockpit::beside::ReviewSlot::new(cx),
         }
     }
 
@@ -4649,7 +4643,7 @@ pub(crate) struct RowCx<'a> {
     pub rich: &'a crate::rich::TextCache,
     pub timings: Option<&'a HashMap<String, ToolTiming>>,
     pub provider: Option<Provider>,
-    pub preview: &'a crate::attachment_preview::Preview,
+    pub preview: &'a crate::preview::Preview,
     pub grid: Grid,
     /// The Pane stands alone (Solo), not on a Group's board.
     pub solo: bool,
@@ -5119,36 +5113,28 @@ pub(crate) fn prompt_row(
         .into_any_element()
 }
 
-/// Open a sent file: an image in the reader beside the Pane, stepping among
-/// its prompt's `gallery`; anything else with the system.
+/// Open a sent file in the Pane's preview (the Panel's Preview tab), an
+/// image stepping among its prompt's `gallery`.
 fn open_file(
     path: &std::path::Path,
     gallery: &[std::path::PathBuf],
-    preview: &crate::attachment_preview::Preview,
+    preview: &crate::preview::Preview,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
-    if crate::image_viewer::is_image(path) {
-        preview.open_image(path.to_path_buf(), gallery, window, cx);
-    } else {
-        crate::file_links::FileLink {
-            path: path.to_path_buf(),
-            location: None,
-        }
-        .open(window, cx);
-    }
+    preview.open(path.to_path_buf(), None, gallery, window, cx);
 }
 
 /// A prompt's file as its band's inline chip (SPEC §5.4): the 12px image
 /// mark (or the file mark), a cell, the name, all `TEXT_STRONG`, on
 /// `paint::RAISED` at `R_INLINE` with a cell of padding each side. A click opens it (an
-/// image in the reader beside the Pane, among its prompt's `gallery`).
+/// image in the Pane's preview, in the Panel, among its prompt's `gallery`).
 /// Sized for the Markdown flow that places it: monospace cells at the size
 /// it is drawn in.
 pub(crate) fn prompt_chip(
     path: std::path::PathBuf,
     label: &str,
-    preview: &crate::attachment_preview::Preview,
+    preview: &crate::preview::Preview,
     gallery: &std::sync::Arc<[std::path::PathBuf]>,
     window: &mut gpui::Window,
     _cx: &mut gpui::App,
@@ -5206,14 +5192,14 @@ pub(crate) fn prompt_chip(
 /// frame `IMAGE_CELLS` wide at the reading size, its 1px `paint::LINE2`
 /// border included (374.4px at Standard, drawn 374), the picture filling
 /// it at its own proportions; under it `name · W×H · 41 KB`, all of it
-/// `TEXT_DIM`. A click opens it in the reader beside the Pane, among its
+/// `TEXT_DIM`. A click opens it in the Pane's preview, among its
 /// prompt's `gallery`.
 fn inline_image(
     block: BlockId,
     index: usize,
     path: &std::path::Path,
     gallery: &std::sync::Arc<[std::path::PathBuf]>,
-    preview: &crate::attachment_preview::Preview,
+    preview: &crate::preview::Preview,
     grid: Grid,
 ) -> AnyElement {
     let name = path
@@ -8480,7 +8466,7 @@ mod tests {
                 focused: true,
                 reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
-                preview: crate::attachment_preview::Preview::new(cx),
+                preview: crate::preview::Preview::new(cx),
                 expanded,
                 target: None,
                 disclosure_focus: cx.focus_handle(),
@@ -8520,7 +8506,7 @@ mod tests {
                     focused: true,
                     reading_size: Default::default(),
                     selection_scope: gpui::base::TextSelectionScopeId::new(),
-                    preview: crate::attachment_preview::Preview::new(cx),
+                    preview: crate::preview::Preview::new(cx),
                     expanded: HashSet::new(),
                     target: None,
                     disclosure_focus: cx.focus_handle(),

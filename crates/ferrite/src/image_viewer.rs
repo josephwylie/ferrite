@@ -1,13 +1,13 @@
-//! The image viewer: an image in the reader slot beside its Pane
-//! (`attachment_preview::Body::Image`; the board tree lays the slot out and
-//! the reader's shell gives it its head, the file's name, the original a
-//! click away and the ×). Every way an image opens comes through
-//! `Preview::open_image`: a sent image under its prompt or the prompt's
-//! chip, a chip on the Composer's shelf, a file link in an answer, a
-//! ⌘-clicked path. Another image swaps in place; ← → step among the images
-//! it was opened with (a prompt's); esc closes the slot.
+//! The image viewer: an image in the Panel's Preview tab
+//! (`preview::Body::Image`; the preview's card, `cockpit/panel/preview.rs`,
+//! gives it its head, the file's name, the original a click away and the
+//! ×). Every way an image opens comes through `Preview::open`: a sent
+//! image under its prompt or the prompt's chip, a chip on the Composer's
+//! shelf, a file link in an answer, a ⌘-clicked path. Another image swaps
+//! in place; ← → step among the images it was opened with (a prompt's);
+//! esc closes the preview.
 //!
-//! The image lies centred on the reader's ground, fitted inside
+//! The image lies centred on the card's ground, fitted inside
 //! `IMAGE_INSET` and never drawn past its own size (an image pixel to a
 //! point), at `R_CHIP` with a 1px white-at-10% ring
 //! (`paint::HAIRLINE_STRONG`) for its edge on the dark ground. A click
@@ -52,14 +52,14 @@ gpui::actions!(
     image_viewer,
     [
         // In the `ImageViewer` context: zoom in or out a stop, fit again,
-        // step to the next or the previous image. Esc is the reader's
+        // step to the next or the previous image. Esc is the preview's
         // (`reader::Close`), around it.
         ZoomIn, ZoomOut, Fit, Next, Previous,
     ]
 );
 
 /// The viewer's key context: deeper than the Cockpit's, so ⌘= ⌘- ⌘0 zoom
-/// the image rather than the reading size and esc closes the slot rather
+/// the image rather than the reading size and esc closes the preview rather
 /// than interrupting the turn.
 pub(crate) const KEY_CONTEXT: &str = "ImageViewer";
 
@@ -475,7 +475,7 @@ impl Render for ImageViewer {
                         ))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
-                            crate::attachment_preview::open_original(&original, window, cx);
+                            crate::preview::open_original(&original, window, cx);
                         }),
                 )
         });

@@ -779,7 +779,7 @@ fn scenario(
             live.shot("claude-reader");
             live.act(move |view, _, cx| {
                 if let Some(index) = view.pane_for(claude) {
-                    view.close_reader(index, cx);
+                    view.close_preview(index, cx);
                 }
             });
         }

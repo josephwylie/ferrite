@@ -632,11 +632,13 @@ to the panel (§5.6).
 ### 5.6 Right panel (new)
 
 The panel is a fixed column, 304 wide, padding 0 10 8 8, on `FRAME`,
-with no border. It is not the Beside slot: the Reader, Review and Thread
-still open beside the Pane inside the board (ADR 0021).
+with no border. It is not the Beside slot: the Review and another Thread
+still open beside the Pane inside the board (ADR 0021). A file, an image
+or a command's output opens in the panel itself, in a Preview tab
+(§5.6.3).
 
 - **Head (46, in the head row).** Three tabs: `Changes N`, `PR #N` and
-  `Context`.
+  `Context`, and a fourth, the preview's, while one is open (§5.6.3).
   - Tabs are 28 high, radius 7, 12.5/500. The active tab is `SELECTED`
     with `TEXT_STRONG` (`SELECTION_HOVER` under the pointer, as a selected
     nav row); inactive tabs are `TEXT_MUTED`, `RAISED` under the pointer.
@@ -702,7 +704,7 @@ still open beside the Pane inside the board (ADR 0021).
 - **Context tab.** The `ctx` card's content (`pane::context_usage`), in
   the new inks: the category legend rows (swatch, name, tokens right).
   Opening the tab fires `RefreshContext`, as the meter does today.
-- **Foot (both tabs).** A hairline, then `Context` in 12/500 `TEXT_DIM`
+- **Foot (every tab but the preview).** A hairline, then `Context` in 12/500 `TEXT_DIM`
   with `84k / 200k` at the right. Under it, a 6px segmented meter (2px
   gaps, radius 2) in the `CTX_*` inks. It turns `ATTENTION` past the
   existing warn fraction (.60) and `BLOCKED` past full (.85).
@@ -856,6 +858,58 @@ says `Context not reported yet`, rather than claim there is none.
 `PrWatch`'s cadence (`AUTO_EVERY`, 30s) while the tab is visible and the
 window is focused. Never poll a hidden tab. A change to the checks' or
 merge state also updates the nav row's PR label.
+
+#### 5.6.3 Preview tab (amended 2026-10-24)
+
+What opens a file opens it here: a file link in an answer, a ⌘-clicked
+path, a tool row, a prompt's image chip or thumbnail, a Composer shelf
+chip, a changed file's name, a review line's *Open file at this line*, a
+user command's output. One routing function (`Preview::open`) takes them
+all.
+
+- **Tab.** A fourth tab after `Context`, in the tabs' grammar (28 high,
+  radius 7, 12.5/500), its label the file's name cut from its start, at
+  most 160 wide. It appears while a preview is open and is selected when
+  one opens. Picking another tab keeps the preview and its tab; picking
+  it again brings the preview back.
+- **Body.** The preview as a card on the panel's frame: the board cards'
+  twin (radius 10 on `CARD`, the card ring), its top and foot level with
+  theirs. No foot meter under it. Its head is the Group head's twin (38
+  over a hairline), level with the head of the Pane beside it: the path
+  from the Thread's workspace in `LINK_INK` and `:line` in `TEXT_DIM` (an
+  image: its name, and `· 2/3` among its gallery), then the original's
+  door (an image, a file it cannot show) and the ×.
+  - A file at a line: numbered lines (6-cell number column, two cells to
+    the code) in syntax colour, the target line on `SELECTED` with its
+    number `TEXT_STRONG`, scrolled to the middle.
+  - Markdown at no line: rendered. A command's output: its text.
+  - An image: the image viewer (fit and actual size, ⌘= ⌘- ⌘0, pinch,
+    pan, ← → through the images it opened among), a 1px white-at-10% ring
+    on its edge.
+  - A binary or unreadable file: `This is not a text file` or `Could not
+    read this file` and why, quietly centred, with `open original`.
+- **Width.** While the Preview tab shows, the panel is 42% of the window,
+  held between 420 and 820, and never so wide that the board beside it
+  and the full nav would be narrower than 584 (what the nav's auto-rail
+  asks, so a preview never folds the nav); never narrower than 304. It
+  rides there and back (`motion::RESIZE`, interruptible), the board giving
+  up and taking back the width every frame. The content is laid out at
+  its width at rest and never re-wraps: the panel's own 304 against the
+  window's edge, the preview's width beyond that pinned to the board's
+  edge, so the preview slides in with it and out under it. Reduced motion
+  snaps.
+- **Closing.** Esc in it (deeper than the Cockpit's interrupt), its × or
+  ⌘W while it holds the keyboard closes it; the panel goes back to the tab
+  it showed, at its own width. A panel hidden when the preview opened
+  shows for it and hides again when it closes, riding out with the
+  preview still drawn; hiding the panel (⌥⌘B) puts its preview away.
+- **Another file** opening over it replaces it in place, its body fading
+  in (`ROW_IN`, from 0.3); an image stepping to the next crossfades in the
+  viewer instead. ⌘F finds in a text preview with the transcript's bar.
+- **Per Thread.** Each Pane keeps its own preview, and the panel shows the
+  focused Pane's: focus moving to another Thread leaves it where it is.
+  A draft shows the panel for its preview alone (only the Preview tab),
+  and keeps it through its first send.
 
 ### 5.7 Bottom bar (30)
 

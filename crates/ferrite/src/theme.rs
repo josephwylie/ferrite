@@ -909,6 +909,21 @@ const _: () = assert!(PANEL_PAD_R == 2. * PANEL_SCROLLBAR_INSET + SCROLLBAR_THUM
 /// 6px to its count; 2px between tabs.
 pub const PANEL_TAB_H: f32 = 28.0;
 pub const PANEL_TAB_PAD_X: f32 = 10.0;
+/// The Preview tab's label, the file's name cut from its start, is never
+/// wider than this: the tabs beside it keep their places.
+pub const PANEL_PREVIEW_TAB_MAX_W: f32 = 160.0;
+/// The Panel while its Preview tab shows (SPEC §5.6.3): `PANEL_PREVIEW_SHARE`
+/// of the window, held between `PANEL_PREVIEW_MIN_W` and
+/// `PANEL_PREVIEW_MAX_W` — wide enough to read code at its own size — and
+/// never so wide that the board beside it and the full nav column is
+/// narrower than `PANEL_PREVIEW_BOARD_MIN`: what the nav's auto-rail asks
+/// of the board (rule 2.7.7), so opening a preview never folds the nav and
+/// the Pane beside it stays a readable Pane. Never narrower than the Panel
+/// itself (`PANEL_W`): a narrow window previews at the Panel's width.
+pub const PANEL_PREVIEW_SHARE: f32 = 0.42;
+pub const PANEL_PREVIEW_MIN_W: f32 = 420.0;
+pub const PANEL_PREVIEW_MAX_W: f32 = 820.0;
+pub const PANEL_PREVIEW_BOARD_MIN: f32 = NAV_AUTO_RAIL_BOARD_W + NAV_AUTO_RAIL_HYSTERESIS;
 /// 48px — a two-line panel row (the branch row, a file block's head): its
 /// 14px icon at x 10, y 9; its text at x 34 (SPEC §4's panel rows).
 pub const PANEL_ROW_H: f32 = 48.0;
@@ -1762,13 +1777,14 @@ pub const BOARD_SEAM: f32 = GRID_GAP;
 /// held (`SEAM_HOVER`); at rest the gutter alone separates the cards.
 pub const SEAM_LINE_W: f32 = 2.0;
 
-/// 38px — the Group head (SPEC §5.9; a reader's head is its twin): the
+/// 38px — the Group head (SPEC §5.9; a preview's and a Review's heads are
+/// its twins, `preview::reading_head`): the
 /// card's tab strip height, its `HAIRLINE` inside it.
 pub const PANE_HEAD_H: f32 = 38.0;
 /// A dragged slot's ghost head's inline inset: one cell.
 pub const HEAD_PAD_X: f32 = CH;
-/// The Group head's insets and gap (and its twin's, the reader's head): 14
-/// before the mark, 6 after the fill button or the reader's × (its 28px
+/// The Group head's insets and gap (and its twins', the reading heads): 14
+/// before the mark, 6 after the fill button or a reading head's × (its 28px
 /// hit box carries the rest of the visual inset), 8 between items.
 pub const PANE_HEAD_PAD_L: f32 = 14.0;
 pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
@@ -1849,11 +1865,12 @@ pub const QUICK_ANSWER_H: f32 = LH_UI + 2.0;
 pub const QUICK_ANSWER_PAD_X: f32 = CH;
 pub const QUICK_ANSWER_GAP: f32 = CH;
 
-/// The reader beside a Pane (`cockpit/beside.rs`): line numbers in a
-/// 6-cell column, right-aligned, two cells before the code.
+/// A file's numbered lines in the Panel's preview (`cockpit/panel/
+/// preview.rs`): line numbers in a 6-cell column, right-aligned, two cells
+/// before the code.
 pub const READER_NUMBER_W: f32 = 6.0 * CH;
 pub const READER_NUMBER_GAP: f32 = 2.0 * CH;
-/// The share of a Pane's slot a reader opening beside it takes, and how
+/// The share of a Pane's slot a Review opening beside it takes, and how
 /// far a drag can take the seam between them (the board's 22–78%).
 pub const READER_SHARE: f32 = 0.5;
 
@@ -2031,9 +2048,9 @@ pub const CTX_BUFFER: u32 = TEXT_DIM;
 pub const CTX_FREE: u32 = LINE2;
 pub const CTX_DEFERRED: u32 = TEXT_FAINT;
 pub const CTX_CYCLE: [u32; 4] = [BLUE, RED, 0x8fb2b8, 0xb5b48e];
-/// 28px — the air a fitted image keeps from its reader slot's edges (the
-/// image viewer): the reader's own text inset. Zoomed past the slot, the
-/// picture pans right to them.
+/// 28px — the air a fitted image keeps from its preview card's edges (the
+/// image viewer): a Solo transcript's text inset. Zoomed past the card,
+/// the picture pans right to them.
 pub const IMAGE_INSET: f32 = TX_INSET_SOLO;
 /// The scales ⌘= and ⌘- step an image through (1 is actual size: an image
 /// pixel to a point). Below the fit there is no stop: ⌘- lands on the fit.
@@ -2663,8 +2680,8 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   all. What leaves on its own (a toast) fades out shorter and softer than
 //   it came (`MOTION_TOAST_OUT_MS`), as a face no pointer finds. The
 //   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly, and
-//   the panel's rides ⌥⌘B the same way. A board slot is no float: the
-//   reader slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
+//   the panel's rides ⌥⌘B and a preview's wider width the same way. A
+//   board slot is no float: the Review slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
 //   `MOTION_SLOT_CLOSE_MS`), its Pane giving way and taking the room back,
 //   so the board never jumps.
 // - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
@@ -2731,7 +2748,7 @@ pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
 /// `dialog-in`: 180ms, rising 2px (the 0.96 scale approximated likewise).
 pub const MOTION_DIALOG_IN_MS: u64 = 180;
 pub const MOTION_DIALOG_RISE: f32 = 2.0;
-/// A board slot opening beside its owner (the reader beside its Pane)
+/// A board slot opening beside its owner (the Review beside its Pane)
 /// slides in over 240ms on `MOTION_EASE_SLIDE`, the owner narrowing with
 /// it, and slides out over a shorter 200ms before it is removed.
 pub const MOTION_SLOT_OPEN_MS: u64 = 240;
@@ -3538,9 +3555,10 @@ mod tests {
             ("background_chips.rs", include_str!("background_chips.rs")),
             ("keymap.rs", include_str!("keymap.rs")),
             ("decision.rs", include_str!("decision.rs")),
+            ("preview.rs", include_str!("preview.rs")),
             (
-                "attachment_preview.rs",
-                include_str!("attachment_preview.rs"),
+                "cockpit/panel/preview.rs",
+                include_str!("cockpit/panel/preview.rs"),
             ),
             ("prompt_drop.rs", include_str!("prompt_drop.rs")),
             ("transcript/rows.rs", include_str!("transcript/rows.rs")),

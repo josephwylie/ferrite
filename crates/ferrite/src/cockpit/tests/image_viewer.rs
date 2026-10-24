@@ -1,11 +1,10 @@
-//! The image viewer in the reader slot (`image_viewer.rs`): an image opens
-//! beside its Pane from anywhere, swaps in place without ever blanking the
-//! slot, replaces a text reader
-//! and is replaced by one, closes on esc with the keyboard back on the
+//! The image viewer in the Panel's Preview tab (`image_viewer.rs`): an
+//! image opens there from anywhere, swaps in place without ever blanking
+//! the preview, replaces a text preview and is replaced by one, closes on esc with the keyboard back on the
 //! Pane, and zooms between fit and actual size — easing, asking for frames
 //! only while it moves, and never rebuilding the Panes beside it.
 use super::*;
-use crate::attachment_preview::Body;
+use crate::preview::Body;
 
 /// A solid PNG `width` × `height` at `path`.
 fn png(path: &std::path::Path, width: u32, height: u32) {
@@ -56,7 +55,7 @@ fn step_to(
     view.update_in(cx, |view, window, cx| {
         view.panes[0]
             .preview
-            .open_image(path.to_path_buf(), gallery, window, cx)
+            .open(path.to_path_buf(), None, gallery, window, cx)
     });
 }
 
@@ -83,12 +82,12 @@ fn picture(
         .expect("the picture is drawn")
 }
 
-/// A prompt's image, clicked under its band, opens in the reader slot
-/// beside the Pane — the board halved, the picture fitted inside the
-/// slot's inset, never past its own size — and the viewer holds the
+/// A prompt's image, clicked under its band, opens in the Panel's Preview
+/// tab — the Panel wide, the board giving it up, the picture fitted inside
+/// the card's inset, never past its own size — and the viewer holds the
 /// keyboard. Nothing dims the window.
 #[gpui::test]
-fn a_sent_image_opens_in_the_reader_slot_beside_its_pane(cx: &mut TestAppContext) {
+fn a_sent_image_opens_in_the_panels_preview(cx: &mut TestAppContext) {
     let dir = scratch("viewer-sent-files");
     let (wide, small) = (dir.join("wide.png"), dir.join("small.png"));
     png(&wide, 1600, 1000);
@@ -112,15 +111,22 @@ fn a_sent_image_opens_in_the_reader_slot_beside_its_pane(cx: &mut TestAppContext
     let (path, viewer) = shown(&view, cx).expect("an image opened");
     assert!(path == wide || path == small, "{path:?}");
     let gallery = view.read_with(cx, |view, _| match view.panes[0].preview.document() {
-        Some(crate::attachment_preview::Document {
+        Some(crate::preview::Document {
             body: Body::Image { gallery, .. },
             ..
         }) => gallery.len(),
         _ => 0,
     });
     assert_eq!(gallery, 2, "it steps among the prompt's images");
+    settle(cx);
     let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert!(pane.w < whole.w * 0.6, "the board halves: {pane:?}");
+    let panel = view.read_with(cx, |view, _| view.board_right_rest());
+    assert!(panel > crate::theme::PANEL_W, "the Panel is wide: {panel}");
+    assert!(
+        (pane.w - (whole.w - (panel - crate::theme::PANEL_W))).abs() <= 1.,
+        "the board gives the width up: {pane:?} from {whole:?}"
+    );
+    assert!(cx.debug_bounds("panel-tab-Preview").is_some());
     let stage = cx.debug_bounds("image-viewer").expect("the viewer");
     assert!(stage.left() >= px(pane.x + pane.w), "beside the Pane");
     assert!(cx.debug_bounds("reader-head").is_some());
@@ -179,7 +185,7 @@ fn a_second_image_swaps_in_place_and_arrows_step(cx: &mut TestAppContext) {
     assert_eq!(
         cx.debug_bounds("image-viewer").unwrap(),
         slot,
-        "no new slot"
+        "it holds its place"
     );
     cx.simulate_keystrokes("right");
     tick(cx);
@@ -190,10 +196,12 @@ fn a_second_image_swaps_in_place_and_arrows_step(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("left left left");
     tick(cx);
     assert_eq!(shown(&view, cx).unwrap().0, images[0]);
-    let title = view.read_with(cx, |view, _| {
-        view.panes[0].preview.document().unwrap().title
-    });
-    assert_eq!(title, "one.png", "the head names the image shown");
+    let title = view.read_with(cx, |view, _| view.preview_tab_label(view.panes[0].identity));
+    assert_eq!(
+        title.as_deref(),
+        Some("one.png"),
+        "the tab names the image shown"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -280,7 +288,7 @@ fn esc_closes_the_image_and_the_pane_takes_the_keyboard_back(cx: &mut TestAppCon
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An image opening while a file is open replaces it in the same slot,
+/// An image opening while a file is open replaces it in the same card,
 /// as another file would — ⌘-clicking an image's path goes there too —
 /// and a file opening over an image replaces it back.
 #[gpui::test]
@@ -290,26 +298,26 @@ fn an_image_and_a_text_reader_replace_each_other(cx: &mut TestAppContext) {
     png(&image, 300, 200);
     std::fs::write(&file, "fn one() {}\n").unwrap();
     let (view, _fake, _, cx) = board("viewer-replace", cx);
-    let reader = |path: &std::path::Path| beside::Beside::Reader {
-        path: path.to_path_buf(),
-        line: None,
-    };
-    let open = |beside: beside::Beside, cx: &mut gpui::VisualTestContext| {
-        cx.update(|window, cx| view.update(cx, |view, cx| view.open_beside(beside, window, cx)));
+    let open = |path: &std::path::Path, cx: &mut gpui::VisualTestContext| {
+        let path = path.to_path_buf();
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.open_preview(path, None, window, cx))
+        });
         tick(cx);
     };
-    open(reader(&file), cx);
+    open(&file, cx);
+    settle(cx);
     let slot = cx
-        .debug_bounds("markdown-reader")
-        .expect("the file's reader");
-    open(reader(&image), cx);
+        .debug_bounds("panel-preview")
+        .expect("the file's preview");
+    open(&image, cx);
     assert_eq!(shown(&view, cx).map(|(path, _)| path), Some(image.clone()));
     assert_eq!(
-        cx.debug_bounds("markdown-reader").unwrap(),
+        cx.debug_bounds("panel-preview").unwrap(),
         slot,
-        "the same slot"
+        "the same card"
     );
-    open(reader(&file), cx);
+    open(&file, cx);
     let document = view.read_with(cx, |view, _| view.panes[0].preview.document().unwrap());
     assert!(matches!(document.body, Body::Text { .. }));
     assert!(cx.debug_bounds("image-viewer").is_none());

@@ -230,7 +230,7 @@ pub(crate) fn release_scope(scope: &str, owner: gpui::EntityId, cx: &mut App) ->
     owned
 }
 
-/// Open a target in a reader beside its Thread (its scope's handler), or
+/// Open a target in its Thread's preview, in the Panel (its scope's handler), or
 /// with the system where no transcript hosts it.
 pub(crate) fn open_target(target: &PathTarget, window: &mut Window, cx: &mut App) {
     let handler = target.scope.as_ref().and_then(|scope| {
@@ -340,7 +340,7 @@ fn underline(key: &str, ink: u32, size: f32, line: f32) -> gpui::Div {
 }
 
 /// Wire `element` as a path target: the pointer cursor, the hover card while
-/// the pointer is on it, ⌘-click to the reader, and its laid-out box kept.
+/// the pointer is on it, ⌘-click to the preview, and its laid-out box kept.
 fn wire_target(
     element: gpui::Stateful<gpui::Div>,
     target: PathTarget,
