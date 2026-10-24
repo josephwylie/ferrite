@@ -748,9 +748,7 @@ impl CockpitView {
             format!("subject-tab-{}-main", thread.get()).into(),
         )
         .accessibility_label("Main transcript")
-        .tooltip(|window, cx| {
-            gpui::component::tooltip::Tooltip::new("Main transcript").build(window, cx)
-        })
+        .tooltip(crate::menu::tooltip("Main transcript"))
         .debug_selector(move || format!("subject-main-{}", thread.get()))
         .child(
             div()
@@ -816,9 +814,7 @@ impl CockpitView {
             .accessibility_label(tooltip.clone())
             .debug_selector(move || selector.clone())
             .child(content)
-            .tooltip(move |window, cx| {
-                gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-            });
+            .tooltip(crate::menu::tooltip(tooltip));
             tabs = tabs.child(self.subject_tab(
                 tab,
                 thread,

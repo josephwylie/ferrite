@@ -2620,9 +2620,7 @@ fn tasks_strip(key: u64, todos: Todos, current: Option<&str>, streaming: bool) -
     meter(done, todos.total, streaming && current.is_some())
         .id(("tasks-meter", key as usize))
         .debug_selector(move || format!("tasks-meter-{key}"))
-        .tooltip(move |window, cx| {
-            gpui::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-        })
+        .tooltip(crate::menu::tooltip(tip))
 }
 
 /// The name a model shows under, from any spelling the wire uses:
