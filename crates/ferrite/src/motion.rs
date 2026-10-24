@@ -1232,9 +1232,10 @@ pub fn reduced_motion(cx: &App) -> bool {
 /// Whether the kit animates at all. Always, except in unit tests, where it
 /// rests unless a test asks for it (`testing::drive`). The suite asserts
 /// layout and hit targets straight after a state change, on a clock it
-/// steps by hand, and gpui's `with_animation` runs on the wall clock: live
-/// entrances would make those readings depend on when they were taken. A
-/// pulse tick nobody asked for would also blank the transcripts' test
+/// steps by hand: live entrances would put those readings mid-flight, and
+/// the kit's own springs and cards (gpui's `with_animation`) run on the
+/// wall clock besides. A pulse tick nobody asked for would also blank the
+/// transcripts' test
 /// selectors (gpui's test window keeps no `debug_bounds` for a cached view
 /// it reuses). Resting, the kit behaves as it does under reduced motion.
 pub(crate) fn live() -> bool {
