@@ -378,6 +378,10 @@ pub(crate) struct ReviewView {
     /// Each row's syntax colours and changed-word washes, worked out once
     /// per read.
     highlights: Vec<Vec<(Range<usize>, HighlightStyle)>>,
+    /// The line-number columns' width in cells: a tool row's diff numbers'
+    /// (`pane::diff_number_cells`), wide enough for the shown files'
+    /// longest number, so every file's columns line up.
+    number_cells: f32,
     selection: Option<Selection>,
     /// A press on a line is held: dragging over lines stretches the pick.
     dragging: bool,
@@ -436,6 +440,7 @@ impl ReviewView {
             children: Vec::new(),
             child_of: Vec::new(),
             highlights: Vec::new(),
+            number_cells: DIFF_NUMBER_CELLS,
             selection: None,
             dragging: false,
             editor: None,
@@ -580,7 +585,15 @@ impl ReviewView {
 
     /// The line-number columns: as wide as a tool row's diff numbers.
     fn number_w(&self) -> f32 {
-        DIFF_NUMBER_CELLS * self.grid.cell()
+        self.number_cells * self.grid.cell()
+    }
+
+    /// Where a row's code starts: a cell of air at the slot's edge (the
+    /// file head's inset), both number columns and the sign. Folds, notices,
+    /// comments and the comment field hang from the same edge.
+    fn code_x(&self) -> f32 {
+        let cell = self.grid.cell();
+        cell + 2. * self.number_w() + DIFF_SIGN_CELLS * cell
     }
 
     /// The handle holding the keyboard in this review — a field of it, or
@@ -838,6 +851,7 @@ impl ReviewView {
         let mut children = Vec::new();
         let mut child_of = Vec::new();
         let mut highlights = Vec::new();
+        let mut max_number = 0;
         for (index, file) in self.files().iter().enumerate() {
             if file.diff.notice.is_some() {
                 children.push(Child::Notice(index));
@@ -849,6 +863,7 @@ impl ReviewView {
             }
             let language =
                 ferrite_core::transcript::language_for_path(std::path::Path::new(&file.diff.path));
+            max_number = max_number.max(rows_max_number(&file.diff.rows));
             for (at, row) in file.diff.rows.iter().enumerate() {
                 child_of.push(children.len());
                 children.push(Child::Row(lines.len()));
@@ -863,6 +878,7 @@ impl ReviewView {
         self.children = children;
         self.child_of = child_of;
         self.highlights = highlights;
+        self.number_cells = crate::pane::diff_number_cells(max_number as usize);
         self.selection = self
             .selection
             .filter(|picked| picked.last() < self.lines.len());
@@ -1378,16 +1394,20 @@ impl ReviewView {
                     .text_color(rgb(TEXT_STRONG))
                     .child(SharedString::from(path)),
             )
-            .when(self.file.is_none(), |head| {
-                head.child(crate::components::tabular(
-                    div().flex_shrink_0().pl(px(2. * self.grid.cell())).child(
-                        crate::pane::trail_diff_stat(
-                            file.additions as usize,
-                            file.deletions as usize,
+            // A file the model declined counts nothing: no `+0 −0`.
+            .when(
+                self.file.is_none() && (file.additions, file.deletions) != (0, 0),
+                |head| {
+                    head.child(crate::components::tabular(
+                        div().flex_shrink_0().pl(px(2. * self.grid.cell())).child(
+                            crate::pane::trail_diff_stat(
+                                file.additions as usize,
+                                file.deletions as usize,
+                            ),
                         ),
-                    ),
-                ))
-            })
+                    ))
+                },
+            )
             .into_any_element()
     }
 
@@ -1401,7 +1421,7 @@ impl ReviewView {
         let picked = self.selection.is_some_and(|picked| picked.contains(at));
         let last_picked = self.selection.is_some_and(|picked| picked.last() == at);
         let (cell, line_h, number_w) = (self.grid.cell(), self.grid.line, self.number_w());
-        let indent = 2. * number_w + 2. * cell;
+        let indent = self.code_x();
         let mut stack = div().flex().flex_col().w_full();
         if first_of_file {
             stack = stack.child(self.file_head(file, shown.file == 0));
@@ -1433,14 +1453,22 @@ impl ReviewView {
         let ink = DiffKind::of(&row.marker().to_string()).paint();
         let text = row.text();
         let highlights = self.highlights_at(at, &text);
+        // The numbers wear a tool row's diff ink (structure on a context
+        // row, the sign's hue dimmed on a changed one); the pick's are the
+        // keyboard's `TEXT_STRONG`.
+        let number_ink = if picked {
+            TEXT_STRONG
+        } else {
+            ink.number_color
+        };
         let number = |number: Option<u32>| {
             crate::components::tabular(
                 div()
                     .flex_shrink_0()
                     .w(px(number_w))
-                    .pr(px(cell))
+                    .pr(px(DIFF_NUMBER_PAD_CELLS * cell))
                     .text_right()
-                    .text_color(rgb(if picked { TEXT_STRONG } else { TEXT_DIM }))
+                    .text_color(rgb(number_ink))
                     .children(number.map(|number| SharedString::from(number.to_string()))),
             )
         };
@@ -1449,25 +1477,19 @@ impl ReviewView {
             Row::Insertion { .. } => None,
             _ => row.old_no(),
         };
-        let line = div()
-            .id(("review-line", at))
-            .debug_selector(move || format!("review-line-{at}"))
+        // The pick lays the selection over the row's wash rather than in
+        // its place, so a picked run still reads added or removed.
+        let cells = div()
             .flex()
-            .w_full()
-            .h(px(line_h))
-            .whitespace_nowrap()
-            .cursor_pointer()
-            .map(|line| match (picked, ink.wash) {
-                (true, _) => line.bg(paint::SELECTED),
-                (false, Some(wash)) => line.bg(rgba(wash)),
-                (false, None) => line,
-            })
+            .size_full()
+            .pl(px(cell))
+            .when(picked, |cells| cells.bg(paint::SELECTED))
             .child(number(old))
             .child(number(row.new_no()))
             .child(
                 div()
                     .flex_shrink_0()
-                    .w(px(2. * cell))
+                    .w(px(DIFF_SIGN_CELLS * cell))
                     .text_color(rgb(ink.sign_color))
                     .child(ink.sign),
             )
@@ -1505,7 +1527,16 @@ impl ReviewView {
                                 ),
                         )
                     }),
-            )
+            );
+        let line = div()
+            .id(("review-line", at))
+            .debug_selector(move || format!("review-line-{at}"))
+            .w_full()
+            .h(px(line_h))
+            .whitespace_nowrap()
+            .cursor_pointer()
+            .when_some(ink.wash, |line, wash| line.bg(rgba(wash)))
+            .child(cells)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
@@ -1590,7 +1621,7 @@ impl ReviewView {
             .flex()
             .items_center()
             .min_h(px(self.grid.line))
-            .pl(px(2. * self.number_w() + 2. * cell))
+            .pl(px(self.code_x()))
             .pr(px(cell))
             .bg(paint::RAISED)
             .child(
@@ -1631,7 +1662,7 @@ impl ReviewView {
             .child(
                 div()
                     .h(px(self.grid.line))
-                    .pl(px(2. * self.number_w() + 2. * self.grid.cell()))
+                    .pl(px(self.code_x()))
                     .text_color(rgb(TEXT_DIM))
                     .child(message),
             )
@@ -2250,6 +2281,18 @@ fn stat(files: &[ReviewFile]) -> String {
         "{count} file{} +{added} \u{2212}{removed}",
         if count == 1 { "" } else { "s" }
     )
+}
+
+/// The longest line number among `rows`, a fold's hidden lines included
+/// (opening one never widens the columns).
+fn rows_max_number(rows: &[Row]) -> u32 {
+    rows.iter()
+        .map(|row| match row {
+            Row::Fold { lines } => rows_max_number(lines),
+            row => row.old_no().max(row.new_no()).unwrap_or(0),
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// A pull request's facts on one line: state, branches, mergeability and
@@ -2872,6 +2915,34 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(*picked.borrow(), ["feature/x", "v1.2.0"]);
+    }
+
+    /// A file whose lines run past a thousand widens both number columns
+    /// for every file shown, so the numbers never run into the sign; a fold
+    /// counts the lines it hides.
+    #[gpui::test]
+    fn long_files_widen_the_number_columns(cx: &mut TestAppContext) {
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        let cells = |cx: &mut gpui::VisualTestContext| review.read_with(cx, |r, _| r.number_cells);
+        assert_eq!(
+            cells(cx),
+            DIFF_NUMBER_CELLS,
+            "short files keep a tool row's columns"
+        );
+        let old: String = (1..=1204).map(|n| format!("line {n}\n")).collect();
+        let new = old.replace("line 1200\n", "line twelve hundred\n");
+        review.update(cx, |review, cx| {
+            let mut two = files();
+            two.push(sides("notes.txt", &old, &new));
+            review.show(Scope::Uncommitted, two, cx)
+        });
+        assert_eq!(
+            cells(cx),
+            crate::pane::diff_number_cells(1204),
+            "four digits and the pad"
+        );
+        assert!(cells(cx) > DIFF_NUMBER_CELLS);
     }
 
     struct Host(Entity<ReviewView>);
