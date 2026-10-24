@@ -2211,3 +2211,46 @@ fn a_choice_menu_fades_in_in_place_and_then_rests(cx: &mut TestAppContext) {
         "it stood still as it came in: {stood:?}"
     );
 }
+
+/// A minimap glide is a scroll the operator asked for, and the wheel is
+/// one too: a turn of the wheel mid-glide takes the scroll back, rather
+/// than the glide overriding it to its end.
+#[gpui::test]
+fn the_wheel_takes_the_scroll_back_from_a_minimap_glide(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, fake) = cockpit("minimap-glide", 1);
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    let gliding = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .is_some_and(|transcript| transcript.read(cx).gliding())
+        })
+    };
+    let rail = cx
+        .debug_bounds("transcript-minimap")
+        .expect("the transcript draws its minimap");
+    // Near the rail's top: far from the tail the transcript follows.
+    let top = gpui::point(rail.center().x, rail.top() + px(4.));
+    cx.simulate_mouse_move(top, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(top, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(top, MouseButton::Left, gpui::Modifiers::none());
+    cx.executor().advance_clock(Duration::from_millis(50));
+    display_frames(cx);
+    assert!(gliding(cx), "the premise: the click glides");
+    let body = gpui::point(rail.left() - px(200.), rail.center().y);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: body,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert!(!gliding(cx), "the wheel took the scroll back");
+    frames_over(cx, theme::MINIMAP_SCROLL_MS);
+    assert_eq!(display_frames(cx), 0, "and nothing glides on");
+}
