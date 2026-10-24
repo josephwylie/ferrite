@@ -1566,12 +1566,11 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// on its `RAISED` chip; links and file paths are `LINK_INK` with no
 /// underline at rest, every link underlining under the pointer
 /// (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_DIM`, hanging in the first
-/// of two cells. A fence is the diff's block box (`BLOCK_*`), the code two
-/// cells in, `TX_BLOCK_STEP` under the prose, in full syntax colour, at most
-/// `MEASURE_CH` cells from the content column; its language tag dim at its
-/// top right and a lowercase `copy` `CODE_COPY_RIGHT_CELLS` in from the
-/// block's right edge, fading in under the pointer over
-/// `CODE_COPY_FADE_MS`. A table takes its content's width: a `W_STRONG`
+/// of two cells. A fence is the diff's block box (`BLOCK_*`), the code
+/// `CODE_PAD_CELLS` in, `TX_BLOCK_STEP` under the prose, in full syntax
+/// colour, at most `MEASURE_CH` cells from the content column; its language
+/// tag dim on its first line at the right, `Copy` before the tag blending
+/// in under the pointer. A table takes its content's width: a `W_STRONG`
 /// `TEXT_STRONG` head over a `paint::LINE2` rule, row rules in `paint::LINE`
 /// (each row exactly one line), no vertical rules and no box, the first
 /// column flush, figures tabular; a column of numbers aligns right (head
@@ -1604,13 +1603,15 @@ pub const QUOTE_RULE_W: f32 = 2.0;
 /// 4px — a horizontal rule's own margin inside its block, so it sits 16px
 /// from its neighbours.
 pub const RULE_MARGIN_Y: f32 = SPACE_1;
-/// A fence's actions overlay: the language id, html `Preview`,
-/// `Copy`/`Copied`, top-right over the block. It is always laid out (so it
-/// never moves the block) and only shown under the pointer (the 150ms
-/// hover blend), while its keys have focus, or while the caret or a
-/// selection is inside the block — those two instantly.
-pub const CODE_ACTIONS_TOP: f32 = 0.0;
-pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
+/// A fence's code sits this many cells (at the fence's size) in from the
+/// block's sides. Its actions overlay — the language id, html `Preview`,
+/// `Copy`/`Copied` — keeps the same inset at the right and stands on the
+/// code's first line (`BLOCK_PAD_Y` down, one code line high), the id set
+/// as the code is, on its baseline. The overlay is always laid out (so it
+/// never moves the block); the actions show only under the pointer (the
+/// 150ms hover blend), while their keys have focus, or while the caret or
+/// a selection is inside the block — those two instantly.
+pub const CODE_PAD_CELLS: f32 = 2.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
 /// A reading dialog (the html preview, What's New): the reading column's
