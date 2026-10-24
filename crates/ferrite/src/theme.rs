@@ -2596,8 +2596,11 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 // that wears it). The rules every animated surface follows:
 //
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
-//   a few pixels into place. A menu or a sheet that closes goes at once:
-//   dismissals are frequent, and the closed state says it all. The
+//   a few pixels into place. What the operator dismisses (a menu, a sheet,
+//   the palette) goes at once: dismissals are frequent, a fading surface
+//   would hold its hit area past its state, and the closed state says it
+//   all. What leaves on its own (a toast) fades out shorter and softer than
+//   it came (`MOTION_TOAST_OUT_MS`), as a face no pointer finds. The
 //   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly.
 // - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
 //   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
@@ -2622,6 +2625,11 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`): each declares
 //   when its picture next changes, and the clock wakes only the views due
 //   then, on its grid; it parks when nothing is declared.
+// - **A frame redraws only what moves.** Every animation asks for its next
+//   frame through the cheapest view that draws it (`motion::frames_through`):
+//   a float the Cockpit draws redraws the frame around its cached parts,
+//   never every Pane. Nothing animates where its host would rebuild more
+//   than the animation shows.
 
 /// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
 pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];

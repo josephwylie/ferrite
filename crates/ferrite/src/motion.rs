@@ -1,6 +1,8 @@
-//! The motion kit: Zeron's animation catalog as helpers over gpui's
-//! [`Animation`], plus the two clocks gpui does not give us — a throttled,
-//! shared pulse for loops and a hover blend for colour. Ported from Zeron
+//! The motion kit: Zeron's animation catalog as one-shot elements on the
+//! executor's clock ([`Played`]), plus the clocks gpui does not give us — a
+//! throttled, shared pulse for loops, a hover blend for colour, and
+//! interruptible tweens. Every clock asks for its frames through the view
+//! that redraws it most cheaply ([`frames_through`]). Ported from Zeron
 //! (MIT, (c) 2026 Wing). The numbers are tokens in `theme.rs` (the motion
 //! section), which also holds the rules; this module is the machinery.
 //!
@@ -12,11 +14,11 @@
 //! | --- | --- | --- |
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
-//! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
+//! | toasts | [`TOAST_IN`] 180ms, 4px rise / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18) rises into place from 0.3 ([`toast_in`]); one that goes on its own fades away sinking 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server, update and Projects toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
+//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
-//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
+//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets and the attachment preview via [`dialog_in`]; the palette, the shortcuts sheet and the Projects popup with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
@@ -24,11 +26,22 @@
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
-//! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
-//! `PopupMenu`) keep the kit's own behaviour. A tool group's disclosure in
-//! the transcript opens without a height tween: its rows are one item of a
-//! virtualized list inside a kit `Collapsible`, and an item mid-reveal would
-//! clip rows the pointer can already reach.
+//! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
+//! keep the kit's own behaviour. A tool group's disclosure in the transcript
+//! opens without a height tween: its rows are one item of a virtualized
+//! list inside a kit `Collapsible`, and an item mid-reveal would clip rows
+//! the pointer can already reach. The hover card (`hover_card.rs`) hangs at
+//! once: the transcript hosting it would draw every frame of an entrance
+//! again, rebuilding its native text (15 text renders for one `menu-in`).
+//!
+//! **What a frame costs.** gpui asks for an animation's next frame by
+//! notifying the view drawing it, and redraws that view's ancestors with
+//! it. A one-shot, a settled flip and a hover blend in the Cockpit's own
+//! tree (its floats, the frame's controls) notify its `FrameTick` instead
+//! ([`draw_frames_through`]), so they rebuild no cached part; one inside a
+//! part (a Pane's Composer menu) rebuilds that part alone. A loop draws in
+//! the loops overlay (ADR 0011). The nav's ride rebuilds every part on each
+//! frame: the board's width moves under them.
 //!
 //! # What gpui here cannot do, and what stands in
 //!
@@ -40,19 +53,21 @@
 //! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
 //!   dropped; opacity and scale carry it.
 //! - **Frost and edge fades.** Fork-only paint effects; not ported.
-//! - **Toast enter and exit.** Ferrite sets the stack's timing
+//! - **The kit's toast card.** Ferrite sets the kit stack's timing
 //!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
 //!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px
-//!   and 200ms exit on the card itself, so the card's 4px / 0.3-opacity
-//!   entrance waits on that crate.
+//!   and 200ms exit on the card itself, so the Server, update and Projects
+//!   toasts keep that slide; the Needs-you toast, Ferrite's own, wears the
+//!   catalog's.
 //!
 //! # Reduced motion
 //!
 //! gpui's `App::reduce_motion` flag snaps every `with_animation` element (a
 //! one-shot to its end state, a loop to its start) and every kit spring. The
-//! clocks here follow the same rule: [`loop_phase`] returns 0 and declares
-//! nothing, a [`Tween`] reads its target, and a hover snaps. [`init`] sets
-//! the flag from the system setting at launch.
+//! clocks here follow the same rule: a [`Played`] one-shot lands on its
+//! first frame (an exit is not drawn at all), [`loop_phase`] returns 0 and
+//! declares nothing, a [`Tween`] reads its target, and a hover snaps.
+//! [`init`] sets the flag from the system setting at launch.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
