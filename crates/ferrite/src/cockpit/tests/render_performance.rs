@@ -1969,3 +1969,88 @@ fn a_pickers_arrows_rebuild_only_its_own_pane(cx: &mut TestAppContext) {
     );
     assert_eq!(built[1..], [0, 0, 0], "an arrow rebuilt another Pane");
 }
+
+// ----------------------------------------------- what an entrance redraws
+
+/// Pane builds since `before`, Pane by Pane.
+fn built_since(threads: &[ThreadId], before: &[usize]) -> Vec<usize> {
+    pane_builds(threads)
+        .iter()
+        .zip(before)
+        .map(|(after, before)| after - before)
+        .collect()
+}
+
+/// Display frames while `ms` pass a frame at a time, each delivered.
+fn frames_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
+    let mut frames = 0;
+    for _ in 0..ms / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        frames += display_frames(cx);
+    }
+    frames
+}
+
+/// A menu the Cockpit draws fades in over `motion::MENU_IN` by redrawing
+/// the frame around the cached parts: after the frame that opens it, no
+/// Pane is rebuilt for its entrance, and it parks once it lands.
+#[gpui::test]
+fn a_menu_entrance_redraws_the_frame_and_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("menu-entrance", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    // The frame that opens it is the Cockpit's change; the entrance is
+    // every frame after.
+    let mut frames = frames_over(cx, 16);
+    let panes = pane_builds(&threads);
+    frames += frames_over(cx, theme::MOTION_MENU_IN_MS + 16);
+    let built = built_since(&threads, &panes);
+    eprintln!("MENU_ENTRANCE frames={frames} pane_builds={built:?}");
+    assert!(frames > 0, "the menu fades in");
+    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}
+
+/// The pointer on a row of a menu the Cockpit draws blends the row's wash
+/// in the frame around the parts: no Pane is rebuilt for it.
+#[gpui::test]
+fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("menu-row-hover", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cockpit_renders_over(cx, 300);
+    let panes = pane_builds(&threads);
+    // A row with a shortcut: its key glyph sits on the row.
+    let row = cx
+        .debug_bounds("command-key")
+        .expect("the Pane menu's shortcuts draw the glyph");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cockpit_renders_over(cx, 300);
+    assert!(
+        cx.update(|_, _| crate::motion::testing::hover_values())
+            .iter()
+            .any(|(key, value)| key.contains("context-menu-row") && *value == 1.0),
+        "the premise: the pointer is on a menu row"
+    );
+    cx.simulate_mouse_move(
+        gpui::point(px(1200.), px(900.)),
+        None,
+        gpui::Modifiers::none(),
+    );
+    cockpit_renders_over(cx, 300);
+    let built = built_since(&threads, &panes);
+    eprintln!("MENU_ROW_HOVER pane_builds={built:?}");
+    assert_eq!(built, [0, 0, 0, 0], "a menu row's hover rebuilt a Pane");
+}

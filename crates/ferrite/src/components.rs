@@ -280,10 +280,10 @@ pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
     }
 }
 
-/// `float_shadow` with its ink scaled by `k` (0..1): a floating surface's
-/// shadow while it fades in (`motion::menu_in`).
-pub fn float_shadow_faded(k: f32) -> Vec<BoxShadow> {
-    float_shadow()
+/// `shadow` with its ink scaled by `k` (0..1): a floating surface's shadow
+/// while it fades in or out (`motion::menu_in`).
+pub fn shadow_faded(shadow: Vec<BoxShadow>, k: f32) -> Vec<BoxShadow> {
+    shadow
         .into_iter()
         .map(|layer| BoxShadow {
             color: layer.color.opacity(k.clamp(0.0, 1.0)),
@@ -1938,7 +1938,7 @@ mod tests {
         for rung in [Float, Sheet] {
             assert_eq!(elevation(rung), float_shadow(), "{rung:?} floats");
         }
-        assert!(float_shadow_faded(0.5)[0].color.a < float_shadow()[0].color.a);
+        assert!(shadow_faded(float_shadow(), 0.5)[0].color.a < float_shadow()[0].color.a);
     }
 
     #[test]

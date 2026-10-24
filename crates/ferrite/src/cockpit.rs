@@ -9786,13 +9786,9 @@ impl Render for CockpitView {
         } else if fading {
             // A blend is drawn again by the view that paints it alone: a
             // part (a nav row, a Pane's control, a transcript's link), or,
-            // for the frame's own controls, the frame around the parts.
-            let root = cx.entity_id();
-            let frame = self.frame_tick_id();
-            let views: Vec<_> = crate::motion::hover_fading_views()
-                .into_iter()
-                .map(|view| if view == root { frame } else { view })
-                .collect();
+            // for the frame's own controls, the frame around the parts
+            // (`motion::frames_through`).
+            let views = crate::motion::hover_fading_views();
             if views.is_empty() {
                 window.request_animation_frame();
             } else {
