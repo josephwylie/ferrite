@@ -1,7 +1,8 @@
 //! Scenes for the features the first references predate: the work board
 //! (every group, a row that asks, the chat and each panel) and its rows in
 //! the nav (ADR 0031), the Review slot (ADR
-//! 0021), find in a transcript (ADR 0020), the nav's PR labels and the four
+//! 0021), the reader beside a Pane at rest and mid-slide, find in a
+//! transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
 //! nothing of the operator's (the projects root is under the scene's own).
@@ -52,6 +53,8 @@ pub(super) const STATES: &[&str] = &[
     "review-commits",
     "review-pr",
     "review-search",
+    "reader-line",
+    "reader-slide",
     "find",
     "nav-states",
     "mermaid",
@@ -74,6 +77,8 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "review-commits" => review(Staged::Commits),
         "review-pr" => review(Staged::Pr),
         "review-search" => review(Staged::Search),
+        "reader-line" => reader(None),
+        "reader-slide" => reader(Some(0.5)),
         "find" => find(),
         "nav-states" => nav_states(),
         "mermaid" => mermaid(),
@@ -650,6 +655,67 @@ fn search_results() -> SearchResults {
         code_more: false,
     }
 }
+
+// -------------------------------------------------------------------- reader
+
+/// The conversation scene's Thread with a file open beside it at a line:
+/// at rest, or held `held` of the way through its slide in (the Pane
+/// giving way, the reader at its final width, cut at the board's edge).
+fn reader(held: Option<f32>) -> (Scene, Setup) {
+    let scene = conversation("reader");
+    let file = scene
+        .root
+        .join("work")
+        .join("ferrite")
+        .join("crates/ferrite/src/nav.rs");
+    let setup: Setup = Box::new(move |view, window, cx| {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, NAV_RS).unwrap();
+        view.empty_shown = false;
+        view.fixture_hold_reader(held);
+        view.open_beside(
+            crate::cockpit::beside::Beside::Reader {
+                path: file.clone(),
+                line: Some(14),
+            },
+            window,
+            cx,
+        );
+    });
+    (scene, setup)
+}
+
+/// What the reader scene's file reads: the nav row the conversation is
+/// about.
+const NAV_RS: &str = "\
+use crate::facts::Facts;
+use crate::theme::{ROW_H, ROW_LINE_H};
+
+/// One Thread's row in the nav: its mark, its title and, while the Thread
+/// is open, the status line under it.
+pub(crate) struct ThreadRow {
+    pub title: SharedString,
+    pub status: Option<SharedString>,
+}
+
+impl NavState {
+    fn thread_row(&self, thread: ThreadId) -> Div {
+        let facts = self.facts.get(thread);
+        let mut row = div().h(px(ROW_H));
+        let summary = facts
+            .summary
+            .clone()
+            .unwrap_or_else(|| \"waiting for first output\".into());
+        row = row.child(status_line(summary));
+        row
+    }
+
+    /// A parked Thread keeps its compact height: it has no live facts.
+    fn parked_row(&self, thread: ThreadId) -> Div {
+        div().h(px(ROW_H)).child(self.title(thread))
+    }
+}
+";
 
 // ---------------------------------------------------------------------- find
 

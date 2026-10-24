@@ -2598,7 +2598,10 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
 //   a few pixels into place. A menu or a sheet that closes goes at once:
 //   dismissals are frequent, and the closed state says it all. The
-//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly.
+//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly. A
+//   board slot is no float: the reader slides in and, a little quicker,
+//   out (`MOTION_SLOT_OPEN_MS` / `MOTION_SLOT_CLOSE_MS`), its Pane giving
+//   way and taking the room back, so the board never jumps.
 // - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
 //   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
 //   changes, a Send becoming ready) and a press land on the same frame.
@@ -2629,6 +2632,10 @@ pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 /// CSS `transition-colors`' default curve: every hover blend.
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
+/// A drawer's ease-out (the iOS sheet's curve): it leaves at speed and
+/// spends its second half settling the last few pixels, so a slot sliding
+/// across half the board reads as one physical move rather than a jump.
+pub const MOTION_EASE_SLIDE: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a line arriving inside a card already open (the usage card's legend).
 pub const MOTION_ROW_IN_MS: u64 = 180;
@@ -2653,9 +2660,11 @@ pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
 /// `dialog-in`: 180ms, rising 2px (the 0.96 scale approximated likewise).
 pub const MOTION_DIALOG_IN_MS: u64 = 180;
 pub const MOTION_DIALOG_RISE: f32 = 2.0;
-/// How far a board slot opening beside its owner (the reader) settles in
-/// from the owner's side.
-pub const MOTION_SLOT_SHIFT: f32 = 6.0;
+/// A board slot opening beside its owner (the reader beside its Pane)
+/// slides in over 240ms on `MOTION_EASE_SLIDE`, the owner narrowing with
+/// it, and slides out over a shorter 200ms before it is removed.
+pub const MOTION_SLOT_OPEN_MS: u64 = 240;
+pub const MOTION_SLOT_CLOSE_MS: u64 = 200;
 /// A disclosure chevron turning: 150ms.
 pub const MOTION_CHEVRON_MS: u64 = 150;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.

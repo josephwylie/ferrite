@@ -18,10 +18,11 @@
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
+//! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the reader beside its Pane (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend); another document replacing the open one in the reader, from 0.3 ([`swap_in`]) — the slot does not slide again |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
 //! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
@@ -156,6 +157,7 @@ impl CubicBezier {
 pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
+pub const EASE_SLIDE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_SLIDE);
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -219,6 +221,12 @@ pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
+/// A board slot sliding in beside its owner, and out again a little
+/// quicker (a [`Reveal`]): the reader beside its Pane.
+pub const SLOT_OPEN: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_OPEN_MS, EASE_SLIDE);
+pub const SLOT_CLOSE: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_CLOSE_MS, EASE_SLIDE);
+// An exit is quicker than its entrance (the rules in `theme.rs`).
+const _: () = assert!(theme::MOTION_SLOT_CLOSE_MS < theme::MOTION_SLOT_OPEN_MS);
 
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
@@ -293,18 +301,16 @@ where
     })
 }
 
-/// `slot-in` for a board slot that opens beside its owner (the reader
-/// beside its Pane): no surface of its own to lift, so no shadow — it fades
-/// up from `MOTION_MENU_FROM_OPACITY` while settling `MOTION_SLOT_SHIFT`
-/// in from the owner's side, over `DIALOG_IN`.
-pub fn slot_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+/// `row-in` for content replacing what an open slot showed (another
+/// document in the reader): opacity alone, up from
+/// `MOTION_MENU_FROM_OPACITY` so its first frame is already legible; the
+/// slot itself holds still.
+pub fn swap_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
+    element.with_animation(id, ROW_IN.animation(), |el, t| {
         el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
-            .relative()
-            .left(px(-theme::MOTION_SLOT_SHIFT * (1.0 - t)))
     })
 }
 
@@ -403,6 +409,90 @@ impl Tween {
         !reduced
             && self.from != self.to
             && now.saturating_duration_since(self.started) < self.spec.duration()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reveal: a slot that slides open and shut
+// ---------------------------------------------------------------------------
+
+/// How far a slot that opens and closes is in — 0 shut, 1 open at rest —
+/// riding a [`Tween`] that eases in over `enter` and out over the shorter
+/// `exit`, and turns around from where it is when flipped mid-flight. The
+/// owner lays the slot out at [`Reveal::value`] (a share of a split, a
+/// column's width), asks for frames while it is [`Reveal::running`], and
+/// keeps the slot until it is [`Reveal::shut`]: a slot outlives its close
+/// by its exit. The reader beside its Pane rides one (`SLOT_OPEN`,
+/// `SLOT_CLOSE`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reveal {
+    open: bool,
+    tween: Tween,
+    enter: MotionSpec,
+    exit: MotionSpec,
+}
+
+impl Reveal {
+    /// A slot opening now, from shut.
+    pub fn opening(enter: MotionSpec, exit: MotionSpec, now: Instant) -> Self {
+        Self {
+            open: true,
+            tween: Tween::new(0.0, 1.0, enter, now),
+            enter,
+            exit,
+        }
+    }
+
+    /// A slot already open, at rest: what first paint finds arrives in
+    /// place, with no entrance.
+    pub fn open(enter: MotionSpec, exit: MotionSpec, now: Instant) -> Self {
+        Self {
+            open: true,
+            tween: Tween::new(1.0, 1.0, enter, now),
+            enter,
+            exit,
+        }
+    }
+
+    /// Open or close it, from wherever it is on screen; no change is a
+    /// no-op.
+    pub fn set(&mut self, open: bool, now: Instant, reduced: bool) {
+        if self.open == open {
+            return;
+        }
+        self.open = open;
+        let (to, spec) = if open {
+            (1.0, self.enter)
+        } else {
+            (0.0, self.exit)
+        };
+        self.tween = Tween::retarget(Some(self.tween), 1.0 - to, to, spec, now, reduced);
+    }
+
+    /// Land it where it is going (a seam grabbed mid-slide).
+    pub fn land(&mut self, now: Instant) {
+        let to = self.tween.to;
+        self.tween = Tween::new(to, to, self.tween.spec, now);
+    }
+
+    /// Whether it is open, or opening.
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// How far in it is at `now`.
+    pub fn value(&self, now: Instant, reduced: bool) -> f32 {
+        self.tween.value(now, reduced)
+    }
+
+    /// Mid-slide: the owner must ask for another frame.
+    pub fn running(&self, now: Instant, reduced: bool) -> bool {
+        self.tween.running(now, reduced)
+    }
+
+    /// Closed and done sliding: the owner lets the slot go.
+    pub fn shut(&self, now: Instant, reduced: bool) -> bool {
+        !self.open && !self.running(now, reduced)
     }
 }
 
@@ -1231,6 +1321,54 @@ mod tests {
         let tween = Tween::new(52.0, 286.0, DIALOG_IN, t0);
         assert_eq!(tween.value(t0, true), 286.0);
         assert!(!tween.running(t0, true), "no frame is asked for");
+    }
+
+    /// A slot slides in over `SLOT_OPEN` and out over `SLOT_CLOSE`, turns
+    /// around mid-flight from where it is, and is shut only once its exit
+    /// has run.
+    #[test]
+    fn a_reveal_slides_open_and_shut_and_turns_around() {
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let mut slot = Reveal::opening(SLOT_OPEN, SLOT_CLOSE, t0);
+        assert_eq!(slot.value(t0, false), 0.0, "it starts shut");
+        let mid = slot.value(ms(60), false);
+        assert!(mid > 0.0 && mid < 1.0 && slot.running(ms(60), false));
+        assert!(mid > 0.5, "an ease-out is past halfway at a quarter: {mid}");
+
+        slot.set(false, ms(60), false);
+        close(
+            slot.value(ms(60), false),
+            mid,
+            1e-4,
+            "turns around on screen",
+        );
+        assert!(
+            !slot.shut(ms(60), false),
+            "a closing slot outlives its close"
+        );
+        assert!(slot.shut(ms(60 + theme::MOTION_SLOT_CLOSE_MS), false));
+        assert_eq!(slot.value(ms(60 + theme::MOTION_SLOT_CLOSE_MS), false), 0.0);
+
+        slot.set(true, ms(400), false);
+        slot.land(ms(410));
+        assert_eq!(slot.value(ms(410), false), 1.0, "landed where it was going");
+        assert!(!slot.running(ms(410), false));
+
+        // At rest from the start: no entrance.
+        let rest = Reveal::open(SLOT_OPEN, SLOT_CLOSE, t0);
+        assert_eq!(rest.value(t0, false), 1.0);
+        assert!(!rest.running(t0, false));
+    }
+
+    #[test]
+    fn reduced_motion_snaps_a_reveal() {
+        let t0 = Instant::now();
+        let mut slot = Reveal::opening(SLOT_OPEN, SLOT_CLOSE, t0);
+        assert_eq!(slot.value(t0, true), 1.0);
+        assert!(!slot.running(t0, true));
+        slot.set(false, t0, true);
+        assert!(slot.shut(t0, true), "closed at once: the slot can go");
     }
 
     #[test]
