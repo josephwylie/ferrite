@@ -2288,10 +2288,10 @@ pub const MENU_PATH_TAIL: usize = 48;
 //
 // - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (the
 //   `search` icon, then the field), a `HAIRLINE` under it, then one
-//   `SETTINGS_NAV_ROW_H` row per page, radius `R_MENU_ROW` —
-//   `paint::SELECTED` and `TEXT_STRONG` on the page shown, `TEXT` on the
-//   rest — and `About` at the foot. ↑/↓ step pages while the sheet holds
-//   focus.
+//   `SETTINGS_NAV_ROW_H` row per page, inset `FLOAT_PAD` like a menu's,
+//   radius `R_MENU_ROW` — `FLOAT_SEL` and `TEXT_STRONG` on the page shown,
+//   `TEXT` on the rest — and `About` at the foot. ↑/↓ step pages while the
+//   sheet holds focus.
 // - **Content:** the page title in `TEXT_STRONG` `W_STRONG`, then groups
 //   `SETTINGS_GROUP_GAP` apart: a group's label is a `TEXT_DIM` row (a
 //   provider's led by its logomark), its rows split by rules.
