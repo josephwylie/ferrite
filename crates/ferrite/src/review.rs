@@ -1371,6 +1371,12 @@ impl ReviewView {
         crate::find::washed(runs, &washes)
     }
 
+    /// The hover blend's key for one of this Review's rows: unique in the
+    /// window, though each Pane's reader slot may hold a Review.
+    fn hover_key(&self, row: String, cx: &Context<Self>) -> SharedString {
+        format!("review-{}-{row}", cx.entity_id()).into()
+    }
+
     /// A file's head: its path (a rename's `old → new`), and what it adds
     /// up to.
     fn file_head(&self, file: &ReviewFile, first: bool) -> AnyElement {
@@ -1438,9 +1444,8 @@ impl ReviewView {
                     .items_center()
                     .h(px(line_h))
                     .pl(px(indent))
-                    .cursor_pointer()
                     .text_color(rgb(TEXT_DIM))
-                    .when(picked, |row| row.bg(paint::SELECTED))
+                    .map(|row| pickable(row, self.hover_key(format!("fold-{at}"), cx), picked))
                     .child(SharedString::from(format!(
                         "\u{22ef} {hidden} line{}",
                         if hidden == 1 { "" } else { "s" }
@@ -1636,10 +1641,16 @@ impl ReviewView {
             .child(
                 div()
                     .id(("review-uncomment", id as usize))
+                    .debug_selector(|| "review-uncomment".into())
                     .flex_shrink_0()
-                    .px(px(cell))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(2. * cell))
+                    .h(px(self.grid.line))
+                    .rounded(px(R_SMALL))
                     .text_color(rgb(TEXT_DIM))
-                    .cursor_pointer()
+                    .hover_control(self.hover_key(format!("uncomment-{id}"), cx))
                     .child("\u{d7}")
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
@@ -1707,9 +1718,12 @@ impl ReviewView {
             .h(px(self.grid.line))
             .px(px(cell))
             .whitespace_nowrap()
-            .cursor_pointer()
-            .when(self.commit_run().contains(&index), |row| {
-                row.bg(paint::SELECTED)
+            .map(|row| {
+                pickable(
+                    row,
+                    self.hover_key(format!("commit-{index}"), cx),
+                    self.commit_run().contains(&index),
+                )
             })
             .child(
                 div()
@@ -1923,8 +1937,13 @@ impl ReviewView {
                                 .h(px(self.grid.line))
                                 .px(px(cell))
                                 .whitespace_nowrap()
-                                .cursor_pointer()
-                                .when(index == search.pick, |row| row.bg(paint::SELECTED))
+                                .map(|row| {
+                                    pickable(
+                                        row,
+                                        self.hover_key(format!("found-{index}"), cx),
+                                        index == search.pick,
+                                    )
+                                })
                                 // A long path gives way at its start, and
                                 // never past the line's words.
                                 .child(
@@ -2038,8 +2057,13 @@ impl ReviewView {
                     .pl(px(cell + 2. * cell * row.depth as f32))
                     .pr(px(cell))
                     .whitespace_nowrap()
-                    .cursor_pointer()
-                    .when(index == tree.pick, |line| line.bg(paint::SELECTED))
+                    .map(|line| {
+                        pickable(
+                            line,
+                            self.hover_key(format!("tree-{index}"), cx),
+                            index == tree.pick,
+                        )
+                    })
                     .text_color(rgb(if row.ignored { TEXT_DIM } else { ink }))
                     .child(div().min_w_0().truncate().child(SharedString::from(label)))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -2101,8 +2125,13 @@ impl ReviewView {
                                 .h(px(self.grid.line))
                                 .px(px(cell))
                                 .whitespace_nowrap()
-                                .cursor_pointer()
-                                .when(index == panel.pick, |line| line.bg(paint::SELECTED))
+                                .map(|line| {
+                                    pickable(
+                                        line,
+                                        self.hover_key(format!("base-{index}"), cx),
+                                        index == panel.pick,
+                                    )
+                                })
                                 .child(
                                     div()
                                         .flex_1()
@@ -2312,6 +2341,17 @@ fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
                     removed as usize,
                 )),
         ))
+}
+
+/// A row a click picks: the row's hover face under the pointer, or, on
+/// the pick, the selection stepping up under it (`hover_carried`), so the
+/// row the arrows hold and the row the pointer is on read apart.
+fn pickable<E: crate::pointer::Pointer>(row: E, key: SharedString, picked: bool) -> E {
+    if picked {
+        row.hover_carried(key)
+    } else {
+        row.hover_row(key)
+    }
 }
 
 /// The longest line number among `rows`, a fold's hidden lines included
