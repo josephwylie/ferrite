@@ -30,16 +30,21 @@
 //! reads on chrome, the plane or a band alike; elsewhere each is its opaque
 //! grey. A float is opaque until it can frost (theme WP-E, FL-15), so its
 //! rows wear the float's own inks (`hover_float`, `float_cursor`,
-//! `press_float`: `FLOAT_HOVER`, `FLOAT_SEL`), never a glass overlay over
-//! an opaque ground; its cursor row keeps `FLOAT_SEL` under the pointer,
-//! so the row the arrows hold and the row the pointer is on read apart.
+//! `press_float`: `FLOAT_HOVER`, `FLOAT_SEL`, steps over `FLOAT`), never a
+//! glass overlay over an opaque ground; its cursor row keeps `FLOAT_SEL`
+//! under the pointer, so the row the arrows hold and the row the pointer
+//! is on read apart. The palette, a float on the frame's grey
+//! (`PALETTE_GROUND`), takes the frame's steps instead (`hover_palette`,
+//! `palette_cursor`).
 
 use gpui::component::button::ButtonCustomVariant;
 use gpui::prelude::*;
 use gpui::{rgba, App, Hsla, SharedString, StyleRefinement};
 
 use crate::motion;
-use crate::theme::{paint, FLOAT_BAND2, FLOAT_HOVER, FLOAT_SEL, TRANSPARENT};
+use crate::theme::{
+    paint, FLOAT_BAND2, FLOAT_HOVER, FLOAT_SEL, PALETTE_HOVER, PALETTE_SEL, TRANSPARENT,
+};
 
 /// The hover styles, named by role. Blanket-implemented: anything styleable
 /// and interactive can say what role it plays. `key` names the element's
@@ -105,21 +110,37 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
         )
     }
 
-    /// A quick answer on a float (a toast's `1 allow`): nothing at rest, the
-    /// float's band (`FLOAT_BAND2`) under the pointer.
+    /// A quick answer on a float (a toast's `1 allow`): a pill of the
+    /// float's band (`FLOAT_BAND2`) at rest, so it reads as a control,
+    /// stepping up to `FLOAT_SEL` under the pointer.
     fn hover_quick(self, key: impl Into<SharedString>) -> Self {
-        blended(
-            self.cursor_pointer(),
-            key.into(),
-            rgba(TRANSPARENT).into(),
-            FLOAT_BAND2.into(),
-        )
+        let key = key.into();
+        let ground = motion::hover_blend(&key, FLOAT_BAND2.into(), FLOAT_SEL.into());
+        let mut element = self.cursor_pointer().bg(ground);
+        listen(&mut element, key);
+        element
     }
 
     /// A float's cursor row (the arrows' `❯`): `FLOAT_SEL`, held under the
     /// pointer — hover never moves or lightens the row the keys act on.
     fn float_cursor(self) -> Self {
         self.cursor_pointer().bg(FLOAT_SEL)
+    }
+
+    /// A row on the palette, whose ground is the frame's grey: nothing at
+    /// rest, `PALETTE_HOVER` under the pointer, pointer cursor.
+    fn hover_palette(self, key: impl Into<SharedString>) -> Self {
+        blended(
+            self.cursor_pointer(),
+            key.into(),
+            rgba(TRANSPARENT).into(),
+            PALETTE_HOVER.into(),
+        )
+    }
+
+    /// The palette's cursor row: `PALETTE_SEL`, held under the pointer.
+    fn palette_cursor(self) -> Self {
+        self.cursor_pointer().bg(PALETTE_SEL)
     }
 
     /// A surface whose resting edge is the hairline (a Pane): under the
@@ -297,6 +318,19 @@ mod tests {
         assert_eq!(background(cursor.style()), Some(&Fill::from(FLOAT_SEL)));
         let mut float_row = div().id("float-row").hover_float("pointer-test-float");
         assert_eq!(background(float_row.style()), None);
+        // The palette's rows step over its frame-grey ground instead; a
+        // toast's quick answer rests on its pill.
+        let mut cursor = div().id("palette-cursor").palette_cursor();
+        assert_eq!(background(cursor.style()), Some(&Fill::from(PALETTE_SEL)));
+        let mut palette_row = div()
+            .id("palette-row")
+            .hover_palette("pointer-test-palette");
+        assert_eq!(background(palette_row.style()), None);
+        let mut quick = div().id("quick").hover_quick("pointer-test-quick");
+        assert_eq!(
+            background(quick.style()),
+            Some(&Fill::from(Hsla::from(FLOAT_BAND2)))
+        );
         assert_eq!(
             float_row.style().mouse_cursor,
             Some(CursorStyle::PointingHand)

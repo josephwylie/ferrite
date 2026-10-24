@@ -713,9 +713,9 @@ fn row_element(
             ))
         });
     if cursor {
-        element.float_cursor().press_float()
+        element.palette_cursor().press_float()
     } else {
-        element.hover_float(key).press_float()
+        element.hover_palette(key).press_float()
     }
 }
 

@@ -1015,12 +1015,14 @@ impl NavChip {
                 nav::RowPlace::ROOT,
                 None,
                 false,
+                0,
                 &measure,
             ),
             NavChip::Group(group) => nav::group_row_with_title(
                 group,
                 group.title.clone(),
                 nav::group_fold(group),
+                0,
                 0,
                 &measure,
             ),
@@ -4702,8 +4704,8 @@ impl CockpitView {
     }
 
     /// Settings' line for one chime: the file it plays (or the built-in),
-    /// `play` to hear it, `choose…` for a file of the operator's own, and
-    /// `built-in` to go back.
+    /// `Play` to hear it, `Choose…` for a file of the operator's own, and
+    /// `Use built-in` to go back.
     fn sound_file_row(
         &self,
         id: &'static str,
@@ -4724,11 +4726,11 @@ impl CockpitView {
                 let _ = view.update(cx, |view, cx| view.choose_sound_file(sound, cx));
             }
         });
-        let mut acts = vec![("play", play), ("choose\u{2026}", choose)];
+        let mut acts = vec![("Play", play), ("Choose\u{2026}", choose)];
         if file.is_some() {
             let reset = self.setting_change(cx, move |s, ()| s.set_sound_file(sound, None));
             acts.push((
-                "built-in",
+                "Use built-in",
                 std::rc::Rc::new(move |cx: &mut gpui::App| reset((), cx)),
             ));
         }
@@ -7161,10 +7163,11 @@ impl CockpitView {
                     selected = Some(rows.len());
                 }
                 // The picker's voice (the prototype's `#picker`): the CLI's
-                // own default reads `default`, every description
+                // own default reads `Default`, a name in sentence case as
+                // every model's is (SPEC §7), every description
                 // lowercase-first.
                 let name = if model.value == "default" {
-                    "default".to_string()
+                    "Default".to_string()
                 } else {
                     model.display.clone()
                 };
@@ -10911,12 +10914,20 @@ impl CockpitView {
         let view = self.cockpit.roster().view();
         let empty = self.empty_board_shown();
         let mut tabs = Vec::new();
-        let solo = self
-            .panes
-            .iter()
-            .filter_map(PaneView::thread)
-            .filter(|thread| self.cockpit.groups().of(*thread).is_none())
-            .max_by_key(|thread| self.last_used(*thread));
+        // Solo's one Thread: the one it shows while it is the view, else
+        // the loose Thread used last, where a press on the tab lands. (The
+        // Thread written last is not always the one on screen: the current
+        // tab's dot must not speak for another, nor its press move off it.)
+        let solo = (!empty && view == View::Solo)
+            .then(|| self.focused_thread())
+            .flatten()
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .filter_map(PaneView::thread)
+                    .filter(|thread| self.cockpit.groups().of(*thread).is_none())
+                    .max_by_key(|thread| self.last_used(*thread))
+            });
         // A tab's dot rolls up the Threads its view shows: Solo's one
         // Thread, a Group's members.
         let roll_up = |threads: &mut dyn Iterator<Item = ThreadId>| {
@@ -12746,7 +12757,7 @@ impl CockpitView {
             title,
             state,
             detail,
-            when: crate::facts::age_label(notice.at, now),
+            when: crate::facts::since_label(notice.at, now),
             read: notice.read,
             folded: Vec::new(),
         }
@@ -12998,7 +13009,7 @@ impl CockpitView {
             title: self.facts.name(thread),
             state: State::NeedsYou(notice.kind),
             detail,
-            when: crate::facts::age_label(notice.at, now),
+            when: crate::facts::since_label(notice.at, now),
             read: notice.read,
             folded: Vec::new(),
         }
@@ -13246,6 +13257,7 @@ impl CockpitView {
                             nav::RowPlace::ROOT,
                             None,
                             false,
+                            0,
                             &nav::Measure::Text(cx),
                         );
                         div()
@@ -13275,9 +13287,11 @@ impl CockpitView {
                     list = list.child(nav::note("nav-parked-empty", "Nothing parked"));
                 }
                 let sections = self.view_tree(state.parked.clone());
-                list = list.children(self.view_sections(&sections, cx, |view, row, place, cx| {
-                    view.thread_element(row, None, place, cx)
-                }));
+                list = list.children(self.view_sections(
+                    &sections,
+                    cx,
+                    |view, row, place, ends, cx| view.thread_element(row, None, place, ends, cx),
+                ));
                 let list = if self.machine_lost() {
                     machines::held(list, "machine-lost-parked")
                 } else {
@@ -13298,7 +13312,7 @@ impl CockpitView {
                 let list = nav::view_list("nav-view-smart-list").children(self.view_sections(
                     &sections,
                     cx,
-                    |_, row, place, cx| {
+                    |_, row, place, ends, cx| {
                         let thread = row.thread;
                         nav::thread_row_with_title(
                             row,
@@ -13306,6 +13320,7 @@ impl CockpitView {
                             place,
                             None,
                             false,
+                            ends,
                             &nav::Measure::Text(cx),
                         )
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -13381,30 +13396,38 @@ impl CockpitView {
     /// Project heading over its rows, one level in with the Project's
     /// guide, each Group's row (a press opens it, its chevron folds it as
     /// the tree's does) over its members, one level further with the
-    /// Group's guide. `thread` draws a row and wires its press, which
-    /// differs by view.
+    /// Group's guide. `thread` draws a row (its place, and how many of its
+    /// guides end at it) and wires its press, which differs by view.
     fn view_sections(
         &self,
         sections: &[nav::ViewSection],
         cx: &mut Context<Self>,
-        thread: impl Fn(&Self, &nav::ThreadRow, nav::RowPlace, &mut Context<Self>) -> AnyElement,
+        thread: impl Fn(&Self, &nav::ThreadRow, nav::RowPlace, usize, &mut Context<Self>) -> AnyElement,
     ) -> Vec<AnyElement> {
         sections
             .iter()
             .enumerate()
             .map(|(index, section)| {
+                let loose = section.solos.len();
                 let mut rows: Vec<AnyElement> = section
                     .solos
                     .iter()
-                    .map(|row| thread(self, row, nav::RowPlace::Row(1), cx))
+                    .enumerate()
+                    .map(|(at, row)| {
+                        let ends = usize::from(at + 1 == loose && section.groups.is_empty());
+                        thread(self, row, nav::RowPlace::Row(1), ends, cx)
+                    })
                     .collect();
-                for group in &section.groups {
+                for (at, group) in section.groups.iter().enumerate() {
                     let id = group.id;
+                    let last = at + 1 == section.groups.len();
+                    let shut = group.folded || group.members.is_empty();
                     let head = nav::group_row_with_title(
                         group,
                         group.title.clone(),
                         self.group_fold(group, cx),
                         1,
+                        usize::from(last && shut),
                         &nav::Measure::Text(cx),
                     )
                     .on_mouse_down(
@@ -13415,12 +13438,17 @@ impl CockpitView {
                     );
                     let mut block = nav::group_block(id).child(head);
                     if !group.folded {
+                        let count = group.members.len();
                         let members = group
                             .members
                             .iter()
-                            .map(|row| thread(self, row, nav::RowPlace::Row(2), cx))
+                            .enumerate()
+                            .map(|(at, row)| {
+                                let ends = member_ends(last, at, count);
+                                thread(self, row, nav::RowPlace::Row(2), ends, cx)
+                            })
                             .collect();
-                        block = block.child(nav::members(id, 1, members));
+                        block = block.child(nav::members(members));
                     }
                     rows.push(block.into_any_element());
                 }
@@ -13430,7 +13458,7 @@ impl CockpitView {
                         section.label.clone(),
                         &nav::Measure::Text(cx),
                     ))
-                    .child(nav::project_rows(index, rows))
+                    .child(nav::project_rows(rows))
                     .into_any_element()
             })
             .collect()
@@ -13439,12 +13467,20 @@ impl CockpitView {
     /// The Needs-you list's `Recent` heading, with `Mark all read` at its
     /// right: every row read, none removed.
     fn recent_heading(&self, cx: &mut Context<Self>) -> Div {
+        // A text control in the heading's ink, the `+`'s height and its
+        // ground under the pointer and pressed, so it reads as one.
         nav::heading("nav-recent", "Recent").child(
             div()
                 .id("notifications-mark-read")
                 .debug_selector(|| "notifications-mark-read".into())
+                .flex()
                 .flex_shrink_0()
+                .items_center()
+                .h(px(crate::theme::NAV_HEADING_BUTTON))
                 .px(px(crate::theme::SPACE_1))
+                .rounded(px(crate::theme::R_SMALL))
+                .hover_row("notifications-mark-read")
+                .press_row()
                 .font_weight(crate::theme::W_BODY)
                 .child("Mark all read")
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
@@ -13616,14 +13652,18 @@ impl CockpitView {
                 let depth = usize::from(!section.mixed);
                 let mut rows: Vec<AnyElement> = Vec::new();
                 if !section.solos.is_empty() {
+                    let loose = section.solos.len();
                     let solos = section
                         .solos
                         .iter()
-                        .map(|row| {
+                        .enumerate()
+                        .map(|(at, row)| {
+                            let last = at + 1 == loose && section.groups.is_empty();
                             self.thread_element(
                                 &state.solos[*row],
                                 None,
                                 nav::RowPlace::Row(depth),
+                                usize::from(last),
                                 cx,
                             )
                         })
@@ -13631,13 +13671,14 @@ impl CockpitView {
                     rows.push(self.loose_run(zones, solos, cx));
                     zones += 1;
                 }
-                for group in &section.groups {
-                    rows.push(self.group_element(&state.groups[*group], depth, origin, cx));
+                for (at, group) in section.groups.iter().enumerate() {
+                    let last = at + 1 == section.groups.len();
+                    rows.push(self.group_element(&state.groups[*group], depth, last, origin, cx));
                 }
                 block = if section.mixed {
                     block.children(rows)
                 } else {
-                    block.child(nav::project_rows(index, rows))
+                    block.child(nav::project_rows(rows))
                 };
             }
             own.push(block.into_any_element());
@@ -13769,11 +13810,13 @@ impl CockpitView {
     /// the way in, its triangle the fold (N-4) — then, unfolded, the member
     /// rows; and over the header's top edge the "insert before this Group"
     /// drop band, laid last so it is the topmost target there. Its row is
-    /// `depth` levels into the tree, its members one further.
+    /// `depth` levels into the tree, its members one further; `last` says
+    /// it closes its section, so the section's guide ends at its last row.
     fn group_element(
         &self,
         group: &nav::GroupBlock,
         depth: usize,
+        last: bool,
         origin: View,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -13790,7 +13833,15 @@ impl CockpitView {
         let folded = group.folded;
         let fold = self.group_fold(group, cx);
         let title = self.editable_group_title(id, group.title.clone(), cx);
-        let head = nav::group_row_with_title(group, title, fold, depth, &nav::Measure::Text(cx));
+        let shut = folded || group.members.is_empty();
+        let head = nav::group_row_with_title(
+            group,
+            title,
+            fold,
+            depth,
+            usize::from(last && shut),
+            &nav::Measure::Text(cx),
+        );
         let chip = NavChip::Group(group.clone());
         let lifted = self.nav_dragging == Some(Drag::Group(id));
         let mut block = nav::group_block(id)
@@ -13833,22 +13884,27 @@ impl CockpitView {
             // Pane's title strong (§5.1.6); any other Group's are two-line
             // rows, nested under it.
             let focused = self.cockpit.roster().focused_thread();
+            let count = group.members.len();
             let rows = group
                 .members
                 .iter()
-                .map(|row| {
+                .enumerate()
+                .map(|(at, row)| {
+                    let ends = member_ends(last, at, count);
                     if group.selected {
                         let member = nav::ThreadRow {
                             selected: focused == Some(row.thread),
                             ..row.clone()
                         };
-                        self.thread_element(&member, Some(id), nav::RowPlace::Member(depth), cx)
+                        let place = nav::RowPlace::Member(depth);
+                        self.thread_element(&member, Some(id), place, ends, cx)
                     } else {
-                        self.thread_element(row, Some(id), nav::RowPlace::Row(depth + 1), cx)
+                        let place = nav::RowPlace::Row(depth + 1);
+                        self.thread_element(row, Some(id), place, ends, cx)
                     }
                 })
                 .collect();
-            let mut members = nav::members(id, depth, rows);
+            let mut members = nav::members(rows);
             // Appending to the Group means dropping past its last row —
             // an index one beyond the end, aimed at the last member.
             if let Some(last) = group.members.last().map(|row| row.thread) {
@@ -13907,6 +13963,7 @@ impl CockpitView {
         row: &nav::ThreadRow,
         group: Option<GroupId>,
         place: nav::RowPlace,
+        ends: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thread = row.thread;
@@ -13928,8 +13985,15 @@ impl CockpitView {
             &self.rename,
             Some((RenameTarget::Thread(editing), _)) if *editing == thread
         );
-        let head =
-            nav::thread_row_with_title(row, title, place, group, editing, &nav::Measure::Text(cx));
+        let head = nav::thread_row_with_title(
+            row,
+            title,
+            place,
+            group,
+            editing,
+            ends,
+            &nav::Measure::Text(cx),
+        );
         let face = self.thread_ghost(thread);
         let nav_edge = self.nav_width();
         let chip = NavChip::Thread(row.clone());
@@ -13982,6 +14046,19 @@ impl CockpitView {
                 }),
             )
             .into_any_element()
+    }
+}
+
+/// How many of a nav member row's guides end at it (`nav::guides`),
+/// innermost first: none above its Group's last member; there its Group's,
+/// and its section's too when its Group is the section's last (`last`).
+/// The row clamps the count to the levels it has (a Group at the root has
+/// no section guide).
+fn member_ends(last: bool, at: usize, count: usize) -> usize {
+    if at + 1 == count {
+        1 + usize::from(last)
+    } else {
+        0
     }
 }
 
@@ -15347,7 +15424,9 @@ mod tests {
         // The queue stays flat: no Project heading, no guide, every row at
         // the root, so its order is the queue's.
         assert!(cx.debug_bounds("nav-view-project-0").is_none());
-        assert!(cx.debug_bounds("nav-guide-project-0").is_none());
+        assert!(cx
+            .debug_bounds(format!("nav-guide-{}-0", threads[2].get()).leak())
+            .is_none());
         let title = cx
             .debug_bounds(format!("nav-title-{}", threads[2].get()).leak())
             .expect("its title");
@@ -15511,7 +15590,9 @@ mod tests {
             .debug_bounds("nav-view-project-0")
             .expect("its Project's heading");
         assert!(heading.bottom() <= row.top());
-        assert!(cx.debug_bounds("nav-guide-project-0").is_some());
+        assert!(cx
+            .debug_bounds(format!("nav-guide-{}-0", away.get()).leak())
+            .is_some());
         assert!(
             cx.debug_bounds("nav-project-summary-0").is_none(),
             "no summary"

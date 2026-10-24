@@ -442,11 +442,40 @@ fn the_bottom_bar_has_solo_and_every_group(cx: &mut TestAppContext) {
     );
 }
 
+/// SPEC §5.7: the `Solo` tab's roll-up dot speaks for the Thread Solo
+/// shows while it is the view — not for whichever loose Thread was written
+/// last, which may be another — so the current tab's dot never contradicts
+/// the board under it.
+#[gpui::test]
+fn the_solo_tabs_dot_follows_the_thread_it_shows(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("frame-solo-dot", 2);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let working = threads[0];
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "thinking".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let dot =
+        |cx: &mut gpui::VisualTestContext| cx.debug_bounds("bottom-bar-tab-solo-dot").is_some();
+    view.update(cx, |view, cx| view.focus_thread(working, cx));
+    tick(cx);
+    assert!(dot(cx), "Solo shows the working Thread: green");
+    view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
+    tick(cx);
+    assert!(!dot(cx), "Solo shows the idle one: no dot");
+}
+
 /// SPEC §5.7: the bar is 30 high and full width, 14px in at each end:
-/// the views' tabs (22 high) at its left, the vitals at its right ending in
-/// the clock. `N need you` shows only while a Thread waits, and opens the
-/// nav's Needs-you view; free disk only under
-/// 20 GB, and never while unknown.
+/// the views' tabs (22 high, centred: 4 over and 4 under) at its left, the
+/// vitals at its right ending in the clock. Its hairline lies on the
+/// frame's last row above it, as the mockups draw it. `N need you` shows
+/// only while a Thread waits, and opens the nav's Needs-you view; free
+/// disk only under 20 GB, and never while unknown.
 #[gpui::test]
 fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
     let (view, fake, cx, group) = board_of("frame-bar-vitals", 2, cx);
@@ -465,6 +494,19 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
     let solo = bounds(cx, "bottom-bar-tab-solo".to_string());
     let work = bounds(cx, format!("bottom-bar-tab-{}", group.get()));
     assert_eq!(solo.size.height, px(22.));
+    assert_eq!(
+        solo.top() - bar.top(),
+        bar.bottom() - solo.bottom(),
+        "the tabs centred in the bar"
+    );
+    let rule = cx
+        .debug_bounds("bottom-bar-rule")
+        .expect("the bar's hairline");
+    assert_eq!(
+        (rule.top(), rule.bottom(), rule.size.width),
+        (bar.top() - px(1.), bar.top(), window.width),
+        "on the row above the bar, full width"
+    );
     assert_eq!(work.left() - solo.right(), px(2.), "tabs 2px apart");
     let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
     let clock = cx.debug_bounds("bottom-bar-clock").unwrap();

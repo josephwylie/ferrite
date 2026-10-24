@@ -299,7 +299,7 @@ impl CockpitView {
         }
         match self.cockpit.server() {
             None => "This window runs without a separate server".to_string(),
-            Some(ServerState::Detached { reason, .. }) => format!("not running: {reason}"),
+            Some(ServerState::Detached { reason, .. }) => format!("not running \u{b7} {reason}"),
             Some(ServerState::Attached { server, since }) => {
                 let up = format!("{} · up {}", server.version, uptime(since.elapsed()));
                 match self.server_build() {
@@ -462,7 +462,16 @@ impl CockpitView {
     /// Settings › Server, for a window attached to one.
     pub(super) fn server_rows(&self, window: &Window, cx: &Context<Self>) -> Vec<prefs::Row> {
         let Some(state) = self.cockpit.server() else {
-            return vec![prefs::fact("Server", self.server_standing().into())];
+            // A sentence, so the row's words (as About says it), not a
+            // fact's machine-text value.
+            return vec![prefs::action(
+                "settings-server-none",
+                "Server",
+                self.server_standing(),
+                SharedString::default(),
+                None,
+                |_| {},
+            )];
         };
         let mut status = self.server_standing();
         if let ServerState::Attached { server, .. } = state {
