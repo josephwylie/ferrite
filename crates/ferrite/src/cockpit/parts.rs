@@ -75,9 +75,17 @@ impl Parts {
 
 impl CockpitView {
     /// Draw the nav and the Panes as cached parts (over a cached Cockpit),
-    /// or inline.
-    pub(crate) fn set_parts(&mut self, on: bool) {
+    /// or inline. With parts, an animation the Cockpit draws itself (a
+    /// float's entrance, a frame control's hover) redraws the frame around
+    /// them, not every part (`motion::draw_frames_through`).
+    pub(crate) fn set_parts(&mut self, on: bool, cx: &mut Context<Self>) {
         self.parts.borrow_mut().on = on;
+        let view = cx.entity_id();
+        crate::motion::draw_frames_through(view, on.then(|| self.frame_tick_id()));
+        if on {
+            cx.on_release(move |_, _| crate::motion::draw_frames_through(view, None))
+                .detach();
+        }
     }
 
     fn part_view(&self, part: Part, cx: &mut Context<Self>) -> Entity<PartView> {

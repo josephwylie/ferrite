@@ -289,10 +289,10 @@ pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
     }
 }
 
-/// `float_shadow` with its ink scaled by `k` (0..1): a floating surface's
-/// shadow while it fades in (`motion::menu_in`).
-pub fn float_shadow_faded(k: f32) -> Vec<BoxShadow> {
-    float_shadow()
+/// `shadow` with its ink scaled by `k` (0..1): a floating surface's shadow
+/// while it fades in or out (`motion::menu_in`).
+pub fn shadow_faded(shadow: Vec<BoxShadow>, k: f32) -> Vec<BoxShadow> {
+    shadow
         .into_iter()
         .map(|layer| BoxShadow {
             color: layer.color.opacity(k.clamp(0.0, 1.0)),
@@ -356,9 +356,14 @@ pub fn outer_ring(radius: f32, ink: impl Into<Hsla>) -> Div {
 /// The caller states its width and position. (The palette's dialog is the
 /// same shell at its own scale, `palette::dialog`.)
 pub fn floating_surface() -> Div {
+    float_ground().cursor_default().occlude()
+}
+
+/// The floating surface's look alone, answering no pointer: a float on its
+/// way out (a toast fading away) must not hold a hit area it no longer
+/// stands behind.
+pub fn float_ground() -> Div {
     text_ui()
-        .cursor_default()
-        .occlude()
         .flex()
         .flex_col()
         .p(px(theme::FLOAT_PAD))
@@ -592,24 +597,42 @@ mod loops {
                 .truncate()
                 .text_color(base)
                 .debug_selector(|| "shimmer".into())
-                .child(ShimmerText {
-                    text: self.text,
-                    base,
-                    lit,
-                    child: None,
-                })
+                .child(ShimmerText::new(self.text, base, lit))
         }
     }
 
     /// A run in `base`, or, while it shimmers, its glyphs painted a device
     /// column at a time in the gradient's ink there (a glyph's columns
     /// each take their own ink, as the browser's clipped gradient does).
+    /// Either way the run is laid out by its `StyledText`, which truncates
+    /// it with `…` to the line's width; the shimmer paints that same
+    /// shaped line, so a narrow Pane cuts it where the still run is cut.
     struct ShimmerText {
-        text: SharedString,
         base: Hsla,
         /// The crest's phase and colour; `None` holds the run still.
         lit: Option<(f32, Hsla)>,
-        child: Option<AnyElement>,
+        child: AnyElement,
+        layout: gpui::TextLayout,
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        /// The text the shimmer last painted lit.
+        pub(super) static SHIMMER_PAINTED: std::cell::RefCell<Option<String>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    impl ShimmerText {
+        fn new(text: SharedString, base: Hsla, lit: Option<(f32, Hsla)>) -> Self {
+            let text = gpui::StyledText::new(text);
+            let layout = text.layout().clone();
+            Self {
+                base,
+                lit,
+                child: text.into_any_element(),
+                layout,
+            }
+        }
     }
 
     impl IntoElement for ShimmerText {
@@ -639,10 +662,7 @@ mod loops {
             window: &mut Window,
             cx: &mut App,
         ) -> (gpui::LayoutId, ()) {
-            let child = self
-                .child
-                .get_or_insert_with(|| gpui::StyledText::new(self.text.clone()).into_any_element());
-            (child.request_layout(window, cx), ())
+            (self.child.request_layout(window, cx), ())
         }
 
         fn prepaint(
@@ -654,9 +674,7 @@ mod loops {
             window: &mut Window,
             cx: &mut App,
         ) {
-            if let Some(child) = self.child.as_mut() {
-                child.prepaint(window, cx);
-            }
+            self.child.prepaint(window, cx);
         }
 
         fn paint(
@@ -670,25 +688,22 @@ mod loops {
             cx: &mut App,
         ) {
             let Some((phase, crest)) = self.lit else {
-                if let Some(child) = self.child.as_mut() {
-                    child.paint(window, cx);
-                }
+                self.child.paint(window, cx);
                 return;
             };
-            let style = window.text_style();
-            let size = style.font_size.to_pixels(window.rem_size());
-            let line_height = style.line_height_in_pixels(window.rem_size());
-            let run = gpui::TextRun {
-                len: self.text.len(),
-                font: style.font(),
-                color: self.base,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
+            // The line the run laid out as: truncated, `…` and all.
+            let Some(line) = self
+                .layout
+                .line_layouts()
+                .first()
+                .map(|line| line.unwrapped_layout.clone())
+            else {
+                return;
             };
-            let line = window
-                .text_system()
-                .shape_line(self.text.clone(), size, &[run], None);
+            #[cfg(test)]
+            SHIMMER_PAINTED.with(|painted| painted.replace(Some(self.layout.text())));
+            let size = line.font_size;
+            let line_height = self.layout.line_height();
             let width = f32::from(line.width);
             if width <= 0.0 {
                 return;
@@ -1936,7 +1951,7 @@ mod tests {
         for rung in [Float, Sheet] {
             assert_eq!(elevation(rung), float_shadow(), "{rung:?} floats");
         }
-        assert!(float_shadow_faded(0.5)[0].color.a < float_shadow()[0].color.a);
+        assert!(shadow_faded(float_shadow(), 0.5)[0].color.a < float_shadow()[0].color.a);
     }
 
     #[test]
@@ -2218,6 +2233,29 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         cx.update(|cx| assert!(motion::pulse_parked(cx), "no loop leased the clock"));
+    }
+
+    /// Lit, the shimmer paints the line its run laid out as: in a box
+    /// narrower than its words, cut with `…` as the still run is, never
+    /// the whole run clipped mid-glyph.
+    #[gpui::test]
+    fn a_narrow_shimmer_is_cut_with_an_ellipsis(cx: &mut gpui::TestAppContext) {
+        motion::testing::drive();
+        struct Narrow;
+        impl gpui::Render for Narrow {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div().flex().w(px(80.)).child(shimmer(
+                    "Checking the supplied arguments",
+                    theme::PROVIDER_CLAUDE,
+                ))
+            }
+        }
+        cx.add_window(|_, _| Narrow);
+        cx.run_until_parked();
+        let painted = loops::SHIMMER_PAINTED.with(|painted| painted.borrow().clone());
+        let painted = painted.expect("the shimmer painted lit");
+        assert!(painted.ends_with('…'), "cut with an ellipsis: {painted:?}");
+        assert!(painted.len() < "Checking the supplied arguments".len());
     }
 
     /// Live, a spinner is drawn when its glyph steps and not between: the

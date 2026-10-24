@@ -1,6 +1,8 @@
-//! The motion kit: Zeron's animation catalog as helpers over gpui's
-//! [`Animation`], plus the two clocks gpui does not give us — a throttled,
-//! shared pulse for loops and a hover blend for colour. Ported from Zeron
+//! The motion kit: Zeron's animation catalog as one-shot elements on the
+//! executor's clock ([`Played`]), plus the clocks gpui does not give us — a
+//! throttled, shared pulse for loops, a hover blend for colour, and
+//! interruptible tweens. Every clock asks for its frames through the view
+//! that redraws it most cheaply ([`frames_through`]). Ported from Zeron
 //! (MIT, (c) 2026 Wing). The numbers are tokens in `theme.rs` (the motion
 //! section), which also holds the rules; this module is the machinery.
 //!
@@ -12,11 +14,11 @@
 //! | --- | --- | --- |
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
-//! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
+//! | toasts | [`TOAST_IN`] 180ms, 4px rise / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18) rises into place from 0.3 ([`toast_in`]); one that goes on its own fades away sinking 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server, update and Projects toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks), the bell's panel and the find bar (a transcript's or the reader's), via [`menu_in`], settling away from their opener ([`Opens`]) |
+//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or the reader's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
-//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
+//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`]; the palette, the shortcuts sheet and the Projects popup with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel (⌥⌘B, and focus moving to or from a draft or the Projects coordinator, which have none) rides the same way at the board's right edge, through [`ColumnRide`]: its content keeps its layout, clipped and anchored to the window's edge, fading on the nav's clock |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the reader beside its Pane (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
@@ -27,11 +29,22 @@
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); another document replacing the open one in the reader, from 0.3 ([`swap_in`]) — the slot does not slide again |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
-//! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
-//! `PopupMenu`) keep the kit's own behaviour. A tool group's disclosure in
-//! the transcript opens without a height tween: its rows are one item of a
-//! virtualized list inside a kit `Collapsible`, and an item mid-reveal would
-//! clip rows the pointer can already reach.
+//! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
+//! keep the kit's own behaviour. A tool group's disclosure in the transcript
+//! opens without a height tween: its rows are one item of a virtualized
+//! list inside a kit `Collapsible`, and an item mid-reveal would clip rows
+//! the pointer can already reach. The hover card (`hover_card.rs`) hangs at
+//! once: the transcript hosting it would draw every frame of an entrance
+//! again, rebuilding its native text (15 text renders for one `menu-in`).
+//!
+//! **What a frame costs.** gpui asks for an animation's next frame by
+//! notifying the view drawing it, and redraws that view's ancestors with
+//! it. A one-shot, a settled flip and a hover blend in the Cockpit's own
+//! tree (its floats, the frame's controls) notify its `FrameTick` instead
+//! ([`draw_frames_through`]), so they rebuild no cached part; one inside a
+//! part (a Pane's Composer menu) rebuilds that part alone. A loop draws in
+//! the loops overlay (ADR 0011). The nav's ride rebuilds every part on each
+//! frame: the board's width moves under them.
 //!
 //! # What gpui here cannot do, and what stands in
 //!
@@ -43,19 +56,21 @@
 //! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
 //!   dropped; opacity and scale carry it.
 //! - **Frost and edge fades.** Fork-only paint effects; not ported.
-//! - **Toast enter and exit.** Ferrite sets the stack's timing
+//! - **The kit's toast card.** Ferrite sets the kit stack's timing
 //!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
 //!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px
-//!   and 200ms exit on the card itself, so the card's 4px / 0.3-opacity
-//!   entrance waits on that crate.
+//!   and 200ms exit on the card itself, so the Server, update and Projects
+//!   toasts keep that slide; the Needs-you toast, Ferrite's own, wears the
+//!   catalog's.
 //!
 //! # Reduced motion
 //!
 //! gpui's `App::reduce_motion` flag snaps every `with_animation` element (a
 //! one-shot to its end state, a loop to its start) and every kit spring. The
-//! clocks here follow the same rule: [`loop_phase`] returns 0 and declares
-//! nothing, a [`Tween`] reads its target, and a hover snaps. [`init`] sets
-//! the flag from the system setting at launch.
+//! clocks here follow the same rule: a [`Played`] one-shot lands on its
+//! first frame (an exit is not drawn at all), [`loop_phase`] returns 0 and
+//! declares nothing, a [`Tween`] reads its target, and a hover snaps.
+//! [`init`] sets the flag from the system setting at launch.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -63,8 +78,7 @@ use std::time::{Duration, Instant};
 
 use ferrite_core::cadence;
 use gpui::{
-    px, Animation, AnimationElement, AnimationExt, App, ElementId, EntityId, Global, Hsla,
-    IntoElement, Rgba, SharedString, Styled, Window,
+    px, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba, SharedString, Styled, Window,
 };
 
 use crate::theme;
@@ -196,17 +210,6 @@ impl MotionSpec {
         }
         self.progress(elapsed.as_secs_f32() / self.duration().as_secs_f32())
     }
-
-    /// This entry as a one-shot gpui [`Animation`]. gpui snaps it to its end
-    /// state under reduced motion.
-    pub fn animation(&self) -> Animation {
-        let spec = *self;
-        if !live() {
-            // Resting (see `live`): lands on its end state at once.
-            return Animation::new(Duration::from_nanos(1)).with_easing(|_| 1.0);
-        }
-        Animation::new(spec.duration()).with_easing(move |raw| spec.progress(raw))
-    }
 }
 
 pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
@@ -233,6 +236,11 @@ pub const SLOT_CLOSE: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_CLOSE_MS, 
 // An exit is quicker than its entrance (the rules in `theme.rs`).
 const _: () = assert!(theme::MOTION_SLOT_CLOSE_MS < theme::MOTION_SLOT_OPEN_MS);
 
+/// A toast rising in over the bottom bar, and fading away when it goes on
+/// its own: the toast tokens, on the menus' curve.
+pub const TOAST_IN: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_IN_MS, EASE);
+pub const TOAST_OUT: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_OUT_MS, EASE);
+
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
     from + (to - from) * t
@@ -245,9 +253,16 @@ pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
 // A rise or drop is a relative `top` inset: taffy applies relative insets
 // after layout, so, like a CSS transform, siblings never move. The entrances
 // play once when their element id first mounts, so a caller mounts one only
-// for a change the operator watched. There are no exits: a menu or sheet
-// that closes is gone at once (an exit costs the operator a wait on every
-// dismissal and says nothing the closed state does not).
+// for a change the operator watched. A surface the operator dismisses (a
+// menu, a sheet, the palette) has no exit: it is gone at once, because an
+// exit costs a wait on every dismissal, its hit area would outlive it, and
+// the closed state says it all. A surface that leaves on its own (a toast)
+// fades out instead, drawn as a face that answers no pointer.
+//
+// Each plays on the executor's clock ([`Played`]), not gpui's wall-clock
+// `with_animation`, so a test steps it like every other clock here, and it
+// asks for its frames through [`frames_through`]: a menu the Cockpit draws
+// redraws the frame around the cached parts, never every Pane.
 //
 // gpui paints a surface's shadow under it and has no group compositing, so
 // a surface still fading in would show its own shadow through it as a dark
@@ -263,6 +278,10 @@ pub enum Opens {
     Down,
     /// Above its opener (the Composer's menus, the footer cards).
     Up,
+    /// Where it stands, without settling: a float that measures its own
+    /// box to place itself (the Composer's choice menus) would chase the
+    /// shift and re-place itself every frame.
+    InPlace,
 }
 
 impl Opens {
@@ -270,24 +289,32 @@ impl Opens {
         let toward = match self {
             Opens::Down => -1.0,
             Opens::Up => 1.0,
+            Opens::InPlace => 0.0,
         };
         toward * theme::MOTION_MENU_SHIFT * (1.0 - t)
     }
 }
 
+/// A floating surface at `opacity`, its float shadow ramped under it.
 fn float_face<E: Styled>(el: E, opacity: f32) -> E {
+    faded(el, opacity, crate::components::float_shadow())
+}
+
+/// A surface at `opacity` casting `shadow`, the shadow's ink ramped by the
+/// square of the fade.
+fn faded<E: Styled>(el: E, opacity: f32, shadow: Vec<gpui::BoxShadow>) -> E {
     el.opacity(opacity)
-        .shadow(crate::components::float_shadow_faded(opacity * opacity))
+        .shadow(crate::components::shadow_faded(shadow, opacity * opacity))
 }
 
 /// `menu-in` for a floating surface in flow (inside `anchored` or a
 /// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` while settling
 /// `MOTION_MENU_SHIFT` away from its opener.
-pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> AnimationElement<E>
+pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, MENU_IN.animation(), move |el, t| {
+    entrance(id, MENU_IN, element, move |el, t| {
         float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
             .relative()
             .top(px(opens.shift(t)))
@@ -295,12 +322,29 @@ where
 }
 
 /// `dialog-in` for a sheet: opacity 0 → 1 rising `MOTION_DIALOG_RISE`.
-pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
+    entrance(id, DIALOG_IN, element, |el, t| {
         float_face(el, t)
+            .relative()
+            .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
+    })
+}
+
+/// `dialog_in` for a sheet that casts its own `shadow` rather than the
+/// float's (the palette's dialog, `components::dialog_shadow`).
+pub fn dialog_in_casting<E>(
+    id: impl Into<ElementId>,
+    element: E,
+    shadow: fn() -> Vec<gpui::BoxShadow>,
+) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, DIALOG_IN, element, move |el, t| {
+        faded(el, t, shadow())
             .relative()
             .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })
@@ -310,13 +354,47 @@ where
 /// document in the reader): opacity alone, up from
 /// `MOTION_MENU_FROM_OPACITY` so its first frame is already legible; the
 /// slot itself holds still.
-pub fn swap_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+pub fn swap_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, ROW_IN.animation(), |el, t| {
+    entrance(id, ROW_IN, element, |el, t| {
         el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
     })
+}
+
+/// `toast-in` for a toast hung over the bottom bar: fades up from
+/// `MOTION_MENU_FROM_OPACITY` while rising `MOTION_TOAST_RISE` into place,
+/// over `TOAST_IN`.
+pub fn toast_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, TOAST_IN, element, |el, t| {
+        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+            .relative()
+            .top(px(theme::MOTION_TOAST_RISE * (1.0 - t)))
+    })
+}
+
+/// `toast-out` for a toast that went on its own at `left`: fades away over
+/// `TOAST_OUT`, sinking half its rise — shorter and softer than it came.
+/// The caller draws it as a face that answers no pointer, and stops once
+/// [`TOAST_OUT`] has passed.
+pub fn toast_out<E>(left: Instant, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    Played {
+        origin: Origin::At(left),
+        spec: TOAST_OUT,
+        element,
+        face: |el: E, t: f32| {
+            float_face(el, 1.0 - t)
+                .relative()
+                .top(px(theme::MOTION_TOAST_RISE / 2.0 * t))
+        },
+    }
 }
 
 /// `fade-in` over `spec`: opacity 0 → `to`, nothing moves — a mark or a
@@ -326,28 +404,105 @@ pub fn fade_in<E>(
     element: E,
     spec: MotionSpec,
     to: f32,
-) -> AnimationElement<E>
+) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, spec.animation(), move |el, t| {
-        el.opacity(lerp(0.0, to, t))
-    })
+    entrance(id, spec, element, move |el, t| el.opacity(lerp(0.0, to, t)))
 }
 
 /// A sheet's veil darkening in over `FADE_QUICK`: only its ground fades, so
 /// the sheet on it keeps its own entrance.
-pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, FADE_QUICK.animation(), |el, t| {
+    entrance(id, FADE_QUICK, element, |el, t| {
         el.bg(mix(
             gpui::transparent_black(),
             gpui::rgba(theme::VEIL).into(),
             t,
         ))
     })
+}
+
+fn entrance<E, F>(id: impl Into<ElementId>, spec: MotionSpec, element: E, face: F) -> Played<E, F>
+where
+    E: IntoElement + 'static,
+    F: FnOnce(E, f32) -> E + 'static,
+{
+    Played {
+        origin: Origin::Mount(id.into()),
+        spec,
+        element,
+        face,
+    }
+}
+
+/// Where a [`Played`] one-shot starts.
+enum Origin {
+    /// When the element under this id first mounts (an entrance): kept in
+    /// its element state, so it plays once and a remount plays it again.
+    Mount(ElementId),
+    /// At an instant the caller holds (an exit: when its subject went).
+    At(Instant),
+}
+
+/// A one-shot drawn at its spec's eased progress on the executor's clock:
+/// `face` draws `element` at 0..1, asking for the next frame while it
+/// plays and none once it lands. Reduced motion lands it at once.
+pub struct Played<E, F> {
+    origin: Origin,
+    spec: MotionSpec,
+    element: E,
+    face: F,
+}
+
+impl<E, F> gpui::RenderOnce for Played<E, F>
+where
+    E: IntoElement + 'static,
+    F: FnOnce(E, f32) -> E + 'static,
+{
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = play(self.origin, self.spec, window, cx);
+        (self.face)(self.element, t)
+    }
+}
+
+impl<E, F> IntoElement for Played<E, F>
+where
+    E: IntoElement + 'static,
+    F: FnOnce(E, f32) -> E + 'static,
+{
+    type Element = gpui::ViewElement<Self>;
+
+    #[track_caller]
+    fn into_element(self) -> Self::Element {
+        gpui::ViewElement::new(self)
+    }
+}
+
+/// How far a one-shot from `origin` has played along `spec` now.
+fn play(origin: Origin, spec: MotionSpec, window: &mut Window, cx: &mut App) -> f32 {
+    if reduced_motion(cx) {
+        return 1.0;
+    }
+    let now = cx.background_executor().now();
+    let started = match origin {
+        Origin::At(at) => at,
+        Origin::Mount(id) => window.with_global_id(id, |id, window| {
+            window.with_element_state(id, |started: Option<Instant>, _| {
+                let started = started.unwrap_or(now);
+                (started, started)
+            })
+        }),
+    };
+    let elapsed = now.saturating_duration_since(started);
+    if elapsed >= spec.duration() {
+        return 1.0;
+    }
+    request_frame(window);
+    spec.progress_at(elapsed)
 }
 
 /// `fade-in` at progress `t`: opacity with a `MOTION_FADE_IN_RISE` rise,
@@ -358,6 +513,45 @@ pub fn fade_in_at<E: Styled>(element: E, t: f32) -> E {
         .opacity(t)
         .relative()
         .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
+}
+
+// ---------------------------------------------------------------------------
+// Frames: who an animation's next frame redraws
+// ---------------------------------------------------------------------------
+//
+// gpui's `request_animation_frame` notifies the view drawing the animation.
+// For the Cockpit that is the costliest notify in the window: its cached
+// parts (the nav, every Pane) all read it, so a menu fading in over 140ms
+// rebuilt every Pane on each of its frames. A view names a cheaper one that
+// redraws the same elements ([`draw_frames_through`]); every clock here —
+// the one-shots, the settled flips, the hover blends — asks for its frames
+// through it.
+
+thread_local! {
+    static FRAMES_THROUGH: RefCell<HashMap<EntityId, EntityId>> = RefCell::default();
+}
+
+/// `view`'s animations draw their frames by notifying `through` instead of
+/// `view` itself; `None` forgets it. The Cockpit names the frame around its
+/// cached parts (ADR 0012's `FrameTick`): its floats and frame controls
+/// redraw without rebuilding a part.
+pub fn draw_frames_through(view: EntityId, through: Option<EntityId>) {
+    FRAMES_THROUGH.with(|map| match through {
+        Some(through) => map.borrow_mut().insert(view, through),
+        None => map.borrow_mut().remove(&view),
+    });
+}
+
+/// The view to notify for a frame of an animation `view` draws.
+pub fn frames_through(view: EntityId) -> EntityId {
+    FRAMES_THROUGH.with(|map| map.borrow().get(&view).copied().unwrap_or(view))
+}
+
+/// Ask for the next frame for an animation the current view is drawing,
+/// through the view that redraws it most cheaply.
+pub fn request_frame(window: &mut Window) {
+    let view = frames_through(window.current_view());
+    window.on_next_frame(move |_, cx| cx.notify(view));
 }
 
 // ---------------------------------------------------------------------------
@@ -605,7 +799,7 @@ fn settle_with(
         })
     });
     if running {
-        window.request_animation_frame();
+        request_frame(window);
     }
     value
 }
@@ -1108,11 +1302,13 @@ pub fn hover_listener_with(
                 .set_with(&key, *hovered, reduced, now, spec, view)
         });
         // Only the view that painted the blend draws it: notifying that
-        // view redraws it and its ancestors, and reuses every other cached
-        // view (the transcripts). Called from outside a painted listener,
-        // refresh, as a gpui `.hover()` style does on the same event.
+        // view (through the one that redraws it most cheaply) redraws it
+        // and its ancestors, and reuses every other cached view (the
+        // transcripts, the Cockpit's parts). Called from outside a painted
+        // listener, refresh, as a gpui `.hover()` style does on the same
+        // event.
         match view {
-            Some(view) => cx.notify(view),
+            Some(view) => cx.notify(frames_through(view)),
             None => window.refresh(),
         }
     }
@@ -1126,11 +1322,22 @@ pub fn hover_fades_active() -> bool {
     HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(now))
 }
 
-/// The views painting a blend still mid-flight, as of the last
-/// [`hover_fades_active`]: the root draws them again with its next frame (a
-/// cached view would otherwise be reused, its blend frozen).
+/// The views to draw again for the blends still mid-flight, as of the last
+/// [`hover_fades_active`] (each painting view through [`frames_through`]):
+/// the root notifies them with its next frame (a cached view would
+/// otherwise be reused, its blend frozen).
 pub fn hover_fading_views() -> Vec<EntityId> {
-    HOVER_FADES.with(|fades| fades.borrow().fading.clone())
+    let mut views: Vec<EntityId> = HOVER_FADES.with(|fades| {
+        fades
+            .borrow()
+            .fading
+            .iter()
+            .map(|view| frames_through(*view))
+            .collect()
+    });
+    views.sort_unstable();
+    views.dedup();
+    views
 }
 
 /// Blend two colours the way a browser transitions them: sRGB components
@@ -1176,9 +1383,10 @@ pub fn reduced_motion(cx: &App) -> bool {
 /// Whether the kit animates at all. Always, except in unit tests, where it
 /// rests unless a test asks for it (`testing::drive`). The suite asserts
 /// layout and hit targets straight after a state change, on a clock it
-/// steps by hand, and gpui's `with_animation` runs on the wall clock: live
-/// entrances would make those readings depend on when they were taken. A
-/// pulse tick nobody asked for would also blank the transcripts' test
+/// steps by hand: live entrances would put those readings mid-flight, and
+/// the kit's own springs and cards (gpui's `with_animation`) run on the
+/// wall clock besides. A pulse tick nobody asked for would also blank the
+/// transcripts' test
 /// selectors (gpui's test window keeps no `debug_bounds` for a cached view
 /// it reuses). Resting, the kit behaves as it does under reduced motion.
 pub(crate) fn live() -> bool {
@@ -1754,6 +1962,130 @@ mod tests {
         flip(&view, true, cx);
         assert_eq!(drawn.get(), 1.0);
         assert_eq!(next_frame(cx), 0);
+    }
+
+    struct Entering {
+        mounted: bool,
+        left: Option<Instant>,
+        drawn: std::rc::Rc<std::cell::Cell<f32>>,
+    }
+
+    impl Render for Entering {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let drawn = self.drawn.clone();
+            let face = move |el: gpui::Div, t: f32| {
+                drawn.set(t);
+                el
+            };
+            div().when(self.mounted, |root| match self.left {
+                None => root.child(entrance("entering", MENU_IN, div().size_4(), face)),
+                Some(left) => root.child(Played {
+                    origin: Origin::At(left),
+                    spec: TOAST_OUT,
+                    element: div().size_4(),
+                    face,
+                }),
+            })
+        }
+    }
+
+    fn entering(
+        cx: &mut TestAppContext,
+        left: Option<Instant>,
+    ) -> (
+        gpui::Entity<Entering>,
+        std::rc::Rc<std::cell::Cell<f32>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let drawn = std::rc::Rc::new(std::cell::Cell::new(-1.0));
+        let seen = drawn.clone();
+        let (view, cx) = cx.add_window_view(move |_, _| Entering {
+            mounted: true,
+            left,
+            drawn: seen,
+        });
+        cx.run_until_parked();
+        (view, drawn, cx)
+    }
+
+    /// An entrance plays from its element's first mount on the executor's
+    /// clock, asking for frames only while it plays; unmounted and mounted
+    /// again, it plays again.
+    #[gpui::test]
+    fn an_entrance_plays_from_its_first_mount_and_then_asks_for_nothing(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, drawn, cx) = entering(cx, None);
+        assert_eq!(drawn.get(), 0.0, "its first frame is its first");
+        cx.executor().advance_clock(Duration::from_millis(70));
+        assert!(next_frame(cx) > 0, "it asks for the next frame");
+        let mid = drawn.get();
+        assert!(mid > 0.0 && mid < 1.0, "mid-flight at 70ms: {mid}");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_MENU_IN_MS));
+        next_frame(cx);
+        assert_eq!(drawn.get(), 1.0, "landed");
+        assert_eq!(next_frame(cx), 0, "and asks for nothing");
+
+        for mounted in [false, true] {
+            view.update(cx, |view, cx| {
+                view.mounted = mounted;
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        assert_eq!(drawn.get(), 0.0, "mounted again, it plays again");
+    }
+
+    /// An exit plays from the instant its subject went, not from its mount.
+    #[gpui::test]
+    fn an_exit_plays_from_the_instant_its_subject_went(cx: &mut TestAppContext) {
+        testing::drive();
+        let left = cx.executor().now() - Duration::from_millis(50);
+        let (_view, drawn, cx) = entering(cx, Some(left));
+        let at = drawn.get();
+        assert!(at > 0.0 && at < 1.0, "50ms into its 100ms: {at}");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_TOAST_OUT_MS));
+        assert!(next_frame(cx) > 0);
+        assert_eq!(drawn.get(), 1.0, "gone");
+        assert_eq!(next_frame(cx), 0, "and asks for nothing");
+    }
+
+    /// Reduced motion lands an entrance on its first frame.
+    #[gpui::test]
+    fn reduced_motion_lands_an_entrance(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (_view, drawn, cx) = entering(cx, None);
+        assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0);
+    }
+
+    /// A view that draws its frames through another notifies that one for
+    /// its animation's next frame, not itself.
+    #[gpui::test]
+    fn an_animation_draws_its_frames_through_the_view_named(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, drawn, cx) = entering(cx, None);
+        let through = cx.update(|_, cx| cx.new(|_| ()));
+        let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = notified.clone();
+        cx.update(|_, cx| {
+            cx.observe(&through, move |_, _| seen.set(seen.get() + 1))
+                .detach()
+        });
+        draw_frames_through(view.entity_id(), Some(through.entity_id()));
+        // The frame its first draw asked for redraws it, and that draw asks
+        // through the view named.
+        next_frame(cx);
+        notified.set(0);
+        let before = drawn.get();
+        cx.executor().advance_clock(Duration::from_millis(30));
+        assert!(next_frame(cx) > 0);
+        assert_eq!(notified.get(), 1, "the frame went to the view named");
+        assert_eq!(drawn.get(), before, "and did not redraw the drawing view");
+        draw_frames_through(view.entity_id(), None);
+        assert_eq!(frames_through(view.entity_id()), view.entity_id());
     }
 
     /// Reduced motion holds a loop at its start and leases nothing.

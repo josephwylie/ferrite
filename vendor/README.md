@@ -116,6 +116,14 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
 - `DefaultToastMotion`: a global motion for toast stacks whose builder never
   called `.motion(..)`. The kit's notification list builds its stack without
   one; Ferrite sets a collapsed stack that shows only its front toast.
+- `ToastStack` redraws the view that draws it when a measurement moves the
+  stack (an item's height, the stack's width, the pointer entering it), where
+  upstream called `cx.refresh_windows()`, which rebuilt every cached view in
+  the window (every Pane, every transcript). An item's height that changes by
+  a pixel or less is not re-measured: a toast sliding in rounds its fractional
+  offset to 43px or 44px on alternate frames, and each flip re-targeted the
+  stack. Ferrite's `cockpit/tests/render_performance.rs` covers it (a toast
+  coming in rebuilds no Pane).
 - `with_blockquote(StyleRefinement)`, `with_rule(StyleRefinement)`: refined after
   the defaults (a quote's `not_italic()` wins over the default italic).
 - `with_list_markers(bullet, ordinal)`: marker refinements; their text

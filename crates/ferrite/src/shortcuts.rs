@@ -380,12 +380,17 @@ impl Render for Shortcuts {
                     .child(crate::palette::NO_MATCHES),
             );
         }
-        crate::palette::dialog()
-            .debug_selector(|| "shortcuts-sheet".into())
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(input)
-            .child(list)
-            .child(crate::palette::footer_row(FOOTER.into(), String::new()))
+        // In on the palette's entrance, over the same veil.
+        crate::motion::dialog_in_casting(
+            "shortcuts-sheet-in",
+            crate::palette::dialog()
+                .debug_selector(|| "shortcuts-sheet".into())
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(input)
+                .child(list)
+                .child(crate::palette::footer_row(FOOTER.into(), String::new())),
+            crate::components::dialog_shadow,
+        )
     }
 }
 

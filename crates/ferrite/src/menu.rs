@@ -749,7 +749,11 @@ impl ChoiceContent {
             surface = surface.child(footer(&self.hints));
         }
         let menu = self.clone();
-        components::on_bounds(surface, move |bounds, window, cx| {
+        // It enters (`menu-in`, in place: it measures its own box) from its
+        // first frame on its measured place; until then it is drawn at zero
+        // opacity, so the entrance is keyed on being placed.
+        let entrance = ("choice-menu-in", self.state.read(cx).placed as usize);
+        let surface = components::on_bounds(surface, move |bounds, window, cx| {
             let place = menu.place;
             // Inside the surface's 1px edge: add it back.
             let bounds = bounds.dilate(px(1.));
@@ -788,8 +792,8 @@ impl ChoiceContent {
             if first {
                 menu.focus.focus(window, cx);
             }
-        })
-        .into_any_element()
+        });
+        crate::motion::menu_in(entrance, surface, crate::motion::Opens::InPlace).into_any_element()
     }
 
     fn step_ladder(self: &Rc<Self>, delta: isize, window: &mut gpui::Window, cx: &mut gpui::App) {

@@ -2657,8 +2657,11 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 // that wears it). The rules every animated surface follows:
 //
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
-//   a few pixels into place. A menu or a sheet that closes goes at once:
-//   dismissals are frequent, and the closed state says it all. The
+//   a few pixels into place. What the operator dismisses (a menu, a sheet,
+//   the palette) goes at once: dismissals are frequent, a fading surface
+//   would hold its hit area past its state, and the closed state says it
+//   all. What leaves on its own (a toast) fades out shorter and softer than
+//   it came (`MOTION_TOAST_OUT_MS`), as a face no pointer finds. The
 //   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly, and
 //   the panel's rides ⌥⌘B the same way. A board slot is no float: the
 //   reader slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
@@ -2687,6 +2690,11 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`): each declares
 //   when its picture next changes, and the clock wakes only the views due
 //   then, on its grid; it parks when nothing is declared.
+// - **A frame redraws only what moves.** Every animation asks for its next
+//   frame through the cheapest view that draws it (`motion::frames_through`):
+//   a float the Cockpit draws redraws the frame around its cached parts,
+//   never every Pane. Nothing animates where its host would rebuild more
+//   than the animation shows.
 
 /// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
 pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
@@ -2736,9 +2744,14 @@ pub const MOTION_CHEVRON_MS: u64 = 150;
 pub const MOTION_IMAGE_ZOOM_MS: u64 = 240;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
 pub const MOTION_HOVER_FADE_MS: u64 = 150;
-/// A toast's stack timing: it settles in over 180ms and leaves over 100ms.
+/// A toast's timing: it rises in over 180ms and leaves over 100ms (the
+/// Needs-you toast, `motion::toast_in` / `toast_out`; the kit's toast
+/// stack settles on the same two).
 pub const MOTION_TOAST_IN_MS: u64 = 180;
 pub const MOTION_TOAST_OUT_MS: u64 = 100;
+/// How far a toast rises into place over the bottom bar; it sinks half
+/// that as it fades away.
+pub const MOTION_TOAST_RISE: f32 = 4.0;
 /// 1.4s — how long a scrollbar thumb holds after the last scroll frame
 /// (C26) before it fades out over `MOTION_HOVER_FADE_MS`. Idle, no thumb.
 pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;

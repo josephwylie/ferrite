@@ -595,6 +595,12 @@ impl TranscriptView {
         self.arrivals.len()
     }
 
+    /// A minimap glide is in flight.
+    #[cfg(test)]
+    pub(crate) fn gliding(&self) -> bool {
+        self.glide.is_some()
+    }
+
     /// How far a live-appended row is into its entrance, while it is.
     fn arrival(&self, row: &RowId, cx: &App) -> Option<f32> {
         if crate::motion::reduced_motion(cx) {
@@ -1918,6 +1924,11 @@ impl Render for TranscriptView {
         let band_pad = theme::prompt_band_pad_y(solo);
         let pad_b = theme::body_pad_b(solo);
         let list = div()
+            // The wheel takes the scroll back from a minimap glide in
+            // flight, rather than the glide overriding it to its end.
+            .on_scroll_wheel(cx.listener(|view, _: &gpui::ScrollWheelEvent, _, _| {
+                view.glide = None;
+            }))
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
                 // A band jump's room: enough under the last row for the

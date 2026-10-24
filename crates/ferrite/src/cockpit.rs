@@ -507,6 +507,9 @@ pub struct CockpitView {
     /// The Needs-you view: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) needs_you: NeedsYou,
+    /// What the toast float drew last: the toast standing and the one
+    /// fading out (`toast_float`).
+    toast_stage: std::cell::RefCell<crate::notifications::ToastStage>,
     /// What to open once the Cockpit is attached: what the window came
     /// to this machine for (ADR 0026), and until when it waits.
     landing: Option<(Landing, std::time::Instant)>,
@@ -1577,6 +1580,7 @@ impl CockpitView {
             leave_asked: false,
             group_error: None,
             needs_you: NeedsYou::new(),
+            toast_stage: Default::default(),
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
@@ -9824,18 +9828,15 @@ impl Render for CockpitView {
         } else if fading || sliding {
             // A blend is drawn again by the view that paints it alone: a
             // part (a nav row, a Pane's control, a transcript's link), or,
-            // for the frame's own controls, the frame around the parts. A
-            // reader's slide redraws the frame, which lays the board out:
-            // only the parts whose cells move are built again (their cache
-            // holds their bounds), the rest replay.
-            let root = cx.entity_id();
-            let frame = self.frame_tick_id();
-            let mut views: Vec<_> = crate::motion::hover_fading_views()
-                .into_iter()
-                .map(|view| if view == root { frame } else { view })
-                .collect();
+            // for the frame's own controls, the frame around the parts
+            // (`motion::frames_through`). A reader's slide redraws the
+            // frame, which lays the board out: only the parts whose cells
+            // move are built again (their cache holds their bounds), the
+            // rest replay.
+            let mut views = crate::motion::hover_fading_views();
+            let frame = crate::motion::frames_through(cx.entity_id());
             if sliding && !views.contains(&frame) {
-                views.push(if self.parts.borrow().on { frame } else { root });
+                views.push(frame);
             }
             if views.is_empty() {
                 window.request_animation_frame();

@@ -1348,6 +1348,10 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     }
     tick(cx);
     settle(cx);
+    // The finished Threads' toasts ring and rise in first: an entrance is
+    // no loop.
+    ring(cx);
+    settle(cx);
     assert!(
         cx.debug_bounds("progress-mark-live").is_some(),
         "the premise: a working mark is on screen"
@@ -2226,4 +2230,285 @@ fn a_pickers_arrows_rebuild_only_its_own_pane(cx: &mut TestAppContext) {
         "its Pane redraws the cursor: {built:?}"
     );
     assert_eq!(built[1..], [0, 0, 0], "an arrow rebuilt another Pane");
+}
+
+// ----------------------------------------------- what an entrance redraws
+
+/// Pane builds since `before`, Pane by Pane.
+fn built_since(threads: &[ThreadId], before: &[usize]) -> Vec<usize> {
+    pane_builds(threads)
+        .iter()
+        .zip(before)
+        .map(|(after, before)| after - before)
+        .collect()
+}
+
+/// Display frames while `ms` pass a frame at a time, each delivered.
+fn frames_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
+    let mut frames = 0;
+    for _ in 0..ms / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        frames += display_frames(cx);
+    }
+    frames
+}
+
+/// A menu the Cockpit draws fades in over `motion::MENU_IN` by redrawing
+/// the frame around the cached parts: after the frame that opens it, no
+/// Pane is rebuilt for its entrance, and it parks once it lands.
+#[gpui::test]
+fn a_menu_entrance_redraws_the_frame_and_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("menu-entrance", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    // The frame that opens it is the Cockpit's change; the entrance is
+    // every frame after.
+    let mut frames = frames_over(cx, 16);
+    let panes = pane_builds(&threads);
+    frames += frames_over(cx, theme::MOTION_MENU_IN_MS + 16);
+    let built = built_since(&threads, &panes);
+    eprintln!("MENU_ENTRANCE frames={frames} pane_builds={built:?}");
+    assert!(frames > 0, "the menu fades in");
+    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}
+
+/// The pointer on a row of a menu the Cockpit draws blends the row's wash
+/// in the frame around the parts: no Pane is rebuilt for it.
+#[gpui::test]
+fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("menu-row-hover", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cockpit_renders_over(cx, 300);
+    let panes = pane_builds(&threads);
+    // A row with a shortcut: its key glyph sits on the row.
+    let row = cx
+        .debug_bounds("command-key")
+        .expect("the Pane menu's shortcuts draw the glyph");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cockpit_renders_over(cx, 300);
+    assert!(
+        cx.update(|_, _| crate::motion::testing::hover_values())
+            .iter()
+            .any(|(key, value)| key.contains("context-menu-row") && *value == 1.0),
+        "the premise: the pointer is on a menu row"
+    );
+    cx.simulate_mouse_move(
+        gpui::point(px(1200.), px(900.)),
+        None,
+        gpui::Modifiers::none(),
+    );
+    cockpit_renders_over(cx, 300);
+    let built = built_since(&threads, &panes);
+    eprintln!("MENU_ROW_HOVER pane_builds={built:?}");
+    assert_eq!(built, [0, 0, 0, 0], "a menu row's hover rebuilt a Pane");
+}
+
+/// The kit's toast stack measures a toast as it slides in: that redraws
+/// the stack's own view, never every view in the window (its upstream
+/// `refresh_windows` rebuilt every Pane on every frame a toast moved).
+#[gpui::test]
+fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (_view, _fake, threads, cx) = group_board("kit-toast", &[], cx);
+    cockpit_renders_over(cx, 2_500);
+    let panes = pane_builds(&threads);
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt;
+        window.push_notification(
+            gpui::component::notification::Notification::new().message("Server restarted"),
+            cx,
+        )
+    });
+    // The kit's card slides on the wall clock: let real time pass with the
+    // frames, so it moves through its fractional offsets.
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(16));
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        display_frames(cx);
+    }
+    let built = built_since(&threads, &panes);
+    eprintln!("KIT_TOAST_IN pane_builds={built:?}");
+    assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
+}
+
+/// The Needs-you toast (FL-18) rises in over `motion::TOAST_IN` and, when it
+/// goes on its own, fades away over `TOAST_OUT` as a face with no answers
+/// to press — frames only while it moves.
+#[gpui::test]
+fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    // A board of two, and a third Thread off it, working.
+    let (mut core, fake) = cockpit("toast-motion", 3);
+    let threads = core.threads().to_vec();
+    core.apply_group(GroupChange::Create {
+        first: threads[0],
+        second: threads[1],
+    })
+    .unwrap();
+    let group = core.groups().of(threads[0]).unwrap().id;
+    core.send(threads[2], "task".into());
+    core.pump();
+    core.enter_group(group).unwrap();
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    fake.streams.borrow()[2]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    settle(cx);
+    let toast: &'static str = format!("toast-{}", threads[2].get()).leak();
+    cx.executor()
+        .advance_clock(crate::notifications::ALERT_DELAY);
+    tick(cx);
+    assert!(cx.debug_bounds(toast).is_some(), "the toast is up");
+    let rising = frames_over(cx, theme::MOTION_TOAST_IN_MS + 32);
+    assert!(rising > 0, "it rises in");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+
+    // It times out, the window drawing a frame at a time.
+    cx.executor()
+        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_millis(200));
+    cx.run_until_parked();
+    let mut waited = 0;
+    while cx.debug_bounds(toast).is_some() {
+        frames_over(cx, 16);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        waited += 1;
+        assert!(waited < 30, "the toast never timed out");
+    }
+    assert!(
+        cx.debug_bounds("toast-leaving").is_some(),
+        "its face fades out where it stood"
+    );
+    let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
+    assert!(cx.debug_bounds(open).is_none(), "with nothing to press");
+    let leaving = frames_over(cx, theme::MOTION_TOAST_OUT_MS + 32);
+    assert!(leaving > 1, "it fades out a frame at a time: {leaving}");
+    assert_eq!(display_frames(cx), 0, "gone: no more frames");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("toast-leaving").is_none(),
+        "and its face is gone"
+    );
+    eprintln!("NEEDS_YOU_TOAST rising={rising} leaving={leaving}");
+}
+
+/// The palette comes in on `dialog-in` over its veil darkening in: frames
+/// while it does, no Pane rebuilt for them, none once it has landed.
+#[gpui::test]
+fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("palette-entrance", &[], cx);
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cx.run_until_parked();
+    // Its first frame takes the keyboard from the Composer, whose Pane
+    // redraws its line once; the entrance is every frame after.
+    let mut frames = frames_over(cx, 16);
+    let panes = pane_builds(&threads);
+    frames += frames_over(cx, theme::MOTION_DIALOG_IN_MS + 16);
+    let built = built_since(&threads, &panes);
+    eprintln!("PALETTE_ENTRANCE frames={frames} pane_builds={built:?}");
+    assert!(frames > 0, "the palette comes in");
+    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}
+
+/// A Composer's choice menu fades in where it measured itself to stand,
+/// from its first placed frame (`Opens::InPlace`), standing still as it
+/// comes in, and asks for nothing once it lands.
+#[gpui::test]
+fn a_choice_menu_fades_in_in_place_and_then_rests(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
+    view.update(cx, |view, cx| {
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    cockpit_renders_over(cx, 300);
+    view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
+    cx.run_until_parked();
+    let mut frames = 0;
+    let mut stood = Vec::new();
+    for _ in 0..(theme::MOTION_MENU_IN_MS + 48) / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        frames += display_frames(cx);
+        if crate::menu::testing::drawn().placed {
+            stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
+        }
+    }
+    assert!(frames > 0, "it fades in");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+    assert!(
+        stood.len() > 2,
+        "the premise: it was drawn placed as it came in"
+    );
+    assert!(
+        stood.windows(2).all(|pair| pair[0] == pair[1]),
+        "it stood still as it came in: {stood:?}"
+    );
+}
+
+/// A minimap glide is a scroll the operator asked for, and the wheel is
+/// one too: a turn of the wheel mid-glide takes the scroll back, rather
+/// than the glide overriding it to its end.
+#[gpui::test]
+fn the_wheel_takes_the_scroll_back_from_a_minimap_glide(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, fake) = cockpit("minimap-glide", 1);
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    let gliding = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .is_some_and(|transcript| transcript.read(cx).gliding())
+        })
+    };
+    let rail = cx
+        .debug_bounds("transcript-minimap")
+        .expect("the transcript draws its minimap");
+    // Near the rail's top: far from the tail the transcript follows.
+    let top = gpui::point(rail.center().x, rail.top() + px(4.));
+    cx.simulate_mouse_move(top, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(top, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(top, MouseButton::Left, gpui::Modifiers::none());
+    cx.executor().advance_clock(Duration::from_millis(50));
+    display_frames(cx);
+    assert!(gliding(cx), "the premise: the click glides");
+    let body = gpui::point(rail.left() - px(200.), rail.center().y);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: body,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert!(!gliding(cx), "the wheel took the scroll back");
+    frames_over(cx, theme::MINIMAP_SCROLL_MS);
+    assert_eq!(display_frames(cx), 0, "and nothing glides on");
 }
