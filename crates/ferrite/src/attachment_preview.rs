@@ -342,10 +342,13 @@ impl Preview {
                     // A press here closes; it must not also pick the slot
                     // up as a drag.
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .tooltip(|window, cx| {
-                        gpui::component::tooltip::Tooltip::new("Close the reader \u{b7} esc")
-                            .build(window, cx)
-                    })
+                    .tooltip(crate::menu::tooltip_with_key(
+                        "Close the reader",
+                        crate::components::bound_chord_in(
+                            "reader::Close",
+                            Some(crate::keymap::READER),
+                        ),
+                    ))
                     .child(crate::icons::icon(crate::icons::CLOSE, GLYPH_BOX, TEXT_DIM))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();

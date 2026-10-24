@@ -52,6 +52,8 @@ use ferrite_reviewr::model::{CommitPick, Scope};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+gpui::actions!(reader, [Close]);
+
 /// Every Pane's reader slot while it is open or sliding (see the module
 /// doc), keyed by the Pane that owns it, and what this frame draws of each.
 #[derive(Default)]
@@ -912,15 +914,15 @@ impl CockpitView {
             .into_any_element(),
             None => body.into_any_element(),
         };
-        let preview = pane.preview.clone();
         let slot = pane
             .preview
             .reader(body, head_drag(leaf, face))?
-            .on_key_down(move |event, window, _| {
-                if event.keystroke.key == "escape" {
-                    preview.close_document(window);
+            .key_context(crate::keymap::READER)
+            .on_action(cx.listener(move |view, _: &Close, _, cx| {
+                if let Some(index) = view.index_of(owner) {
+                    view.close_reader(index, cx);
                 }
-            })
+            }))
             .on_action(cx.listener(move |view, _: &crate::find::Next, _, cx| {
                 view.step_reader_find(owner, true, cx)
             }))

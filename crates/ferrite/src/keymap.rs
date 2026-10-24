@@ -434,6 +434,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("a".into(), "review::AllFiles", Some(REVIEW)),
         ("shift-b".into(), "review::PickBase", Some(REVIEW)),
         ("escape".into(), "review::Close", Some(REVIEW)),
+        // The reader's own text holding the keyboard (a selection in it):
+        // esc closes the reader, not the Pane's turn.
+        ("escape".into(), "reader::Close", Some(READER)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
         (
             "escape".into(),
@@ -519,6 +522,11 @@ pub const UNBOUND: [(&str, Option<&str>); 2] = [
 
 /// The Review slot holds the keyboard itself, not a field inside it.
 const REVIEW: &str = "Review && !Composer";
+
+/// The reader slot beside a Pane (`cockpit/beside.rs`), around whatever it
+/// shows: a review, the find bar or a viewer inside it binds its own keys
+/// deeper.
+pub const READER: &str = "Reader";
 
 /// The contexts where no text field takes typing (a Decision answers its
 /// own letters), so a plain key may act there.

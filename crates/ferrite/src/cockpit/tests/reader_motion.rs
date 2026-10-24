@@ -302,6 +302,74 @@ fn reduced_motion_snaps_the_reader(cx: &mut TestAppContext) {
     assert_eq!(frame(cx), 0);
 }
 
+/// Esc with the reader's own text holding the keyboard closes the reader
+/// — not the Pane's turn — and the keyboard is the Pane's at once, while
+/// the reader is still sliding out.
+#[gpui::test]
+fn escape_in_the_reader_closes_it_and_hands_the_keyboard_back(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, fake) = cockpit("reader-escape", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let dir = scratch("reader-escape-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.md");
+    std::fs::write(
+        &file,
+        "# Notes\n\nA paragraph long enough to select a few words in.\n",
+    )
+    .unwrap();
+    read(&view, &file, None, cx);
+    settle(cx);
+    // Select a word or two of the rendered document: its text holds the
+    // keyboard.
+    let text = cx
+        .update(|_, cx| {
+            crate::rich::testing::bounds(&format!("document-{}", file.display()), 0, cx)
+        })
+        .expect("the document is drawn");
+    let y = text.top() + px(12.);
+    let from = gpui::point(text.left() + px(4.), y);
+    let to = gpui::point(text.left() + px(60.), y);
+    cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.update(|window, cx| view.read(cx).panes[0]
+            .preview
+            .reader_text_focused(window, cx)),
+        "the premise: the reader's text holds the keyboard"
+    );
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()),
+        "esc closed the reader"
+    );
+    assert_eq!(*fake.interrupts.borrow(), 0, "and interrupted nothing");
+    assert!(
+        cx.debug_bounds("reader-head").is_some(),
+        "the reader is still sliding out"
+    );
+    cx.simulate_input("x");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.panes[0]
+            .composer
+            .read(cx)
+            .text()
+            .to_string()),
+        "x",
+        "the keyboard is the Pane's already"
+    );
+    settle(cx);
+    assert!(cx.debug_bounds("reader-head").is_none());
+}
+
 /// A fullscreen Pane's own cell fills the board, so a reader opened from
 /// it splits that cell, where it can be seen, and slides like any other;
 /// closed, the Pane fills the board again.
