@@ -403,3 +403,41 @@ fn a_long_edit_diff_splits_caps_and_folds(cx: &mut TestAppContext) {
         "`+ show diff` opens it"
     );
 }
+
+/// A folded command's first line gives way in a narrow Pane: cut at its
+/// end, it keeps the row's width, and `+ N lines` stays in the row.
+#[gpui::test]
+fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("ct-fold-head", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Summarise".into());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let first = "a-p06 skip Tribe Market (Level Group OMO43465) ".repeat(4);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "summary".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "python3 prep.py --summary" }),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "summary".into(),
+            output: format!("{first}\n+ 12 bills ready"),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    for width in [1200., 700.] {
+        cx.simulate_resize(gpui::size(px(width), px(900.)));
+        tick(cx);
+        let row = cx.debug_bounds("tool-row-summary").expect("the call's row");
+        let fold = cx.debug_bounds("tool-fold").expect("`+ 1 line`");
+        assert!(
+            fold.right() <= row.right() + px(0.5),
+            "at {width}px the fold stays in the row: {fold:?} / {row:?}"
+        );
+        let head = cx.debug_bounds("tool-fold-head").expect("the first line");
+        assert!(head.right() <= fold.left(), "{head:?} before {fold:?}");
+    }
+}

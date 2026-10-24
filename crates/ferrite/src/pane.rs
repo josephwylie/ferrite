@@ -6419,14 +6419,18 @@ pub(crate) fn render_tool(
                 // elbow; open, the rest hangs under it.
                 // Each run holds exactly its cells: a measured run rounds
                 // up a pixel and would push the fold's words off the grid.
+                // Where the line is narrower, the first line gives way, cut
+                // at its end: the fold's words always stay in the row.
                 let first_w = first.chars().count() as f32 * grid.cell();
                 card = card.child(
                     elbow_line(grid, TEXT_DIM)
                         .child(
                             div()
-                                .flex_shrink_0()
+                                .debug_selector(|| "tool-fold-head".into())
+                                .flex_shrink(1.)
+                                .min_w_0()
                                 .w(px(first_w))
-                                .whitespace_nowrap()
+                                .truncate()
                                 .child(selection.line(
                                     block,
                                     first.clone(),
