@@ -1,6 +1,6 @@
 //! What opens beside a Pane on the board (F-14, F-15): a reader on a file
-//! at a line, a review of the Thread's changes (ADR 0021), or another
-//! Thread.
+//! at a line or on an image (`image_viewer.rs`), a review of the Thread's
+//! changes (ADR 0021), or another Thread.
 //!
 //! A reader and a review take the reader slot the Pane already has
 //! (`attachment_preview::Preview`'s document, laid out by `board_tree`): in
@@ -25,6 +25,7 @@
 //! a member.
 
 use super::*;
+use crate::attachment_preview::Body;
 use crate::review::{
     BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
     ScopePicked, Searched,
@@ -67,7 +68,7 @@ impl ReaderFind {
 /// Whether the reader renders `document` as Markdown (a file opened at a
 /// line reads as numbered lines, to mark it).
 fn renders_markdown(document: &crate::attachment_preview::Document) -> bool {
-    document.is_markdown() && document.line.is_none()
+    matches!(document.body, Body::Text { line: None, .. }) && document.is_markdown()
 }
 
 /// How often a read on another thread (a review's git, a PR's `gh`) is
@@ -77,7 +78,8 @@ const ANSWER_POLL: std::time::Duration = std::time::Duration::from_millis(30);
 /// What `open_beside` opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Beside {
-    /// A file, marked and scrolled to `line` (1-based) when there is one.
+    /// A file, marked and scrolled to `line` (1-based) when there is one;
+    /// an image in the image viewer.
     Reader { path: PathBuf, line: Option<u32> },
     /// The focused Thread's changes, at a scope.
     Review(Scope),
@@ -119,13 +121,18 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return;
         };
+        if crate::image_viewer::is_image(&path) {
+            pane.preview.open_image(path, &[], window, cx);
+            cx.notify();
+            return;
+        }
         let title = workspace
             .as_deref()
             .and_then(|root| path.strip_prefix(root).ok())
             .map(|relative| relative.display().to_string())
             .unwrap_or_else(|| home_relative(&path));
         if !pane.preview.open_text_at(path.clone(), title.clone(), line) {
-            // Not a UTF-8 file: the image preview, or the OS, takes it.
+            // Not a UTF-8 file: say so.
             pane.preview.open_document(path, title, window, cx);
             cx.notify();
             return;
@@ -503,7 +510,11 @@ impl CockpitView {
         let Some(pane) = self.panes.get_mut(index) else {
             return false;
         };
-        let Some(document) = pane.preview.document().filter(|doc| doc.review.is_none()) else {
+        let Some(document) = pane
+            .preview
+            .document()
+            .filter(|document| matches!(document.body, Body::Text { .. }))
+        else {
             return false;
         };
         let owner = pane.identity;
@@ -539,12 +550,12 @@ impl CockpitView {
             return;
         };
         let changed = if renders_markdown(&document) {
-            let text = gpui::base::text::TextView::markdown_find_text(&document.source);
+            let text = gpui::base::text::TextView::markdown_find_text(document.source());
             find.bar.search([text.as_str()], 0, cx)
         } else {
             let top = -pane.reader_scroll.0.borrow().base_handle.offset().y;
             let from = (f32::from(top) / crate::theme::LH_UI) as usize;
-            find.bar.search(document.source.lines(), from, cx)
+            find.bar.search(document.source().lines(), from, cx)
         };
         if changed {
             reveal_in_reader(pane, &document, true);
@@ -607,6 +618,16 @@ impl CockpitView {
         }
     }
 
+    /// ← → in an image beside `owner`'s Pane: the next or the previous of
+    /// the images it was opened among.
+    fn step_image(&mut self, owner: PaneIdentity, by: isize, cx: &mut Context<Self>) {
+        if let Some(index) = self.index_of(owner) {
+            if self.panes[index].preview.step_image(by, cx) {
+                cx.notify();
+            }
+        }
+    }
+
     /// Close the reader beside `index` (escape in it, ⌘W while it holds
     /// focus): its slot closes and the board is as it was.
     pub(super) fn close_reader(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -621,8 +642,8 @@ impl CockpitView {
     /// (`Preview::reader` — its head the path in `LINK_INK` and `:line` dim,
     /// or `review · dev`, the slot's drag handle) over the body: the file's
     /// numbered lines in syntax colour with the target line marked,
-    /// rendered Markdown, or the review. A press lands on the Pane that
-    /// opened it; escape closes it.
+    /// rendered Markdown, the review, or the image viewer. A press lands on
+    /// the Pane that opened it; escape closes it.
     pub(super) fn reader_cell(
         &self,
         owner: PaneIdentity,
@@ -639,9 +660,10 @@ impl CockpitView {
             reader: true,
             size: self.slot_size(leaf),
         };
-        let body = match &document.review {
-            Some(review) => review.clone().into_any_element(),
-            None if renders_markdown(&document) => {
+        let body = match &document.body {
+            Body::Review(review) => review.clone().into_any_element(),
+            Body::Image { viewer, .. } => viewer.clone().into_any_element(),
+            Body::Text { .. } if renders_markdown(&document) => {
                 pane.document_rich
                     .file_context(document.path.parent(), &pane.preview);
                 let marks = find.and_then(|find| find.bar.marks(0));
@@ -661,7 +683,7 @@ impl CockpitView {
                     ))
                     .into_any_element()
             }
-            None => numbered_lines(
+            Body::Text { .. } => numbered_lines(
                 leaf,
                 &document,
                 pane.reader_scroll.clone(),
@@ -704,6 +726,23 @@ impl CockpitView {
                     view.close_reader(index, cx);
                 }
             }))
+            .on_action(
+                cx.listener(move |view, _: &crate::image_viewer::Close, _, cx| {
+                    if let Some(index) = view.index_of(owner) {
+                        view.close_reader(index, cx);
+                    }
+                }),
+            )
+            .on_action(
+                cx.listener(move |view, _: &crate::image_viewer::Next, _, cx| {
+                    view.step_image(owner, 1, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(move |view, _: &crate::image_viewer::Previous, _, cx| {
+                    view.step_image(owner, -1, cx)
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -715,12 +754,16 @@ impl CockpitView {
                 }),
             );
         // The reader settles in from its Pane's side each time a document
-        // opens in it (keyed by the document, so a new one replays).
+        // opens in it (keyed by the document, so a new one replays) — but
+        // not for an image swapping for another, which the viewer
+        // crossfades in place.
         let key = {
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
-            document.path.hash(&mut hash);
-            document.line.hash(&mut hash);
+            if !matches!(document.body, Body::Image { .. }) {
+                document.path.hash(&mut hash);
+            }
+            document.line().hash(&mut hash);
             hash.finish()
         };
         let reader = div().size_full().flex().child(crate::motion::slot_in(
@@ -746,9 +789,9 @@ fn numbered_lines(
 ) -> AnyElement {
     use crate::theme::*;
     let lines: std::rc::Rc<Vec<String>> =
-        std::rc::Rc::new(document.source.lines().map(str::to_string).collect());
+        std::rc::Rc::new(document.source().lines().map(str::to_string).collect());
     let language = ferrite_core::transcript::language_for_path(&document.path);
-    let target = document.line;
+    let target = document.line();
     let count = lines.len();
     // A find's occurrences: its query, and the line and ordinal it is on.
     let find = find.map(|find| {

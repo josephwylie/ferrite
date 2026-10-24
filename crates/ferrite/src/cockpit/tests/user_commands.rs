@@ -77,7 +77,7 @@ fn a_user_command_runs_for_the_focused_thread_into_the_reader(cx: &mut TestAppCo
     assert_eq!(document.title, "where");
     assert_eq!(document.kind(), "LOG");
     let pwd = std::fs::canonicalize(&cwd).unwrap();
-    assert_eq!(document.source, format!("{}\n{thread}", pwd.display()));
+    assert_eq!(document.source(), format!("{}\n{thread}", pwd.display()));
 }
 
 /// `reset keys` shows only while the operator has keys of their own, and

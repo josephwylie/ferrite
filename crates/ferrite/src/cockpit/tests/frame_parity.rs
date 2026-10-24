@@ -553,7 +553,7 @@ fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
     let (line, half) = cx.update(|window, cx| {
         let view = view.read(cx);
         (
-            view.panes[0].preview.document().and_then(|doc| doc.line),
+            view.panes[0].preview.document().and_then(|doc| doc.line()),
             view.pane_rects(window)[0].1.w,
         )
     });

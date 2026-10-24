@@ -4957,6 +4957,12 @@ pub(crate) fn prompt_row(
     let grid = row_cx.grid();
     let pinned = preview_lines.is_some();
     let (text, files) = prompt_text(line);
+    // The images a chip or a picture opens among: ← → step through them.
+    let gallery: std::sync::Arc<[std::path::PathBuf]> = files
+        .iter()
+        .filter(|path| crate::image_viewer::is_image(path))
+        .cloned()
+        .collect();
     // The chips close the prompt; their line stands taller, as the
     // prototype's inline chip makes it.
     let chip_line = if files.is_empty() {
@@ -4989,7 +4995,7 @@ pub(crate) fn prompt_row(
                 row_cx.rich.clone(),
             )
             .ink(TEXT_STRONG)
-            .chips(row_cx.preview.clone())
+            .chips(row_cx.preview.clone(), gallery.clone())
             .into_any_element(),
         ),
         PromptText::Markdown(source) => Some(
@@ -4997,7 +5003,7 @@ pub(crate) fn prompt_row(
                 .selection
                 .markdown(block.id, source)
                 .ink(TEXT_STRONG)
-                .chips(row_cx.preview.clone())
+                .chips(row_cx.preview.clone(), gallery.clone())
                 .into_any_element(),
         ),
     };
@@ -5056,11 +5062,10 @@ pub(crate) fn prompt_row(
     if pinned {
         return band.into_any_element();
     }
-    let images: Vec<_> = files
+    let images: Vec<_> = gallery
         .iter()
         .enumerate()
-        .filter(|(_, path)| is_image(path))
-        .map(|(index, path)| inline_image(block.id, index, path, row_cx.preview, grid))
+        .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview, grid))
         .collect();
     if images.is_empty() {
         return band.into_any_element();
@@ -5086,28 +5091,17 @@ pub(crate) fn prompt_row(
         .into_any_element()
 }
 
-/// Whether a file is an image gpui can draw.
-fn is_image(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str()))
-}
-
-/// Open a sent file: an image in the Pane's preview, anything else with the
-/// system.
+/// Open a sent file: an image in the reader beside the Pane, stepping among
+/// its prompt's `gallery`; anything else with the system.
 fn open_file(
     path: &std::path::Path,
+    gallery: &[std::path::PathBuf],
     preview: &crate::attachment_preview::Preview,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    if is_image(path) {
-        preview.open(path.to_path_buf(), name, window, cx);
+    if crate::image_viewer::is_image(path) {
+        preview.open_image(path.to_path_buf(), gallery, window, cx);
     } else {
         crate::file_links::FileLink {
             path: path.to_path_buf(),
@@ -5120,12 +5114,14 @@ fn open_file(
 /// A prompt's file as its band's inline chip (SPEC §5.4): the 12px image
 /// mark (or the file mark), a cell, the name, all `TEXT_STRONG`, on
 /// `paint::RAISED` at `R_INLINE` with a cell of padding each side. A click opens it (an
-/// image in the Pane's preview). Sized for the Markdown flow that places
-/// it: monospace cells at the size it is drawn in.
+/// image in the reader beside the Pane, among its prompt's `gallery`).
+/// Sized for the Markdown flow that places it: monospace cells at the size
+/// it is drawn in.
 pub(crate) fn prompt_chip(
     path: std::path::PathBuf,
     label: &str,
-    preview: Option<&crate::attachment_preview::Preview>,
+    preview: &crate::attachment_preview::Preview,
+    gallery: &std::sync::Arc<[std::path::PathBuf]>,
     window: &mut gpui::Window,
     _cx: &mut gpui::App,
 ) -> (gpui::Size<gpui::Pixels>, AnyElement) {
@@ -5133,8 +5129,9 @@ pub(crate) fn prompt_chip(
     let cell = theme::tx_cell(size);
     let line = window.line_height();
     let width = 3.0 * cell + theme::GLYPH_BOX + label.chars().count() as f32 * cell;
-    let image = is_image(&path);
-    let host = preview.cloned();
+    let image = crate::image_viewer::is_image(&path);
+    let host = preview.clone();
+    let gallery = gallery.clone();
     let open = path.clone();
     let element = div()
         .id(SharedString::from(format!(
@@ -5172,14 +5169,7 @@ pub(crate) fn prompt_chip(
         )
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
-            match &host {
-                Some(host) => open_file(&open, host, window, cx),
-                None => crate::file_links::FileLink {
-                    path: open.clone(),
-                    location: None,
-                }
-                .open(window, cx),
-            }
+            open_file(&open, &gallery, &host, window, cx);
         });
     (gpui::size(px(width), line), element.into_any_element())
 }
@@ -5188,11 +5178,13 @@ pub(crate) fn prompt_chip(
 /// frame `IMAGE_CELLS` wide at the reading size, its 1px `paint::LINE2`
 /// border included (374.4px at Standard, drawn 374), the picture filling
 /// it at its own proportions; under it `name · W×H · 41 KB`, all of it
-/// `TEXT_DIM`. A click opens the preview.
+/// `TEXT_DIM`. A click opens it in the reader beside the Pane, among its
+/// prompt's `gallery`.
 fn inline_image(
     block: BlockId,
     index: usize,
     path: &std::path::Path,
+    gallery: &std::sync::Arc<[std::path::PathBuf]>,
     preview: &crate::attachment_preview::Preview,
     grid: Grid,
 ) -> AnyElement {
@@ -5219,6 +5211,7 @@ fn inline_image(
     .floor();
     let caption = image_caption(&name, facts);
     let host = preview.clone();
+    let gallery = gallery.clone();
     let open = path.to_path_buf();
     div()
         .id(SharedString::from(format!("sent-image-{block:?}-{index}")))
@@ -5229,7 +5222,7 @@ fn inline_image(
         .cursor_pointer()
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
-            open_file(&open, &host, window, cx);
+            open_file(&open, &gallery, &host, window, cx);
         })
         .child(
             div()

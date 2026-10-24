@@ -389,8 +389,11 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
         .read_with(cx, |view, _| view.panes[0].preview.document())
         .expect("the reader replaces the review");
     assert!(document.path.ends_with("src/nav.rs"), "{:?}", document.path);
-    assert_eq!(document.line, Some(2), "the removed line's old number");
-    assert!(document.review.is_none());
+    assert_eq!(document.line(), Some(2), "the removed line's old number");
+    assert!(matches!(
+        document.body,
+        crate::attachment_preview::Body::Text { .. }
+    ));
 }
 
 /// A turn snapshots its checkout as it begins, reviewed or not (the

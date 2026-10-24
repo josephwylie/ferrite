@@ -10111,17 +10111,16 @@ impl CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
-            // A review beside the focused Pane keeps the keyboard it took,
-            // from its first frame (its comment field's too).
+            // A review or an image beside the focused Pane keeps the
+            // keyboard it took, from its first frame (a review's comment
+            // field's too).
             .or_else(|| {
                 self.panes
                     .get(self.focused())
-                    .and_then(|pane| pane.preview.review())
-                    .and_then(|review| review.read(cx).held_focus(window, cx))
+                    .and_then(|pane| pane.preview.held_focus(window, cx))
             })
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
-                    _ if pane.preview.focus_target().is_some() => pane.preview.focus_target(),
                     // A parked member's tile draws no Composer: the root holds
                     // the keyboard, where ⏎ wakes it (F-8).
                     _ if pane
@@ -10634,7 +10633,6 @@ impl CockpitView {
         if self.settings_open || self.project_editor.is_some() {
             return content;
         }
-        let content = self.panes[index].preview.mount(content);
         if !self.panes[index].is_main() {
             return content;
         }
@@ -14128,6 +14126,7 @@ mod tests {
     mod find;
     mod floats_parity;
     mod frame_parity;
+    mod image_viewer;
     mod interaction_regressions;
     mod layout_polish;
     mod leaving;
@@ -24009,10 +24008,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The image viewer's head opens the original with the OS by its
+    /// canonical file URL, leaving the viewer open and sending nothing;
+    /// esc then closes the slot.
     #[gpui::test]
-    fn image_preview_opens_the_canonical_original_without_sending_or_closing(
-        cx: &mut TestAppContext,
-    ) {
+    fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("open-original-image", 1);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -24027,12 +24027,12 @@ mod tests {
         view.update_in(cx, |view, window, cx| {
             view.panes[0]
                 .preview
-                .open(unresolved, "Screenshot".into(), window, cx);
+                .open_image(unresolved, &[], window, cx);
         });
         tick(cx);
         let open = cx
-            .debug_bounds("open-original-attachment")
-            .expect("the preview exposes its original image");
+            .debug_bounds("open-original-image")
+            .expect("the viewer's head offers the original");
         cx.simulate_click(open.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         let opened =
@@ -24047,10 +24047,16 @@ mod tests {
             fake.sent.borrow().is_empty(),
             "inspection never submits a prompt"
         );
-        assert!(cx.debug_bounds("attachment-preview-content").is_some());
+        assert!(cx.debug_bounds("image-viewer").is_some());
         cx.simulate_keystrokes("escape");
         tick(cx);
-        assert!(cx.debug_bounds("attachment-preview-content").is_none());
+        assert!(cx.debug_bounds("image-viewer").is_none());
+        assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            0,
+            "esc closed the image, not the turn"
+        );
     }
 
     #[gpui::test]
@@ -24135,14 +24141,14 @@ mod tests {
                 "the attachment island stays above the editable prompt"
             );
             // The thumbnail overlay and card share a hit area: one click must
-            // open one preview, so one Escape must dismiss it completely.
+            // open one image, so one Escape must close it completely.
             let island = cx.debug_bounds("attachment-island-content").unwrap();
             cx.simulate_click(
                 island.origin + gpui::point(px(24.), island.size.height / 2.),
                 gpui::Modifiers::none(),
             );
             tick(cx);
-            let popup = cx.debug_bounds("attachment-preview-content").unwrap();
+            let viewer = cx.debug_bounds("image-viewer").unwrap();
             let owner = cx.update(|window, cx| {
                 let view = view.read(cx);
                 view.pane_rects(window)
@@ -24151,14 +24157,15 @@ mod tests {
                     .unwrap()
                     .1
             });
-            assert!((popup.center().x - px(owner.x + owner.w / 2.)).abs() <= px(2.));
-            assert!((popup.center().y - px(owner.y + owner.h / 2.)).abs() <= px(2.));
-            assert!(popup.size.width < px(owner.w) && popup.size.height < px(owner.h));
+            assert!(
+                viewer.left() >= px(owner.x + owner.w),
+                "the image opens in the reader beside its Pane: {viewer:?} / {owner:?}"
+            );
             cx.simulate_keystrokes("escape");
             tick(cx);
             assert!(
-                cx.debug_bounds("attachment-preview-content").is_none(),
-                "one Escape dismisses the only preview"
+                cx.debug_bounds("image-viewer").is_none(),
+                "one Escape closes the only image"
             );
             cx.simulate_click(editor.center(), gpui::Modifiers::none());
             tick(cx);
@@ -24186,26 +24193,31 @@ mod tests {
                 keystroke: gpui::Keystroke::parse("enter").unwrap(),
             });
             tick(cx);
-            let popup = cx
-                .debug_bounds("attachment-preview-content")
-                .expect("keyboard image preview");
-            assert!(fake.sent.borrow().len() == n, "preview never submits");
+            let viewer = cx
+                .debug_bounds("image-viewer")
+                .expect("an image opened from the keyboard");
+            assert!(
+                fake.sent.borrow().len() == n,
+                "opening an image never submits"
+            );
             cx.simulate_resize(gpui::size(px(1000.), px(480.)));
             tick(cx);
             tick(cx);
-            let smaller = cx.debug_bounds("attachment-preview-content").unwrap();
+            let smaller = cx.debug_bounds("image-viewer").unwrap();
             assert!(
-                smaller.size.width < popup.size.width && smaller.size.height < popup.size.height,
-                "preview resizes with its pane: {popup:?} -> {smaller:?}"
+                smaller.size.height < viewer.size.height,
+                "the image's slot resizes with the board: {viewer:?} -> {smaller:?}"
             );
             cx.simulate_keystrokes("escape");
             tick(cx);
-            assert!(cx.debug_bounds("attachment-preview-content").is_none());
+            assert!(cx.debug_bounds("image-viewer").is_none());
             cx.simulate_resize(gpui::size(px(1200.), px(700.)));
             tick(cx);
             cx.executor().advance_clock(Duration::from_millis(300));
             cx.run_until_parked();
-            cx.simulate_keystrokes("tab tab");
+            // Esc handed the keyboard back to the Composer: past the
+            // image's two controls to the other file's ×.
+            cx.simulate_keystrokes("tab tab tab");
             tick(cx);
             cx.simulate_keystrokes("space");
             cx.simulate_event(gpui::KeyUpEvent {
@@ -24222,8 +24234,8 @@ mod tests {
                 );
             });
             assert!(
-                cx.debug_bounds("attachment-preview-content").is_none(),
-                "closed preview leaves no hitbox"
+                cx.debug_bounds("image-viewer").is_none(),
+                "a closed image leaves no hitbox"
             );
             // A repeated drop restores the removed file and deduplicates the image.
             cx.simulate_event(gpui::FileDropEvent::Entered {
