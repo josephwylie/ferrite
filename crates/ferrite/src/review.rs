@@ -247,11 +247,13 @@ impl SearchPanel {
             path: hit.path.clone(),
             line: None,
             text: None,
+            matched: spans(&hit.path, &hit.spans),
         });
         let code = results.code.iter().map(|hit| Found {
             path: hit.path.clone(),
             line: Some(hit.line),
             text: Some(hit.text.clone()),
+            matched: spans(&hit.text, &hit.spans),
         });
         files.chain(code).collect()
     }
@@ -301,6 +303,23 @@ struct Found {
     path: String,
     line: Option<u64>,
     text: Option<String>,
+    /// What the engine matched: in the line's words for a line, else in
+    /// the path.
+    matched: Vec<Range<usize>>,
+}
+
+/// The engine's byte spans into `text` as ranges, any that do not fall on
+/// its characters dropped.
+fn spans(text: &str, spans: &[(u32, u32)]) -> Vec<Range<usize>> {
+    spans
+        .iter()
+        .map(|&(start, end)| start as usize..end as usize)
+        .filter(|range| {
+            range.start < range.end
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end)
+        })
+        .collect()
 }
 
 /// One drawn child of the rows' list: a row (its index in `lines`), a
@@ -1976,18 +1995,36 @@ impl ReviewView {
                                         .truncate()
                                         .text_ellipsis_start()
                                         .text_color(rgb(LINK_INK))
-                                        .child(SharedString::from(match found.line {
-                                            Some(line) => format!("{}:{line}", found.path),
-                                            None => found.path.clone(),
-                                        })),
+                                        .child({
+                                            let path = match found.line {
+                                                Some(line) => format!("{}:{line}", found.path),
+                                                None => found.path.clone(),
+                                            };
+                                            let marks = match found.text {
+                                                Some(_) => Vec::new(),
+                                                None => crate::components::match_highlights(
+                                                    &found.matched,
+                                                    false,
+                                                ),
+                                            };
+                                            StyledText::new(SharedString::from(path))
+                                                .with_highlights(marks)
+                                        }),
                                 )
+                                // The matched words in the face every
+                                // filtering float marks its matches in.
                                 .children(found.text.map(|text| {
+                                    let marks =
+                                        crate::components::match_highlights(&found.matched, false);
                                     div()
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
                                         .text_color(rgb(TEXT))
-                                        .child(SharedString::from(text))
+                                        .child(
+                                            StyledText::new(SharedString::from(text))
+                                                .with_highlights(marks),
+                                        )
                                 }))
                                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                                     view.open_found(index, window, cx);
