@@ -209,6 +209,20 @@ blocked Threads oldest-first (the queue ⌘D walks), then the Notices under
 replaced the bell's list.
 _Avoid_: bell, inbox, needs-you strip (the strip in the tree is gone).
 
+**Attention list**
+The nav's always-on list, over `Projects`, of the Threads in flight by
+their Attention: `Needs you` (blocked, oldest request first), `Done` (a
+Notice not yet seen, newest first) and `Working` (creation order). Each
+row is one line. A section with no rows is not drawn, and each section
+folds to its head and count. The list is herdr's Agents panel without the
+idle Threads; the tree below still lists every Thread. A row never leaves
+from under the operator: the focused Thread keeps its section while its
+state would take it out of the list, so a done Thread opened from it
+stays under `Done`, read. It leaves when focus moves to another Thread.
+That hold is the nav's; the Notice is read as soon as it is seen.
+_Avoid_: smart filtering (the setting it replaced), agents panel
+(herdr's), queue (that is ⌘D's).
+
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its
 first prompt creates a Thread. It has no durable history or Session.
