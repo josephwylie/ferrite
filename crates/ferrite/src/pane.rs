@@ -1120,10 +1120,7 @@ pub(crate) fn working_line(
             view.thread().map_or(0, |thread| thread.get()),
         )
     } else if facts.starting {
-        starting_line(
-            facts.reduce_motion || !focused,
-            provider_ink(facts.provider),
-        )
+        starting_line(facts.reduce_motion || !focused, solo)
     } else {
         return None;
     };
@@ -1148,9 +1145,11 @@ pub(crate) fn working_line(
 /// The working line's shape while a Session starts: nothing the provider
 /// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
 /// the focused Pane, assembled and still elsewhere and under reduced motion
-/// — and `Starting` in `TEXT_DIM`. Its element id is a constant: the
-/// timeline has to survive every re-render of the line.
-fn starting_line(still: bool, _ink: u32) -> Div {
+/// — and `Starting` in `TEXT_DIM`, on the working line's own grid (Solo's
+/// or a Group Pane's), so the line never shifts when the turn's words
+/// replace it. Its element id is a constant: the timeline has to survive
+/// every re-render of the line.
+fn starting_line(still: bool, solo: bool) -> Div {
     let mark = if still {
         div()
             .debug_selector(|| "starting-mark-still".into())
@@ -1165,23 +1164,24 @@ fn starting_line(still: bool, _ink: u32) -> Div {
             ))
             .into_any_element()
     };
+    let grid = Grid::pane(Default::default(), solo);
     div()
         .debug_selector(|| "transcript-starting".into())
         .flex()
         .items_center()
         .w_full()
         .min_w_0()
-        .h(px(theme::LH_UI))
+        .h(px(grid.line))
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
+        .text_size(px(grid.size))
+        .line_height(px(grid.line))
         .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .w(px(theme::GLYPH_GUTTER))
+                .w(px(grid.gutter()))
                 .child(mark),
         )
         .child(div().min_w_0().truncate().child("Starting"))
@@ -8322,6 +8322,48 @@ mod tests {
             assert!(
                 interrupt.left() >= metadata.right(),
                 "`esc to interrupt` closes the line, after its facts"
+            );
+        }
+    }
+
+    struct StartingAndWorking(Transcript);
+
+    impl Render for StartingAndWorking {
+        fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+            let line = |selector: &'static str, line: Div| {
+                div().debug_selector(move || selector.into()).child(line)
+            };
+            let working =
+                |solo| working_line_for(&self.0, false, solo, false, false, true, None, 0);
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(line("solo-starting", starting_line(true, true)))
+                .child(line("solo-working", working(true)))
+                .child(line("group-starting", starting_line(true, false)))
+                .child(line("group-working", working(false)))
+        }
+    }
+
+    /// `Starting` holds the working line's own row, Solo's and a Group
+    /// Pane's, so the line never moves when the turn's words replace it.
+    #[gpui::test]
+    fn the_starting_line_stands_on_the_working_line_grid(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            StartingAndWorking(Transcript::default())
+        });
+        cx.simulate_resize(size(px(640.), px(400.)));
+        cx.run_until_parked();
+        for (starting, working) in [
+            ("solo-starting", "solo-working"),
+            ("group-starting", "group-working"),
+        ] {
+            assert_eq!(
+                cx.debug_bounds(starting).unwrap().size.height,
+                cx.debug_bounds(working).unwrap().size.height,
+                "{starting} is {working}'s height"
             );
         }
     }
