@@ -1629,13 +1629,7 @@ impl ReviewView {
                     .bg(paint::RAISED)
                     // The field holding the keyboard wears the focus ring,
                     // so it never reads as a comment already made.
-                    .when(self.editor_focused, |field| {
-                        field.map(|mut field| {
-                            let style = std::mem::take(field.style());
-                            *field.style() = crate::components::control_focus(style);
-                            field
-                        })
-                    })
+                    .map(|field| crate::components::focused(field, self.editor_focused))
                     .child(div().min_w_0().flex_1().child(editor.clone()))
                     .child(
                         verb("review-comment-save", "\u{21b5} add").on_click(cx.listener(
