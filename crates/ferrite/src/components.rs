@@ -50,7 +50,8 @@ pub fn control_focus(style: StyleRefinement) -> StyleRefinement {
 fn focus_outline(style: StyleRefinement, ink: u32) -> StyleRefinement {
     style.shadow(vec![BoxShadow {
         inset: true,
-        color: rgb(ink).into(),
+        // The ring's inks carry their alpha (`FOCUS_RING`, white at 22%).
+        color: rgba(ink).into(),
         offset: point(px(0.), px(0.)),
         blur_radius: px(0.),
         spread_radius: px(theme::FOCUS_RING_W),
@@ -1974,7 +1975,7 @@ mod tests {
         let focus = control_focus(StyleRefinement::default());
         let shadow = &focus.box_shadow.clone().expect("an inset outline")[0];
         assert!(shadow.inset);
-        assert_eq!(shadow.color, solid(theme::FOCUS_RING));
+        assert_eq!(shadow.color, rgba(theme::FOCUS_RING).into());
         assert_eq!(shadow.spread_radius, px(theme::FOCUS_RING_W));
         assert_eq!(theme::FOCUS_RING_W, 1.);
         let mut ringed = focused(div(), true);
