@@ -136,8 +136,6 @@ pub(crate) enum Command {
     TextReset,
     ShowThinking,
     HideThinking,
-    SmartFilteringOn,
-    SmartFilteringOff,
     Notifications,
     Shortcuts,
     NextRequest,

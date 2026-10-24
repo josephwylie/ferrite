@@ -445,6 +445,7 @@ const STATES: &[(&str, &[&str])] = &[
 
     // ---- WP-G states (append above the end line)
     ("navrail", &["app"]),
+    ("navlist", &["app"]),
     ("palettefilter", &["app"]),
     // (end WP-G)
 
@@ -1037,6 +1038,24 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {
                 view.set_nav_collapsed(true, cx);
+            });
+            (scene, setup)
+        }
+        // The Attention list with all three sections, and a done Thread
+        // the operator just opened from it: read, and still under `Done`
+        // while it is the focused Thread.
+        "navlist" => {
+            let (scene, branches) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                branches(view, window, cx);
+                view.attention_list(&view.nav_state());
+                let notes = view
+                    .cockpit
+                    .threads()
+                    .into_iter()
+                    .find(|thread| view.facts.name(*thread).as_ref() == "Release notes 0.9")
+                    .expect("the fixture's done Thread");
+                view.land_on_thread(notes, cx);
             });
             (scene, setup)
         }

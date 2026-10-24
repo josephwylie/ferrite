@@ -1,10 +1,11 @@
 //! The left navigation column (SPEC §5.1, `mockups/solo.png`): the head
 //! (the traffic lights' spacer and the sidebar toggle), the views (`Search`,
-//! `Needs you`, `Parked`, `Tasks`, and smart filtering's `Working` and
-//! `Done`), the tree — one section per Project, its loose Threads and its
-//! Groups, each Group's members hanging under it — and the foot (`Ferrite
-//! 0.5` and the gear). A view other than the tree shows its list in the
-//! tree's place; Esc or a click on the active view returns to the tree.
+//! `Needs you`, `Parked`, `Tasks`), the Attention list — the Threads that
+//! need the operator, finished unseen or work, one line each — the tree —
+//! one section per Project, its loose Threads and its Groups, each Group's
+//! members hanging under it — and the foot (`Ferrite 0.5` and the gear). A
+//! view other than the tree shows its list in the place of the list and
+//! the tree; Esc or a click on the active view returns to them.
 //! It is a view, never the only door: everything a row does (focus,
 //! revive, regroup) stays reachable from the keyboard and the ⌘K palette.
 //!
@@ -28,8 +29,8 @@
 //! under the Group (`RowPlace`), each level with a hairline guide down its
 //! left, which each row draws down its own height (`guides`) so a fill
 //! can take its stretch away. Only content moves in; the fills keep the
-//! width. The Parked, Working and Done views group their rows the same way
-//! (`ViewSection`); the Needs-you queue stays flat.
+//! width. The Parked view groups its rows the same way (`ViewSection`);
+//! the Needs-you queue and the Attention list stay flat.
 //!
 //! Colour is state (ADR 0033): the mark, a blocked or failed row's line 2,
 //! a Group's roll-up word, the needs-you pill. One thing moves: a working
@@ -83,8 +84,8 @@ pub(crate) const DOOR_HOVER: MotionSpec = MotionSpec::new(MOTION_NAV_DOOR_MS, mo
 pub(crate) const CONTENT_FADE: MotionSpec = MotionSpec::new(MOTION_NAV_FADE_MS, motion::EASE);
 
 /// What a fold in the nav holds shut (N-4): a Project section shut to its
-/// heading, the Groups section, or a Group shut to its row (its count
-/// kept). Held in memory by the cockpit (`CockpitView::set_nav_fold`), so
+/// heading, the Groups section, a Group shut to its row (its count kept),
+/// or a section of the Attention list shut to its head and count. Held in memory by the cockpit (`CockpitView::set_nav_fold`), so
 /// a fold survives every re-render and view switch; opening a folded Group
 /// never unfolds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -93,6 +94,8 @@ pub(crate) enum NavFold {
     /// The Groups section: the Groups that span Projects.
     Groups,
     Group(GroupId),
+    /// A section of the Attention list, shut to its head and count.
+    List(ListSection),
 }
 
 /// What the nav shows under its views (§5.1.2): the tree, or one view's
@@ -106,18 +109,12 @@ pub enum NavView {
     NeedsYou,
     /// The parked Threads no Group claims.
     Parked,
-    /// Smart filtering's working Threads.
-    Working,
-    /// Smart filtering's Threads that finished unseen.
-    Done,
 }
 
 /// What the nav draws this frame: the Project sections and the views'
 /// lists. Nothing here is a store read — the cockpit assembles it from
 /// O(1) reads plus its project/branch caches.
 pub struct NavState {
-    /// Smart filtering's lists, or `None` while it is off.
-    pub smart: Option<SmartSections>,
     /// One section per Project with a row to show, in creation order, then
     /// `Other` for Threads whose Project cannot be read.
     pub sections: Vec<ProjectSection>,
@@ -254,21 +251,79 @@ impl RollUp {
     }
 }
 
-/// Smart filtering (`Settings::smart_filtering`): two lists, each a view.
-/// Each row is a reference to the Thread — its own row stays in the tree.
+/// The Attention list (§5.1.2, ADR 0015's 2026-10-24 amendment): above
+/// `Projects`, always on, the Threads in flight by their Attention — herdr's
+/// Agents panel, minus the idle Threads the tree already lists. Each row is
+/// a reference to the Thread; its own row stays in the tree, which carries
+/// no queue. Only the sections with a row are here, in `ListSection::ALL`'s
+/// order; none at all and the list is gone.
 #[derive(Clone, Default)]
-pub struct SmartSections {
-    /// Threads that finished unseen (`RowStatus::Done`). Seeing one reads
-    /// it, and it leaves.
-    pub done: Vec<ThreadRow>,
-    /// Threads whose Main or a Subagent is working right now.
-    pub working: Vec<ThreadRow>,
+pub struct AttentionList {
+    pub sections: Vec<ListBlock>,
+}
+
+/// One section of the Attention list: its head (its label and its count)
+/// and, unless it is folded to that head, its rows.
+#[derive(Clone)]
+pub struct ListBlock {
+    pub section: ListSection,
+    pub rows: Vec<ThreadRow>,
+    pub folded: bool,
+}
+
+/// The Attention list's sections, most urgent first: `Needs you`
+/// (Attention::Blocked, oldest request first — ⌘D's order), `Done` (a
+/// finish not yet seen, newest first) and `Working` (Main, a failing
+/// suite, or only Subagents and background tasks at work; creation order,
+/// so rows never shuffle under the pointer). Idle has none: the tree lists
+/// every Thread. Failed has none either: it ranks as idle (ADR 0015).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ListSection {
+    NeedsYou,
+    Done,
+    Working,
+}
+
+impl ListSection {
+    pub const ALL: [ListSection; 3] = [
+        ListSection::NeedsYou,
+        ListSection::Done,
+        ListSection::Working,
+    ];
+
+    /// The section a Thread in this state is listed under, if any.
+    pub fn of(attention: Attention) -> Option<Self> {
+        match attention {
+            Attention::Blocked => Some(ListSection::NeedsYou),
+            Attention::Done => Some(ListSection::Done),
+            Attention::Working => Some(ListSection::Working),
+            Attention::Idle => None,
+        }
+    }
+
+    /// Its head's label, in the section-head grammar (`Projects`).
+    pub fn label(self) -> &'static str {
+        match self {
+            ListSection::NeedsYou => "Needs you",
+            ListSection::Done => "Done",
+            ListSection::Working => "Working",
+        }
+    }
+
+    /// Its head's selector.
+    pub fn key(self) -> &'static str {
+        match self {
+            ListSection::NeedsYou => "nav-list-needs-you",
+            ListSection::Done => "nav-list-done",
+            ListSection::Working => "nav-list-working",
+        }
+    }
 }
 
 /// One Project's run of a view's list (§5.1.2), drawn as the tree draws
 /// it: a plain heading, the rows no Group claims, then each home Group its
-/// rows share, its members under it. The Parked, Working and Done views
-/// list their rows so; the Needs-you view keeps its queue's order, flat.
+/// rows share, its members under it. The Parked view lists its rows so;
+/// the Needs-you view keeps its queue's order, flat.
 #[derive(Clone)]
 pub struct ViewSection {
     pub label: SharedString,
@@ -533,6 +588,25 @@ impl NavTail {
     }
 }
 
+/// What an Attention list row says at its right (`RowPlace::Line`): its
+/// line 2 in a word, the section's own word left unsaid — what a request
+/// waits for (`approval`), a failing suite, a working Thread's elapsed
+/// time, `background`, and for a finish (or a row the list holds while
+/// the operator is on it) how long ago it was last used — each in the ink
+/// line 2 gives it.
+pub fn line_word(row: &ThreadRow) -> Option<(SharedString, u32)> {
+    let ink = match row.tail {
+        NavTail::Waiting(_) => ATTENTION,
+        NavTail::Failing(_) | NavTail::Failed => BLOCKED,
+        _ => TEXT_DIM,
+    };
+    let text = match &row.tail {
+        NavTail::Done | NavTail::None => Some(row.age.clone()).filter(|age| !age.is_empty()),
+        tail => tail.text(),
+    };
+    text.map(|text| (text, ink))
+}
+
 /// A Thread's state, for its mark, least urgent first: the order a
 /// roll-up takes its `max` in, consistent with `Attention`. Every surface
 /// reads a Thread's state as one of these (`RowStatus::of`) and draws it
@@ -606,12 +680,15 @@ impl RowStatus {
 /// level: `Row(depth)` is its two-line row `depth` levels in — 0 in a flat
 /// list (the Needs-you view), 1 inside a Project, 2 under a Group inside a
 /// Project — and `Member(depth)` a one-line member of the shown Group
-/// whose own row is `depth` levels in. Only the content moves in: the
-/// row's fills keep the column's width.
+/// whose own row is `depth` levels in. `Line` is the Attention list's
+/// one-line row at the root: a two-line row's mark and title, and at its
+/// right what its line 2 would say in a word (`line_word`). Only the
+/// content moves in: the row's fills keep the column's width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowPlace {
     Row(usize),
     Member(usize),
+    Line,
 }
 
 impl RowPlace {
@@ -624,6 +701,7 @@ impl RowPlace {
         match self {
             RowPlace::Row(depth) => depth,
             RowPlace::Member(depth) => depth + 1,
+            RowPlace::Line => 0,
         }
     }
 
@@ -631,6 +709,7 @@ impl RowPlace {
     fn indent(self) -> f32 {
         match self {
             RowPlace::Row(depth) | RowPlace::Member(depth) => indent(depth),
+            RowPlace::Line => 0.0,
         }
     }
 
@@ -638,7 +717,7 @@ impl RowPlace {
     fn mark_x(self) -> f32 {
         self.indent()
             + match self {
-                RowPlace::Row(_) => NAV_ROW_PAD_X,
+                RowPlace::Row(_) | RowPlace::Line => NAV_ROW_PAD_X,
                 RowPlace::Member(_) => NAV_TITLE_X - 1.0,
             }
     }
@@ -647,7 +726,7 @@ impl RowPlace {
     fn title_x(self) -> f32 {
         self.indent()
             + match self {
-                RowPlace::Row(_) => NAV_TITLE_X,
+                RowPlace::Row(_) | RowPlace::Line => NAV_TITLE_X,
                 RowPlace::Member(_) => NAV_MEMBER_X,
             }
     }
@@ -1748,6 +1827,9 @@ pub fn thread_row_with_title(
     measure: &Measure,
 ) -> Stateful<Div> {
     let thread = row.thread;
+    if place == RowPlace::Line {
+        return line_row(row, title, measure);
+    }
     let key = SharedString::from(format!(
         "nav-thread-{}-{}",
         group.map_or(0, GroupId::get),
@@ -1878,6 +1960,69 @@ pub fn thread_row_with_title(
         .child(line_one)
         .child(line_two)
         .children(extra)
+}
+
+/// An Attention list row (`RowPlace::Line`): the tree row's frame, its
+/// mark and title on one line, and its `line_word` at the right in tabular
+/// figures, so a ticking elapsed time never shuffles. Its own blend and
+/// selectors (`nav-list-row-N`), apart from its tree row's.
+fn line_row(row: &ThreadRow, title: impl IntoElement, measure: &Measure) -> Stateful<Div> {
+    let thread = row.thread;
+    let place = RowPlace::Line;
+    let key = SharedString::from(format!("nav-list-row-{}", thread.get()));
+    let (ink, weight) = title_face(row);
+    let word = line_word(row);
+    let word_w = word.as_ref().map_or(0.0, |(text, _)| {
+        measure.ui(text, FS_META, W_BODY) + NAV_WORD_GAP
+    });
+    row_frame(("nav-list-row", thread.get() as usize), key, row.selected)
+        .debug_selector(move || format!("nav-list-row-{}", thread.get()))
+        .flex_row()
+        .items_center()
+        .h(px(NAV_ROW_H))
+        .pl(px(place.title_x()))
+        .pr(px(NAV_ROW_PAD_X))
+        .child(mark_at(row.status, place.mark_x(), MarkSeat::OneLine))
+        .child(
+            fitted(place.text_w() - word_w, FS_UI, ink, weight, title)
+                .debug_selector(move || format!("nav-list-title-{}", thread.get())),
+        )
+        .children(word.map(|(text, ink)| {
+            div()
+                .flex()
+                .flex_1()
+                .justify_end()
+                .debug_selector(move || format!("nav-list-word-{}", thread.get()))
+                .child(components::tabular(trailing(text, FS_META, ink)))
+        }))
+}
+
+/// An Attention list section's head (§5.1.3's grammar: `Projects`,
+/// `Recent`): its label, and at its right how many rows it holds, in
+/// tabular figures — kept while it is folded, the head then all there is.
+/// The cockpit wires its press to the fold.
+pub fn list_heading(section: ListSection, count: usize) -> Stateful<Div> {
+    let key = section.key();
+    div().id(key).child(
+        heading(key, section.label()).child(
+            // At a row's right padding, under the counts and words beside it.
+            components::tabular(trailing(count.to_string(), FS_META, TEXT_DIM))
+                .pr(px(NAV_ROW_PAD_X - NAV_HEADING_PAD_R))
+                .debug_selector(move || format!("{key}-count")),
+        ),
+    )
+}
+
+/// The Attention list: its sections' heads and rows, flush, `NAV_SECTION_GAP`
+/// over what follows it.
+pub fn attention_list(sections: Vec<AnyElement>) -> Div {
+    div()
+        .debug_selector(|| "nav-list".into())
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .mb(px(NAV_SECTION_GAP))
+        .children(sections)
 }
 
 // ------------------------------------------------------- the board's rows

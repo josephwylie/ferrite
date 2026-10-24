@@ -100,3 +100,46 @@ and §6) changes three things here.
   `Recent`. It replaces the bell's list. It is not the strip this ADR
   removed: the tree still carries no queue, and ⌘D still walks
   `Cockpit::needs_you`.
+
+## Amendment (2026-10-24): the Attention list, herdr's Agents panel
+
+herdr's sidebar has two panels, and both are always on screen. Spaces
+lists the projects with their rolled-up state. Agents lists every agent
+with its own state. Ferrite copied the four states, the roll-up and the
+attention sort, but not the Agents panel. Smart filtering then stood in
+for it, first as `done` and `working` sections over the tree (2026-10-06)
+and later as two views behind a setting that was off by default (SPEC
+§5.1.2, 2026-10-21). Neither left a list of what is in flight on screen.
+
+The nav now carries one on purpose. The **Attention list** sits over
+`Projects`, always on, with no setting. It has three sections: `Needs
+you` (blocked, oldest request first, ⌘D's order), `Done` (unseen, newest
+first) and `Working` (creation order, so nothing shuffles under the
+pointer). Each row is one line, and each section folds to its head and
+count. Smart filtering, its setting, its views and its palette commands
+are gone. A settings file that still names `smart_filtering` loads, and
+the key is ignored.
+
+- **The tree still carries no queue.** The list sits over the tree, not in
+  it. Every Thread keeps its own row in its Project, in the tree's order.
+  This is not the Needs-you strip this ADR removed: that strip was a
+  second copy of the tree's yellow rows. The list is the one place where
+  done and working Threads from every Project stand together.
+- **No idle section.** herdr's Agents panel lists idle agents too.
+  Ferrite's tree already lists every Thread, so repeating the idle ones
+  would double the column.
+- **No failed section.** Failed still ranks as idle, as above. It rarely
+  happens, and its row in the tree keeps its red mark.
+- **Board groups do not rank.** A task's own words (`ready to approve`)
+  stay on its row's line 2. The list ranks Threads by their Attention
+  alone.
+- **A finish never leaves from under the operator.** The focused Thread
+  is held under `Done` in two cases. Opening a done Thread reads its
+  Notice, yet its row stays under `Done`. A Thread that finishes while the
+  operator watches it is seen at once, and it moves from `Working` to
+  `Done` and stays there. Either way the row leaves once focus moves to
+  another Thread. Nothing else is held: an interrupt raises no Notice, so
+  that row leaves, and a row never stands in a section that no longer says
+  what happened. This rule lives in the nav, not in core: the Notice is
+  read when it is seen, as ever, so the Bar, the Pane head, the toasts and
+  ⌘D are unchanged.

@@ -88,12 +88,6 @@ pub struct Settings {
     /// approved transcript has none, so they are kept off it and shown from
     /// the ⌘K palette's `show thinking`. Default: false.
     pub show_thinking: bool,
-    /// Smart filtering: the nav opens with a `done` section (Threads that
-    /// finished while the operator looked elsewhere) and a `working`
-    /// section above a rule, the usual Project tree below it — for running
-    /// many Sessions at once. Toggled from Settings or the ⌘K palette.
-    /// Default: false.
-    pub smart_filtering: bool,
     /// Whether agents may show interactive visuals inline (Ferrite's own
     /// `show_visual` tool), and how readily: Off (not offered), When asked,
     /// or Automatic. Applies to Sessions started after it changes; a Codex
@@ -254,7 +248,6 @@ impl Default for Settings {
             check_for_updates: true,
             start_at_login: true,
             show_thinking: false,
-            smart_filtering: false,
             visuals: crate::visual::Level::WhenAsked,
             commands: Vec::new(),
             keys: BTreeMap::new(),
@@ -434,7 +427,6 @@ mod tests {
             check_for_updates: false,
             start_at_login: false,
             show_thinking: true,
-            smart_filtering: true,
             visuals: crate::visual::Level::Automatic,
             commands: vec![crate::user_commands::UserCommand {
                 name: "run tests".to_string(),
@@ -622,17 +614,24 @@ mod tests {
         assert!(Settings::load(&dir).is_err());
     }
 
-    /// A setting Ferrite no longer has (the retired usage meter style) is
+    /// A setting Ferrite no longer has (the retired usage meter style,
+    /// smart filtering — the nav's Attention list is always on now) is
     /// ignored: the rest of the file still loads.
     #[test]
     fn a_retired_setting_is_ignored() {
         let dir = scratch("retired");
         fs::write(
             dir.join(Settings::FILE),
-            br#"{"usage_meter_style": "rings", "confirm_delete": false}"#,
+            br#"{"usage_meter_style": "rings", "smart_filtering": true, "confirm_delete": false}"#,
         )
         .unwrap();
-        assert!(!Settings::load(&dir).unwrap().confirm_delete);
+        assert_eq!(
+            Settings::load(&dir).unwrap(),
+            Settings {
+                confirm_delete: false,
+                ..Settings::default()
+            }
+        );
     }
 
     /// An unreadable file — here a directory squatting at its path — is
