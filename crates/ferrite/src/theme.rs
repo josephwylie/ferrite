@@ -2031,9 +2031,30 @@ pub const CTX_BUFFER: u32 = TEXT_DIM;
 pub const CTX_FREE: u32 = LINE2;
 pub const CTX_DEFERRED: u32 = TEXT_FAINT;
 pub const CTX_CYCLE: [u32; 4] = [BLUE, RED, 0x8fb2b8, 0xb5b48e];
-/// 768px — the image preview sheet's widest reading; it otherwise takes
-/// 90% × 85% of its Pane.
-pub const PREVIEW_MAX_W: f32 = 768.0;
+/// 28px — the air a fitted image keeps from its reader slot's edges (the
+/// image viewer): the reader's own text inset. Zoomed past the slot, the
+/// picture pans right to them.
+pub const IMAGE_INSET: f32 = TX_INSET_SOLO;
+/// The scales ⌘= and ⌘- step an image through (1 is actual size: an image
+/// pixel to a point). Below the fit there is no stop: ⌘- lands on the fit.
+pub const IMAGE_ZOOM_STOPS: [f32; 11] = [
+    0.25,
+    1.0 / 3.0,
+    0.5,
+    2.0 / 3.0,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    4.0,
+    6.0,
+    8.0,
+];
+/// 8× — the closest an image zooms, by key or by pinch.
+pub const IMAGE_ZOOM_MAX: f32 = IMAGE_ZOOM_STOPS[IMAGE_ZOOM_STOPS.len() - 1];
+/// 3px — how far a press on an image travels before it is a pan rather
+/// than a click.
+pub const IMAGE_DRAG_SLOP: f32 = 3.0;
 /// A background task on the shelf above the Composer (a shelf chip): the
 /// still `RUNNING` dot, the task cut at 32 cells, and a quiet `×` that
 /// stops it.
@@ -2709,6 +2730,10 @@ pub const MOTION_SLOT_OPEN_MS: u64 = 240;
 pub const MOTION_SLOT_CLOSE_MS: u64 = 200;
 /// A disclosure chevron turning: 150ms.
 pub const MOTION_CHEVRON_MS: u64 = 150;
+/// The image viewer's zoom (a click between fit and actual size, ⌘= ⌘-
+/// ⌘0): 240ms on `MOTION_EASE_OUT_EXPO`, so the picture answers the click
+/// at once and settles softly. A pinch or a pan follows the hand instead.
+pub const MOTION_IMAGE_ZOOM_MS: u64 = 240;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
 pub const MOTION_HOVER_FADE_MS: u64 = 150;
 /// A toast's stack timing: it settles in over 180ms and leaves over 100ms.
@@ -3496,6 +3521,7 @@ mod tests {
             ("project_editor.rs", include_str!("project_editor.rs")),
             ("notifications.rs", include_str!("notifications.rs")),
             ("attachments.rs", include_str!("attachments.rs")),
+            ("image_viewer.rs", include_str!("image_viewer.rs")),
             ("background_chips.rs", include_str!("background_chips.rs")),
             ("keymap.rs", include_str!("keymap.rs")),
             ("decision.rs", include_str!("decision.rs")),

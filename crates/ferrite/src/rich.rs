@@ -330,8 +330,11 @@ pub struct Markdown {
     /// Body ink in place of `TEXT` (a prompt's `TEXT_STRONG`).
     ink: Option<u32>,
     /// `ferrite-chip:` links draw as a prompt's inline file chips, opening
-    /// in this preview (`pane::prompt_chip`).
-    chips: Option<crate::attachment_preview::Preview>,
+    /// in this Pane's reader among the prompt's images (`pane::prompt_chip`).
+    chips: Option<(
+        crate::attachment_preview::Preview,
+        std::sync::Arc<[std::path::PathBuf]>,
+    )>,
     document: Option<gpui::base::TextSelectionDocument>,
     /// A find's occurrences to mark (`crate::find`).
     find: Option<gpui::base::text::TextFind>,
@@ -363,9 +366,14 @@ impl Markdown {
     }
 
     /// Draw `ferrite-chip:` links as a prompt's inline chips (a prompt's
-    /// band: its words, then its files), opening in `preview`.
-    pub fn chips(mut self, preview: crate::attachment_preview::Preview) -> Self {
-        self.chips = Some(preview);
+    /// band: its words, then its files), opening in `preview` — an image
+    /// among the prompt's `images`.
+    pub fn chips(
+        mut self,
+        preview: crate::attachment_preview::Preview,
+        images: std::sync::Arc<[std::path::PathBuf]>,
+    ) -> Self {
+        self.chips = Some((preview, images));
         self
     }
 
@@ -440,11 +448,12 @@ impl gpui::RenderOnce for Markdown {
             .link_renderer(move |url, label, window, cx| {
                 // A prompt's file, as its band's chip.
                 if let Some(path) = url.strip_prefix(CHIP_SCHEME) {
-                    let chips = chips.as_ref()?;
+                    let (preview, images) = chips.as_ref()?;
                     return Some(crate::pane::prompt_chip(
                         std::path::PathBuf::from(path),
                         label,
-                        Some(chips),
+                        preview,
+                        images,
                         window,
                         cx,
                     ));
@@ -1094,28 +1103,33 @@ pub fn reading_dialog(
         )
 }
 
-/// The reader's body for an open document: Markdown rendered, a file in a
-/// language the lexer knows coloured, anything else as plain text.
+/// The reader's body for an open text document: Markdown rendered, a file
+/// in a language the lexer knows coloured, anything else as plain text.
 pub fn document_body(
     document: crate::attachment_preview::Document,
     cache: TextCache,
     find: Option<gpui::base::text::TextFind>,
 ) -> gpui::AnyElement {
-    let id = SharedString::from(format!("file-{}", document.path.display()));
-    if document.is_markdown() {
-        return Markdown::new(
-            format!("document-{}", document.path.display()),
-            document.source,
-            cache,
-        )
-        .find(find)
-        .into_any_element();
+    let markdown = document.is_markdown();
+    let crate::attachment_preview::Document {
+        path,
+        body: crate::attachment_preview::Body::Text { source, .. },
+        ..
+    } = document
+    else {
+        return gpui::Empty.into_any_element();
+    };
+    let id = SharedString::from(format!("file-{}", path.display()));
+    if markdown {
+        return Markdown::new(format!("document-{}", path.display()), source, cache)
+            .find(find)
+            .into_any_element();
     }
     let aria_label = SharedString::from("File contents");
-    match ferrite_core::transcript::language_for_path(&document.path) {
+    match ferrite_core::transcript::language_for_path(&path) {
         Some(language) => Code {
             id,
-            text: document.source.into(),
+            text: source.into(),
             language,
             cache,
             aria_label,
@@ -1123,7 +1137,7 @@ pub fn document_body(
         .into_any_element(),
         None => Output {
             id,
-            text: document.source.into(),
+            text: source.into(),
             cache,
             aria_label,
             fill: true,
@@ -1511,11 +1525,19 @@ mod file_link_tests {
     impl Render for LinkFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.cache.file_context(Some(&self.cwd), &self.preview);
-            let document_body = self.preview.document().map(|document| {
-                self.document_cache
-                    .file_context(document.path.parent(), &self.preview);
-                document_body(document, self.document_cache.clone(), None)
-            });
+            let document_body = self
+                .preview
+                .document()
+                .map(|document| match &document.body {
+                    crate::attachment_preview::Body::Image { viewer, .. } => {
+                        viewer.clone().into_any_element()
+                    }
+                    _ => {
+                        self.document_cache
+                            .file_context(document.path.parent(), &self.preview);
+                        document_body(document, self.document_cache.clone(), None)
+                    }
+                });
             use gpui::base::ElementExt;
             // The reader is a board slot of its own; beside the fixture's
             // Pane is where the cockpit first opens it.
@@ -1527,22 +1549,18 @@ mod file_link_tests {
                 .size_full()
                 .child(
                     div().flex_1().min_w_0().child(
-                        self.preview.mount(
-                            div().size_full().child(
-                                div()
-                                    .text_size(px(self.font_size))
-                                    .when_some(self.line_height, |this, line| {
-                                        this.line_height(px(line))
-                                    })
-                                    .child(Markdown::new(
-                                        "file-link-fixture",
-                                        self.source.clone(),
-                                        self.cache.clone(),
-                                    ))
-                                    .text_selection_scope(
-                                        gpui::base::TextSelectionScopeId::default(),
-                                    ),
-                            ),
+                        div().size_full().child(
+                            div()
+                                .text_size(px(self.font_size))
+                                .when_some(self.line_height, |this, line| {
+                                    this.line_height(px(line))
+                                })
+                                .child(Markdown::new(
+                                    "file-link-fixture",
+                                    self.source.clone(),
+                                    self.cache.clone(),
+                                ))
+                                .text_selection_scope(gpui::base::TextSelectionScopeId::default()),
                         ),
                     ),
                 )
@@ -1936,7 +1954,7 @@ let count = 2;
             .read_with(cx, |view, _| view.preview.document())
             .expect("the Markdown document is retained by its Pane");
         assert_eq!(document.path, path);
-        assert_eq!(document.source, "fixture");
+        assert_eq!(document.source(), "fixture");
         let reader = cx
             .debug_bounds("markdown-reader")
             .expect("the reader is rendered beside the transcript");
@@ -1966,7 +1984,7 @@ let count = 2;
             .read_with(cx, |view, _| view.preview.document())
             .expect("the code file is retained by the built-in reader");
         assert_eq!(document.path, path);
-        assert_eq!(document.source, "fn ferrite() {}\n");
+        assert_eq!(document.source(), "fn ferrite() {}\n");
         assert!(!document.is_markdown());
         assert!(cx.debug_bounds("markdown-reader").is_some());
     }
@@ -2172,8 +2190,11 @@ let count = 2;
         assert!(chip.size.width >= name, "{chip:?} holds {name:?}");
     }
 
+    /// A file link to an image opens it in the Pane's reader, as every
+    /// image does (`Preview::open_image`), the viewer holding the keyboard;
+    /// the OS is never asked.
     #[gpui::test]
-    fn image_file_card_uses_the_existing_pane_preview(cx: &mut TestAppContext) {
+    fn an_image_link_opens_in_the_panes_reader(cx: &mut TestAppContext) {
         let path = std::env::temp_dir().join("ferrite-link-image.svg");
         std::fs::write(
             &path,
@@ -2183,10 +2204,17 @@ let count = 2;
         let (view, cx) = fixture(cx, "[image](ferrite-link-image.svg)");
         let target = card(cx, "ferrite-link-image.svg").center();
         cx.simulate_click(target, Modifiers::default());
-        assert!(view.read_with(cx, |view, _| view.preview.focus_target().is_some()));
+        let document = view
+            .read_with(cx, |view, _| view.preview.document())
+            .expect("the image opened");
+        assert!(matches!(
+            document.body,
+            crate::attachment_preview::Body::Image { .. }
+        ));
+        assert_eq!(document.path, path);
+        assert_eq!(document.title, "ferrite-link-image.svg");
+        assert!(cx.update(|window, cx| view.read(cx).preview.held_focus(window, cx).is_some()));
         assert_eq!(cx.opened_url(), None);
-        cx.simulate_keystrokes("escape");
-        assert!(view.read_with(cx, |view, _| view.preview.focus_target().is_none()));
     }
 
     #[gpui::test]

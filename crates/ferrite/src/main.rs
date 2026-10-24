@@ -22,6 +22,7 @@ mod float;
 mod fuzzy;
 mod hover_card;
 mod icons;
+mod image_viewer;
 mod keymap;
 mod line;
 mod loops_overlay;

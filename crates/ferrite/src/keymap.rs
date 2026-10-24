@@ -451,6 +451,29 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("down".into(), "review::Next", Some("ReviewBase")),
         ("enter".into(), "review::ChooseBase", Some("ReviewBase")),
         ("escape".into(), "review::CloseBases", Some("ReviewBase")),
+        // The image viewer (an image in the reader slot), while it holds
+        // the keyboard: ⌘= and ⌘- step the zoom and ⌘0 fits it again (the
+        // image's zoom, not the reading size) and ← → step among the images
+        // it was opened with; esc is the reader's, around it. Its context is
+        // deeper than the Cockpit's.
+        (
+            with_primary("="),
+            "image_viewer::ZoomIn",
+            Some(IMAGE_VIEWER),
+        ),
+        (
+            with_primary("+"),
+            "image_viewer::ZoomIn",
+            Some(IMAGE_VIEWER),
+        ),
+        (
+            with_primary("-"),
+            "image_viewer::ZoomOut",
+            Some(IMAGE_VIEWER),
+        ),
+        (with_primary("0"), "image_viewer::Fit", Some(IMAGE_VIEWER)),
+        ("left".into(), "image_viewer::Previous", Some(IMAGE_VIEWER)),
+        ("right".into(), "image_viewer::Next", Some(IMAGE_VIEWER)),
         // The find bar's line: ⏎ and ⌘G step forward, ⇧⏎ and ⌘⇧G back, esc
         // closes it. Last, so its context wins every same-depth tie: the
         // Composer's new line and Groups (⌘G, ⌘⇧G).
@@ -527,6 +550,8 @@ const REVIEW: &str = "Review && !Composer";
 /// shows: a review, the find bar or a viewer inside it binds its own keys
 /// deeper.
 pub const READER: &str = "Reader";
+/// The image viewer's key context.
+const IMAGE_VIEWER: &str = crate::image_viewer::KEY_CONTEXT;
 
 /// The contexts where no text field takes typing (a Decision answers its
 /// own letters), so a plain key may act there.

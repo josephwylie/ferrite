@@ -20,6 +20,8 @@
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel (⌥⌘B, and focus moving to or from a draft or the Projects coordinator, which have none) rides the same way at the board's right edge, through [`ColumnRide`]: its content keeps its layout, clipped and anchored to the window's edge, fading on the nav's clock |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the reader beside its Pane (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
+//! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
+//! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its slot is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks, the PR tab's `N resolved` and `Show more`) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); another document replacing the open one in the reader, from 0.3 ([`swap_in`]) — the slot does not slide again |
@@ -220,6 +222,9 @@ pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, 
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
+/// The image viewer's zoom, tweened on the scale's logarithm so every
+/// step of it reads as the same zoom.
+pub const IMAGE_ZOOM: MotionSpec = MotionSpec::new(theme::MOTION_IMAGE_ZOOM_MS, EASE_OUT_EXPO);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
 /// A board slot sliding in beside its owner, and out again a little
 /// quicker (a [`Reveal`]): the reader beside its Pane.
