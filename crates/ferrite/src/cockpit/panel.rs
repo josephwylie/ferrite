@@ -122,6 +122,7 @@ impl CockpitView {
     }
 
     /// The Thread whose panel shows this frame, if it shows for one.
+    #[cfg(test)]
     pub(super) fn panel_thread(&self) -> Option<ThreadId> {
         self.panes[self.panel_pane()?].thread()
     }
