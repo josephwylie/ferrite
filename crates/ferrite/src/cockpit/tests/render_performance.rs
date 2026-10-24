@@ -1449,6 +1449,147 @@ fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0);
 }
 
+/// A Solo window of one Thread at 1600 wide whose settings are its own
+/// (the panel's toggle saves them), settled on its first paint.
+fn panel_window<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (gpui::Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
+    let (core, _fake) = cockpit(name, 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let dir = scratch(&format!("{name}-settings"));
+    std::fs::create_dir_all(&dir).unwrap();
+    view.update(cx, |view, _| view.prefs.dir = dir);
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    tick(cx);
+    settle(cx);
+    (view, cx)
+}
+
+fn panel_width(cx: &mut gpui::VisualTestContext) -> Option<f32> {
+    cx.debug_bounds("panel")
+        .map(|panel| f32::from(panel.size.width))
+}
+
+fn solo_card_right(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f32 {
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+    card.x + card.w
+}
+
+/// ⌥⌘B rides the panel's column over `motion::RESIZE`, as cmd-B rides the
+/// nav's: the board gives up or takes back the width every frame, the
+/// panel's content holds still against the window's edge (clipped, never
+/// re-laid), the toggle never moves, frames come only while it rides, and
+/// a flip mid-flight turns around from the width on screen.
+#[gpui::test]
+fn the_panel_rides_in_and_out_and_settles_without_frames(cx: &mut TestAppContext) {
+    use crate::theme::{BOARD_PAD, PANEL_W};
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel", cx);
+    assert_eq!(panel_width(cx), Some(PANEL_W), "first paint: no ride");
+    let tab = cx.debug_bounds("panel-tab-Context").expect("a tab");
+    let toggle = cx.debug_bounds("panel-toggle").expect("the toggle");
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert!(display_frames(cx) > 0, "a riding column asks for frames");
+    let mid = panel_width(cx).expect("still drawn while it rides out");
+    assert!(mid > BOARD_PAD && mid < PANEL_W, "mid-ride at 100ms: {mid}");
+    assert!(
+        (solo_card_right(&view, cx) - (1600. - mid)).abs() <= 1.,
+        "the board takes the width back with it"
+    );
+    assert_eq!(
+        cx.debug_bounds("panel-tab-Context"),
+        Some(tab),
+        "the content holds its layout against the window's edge"
+    );
+    assert_eq!(cx.debug_bounds("panel-toggle"), Some(toggle), "in place");
+    // The view head follows the board's edge, short of the toggle's room
+    // (the toggle, a gap): where its controls come to rest once hidden.
+    let room = 1600. - f32::from(toggle.left()) + crate::theme::VIEW_HEAD_GAP;
+    let head = cx.debug_bounds("view-head").expect("the view head");
+    assert!(
+        (f32::from(head.right()) - (1600. - mid.max(room))).abs() <= 1.,
+        "the head rides with the board: {head:?} at {mid}"
+    );
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    let turned = panel_width(cx).expect("riding back in");
+    assert!(
+        (turned - mid).abs() < 1.,
+        "the flip starts from the width on screen: {mid} -> {turned}"
+    );
+
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), Some(PANEL_W), "settled on its target");
+    assert_eq!(solo_card_right(&view, cx), 1600. - PANEL_W);
+    assert_eq!(display_frames(cx), 0, "and asks for nothing more");
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None, "gone once it has ridden out");
+    assert_eq!(solo_card_right(&view, cx), 1600. - BOARD_PAD);
+    assert_eq!(cx.debug_bounds("panel-toggle"), Some(toggle), "still there");
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// Focus moving to a draft, which has no panel, takes the panel away on
+/// the same ride: the column keeps drawing the Thread it showed until it
+/// has gone, and the toggle, with no Thread to show the panel for, goes at
+/// once.
+#[gpui::test]
+fn the_panel_rides_out_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
+    use crate::theme::PANEL_W;
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel-draft", cx);
+    view.update(cx, |view, cx| {
+        view.open_draft_with_provider(DraftTarget::Main, Provider::Claude, cx)
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    display_frames(cx);
+    let mid = panel_width(cx).expect("riding out");
+    assert!(mid < PANEL_W, "mid-ride: {mid}");
+    assert!(
+        cx.debug_bounds("panel-tab-Changes").is_some(),
+        "still the Thread's"
+    );
+    assert!(
+        cx.debug_bounds("panel-toggle").is_none(),
+        "no Thread: no toggle"
+    );
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None);
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// Reduced motion: the panel comes and goes at once, asking for no frame.
+#[gpui::test]
+fn reduced_motion_snaps_the_panel(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel-reduced", cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    assert_eq!(panel_width(cx), None);
+    assert_eq!(display_frames(cx), 0);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    assert_eq!(panel_width(cx), Some(crate::theme::PANEL_W));
+    assert_eq!(display_frames(cx), 0);
+}
+
 /// A nav row's hover blends in over `motion::HOVER_FADE`: frames while it
 /// fades, none once it has landed or once the pointer has left and the
 /// blend has returned to rest.

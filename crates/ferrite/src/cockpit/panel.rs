@@ -13,13 +13,25 @@
 //! A draft, the empty board and the Projects coordinator have no Thread,
 //! so no panel.
 //!
-//! One toggle (`panel_toggle`) sits at the head row's right end either
-//! way: the panel head's last control while it shows, the view head's
-//! while it is hidden.
+//! Coming and going, the column rides (`ride_panel`, `motion::ColumnRide`,
+//! the nav's cmd-B ride mirrored): whatever made it show or hide — ⌥⌘B, or
+//! focus moving to or from a draft or the coordinator — the board gives up
+//! or takes back its width every frame, while the panel's content keeps
+//! its full-width layout against the window's edge, clipped where the
+//! board's edge is, and fades on its own clock. A column riding out after
+//! its Thread left still draws that Thread (`Panel::last`).
+//!
+//! One toggle (`panel_toggle_element`) sits at the head row's right end
+//! either way, laid by the frame rather than by a head, so it never moves
+//! or blinks as the panel comes and goes: the panel head leaves its room
+//! while the panel shows, the view head while it is hidden
+//! (`view_head_end`).
 //!
 //! One function per tab draws its body (`panel_changes`, `panel_context`,
 //! and the PR tab's `panel_pr`, in `pr_tab`, which also reads it): 7b adds
-//! a file's hunks under its head (`panel_file_block`, `hunks`).
+//! a file's hunks under its head (`panel_file_block`, `hunks`). The body
+//! switches at once with its tab, and each Thread's tab keeps its own
+//! scroll.
 
 pub(crate) mod hunks;
 
@@ -29,7 +41,7 @@ use ferrite_core::docview::FileChange;
 use gpui::relative;
 
 /// A panel tab. A Thread the panel has not shown yet opens on `Changes`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum PanelTab {
     #[default]
     Changes,
@@ -42,8 +54,21 @@ pub(crate) enum PanelTab {
 pub(crate) struct Panel {
     /// The last tab each Thread's panel showed.
     tabs: std::collections::HashMap<ThreadId, PanelTab>,
+    /// Each Thread's tabs' scroll, so a tab comes back where it was left
+    /// rather than at another tab's offset.
+    scrolls: std::collections::HashMap<(ThreadId, PanelTab), ScrollHandle>,
     /// The Changes tab's unfolded files and their hunks.
     hunks: hunks::Hunks,
+    /// The column on its way in or out (see the module doc).
+    ride: crate::motion::ColumnRide,
+    /// Whether the panel showed at the last frame; `None` before the first,
+    /// so a panel shown at launch arrives in place.
+    shown: Option<bool>,
+    /// The Thread the panel last showed, drawn while the column rides out.
+    last: Option<ThreadId>,
+    /// What the board leaves at its right this frame while the column
+    /// rides (`board_right`); `None` at rest.
+    riding: Option<f32>,
 }
 
 impl CockpitView {
@@ -66,13 +91,113 @@ impl CockpitView {
         self.panes.get(self.focused())?.thread()
     }
 
-    /// What the board leaves at its right: the panel's column, or the
-    /// frame's gutter when the panel is hidden (SPEC §4).
+    /// Once per frame, before anything measures the board: turn the
+    /// column's ride when the panel has come or gone since the last frame,
+    /// for whatever reason, and read where the ride has the board's edge.
+    pub(super) fn ride_panel(&mut self, cx: &mut Context<Self>) {
+        use crate::theme::{BOARD_PAD, PANEL_W};
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let thread = self.panel_thread();
+        if let Some(thread) = thread {
+            self.panel.last = Some(thread);
+            let tab = self.panel_tab(thread);
+            self.panel.scrolls.entry((thread, tab)).or_default();
+        }
+        let shown = thread.is_some();
+        if self
+            .panel
+            .shown
+            .replace(shown)
+            .is_some_and(|was| was != shown)
+        {
+            self.panel.ride.turn(
+                shown,
+                BOARD_PAD,
+                PANEL_W,
+                crate::nav::CONTENT_FADE,
+                now,
+                reduced,
+            );
+        }
+        self.panel.riding = self.panel.ride.width(now, reduced);
+    }
+
+    /// Whether the column is riding: the frame keeps asking for frames.
+    pub(super) fn panel_rides(&self, now: std::time::Instant, reduced: bool) -> bool {
+        self.panel.ride.running(now, reduced)
+    }
+
+    /// What the board leaves at its right this frame: the panel's column,
+    /// the frame's gutter when the panel is hidden (SPEC §4), or wherever
+    /// the column's ride has the board's edge between the two. A measure
+    /// taken at the destination (`board_level`'s, `update_auto_rail`'s)
+    /// reads where the ride will end.
     pub(super) fn board_right(&self) -> f32 {
+        let measuring = self.nav_measure_rest.get() || self.nav_measure_full.get();
+        match self.panel.riding {
+            Some(right) if !measuring => right,
+            _ => self.board_right_rest(),
+        }
+    }
+
+    /// What the board leaves at its right once the column's ride ends.
+    pub(super) fn board_right_rest(&self) -> f32 {
         if self.panel_thread().is_some() {
             crate::theme::PANEL_W
         } else {
             crate::theme::BOARD_PAD
+        }
+    }
+
+    /// The Thread the panel draws this frame and its column's width: shown,
+    /// or riding out after the operator hid it or its Thread left the
+    /// board's focus.
+    fn panel_drawn(&self) -> Option<(ThreadId, f32)> {
+        match (self.panel_thread(), self.panel.riding) {
+            (Some(thread), riding) => Some((thread, riding.unwrap_or(crate::theme::PANEL_W))),
+            (None, Some(width)) => Some((self.panel.last?, width)),
+            (None, None) => None,
+        }
+    }
+
+    /// How much of the window's right edge the panel's column covers this
+    /// frame: the board lies left of it, and keeps a gutter of its own
+    /// where it covers none.
+    pub(super) fn panel_column_w(&self) -> f32 {
+        self.panel_drawn().map_or(0., |(_, width)| width)
+    }
+
+    /// Where the view head ends, in from the window's right edge, and
+    /// whether the toggle's room is its last part. Shown, it stops at the
+    /// panel, whose head holds the toggle; hidden with a Thread for the
+    /// panel, it runs to the toggle and ends in its room. While the column
+    /// rides it follows the board's edge, but never over the toggle's room,
+    /// so its own controls ride with the board to where they come to rest.
+    pub(super) fn view_head_end(&self) -> (f32, bool) {
+        use crate::theme::{ICON_BUTTON, VIEW_HEAD_GAP};
+        let toggle = self.panel_candidate().is_some();
+        let inset = panel_toggle_inset();
+        if let Some(right) = self.panel.riding {
+            let floor = if toggle {
+                inset + ICON_BUTTON + VIEW_HEAD_GAP
+            } else if crate::titlebar::CUSTOM {
+                inset
+            } else {
+                0.
+            };
+            return (right.max(floor), false);
+        }
+        // On Windows the caption buttons keep the row's right end either
+        // way.
+        if self.panel_thread().is_some() {
+            (self.board_right(), false)
+        } else if toggle {
+            (inset, true)
+        } else if crate::titlebar::CUSTOM {
+            (inset, false)
+        } else {
+            (self.board_right(), false)
         }
     }
 
@@ -108,12 +233,31 @@ impl CockpitView {
         self.select_panel_tab(thread, tab, cx);
     }
 
-    /// The head row's one panel toggle (SPEC §5.6): the nav head's sidebar
-    /// toggle's twin (`nav::icon_button`), the `panel-right` glyph, its
-    /// tooltip and chord read from the keymap. The panel head draws it
-    /// while the panel shows, the view head while it is hidden, both with
-    /// its right edge `panel_toggle_inset` in from the window's.
-    pub(super) fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The head row's one panel toggle (SPEC §5.6), while there is a Thread
+    /// for the panel: laid over the row's right end, its right edge
+    /// `panel_toggle_inset` in from the window's, over the panel head while
+    /// the panel shows and over the view head's end while it is hidden.
+    /// The frame lays it after both heads, so it stays put — hover and all
+    /// — while the column rides between them.
+    pub(super) fn panel_toggle_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.panel_candidate()?;
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .right(px(panel_toggle_inset()))
+                .h(px(crate::theme::WIN_CHROME_H))
+                .flex()
+                .items_center()
+                .child(self.panel_toggle(cx))
+                .into_any_element(),
+        )
+    }
+
+    /// The toggle itself: the nav head's sidebar toggle's twin
+    /// (`nav::icon_button`), the `panel-right` glyph, its tooltip and chord
+    /// read from the keymap.
+    fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_TAB};
         crate::nav::icon_button(
             "panel-toggle",
@@ -159,23 +303,36 @@ impl CockpitView {
 
     // ------------------------------------------------------------ drawing
 
-    /// The panel's column, when it shows: laid over the window's right
-    /// edge from the top of the head row to the bar, after the head row's
-    /// drag strip, so its tabs and button take their presses and the gaps
-    /// between them still drag the window.
+    /// The panel's column, while it shows or rides: laid over the window's
+    /// right edge from the top of the head row to the bar, after the head
+    /// row's drag strip, so its tabs take their presses and the gaps
+    /// between them still drag the window. The column is as wide as the
+    /// board leaves it this frame; its content keeps its full width against
+    /// the window's edge, so a ride clips it and never re-wraps it, and
+    /// fades on the ride's own clock.
     pub(super) fn panel_element(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use crate::theme::*;
-        let thread = self.panel_thread()?;
+        let (thread, width) = self.panel_drawn()?;
+        let opacity = self.panel.ride.opacity(
+            cx.background_executor().now(),
+            crate::motion::reduced_motion(cx),
+        );
         let tab = self.panel_tab(thread);
         let body = match tab {
             PanelTab::Changes => self.panel_changes(thread, cx),
             PanelTab::Pr => self.panel_pr(thread, window, cx),
             PanelTab::Context => self.panel_context(thread, window, cx),
         };
+        let scroll = self
+            .panel
+            .scrolls
+            .get(&(thread, tab))
+            .cloned()
+            .unwrap_or_default();
         Some(
             div()
                 .debug_selector(|| "panel".into())
@@ -183,39 +340,38 @@ impl CockpitView {
                 .top_0()
                 .right_0()
                 .bottom(px(STATUS_BAR_H))
-                .w(px(PANEL_W))
-                .flex()
-                .flex_col()
-                .pl(px(PANEL_PAD_L))
-                .pr(px(PANEL_PAD_R))
-                .pb(px(PANEL_PAD_B))
-                .bg(paint::FRAME)
-                .font_family(FONT_UI)
-                .text_size(px(FS_UI))
-                .line_height(px(LH_UI))
-                .text_color(rgb(TEXT))
-                .whitespace_nowrap()
+                .w(px(width))
                 .overflow_hidden()
-                .child(self.panel_head(thread, tab, cx))
+                .bg(paint::FRAME)
                 .child(
                     div()
-                        .id("panel-body")
-                        .debug_selector(|| "panel-body".into())
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(px(PANEL_W))
                         .flex()
                         .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .child(body),
+                        .pl(px(PANEL_PAD_L))
+                        .pr(px(PANEL_PAD_R))
+                        .pb(px(PANEL_PAD_B))
+                        .when(opacity < 1.0, |content| content.opacity(opacity))
+                        .font_family(FONT_UI)
+                        .text_size(px(FS_UI))
+                        .line_height(px(LH_UI))
+                        .text_color(rgb(TEXT))
+                        .whitespace_nowrap()
+                        .child(self.panel_head(thread, tab, cx))
+                        .child(panel_body(body, &scroll))
+                        .children(self.panel_foot(thread)),
                 )
-                .children(self.panel_foot(thread))
                 .into_any_element(),
         )
     }
 
-    /// The head (46, in the head row): the three tabs, then the toggle.
-    /// On Windows it stops short of the caption buttons, which keep the
-    /// row's right end.
+    /// The head (46, in the head row): the three tabs, then the toggle's
+    /// room (`panel_toggle_element` lays the toggle over it). On Windows it
+    /// stops short of the caption buttons, which keep the row's right end.
     fn panel_head(&self, thread: ThreadId, shown: PanelTab, cx: &mut Context<Self>) -> Div {
         use crate::theme::*;
         let facts = self.facts.get(thread);
@@ -239,8 +395,12 @@ impl CockpitView {
                 .font_weight(W_LABEL)
                 .occlude()
                 .map(|face| {
+                    // The shown tab carries the selection, and steps it up
+                    // under the pointer; its blend is the same key either
+                    // way, so the tab the pointer left while it was shown
+                    // has let its hover go.
                     if active {
-                        face.bg(paint::SELECTED).text_color(rgb(TEXT_STRONG))
+                        face.hover_carried(key).text_color(rgb(TEXT_STRONG))
                     } else {
                         face.text_color(rgb(TEXT_MUTED))
                             .hover_raised(key)
@@ -287,7 +447,7 @@ impl CockpitView {
                     .child(tab(PanelTab::Pr, "PR", pr_number))
                     .child(tab(PanelTab::Context, "Context", None)),
             )
-            .child(self.panel_toggle(cx))
+            .child(toggle_room())
     }
 
     /// The Changes tab: the branch row, the section line, one block per
@@ -440,7 +600,8 @@ impl CockpitView {
     /// which opens the file in the reader as a file link does, its `+N −N`,
     /// and its directory under it — and, unfolded, its hunks (`hunks`).
     /// The rest of the head folds and unfolds them; under the pointer its
-    /// icon turns to the fold's chevron.
+    /// icon turns to the fold's chevron, which turns a quarter with the
+    /// fold (`fold_chevron`).
     fn panel_file_block(
         &self,
         thread: ThreadId,
@@ -473,11 +634,6 @@ impl CockpitView {
             .filter(|dir| !dir.is_empty());
         let unfolded = self.panel_file_unfolded(thread, file, cx);
         let group = SharedString::from(format!("panel-file-head-{index}"));
-        let chevron = if unfolded {
-            icons::CHEVRON_DOWN
-        } else {
-            icons::CHEVRON_RIGHT
-        };
         let slot = div()
             .debug_selector(move || format!("panel-file-fold-{index}"))
             .relative()
@@ -495,7 +651,7 @@ impl CockpitView {
                     .inset_0()
                     .invisible()
                     .group_hover(group.clone(), |style| style.visible())
-                    .child(icon(chevron, PANEL_ROW_ICON, TEXT_MUTED)),
+                    .child(fold_chevron(unfolded, PANEL_ROW_ICON, TEXT_MUTED)),
             );
         let fold_path = file.path.clone();
         let head = panel_row_with(slot)
@@ -551,11 +707,7 @@ impl CockpitView {
             .rounded(px(R_BLOCK))
             .overflow_hidden()
             .child(head)
-            .children(
-                unfolded
-                    .then(|| self.panel_hunks_element(thread, index, &file.path))
-                    .flatten(),
-            )
+            .child(self.panel_hunks_element(thread, index, &file.path, unfolded))
     }
 
     /// The Context tab: what fills the Thread's context window, by
@@ -671,6 +823,57 @@ pub(super) fn panel_toggle_inset() -> f32 {
     } else {
         PANEL_PAD_R
     }
+}
+
+/// The toggle's room at the end of whichever head the toggle lies over
+/// (`panel_toggle_element`): the toggle's own box, kept clear.
+pub(super) fn toggle_room() -> Div {
+    div().flex_shrink_0().size(px(crate::theme::ICON_BUTTON))
+}
+
+/// The tab's body, scrolling between the head and the foot on the Thread's
+/// tab's own `scroll`, its overlay thumb in the column's right padding
+/// (`PANEL_SCROLLBAR_INSET`) beside the rows rather than over them.
+fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
+    use crate::theme::{PANEL_PAD_R, PANEL_SCROLLBAR_INSET};
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .id("panel-body")
+                .debug_selector(|| "panel-body".into())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(scroll)
+                .child(body),
+        )
+        .child(
+            crate::components::scrollbar_layer()
+                .right(px(-PANEL_PAD_R))
+                .child(
+                    crate::components::scrollbar_bar("panel-scrollbar", scroll)
+                        .gutter(px(PANEL_PAD_R), px(PANEL_SCROLLBAR_INSET)),
+                ),
+        )
+}
+
+/// A fold's chevron in the panel (a file block's, the PR tab's): pointing
+/// right while folded, a quarter turn down while unfolded. The turn eases
+/// over `motion::CHEVRON` when the fold flips under it; drawn first already
+/// unfolded, it is simply turned.
+pub(super) fn fold_chevron(unfolded: bool, size: f32, ink: u32) -> impl IntoElement {
+    crate::motion::settled("fold-turn", unfolded, crate::motion::CHEVRON, move |turn| {
+        icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
+            gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
+        ))
+    })
 }
 
 /// A two-line panel row (48): its icon at the row's left, its two lines

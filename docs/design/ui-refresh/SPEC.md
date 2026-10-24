@@ -637,7 +637,8 @@ still open beside the Pane inside the board (ADR 0021).
 - **Head (46, in the head row).** Three tabs: `Changes N`, `PR #N` and
   `Context`.
   - Tabs are 28 high, radius 7, 12.5/500. The active tab is `SELECTED`
-    with `TEXT_STRONG`; inactive tabs are `TEXT_MUTED`.
+    with `TEXT_STRONG` (`SELECTION_HOVER` under the pointer, as a selected
+    nav row); inactive tabs are `TEXT_MUTED`, `RAISED` under the pointer.
   - `Changes` carries the changed-file count in 12/400 `TEXT_DIM`.
   - `PR` carries the PR number in Geist Mono 11.5 `TEXT_DIM` when the
     branch has one, and nothing otherwise.
@@ -647,16 +648,31 @@ still open beside the Pane inside the board (ADR 0021).
     the nav head's sidebar toggle's twin (28, radius 6, the glyph 16 in
     `TEXT_DIM`, `RAISED` under the pointer), tooltip `Toggle panel ⌥⌘B`
     with the chord read from the keymap. It sits in the same place
-    whether the panel shows or not: shown, it ends the panel head;
-    hidden, it ends the view head, at the head row's far right over the
-    board. It shows in Solo and Group heads alike whenever there is a
-    focused Thread. On Windows the caption buttons keep the row's right
-    end, the toggle just left of them.
+    whether the panel shows or not, at the head row's far right: one
+    control laid over the row, not a part of either head. Shown, the
+    panel head ends in its room; hidden, the view head does. So it never
+    moves or blinks while the panel comes and goes. It shows in Solo and
+    Group heads alike whenever there is a focused Thread. On Windows the
+    caption buttons keep the row's right end, the toggle just left of
+    them.
   - The act `TogglePanel` (⌥⌘B) shows and hides it, from the toggle, the
     View menu's `Toggle Panel` (beside `Toggle Sidebar`) and the
     palette's `Toggle panel`.
   - The panel's visibility is a persisted setting, beside
     `nav_collapsed`.
+  - Tabs switch at once: the body changes on the click's frame, with no
+    layout shift in the head. Each Thread's tab keeps its own scroll, so
+    a tab comes back where it was left. The body's overlay scrollbar
+    sits in the column's right padding, as the nav's does.
+- **Showing and hiding.** The panel rides in and out the way the nav
+  folds (`motion::RESIZE`, 200ms CSS `ease`, interruptible), whatever
+  made it come or go: the toggle, or focus moving to or from a draft,
+  the empty board or the Projects coordinator. The board gives up or
+  takes back the width every frame. The panel's content keeps its
+  304 layout against the window's right edge, clipped where the board's
+  edge is (never re-wrapped), and fades on the nav's 150ms clock. Under
+  reduced motion it comes and goes at once. A restored panel is simply
+  there on first paint.
 - **Changes tab.**
   - **Branch row (48):** a `branch` icon, the branch in `TEXT_STRONG`
     500, and on line 2 `from <default_branch>` in `TEXT_DIM` 12. When
@@ -671,10 +687,12 @@ still open beside the Pane inside the board (ADR 0021).
       `TEXT_DIM` 12. Clicking the name opens the file the way file links
       do.
     - Hunks (phase 7b): folded by default, and the head's chevron unfolds
-      them. They draw on `BAR` in Geist Mono 11/19, with a 2.5ch sign
-      column, the add/delete washes, and no line numbers. Fetch the hunks
-      through the Review core (Uncommitted scope) off the UI thread, only
-      for an unfolded file.
+      them, turning a quarter as it does (`motion::CHEVRON`). They draw on
+      `BAR` in Geist Mono 11/19, with a 2.5ch sign column, the add/delete
+      washes, and no line numbers. Fetch the hunks through the Review core
+      (Uncommitted scope) off the UI thread, only for an unfolded file.
+      Nothing draws until the read lands; then the hunks fade in
+      (`motion::ROW_IN`, opacity only). Folding takes them away at once.
   - **Foot button:** `Review changes` (secondary, full width). It opens
     `Beside::Review(Uncommitted)`, the changed-files card's `review` verb
     today.
@@ -702,14 +720,19 @@ still open beside the Pane inside the board (ADR 0021).
 #### 5.6.2 PR tab
 
 A read-only view of the branch's pull request, designed to answer at a
-glance "can this merge, and what's in the way". Mockups: `solo.png` (open,
-checks running) and `pr-states.png` (failing with conflicts, merged, no
-PR). It is fed by the Review's forge read
+glance "can this merge, and what's in the way", and to say what it is.
+Mockups: `solo.png` (open, checks running) and `pr-states.png` (failing
+with conflicts, merged, no PR); the description (item 3) came after them,
+and the `refresh-pr-described` scenes draw it. It is fed by the Review's
+forge read
 (`Cockpit::review_pull_request` → `forge::PrSnapshot` → `WirePr`), the
 same snapshot the Review's PR scope shows. Nothing new is fetched from
 GitHub.
 
-Top to bottom, with 14px between sections:
+Top to bottom, with 14px between sections. A row that a click opens or
+unfolds (a check, `Show N more`, `N resolved`, `Show more`) keeps the
+section heads' inset; under the pointer its `RAISED` hover ground reaches
+4px past the column on either side, so the ground clears its mark.
 
 1. **PR head** (padding 2 2 14).
    - **Line 1.** A state pill (22 high, radius 11, padding 0 9 0 7,
@@ -752,7 +775,23 @@ Top to bottom, with 14px between sections:
    | `sync` Behind | `arrow-down` `ATTENTION`, `N commit(s) to pull` |
    | `sync` InSync | `check-circle` `TEXT_DIM`, `In sync with your branch` |
    | Merged | `git-merge` `TEXT`, `Merged into <base>` (it replaces the merge and sync rows) |
-3. **Checks.**
+3. **Description.** The PR's body, as its author wrote it. It is how
+   the tab says what the pull request *is*, not only whether it can
+   merge. With an empty body there is no section.
+   - Heading (30): `Description` 12/500 `TEXT_DIM`, with nothing at the
+     right.
+   - Body: Markdown set small, as a comment's (12.5/18 `TEXT`, inline
+     code as chips). Headings stay at the body's size in 600
+     `TEXT_STRONG`, with a paragraph's gap more above them than below.
+     A list's markers hang dim in a 16px box. The text sits at the
+     heading's 2px inset.
+   - It is clamped to 5 lines, which is typically its opening heading
+     and the first lines under it. A `Show more` row (30, a chevron and
+     the words in 12.5 `TEXT_DIM`, as `N resolved`) follows only when the
+     clamp cuts something. Unfolded, the whole body shows and the row
+     reads `Show less`, its chevron turned. The Thread keeps the choice,
+     like the tab's other unfolds.
+4. **Checks.**
    - Heading (30): `Checks` 12/500 `TEXT_DIM`, with the count at the
      right.
    - One 30px row per check:
@@ -767,7 +806,7 @@ Top to bottom, with 14px between sections:
      Otherwise it opens the PR.
    - After 8 rows, a `Show N more` row. `checks_truncated` adds `· more on
      GitHub`.
-4. **Comments.**
+5. **Comments.**
    - Heading (30): `Comments` with `N · M unresolved` at the right, or
      `N · all resolved`.
    - Unresolved items come first, newest first. Each is a card: radius 8,
@@ -787,9 +826,10 @@ Top to bottom, with 14px between sections:
      - **Outdated** findings show `outdated` in `TEXT_DIM` beside the
        kind.
    - Resolved items fold into one 30px row: a chevron and `N resolved`
-     in `TEXT_DIM`. It expands to the same cards at 60% ink.
+     in `TEXT_DIM`. It expands to the same cards at 60% ink, the chevron
+     turning a quarter (`motion::CHEVRON`).
    - `comments_truncated` adds a last row, `More on GitHub`.
-5. **`Review PR`.** A secondary full-width button (32, radius 7,
+6. **`Review PR`.** A secondary full-width button (32, radius 7,
    `RAISED`, 12.5/500 `TEXT_STRONG`). It opens the Review beside the Pane
    in its PR scope (ADR 0021), where findings can be read against the
    diff.
@@ -807,7 +847,9 @@ them here.`
 **Loading:** the last snapshot stays on screen while a new one is
 fetched. The `refresh` icon spins (reduced motion: it dims). The first
 fetch shows the PR head from `PrWatch`'s reading (number, state), then
-fills in the rest.
+fills in the rest. With no reading of `PrWatch`'s either, it says
+`Checking for a pull request…` in 12 `TEXT_DIM`, where the Context tab
+says `Context not reported yet`, rather than claim there is none.
 
 **Freshness:** read the snapshot when the tab is opened, then on
 `PrWatch`'s cadence (`AUTO_EVERY`, 30s) while the tab is visible and the

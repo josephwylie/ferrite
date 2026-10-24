@@ -17,11 +17,11 @@
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
+//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel (⌥⌘B, and focus moving to or from a draft or the Projects coordinator, which have none) rides the same way at the board's right edge, through [`ColumnRide`]: its content keeps its layout, clipped and anchored to the window's edge, fading on the nav's clock |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
-//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
+//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks, the PR tab's `N resolved` and `Show more`) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
 //! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
@@ -403,6 +403,61 @@ impl Tween {
         !reduced
             && self.from != self.to
             && now.saturating_duration_since(self.started) < self.spec.duration()
+    }
+}
+
+/// A column that opens and closes by riding its width (the catalog's
+/// column-width row): its width rides [`RESIZE`] while its content's
+/// opacity rides `fade` on its own clock, 0 → 1 opening and 1 → 0 closing.
+/// A turn mid-flight starts both from where they are on screen. The
+/// default is at rest — nothing rides until the first turn, so a column
+/// restored open or closed arrives in place.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ColumnRide {
+    width: Option<Tween>,
+    fade: Option<Tween>,
+}
+
+impl ColumnRide {
+    /// Turn toward open (`open_w` wide) or closed (`closed_w`).
+    pub fn turn(
+        &mut self,
+        open: bool,
+        closed_w: f32,
+        open_w: f32,
+        fade: MotionSpec,
+        now: Instant,
+        reduced: bool,
+    ) {
+        let (from, to) = if open {
+            (closed_w, open_w)
+        } else {
+            (open_w, closed_w)
+        };
+        self.width = Some(Tween::retarget(self.width, from, to, RESIZE, now, reduced));
+        let (from, to) = if open { (0.0, 1.0) } else { (1.0, 0.0) };
+        self.fade = Some(Tween::retarget(self.fade, from, to, fade, now, reduced));
+    }
+
+    /// Mid-flight: the owner must ask for another frame.
+    pub fn running(&self, now: Instant, reduced: bool) -> bool {
+        self.width.is_some_and(|width| width.running(now, reduced))
+    }
+
+    /// The width this frame while the column rides; `None` at rest.
+    pub fn width(&self, now: Instant, reduced: bool) -> Option<f32> {
+        self.width
+            .filter(|width| width.running(now, reduced))
+            .map(|width| width.value(now, reduced))
+    }
+
+    /// The content's opacity this frame: its fade's while the width rides
+    /// (a fade that has finished holds its end), and 1 at rest.
+    pub fn opacity(&self, now: Instant, reduced: bool) -> f32 {
+        match self.fade {
+            Some(fade) if self.running(now, reduced) => fade.value(now, reduced),
+            _ => 1.0,
+        }
     }
 }
 
@@ -1231,6 +1286,38 @@ mod tests {
         let tween = Tween::new(52.0, 286.0, DIALOG_IN, t0);
         assert_eq!(tween.value(t0, true), 286.0);
         assert!(!tween.running(t0, true), "no frame is asked for");
+    }
+
+    /// A column rides its width over `RESIZE` and fades its content over
+    /// its own (shorter) clock; turned back mid-flight both start from
+    /// where they are; at rest it reads no width and full opacity, and under
+    /// reduced motion it is always at rest.
+    #[test]
+    fn a_column_ride_turns_around_from_where_it_is() {
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let fade = MotionSpec::new(150, EASE);
+        let mut ride = ColumnRide::default();
+        assert_eq!(ride.width(t0, false), None, "at rest before any turn");
+        assert_eq!(ride.opacity(t0, false), 1.0);
+
+        ride.turn(true, 8.0, 304.0, fade, t0, false);
+        let mid = ride.width(ms(100), false).expect("riding");
+        assert!(mid > 8.0 && mid < 304.0, "mid-ride {mid}");
+        let shown = ride.opacity(ms(100), false);
+        assert!(shown > 0.0 && shown < 1.0, "fading in {shown}");
+        assert_eq!(ride.opacity(ms(170), false), 1.0, "its fade is done first");
+        assert!(ride.running(ms(170), false), "while the width still rides");
+
+        ride.turn(false, 8.0, 304.0, fade, ms(100), false);
+        close(ride.width(ms(100), false).unwrap(), mid, 1e-3, "continuity");
+        close(ride.opacity(ms(100), false), shown, 1e-3, "the fade too");
+        assert_eq!(ride.width(ms(300), false), None, "settled");
+        assert!(!ride.running(ms(300), false));
+
+        ride.turn(true, 8.0, 304.0, fade, ms(400), true);
+        assert_eq!(ride.width(ms(400), true), None, "reduced: no ride");
+        assert_eq!(ride.opacity(ms(400), true), 1.0);
     }
 
     #[test]

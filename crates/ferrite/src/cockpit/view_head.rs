@@ -4,8 +4,9 @@
 //! and its Project. A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
 //! While the panel is hidden and there is a focused Thread for it, the
-//! head ends in the panel toggle (`panel_toggle`), where the panel head's
-//! sits while it shows; the branch and its diffstat are the panel's.
+//! head ends in the panel toggle's room (the frame lays the one toggle over
+//! it, `panel_toggle_element`), where the panel head's room is while it
+//! shows; the branch and its diffstat are the panel's.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (`titlebar::strip`), over the frame the board column already paints
@@ -28,25 +29,14 @@ impl CockpitView {
             View::Solo => self.solo_head(cx)?,
             View::Group(group) => self.group_view_head(group, cx)?,
         };
-        // Hidden, the panel's toggle ends the head while there is a Thread
-        // to show it for.
-        let shown = self.panel_thread().is_some();
-        let toggle = !shown && self.panel_candidate().is_some();
-        if toggle {
-            parts.push(control(self.panel_toggle(cx)));
-        }
         // The head stops where the board does while the panel shows (its
         // head holds the row's right end, toggle, caption buttons and all);
-        // else it runs to the toggle's place, or with no toggle to the
-        // board's edge. On Windows the caption buttons keep the row's
-        // right end either way.
-        let right = if shown {
-            self.board_right()
-        } else if toggle || crate::titlebar::CUSTOM {
-            super::panel::panel_toggle_inset()
-        } else {
-            self.board_right()
-        };
+        // hidden, it runs to the panel toggle and ends in its room, which
+        // the frame lays the toggle over (`view_head_end`).
+        let (right, toggle_room) = self.view_head_end();
+        if toggle_room {
+            parts.push(super::panel::toggle_room().into_any_element());
+        }
         Some(
             div()
                 .debug_selector(|| "view-head".into())

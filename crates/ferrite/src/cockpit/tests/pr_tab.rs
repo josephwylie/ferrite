@@ -280,3 +280,106 @@ fn a_hidden_tab_makes_no_forge_reads(cx: &mut TestAppContext) {
     }
     assert_eq!(reads(&view, cx), 0, "the panel hidden: never");
 }
+
+/// `snapshot`'s pull request, its description `body`.
+fn described(view: PrView, body: &str) -> PrView {
+    match view {
+        PrView::Pr(mut pr) => {
+            pr.body = body.into();
+            PrView::Pr(pr)
+        }
+        other => other,
+    }
+}
+
+const LONG_BODY: &str = "## Summary\n\nBackground subagents showed up twice: once as a tab \
+and once as a chip on the Composer's background shelf, and as a row in the Background tasks \
+card.\n\n## Evidence\n\n- `claude_background_snapshots_replace_tasks` fails without the fix.\n\
+- `cargo test -p ferrite-core` passes.\n\n## Not covered\n\nA log written before the fix shows \
+the chips again on revive.";
+
+/// The description: the body under its heading, clamped, with `Show more`
+/// only when the clamp cuts something; unfolded, it stays unfolded across
+/// tab switches; an empty body has no section.
+#[gpui::test]
+fn the_description_shows_the_body_clamped_until_unfolded(cx: &mut TestAppContext) {
+    use CheckStatus::Success;
+    let open = |body: &str| {
+        described(
+            snapshot(PrState::Open, Merge::Clean, Sync::InSync, &[Success]),
+            body,
+        )
+    };
+    let (view, thread, cx) = solo("pr-tab-description", open(LONG_BODY), cx);
+    open_tab(&view, thread, PanelTab::Pr, cx);
+    settle(&view, thread, cx);
+    assert!(shows(cx, "pr-description-head"));
+    let readiness = cx.debug_bounds("pr-readiness").expect("readiness");
+    let head = cx.debug_bounds("pr-description-head").unwrap();
+    let checks = cx.debug_bounds("pr-checks-head").expect("checks");
+    assert!(
+        readiness.bottom() < head.top() && head.bottom() < checks.top(),
+        "between the readiness group and the checks"
+    );
+    let folded = cx.debug_bounds("pr-description").unwrap().size.height;
+    let more = cx.debug_bounds("pr-description-more").expect("Show more");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    let unfolded = cx.debug_bounds("pr-description").unwrap().size.height;
+    assert!(unfolded > folded, "unfolded: {folded} -> {unfolded}");
+    assert!(
+        shows(cx, "pr-description-more"),
+        "`Show less` folds it back"
+    );
+
+    open_tab(&view, thread, PanelTab::Changes, cx);
+    open_tab(&view, thread, PanelTab::Pr, cx);
+    settle(&view, thread, cx);
+    assert_eq!(
+        cx.debug_bounds("pr-description").unwrap().size.height,
+        unfolded,
+        "the Thread keeps it unfolded"
+    );
+
+    forge(&view, thread, open("Requeues the job."), cx);
+    view.update(cx, |view, cx| view.read_pr_tab(thread, cx));
+    settle(&view, thread, cx);
+    assert!(shows(cx, "pr-description"));
+    let less = cx
+        .debug_bounds("pr-description-more")
+        .expect("still unfolded");
+    cx.simulate_click(less.center(), gpui::Modifiers::none());
+    tick(cx);
+    tick(cx);
+    assert!(
+        !shows(cx, "pr-description-more"),
+        "folded, a body the clamp never cuts has nothing to unfold"
+    );
+
+    forge(&view, thread, open("  \n"), cx);
+    view.update(cx, |view, cx| view.read_pr_tab(thread, cx));
+    settle(&view, thread, cx);
+    assert!(!shows(cx, "pr-description"), "an empty body: no section");
+}
+
+/// Before the first read lands, with no reading of the nav label's to go
+/// on, the tab says it is checking rather than that there is no pull
+/// request.
+#[gpui::test]
+fn the_first_read_says_it_is_checking(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("pr-tab-checking", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(960.)));
+    open_tab(&view, thread, PanelTab::Pr, cx);
+    assert!(shows(cx, "panel-no-pr"), "nobody asking: no pull request");
+    view.update(cx, |view, cx| {
+        view.pr_tab.hold_first_read(thread);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(shows(cx, "panel-pr-checking"));
+    assert!(!shows(cx, "panel-no-pr"));
+}

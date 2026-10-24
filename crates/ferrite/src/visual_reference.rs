@@ -456,6 +456,8 @@ const STATES: &[(&str, &[&str])] = &[
     ("refresh-pr-failing", &["refresh"]),
     ("refresh-pr-merged", &["refresh"]),
     ("refresh-pr-none", &["refresh"]),
+    ("refresh-pr-described", &["refresh"]),
+    ("refresh-pr-described-open", &["refresh"]),
     ("refresh-palette", &["refresh"]),
 ];
 

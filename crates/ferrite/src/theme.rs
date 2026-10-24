@@ -889,6 +889,11 @@ pub const PANEL_W: f32 = 304.0;
 pub const PANEL_PAD_L: f32 = SPACE_2;
 pub const PANEL_PAD_R: f32 = 10.0;
 pub const PANEL_PAD_B: f32 = SPACE_2;
+/// The panel body's scrollbar lies in the column's right padding
+/// (`PANEL_PAD_R`), beside the rows rather than over them, as the nav's
+/// does: a 10px hit strip, the 6px hovered thumb 2px from either side.
+pub const PANEL_SCROLLBAR_INSET: f32 = 2.0;
+const _: () = assert!(PANEL_PAD_R == 2. * PANEL_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
 /// 28px — a panel tab in the head row (r7, 12.5/500), 10px inline padding,
 /// 6px to its count; 2px between tabs.
 pub const PANEL_TAB_H: f32 = 28.0;
@@ -975,6 +980,16 @@ pub const PR_CODE_CHIP: u32 = 0x333333;
 pub const PR_BODY_LH: f32 = 18.0;
 /// The lines a folded comment body shows.
 pub const PR_BODY_LINES: usize = 3;
+/// 16px — where a list item's text starts in a comment or the description,
+/// its marker hanging dim in the box before it, 6px short of the text.
+pub const PR_LIST_HANG: f32 = 16.0;
+/// The lines the folded description shows: its opening heading, if it has
+/// one, and the first lines under it.
+pub const PR_DESCRIPTION_LINES: usize = 5;
+/// How far a flush row's hover ground (a check, `Show more`, `N resolved`)
+/// reaches past the column either side: its content keeps the section
+/// heads' inset, and the ground still clears it.
+pub const PR_ROW_BLEED: f32 = SPACE_1;
 /// 26px — a reply's indent under its comment.
 pub const PR_REPLY_INDENT: f32 = 26.0;
 /// The ink a resolved comment card keeps.
@@ -2598,7 +2613,8 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
 //   a few pixels into place. A menu or a sheet that closes goes at once:
 //   dismissals are frequent, and the closed state says it all. The
-//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly.
+//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly, and
+//   the panel's rides ⌥⌘B the same way.
 // - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
 //   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
 //   changes, a Send becoming ready) and a press land on the same frame.
@@ -2636,8 +2652,9 @@ pub const MOTION_ROW_IN_MS: u64 = 180;
 /// while rising `MOTION_FADE_IN_RISE` into place.
 pub const MOTION_FADE_IN_MS: u64 = 500;
 pub const MOTION_FADE_IN_RISE: f32 = 4.0;
-/// The sidebar's width between column and rail (cmd-B) — the board's
-/// width rides it every frame.
+/// The sidebar's width between column and rail (cmd-B), and the panel's
+/// between shown and hidden (⌥⌘B) — the board's width rides it every
+/// frame.
 pub const MOTION_RESIZE_MS: u64 = 200;
 /// A board seam's hover line fading in under the pointer: 120ms.
 pub const MOTION_SEAM_FADE_MS: u64 = 120;
