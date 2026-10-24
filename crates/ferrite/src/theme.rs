@@ -272,6 +272,15 @@ pub const FLOAT: u32 = 0x2a2a2c;
 /// the prototype's blur softened would let the rows under a menu ghost
 /// through as sharp text; a float must stay legible on its own.
 pub const FLOAT_GLASS: u32 = 0x2c2c2fff;
+/// `#2e2e30` · `#343437` — a float's hover and cursor fills, opaque steps
+/// over its own ground: `RAISED` and `SELECTED` are tuned to the frame
+/// (#222) and land 2 under and 4 over `FLOAT`, so on a float the pointer
+/// showed nothing and the cursor next to nothing. The cursor is the clear
+/// step (+10); the hover stays faint enough (+4) to keep `TEXT_DIM` on its
+/// floor, and the cursor row lifts its dim words to `TEXT_MUTED`
+/// (`menu::row_face`), as the nav's selected row lifts its line 2.
+pub const FLOAT_RAISED: u32 = 0x2e2e30;
+pub const FLOAT_SELECTED: u32 = 0x343437;
 /// `#2e2e2e` — selected: the selected nav row, the active view and panel
 /// tab, the cursor row of a menu, a Decision option and the palette.
 pub const SELECTED: u32 = 0x2e2e2e;
@@ -2162,6 +2171,12 @@ pub const PALETTE_TOP: f32 = 56.0;
 /// departure from SPEC §5.8's `FLOAT ground`). Opaque on every platform,
 /// as every float is (FL-15).
 pub const PALETTE_GROUND: Paint = Paint(solid(FRAME));
+/// The palette's rows on that ground: the frame's own steps, opaque —
+/// `RAISED` under the pointer, `SELECTED` the cursor (the mockup's
+/// `#2e2e2e`). The float inks (`FLOAT_HOVER`, `FLOAT_SEL`) step over
+/// `FLOAT` instead.
+pub const PALETTE_HOVER: Paint = Paint(solid(RAISED));
+pub const PALETTE_SEL: Paint = Paint(solid(SELECTED));
 pub const PALETTE_INPUT_H: f32 = 50.0;
 pub const PALETTE_PAD_X: f32 = SPACE_4;
 /// 10 — between a row's parts, and the input row's (off the space scale,
@@ -2225,11 +2240,12 @@ pub const FIND_ICON: f32 = 14.0;
 ///    owner.
 ///
 /// The verdict: floats render in-window and opaque (`float::hang`), on the
-/// opaque float inks below (`FLOAT_GROUND`, `FLOAT_EDGE`, `FLOAT_RULE`,
-/// `FLOAT_SEL`, `FLOAT_HOVER` = `#2a2a2c`, `#3c3c3f`, `#2f2f31`, `#343437`,
-/// `#2c2c2e`), never a glass overlay over an opaque ground, and
-/// `FLOAT_GLASS` stays opaque. Flip `FLOAT_FROSTED` when a gpui release
-/// lifts the three blocks; the inks then follow the glass values.
+/// opaque float inks below (`FLOAT_GROUND` `#2a2a2c`, `FLOAT_SEL` and
+/// `FLOAT_HOVER` its own steps, `FLOAT_SELECTED` and `FLOAT_RAISED`; the
+/// edge and rule are hairlines), never a glass overlay over an opaque
+/// ground, and `FLOAT_GLASS` stays opaque. Flip `FLOAT_FROSTED` when a
+/// gpui release lifts the three blocks; the inks then follow the glass
+/// values.
 pub const FLOAT_FROSTED: bool = false;
 const fn float_ink(glass: u32, opaque: u32) -> Paint {
     if FLOAT_FROSTED {
@@ -2243,10 +2259,11 @@ const fn float_ink(glass: u32, opaque: u32) -> Paint {
 pub const FLOAT_GROUND: Paint = float_ink(FLOAT_GLASS, FLOAT);
 pub const FLOAT_EDGE: Paint = paint::HAIRLINE_STRONG;
 pub const FLOAT_RULE: Paint = paint::HAIRLINE;
-pub const FLOAT_SEL: Paint = float_ink(SELECTED_GLASS, SELECTED);
-pub const FLOAT_HOVER: Paint = float_ink(RAISED_GLASS, RAISED);
-/// A quick answer under the pointer on a float (a toast's buttons).
-pub const FLOAT_BAND2: Paint = float_ink(RAISED_GLASS, RAISED);
+pub const FLOAT_SEL: Paint = float_ink(SELECTED_GLASS, FLOAT_SELECTED);
+pub const FLOAT_HOVER: Paint = float_ink(RAISED_GLASS, FLOAT_RAISED);
+/// A quick answer's pill on a float (a toast's buttons), stepping up to
+/// `FLOAT_SEL` under the pointer.
+pub const FLOAT_BAND2: Paint = float_ink(RAISED_GLASS, FLOAT_RAISED);
 /// A sheet (Settings, the Project editor, the image preview) is a float at
 /// sheet size: its head two rows (the title and the one close control over
 /// a `paint::LINE`), its body two cells in, a footer under a `paint::LINE`.
@@ -2844,6 +2861,20 @@ mod tests {
         // and the grounds rows sit on, 4:1 on the raised ones.
         floor(&[("TEXT_DIM", TEXT_DIM)], GROUNDS, 4.5);
         floor(&[("TEXT_DIM", TEXT_DIM)], RAISED_GROUNDS, 4.0);
+        // A float's rows: its dim words under the pointer, and lifted to
+        // `TEXT_MUTED` on the cursor row.
+        floor(
+            &[("TEXT_DIM", TEXT_DIM)],
+            &[("FLOAT_RAISED", FLOAT_RAISED)],
+            4.0,
+        );
+        floor(
+            &[("TEXT_MUTED", TEXT_MUTED)],
+            &[("FLOAT_SELECTED", FLOAT_SELECTED)],
+            4.5,
+        );
+        // Each step reads over the one under it.
+        const { assert!(FLOAT_RAISED > FLOAT && FLOAT_SELECTED > FLOAT_RAISED) };
         assert!(contrast(TEXT_DIM, FRAME) >= 4.5 && contrast(TEXT_DIM, CARD) >= 4.5);
         assert!(contrast(TEXT_DIM, SELECTED) >= 4.0);
         // Comments are the dim ink, under its floor.

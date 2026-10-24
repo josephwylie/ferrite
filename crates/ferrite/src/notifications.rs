@@ -639,8 +639,8 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
 
 /// A quick answer in a toast: the key in `TEXT_DIM` and the word in
 /// `TEXT`, on a `TOKEN_H` pill of the float's raised fill (`FLOAT_BAND2`),
-/// radius `R_SMALL`; under the pointer the word `TEXT_STRONG`, over the one
-/// blend.
+/// radius `R_SMALL`; under the pointer the pill a step up and the word
+/// `TEXT_STRONG`, over the one blend (`hover_quick`).
 fn quick_button(
     id: impl Into<gpui::ElementId>,
     key: &'static str,
@@ -658,7 +658,6 @@ fn quick_button(
         .h(px(TOKEN_H))
         .px(px(TOKEN_PAD_X))
         .rounded(px(R_SMALL))
-        .bg(FLOAT_BAND2)
         .whitespace_nowrap()
         .hover_quick(blend)
         .press_float()
