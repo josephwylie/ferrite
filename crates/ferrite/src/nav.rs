@@ -71,17 +71,6 @@ gpui::actions!(nav, [CloseView]);
 /// The column's inner width: its rows reach this far.
 const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
 
-/// The slack a truncating title's budget gets over its visible box.
-///
-/// gpui truncates by summing each character's advance measured **alone**
-/// (gpui text_system/line_wrapper.rs `width_for_char`, cached per char) and
-/// keeps a prefix only while `width + suffix_width < truncate_width` — a
-/// strict `<`, against CSS's `<=`. At an exact fit the last glyph that
-/// would still fit is dropped. Handing the truncator this much extra budget
-/// restores the glyph; the visible box stays exactly its pinned width, and
-/// clips.
-const TRUNCATE_SLOP: f32 = SPACE_1;
-
 const COLLAPSE_KEY: &str = "nav-collapse";
 
 /// A nav row's hover wash.
@@ -718,6 +707,13 @@ impl Measure<'_> {
 /// **column** whose own available width is definite — which taffy derives
 /// from the child's own min/max width. Hence: flex **column**, with min and
 /// max width pinned to the box.
+///
+/// The truncator gets exactly the box. The vendored text element keeps a
+/// line whole when its shaped width fits (a layout unit of slack, so an
+/// exact fit keeps its last glyph) and otherwise cuts it to fit with the
+/// ellipsis, so nothing reaches past the box to be clipped: a budget
+/// wider than the box would lay a slightly-too-long title out whole and
+/// shave its last glyph with no ellipsis (`Supplier Price Reviev`).
 fn fitted(width: f32, size: f32, ink: u32, weight: FontWeight, text: impl IntoElement) -> Div {
     div()
         .flex()
@@ -730,8 +726,8 @@ fn fitted(width: f32, size: f32, ink: u32, weight: FontWeight, text: impl IntoEl
                 div()
                     .flex()
                     .flex_col()
-                    .min_w(px(width.max(0.0) + TRUNCATE_SLOP))
-                    .max_w(px(width.max(0.0) + TRUNCATE_SLOP))
+                    .min_w(px(width.max(0.0)))
+                    .max_w(px(width.max(0.0)))
                     .truncate()
                     .h(px(NAV_LINE))
                     .text_size(px(size))
