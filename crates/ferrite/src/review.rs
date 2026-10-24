@@ -1687,7 +1687,7 @@ impl ReviewView {
         let message = file
             .diff
             .notice
-            .map(|notice| notice.message())
+            .map(|notice| sentence(notice.message()))
             .unwrap_or_default();
         div()
             .flex()
@@ -1801,7 +1801,7 @@ impl ReviewView {
     /// The pull request: its head, its checks and its conversation.
     fn pr_body(&self) -> AnyElement {
         let Some(pr) = &self.pr else {
-            return crate::menu::note("reading\u{2026}").into_any_element();
+            return crate::menu::note("Reading\u{2026}").into_any_element();
         };
         let pr = match &pr.pr {
             Ok(pr) => pr,
@@ -1847,7 +1847,7 @@ impl ReviewView {
             );
         }
         if !pr.checks.is_empty() {
-            body = body.child(div().mt(px(self.grid.half())).child(muted("checks".into())));
+            body = body.child(div().mt(px(self.grid.half())).child(muted("Checks".into())));
             for check in &pr.checks {
                 let (glyph, color) = match check.status {
                     WireCheckStatus::Success => ("\u{2713}", GREEN),
@@ -1922,7 +1922,7 @@ impl ReviewView {
             body = body.child(card);
         }
         if pr.truncated {
-            body = body.child(muted("more on the forge".into()));
+            body = body.child(muted("More on the forge".into()));
         }
         body.into_any_element()
     }
@@ -1931,7 +1931,7 @@ impl ReviewView {
     fn search_body(&self, search: &SearchPanel, cx: &mut Context<Self>) -> AnyElement {
         let cell = self.grid.cell();
         let results: AnyElement = match &search.results {
-            None => crate::menu::note("searching\u{2026}").into_any_element(),
+            None => crate::menu::note("Searching\u{2026}").into_any_element(),
             Some(Err(error)) => crate::menu::note(error.clone()).into_any_element(),
             Some(Ok(_)) => {
                 let rows = search.rows();
@@ -2022,7 +2022,7 @@ impl ReviewView {
     /// quiet.
     fn tree_body(&self, tree: &TreePanel, cx: &mut Context<Self>) -> AnyElement {
         let entries = match &tree.entries {
-            None => return crate::menu::note("reading\u{2026}").into_any_element(),
+            None => return crate::menu::note("Reading\u{2026}").into_any_element(),
             Some(Err(error)) => {
                 return crate::menu::note(format!("Can\u{2019}t list the files \u{b7} {error}"))
                     .into_any_element()
@@ -2100,14 +2100,14 @@ impl ReviewView {
     fn bases_body(&self, panel: &BasePanel, cx: &mut Context<Self>) -> AnyElement {
         let cell = self.grid.cell();
         let list: AnyElement = match &panel.bases {
-            None => crate::menu::note("reading\u{2026}").into_any_element(),
+            None => crate::menu::note("Reading\u{2026}").into_any_element(),
             Some(Err(error)) => crate::menu::note(error.clone()).into_any_element(),
             Some(Ok(bases)) => {
                 let visible = panel.visible(cx);
                 if visible.is_empty() {
                     let typed = panel.field.read(cx).text().trim().to_string();
                     let note = match typed.is_empty() {
-                        true => "no branches".to_string(),
+                        true => "No branches".to_string(),
                         false => format!("\u{23ce} reads the branch over {typed}"),
                     };
                     crate::menu::note(note).into_any_element()
@@ -2210,30 +2210,22 @@ impl ReviewView {
             return self.tree_body(tree, cx);
         }
         if let Some(error) = &self.error {
-            let what = if self.pr_open {
-                "the pull request".to_string()
-            } else if let Some(file) = &self.file {
-                file.path.clone()
-            } else {
-                self.scope.label().to_string()
-            };
-            return crate::menu::note(format!("can\u{2019}t read {what} \u{b7} {error}"))
-                .into_any_element();
+            return crate::menu::note(self.error_note(error)).into_any_element();
         }
         if self.pr_open {
             return self.pr_body();
         }
         if let Some(file) = &self.file {
             return match &file.file {
-                None => crate::menu::note("reading\u{2026}").into_any_element(),
+                None => crate::menu::note("Reading\u{2026}").into_any_element(),
                 Some(_) => self.rows_list(cx),
             };
         }
         if self.listing_commits() {
             return match &self.commits {
-                None => crate::menu::note("reading\u{2026}").into_any_element(),
+                None => crate::menu::note("Reading\u{2026}").into_any_element(),
                 Some(commits) if commits.is_empty() => {
-                    crate::menu::note("no commits on this branch").into_any_element()
+                    crate::menu::note("No commits on this branch").into_any_element()
                 }
                 Some(commits) => div()
                     .id("review-commits")
@@ -2257,12 +2249,51 @@ impl ReviewView {
             };
         }
         match &self.diff {
-            None => crate::menu::note("reading\u{2026}").into_any_element(),
+            None => crate::menu::note("Reading\u{2026}").into_any_element(),
             Some(files) if files.is_empty() => {
-                crate::menu::note(format!("nothing changed \u{b7} {}", self.scope.label()))
-                    .into_any_element()
+                crate::menu::note(self.empty_note()).into_any_element()
             }
             Some(_) => self.rows_list(cx),
+        }
+    }
+
+    /// What the slot says when a read failed. Reviewr's word for a state
+    /// that is nobody's fault — no repository, no turn yet — stands as a
+    /// plain sentence; anything else says what could not be read, and why.
+    fn error_note(&self, error: &str) -> String {
+        match error {
+            "not a git repository" => "No git repository here, so nothing to review".into(),
+            "waiting for the first turn" => {
+                "No turn has changed the checkout yet: the last turn shows here once one does"
+                    .into()
+            }
+            _ => {
+                let what = if self.pr_open {
+                    "the pull request".to_string()
+                } else if let Some(file) = &self.file {
+                    file.path.clone()
+                } else {
+                    match (self.scope, &self.commit) {
+                        (Scope::Uncommitted, _) => "the uncommitted changes",
+                        (Scope::Branch, _) => "the branch",
+                        (Scope::LastTurn, _) => "the last turn",
+                        (Scope::Commits, Some(_)) => "the commit",
+                        (Scope::Commits, None) => "the branch\u{2019}s commits",
+                    }
+                    .to_string()
+                };
+                format!("Can\u{2019}t read {what} \u{b7} {error}")
+            }
+        }
+    }
+
+    /// What the slot says when the scope's diff is empty.
+    fn empty_note(&self) -> &'static str {
+        match self.scope {
+            Scope::Uncommitted => "No uncommitted changes",
+            Scope::Branch => "No changes on this branch",
+            Scope::LastTurn => "No changes in the last turn",
+            Scope::Commits => "No changes in this commit",
         }
     }
 
@@ -2362,6 +2393,15 @@ fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
                     removed as usize,
                 )),
         ))
+}
+
+/// `words` in sentence case: reviewr's notices are lower case, the slot's
+/// notes (like every note in Ferrite) start with a capital.
+fn sentence(words: &str) -> String {
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// A row a click picks: the row's hover face under the pointer, or, on
@@ -3057,6 +3097,30 @@ mod tests {
             lines.right(),
             slot.right()
         );
+    }
+
+    /// Notes speak in sentences: reviewr's lower-case notices take a
+    /// capital, and its states that are no fault read plainly.
+    #[gpui::test]
+    fn notes_read_in_sentence_case(cx: &mut TestAppContext) {
+        assert_eq!(
+            sentence("binary file \u{b7} no line comments"),
+            "Binary file \u{b7} no line comments"
+        );
+        assert_eq!(sentence(""), "");
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        review.read_with(cx, |review, _| {
+            assert_eq!(review.empty_note(), "No uncommitted changes");
+            assert_eq!(
+                review.error_note("not a git repository"),
+                "No git repository here, so nothing to review"
+            );
+            assert_eq!(
+                review.error_note("index.lock exists"),
+                "Can\u{2019}t read the uncommitted changes \u{b7} index.lock exists"
+            );
+        });
     }
 
     struct Host(Entity<ReviewView>);
