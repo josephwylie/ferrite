@@ -29,7 +29,9 @@
 //!
 //! One function per tab draws its body (`panel_changes`, `panel_context`,
 //! and the PR tab's `panel_pr`, in `pr_tab`, which also reads it): 7b adds
-//! a file's hunks under its head (`panel_file_block`, `hunks`).
+//! a file's hunks under its head (`panel_file_block`, `hunks`). The body
+//! switches at once with its tab, and each Thread's tab keeps its own
+//! scroll.
 
 pub(crate) mod hunks;
 
@@ -39,7 +41,7 @@ use ferrite_core::docview::FileChange;
 use gpui::relative;
 
 /// A panel tab. A Thread the panel has not shown yet opens on `Changes`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum PanelTab {
     #[default]
     Changes,
@@ -52,6 +54,9 @@ pub(crate) enum PanelTab {
 pub(crate) struct Panel {
     /// The last tab each Thread's panel showed.
     tabs: std::collections::HashMap<ThreadId, PanelTab>,
+    /// Each Thread's tabs' scroll, so a tab comes back where it was left
+    /// rather than at another tab's offset.
+    scrolls: std::collections::HashMap<(ThreadId, PanelTab), ScrollHandle>,
     /// The Changes tab's unfolded files and their hunks.
     hunks: hunks::Hunks,
     /// The column on its way in or out (see the module doc).
@@ -96,6 +101,8 @@ impl CockpitView {
         let thread = self.panel_thread();
         if let Some(thread) = thread {
             self.panel.last = Some(thread);
+            let tab = self.panel_tab(thread);
+            self.panel.scrolls.entry((thread, tab)).or_default();
         }
         let shown = thread.is_some();
         if self
@@ -320,6 +327,12 @@ impl CockpitView {
             PanelTab::Pr => self.panel_pr(thread, window, cx),
             PanelTab::Context => self.panel_context(thread, window, cx),
         };
+        let scroll = self
+            .panel
+            .scrolls
+            .get(&(thread, tab))
+            .cloned()
+            .unwrap_or_default();
         Some(
             div()
                 .debug_selector(|| "panel".into())
@@ -349,17 +362,7 @@ impl CockpitView {
                         .text_color(rgb(TEXT))
                         .whitespace_nowrap()
                         .child(self.panel_head(thread, tab, cx))
-                        .child(
-                            div()
-                                .id("panel-body")
-                                .debug_selector(|| "panel-body".into())
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .min_h_0()
-                                .overflow_y_scroll()
-                                .child(body),
-                        )
+                        .child(panel_body(body, &scroll))
                         .children(self.panel_foot(thread)),
                 )
                 .into_any_element(),
@@ -392,8 +395,12 @@ impl CockpitView {
                 .font_weight(W_LABEL)
                 .occlude()
                 .map(|face| {
+                    // The shown tab carries the selection, and steps it up
+                    // under the pointer; its blend is the same key either
+                    // way, so the tab the pointer left while it was shown
+                    // has let its hover go.
                     if active {
-                        face.bg(paint::SELECTED).text_color(rgb(TEXT_STRONG))
+                        face.hover_carried(key).text_color(rgb(TEXT_STRONG))
                     } else {
                         face.text_color(rgb(TEXT_MUTED))
                             .hover_raised(key)
@@ -830,6 +837,39 @@ pub(super) fn panel_toggle_inset() -> f32 {
 /// (`panel_toggle_element`): the toggle's own box, kept clear.
 pub(super) fn toggle_room() -> Div {
     div().flex_shrink_0().size(px(crate::theme::ICON_BUTTON))
+}
+
+/// The tab's body, scrolling between the head and the foot on the Thread's
+/// tab's own `scroll`, its overlay thumb in the column's right padding
+/// (`PANEL_SCROLLBAR_INSET`) beside the rows rather than over them.
+fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
+    use crate::theme::{PANEL_PAD_R, PANEL_SCROLLBAR_INSET};
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .id("panel-body")
+                .debug_selector(|| "panel-body".into())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(scroll)
+                .child(body),
+        )
+        .child(
+            crate::components::scrollbar_layer()
+                .right(px(-PANEL_PAD_R))
+                .child(
+                    crate::components::scrollbar_bar("panel-scrollbar", scroll)
+                        .gutter(px(PANEL_PAD_R), px(PANEL_SCROLLBAR_INSET)),
+                ),
+        )
 }
 
 /// A two-line panel row (48): its icon at the row's left, its two lines

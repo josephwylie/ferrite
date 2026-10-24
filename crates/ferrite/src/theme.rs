@@ -889,6 +889,11 @@ pub const PANEL_W: f32 = 304.0;
 pub const PANEL_PAD_L: f32 = SPACE_2;
 pub const PANEL_PAD_R: f32 = 10.0;
 pub const PANEL_PAD_B: f32 = SPACE_2;
+/// The panel body's scrollbar lies in the column's right padding
+/// (`PANEL_PAD_R`), beside the rows rather than over them, as the nav's
+/// does: a 10px hit strip, the 6px hovered thumb 2px from either side.
+pub const PANEL_SCROLLBAR_INSET: f32 = 2.0;
+const _: () = assert!(PANEL_PAD_R == 2. * PANEL_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
 /// 28px — a panel tab in the head row (r7, 12.5/500), 10px inline padding,
 /// 6px to its count; 2px between tabs.
 pub const PANEL_TAB_H: f32 = 28.0;

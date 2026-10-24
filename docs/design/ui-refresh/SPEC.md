@@ -637,7 +637,8 @@ still open beside the Pane inside the board (ADR 0021).
 - **Head (46, in the head row).** Three tabs: `Changes N`, `PR #N` and
   `Context`.
   - Tabs are 28 high, radius 7, 12.5/500. The active tab is `SELECTED`
-    with `TEXT_STRONG`; inactive tabs are `TEXT_MUTED`.
+    with `TEXT_STRONG` (`SELECTION_HOVER` under the pointer, as a selected
+    nav row); inactive tabs are `TEXT_MUTED`, `RAISED` under the pointer.
   - `Changes` carries the changed-file count in 12/400 `TEXT_DIM`.
   - `PR` carries the PR number in Geist Mono 11.5 `TEXT_DIM` when the
     branch has one, and nothing otherwise.
@@ -659,6 +660,10 @@ still open beside the Pane inside the board (ADR 0021).
     palette's `Toggle panel`.
   - The panel's visibility is a persisted setting, beside
     `nav_collapsed`.
+  - Tabs switch at once: the body changes on the click's frame, with no
+    layout shift in the head. Each Thread's tab keeps its own scroll, so
+    a tab comes back where it was left. The body's overlay scrollbar
+    sits in the column's right padding, as the nav's does.
 - **Showing and hiding.** The panel rides in and out the way the nav
   folds (`motion::RESIZE`, 200ms CSS `ease`, interruptible), whatever
   made it come or go: the toggle, or focus moving to or from a draft,
