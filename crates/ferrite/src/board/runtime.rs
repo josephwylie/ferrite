@@ -33,12 +33,17 @@ use sw_board::shown::ink::{Ink, Inked};
 
 use super::{aim, controls, keys, machines, mouse, render};
 use crate::components;
-use crate::theme::{CARD, CH, ROW};
+use crate::theme::{CARD, CH, ROW, SPACE_1};
 
 /// How often the board ticks and the loader looks again.
 const BEAT: std::time::Duration = std::time::Duration::from_secs(1);
 /// The popup's edge, inside which its cells are.
 const POPUP_EDGE: f32 = 1.0;
+/// The cells' inset from the board's sides and from the controls above:
+/// with the cell the board's own lines start in, their words stand on the
+/// controls' text edge (`SPACE_3`), and the first line is clear of the
+/// controls' hairline.
+pub(super) const GRID_INSET: f32 = SPACE_1;
 /// How long the popup says how to come back before it closes on an
 /// opened agent (`Ctx::leave_ms`, as upstream's runtime sets it).
 const LEAVE_MS: i64 = 700;
@@ -155,8 +160,8 @@ impl BoardView {
         self.pixels = (width, height);
         let edge = if self.popup() { 2.0 * POPUP_EDGE } else { 0.0 };
         self.size = cells(
-            width - edge,
-            height - edge - self.aim.height() - controls::HEIGHT,
+            width - edge - 2.0 * GRID_INSET,
+            height - edge - GRID_INSET - self.aim.height() - controls::HEIGHT,
         );
     }
 
@@ -430,6 +435,10 @@ impl Render for BoardView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let screen = self.screen();
         let lines = self.pointer.frame(screen);
+        let grounds = match self.board.as_ref() {
+            Some(board) => self.pointer.grounds(&board.state),
+            None => Vec::new(),
+        };
         let theme = self.board.as_ref().map(|board| &board.theme);
         // The reading plane under the board, popup too: its greys are held
         // readable on it; a named theme paints its own ground.
@@ -460,13 +469,16 @@ impl Render for BoardView {
             .children(strip)
             .child(controls)
             .child(
-                components::text_ui()
-                    .debug_selector(|| "projects-board-rows".into())
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .children(rows)
-                    .child(self.pointer.layer()),
+                div().px(px(GRID_INSET)).pt(px(GRID_INSET)).child(
+                    components::text_ui()
+                        .debug_selector(|| "projects-board-rows".into())
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .children(grounds)
+                        .children(rows)
+                        .child(self.pointer.layer()),
+                ),
             )
     }
 }

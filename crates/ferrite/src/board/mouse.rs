@@ -10,6 +10,13 @@
 //!
 //! A click on a link's words opens it (`links.rs`) instead.
 //!
+//! The pointer says where a click lands, as every list in Ferrite does
+//! (`pointer.rs`): a row a click would select, or a heading it would fold,
+//! takes the row role's hover wash, blended under its words, and the
+//! pointing hand; so do a link's words. The selected row, a row while a
+//! draft locks who gets it, and every screen a click does nothing on stay
+//! as they are.
+//!
 //! `Selecting` works on cells of the drawn screen (column, line); `Pointer`
 //! keeps it with the screen's links and where its cells are, and `listen`
 //! turns GPUI's mouse into cells for it.
@@ -19,16 +26,17 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    canvas, px, Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, ScrollWheelEvent,
+    canvas, div, px, AnyElement, Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, ScrollWheelEvent, SharedString,
 };
-use sw_board::board::state::State;
+use sw_board::board::state::{Mode, State};
 use sw_board::board::update::Event;
 use sw_board::shown::ink::{Ink, Inked, Piece};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::links::{self, Link};
 use super::BoardView;
+use crate::pointer::Pointer as _;
 use crate::theme::{CH, ROW};
 
 /// A cell of the screen: its column and its line.
@@ -255,6 +263,54 @@ impl Selecting {
     }
 }
 
+/// A row of the list a click acts on: its id, its first line on the
+/// screen and how many lines it takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Band {
+    pub id: String,
+    pub y: usize,
+    pub lines: usize,
+}
+
+/// Whether a click on the list does anything now: `update/mouse.rs`'s
+/// `click`, which ignores it on every other screen and while a draft
+/// locks who it is for.
+fn takes_clicks(s: &State) -> bool {
+    let busy = s.leaving
+        || s.setup.is_some()
+        || s.ask.is_some()
+        || !s.paste_text.is_empty()
+        || s.menu.is_some()
+        || s.full
+        || s.auto_open;
+    let locked = s.mode == Mode::New && !s.value().trim().is_empty();
+    !busy && !locked
+}
+
+/// The list's rows a click would act on, as the screen last laid them out
+/// (`list_at`, `list_ids`), with the columns they span: every row and
+/// heading but the selected row, where a click does nothing more.
+pub fn bands(s: &State) -> (usize, Vec<Band>) {
+    let Some((top, wide)) = s.list_at.filter(|_| takes_clicks(s)) else {
+        return (0, Vec::new());
+    };
+    let mut out: Vec<Band> = Vec::new();
+    for (at, id) in s.list_ids.iter().enumerate() {
+        if id.is_empty() || *id == s.sel {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.id == *id && last.y + last.lines == top + at => last.lines += 1,
+            _ => out.push(Band {
+                id: id.clone(),
+                y: top + at,
+                lines: 1,
+            }),
+        }
+    }
+    (wide, out)
+}
+
 /// Two pieces drawn alike: everything but their words the same.
 fn same_style(a: &Piece, b: &Piece) -> bool {
     Piece {
@@ -307,6 +363,39 @@ impl Pointer {
         canvas(move |at, _, _| bounds.set(Some(at)), |_, _, _, _| {})
             .absolute()
             .size_full()
+    }
+
+    /// What lies under the board's words and says where a click lands:
+    /// each row a click acts on, washed under the pointer (the row role),
+    /// and each link's words, the pointing hand. Drawn before the lines,
+    /// so the wash sits under their words.
+    pub(crate) fn grounds(&self, s: &State) -> Vec<AnyElement> {
+        let at = |x: usize, y: usize, width: usize, lines: usize| {
+            div()
+                .absolute()
+                .left(px(x as f32 * CH))
+                .top(px(y as f32 * ROW))
+                .w(px(width as f32 * CH))
+                .h(px(lines as f32 * ROW))
+        };
+        let (wide, bands) = bands(s);
+        let rows = bands.into_iter().map(|band| {
+            let id = SharedString::from(format!("board-row-{}", band.id));
+            let key = SharedString::from(format!("hover:{id}"));
+            let selector = id.clone();
+            at(0, band.y, wide, band.lines)
+                .id(id)
+                .debug_selector(move || selector.to_string())
+                .hover_row(key)
+                .into_any_element()
+        });
+        let links = self.links.iter().enumerate().map(|(n, link)| {
+            at(link.x, link.y, link.width, 1)
+                .id(("board-link", n))
+                .cursor_pointer()
+                .into_any_element()
+        });
+        rows.chain(links).collect()
     }
 
     /// The cell under a point of the window: one off the board is the
