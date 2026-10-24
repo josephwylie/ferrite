@@ -2660,9 +2660,14 @@ pub const MOTION_SLOT_SHIFT: f32 = 6.0;
 pub const MOTION_CHEVRON_MS: u64 = 150;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
 pub const MOTION_HOVER_FADE_MS: u64 = 150;
-/// A toast's stack timing: it settles in over 180ms and leaves over 100ms.
+/// A toast's timing: it rises in over 180ms and leaves over 100ms (the
+/// Needs-you toast, `motion::toast_in` / `toast_out`; the kit's toast
+/// stack settles on the same two).
 pub const MOTION_TOAST_IN_MS: u64 = 180;
 pub const MOTION_TOAST_OUT_MS: u64 = 100;
+/// How far a toast rises into place over the bottom bar; it sinks half
+/// that as it fades away.
+pub const MOTION_TOAST_RISE: f32 = 4.0;
 /// 1.4s — how long a scrollbar thumb holds after the last scroll frame
 /// (C26) before it fades out over `MOTION_HOVER_FADE_MS`. Idle, no thumb.
 pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;

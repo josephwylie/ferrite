@@ -637,20 +637,11 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
 
 // ---------------------------------------------------------------- toasts
 
-/// A quick answer in a toast: the key in `TEXT_DIM` and the word in
-/// `TEXT`, on a `TOKEN_H` pill of the float's raised fill (`FLOAT_BAND2`),
-/// radius `R_SMALL`; under the pointer the word `TEXT_STRONG`, over the one
-/// blend.
-fn quick_button(
-    id: impl Into<gpui::ElementId>,
-    key: &'static str,
-    word: &'static str,
-) -> Stateful<Div> {
-    let id = id.into();
-    let blend = crate::pointer::hover_key(&id);
-    let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
+/// A quick answer's pill: the key in `TEXT_DIM` and the word in `ink`, on
+/// a `TOKEN_H` pill of the float's raised fill (`FLOAT_BAND2`), radius
+/// `R_SMALL`.
+fn quick_pill(key: &'static str, word: &'static str, ink: gpui::Hsla) -> Div {
     div()
-        .id(id)
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -660,10 +651,24 @@ fn quick_button(
         .rounded(px(R_SMALL))
         .bg(FLOAT_BAND2)
         .whitespace_nowrap()
-        .hover_quick(blend)
-        .press_float()
         .child(div().text_color(rgb(TEXT_DIM)).child(key))
         .child(div().text_color(ink).child(word))
+}
+
+/// A quick answer in a toast: its pill, the word `TEXT_STRONG` under the
+/// pointer, over the one blend.
+fn quick_button(
+    id: impl Into<gpui::ElementId>,
+    key: &'static str,
+    word: &'static str,
+) -> Stateful<Div> {
+    let id = id.into();
+    let blend = crate::pointer::hover_key(&id);
+    let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
+    quick_pill(key, word, ink)
+        .id(id)
+        .hover_quick(blend)
+        .press_float()
 }
 
 /// A toast (the prototype's `.toast`, FL-18), in the float grammar with no
@@ -673,6 +678,17 @@ fn quick_button(
 /// `⏎ open` alone for a question, a finished turn, or anything on a
 /// machine off screen (its status link answers nothing).
 pub fn toast(row: &Row, handle: Handle) -> Div {
+    toast_card(row, Some(handle))
+}
+
+/// A toast on its way out (`ToastStage`): the same card, answering no
+/// pointer — its answers drawn at rest and pressing nothing, nothing under
+/// it occluded, none of the live toast's selectors (`toast-leaving`).
+pub fn toast_face(row: &Row) -> Div {
+    toast_card(row, None)
+}
+
+fn toast_card(row: &Row, handle: Option<Handle>) -> Div {
     let thread = row.thread.get() as usize;
     let request = row.request();
     let word = row.word();
@@ -703,50 +719,45 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
             .child(SharedString::from(detail.text()))
             .into_any_element(),
     };
-    let mut buttons: Vec<AnyElement> = Vec::new();
+    let mut answers: Vec<(&'static str, &'static str, &'static str, Verb)> = Vec::new();
     if let (None, RowTarget::Decision(id), State::NeedsYou(RequestKind::Permission)) =
         (&row.away, &row.target, row.state)
     {
-        let (allow, deny) = (handle.clone(), handle.clone());
-        let (allow_id, deny_id) = (id.clone(), id.clone());
-        buttons.push(
-            quick_button(("toast-allow", thread), "1 ", "allow")
-                .debug_selector(move || format!("toast-allow-{thread}"))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    allow(
-                        Verb::Answer(allow_id.clone(), QuickAnswer::Allow),
-                        window,
-                        cx,
-                    )
-                })
-                .into_any_element(),
-        );
-        buttons.push(
-            quick_button(("toast-deny", thread), "3 ", "deny")
-                .debug_selector(move || format!("toast-deny-{thread}"))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    deny(Verb::Answer(deny_id.clone(), QuickAnswer::Deny), window, cx)
-                })
-                .into_any_element(),
-        );
+        answers.push((
+            "toast-allow",
+            "1 ",
+            "allow",
+            Verb::Answer(id.clone(), QuickAnswer::Allow),
+        ));
+        answers.push((
+            "toast-deny",
+            "3 ",
+            "deny",
+            Verb::Answer(id.clone(), QuickAnswer::Deny),
+        ));
     }
-    let open = row.open_verb();
-    let opener = handle.clone();
-    buttons.push(
-        quick_button(("toast-open", thread), "\u{23ce} ", "open")
-            .debug_selector(move || format!("toast-open-{thread}"))
+    answers.push(("toast-open", "\u{23ce} ", "open", row.open_verb()));
+    let buttons = answers.into_iter().map(|(name, key, word, verb)| {
+        let Some(handle) = handle.clone() else {
+            return quick_pill(key, word, rgb(TEXT).into()).into_any_element();
+        };
+        quick_button((name, thread), key, word)
+            .debug_selector(move || format!("{name}-{thread}"))
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
-                opener(open.clone(), window, cx)
+                handle(verb.clone(), window, cx)
             })
-            .into_any_element(),
-    );
-    crate::menu::float()
-        .debug_selector(move || format!("toast-{thread}"))
-        .w(px(TOAST_W))
-        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .into_any_element()
+    });
+    let card = match handle {
+        Some(_) => crate::menu::float()
+            .debug_selector(move || format!("toast-{thread}"))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+        None => components::float_ground()
+            .p(px(0.))
+            .debug_selector(|| "toast-leaving".into()),
+    };
+    card.w(px(TOAST_W))
         .child(
             div()
                 .flex()
@@ -804,6 +815,51 @@ pub fn toast(row: &Row, handle: Handle) -> Div {
         )
 }
 
+/// What the toast float draws as toasts come and go (FL-18). The toast
+/// standing now rises in (`motion::toast_in`, keyed by `toast_key`, so a
+/// new one enters and the same one stays put); one that goes — read,
+/// resolved, timed out or replaced — leaves as its face (`toast_face`),
+/// fading over `motion::TOAST_OUT` (`motion::toast_out`), under whatever
+/// stands next. Under reduced motion nothing lingers.
+#[derive(Default)]
+pub struct ToastStage {
+    standing: Option<Row>,
+    leaving: Option<(Row, Instant)>,
+}
+
+impl ToastStage {
+    /// This frame's standing toast, at `now`: the toast leaving, and when it
+    /// went, while it still fades.
+    pub fn stage(
+        &mut self,
+        standing: Option<&Row>,
+        now: Instant,
+        reduced: bool,
+    ) -> Option<(Row, Instant)> {
+        let same = |a: &Row, b: &Row| toast_key(a) == toast_key(b);
+        let went = match (self.standing.take(), standing) {
+            (Some(shown), Some(next)) if same(&shown, next) => None,
+            (shown, _) => shown,
+        };
+        if let Some(went) = went.filter(|_| !reduced) {
+            self.leaving = Some((went, now));
+        }
+        self.standing = standing.cloned();
+        let fading = |left: Instant| {
+            !reduced && now.saturating_duration_since(left) < crate::motion::TOAST_OUT.duration()
+        };
+        if !self.leaving.as_ref().is_some_and(|(_, left)| fading(*left)) {
+            self.leaving = None;
+        }
+        self.leaving.clone()
+    }
+}
+
+/// A toast's identity on screen: its record, on its machine.
+pub fn toast_key(row: &Row) -> SharedString {
+    format!("toast-in-{:?}-{:?}", row.away, row.target).into()
+}
+
 pub fn target_verb(target: &RowTarget) -> Verb {
     match target {
         RowTarget::Notice(id) => Verb::Open(*id),
@@ -847,6 +903,53 @@ mod tests {
                 request_id: format!("r{serial}"),
             },
         }
+    }
+
+    /// A toast that goes leaves for `TOAST_OUT`, while the same one standing
+    /// on (its words updated) stays put; a new one replacing it sends the
+    /// old one out under it. Reduced motion keeps nothing leaving.
+    #[test]
+    fn the_toast_stage_lets_a_toast_go_softly_and_keeps_one_that_stays() {
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let out = crate::motion::TOAST_OUT.duration();
+        let done = row(State::Done, Detail::None);
+        let mut stage = ToastStage::default();
+        assert!(stage.stage(Some(&done), t0, false).is_none(), "it enters");
+        let aged = Row {
+            when: "10m".into(),
+            ..done.clone()
+        };
+        assert!(
+            stage.stage(Some(&aged), ms(500), false).is_none(),
+            "the same toast stands on"
+        );
+
+        let (left, at) = stage.stage(None, ms(1_000), false).expect("it leaves");
+        assert_eq!((toast_key(&left), at), (toast_key(&done), ms(1_000)));
+        assert!(stage.stage(None, ms(1_050), false).is_some(), "fading");
+        assert!(
+            stage.stage(None, ms(1_000) + out, false).is_none(),
+            "gone after TOAST_OUT"
+        );
+
+        let asking = Row {
+            target: RowTarget::Decision(request(3, 1)),
+            ..done.clone()
+        };
+        stage.stage(Some(&done), ms(2_000), false);
+        let (left, _) = stage
+            .stage(Some(&asking), ms(2_100), false)
+            .expect("replaced, the old one leaves");
+        assert_eq!(toast_key(&left), toast_key(&done));
+        assert_ne!(toast_key(&left), toast_key(&asking), "the new one enters");
+
+        let mut reduced = ToastStage::default();
+        reduced.stage(Some(&done), t0, true);
+        assert!(
+            reduced.stage(None, ms(10), true).is_none(),
+            "reduced: it just goes"
+        );
     }
 
     /// Each detail shape the list prints (R7): an approval's command head,

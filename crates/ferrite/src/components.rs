@@ -347,9 +347,14 @@ pub fn outer_ring(radius: f32, ink: impl Into<Hsla>) -> Div {
 /// The caller states its width and position. (The palette's dialog is the
 /// same shell at its own scale, `palette::dialog`.)
 pub fn floating_surface() -> Div {
+    float_ground().cursor_default().occlude()
+}
+
+/// The floating surface's look alone, answering no pointer: a float on its
+/// way out (a toast fading away) must not hold a hit area it no longer
+/// stands behind.
+pub fn float_ground() -> Div {
     text_ui()
-        .cursor_default()
-        .occlude()
         .flex()
         .flex_col()
         .p(px(theme::FLOAT_PAD))

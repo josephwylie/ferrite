@@ -507,6 +507,9 @@ pub struct CockpitView {
     /// The Needs-you view: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) needs_you: NeedsYou,
+    /// What the toast float drew last: the toast standing and the one
+    /// fading out (`toast_float`).
+    toast_stage: std::cell::RefCell<crate::notifications::ToastStage>,
     /// What to open once the Cockpit is attached: what the window came
     /// to this machine for (ADR 0026), and until when it waits.
     landing: Option<(Landing, std::time::Instant)>,
@@ -1573,6 +1576,7 @@ impl CockpitView {
             leave_asked: false,
             group_error: None,
             needs_you: NeedsYou::new(),
+            toast_stage: Default::default(),
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),

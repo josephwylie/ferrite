@@ -207,6 +207,10 @@ pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
+/// A toast rising in over the bottom bar, and fading away when it goes on
+/// its own: the toast tokens, on the menus' curve.
+pub const TOAST_IN: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_IN_MS, EASE);
+pub const TOAST_OUT: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_OUT_MS, EASE);
 
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
@@ -310,6 +314,40 @@ where
     })
 }
 
+/// `toast-in` for a toast hung over the bottom bar: fades up from
+/// `MOTION_MENU_FROM_OPACITY` while rising `MOTION_TOAST_RISE` into place,
+/// over `TOAST_IN`.
+pub fn toast_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, TOAST_IN, element, |el, t| {
+        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+            .relative()
+            .top(px(theme::MOTION_TOAST_RISE * (1.0 - t)))
+    })
+}
+
+/// `toast-out` for a toast that went on its own at `left`: fades away over
+/// `TOAST_OUT`, sinking half its rise — shorter and softer than it came.
+/// The caller draws it as a face that answers no pointer, and stops once
+/// [`TOAST_OUT`] has passed.
+pub fn toast_out<E>(left: Instant, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    Played {
+        origin: Origin::At(left),
+        spec: TOAST_OUT,
+        element,
+        face: |el: E, t: f32| {
+            float_face(el, 1.0 - t)
+                .relative()
+                .top(px(theme::MOTION_TOAST_RISE / 2.0 * t))
+        },
+    }
+}
+
 /// `fade-in` over `spec`: opacity 0 → `to`, nothing moves — a mark or a
 /// chip arriving in a line that is already drawn.
 pub fn fade_in<E>(
@@ -357,6 +395,8 @@ enum Origin {
     /// When the element under this id first mounts (an entrance): kept in
     /// its element state, so it plays once and a remount plays it again.
     Mount(ElementId),
+    /// At an instant the caller holds (an exit: when its subject went).
+    At(Instant),
 }
 
 /// A one-shot drawn at its spec's eased progress on the executor's clock:
@@ -400,6 +440,7 @@ fn play(origin: Origin, spec: MotionSpec, window: &mut Window, cx: &mut App) -> 
     }
     let now = cx.background_executor().now();
     let started = match origin {
+        Origin::At(at) => at,
         Origin::Mount(id) => window.with_global_id(id, |id, window| {
             window.with_element_state(id, |started: Option<Instant>, _| {
                 let started = started.unwrap_or(now);
@@ -1656,6 +1697,7 @@ mod tests {
 
     struct Entering {
         mounted: bool,
+        left: Option<Instant>,
         drawn: std::rc::Rc<std::cell::Cell<f32>>,
     }
 
@@ -1666,14 +1708,21 @@ mod tests {
                 drawn.set(t);
                 el
             };
-            div().when(self.mounted, |root| {
-                root.child(entrance("entering", MENU_IN, div().size_4(), face))
+            div().when(self.mounted, |root| match self.left {
+                None => root.child(entrance("entering", MENU_IN, div().size_4(), face)),
+                Some(left) => root.child(Played {
+                    origin: Origin::At(left),
+                    spec: TOAST_OUT,
+                    element: div().size_4(),
+                    face,
+                }),
             })
         }
     }
 
     fn entering(
         cx: &mut TestAppContext,
+        left: Option<Instant>,
     ) -> (
         gpui::Entity<Entering>,
         std::rc::Rc<std::cell::Cell<f32>>,
@@ -1683,6 +1732,7 @@ mod tests {
         let seen = drawn.clone();
         let (view, cx) = cx.add_window_view(move |_, _| Entering {
             mounted: true,
+            left,
             drawn: seen,
         });
         cx.run_until_parked();
@@ -1695,7 +1745,7 @@ mod tests {
     #[gpui::test]
     fn an_entrance_plays_from_its_first_mount_and_then_asks_for_nothing(cx: &mut TestAppContext) {
         testing::drive();
-        let (view, drawn, cx) = entering(cx);
+        let (view, drawn, cx) = entering(cx, None);
         assert_eq!(drawn.get(), 0.0, "its first frame is its first");
         cx.executor().advance_clock(Duration::from_millis(70));
         assert!(next_frame(cx) > 0, "it asks for the next frame");
@@ -1717,12 +1767,27 @@ mod tests {
         assert_eq!(drawn.get(), 0.0, "mounted again, it plays again");
     }
 
+    /// An exit plays from the instant its subject went, not from its mount.
+    #[gpui::test]
+    fn an_exit_plays_from_the_instant_its_subject_went(cx: &mut TestAppContext) {
+        testing::drive();
+        let left = cx.executor().now() - Duration::from_millis(50);
+        let (_view, drawn, cx) = entering(cx, Some(left));
+        let at = drawn.get();
+        assert!(at > 0.0 && at < 1.0, "50ms into its 100ms: {at}");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_TOAST_OUT_MS));
+        assert!(next_frame(cx) > 0);
+        assert_eq!(drawn.get(), 1.0, "gone");
+        assert_eq!(next_frame(cx), 0, "and asks for nothing");
+    }
+
     /// Reduced motion lands an entrance on its first frame.
     #[gpui::test]
     fn reduced_motion_lands_an_entrance(cx: &mut TestAppContext) {
         testing::drive();
         cx.update(|cx| cx.set_reduce_motion(true));
-        let (_view, drawn, cx) = entering(cx);
+        let (_view, drawn, cx) = entering(cx, None);
         assert_eq!(drawn.get(), 1.0);
         assert_eq!(next_frame(cx), 0);
     }
@@ -1732,7 +1797,7 @@ mod tests {
     #[gpui::test]
     fn an_animation_draws_its_frames_through_the_view_named(cx: &mut TestAppContext) {
         testing::drive();
-        let (view, drawn, cx) = entering(cx);
+        let (view, drawn, cx) = entering(cx, None);
         let through = cx.update(|_, cx| cx.new(|_| ()));
         let notified = std::rc::Rc::new(std::cell::Cell::new(0));
         let seen = notified.clone();

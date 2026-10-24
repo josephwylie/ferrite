@@ -1348,6 +1348,10 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     }
     tick(cx);
     settle(cx);
+    // The finished Threads' toasts ring and rise in first: an entrance is
+    // no loop.
+    ring(cx);
+    settle(cx);
     assert!(
         cx.debug_bounds("progress-mark-live").is_some(),
         "the premise: a working mark is on screen"
@@ -2081,4 +2085,73 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
     let built = built_since(&threads, &panes);
     eprintln!("KIT_TOAST_IN pane_builds={built:?}");
     assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
+}
+
+/// The Needs-you toast (FL-18) rises in over `motion::TOAST_IN` and, when it
+/// goes on its own, fades away over `TOAST_OUT` as a face with no answers
+/// to press — frames only while it moves.
+#[gpui::test]
+fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    // A board of two, and a third Thread off it, working.
+    let (mut core, fake) = cockpit("toast-motion", 3);
+    let threads = core.threads().to_vec();
+    core.apply_group(GroupChange::Create {
+        first: threads[0],
+        second: threads[1],
+    })
+    .unwrap();
+    let group = core.groups().of(threads[0]).unwrap().id;
+    core.send(threads[2], "task".into());
+    core.pump();
+    core.enter_group(group).unwrap();
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    fake.streams.borrow()[2]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    settle(cx);
+    let toast: &'static str = format!("toast-{}", threads[2].get()).leak();
+    cx.executor()
+        .advance_clock(crate::notifications::ALERT_DELAY);
+    tick(cx);
+    assert!(cx.debug_bounds(toast).is_some(), "the toast is up");
+    let rising = frames_over(cx, theme::MOTION_TOAST_IN_MS + 32);
+    assert!(rising > 0, "it rises in");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+
+    // It times out, the window drawing a frame at a time.
+    cx.executor()
+        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_millis(200));
+    cx.run_until_parked();
+    let mut waited = 0;
+    while cx.debug_bounds(toast).is_some() {
+        frames_over(cx, 16);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        waited += 1;
+        assert!(waited < 30, "the toast never timed out");
+    }
+    assert!(
+        cx.debug_bounds("toast-leaving").is_some(),
+        "its face fades out where it stood"
+    );
+    let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
+    assert!(cx.debug_bounds(open).is_none(), "with nothing to press");
+    let leaving = frames_over(cx, theme::MOTION_TOAST_OUT_MS + 32);
+    assert!(leaving > 1, "it fades out a frame at a time: {leaving}");
+    assert_eq!(display_frames(cx), 0, "gone: no more frames");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("toast-leaving").is_none(),
+        "and its face is gone"
+    );
+    eprintln!("NEEDS_YOU_TOAST rising={rising} leaving={leaving}");
 }
