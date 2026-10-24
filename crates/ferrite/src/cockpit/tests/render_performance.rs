@@ -1465,11 +1465,11 @@ fn slide_frames(cx: &mut gpui::VisualTestContext) -> (usize, Duration) {
 }
 
 /// A reader sliding open beside one Pane of a Group, and shut again: each
-/// frame of the slide lays the board out again and builds the one Pane
-/// whose cell moves — its transcript re-wrapping at the new width, as under
-/// a cmd-B fold — and nothing else: its neighbour and the nav replay from
-/// their caches, and the reader's own text, laid out at its final width,
-/// is never re-wrapped. Landed, the window asks for no frame.
+/// frame of the slide redraws the frame around the parts, which lays the
+/// board out again and draws the reader (at its final width), and builds
+/// the one Pane whose cell moves — its transcript re-wrapping at the new
+/// width, as under a cmd-B fold — and nothing else: its neighbour and the
+/// nav replay from their caches. Landed, the window asks for no frame.
 #[gpui::test]
 fn a_reader_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
     crate::motion::testing::drive();

@@ -1,7 +1,9 @@
 //! The reader slot's slide (`beside.rs`): it opens and closes beside its
 //! Pane as one move, the Pane giving way and taking the room back, turns
-//! around mid-flight, never slides for a document swapped in place, lands
-//! for a seam drag, and snaps under reduced motion.
+//! around mid-flight, never slides for a document swapped in place, stays
+//! inside a Group's or a fullscreen Pane's cell, lands for a seam drag, and
+//! snaps under reduced motion; esc in its text closes it, the keyboard the
+//! Pane's at once.
 
 use super::*;
 use crate::theme::{BOARD_SEAM, MOTION_SLOT_CLOSE_MS, MOTION_SLOT_OPEN_MS};
