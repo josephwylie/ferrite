@@ -2143,9 +2143,16 @@ fn reduced_motion_still_advances_a_working_clock(cx: &mut TestAppContext) {
 /// A path the pointer rests on keeps its underline while its transcript
 /// streams: the Cockpit around the cached transcript redraws on every step
 /// of the working Thread's loops without drawing the transcript, and the
-/// hover must outlive those frames.
+/// hover must outlive those frames and the transcript's own next draw.
+///
+/// The stream runs on along the link's own line, so the link stays under
+/// the pointer: a new paragraph would lift the tail-following transcript
+/// and carry the link out from under it, a leave the blend rightly fades.
+/// The wall clock is held, as the working clock's turnover would otherwise
+/// draw a frame inside the test's last step on some runs and not others.
 #[gpui::test]
 fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
     crate::motion::testing::drive();
     let (mut core, fake, workspace) = bound_cockpit("hovered-link-streams", Provider::Claude);
     let file = workspace.join("docs").join("guide.md");
@@ -2156,21 +2163,25 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(700.)));
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "See [guide](docs/guide.md:12) for the notes.\n\n".into(),
-        })
-        .unwrap();
+    let stream = |text: &str| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: text.into() })
+            .unwrap();
+    };
+    stream("See [guide](docs/guide.md:12) for the notes");
     tick(cx);
     tick(cx);
     // The loops redraw the Cockpit and reuse the cached transcript, whose
     // selectors a test window keeps only for a frame that drew it.
-    cx.update(|window, _| window.refresh());
-    cx.run_until_parked();
-    let link = debug_bounds(cx, format!("file-attachment-{}", file.display()))
-        .or_else(|| debug_bounds(cx, "inline-file".to_string()))
-        .expect("the transcript draws the link");
-    cx.simulate_mouse_move(link.center(), None, gpui::Modifiers::none());
+    let link = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        debug_bounds(cx, format!("file-attachment-{}", file.display()))
+            .or_else(|| debug_bounds(cx, "inline-file".to_string()))
+            .expect("the transcript draws the link")
+    };
+    let before = link(cx);
+    cx.simulate_mouse_move(before.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
     cockpit_renders_over(cx, 300);
     let underlined = |cx: &mut gpui::VisualTestContext| {
@@ -2181,15 +2192,18 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     assert!(underlined(cx), "the premise: the link is underlined");
     // The working loops redraw the Cockpit; the cached transcript is reused.
     cockpit_renders_over(cx, 600);
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "One more streamed line.\n\n".into(),
-        })
-        .unwrap();
+    stream(", and a few more words.");
     tick(cx);
+    // Past a fade: a hover lost on that draw has faded out by now.
+    cockpit_renders_over(cx, 300);
     assert!(
         underlined(cx),
         "the transcript drew again under the pointer and lost the link's underline"
+    );
+    assert_eq!(
+        link(cx),
+        before,
+        "the premise: the link stayed under the pointer"
     );
 }
 
