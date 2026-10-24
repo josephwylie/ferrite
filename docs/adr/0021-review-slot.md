@@ -31,7 +31,7 @@ take reviewr itself instead, so its fixes and features keep arriving.
    selection and comment model (`ferrite_core::review`) are gone.
 2. **The compare is the Review; one slot, no new surface.** The Review is
    a GPUI view (`review.rs`, `ReviewView`) that takes the reader slot
-   beside its Pane (`attachment_preview::Document::review`), laid out,
+   beside its Pane (`attachment_preview::Body::Review`), laid out,
    dragged and closed like any reader (F-14). ⌘⇧D (`review branch`, in the
    palette and the menu) opens it at the branch scope; the palette's
    `review changes` and the files-changed card's `review` open it at the
