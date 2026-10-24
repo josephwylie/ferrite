@@ -963,10 +963,12 @@ impl CockpitView {
     }
 }
 
-/// A file's lines, numbered (F-14): a `READER_NUMBER_W` column of numbers,
-/// right-aligned and dim, `READER_NUMBER_GAP` before the code, the code in
-/// its syntax colours (`highlight_tokens` for the path's language). The
-/// target line lies on `paint::SELECTED` with its number in `TEXT_STRONG`.
+/// A file's lines, numbered (F-14), in the code face on the grid's cells
+/// (`CH`, what the cut below counts in): a `READER_NUMBER_W` column of
+/// numbers, right-aligned and dim, `READER_NUMBER_GAP` before the code,
+/// the code in its syntax colours (`highlight_tokens` for the path's
+/// language). The target line lies on `paint::SELECTED` with its number in
+/// `TEXT_STRONG`.
 /// A line wider than the reader is cut at its edge; the one holding the
 /// find's occurrence starts further in when that would lie past it
 /// (`shown_from`). Virtualised: only the rows in view are laid out.
@@ -1053,6 +1055,7 @@ fn numbered_lines(
     .min_h_0()
     .w_full()
     .py(px(HALF_ROW))
+    .font_family(FONT_CODE)
     .into_any_element()
 }
 
