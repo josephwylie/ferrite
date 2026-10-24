@@ -1742,11 +1742,11 @@ pub const SEAM_LINE_W: f32 = 2.0;
 /// 38px — the Group head (SPEC §5.9; a reader's head is its twin): the
 /// card's tab strip height, its `HAIRLINE` inside it.
 pub const PANE_HEAD_H: f32 = 38.0;
-/// A head's inline inset: one cell (the reader's twin head).
+/// A dragged slot's ghost head's inline inset: one cell.
 pub const HEAD_PAD_X: f32 = CH;
-/// The Group head's insets and gap: 14 before the mark, 6 after the fill
-/// button (its 28px hit box carries the rest of the visual inset), 8
-/// between items.
+/// The Group head's insets and gap (and its twin's, the reader's head): 14
+/// before the mark, 6 after the fill button or the reader's × (its 28px
+/// hit box carries the rest of the visual inset), 8 between items.
 pub const PANE_HEAD_PAD_L: f32 = 14.0;
 pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
 pub const PANE_HEAD_GAP: f32 = SPACE_2;

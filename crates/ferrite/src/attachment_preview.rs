@@ -280,14 +280,14 @@ impl Preview {
         .child(PreviewLayer(self.clone()))
     }
 
-    /// The shown document (`shown`) as a board slot (F-14): a Pane-shaped
-    /// shell on the plane whose head row is handed to `head` (the cockpit
-    /// wires the drag that moves the slot) and whose body is the rendered
-    /// `body`. The head is the Group head's twin — `PANE_HEAD_H`, its
-    /// `paint::LINE` rule, a cell in from each side — reading the file's
-    /// path (its `title`) in `LINK_INK` and its `:line` in `TEXT_DIM`, or
-    /// `review` and the workspace, with a dim × at the right. None while
-    /// nothing is shown.
+    /// The shown document as a board slot (F-14): a Pane-shaped shell on
+    /// the plane whose head row is handed to `head` (the cockpit wires the
+    /// drag that moves the slot) and whose body is the rendered `body`. The
+    /// head is the Group head's twin — `PANE_HEAD_H` over its `HAIRLINE`,
+    /// its insets — so a Pane's head and its reader's read as one band. It
+    /// reads the file's path (its `title`) in `LINK_INK` and its `:line` in
+    /// `TEXT_DIM`, or `review` and the workspace, with a dim × at the right
+    /// in the fill button's 28px door. None while nothing is shown.
     pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
         use crate::theme::*;
         let document = self.shown()?;
@@ -302,9 +302,12 @@ impl Preview {
                 .min_w_0()
                 .overflow_hidden()
                 .child(
+                    // A narrow reader cuts the path's head, keeping its
+                    // file name.
                     div()
                         .min_w_0()
-                        .truncate()
+                        .overflow_hidden()
+                        .text_ellipsis_start()
                         .text_color(rgb(LINK_INK))
                         .child(document.title.clone()),
                 )
@@ -321,10 +324,13 @@ impl Preview {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .h(px(PANE_HEAD_H))
-            .px(px(HEAD_PAD_X))
+            .gap(px(PANE_HEAD_GAP))
+            // The hairline lies under the row's 38, as the Group head's does.
+            .h(px(PANE_HEAD_H + 1.))
+            .pl(px(PANE_HEAD_PAD_L))
+            .pr(px(PANE_HEAD_PAD_R))
             .border_b_1()
-            .border_color(paint::LINE)
+            .border_color(paint::HAIRLINE)
             .whitespace_nowrap()
             .child(label)
             .child(div().flex_1())
@@ -336,9 +342,14 @@ impl Preview {
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .w(px(ICON_BUTTON))
-                    .h(px(PANE_HEAD_H))
-                    .hover_control("reader-close")
+                    .size(px(ICON_BUTTON))
+                    .rounded(px(R_TAB))
+                    // One blend per Pane's reader (two can be open on a
+                    // Group): keyed by this Preview's own state.
+                    .hover_control(format!(
+                        "reader-close-{}",
+                        Arc::as_ptr(&self.state) as usize
+                    ))
                     // A press here closes; it must not also pick the slot
                     // up as a drag.
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -349,7 +360,11 @@ impl Preview {
                             Some(crate::keymap::READER),
                         ),
                     ))
-                    .child(crate::icons::icon(crate::icons::CLOSE, GLYPH_BOX, TEXT_DIM))
+                    .child(crate::icons::icon(
+                        crate::icons::CLOSE,
+                        ICON_BUTTON_GLYPH,
+                        TEXT_DIM,
+                    ))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         close.close_document(window);
