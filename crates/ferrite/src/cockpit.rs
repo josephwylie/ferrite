@@ -9814,12 +9814,11 @@ impl Render for CockpitView {
         // hover blend, a column's width (the nav's, the panel's) or a
         // reader's slide mid-flight keeps frames coming; with none, nothing
         // is scheduled (the pulse clock drives loops).
-        let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
-        let column_moving = self
-            .nav_tween
-            .is_some_and(|tween| tween.running(now, reduced))
-            || self.panel_rides(now, reduced);
+        // Each reads what this frame drew, never the clock again: a ride
+        // that ended between the draw and here still asks for the one frame
+        // that lands it at rest. A scene's held ride asks for none.
+        let column_moving =
+            (self.nav_ride.get().is_some() && self.nav_hold.is_none()) || self.panel_riding();
         let sliding = self.reader_slides.moving();
         let fading = crate::motion::hover_fades_active();
         if column_moving {
@@ -12744,9 +12743,13 @@ impl CockpitView {
     fn notice_handle(&self, cx: &mut Context<Self>) -> Handle {
         let view = cx.entity().downgrade();
         std::rc::Rc::new(move |verb, window, cx| {
-            let _ = view.update(cx, |view, cx| match verb {
-                Verb::Answer(id, answer) => view.answer_from_toast(id, answer, window, cx),
-                verb => view.notice_verb(verb, cx),
+            let _ = view.update(cx, |view, cx| {
+                // An answered toast goes at once (`ToastStage::dismiss`).
+                view.toast_stage.borrow_mut().dismiss();
+                match verb {
+                    Verb::Answer(id, answer) => view.answer_from_toast(id, answer, window, cx),
+                    verb => view.notice_verb(verb, cx),
+                }
             });
         })
     }

@@ -105,6 +105,13 @@ impl CockpitView {
             self.panel.scrolls.entry((thread, tab)).or_default();
         }
         let shown = thread.is_some();
+        // Until a first Thread is there to show (a machine's window before
+        // it connects, an empty board), nothing is recorded: the first
+        // panel arrives in place, as one shown at launch does.
+        if self.panel.shown.is_none() && !shown {
+            self.panel.riding = None;
+            return;
+        }
         if self
             .panel
             .shown
@@ -123,9 +130,10 @@ impl CockpitView {
         self.panel.riding = self.panel.ride.width(now, reduced);
     }
 
-    /// Whether the column is riding: the frame keeps asking for frames.
-    pub(super) fn panel_rides(&self, now: std::time::Instant, reduced: bool) -> bool {
-        self.panel.ride.running(now, reduced)
+    /// Whether this frame drew the column mid-ride: the frame asks for
+    /// another.
+    pub(super) fn panel_riding(&self) -> bool {
+        self.panel.riding.is_some()
     }
 
     /// What the board leaves at its right this frame: the panel's column,
@@ -651,7 +659,12 @@ impl CockpitView {
                     .inset_0()
                     .invisible()
                     .group_hover(group.clone(), |style| style.visible())
-                    .child(fold_chevron(unfolded, PANEL_ROW_ICON, TEXT_MUTED)),
+                    .child(fold_chevron(
+                        format!("panel-fold-turn-{}-{}", thread.get(), file.path),
+                        unfolded,
+                        PANEL_ROW_ICON,
+                        TEXT_MUTED,
+                    )),
             );
         let fold_path = file.path.clone();
         let head = panel_row_with(slot)
@@ -868,8 +881,13 @@ fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
 /// right while folded, a quarter turn down while unfolded. The turn eases
 /// over `motion::CHEVRON` when the fold flips under it; drawn first already
 /// unfolded, it is simply turned.
-pub(super) fn fold_chevron(unfolded: bool, size: f32, ink: u32) -> impl IntoElement {
-    crate::motion::settled("fold-turn", unfolded, crate::motion::CHEVRON, move |turn| {
+pub(super) fn fold_chevron(
+    key: impl Into<SharedString>,
+    unfolded: bool,
+    size: f32,
+    ink: u32,
+) -> impl IntoElement {
+    crate::motion::settled(key.into(), unfolded, crate::motion::CHEVRON, move |turn| {
         icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
             gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
         ))

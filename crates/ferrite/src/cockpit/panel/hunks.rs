@@ -206,7 +206,7 @@ impl CockpitView {
             .then(|| self.panel.hunks.shown(&(thread, path.to_string())))
             .flatten()
             .map(|shown| hunks_element(index, shown));
-        let id = SharedString::from(format!("panel-hunks-in-{path}"));
+        let id = SharedString::from(format!("panel-hunks-in-{}-{path}", thread.get()));
         crate::motion::settled(
             id,
             area.is_some(),

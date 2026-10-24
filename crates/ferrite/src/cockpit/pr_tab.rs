@@ -578,12 +578,16 @@ impl CockpitView {
             let unfolded = self.pr_tab.unfolded(thread, &Unfold::Resolved);
             let words = format!("{} resolved", resolved.len());
             cards = cards.child(
-                fold_row("pr-resolved", unfolded, words).on_click(cx.listener(
-                    move |view, _: &ClickEvent, _, cx| {
-                        view.pr_tab.toggle(thread, Unfold::Resolved);
-                        cx.notify();
-                    },
-                )),
+                fold_row(
+                    "pr-resolved",
+                    format!("pr-resolved-turn-{}", thread.get()).into(),
+                    unfolded,
+                    words,
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    view.pr_tab.toggle(thread, Unfold::Resolved);
+                    cx.notify();
+                })),
             );
             if unfolded {
                 for (index, comment) in resolved.iter().enumerate() {
@@ -988,15 +992,26 @@ fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
 }
 
 /// A fold's quiet row (`N resolved`, `Show more`): its chevron turning a
-/// quarter as it unfolds, then its words.
-fn fold_row(id: &'static str, unfolded: bool, words: impl Into<SharedString>) -> Stateful<Div> {
+/// quarter as it unfolds, then its words. The chevron's turn is kept under
+/// `turn`, its Thread's own, so another Thread's fold never turns it.
+fn fold_row(
+    id: &'static str,
+    turn: SharedString,
+    unfolded: bool,
+    words: impl Into<SharedString>,
+) -> Stateful<Div> {
     use crate::theme::*;
     flush_row(id.into(), SPACE_1)
         .debug_selector(move || id.into())
         .gap(px(SPACE_2))
         .text_size(px(FS_LABEL))
         .text_color(rgb(TEXT_DIM))
-        .child(super::panel::fold_chevron(unfolded, ICON_CHEVRON, TEXT_DIM))
+        .child(super::panel::fold_chevron(
+            turn,
+            unfolded,
+            ICON_CHEVRON,
+            TEXT_DIM,
+        ))
         .child(words.into())
 }
 
@@ -1033,7 +1048,9 @@ impl RenderOnce for Description {
     fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         use crate::theme::*;
         let body = self.body;
-        let state = window.use_keyed_state(self.id, cx, |_, cx| TextViewState::markdown(&body, cx));
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| {
+            TextViewState::markdown(&body, cx)
+        });
         state.update(cx, |state, cx| state.set_text(&body, cx));
         let view = small_markdown(TextView::new(&state), window).px(px(SPACE_0_5));
         let view = if self.unfolded {
@@ -1051,7 +1068,8 @@ impl RenderOnce for Description {
             let state = state.clone();
             window.defer(cx, move |_, cx| {
                 if state.read(cx).is_clamped() != clamped {
-                    cx.notify(cockpit);
+                    // The frame draws the panel: it alone draws again.
+                    cx.notify(crate::motion::frames_through(cockpit));
                 }
             });
         }
@@ -1064,8 +1082,13 @@ impl RenderOnce for Description {
         let toggle = self.toggle;
         div().flex().flex_col().child(view).when(more, |section| {
             section.child(
-                fold_row("pr-description-more", self.unfolded, words)
-                    .on_click(move |event, window, cx| toggle(event, window, cx)),
+                fold_row(
+                    "pr-description-more",
+                    format!("{}-turn", self.id).into(),
+                    self.unfolded,
+                    words,
+                )
+                .on_click(move |event, window, cx| toggle(event, window, cx)),
             )
         })
     }

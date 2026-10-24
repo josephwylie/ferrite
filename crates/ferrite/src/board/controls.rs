@@ -13,13 +13,14 @@ use sw_board::json::*;
 use super::BoardView;
 use crate::components::{self, Tip};
 use crate::theme::{
-    paint, CH, CONTROL_H, ICON_CHEVRON, ON_PRIMARY, SPACE_1, SPACE_3, TEXT, TEXT_DIM, TEXT_STRONG,
-    W_STRONG,
+    paint, CH, CONTROL_H, HAIRLINE_W, ICON_CHEVRON, ON_PRIMARY, SPACE_1, SPACE_3, TEXT, TEXT_DIM,
+    TEXT_STRONG, W_STRONG,
 };
 
 /// The controls' two rows of `CONTROL_H` buttons, `SPACE_1` above, between
-/// and below them, so no button touches a hairline or its neighbour.
-pub(super) const HEIGHT: f32 = 2. * CONTROL_H + 3. * SPACE_1;
+/// and below them, so no button touches a hairline or its neighbour, over
+/// their own hairline (the box's border takes its height too).
+pub(super) const HEIGHT: f32 = 2. * CONTROL_H + 3. * SPACE_1 + HAIRLINE_W;
 
 #[derive(Default)]
 pub(super) struct Controls {

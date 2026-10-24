@@ -44,14 +44,13 @@ pub fn button(id: impl Into<ElementId>) -> Button {
 /// and stays inside clipped forms without taking any layout space, so a
 /// control never swaps a border to say it has focus.
 pub fn control_focus(style: StyleRefinement) -> StyleRefinement {
-    focus_outline(style, theme::FOCUS_RING)
+    focus_outline(style, rgba(theme::FOCUS_RING).into())
 }
 
-fn focus_outline(style: StyleRefinement, ink: u32) -> StyleRefinement {
+fn focus_outline(style: StyleRefinement, ink: Hsla) -> StyleRefinement {
     style.shadow(vec![BoxShadow {
         inset: true,
-        // The ring's inks carry their alpha (`FOCUS_RING`, white at 22%).
-        color: rgba(ink).into(),
+        color: ink,
         offset: point(px(0.), px(0.)),
         blur_radius: px(0.),
         spread_radius: px(theme::FOCUS_RING_W),
@@ -158,9 +157,15 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
     )
     .tab_stop(true)
     .text_color(rgb(primary_ink(disabled)))
-    .focus_visible(|style| focus_outline(style, theme::TEXT_STRONG))
+    .focus_visible(primary_focus)
     .disabled(disabled)
     .when(disabled, |button| button.cursor_default())
+}
+
+/// A primary button's keyboard focus: the outline in `TEXT_STRONG`, which
+/// reads on its steel face where `FOCUS_RING` would not.
+fn primary_focus(style: StyleRefinement) -> StyleRefinement {
+    focus_outline(style, rgb(theme::TEXT_STRONG).into())
 }
 
 fn primary_face(disabled: bool) -> u32 {
@@ -2005,6 +2010,9 @@ mod tests {
         assert_eq!(ringed.style().box_shadow, focus.box_shadow);
         let mut plain = focused(div(), false);
         assert_eq!(plain.style().box_shadow, None);
+        let primary = primary_focus(StyleRefinement::default());
+        let shadow = &primary.box_shadow.expect("an inset outline")[0];
+        assert_eq!(shadow.color, rgb(theme::TEXT_STRONG).into());
         assert_eq!(primary_face(false), theme::PRIMARY);
         assert_eq!(primary_ink(false), theme::ON_PRIMARY);
         assert_eq!(primary_face(true), theme::SELECTED);

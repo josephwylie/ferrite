@@ -818,10 +818,11 @@ fn toast_card(row: &Row, handle: Option<Handle>) -> Div {
 
 /// What the toast float draws as toasts come and go (FL-18). The toast
 /// standing now rises in (`motion::toast_in`, keyed by `toast_key`, so a
-/// new one enters and the same one stays put); one that goes — read,
-/// resolved, timed out or replaced — leaves as its face (`toast_face`),
-/// fading over `motion::TOAST_OUT` (`motion::toast_out`), under whatever
-/// stands next. Under reduced motion nothing lingers.
+/// new one enters and the same one stays put); one that goes on its own —
+/// read elsewhere, resolved, timed out or replaced — leaves as its face
+/// (`toast_face`), fading over `motion::TOAST_OUT` (`motion::toast_out`),
+/// under whatever stands next. One the operator answers from the toast goes
+/// at once (`dismiss`). Under reduced motion nothing lingers.
 #[derive(Default)]
 pub struct ToastStage {
     standing: Option<Row>,
@@ -853,6 +854,14 @@ impl ToastStage {
             self.leaving = None;
         }
         self.leaving.clone()
+    }
+
+    /// The operator answered or opened the standing toast: it goes at once,
+    /// as everything they dismiss does — only a toast that leaves on its own
+    /// fades.
+    pub fn dismiss(&mut self) {
+        self.standing = None;
+        self.leaving = None;
     }
 }
 
@@ -908,7 +917,8 @@ mod tests {
 
     /// A toast that goes leaves for `TOAST_OUT`, while the same one standing
     /// on (its words updated) stays put; a new one replacing it sends the
-    /// old one out under it. Reduced motion keeps nothing leaving.
+    /// old one out under it; one the operator answers goes at once. Reduced
+    /// motion keeps nothing leaving.
     #[test]
     fn the_toast_stage_lets_a_toast_go_softly_and_keeps_one_that_stays() {
         let t0 = Instant::now();
@@ -944,6 +954,13 @@ mod tests {
             .expect("replaced, the old one leaves");
         assert_eq!(toast_key(&left), toast_key(&done));
         assert_ne!(toast_key(&left), toast_key(&asking), "the new one enters");
+
+        stage.stage(Some(&done), ms(3_000), false);
+        stage.dismiss();
+        assert!(
+            stage.stage(None, ms(3_010), false).is_none(),
+            "answered: it goes at once"
+        );
 
         let mut reduced = ToastStage::default();
         reduced.stage(Some(&done), t0, true);

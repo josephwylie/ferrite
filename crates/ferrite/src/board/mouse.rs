@@ -288,15 +288,16 @@ fn takes_clicks(s: &State) -> bool {
 }
 
 /// The list's rows a click would act on, as the screen last laid them out
-/// (`list_at`, `list_ids`), with the columns they span: every row and
-/// heading but the selected row, where a click does nothing more.
+/// (`list_at`, `list_ids`), with the columns they span: every heading (a
+/// click folds it, selected or not) and every row but the selected one,
+/// where a click does nothing more.
 pub fn bands(s: &State) -> (usize, Vec<Band>) {
     let Some((top, wide)) = s.list_at.filter(|_| takes_clicks(s)) else {
         return (0, Vec::new());
     };
     let mut out: Vec<Band> = Vec::new();
     for (at, id) in s.list_ids.iter().enumerate() {
-        if id.is_empty() || *id == s.sel {
+        if id.is_empty() || (*id == s.sel && !sw_board::board::update::heads::is_head(id)) {
             continue;
         }
         match out.last_mut() {
