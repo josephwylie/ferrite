@@ -333,6 +333,9 @@ pub struct CockpitView {
     nav_drag_live: std::cell::Cell<bool>,
     /// The order the nav last drew, held while the pointer is inside.
     nav_snapshot: std::cell::RefCell<Option<NavSnapshot>>,
+    /// The section the Attention list last listed each Thread under
+    /// (`attention_list`): where the focused Thread is held.
+    nav_listed: std::cell::RefCell<std::collections::HashMap<ThreadId, nav::ListSection>>,
     /// The column's width on its way between its two (`motion::RESIZE`).
     /// None on launch so a restored preference never performs entrance
     /// choreography; once the operator acts, a flip mid-flight retargets
@@ -1511,6 +1514,7 @@ impl CockpitView {
             native_copy: None,
             nav_filter: None,
             nav_folds: std::collections::HashSet::new(),
+            nav_listed: Default::default(),
             nav_scroll: ScrollHandle::new(),
             nav_view: nav::NavView::Tree,
             nav_view_focus: cx.focus_handle(),
@@ -4986,13 +4990,6 @@ impl CockpitView {
                 "cmd-B toggles it any time",
                 settings.nav_collapsed,
                 self.setting_change(cx, |s, v| s.nav_collapsed = v),
-            ),
-            prefs::toggle(
-                "settings-smart-filtering",
-                "Smart filtering",
-                "Done and working threads above the project tree",
-                settings.smart_filtering,
-                self.setting_change(cx, |s, v| s.smart_filtering = v),
             ),
         ];
         let size = settings.reading_size;
@@ -8920,14 +8917,8 @@ impl CockpitView {
         }
 
         let parked = self.parked_threads().into_iter().map(row).collect();
-        let smart = self
-            .prefs
-            .settings
-            .smart_filtering
-            .then(|| self.smart_sections());
 
         nav::NavState {
-            smart,
             sections,
             groups,
             solos,
@@ -8935,27 +8926,101 @@ impl CockpitView {
         }
     }
 
-    /// Smart filtering's sections, whatever the Project filter admits, in
-    /// creation order so a row never moves under the pointer: `done` is
-    /// every open Thread that finished unseen, `working` every open Thread
-    /// at work. A Thread waiting on the operator is its row's yellow mark,
-    /// not these.
-    fn smart_sections(&self) -> nav::SmartSections {
-        let mut threads = self.cockpit.threads();
-        threads.sort();
-        let mut sections = nav::SmartSections::default();
-        for thread in threads {
-            if !self.admitted(thread) {
+    /// The nav's Attention list (§5.1.2) from the tree's rows (`state`), so
+    /// it lists what the Project filter admits and reads nothing new: every
+    /// open Thread that needs the operator, in ⌘D's order (oldest request
+    /// first); every one that finished unseen, newest finish first; every
+    /// one at work, in creation order. Its folds are the nav's.
+    ///
+    /// Nothing leaves from under the operator (CONTEXT.md "Attention
+    /// list"): the focused Thread keeps the section it was last listed in
+    /// while its state would take it out of the list — opening a done
+    /// Thread reads its Notice — and leaves once focus moves to another.
+    /// A Thread whose state moves it to another section moves at once.
+    pub(crate) fn attention_list(&self, state: &nav::NavState) -> nav::AttentionList {
+        use nav::ListSection;
+        let roster = self.cockpit.roster();
+        let focused = roster.focused_thread();
+        // The row stands for what the board shows, as in the tree: the Solo
+        // Thread, or the shown Group's focused member.
+        let shown = |thread: ThreadId| {
+            !self.empty_board_shown()
+                && focused == Some(thread)
+                && match roster.view() {
+                    View::Solo => true,
+                    View::Group(group) => self
+                        .cockpit
+                        .groups()
+                        .get(group)
+                        .is_some_and(|group| group.members.contains(&thread)),
+                }
+        };
+        let mut rows: Vec<&nav::ThreadRow> = state
+            .solos
+            .iter()
+            .chain(state.groups.iter().flat_map(|group| group.members.iter()))
+            .collect();
+        rows.sort_by_key(|row| row.thread);
+        rows.dedup_by_key(|row| row.thread);
+
+        let mut listed = self.nav_listed.borrow_mut();
+        let mut placed: Vec<(ListSection, nav::ThreadRow)> = Vec::new();
+        for row in rows {
+            let thread = row.thread;
+            let held = || {
+                (focused == Some(thread))
+                    .then(|| listed.get(&thread).copied())
+                    .flatten()
+            };
+            let Some(section) = ListSection::of(row.status.attention()).or_else(held) else {
                 continue;
-            }
-            let row = self.thread_row(thread);
-            match row.status.attention() {
-                Attention::Working => sections.working.push(row),
-                Attention::Done => sections.done.push(row),
-                Attention::Blocked | Attention::Idle => {}
-            }
+            };
+            let row = nav::ThreadRow {
+                selected: shown(thread),
+                ..row.clone()
+            };
+            placed.push((section, row));
         }
-        sections
+        *listed = placed
+            .iter()
+            .map(|(section, row)| (row.thread, *section))
+            .collect();
+
+        let queue = self.cockpit.needs_you();
+        let notifications = self.cockpit.notifications();
+        let sections = ListSection::ALL
+            .into_iter()
+            .filter_map(|section| {
+                let mut rows: Vec<nav::ThreadRow> = placed
+                    .iter()
+                    .filter(|(each, _)| *each == section)
+                    .map(|(_, row)| row.clone())
+                    .collect();
+                // Stable: creation order among equals, and for `Working`.
+                match section {
+                    ListSection::NeedsYou => rows.sort_by_key(|row| {
+                        queue
+                            .iter()
+                            .position(|thread| *thread == row.thread)
+                            .unwrap_or(usize::MAX)
+                    }),
+                    // The Notices come newest first.
+                    ListSection::Done => rows.sort_by_key(|row| {
+                        notifications
+                            .notices()
+                            .position(|notice| notice.thread == row.thread)
+                            .unwrap_or(usize::MAX)
+                    }),
+                    ListSection::Working => {}
+                }
+                (!rows.is_empty()).then(|| nav::ListBlock {
+                    section,
+                    rows,
+                    folded: self.nav_folds.contains(&NavFold::List(section)),
+                })
+            })
+            .collect();
+        nav::AttentionList { sections }
     }
 
     /// Does the Project filter admit this Thread? `All projects` admits
@@ -9110,10 +9175,10 @@ impl CockpitView {
         (Some((first, default)), shared.then_some(drift))
     }
 
-    /// Land on a Thread from the nav's other doors — a smart or rail row: the
-    /// Group on screen when it holds the Thread, else its home Group's
-    /// view, else its Pane if open, else revived — exactly as a press on
-    /// its own row does.
+    /// Land on a Thread from the nav's other doors — an Attention list or
+    /// rail row: the Group on screen when it holds the Thread, else its
+    /// home Group's view, else its Pane if open, else revived — exactly as
+    /// a press on its own row does.
     fn land_on_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.board_gives_way();
         let target: Option<GroupId> = {
@@ -13092,14 +13157,18 @@ impl CockpitView {
     }
 
     /// The nav's content at its own width (`nav::content`, §5.1): the head
-    /// in the head row, the views, the tree — or the shown view's list in
-    /// its place — with its scrollbar, and the foot.
+    /// in the head row, the views, the Attention list and the tree — or the
+    /// shown view's list in their place — with its scrollbar, and the foot.
+    /// The Attention list is built whichever is shown, so what it says it
+    /// last drew stays true.
     fn nav_content(&self, state: &nav::NavState, window: &Window, cx: &mut Context<Self>) -> Div {
         #[cfg(test)]
         drawn::built_nav();
+        let attention = self.attention_list(state);
         let list = match self.nav_view {
-            nav::NavView::Tree => self.nav_tree(state, cx),
-            view => self.nav_view_list(view, state, window, cx),
+            nav::NavView::Tree => self.nav_tree(state, &attention, cx),
+            nav::NavView::NeedsYou => self.needs_you_list(window, cx),
+            nav::NavView::Parked => self.parked_list(state, cx),
         };
         let gear = nav::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
@@ -13137,9 +13206,9 @@ impl CockpitView {
 
     /// The views (§5.1.2): `Search` (the palette, its chord read from the
     /// keymap), `Needs you` (its pill the blocked Threads), `Parked` (its
-    /// count), `Tasks` while Projects is live (ADR 0031: the board, its
-    /// tally), and smart filtering's `Working` and `Done`. A press shows
-    /// the view in the tree's place, or the tree again from the active one.
+    /// count) and `Tasks` while Projects is live (ADR 0031: the board, its
+    /// tally). A press shows the view in the tree's place, or the tree
+    /// again from the active one.
     fn nav_views(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         use crate::icons;
         use nav::{NavView, Trailing};
@@ -13221,161 +13290,98 @@ impl CockpitView {
                 .into_any_element(),
             );
         }
-        if let Some(smart) = &state.smart {
-            for (key, label, view, count) in [
-                (
-                    "nav-view-working",
-                    "Working",
-                    NavView::Working,
-                    smart.working.len(),
-                ),
-                ("nav-view-done", "Done", NavView::Done, smart.done.len()),
-            ] {
-                let active = shown == view;
-                let glyph = match view {
-                    NavView::Working => nav::mark(nav::RowStatus::Working, false),
-                    _ => nav::view_icon(icons::CHECK_CIRCLE, key, active, false),
-                };
-                rows.push(
-                    nav::view_row(key, glyph, label, Trailing::Count(count), active, false)
-                        .on_click(cx.listener(move |nav_view, _: &ClickEvent, window, cx| {
-                            nav_view.toggle_nav_view(view, Some(window), cx);
-                        }))
-                        .into_any_element(),
-                );
-            }
-        }
         nav::views(rows)
     }
 
-    /// A view's list in the tree's place (§5.1.2), scrolling as the tree
-    /// does and holding its own keys. The Needs-you list is
-    /// (`needs_you_rows`, its cursor `needs_you.cursor` while it has the keyboard):
-    /// the blocked Threads oldest-first as their two-line rows, a machine
-    /// off screen's requests, then `Recent`, the Notices. A row's press
-    /// opens what it stands for, as the Needs-you view's did. The other views list
-    /// their Threads as the tree draws them.
-    fn nav_view_list(
-        &self,
-        view: nav::NavView,
-        state: &nav::NavState,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    /// The Needs-you view's list in the tree's place (§5.1.2), scrolling as
+    /// the tree does and holding its own keys (`needs_you_rows`, its cursor
+    /// `needs_you.cursor` while it has the keyboard): the blocked Threads
+    /// oldest-first as their two-line rows, a machine off screen's
+    /// requests, then `Recent`, the Notices. A row's press opens what it
+    /// stands for.
+    fn needs_you_list(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let tree = nav::nav_tree(&self.nav_scroll);
-        match view {
-            nav::NavView::NeedsYou => {
-                let rows = self.needs_you_rows(cx);
-                let cursor = self
-                    .floats
-                    .notice_focus
-                    .is_focused(window)
-                    .then(|| self.needs_you.cursor.min(rows.len().saturating_sub(1)));
-                let mut list = nav::view_list("nav-view-needs-you-list");
-                if rows.is_empty() {
-                    list = list.child(nav::note("nav-needs-you-empty", "Nothing needs you"));
-                }
-                let mut recent = false;
-                for (index, row) in rows.iter().enumerate() {
-                    let local_request = row.request() && row.away.is_none();
-                    if !row.request() && !recent {
-                        recent = true;
-                        list = list.child(self.recent_heading(cx));
-                    }
-                    let verb = row.open_verb();
-                    let open = cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.notice_verb(verb.clone(), cx);
-                    });
-                    let selected = cursor == Some(index);
-                    let element = if local_request {
-                        let thread = nav::ThreadRow {
-                            selected,
-                            ..self.thread_row(row.thread)
-                        };
-                        let drawn = nav::thread_row_with_title(
-                            &thread,
-                            thread.name.clone(),
-                            nav::RowPlace::ROOT,
-                            None,
-                            false,
-                            0,
-                            &nav::Measure::Text(cx),
-                        );
-                        div()
-                            .id(("notice-row", index))
-                            .debug_selector(move || format!("notice-row-{index}"))
-                            .flex_shrink_0()
-                            .child(drawn)
-                            .on_click(open)
-                            .into_any_element()
-                    } else {
-                        nav::notice_row(index, row, selected, &nav::Measure::Text(cx))
-                            .on_click(open)
-                            .into_any_element()
-                    };
-                    list = list.child(element);
-                }
-                if !rows.is_empty() && !recent {
-                    list = list.child(self.recent_heading(cx));
-                }
-                tree.track_focus(&self.floats.notice_focus)
-                    .key_context("Notifications")
-                    .child(list)
-            }
-            nav::NavView::Parked => {
-                let mut list = nav::view_list("nav-view-parked-list");
-                if state.parked.is_empty() {
-                    list = list.child(nav::note("nav-parked-empty", "Nothing parked"));
-                }
-                let sections = self.view_tree(state.parked.clone());
-                list = list.children(self.view_sections(
-                    &sections,
-                    cx,
-                    |view, row, place, ends, cx| view.thread_element(row, None, place, ends, cx),
-                ));
-                let list = if self.machine_lost() {
-                    machines::held(list, "machine-lost-parked")
-                } else {
-                    list
-                };
-                tree.track_focus(&self.nav_view_focus)
-                    .key_context("NavView")
-                    .child(list)
-            }
-            nav::NavView::Working | nav::NavView::Done | nav::NavView::Tree => {
-                let smart = state.smart.clone().unwrap_or_default();
-                let rows = if view == nav::NavView::Done {
-                    smart.done
-                } else {
-                    smart.working
-                };
-                let sections = self.view_tree(rows);
-                let list = nav::view_list("nav-view-smart-list").children(self.view_sections(
-                    &sections,
-                    cx,
-                    |_, row, place, ends, cx| {
-                        let thread = row.thread;
-                        nav::thread_row_with_title(
-                            row,
-                            row.name.clone(),
-                            place,
-                            None,
-                            false,
-                            ends,
-                            &nav::Measure::Text(cx),
-                        )
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            view.land_on_thread(thread, cx);
-                        }))
-                        .into_any_element()
-                    },
-                ));
-                tree.track_focus(&self.nav_view_focus)
-                    .key_context("NavView")
-                    .child(list)
-            }
+        let rows = self.needs_you_rows(cx);
+        let cursor = self
+            .floats
+            .notice_focus
+            .is_focused(window)
+            .then(|| self.needs_you.cursor.min(rows.len().saturating_sub(1)));
+        let mut list = nav::view_list("nav-view-needs-you-list");
+        if rows.is_empty() {
+            list = list.child(nav::note("nav-needs-you-empty", "Nothing needs you"));
         }
+        let mut recent = false;
+        for (index, row) in rows.iter().enumerate() {
+            let local_request = row.request() && row.away.is_none();
+            if !row.request() && !recent {
+                recent = true;
+                list = list.child(self.recent_heading(cx));
+            }
+            let verb = row.open_verb();
+            let open = cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.notice_verb(verb.clone(), cx);
+            });
+            let selected = cursor == Some(index);
+            let element = if local_request {
+                let thread = nav::ThreadRow {
+                    selected,
+                    ..self.thread_row(row.thread)
+                };
+                let drawn = nav::thread_row_with_title(
+                    &thread,
+                    thread.name.clone(),
+                    nav::RowPlace::ROOT,
+                    None,
+                    false,
+                    0,
+                    &nav::Measure::Text(cx),
+                );
+                div()
+                    .id(("notice-row", index))
+                    .debug_selector(move || format!("notice-row-{index}"))
+                    .flex_shrink_0()
+                    .child(drawn)
+                    .on_click(open)
+                    .into_any_element()
+            } else {
+                nav::notice_row(index, row, selected, &nav::Measure::Text(cx))
+                    .on_click(open)
+                    .into_any_element()
+            };
+            list = list.child(element);
+        }
+        if !rows.is_empty() && !recent {
+            list = list.child(self.recent_heading(cx));
+        }
+        tree.track_focus(&self.floats.notice_focus)
+            .key_context("Notifications")
+            .child(list)
+    }
+
+    /// The Parked view's list in the tree's place (§5.1.2), its Threads
+    /// grouped as the tree groups them, Esc's way back to the tree.
+    fn parked_list(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
+        let mut list = nav::view_list("nav-view-parked-list");
+        if state.parked.is_empty() {
+            list = list.child(nav::note("nav-parked-empty", "Nothing parked"));
+        }
+        let sections = self.view_tree(state.parked.clone());
+        list = list.children(
+            self.view_sections(&sections, cx, |view, row, place, ends, cx| {
+                view.thread_element(row, None, place, ends, cx)
+            }),
+        );
+        let list = if self.machine_lost() {
+            machines::held(list, "machine-lost-parked")
+        } else {
+            list
+        };
+        nav::nav_tree(&self.nav_scroll)
+            .track_focus(&self.nav_view_focus)
+            .key_context("NavView")
+            .child(list)
     }
 
     /// A view's rows grouped as the tree groups them (`nav::ViewSection`):
@@ -13648,16 +13654,25 @@ impl CockpitView {
         }
     }
 
-    /// The scrolling tree: one section per Project (`nav_state`), each its
-    /// heading, its loose rows — a `LooseZone`, a place to drop a row to get
-    /// it out of its Group — and its Groups, then the ground, which is a
-    /// `LooseZone` too.
-    fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// The scrolling tree: the Attention list over it (`attention_list`),
+    /// then one section per Project (`nav_state`), each its heading, its
+    /// loose rows — a `LooseZone`, a place to drop a row to get it out of
+    /// its Group — and its Groups, then the ground, which is a `LooseZone`
+    /// too.
+    fn nav_tree(
+        &self,
+        state: &nav::NavState,
+        attention: &nav::AttentionList,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         // Every drag started from this frame started from this View.
         let origin = self.cockpit.roster().view();
         let mut tree = nav::nav_tree(&self.nav_scroll);
         if let Some(error) = &self.group_error {
             tree = tree.child(nav::notice(error.clone()));
+        }
+        if !attention.sections.is_empty() {
+            tree = tree.child(self.attention_element(attention, cx));
         }
         // With machines (ADR 0026): the one the window is on heads its own
         // tree, which folds under it, and is held while its Server is away;
@@ -13763,6 +13778,40 @@ impl CockpitView {
                 view.apply_drop(*drag, DropTarget::LooseZone, cx)
             })),
         )
+    }
+
+    /// The Attention list (§5.1.2): each section its head — a press folds
+    /// it to the head and its count — and its one-line rows, each wired as
+    /// its tree row is (`thread_element`). A row arrives and leaves at
+    /// once: the list is the nav's, and a fade would rebuild it a frame at
+    /// a time.
+    fn attention_element(&self, attention: &nav::AttentionList, cx: &mut Context<Self>) -> Div {
+        let sections = attention
+            .sections
+            .iter()
+            .map(|block| {
+                let (section, folded) = (block.section, block.folded);
+                let head = nav::list_heading(section, block.rows.len()).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        view.set_nav_fold(NavFold::List(section), !folded, cx);
+                    }),
+                );
+                let rows = block
+                    .rows
+                    .iter()
+                    .filter(|_| !folded)
+                    .map(|row| self.thread_element(row, None, nav::RowPlace::Line, 0, cx));
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .child(head)
+                    .children(rows)
+                    .into_any_element()
+            })
+            .collect();
+        nav::attention_list(sections)
     }
 
     /// The `Projects` heading (§5.1.3), its `+` a new Project.
@@ -13999,7 +14048,10 @@ impl CockpitView {
     /// One Thread row, with the whole drag/drop and click wiring a row has
     /// had since #21. A press on a member row opens its Group (`group`, the
     /// Group it is drawn under) on that Thread; a loose row whose Pane is
-    /// open focuses it; a parked one revives.
+    /// open focuses it; a parked one revives. An Attention list row
+    /// (`RowPlace::Line`) stands for its tree row: it drags and drops as
+    /// that row does, from its home Group, and a press lands on the Thread
+    /// (`land_on_thread`); it is renamed from the tree.
     fn thread_element(
         &self,
         row: &nav::ThreadRow,
@@ -14009,6 +14061,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thread = row.thread;
+        let line = place == nav::RowPlace::Line;
+        let group = if line {
+            self.cockpit.groups().home(thread).map(|group| group.id)
+        } else {
+            group
+        };
         // A Project filter hides rows, not members. Drop positions always
         // address the durable order, including the hidden members.
         let index = group
@@ -14022,11 +14080,16 @@ impl CockpitView {
             group,
             index,
         };
-        let title = self.editable_thread_title(thread, row.name.clone(), cx);
-        let editing = matches!(
-            &self.rename,
-            Some((RenameTarget::Thread(editing), _)) if *editing == thread
-        );
+        let title = if line {
+            row.name.clone().into_any_element()
+        } else {
+            self.editable_thread_title(thread, row.name.clone(), cx)
+        };
+        let editing = !line
+            && matches!(
+                &self.rename,
+                Some((RenameTarget::Thread(editing), _)) if *editing == thread
+            );
         let head = nav::thread_row_with_title(
             row,
             title,
@@ -14069,6 +14132,10 @@ impl CockpitView {
             // board must leave the board showing, not switch to the row's
             // own view before the drag begins.
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                if line {
+                    view.land_on_thread(thread, cx);
+                    return;
+                }
                 if let Some(group) = group {
                     view.enter_group(group, cx);
                     view.focus_thread(thread, cx);
@@ -15560,102 +15627,263 @@ mod tests {
         assert_eq!(order(&view, cx), before, "nor does finishing");
     }
 
-    /// Smart filtering: off, the nav has no `Working` and `Done` views; on,
-    /// a Thread at work is listed under `Working`, and once it finishes out
-    /// of sight under `Done` — until the operator lands on it. Its own row
-    /// stays in the tree throughout.
+    /// The Attention list's sections, as `attention_list` builds them.
+    fn listed(
+        view: &Entity<CockpitView>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Vec<(nav::ListSection, Vec<ThreadId>)> {
+        view.read_with(cx, |view, _| {
+            view.attention_list(&view.nav_state())
+                .sections
+                .into_iter()
+                .map(|block| {
+                    let rows = block.rows.iter().map(|row| row.thread).collect();
+                    (block.section, rows)
+                })
+                .collect()
+        })
+    }
+
+    /// The Attention list (§5.1.2): always on, no setting. Nothing in
+    /// flight and it is gone. Then `Needs you` (oldest request first), `Done`
+    /// (newest finish first) and `Working` (creation order), in that order
+    /// over `Projects`, each head with its count, each row one line; and a
+    /// Thread's own row stays in the tree throughout.
     #[gpui::test]
-    fn smart_filtering_lists_working_then_done_over_the_tree(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("smart-filtering", 2);
+    fn the_attention_list_lists_needs_you_then_done_then_working(cx: &mut TestAppContext) {
+        use nav::ListSection::{Done, NeedsYou, Working};
+        let (core, fake) = cockpit("attention-list", 6);
         let threads = core.threads();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1440.), px(900.)));
         tick(cx);
-        assert!(view.read_with(cx, |view, _| view.nav_state().smart.is_none()));
-        assert!(
-            cx.debug_bounds("nav-view-working").is_none(),
-            "off by default"
+        assert_eq!(listed(&view, cx), vec![], "nothing in flight");
+        assert!(cx.debug_bounds("nav-list").is_none(), "and no list at all");
+
+        // threads[0] is focused; the others are out of sight.
+        assert_eq!(
+            view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+            Some(threads[0])
         );
-
-        view.update(cx, |view, cx| {
-            view.change_settings(|settings| settings.smart_filtering = true, cx)
-        });
-        tick(cx);
-        assert!(cx.debug_bounds("nav-view-done").is_some());
-        assert!(cx.debug_bounds("nav-view-working").is_some());
-
-        let focused = view.read_with(cx, |view, _| view.cockpit.roster().focused_thread());
-        let stream = threads
-            .iter()
-            .position(|thread| Some(*thread) != focused)
-            .unwrap();
-        let away = threads[stream];
-        let listed = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-            view.read_with(cx, |view, _| {
-                let smart = view.nav_state().smart.unwrap();
-                let ids = |rows: &[nav::ThreadRow]| -> Vec<ThreadId> {
-                    rows.iter().map(|row| row.thread).collect()
-                };
-                (ids(&smart.done), ids(&smart.working))
-            })
+        let send = |index: usize, event: SessionEvent| {
+            fake.streams.borrow()[index].send(event).unwrap();
         };
-
-        fake.streams.borrow()[stream]
-            .send(SessionEvent::TextDelta {
-                text: "thinking".into(),
-            })
-            .unwrap();
+        let finish = || SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        };
+        let working = || SessionEvent::TextDelta {
+            text: "thinking".into(),
+        };
+        // Two working, the later-created first to start.
+        send(5, working());
+        send(1, working());
         tick(cx);
-        assert_eq!(listed(&view, cx), (vec![], vec![away]), "working");
-        let own: &'static str = format!("nav-thread-{}", away.get()).leak();
-        assert!(cx.debug_bounds(own).is_some(), "its own row stays");
-
-        fake.streams.borrow()[stream]
-            .send(SessionEvent::TurnEnded {
-                outcome: ferrite_core::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        tick(cx);
-        assert_eq!(listed(&view, cx), (vec![away], vec![]), "done, unseen");
-        assert!(cx.debug_bounds("nav-view-done-count").is_some());
-        view.update(cx, |view, cx| {
-            view.show_nav_view(nav::NavView::Done, None, cx)
-        });
-        tick(cx);
-        let list = cx
-            .debug_bounds("nav-view-smart-list")
-            .expect("the Done view");
-        let row = cx.debug_bounds(own).expect("its row, listed");
-        assert!(list.contains(&row.center()));
-        // Grouped as the tree is: under its Project's plain heading, one
-        // level in, with the Project's guide.
-        let heading = cx
-            .debug_bounds("nav-view-project-0")
-            .expect("its Project's heading");
-        assert!(heading.bottom() <= row.top());
-        assert!(cx
-            .debug_bounds(format!("nav-guide-{}-0", away.get()).leak())
-            .is_some());
-        assert!(
-            cx.debug_bounds("nav-project-summary-0").is_none(),
-            "no summary"
+        assert_eq!(
+            listed(&view, cx),
+            vec![(Working, vec![threads[1], threads[5]])]
         );
-        let title = cx
-            .debug_bounds(format!("nav-title-{}", away.get()).leak())
-            .expect("its title");
-        assert!(
-            (title.left()
-                - row.left()
-                - px(crate::theme::NAV_TITLE_X + crate::theme::NAV_TREE_INDENT))
-            .abs()
-                < px(0.5),
-            "one level in"
+        // Two finishing, threads[2] first; two asking, threads[4] first.
+        send(2, working());
+        send(3, working());
+        tick(cx);
+        send(2, finish());
+        tick(cx);
+        send(3, finish());
+        send(4, decision("perm-a"));
+        tick(cx);
+        send(1, decision("perm-b"));
+        tick(cx);
+        assert_eq!(
+            listed(&view, cx),
+            vec![
+                (NeedsYou, vec![threads[4], threads[1]]),
+                (Done, vec![threads[3], threads[2]]),
+                (Working, vec![threads[5]]),
+            ],
         );
 
-        view.update(cx, |view, cx| view.land_on_thread(away, cx));
+        let at = |cx: &mut gpui::VisualTestContext, key: String| {
+            cx.debug_bounds(key.clone().leak())
+                .unwrap_or_else(|| panic!("{key} drawn"))
+        };
+        let heads: Vec<_> = ["nav-list-needs-you", "nav-list-done", "nav-list-working"]
+            .into_iter()
+            .map(|key| at(cx, key.into()))
+            .collect();
+        assert!(heads[0].bottom() <= heads[1].top() && heads[1].bottom() <= heads[2].top());
+        let parked = at(cx, "nav-view-parked".into());
+        let projects = at(cx, "nav-projects-heading".into());
+        assert!(parked.bottom() <= heads[0].top(), "under the views");
+        assert!(
+            at(cx, "nav-list".into()).bottom() <= projects.top(),
+            "over Projects"
+        );
+        let count = cx.debug_bounds("nav-list-done-count").expect("its count");
+        assert!(count.right() > heads[1].center().x, "at the head's right");
+        // One line each, its word at the right; its own row stays below.
+        for thread in [threads[4], threads[3], threads[5]] {
+            let row = at(cx, format!("nav-list-row-{}", thread.get()));
+            assert_eq!(row.size.height, px(crate::theme::NAV_ROW_H), "one line");
+            assert!(at(cx, format!("nav-thread-{}", thread.get())).top() >= projects.bottom());
+        }
+        let word = at(cx, format!("nav-list-word-{}", threads[4].get()));
+        let row = at(cx, format!("nav-list-row-{}", threads[4].get()));
+        assert!(word.right() <= row.right() && word.left() > row.center().x);
+        assert_eq!(
+            view.read_with(cx, |view, _| nav::line_word(&view.thread_row(threads[4])))
+                .map(|(word, _)| word),
+            Some("approval".into()),
+            "a request says what it waits for"
+        );
+    }
+
+    /// Each section folds to its head and count, the fold held as the
+    /// nav's others are; the other sections stay open.
+    #[gpui::test]
+    fn an_attention_list_section_folds_to_its_head(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("attention-list-fold", 3);
+        let threads = core.threads();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        for stream in [1, 2] {
+            fake.streams.borrow()[stream]
+                .send(SessionEvent::TextDelta {
+                    text: "thinking".into(),
+                })
+                .unwrap();
+        }
         tick(cx);
-        assert_eq!(listed(&view, cx), (vec![], vec![]), "seen, it leaves");
+        let row = |cx: &mut gpui::VisualTestContext, thread: ThreadId| {
+            cx.debug_bounds(format!("nav-list-row-{}", thread.get()).leak())
+        };
+        assert!(row(cx, threads[1]).is_some());
+        let head = cx.debug_bounds("nav-list-working").expect("its head");
+        cx.simulate_click(head.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert!(view.read_with(cx, |view, _| view
+            .nav_folds
+            .contains(&NavFold::List(nav::ListSection::Working))));
+        assert!(row(cx, threads[1]).is_none() && row(cx, threads[2]).is_none());
+        assert!(
+            cx.debug_bounds("nav-list-working-count").is_some(),
+            "the count stays"
+        );
+        // A request arriving opens a section of its own, unfolded.
+        fake.streams.borrow()[1]
+            .send(decision("perm-fold"))
+            .unwrap();
+        tick(cx);
+        assert!(row(cx, threads[1]).is_some(), "under Needs you");
+        assert!(row(cx, threads[2]).is_none(), "Working still folded");
+
+        let head = cx.debug_bounds("nav-list-working").expect("its head");
+        cx.simulate_click(head.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert!(row(cx, threads[2]).is_some(), "open again");
+    }
+
+    /// Done's exit rule (CONTEXT.md "Attention list"): opening a done
+    /// Thread from the list reads its Notice, yet its row stays under
+    /// `Done` while it is the focused Thread, and leaves once focus moves
+    /// to another — by a press on a tree row or by the keyboard (⌘]).
+    #[gpui::test]
+    fn a_done_thread_stays_in_done_until_focus_moves_on(cx: &mut TestAppContext) {
+        use nav::ListSection::Done;
+        let (mut core, fake) = cockpit("attention-list-done", 4);
+        let threads = core.threads();
+        // threads[2] shares a Group with threads[0], so ⌘] can walk from it.
+        core.apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[2],
+        })
+        .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        tick(cx);
+        for stream in [1, 2] {
+            fake.streams.borrow()[stream]
+                .send(SessionEvent::TextDelta {
+                    text: "thinking".into(),
+                })
+                .unwrap();
+        }
+        tick(cx);
+        for stream in [1, 2] {
+            fake.streams.borrow()[stream]
+                .send(SessionEvent::TurnEnded {
+                    outcome: ferrite_core::TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+            tick(cx);
+        }
+        assert_eq!(
+            listed(&view, cx),
+            vec![(Done, vec![threads[2], threads[1]])]
+        );
+
+        let row = cx
+            .debug_bounds(format!("nav-list-row-{}", threads[1].get()).leak())
+            .expect("its list row");
+        cx.simulate_click(row.center(), gpui::Modifiers::none());
+        tick(cx);
+        let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext, at: usize| {
+            view.read_with(cx, |view, _| view.thread_row(threads[at]).status)
+        };
+        assert_eq!(
+            view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+            Some(threads[1]),
+            "the press lands on it"
+        );
+        assert_ne!(status(&view, cx, 1), nav::RowStatus::Done, "seen: read");
+        assert_eq!(
+            listed(&view, cx),
+            vec![(Done, vec![threads[2], threads[1]])],
+            "and still in Done, where the operator clicked it"
+        );
+        let selected = cx
+            .debug_bounds(format!("nav-list-row-{}", threads[1].get()).leak())
+            .expect("its list row, drawn");
+        assert!(
+            selected.contains(&row.center()),
+            "not moved from under the pointer"
+        );
+
+        // A press on a tree row moves focus on: it leaves.
+        let tree_row = cx
+            .debug_bounds(format!("nav-thread-{}", threads[3].get()).leak())
+            .expect("a tree row");
+        cx.simulate_click(tree_row.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert_eq!(
+            listed(&view, cx),
+            vec![(Done, vec![threads[2]])],
+            "it leaves"
+        );
+
+        // Focused from the tree, the other one is held too, and the
+        // keyboard's ⌘] moving on to its Group's other member lets it go.
+        // (Entering the Group puts both members on screen: both are seen.)
+        let tree_row = cx
+            .debug_bounds(format!("nav-thread-{}", threads[2].get()).leak())
+            .expect("a tree row");
+        cx.simulate_click(tree_row.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert_ne!(status(&view, cx, 2), nav::RowStatus::Done);
+        assert_eq!(listed(&view, cx), vec![(Done, vec![threads[2]])], "held");
+        view.update_in(cx, |view, window, cx| view.next_pane(&NextPane, window, cx));
+        tick(cx);
+        assert_ne!(
+            view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
+            Some(threads[2])
+        );
+        assert_eq!(
+            listed(&view, cx),
+            vec![],
+            "focus moved on: gone, and so is the list"
+        );
+        assert!(cx.debug_bounds("nav-list").is_none());
     }
 
     /// C8 under `sort: recent`: the tree never re-sorts under the pointer.

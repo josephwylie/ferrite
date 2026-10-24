@@ -1901,6 +1901,59 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     assert_eq!(built, 0, "a hover in the nav rebuilt a Pane");
 }
 
+/// The Attention list costs nothing at rest: a row arrives at once, asking
+/// for no frame of its own, and a list with rows in it asks for no frame
+/// and rebuilds no nav however long it sits.
+#[gpui::test]
+fn the_attention_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (core, fake) = cockpit("attention-list-rest", 3);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    for stream in [1, 2] {
+        let streams = fake.streams.borrow();
+        streams[stream]
+            .send(SessionEvent::TextDelta {
+                text: "thinking".into(),
+            })
+            .unwrap();
+        streams[stream]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    let listed = view.read_with(cx, |view, _| {
+        view.attention_list(&view.nav_state())
+            .sections
+            .iter()
+            .map(|block| block.rows.len())
+            .sum::<usize>()
+    });
+    assert_eq!(listed, 2, "the premise: two rows under Done");
+    // Their toasts come and go.
+    cockpit_renders_over(
+        cx,
+        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
+            + 1_000,
+    );
+    settle(cx);
+    let nav = crate::cockpit::drawn::nav_renders();
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(display_frames(cx), 0, "a list at rest asks for no frame");
+    assert_eq!(
+        crate::cockpit::drawn::nav_renders(),
+        nav,
+        "nor rebuilds the nav"
+    );
+}
+
 /// A Thread waiting on the operator: a Decision pending in the focused
 /// Pane of an active window, nothing else happening. Waiting is not
 /// working: it costs the Cockpit no more than an idle window does.
