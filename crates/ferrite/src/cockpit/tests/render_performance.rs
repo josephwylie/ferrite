@@ -2155,3 +2155,24 @@ fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
     );
     eprintln!("NEEDS_YOU_TOAST rising={rising} leaving={leaving}");
 }
+
+/// The palette comes in on `dialog-in` over its veil darkening in: frames
+/// while it does, no Pane rebuilt for them, none once it has landed.
+#[gpui::test]
+fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("palette-entrance", &[], cx);
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cx.run_until_parked();
+    // Its first frame takes the keyboard from the Composer, whose Pane
+    // redraws its line once; the entrance is every frame after.
+    let mut frames = frames_over(cx, 16);
+    let panes = pane_builds(&threads);
+    frames += frames_over(cx, theme::MOTION_DIALOG_IN_MS + 16);
+    let built = built_since(&threads, &panes);
+    eprintln!("PALETTE_ENTRANCE frames={frames} pane_builds={built:?}");
+    assert!(frames > 0, "the palette comes in");
+    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}

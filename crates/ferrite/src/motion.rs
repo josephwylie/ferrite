@@ -299,6 +299,23 @@ where
     })
 }
 
+/// `dialog_in` for a sheet that casts its own `shadow` rather than the
+/// float's (the palette's dialog, `components::dialog_shadow`).
+pub fn dialog_in_casting<E>(
+    id: impl Into<ElementId>,
+    element: E,
+    shadow: fn() -> Vec<gpui::BoxShadow>,
+) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, DIALOG_IN, element, move |el, t| {
+        faded(el, t, shadow())
+            .relative()
+            .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
+    })
+}
+
 /// `slot-in` for a board slot that opens beside its owner (the reader
 /// beside its Pane): no surface of its own to lift, so no shadow — it fades
 /// up from `MOTION_MENU_FROM_OPACITY` while settling `MOTION_SLOT_SHIFT`

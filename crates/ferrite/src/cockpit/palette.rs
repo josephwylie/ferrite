@@ -1410,7 +1410,10 @@ impl CockpitView {
             return Vec::new();
         };
         let board = self.board_bounds(window);
-        let veil = deferred(
+        // The veil darkens in under the sheet's own entrance, as Settings'
+        // does; a press on it takes effect from its first frame.
+        let veil = deferred(crate::motion::veil_in(
+            "palette-veil-in",
             div()
                 .debug_selector(|| "palette-veil".into())
                 .absolute()
@@ -1428,7 +1431,7 @@ impl CockpitView {
                         view.close_shortcuts(cx);
                     }),
                 ),
-        )
+        ))
         .with_priority(float::VEIL_PRIORITY)
         .into_any_element();
         let anchor = gpui::Bounds::new(
