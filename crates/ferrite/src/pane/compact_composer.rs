@@ -14,7 +14,7 @@
 
 use super::*;
 
-/// One board Pane's Composer: the shelf and the working line over the box
+/// One board Pane's Composer: the working line and the shelf over the box
 /// (`composer_stack`), as Solo's, then the box.
 pub(super) fn compact_composer(
     view: &PaneView,

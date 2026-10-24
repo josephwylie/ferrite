@@ -610,14 +610,21 @@ impl gpui::Render for CodeActions {
         }
         // The prototype's `.code .lang` and `.code .copy`: the language tag
         // always shows, dim, at the block's top right; the actions before it
-        // blend in under the pointer.
+        // blend in under the pointer. The row stands on the code's first
+        // line — the block's padding down, the code's own inset in from the
+        // right — and the tag is set as the code is, on its baseline.
+        let code_size = window.text_style().font_size.to_pixels(window.rem_size());
+        let code_line = window.line_height();
         let mut actions = gpui::div()
             .key_context("TranscriptCodeActions")
             .track_focus(&self.focus)
             .debug_selector(|| "code-actions".into())
             .absolute()
-            .top(px(theme::CODE_ACTIONS_TOP))
-            .right(px(theme::CODE_ACTIONS_RIGHT))
+            .top(px(theme::BLOCK_PAD_Y))
+            .right(px(
+                theme::CODE_PAD_CELLS * theme::tx_cell(f32::from(code_size))
+            ))
+            .h(code_line)
             .flex()
             .items_center()
             .justify_end()
@@ -688,12 +695,15 @@ impl gpui::Render for CodeActions {
                         .debug_selector(|| "code-language".into())
                         .flex_shrink_0()
                         .font_family(theme::FONT_CODE)
+                        .text_size(code_size)
+                        .line_height(code_line)
                         .child(language),
                 )
             },
         );
         gpui::div()
             .id(SharedString::from(format!("{}-overlay", self.key)))
+            .debug_selector(|| "code-overlay".into())
             .relative()
             .size_full()
             .on_hover(crate::motion::hover_listener(self.key.clone()))
@@ -776,11 +786,11 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         })
         // A fence is the diff's block box (`pane::block_box`): `BAR`,
         // `R_CONTROL` corners, a 1px `HAIRLINE`, `BLOCK_PAD_Y` above and
-        // below, the code two cells in, a half step under the prose.
+        // below, the code `CODE_PAD_CELLS` in, a half step under the prose.
         .with_code_background(gpui::transparent_black())
         .with_code_block(
             gpui::StyleRefinement::default()
-                .px(px(2.0 * code_cell))
+                .px(px(theme::CODE_PAD_CELLS * code_cell))
                 .py(px(theme::BLOCK_PAD_Y))
                 // A fence holds to the measure too (`max-width: 108ch`): its
                 // language word sits at that edge.
@@ -1860,6 +1870,35 @@ mod file_link_tests {
         assert!(
             cx.debug_bounds("code-copied").is_some(),
             "appending prose retains block feedback"
+        );
+    }
+
+    /// A fence's language tag stands on its code's first line: the block's
+    /// padding down, the code's own inset in from the right, one code line
+    /// high, so it shares that line's baseline.
+    #[gpui::test]
+    fn a_fence_sets_its_language_on_its_first_line(cx: &mut TestAppContext) {
+        let (_, cx) = fixture(
+            cx,
+            "```rust
+let count = 2;
+```",
+        );
+        cx.simulate_resize(gpui::size(px(520.), px(400.)));
+        cx.run_until_parked();
+        let block = cx
+            .debug_bounds("code-overlay")
+            .expect("the block's overlay");
+        let row = cx.debug_bounds("code-actions").expect("the actions row");
+        let language = cx.debug_bounds("code-language").expect("the language");
+        let code_size = theme::FS_PROSE - theme::TX_BLOCK_STEP;
+        assert_eq!(row.top() - block.top(), px(theme::BLOCK_PAD_Y));
+        let inset = block.right() - row.right();
+        assert!((inset - px(theme::CODE_PAD_CELLS * theme::tx_cell(code_size))).abs() < px(0.01));
+        assert_eq!(language.right(), row.right());
+        assert_eq!(
+            (language.top(), language.size.height),
+            (row.top(), px(theme::prose_line_height(code_size)))
         );
     }
 

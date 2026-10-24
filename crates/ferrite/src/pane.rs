@@ -1120,10 +1120,7 @@ pub(crate) fn working_line(
             view.thread().map_or(0, |thread| thread.get()),
         )
     } else if facts.starting {
-        starting_line(
-            facts.reduce_motion || !focused,
-            provider_ink(facts.provider),
-        )
+        starting_line(facts.reduce_motion || !focused, solo)
     } else {
         return None;
     };
@@ -1148,9 +1145,11 @@ pub(crate) fn working_line(
 /// The working line's shape while a Session starts: nothing the provider
 /// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
 /// the focused Pane, assembled and still elsewhere and under reduced motion
-/// — and `Starting` in `TEXT_DIM`. Its element id is a constant: the
-/// timeline has to survive every re-render of the line.
-fn starting_line(still: bool, _ink: u32) -> Div {
+/// — and `Starting` in `TEXT_DIM`, on the working line's own grid (Solo's
+/// or a Group Pane's), so the line never shifts when the turn's words
+/// replace it. Its element id is a constant: the timeline has to survive
+/// every re-render of the line.
+fn starting_line(still: bool, solo: bool) -> Div {
     let mark = if still {
         div()
             .debug_selector(|| "starting-mark-still".into())
@@ -1165,23 +1164,24 @@ fn starting_line(still: bool, _ink: u32) -> Div {
             ))
             .into_any_element()
     };
+    let grid = Grid::pane(Default::default(), solo);
     div()
         .debug_selector(|| "transcript-starting".into())
         .flex()
         .items_center()
         .w_full()
         .min_w_0()
-        .h(px(theme::LH_UI))
+        .h(px(grid.line))
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
+        .text_size(px(grid.size))
+        .line_height(px(grid.line))
         .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .w(px(theme::GLYPH_GUTTER))
+                .w(px(grid.gutter()))
                 .child(mark),
         )
         .child(div().min_w_0().truncate().child("Starting"))
@@ -1222,19 +1222,13 @@ fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
 /// WP-D · the L1 Composer, or a Subagent's footer in its place.
 fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
     if let Some(footer) = cx.child_footer.take() {
-        // A subagent's tab keeps the working line over its footer.
+        // A subagent's tab keeps the working line over its footer, spaced
+        // as it stands over the Composer.
         let working = cx
             .transcript
             .and_then(|transcript| working_line(cx.view, transcript, !cx.grid, cx.focused));
         return Some(
-            div()
-                .flex()
-                .flex_col()
-                .flex_shrink_0()
-                .min_w_0()
-                .when_some(working, |stack, line| {
-                    stack.child(div().px(px(theme::tx_inset(!cx.grid))).child(line))
-                })
+            composer_stack(None, None, working, !cx.grid)
                 .child(footer)
                 .into_any_element(),
         );
@@ -2695,7 +2689,8 @@ fn chip_face(
 
 /// A toolbar chip's button (SPEC §5.5): `TOOL_CHIP_H` high at `R_CHIP`,
 /// `TOOL_CHIP_PAD_X` at each side, no ground at rest, `paint::RAISED`
-/// under the pointer. The cockpit gives it its face and its menu.
+/// under the pointer. The cockpit gives it its face and its menu. It may
+/// narrow past its label, which then cuts (`composer_toolbar`).
 pub fn toolbar_chip(
     id: impl Into<gpui::ElementId>,
     cx: &gpui::App,
@@ -2704,7 +2699,8 @@ pub fn toolbar_chip(
         .p_0()
         .h(px(theme::TOOL_CHIP_H))
         .px(px(theme::TOOL_CHIP_PAD_X))
-        .flex_shrink_0()
+        .min_w_0()
+        .flex_shrink(1.)
         .rounded(px(theme::R_CHIP))
 }
 
@@ -2763,10 +2759,38 @@ pub fn send_button(stop: bool, compact: bool, cx: &gpui::App) -> gpui::component
     ))
 }
 
-/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): `lead` from the left —
-/// the `+`, a draft's chips, the mode — then a spacer and `trail` — the
-/// model, the effort, send.
-pub fn composer_toolbar(lead: Vec<AnyElement>, trail: Vec<AnyElement>) -> Div {
+/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): the `+`, `lead` — a
+/// draft's chips, the mode — a spacer, `trail` — the model, the effort —
+/// and the send circle. In a narrow box the lead chips give way first,
+/// their labels cut at the end (the mode keeps its shield and its ink);
+/// the model and effort stay whole; narrower still, the chips clip at the
+/// row's end. The `+` and send always stand whole inside the box.
+pub fn composer_toolbar(
+    attach: AnyElement,
+    lead: Vec<AnyElement>,
+    trail: Vec<AnyElement>,
+    send: AnyElement,
+) -> Div {
+    // A lead chip's slot may grow narrower than the chip: the chip, a
+    // block in it, takes the slot's width and cuts its label.
+    let give = |chip: AnyElement| {
+        div()
+            .min_w_0()
+            .flex_shrink(1.)
+            .overflow_hidden()
+            .child(chip)
+    };
+    let keep = |chip: AnyElement| div().flex_shrink_0().child(chip);
+    let chips = div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .items_center()
+        .gap(px(theme::COMPOSER_TOOLBAR_GAP))
+        .children(lead.into_iter().map(give))
+        .child(div().flex_1().min_w_0())
+        .children(trail.into_iter().map(keep));
     div()
         .debug_selector(|| "composer-toolbar".into())
         .flex()
@@ -2776,9 +2800,9 @@ pub fn composer_toolbar(lead: Vec<AnyElement>, trail: Vec<AnyElement>) -> Div {
         .h(px(theme::COMPOSER_TOOLBAR_H))
         .min_w_0()
         .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
-        .children(lead)
-        .child(div().flex_1().min_w_0())
-        .children(trail)
+        .child(attach)
+        .child(chips)
+        .child(send)
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -3202,11 +3226,13 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .child(field)
 }
 
-/// What stands over either Composer: the shelf — pending files at left,
-/// background chips at right; the chips give way first, cutting their
-/// labels — then the working line (`.comp > .r`), on the transcript rows'
-/// axis, `COMPACT_WORKING_GAP` (Solo: `COMPOSER_WORKING_GAP_SOLO`) over
-/// the input. Each shelf keeps to its box's inset (`boxed`: Solo's).
+/// What stands over either Composer: on top the working line (`.comp >
+/// .r`, SPEC §5.4: the stack's top row), on the transcript rows' axis,
+/// `COMPACT_WORKING_GAP` (Solo: `COMPOSER_WORKING_GAP_SOLO`) over what
+/// follows; then, `SHELF_GAP` over the box it belongs to, the shelf —
+/// pending files at left, background chips at right; the chips give way
+/// first, cutting their labels. The shelf keeps to its box's inset
+/// (`boxed`: Solo's).
 fn composer_stack(
     attachments: Option<AnyElement>,
     background: Option<AnyElement>,
@@ -3223,6 +3249,21 @@ fn composer_stack(
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
+        .when_some(working, |stack, working| {
+            stack.child(
+                div()
+                    .debug_selector(|| "transcript-progress".into())
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .px(px(theme::tx_inset(boxed)))
+                    .mb(px(if boxed {
+                        theme::COMPOSER_WORKING_GAP_SOLO
+                    } else {
+                        theme::COMPACT_WORKING_GAP
+                    }))
+                    .child(working),
+            )
+        })
         .when(attachments.is_some() || background.is_some(), |stack| {
             stack.child(
                 div()
@@ -3240,21 +3281,6 @@ fn composer_stack(
                     .when_some(background, |shelf, chips| {
                         shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
                     }),
-            )
-        })
-        .when_some(working, |stack, working| {
-            stack.child(
-                div()
-                    .debug_selector(|| "transcript-progress".into())
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .px(px(theme::tx_inset(boxed)))
-                    .mb(px(if boxed {
-                        theme::COMPOSER_WORKING_GAP_SOLO
-                    } else {
-                        theme::COMPACT_WORKING_GAP
-                    }))
-                    .child(working),
             )
         })
 }
@@ -4967,11 +4993,15 @@ pub(crate) fn prompt_row(
     // A prompt of attachments alone has no words to register or draw.
     let words = match text {
         PromptText::Literal(words) if words.is_empty() => None,
+        // A clamped band ends its last line in `…`, so it says there is
+        // more of the prompt above.
         PromptText::Literal(words) if pinned => Some(
             div()
                 .w_full()
                 .min_w_0()
-                .when_some(preview_lines, |words, lines| words.line_clamp(lines))
+                .when_some(preview_lines, |words, lines| {
+                    words.line_clamp(lines).text_ellipsis()
+                })
                 .child(SharedString::from(words))
                 .into_any_element(),
         ),
@@ -6389,14 +6419,18 @@ pub(crate) fn render_tool(
                 // elbow; open, the rest hangs under it.
                 // Each run holds exactly its cells: a measured run rounds
                 // up a pixel and would push the fold's words off the grid.
+                // Where the line is narrower, the first line gives way, cut
+                // at its end: the fold's words always stay in the row.
                 let first_w = first.chars().count() as f32 * grid.cell();
                 card = card.child(
                     elbow_line(grid, TEXT_DIM)
                         .child(
                             div()
-                                .flex_shrink_0()
+                                .debug_selector(|| "tool-fold-head".into())
+                                .flex_shrink(1.)
+                                .min_w_0()
                                 .w(px(first_w))
-                                .whitespace_nowrap()
+                                .truncate()
                                 .child(selection.line(
                                     block,
                                     first.clone(),
@@ -8288,6 +8322,48 @@ mod tests {
             assert!(
                 interrupt.left() >= metadata.right(),
                 "`esc to interrupt` closes the line, after its facts"
+            );
+        }
+    }
+
+    struct StartingAndWorking(Transcript);
+
+    impl Render for StartingAndWorking {
+        fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+            let line = |selector: &'static str, line: Div| {
+                div().debug_selector(move || selector.into()).child(line)
+            };
+            let working =
+                |solo| working_line_for(&self.0, false, solo, false, false, true, None, 0);
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(line("solo-starting", starting_line(true, true)))
+                .child(line("solo-working", working(true)))
+                .child(line("group-starting", starting_line(true, false)))
+                .child(line("group-working", working(false)))
+        }
+    }
+
+    /// `Starting` holds the working line's own row, Solo's and a Group
+    /// Pane's, so the line never moves when the turn's words replace it.
+    #[gpui::test]
+    fn the_starting_line_stands_on_the_working_line_grid(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            StartingAndWorking(Transcript::default())
+        });
+        cx.simulate_resize(size(px(640.), px(400.)));
+        cx.run_until_parked();
+        for (starting, working) in [
+            ("solo-starting", "solo-working"),
+            ("group-starting", "group-working"),
+        ] {
+            assert_eq!(
+                cx.debug_bounds(starting).unwrap().size.height,
+                cx.debug_bounds(working).unwrap().size.height,
+                "{starting} is {working}'s height"
             );
         }
     }

@@ -8333,19 +8333,18 @@ impl CockpitView {
                 view.attach_files(index, cx);
             }))
             .into_any_element();
-        let mut lead = vec![attach];
-        let mut trail = match pane.thread() {
-            None => {
-                lead.extend(self.draft_band_chips(index, cx));
-                self.draft_model_chips(index, cx)
-            }
-            Some(_) => {
-                lead.extend(self.mode_chip(index, cx));
-                self.model_chips(index, cx)
-            }
+        let (lead, trail) = match pane.thread() {
+            None => (
+                self.draft_band_chips(index, cx),
+                self.draft_model_chips(index, cx),
+            ),
+            Some(_) => (
+                self.mode_chip(index, cx).into_iter().collect(),
+                self.model_chips(index, cx),
+            ),
         };
-        trail.push(self.send_button(index, false, cx));
-        Some(pane::composer_toolbar(lead, trail).into_any_element())
+        let send = self.send_button(index, false, cx);
+        Some(pane::composer_toolbar(attach, lead, trail, send).into_any_element())
     }
 
     /// The send circle: Enter's act — or, while Main is busy (a turn runs

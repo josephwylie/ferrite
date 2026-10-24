@@ -1038,10 +1038,6 @@ pub const GUTTER_GAP: f32 = 8.0;
 /// `GLYPH_BOX + GUTTER_GAP`. An elbow result sits at C2 = C1 + `ELBOW_INDENT`.
 /// (On the grid the gutter is two cells, `GLYPH_GUTTER`.)
 pub const GUTTER_W: f32 = GLYPH_BOX + GUTTER_GAP;
-/// 13px — a raised box's content inset (1px edge + 12px padding). Transcript
-/// rows sit the same distance inside the reading column, so the transcript `❯`
-/// and the Composer `❯` share one axis.
-pub const BOX_INSET_X: f32 = 13.0;
 /// 8px — between a row's glyph column and its text (tool rows, the working
 /// line, the turn diff, controls beside a label).
 pub const EVENT_GAP: f32 = 8.0;
@@ -1581,12 +1577,11 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// on its `RAISED` chip; links and file paths are `LINK_INK` with no
 /// underline at rest, every link underlining under the pointer
 /// (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_DIM`, hanging in the first
-/// of two cells. A fence is the diff's block box (`BLOCK_*`), the code two
-/// cells in, `TX_BLOCK_STEP` under the prose, in full syntax colour, at most
-/// `MEASURE_CH` cells from the content column; its language tag dim at its
-/// top right and a lowercase `copy` `CODE_COPY_RIGHT_CELLS` in from the
-/// block's right edge, fading in under the pointer over
-/// `CODE_COPY_FADE_MS`. A table takes its content's width: a `W_STRONG`
+/// of two cells. A fence is the diff's block box (`BLOCK_*`), the code
+/// `CODE_PAD_CELLS` in, `TX_BLOCK_STEP` under the prose, in full syntax
+/// colour, at most `MEASURE_CH` cells from the content column; its language
+/// tag dim on its first line at the right, `Copy` before the tag blending
+/// in under the pointer. A table takes its content's width: a `W_STRONG`
 /// `TEXT_STRONG` head over a `paint::LINE2` rule, row rules in `paint::LINE`
 /// (each row exactly one line), no vertical rules and no box, the first
 /// column flush, figures tabular; a column of numbers aligns right (head
@@ -1619,13 +1614,15 @@ pub const QUOTE_RULE_W: f32 = 2.0;
 /// 4px — a horizontal rule's own margin inside its block, so it sits 16px
 /// from its neighbours.
 pub const RULE_MARGIN_Y: f32 = SPACE_1;
-/// A fence's actions overlay: the language id, html `Preview`,
-/// `Copy`/`Copied`, top-right over the block. It is always laid out (so it
-/// never moves the block) and only shown under the pointer (the 150ms
-/// hover blend), while its keys have focus, or while the caret or a
-/// selection is inside the block — those two instantly.
-pub const CODE_ACTIONS_TOP: f32 = 0.0;
-pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
+/// A fence's code sits this many cells (at the fence's size) in from the
+/// block's sides. Its actions overlay — the language id, html `Preview`,
+/// `Copy`/`Copied` — keeps the same inset at the right and stands on the
+/// code's first line (`BLOCK_PAD_Y` down, one code line high), the id set
+/// as the code is, on its baseline. The overlay is always laid out (so it
+/// never moves the block); the actions show only under the pointer (the
+/// 150ms hover blend), while their keys have focus, or while the caret or
+/// a selection is inside the block — those two instantly.
+pub const CODE_PAD_CELLS: f32 = 2.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
 /// A reading dialog (the html preview, What's New): the reading column's
@@ -1915,10 +1912,11 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 /// `COMPOSER_INSET` from the card's sides and foot: `paint::FIELD` at
 /// `R_PANE`, a 1px `FIELD_RING` laid outside it (it takes no layout).
 ///
-/// - **The shelf** stands above the box: pending files at left, background
-///   tasks at right, chips `SHELF_CHIP_H` high at `R_CHIP` on
-///   `paint::RAISED`, `FS_META`. Then the working line
-///   (`pane::working_line`), `COMPOSER_WORKING_GAP_SOLO` above the box.
+/// - **The working line** (`pane::working_line`) is the stack's top row,
+///   `COMPOSER_WORKING_GAP_SOLO` above what follows it.
+/// - **The shelf** stands `SHELF_GAP` above the box its files are for:
+///   pending files at left, background tasks at right, chips
+///   `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, `FS_META`.
 /// - **The queued row** (`QUEUED_ROW_H`, when anything is queued): `Queued`
 ///   in `FS_META`/`W_LABEL` `TEXT_DIM`, the top of the pile in
 ///   `TEXT_MUTED` on one cut line, `+N` in `TEXT_DIM`, and a
@@ -1952,10 +1950,6 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 pub const COMPOSER_PAD_Y: f32 = 6.0;
 pub const COMPOSER_ROW_H: f32 = LH_UI;
 pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
-/// Legacy names other modules still read (the Subagent footer, the send
-/// controls' corner).
-pub const COMPOSER_PAD_END: f32 = SPACE_2;
-pub const COMPOSER_INSET_B: f32 = SPACE_2;
 /// How far a table cell's text sits under the cell's top (`rich::style`):
 /// the prototype's 19px line centred in its 20px cell, rounded down to the
 /// whole pixel.
@@ -1979,7 +1973,7 @@ pub const STATUS_LOGO_FOOT: f32 = 1.0;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
-/// Between the shelf (pending files, background chips) and the band.
+/// Between the shelf (pending files, background chips) and the box.
 pub const SHELF_GAP: f32 = SPACE_1;
 /// The caret's bar: 2px wide (off the space scale: a caret is a hairline
 /// you can find), the row high.
@@ -2379,9 +2373,9 @@ pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (DECISION_OPTION_H + LH_UI) + D
 /// The scroll gutter a body keeps free for its thumb.
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
 /// A question's own answer (rule 2.8.6) is not a second field: it is one
-/// bare mono input line on the text column, `LH_UI` high, placeholder
-/// `Or type your own answer…` in `TEXT_DIM`; the digit one past the last
-/// option arms it.
+/// bare input line on the option labels' column and in their face (Geist,
+/// SPEC §5.9), `LH_UI` high, placeholder `Or type your own answer…` in
+/// `TEXT_DIM`; the digit one past the last option arms it.
 pub const QUESTION_OTHER_H: f32 = LH_UI;
 /// The primary's `↵`: `ON_PRIMARY` at 70%, so the key reads under its label
 /// on the primary fill.
