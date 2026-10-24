@@ -372,17 +372,6 @@ pub fn veil() -> Div {
         .bg(rgba(theme::VEIL))
 }
 
-/// The reading column: at most `READING_MAX_W`, centred in a wide Pane, the
-/// full width of a narrow one.
-pub fn reading_column(child: impl IntoElement) -> Div {
-    div()
-        .w_full()
-        .max_w(px(theme::READING_MAX_W))
-        .mx_auto()
-        .min_w_0()
-        .child(child)
-}
-
 // ------------------------------------------------------------- the line
 
 /// Where the browser paints a box edge at `x` (a layout position in

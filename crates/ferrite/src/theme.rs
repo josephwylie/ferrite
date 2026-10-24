@@ -1023,10 +1023,6 @@ pub const GUTTER_GAP: f32 = 8.0;
 /// `GLYPH_BOX + GUTTER_GAP`. An elbow result sits at C2 = C1 + `ELBOW_INDENT`.
 /// (On the grid the gutter is two cells, `GLYPH_GUTTER`.)
 pub const GUTTER_W: f32 = GLYPH_BOX + GUTTER_GAP;
-/// 13px — a raised box's content inset (1px edge + 12px padding). Transcript
-/// rows sit the same distance inside the reading column, so the transcript `❯`
-/// and the Composer `❯` share one axis.
-pub const BOX_INSET_X: f32 = 13.0;
 /// 8px — between a row's glyph column and its text (tool rows, the working
 /// line, the turn diff, controls beside a label).
 pub const EVENT_GAP: f32 = 8.0;
@@ -1938,10 +1934,6 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 pub const COMPOSER_PAD_Y: f32 = 6.0;
 pub const COMPOSER_ROW_H: f32 = LH_UI;
 pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
-/// Legacy names other modules still read (the Subagent footer, the send
-/// controls' corner).
-pub const COMPOSER_PAD_END: f32 = SPACE_2;
-pub const COMPOSER_INSET_B: f32 = SPACE_2;
 /// How far a table cell's text sits under the cell's top (`rich::style`):
 /// the prototype's 19px line centred in its 20px cell, rounded down to the
 /// whole pixel.

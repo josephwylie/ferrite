@@ -1179,17 +1179,31 @@ impl CockpitView {
                 .children(tail.map(|tail| div().flex_shrink_0().child(tail))),
             (None, None) => text,
         };
-        // A read-only line in the Composer's slot: one fixed
+        // A read-only line in the Composer's slot (SPEC §5.3): one fixed
         // `CHILD_FOOTER_H` row on the card's own ground — no box, no edge,
-        // nothing to type here — its words on the text column in
-        // `TEXT_DIM` and `Back to Main`, a secondary button, at the right.
+        // nothing to type here — inset as the Composer's box is, its words
+        // where the input's stand in `TEXT_DIM` and `Back to Main`, a
+        // secondary button, where send stands.
+        let (inset, pad_l, pad_r) = if self.grid_board() {
+            (
+                theme::COMPACT_COMPOSER_INSET,
+                theme::COMPACT_COMPOSER_PAD_L,
+                theme::COMPACT_COMPOSER_PAD_R,
+            )
+        } else {
+            (
+                theme::COMPOSER_INSET,
+                theme::COMPOSER_INPUT_PAD_X,
+                theme::COMPOSER_TOOLBAR_PAD_X,
+            )
+        };
         let footer = div()
             .debug_selector(move || format!("child-footer-{}", thread.get()))
             .flex()
             .items_center()
             .h(px(theme::CHILD_FOOTER_H))
-            .pl(px(theme::BOX_INSET_X + theme::GUTTER_W))
-            .pr(px(theme::COMPOSER_PAD_END))
+            .pl(px(pad_l))
+            .pr(px(pad_r))
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
@@ -1230,16 +1244,16 @@ impl CockpitView {
                         )),
                     ),
             );
-        // The Composer's slot: the Pane's inline padding, the reading
-        // column, and the block's inset from the Pane's foot.
+        // The Composer's slot: its box's inset from the card's sides and
+        // foot.
         Some(
             native_keys(
                 div()
                     .flex_shrink_0()
                     .min_w_0()
-                    .px(px(theme::PANE_PAD_X))
-                    .pb(px(theme::COMPOSER_INSET_B))
-                    .child(components::reading_column(footer)),
+                    .px(px(inset))
+                    .pb(px(inset))
+                    .child(footer),
             )
             .into_any_element(),
         )

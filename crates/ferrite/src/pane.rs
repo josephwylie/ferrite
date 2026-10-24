@@ -1222,19 +1222,13 @@ fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
 /// WP-D · the L1 Composer, or a Subagent's footer in its place.
 fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
     if let Some(footer) = cx.child_footer.take() {
-        // A subagent's tab keeps the working line over its footer.
+        // A subagent's tab keeps the working line over its footer, spaced
+        // as it stands over the Composer.
         let working = cx
             .transcript
             .and_then(|transcript| working_line(cx.view, transcript, !cx.grid, cx.focused));
         return Some(
-            div()
-                .flex()
-                .flex_col()
-                .flex_shrink_0()
-                .min_w_0()
-                .when_some(working, |stack, line| {
-                    stack.child(div().px(px(theme::tx_inset(!cx.grid))).child(line))
-                })
+            composer_stack(None, None, working, !cx.grid)
                 .child(footer)
                 .into_any_element(),
         );
