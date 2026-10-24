@@ -753,7 +753,7 @@ pub(super) fn away_row(
         title: crate::notifications::away_title(&away.name, title),
         state,
         detail,
-        when: crate::facts::age_label(at, now),
+        when: crate::facts::since_label(at, now),
         read,
         folded: Vec::new(),
     })

@@ -12753,7 +12753,7 @@ impl CockpitView {
             title,
             state,
             detail,
-            when: crate::facts::age_label(notice.at, now),
+            when: crate::facts::since_label(notice.at, now),
             read: notice.read,
             folded: Vec::new(),
         }
@@ -13005,7 +13005,7 @@ impl CockpitView {
             title: self.facts.name(thread),
             state: State::NeedsYou(notice.kind),
             detail,
-            when: crate::facts::age_label(notice.at, now),
+            when: crate::facts::since_label(notice.at, now),
             read: notice.read,
             folded: Vec::new(),
         }

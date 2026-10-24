@@ -595,9 +595,9 @@ pub fn next_minute(now: SystemTime) -> Duration {
     ferrite_core::cadence::next_rollover(since, Duration::from_secs(60))
 }
 
-/// A notification's age (the notifications list's right column): the one
-/// unit `since_label` reads, with `now` for its first minute — a row
-/// there always says how old it is.
+/// A comment's age (the PR tab's): the one unit `since_label` reads, with
+/// `now` for its first minute — a comment there always says how old it
+/// is.
 pub fn age_label(at: SystemTime, now: SystemTime) -> SharedString {
     let label = since_label(at, now);
     if label.is_empty() {
@@ -896,10 +896,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A notification's age says `now` in its first minute (a future
-    /// stamp too), and `since_label`'s one unit after.
+    /// A comment's age says `now` in its first minute (a future stamp
+    /// too), and `since_label`'s one unit after.
     #[test]
-    fn a_notifications_age_starts_at_now() {
+    fn a_comments_age_starts_at_now() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
         assert_eq!(age_label(now - Duration::from_secs(5), now), "now");
         assert_eq!(age_label(now + Duration::from_secs(5), now), "now");

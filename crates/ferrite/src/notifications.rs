@@ -135,7 +135,8 @@ pub struct Row {
     pub title: SharedString,
     pub state: State,
     pub detail: Detail,
-    /// Its age (`facts::age_label`: `now`, `2m`, `1h`).
+    /// Its age (`facts::since_label`: `2m`, `1h`; nothing in its first
+    /// minute — no surface prints `now`, theme rule 11).
     pub when: SharedString,
     pub read: bool,
     /// The older Notices folded under this row; dismissing the row

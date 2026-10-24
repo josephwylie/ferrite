@@ -1911,7 +1911,12 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         format!("{} \u{b7} {detail}", row.word())
     };
     let text_w = RowPlace::ROOT.text_w();
-    let age_w = measure.ui(&row.when, FS_META, W_BODY) + NAV_WORD_GAP;
+    // In its first minute a Notice has no age to say: the title takes the
+    // line.
+    let age = (!row.when.is_empty()).then(|| row.when.clone());
+    let age_w = age
+        .as_ref()
+        .map_or(0.0, |age| measure.ui(age, FS_META, W_BODY) + NAV_WORD_GAP);
     let title_ink = if cursor || !row.read {
         TEXT_STRONG
     } else {
@@ -1937,17 +1942,13 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
                     W_BODY,
                     row.title.clone(),
                 ))
-                .child(
+                .children(age.map(|age| {
                     div()
                         .flex()
                         .flex_1()
                         .justify_end()
-                        .child(components::tabular(trailing(
-                            row.when.clone(),
-                            FS_META,
-                            TEXT_DIM,
-                        ))),
-                ),
+                        .child(components::tabular(trailing(age, FS_META, TEXT_DIM)))
+                })),
         )
         .child(div().flex().h(px(NAV_LINE)).child(fitted(
             text_w,
