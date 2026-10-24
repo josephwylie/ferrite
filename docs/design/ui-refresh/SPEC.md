@@ -647,16 +647,27 @@ still open beside the Pane inside the board (ADR 0021).
     the nav head's sidebar toggle's twin (28, radius 6, the glyph 16 in
     `TEXT_DIM`, `RAISED` under the pointer), tooltip `Toggle panel ⌥⌘B`
     with the chord read from the keymap. It sits in the same place
-    whether the panel shows or not: shown, it ends the panel head;
-    hidden, it ends the view head, at the head row's far right over the
-    board. It shows in Solo and Group heads alike whenever there is a
-    focused Thread. On Windows the caption buttons keep the row's right
-    end, the toggle just left of them.
+    whether the panel shows or not, at the head row's far right: one
+    control laid over the row, not a part of either head. Shown, the
+    panel head ends in its room; hidden, the view head does. So it never
+    moves or blinks while the panel comes and goes. It shows in Solo and
+    Group heads alike whenever there is a focused Thread. On Windows the
+    caption buttons keep the row's right end, the toggle just left of
+    them.
   - The act `TogglePanel` (⌥⌘B) shows and hides it, from the toggle, the
     View menu's `Toggle Panel` (beside `Toggle Sidebar`) and the
     palette's `Toggle panel`.
   - The panel's visibility is a persisted setting, beside
     `nav_collapsed`.
+- **Showing and hiding.** The panel rides in and out the way the nav
+  folds (`motion::RESIZE`, 200ms CSS `ease`, interruptible), whatever
+  made it come or go: the toggle, or focus moving to or from a draft,
+  the empty board or the Projects coordinator. The board gives up or
+  takes back the width every frame. The panel's content keeps its
+  304 layout against the window's right edge, clipped where the board's
+  edge is (never re-wrapped), and fades on the nav's 150ms clock. Under
+  reduced motion it comes and goes at once. A restored panel is simply
+  there on first paint.
 - **Changes tab.**
   - **Branch row (48):** a `branch` icon, the branch in `TEXT_STRONG`
     500, and on line 2 `from <default_branch>` in `TEXT_DIM` 12. When

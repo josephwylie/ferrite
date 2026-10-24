@@ -2598,7 +2598,8 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
 //   a few pixels into place. A menu or a sheet that closes goes at once:
 //   dismissals are frequent, and the closed state says it all. The
-//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly.
+//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly, and
+//   the panel's rides ⌥⌘B the same way.
 // - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
 //   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
 //   changes, a Send becoming ready) and a press land on the same frame.
@@ -2636,8 +2637,9 @@ pub const MOTION_ROW_IN_MS: u64 = 180;
 /// while rising `MOTION_FADE_IN_RISE` into place.
 pub const MOTION_FADE_IN_MS: u64 = 500;
 pub const MOTION_FADE_IN_RISE: f32 = 4.0;
-/// The sidebar's width between column and rail (cmd-B) — the board's
-/// width rides it every frame.
+/// The sidebar's width between column and rail (cmd-B), and the panel's
+/// between shown and hidden (⌥⌘B) — the board's width rides it every
+/// frame.
 pub const MOTION_RESIZE_MS: u64 = 200;
 /// A board seam's hover line fading in under the pointer: 120ms.
 pub const MOTION_SEAM_FADE_MS: u64 = 120;

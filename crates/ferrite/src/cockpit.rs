@@ -536,7 +536,7 @@ pub struct CockpitView {
     /// the board's left edge reads it every frame. `None` at rest.
     nav_ride: std::cell::Cell<Option<f32>>,
     /// Measuring at the ride's destination (`board_level`), so a Level never
-    /// flaps mid-ride.
+    /// flaps mid-ride — the nav's or the panel's (`board_right`).
     nav_measure_rest: std::cell::Cell<bool>,
     /// A scene holding the ride at a progress (`fixture_hold_nav`).
     nav_hold: Option<f32>,
@@ -2654,8 +2654,9 @@ impl CockpitView {
     /// clear their threshold by `NAV_AUTO_RAIL_HYSTERESIS`. The operator's
     /// cmd-B override (`nav_forced_open`) outranks it either way. The board
     /// beside the 264px column is the window less the column and what the
-    /// board leaves at its right (`board_right`: the panel, or `BOARD_PAD`),
-    /// so with the panel hidden the nav folds under 832px (the card keeps
+    /// board leaves at its right once the panel's ride ends
+    /// (`board_right_rest`: the panel, or `BOARD_PAD`), so with the panel
+    /// hidden the nav folds under 832px (the card keeps
     /// 560px, as it did beside the 36ch column).
     fn update_auto_rail(&mut self, window: &Window) {
         use crate::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
@@ -2663,7 +2664,7 @@ impl CockpitView {
         let held = self.nav_auto_rail.get();
         let slack = if held { NAV_AUTO_RAIL_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
-        let right = self.board_right();
+        let right = self.board_right_rest();
         let board = width - nav::WIDTH - right;
         let narrowest = |view: &Self| {
             view.pane_rects(window)
@@ -9772,15 +9773,17 @@ impl Render for CockpitView {
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
-        // hover blend or the nav's width mid-flight keeps frames coming;
-        // with neither, nothing is scheduled (the pulse clock drives loops).
+        // hover blend or a column's width mid-flight (the nav's, the
+        // panel's) keeps frames coming; with neither, nothing is scheduled
+        // (the pulse clock drives loops).
         let now = cx.background_executor().now();
         let reduced = crate::motion::reduced_motion(cx);
-        let nav_moving = self
+        let column_moving = self
             .nav_tween
-            .is_some_and(|tween| tween.running(now, reduced));
+            .is_some_and(|tween| tween.running(now, reduced))
+            || self.panel_rides(now, reduced);
         let fading = crate::motion::hover_fades_active();
-        if nav_moving {
+        if column_moving {
             // The column's width moves the whole board: every part redraws.
             window.request_animation_frame();
         } else if fading {
@@ -9901,8 +9904,10 @@ impl CockpitView {
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
         // The board rides the sidebar's width every frame of a cmd-B fold
-        // (F-12); a Solo pair lasts while focus stays on one of its Panes.
+        // (F-12), and the panel's as it comes and goes; a Solo pair lasts
+        // while focus stays on one of its Panes.
         self.nav_ride.set(self.nav_ride_now(cx));
+        self.ride_panel(cx);
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
@@ -10242,16 +10247,17 @@ impl CockpitView {
         // The cards start under the head row (`titlebar::board_top`), with
         // `BOARD_PAD` of frame under them and right of them — none at the
         // right beside the panel, whose column is the frame there
-        // (`board_bounds`).
+        // (`board_bounds`), riding or at rest.
         let board_top = crate::titlebar::board_top();
-        let panel_shown = self.panel_thread().is_some();
+        let panel_w = self.panel_column_w();
+        let frame_right = self.board_right() - panel_w;
         let frame = || {
             div()
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
                 .pt(px(board_top))
-                .when(!panel_shown, |frame| frame.pr(px(crate::theme::BOARD_PAD)))
+                .pr(px(frame_right))
                 .pb(px(crate::theme::BOARD_PAD))
         };
         let visible = self.visible_indices();
@@ -10577,11 +10583,7 @@ impl CockpitView {
                             .absolute()
                             .top_0()
                             .bottom_0()
-                            .right(px(if panel_shown {
-                                crate::theme::PANEL_W
-                            } else {
-                                0.
-                            }))
+                            .right(px(panel_w))
                             .left(px(self.board_left()))
                             .flex()
                             .child(grid),
@@ -10600,8 +10602,10 @@ impl CockpitView {
             ))
             .children(self.view_head(cx))
             // The panel over the strip's right end: its tabs take
-            // their presses, the gaps between them still drag.
+            // their presses, the gaps between them still drag. Its toggle
+            // over both heads, in one place.
             .children(self.panel_element(window, cx))
+            .children(self.panel_toggle_element(cx))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
             .children(self.session_controls_element(window, cx))
