@@ -4703,8 +4703,8 @@ impl CockpitView {
     }
 
     /// Settings' line for one chime: the file it plays (or the built-in),
-    /// `play` to hear it, `choose…` for a file of the operator's own, and
-    /// `built-in` to go back.
+    /// `Play` to hear it, `Choose…` for a file of the operator's own, and
+    /// `Use built-in` to go back.
     fn sound_file_row(
         &self,
         id: &'static str,
@@ -4725,11 +4725,11 @@ impl CockpitView {
                 let _ = view.update(cx, |view, cx| view.choose_sound_file(sound, cx));
             }
         });
-        let mut acts = vec![("play", play), ("choose\u{2026}", choose)];
+        let mut acts = vec![("Play", play), ("Choose\u{2026}", choose)];
         if file.is_some() {
             let reset = self.setting_change(cx, move |s, ()| s.set_sound_file(sound, None));
             acts.push((
-                "built-in",
+                "Use built-in",
                 std::rc::Rc::new(move |cx: &mut gpui::App| reset((), cx)),
             ));
         }
@@ -7162,10 +7162,11 @@ impl CockpitView {
                     selected = Some(rows.len());
                 }
                 // The picker's voice (the prototype's `#picker`): the CLI's
-                // own default reads `default`, every description
+                // own default reads `Default`, a name in sentence case as
+                // every model's is (SPEC §7), every description
                 // lowercase-first.
                 let name = if model.value == "default" {
-                    "default".to_string()
+                    "Default".to_string()
                 } else {
                     model.display.clone()
                 };

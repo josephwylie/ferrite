@@ -286,7 +286,7 @@ impl CockpitView {
                 let index = row.index;
                 let view = view.clone();
                 acts.push((
-                    "sign in".into(),
+                    "Sign in".into(),
                     Rc::new(move |cx: &mut gpui::App| {
                         let _ = view.update(cx, |view, cx| {
                             let signed = view.machines.as_ref().map(|machines| {
@@ -303,7 +303,7 @@ impl CockpitView {
             if unsaved.as_ref() == Some(&machine) {
                 let saving = machine.clone();
                 acts.push((
-                    "save".into(),
+                    "Save".into(),
                     act(Box::new(move |saved| saved.push(saving.clone()))),
                 ));
             } else {
@@ -314,7 +314,7 @@ impl CockpitView {
                 };
                 let flipped = target.clone();
                 acts.push((
-                    format!("turn {word}").into(),
+                    format!("Turn {word}").into(),
                     act(Box::new(move |saved| {
                         for machine in saved.iter_mut().filter(|m| m.target == flipped) {
                             machine.enabled = flip;
@@ -323,7 +323,7 @@ impl CockpitView {
                 ));
                 let removed = target.clone();
                 acts.push((
-                    "remove".into(),
+                    "Remove".into(),
                     act(Box::new(move |saved| saved.retain(|m| m.target != removed))),
                 ));
             }
@@ -343,7 +343,7 @@ impl CockpitView {
             "Its ssh target. It needs `ferrited` on its PATH; ssh signs in as it \
              always does, and Ferrite keeps no password.",
             field,
-            "add",
+            "Add",
             move |window, cx| {
                 let target = typed.read(cx).value().trim().to_string();
                 let _ = adding.update(cx, |view, cx| match machine::check_target(&target) {

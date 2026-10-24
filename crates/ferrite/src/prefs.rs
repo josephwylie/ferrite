@@ -702,7 +702,7 @@ pub fn chooser<T: Clone + 'static>(
         .iter()
         .find(|(_, selected, _)| *selected)
         .map(|(label, _, _)| label.clone())
-        .unwrap_or_else(|| "choose".into());
+        .unwrap_or_else(|| "Choose".into());
     Row::new(title, detail, keywords, move |_, cx| {
         let options = options.clone();
         let change = change.clone();
@@ -911,7 +911,7 @@ pub fn stepper(
 
 /// A file the operator may choose in place of a built-in (a sound): its
 /// name, or `built_in`'s words, as a fact reads, then a token per `acts`
-/// (`play`, `choose…`, `built-in`). Searchable by the name.
+/// (`Play`, `Choose…`, `Use built-in`). Searchable by the name.
 pub fn file_choice(
     id: &'static str,
     title: &'static str,
