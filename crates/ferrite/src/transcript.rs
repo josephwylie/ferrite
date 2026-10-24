@@ -1179,28 +1179,13 @@ impl TranscriptView {
         stops
     }
 
-    /// The banner (ADR 0014): one muted line — the checkout, a path target,
-    /// on its branch, and when the Thread started. Its text is selectable.
+    /// The banner (ADR 0014): one muted line — the checkout, on its branch,
+    /// and when the Thread started. The checkout is a path target in the
+    /// line's own ink, as a call's path argument is (SPEC §3.4): its
+    /// underline shows under the pointer. Its text is selectable.
     fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
         let grid = self.grid();
         let line = banner_line(facts);
-        let highlights = line
-            .path
-            .map(|len| {
-                let to = line
-                    .text
-                    .char_indices()
-                    .nth(len)
-                    .map_or(line.text.len(), |(at, _)| at);
-                vec![(
-                    0..to,
-                    gpui::HighlightStyle {
-                        color: Some(gpui::rgb(theme::LINK_INK).into()),
-                        ..Default::default()
-                    },
-                )]
-            })
-            .unwrap_or_default();
         let overlay = line.path.map(|len| {
             crate::file_links::path_overlay(
                 PathTarget::new(facts.workspace_path.clone())
@@ -1220,7 +1205,7 @@ impl TranscriptView {
             .flex_shrink_0()
             .truncate()
             .text_color(gpui::rgb(theme::TEXT_DIM))
-            .child(selection.line(BlockId::BANNER, line.text, highlights))
+            .child(selection.line(BlockId::BANNER, line.text, Vec::new()))
             .children(overlay)
             .into_any_element()
     }
