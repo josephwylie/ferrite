@@ -2357,9 +2357,9 @@ pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (DECISION_OPTION_H + LH_UI) + D
 /// The scroll gutter a body keeps free for its thumb.
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
 /// A question's own answer (rule 2.8.6) is not a second field: it is one
-/// bare mono input line on the text column, `LH_UI` high, placeholder
-/// `Or type your own answer…` in `TEXT_DIM`; the digit one past the last
-/// option arms it.
+/// bare input line on the option labels' column and in their face (Geist,
+/// SPEC §5.9), `LH_UI` high, placeholder `Or type your own answer…` in
+/// `TEXT_DIM`; the digit one past the last option arms it.
 pub const QUESTION_OTHER_H: f32 = LH_UI;
 /// The primary's `↵`: `ON_PRIMARY` at 70%, so the key reads under its label
 /// on the primary fill.

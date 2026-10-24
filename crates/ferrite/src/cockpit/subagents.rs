@@ -2670,15 +2670,16 @@ impl Cards {
             }
             section = section.child(rows);
             if question.allow_other {
-                // The own answer is not a second field: one bare mono line
-                // on the options' grid — its digit where theirs stand, its
-                // text on their labels' column — that the digit one past
-                // the options arms.
+                // The own answer is not a second field: one bare line on
+                // the options' grid — an option row high, its digit where
+                // theirs stand, its text on their labels' column, in their
+                // face — that the digit one past the options arms.
                 let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
                 section = section.child(
                     div()
                         .w_full()
                         .min_w_0()
+                        .min_h(px(theme::DECISION_OPTION_H))
                         .flex()
                         .items_center()
                         .gap(px(theme::DECISION_OPTION_GAP))
@@ -2711,7 +2712,7 @@ impl Cards {
                                     )
                                     .px(px(0.))
                                     .py(px(0.))
-                                    .font_family(theme::FONT_CODE)
+                                    .font_family(theme::FONT_UI)
                                     .text_size(px(theme::FS_UI))
                                     .text_color(rgb(theme::TEXT)),
                                 ),
