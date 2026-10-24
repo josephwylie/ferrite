@@ -39,7 +39,9 @@ impl BoardView {
         } else {
             "board-project-all"
         };
-        components::form_button_on(id, if selected { paint::RAISED } else { paint::CARD }, cx)
+        // The Tasks header's tabs (`tasks_header`): the scope in force
+        // selected and strong, the other quiet, both on no frame.
+        components::form_button(id, cx)
             .tab_stop(false)
             .h(px(CONTROL_H))
             .px(px(CH))
@@ -48,6 +50,11 @@ impl BoardView {
             .child(
                 components::text_ui()
                     .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_DIM }))
+                    .font_weight(if selected {
+                        W_STRONG
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
                     .child(label),
             )
             .on_click(cx.listener(move |view, _, _, cx| {

@@ -194,8 +194,7 @@ impl BoardView {
                 .child(
                     div()
                         .flex()
-                        .border_1()
-                        .border_color(paint::LINE)
+                        .gap(px(CH))
                         .child(self.project_scope_button(true, cx))
                         .child(self.project_scope_button(false, cx)),
                 )
