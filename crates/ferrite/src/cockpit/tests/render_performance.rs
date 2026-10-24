@@ -2736,26 +2736,24 @@ fn nav_rebuilds_starve_no_ride(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn nav_rebuilds_starve_no_reader_slide(cx: &mut TestAppContext) {
-    let (view, _fake, _threads, cx) = group_board("nav-rebuild-reader", &[], cx);
-    let dir = scratch("nav-rebuild-reader-file");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("notes.md");
-    std::fs::write(&file, "# Notes\n\nA line of notes.\n").unwrap();
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.open_beside(
-                beside::Beside::Reader {
-                    path: file.clone(),
-                    line: None,
-                },
-                window,
+fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
+    let (view, _fake, _threads, cx) = group_board("nav-rebuild-review", &[], cx);
+    view.update(cx, |view, cx| {
+        let composer = view.panes[0].composer.clone();
+        let reading = view.prefs.settings.reading_size;
+        let review = cx.new(|cx| {
+            crate::review::ReviewView::new(
+                composer,
+                ferrite_reviewr::model::Scope::Uncommitted,
+                reading,
                 cx,
             )
-        })
+        });
+        view.panes[0].review.show(review, "main".into());
+        cx.notify();
     });
     cx.run_until_parked();
-    plays_beside_nav_rebuilds(&view, theme::MOTION_SLOT_OPEN_MS, "reader open", cx);
+    plays_beside_nav_rebuilds(&view, theme::MOTION_SLOT_OPEN_MS, "review open", cx);
 }
 
 /// The palette comes in on `dialog-in` over its veil darkening in: frames
