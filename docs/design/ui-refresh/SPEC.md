@@ -381,11 +381,13 @@ Thread's context menu, and a drag from it is a drag of the tree row. A
 press lands on the Thread, as a rail cell's does. Renaming is done from
 the tree. Its Thread's own row stays in the tree, which carries no queue.
 
-A row never leaves from under the operator (CONTEXT.md "Attention list").
-The focused Thread keeps its section while its state would take it out of
-the list: opening a done Thread reads its Notice, yet it stays under
-`Done`. It leaves once focus moves to another Thread. A state that moves
-a Thread to another section moves it at once. Rows arrive and leave at
+A finish never leaves from under the operator (CONTEXT.md "Attention
+list"). The focused Thread is held under `Done` when it was listed there
+(opening a done Thread reads its Notice, yet it stays) or when it
+finished while focused (seen at once, it moves from `Working` to `Done`).
+It leaves once focus moves to another Thread. Nothing else is held: a
+state that moves a Thread to another section moves it at once, and an
+interrupt (no Notice) leaves. Rows arrive and leave at
 once. A `ROW_IN` fade was tried and dropped: each of its frames rebuilt
 the nav part alone, and a nav-only rebuild after a finish cost that
 finish's toast the frames of its fade-out (the toast test in

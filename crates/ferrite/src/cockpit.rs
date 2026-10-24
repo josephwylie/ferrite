@@ -57,6 +57,13 @@ struct NavSnapshot {
     ranks: std::collections::HashMap<ThreadId, Attention>,
 }
 
+/// Where the Attention list listed a Thread: its section, and its newest
+/// Notice then (`CockpitView::attention_list`).
+type Listed = (
+    nav::ListSection,
+    Option<ferrite_core::notifications::NoticeId>,
+);
+
 /// Reorder `rows` by where they sat in `snapshot`, when the snapshot holds
 /// exactly the same Threads; `false` (and `rows` untouched) otherwise.
 fn hold_order(rows: &mut [nav::ThreadRow], snapshot: &[ThreadId]) -> bool {
@@ -333,9 +340,10 @@ pub struct CockpitView {
     nav_drag_live: std::cell::Cell<bool>,
     /// The order the nav last drew, held while the pointer is inside.
     nav_snapshot: std::cell::RefCell<Option<NavSnapshot>>,
-    /// The section the Attention list last listed each Thread under
-    /// (`attention_list`): where the focused Thread is held.
-    nav_listed: std::cell::RefCell<std::collections::HashMap<ThreadId, nav::ListSection>>,
+    /// The section the Attention list last listed each Thread under, and
+    /// the Thread's newest Notice then (`attention_list`): what says the
+    /// focused Thread finished and is held under `Done`.
+    nav_listed: std::cell::RefCell<std::collections::HashMap<ThreadId, Listed>>,
     /// The column's width on its way between its two (`motion::RESIZE`).
     /// None on launch so a restored preference never performs entrance
     /// choreography; once the operator acts, a flip mid-flight retargets
@@ -8932,11 +8940,14 @@ impl CockpitView {
     /// first); every one that finished unseen, newest finish first; every
     /// one at work, in creation order. Its folds are the nav's.
     ///
-    /// Nothing leaves from under the operator (CONTEXT.md "Attention
-    /// list"): the focused Thread keeps the section it was last listed in
-    /// while its state would take it out of the list — opening a done
-    /// Thread reads its Notice — and leaves once focus moves to another.
-    /// A Thread whose state moves it to another section moves at once.
+    /// A finish never leaves from under the operator (CONTEXT.md
+    /// "Attention list"): the focused Thread is held under `Done` while it
+    /// would otherwise leave the list, when it was listed there (opening a
+    /// done Thread reads its Notice) or was listed under `Working` and has
+    /// a Notice since (it finished while the operator watched, seen at
+    /// once). It leaves once focus moves to another. Anything else moves
+    /// at once: a Thread whose state takes it to another section, and one
+    /// that stopped with no Notice (an interrupt), which leaves.
     pub(crate) fn attention_list(&self, state: &nav::NavState) -> nav::AttentionList {
         use nav::ListSection;
         let roster = self.cockpit.roster();
@@ -8963,14 +8974,25 @@ impl CockpitView {
         rows.sort_by_key(|row| row.thread);
         rows.dedup_by_key(|row| row.thread);
 
+        let notifications = self.cockpit.notifications();
+        // The Notices come newest first.
+        let newest = |thread: ThreadId| {
+            notifications
+                .notices()
+                .find(|notice| notice.thread == thread)
+                .map(|notice| notice.id)
+        };
         let mut listed = self.nav_listed.borrow_mut();
         let mut placed: Vec<(ListSection, nav::ThreadRow)> = Vec::new();
         for row in rows {
             let thread = row.thread;
             let held = || {
-                (focused == Some(thread))
-                    .then(|| listed.get(&thread).copied())
-                    .flatten()
+                let finished = match listed.get(&thread) {
+                    Some((ListSection::Done, _)) => true,
+                    Some((ListSection::Working, known)) => newest(thread) > *known,
+                    _ => false,
+                };
+                (focused == Some(thread) && finished).then_some(ListSection::Done)
             };
             let Some(section) = ListSection::of(row.status.attention()).or_else(held) else {
                 continue;
@@ -8983,11 +9005,10 @@ impl CockpitView {
         }
         *listed = placed
             .iter()
-            .map(|(section, row)| (row.thread, *section))
+            .map(|(section, row)| (row.thread, (*section, newest(row.thread))))
             .collect();
 
         let queue = self.cockpit.needs_you();
-        let notifications = self.cockpit.notifications();
         let sections = ListSection::ALL
             .into_iter()
             .filter_map(|section| {
@@ -15786,10 +15807,11 @@ mod tests {
     /// Done's exit rule (CONTEXT.md "Attention list"): opening a done
     /// Thread from the list reads its Notice, yet its row stays under
     /// `Done` while it is the focused Thread, and leaves once focus moves
-    /// to another — by a press on a tree row or by the keyboard (⌘]).
+    /// to another — by a press on a tree row or by the keyboard (⌘]). One
+    /// that finishes while focused is held under Done the same way.
     #[gpui::test]
     fn a_done_thread_stays_in_done_until_focus_moves_on(cx: &mut TestAppContext) {
-        use nav::ListSection::Done;
+        use nav::ListSection::{Done, Working};
         let (mut core, fake) = cockpit("attention-list-done", 4);
         let threads = core.threads();
         // threads[2] shares a Group with threads[0], so ⌘] can walk from it.
@@ -15884,6 +15906,60 @@ mod tests {
             "focus moved on: gone, and so is the list"
         );
         assert!(cx.debug_bounds("nav-list").is_none());
+
+        // A Thread that finishes while the operator watches it is seen at
+        // once, and held under Done, not Working: the finish is the news.
+        let on = view
+            .read_with(cx, |view, _| view.cockpit.roster().focused_thread())
+            .unwrap();
+        let stream = threads.iter().position(|thread| *thread == on).unwrap();
+        let send = |event: SessionEvent| fake.streams.borrow()[stream].send(event).unwrap();
+        send(SessionEvent::TextDelta {
+            text: "thinking".into(),
+        });
+        tick(cx);
+        assert_eq!(listed(&view, cx), vec![(Working, vec![on])]);
+        send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        });
+        tick(cx);
+        assert_ne!(
+            view.read_with(cx, |view, _| view.thread_row(on).status),
+            nav::RowStatus::Done,
+            "seen at once"
+        );
+        assert_eq!(listed(&view, cx), vec![(Done, vec![on])], "held under Done");
+        // Work again moves it back at once; an interrupt is no finish, so
+        // with no Notice it leaves rather than being held.
+        send(SessionEvent::TextDelta {
+            text: "again".into(),
+        });
+        tick(cx);
+        assert_eq!(listed(&view, cx), vec![(Working, vec![on])]);
+        send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Interrupted,
+            cost_usd: None,
+        });
+        tick(cx);
+        assert_eq!(listed(&view, cx), vec![], "interrupted: not held");
+        // Finished and held, it leaves when focus moves on.
+        send(SessionEvent::TextDelta {
+            text: "once more".into(),
+        });
+        tick(cx);
+        send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        });
+        tick(cx);
+        assert_eq!(listed(&view, cx), vec![(Done, vec![on])]);
+        let tree_row = cx
+            .debug_bounds(format!("nav-thread-{}", threads[3].get()).leak())
+            .expect("a tree row");
+        cx.simulate_click(tree_row.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert_eq!(listed(&view, cx), vec![], "focus moved on: it leaves");
     }
 
     /// C8 under `sort: recent`: the tree never re-sorts under the pointer.

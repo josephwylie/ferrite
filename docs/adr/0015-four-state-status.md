@@ -133,9 +133,13 @@ the key is ignored.
 - **Board groups do not rank.** A task's own words (`ready to approve`)
   stay on its row's line 2. The list ranks Threads by their Attention
   alone.
-- **Nothing leaves from under the operator.** The focused Thread keeps
-  the section it was listed in while its state would take it out of the
-  list: opening a done Thread reads its Notice, yet its row stays under
-  `Done`. The row leaves once focus moves to another Thread. This rule
-  lives in the nav, not in core: the Notice is read when it is seen, as
-  ever, so the Bar, the Pane head, the toasts and ⌘D are unchanged.
+- **A finish never leaves from under the operator.** The focused Thread
+  is held under `Done` in two cases. Opening a done Thread reads its
+  Notice, yet its row stays under `Done`. A Thread that finishes while the
+  operator watches it is seen at once, and it moves from `Working` to
+  `Done` and stays there. Either way the row leaves once focus moves to
+  another Thread. Nothing else is held: an interrupt raises no Notice, so
+  that row leaves, and a row never stands in a section that no longer says
+  what happened. This rule lives in the nav, not in core: the Notice is
+  read when it is seen, as ever, so the Bar, the Pane head, the toasts and
+  ⌘D are unchanged.

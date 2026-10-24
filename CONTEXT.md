@@ -215,11 +215,14 @@ their Attention: `Needs you` (blocked, oldest request first), `Done` (a
 Notice not yet seen, newest first) and `Working` (creation order). Each
 row is one line. A section with no rows is not drawn, and each section
 folds to its head and count. The list is herdr's Agents panel without the
-idle Threads; the tree below still lists every Thread. A row never leaves
-from under the operator: the focused Thread keeps its section while its
-state would take it out of the list, so a done Thread opened from it
-stays under `Done`, read. It leaves when focus moves to another Thread.
-That hold is the nav's; the Notice is read as soon as it is seen.
+idle Threads; the tree below still lists every Thread. A finish never
+leaves from under the operator: the focused Thread is held under `Done`
+when it was listed there (a done Thread opened from it stays, read) or
+finished while the operator watched it (seen at once, it moves from
+`Working` to `Done`). It leaves when focus moves to another Thread.
+Nothing else is held, so no row stands in a section that no longer says
+what happened. That hold is the nav's; the Notice is read as soon as it
+is seen.
 _Avoid_: smart filtering (the setting it replaced), agents panel
 (herdr's), queue (that is ⌘D's).
 
