@@ -624,9 +624,9 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A Subagent's read-only footer is the Composer's own block: in the
-/// reading column, inset from the Pane's foot, its `❯` on the Composer's
-/// axis and its text at C1.
+/// A Subagent's read-only footer stands in the Composer's slot (SPEC
+/// §5.3): as wide as Main's box and as far inside the card's foot, its
+/// words where the input's stand.
 #[gpui::test]
 fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
     use ferrite_core::activity::{
@@ -663,20 +663,20 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
         .expect("the read-only footer");
     let text = cx.debug_bounds("child-footer-text-1").unwrap();
     let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    // Terminal-native: Main's Composer is a full-width band now (WP-D); the
-    // footer keeps its column until WP-F takes it onto the band, so only
-    // its own placement is asserted here.
-    assert!(main_block.size.width >= footer.size.width);
+    assert_eq!(
+        (footer.left(), footer.size.width),
+        (main_block.left(), main_block.size.width),
+        "the footer spans the Composer's box"
+    );
     assert_eq!(footer.size.height, px(crate::theme::CHILD_FOOTER_H));
     assert!(
-        (px(pane.y + pane.h) - footer.bottom() - px(crate::theme::COMPOSER_INSET_B)).abs()
-            <= px(1.5),
-        "inset from the Pane's foot: {footer:?} / {pane:?}"
+        (px(pane.y + pane.h) - footer.bottom() - px(crate::theme::COMPOSER_INSET)).abs() <= px(1.5),
+        "inset from the card's foot as the box is: {footer:?} / {pane:?}"
     );
     assert_eq!(
         text.left() - footer.left(),
-        px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W),
-        "the text starts at C1"
+        px(crate::theme::COMPOSER_INPUT_PAD_X),
+        "the words start where the input's do"
     );
 }
 
@@ -714,36 +714,6 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
         "the line's text starts on the labels' column: {:?} / {labels:?}",
         field.left()
     );
-}
-
-/// The image preview's scrim covers the whole window, nav and titlebar
-/// included, like every modal's; its sheet stays centred on its Pane.
-#[gpui::test]
-fn the_image_preview_dims_the_whole_window(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("preview-scrim", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
-    tick(cx);
-    let image = scratch("preview-scrim-image").join("shot.png");
-    std::fs::create_dir_all(image.parent().unwrap()).unwrap();
-    std::fs::write(&image, include_bytes!("../../../assets/app-icon.png")).unwrap();
-    view.update_in(cx, |view, window, cx| {
-        view.panes[0]
-            .preview
-            .open(image.clone(), "Screenshot".into(), window, cx);
-    });
-    tick(cx);
-    tick(cx);
-    let scrim = cx
-        .debug_bounds("attachment-preview-scrim")
-        .expect("a scrim");
-    let window = cx.update(|window, _| window.viewport_size());
-    assert_eq!(scrim.origin, gpui::point(px(0.), px(0.)));
-    assert_eq!(scrim.size, window, "the scrim covers the window");
-    let sheet = cx.debug_bounds("attachment-preview-content").unwrap();
-    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert!((sheet.center().x - px(pane.x + pane.w / 2.)).abs() <= px(2.));
-    let _ = std::fs::remove_dir_all(image.parent().unwrap());
 }
 
 /// A draft's body holds only the embossed mark, and neither it nor an

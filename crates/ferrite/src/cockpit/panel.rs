@@ -1,40 +1,74 @@
 //! The right panel (SPEC §5.6): a fixed column on the frame, right of the
-//! board and outside it — not the Beside slot, which still opens inside
-//! the board (ADR 0021). Its head sits in the head row over it: the
-//! `Changes`, `PR` and `Context` tabs and the toggle that hides it. Under
-//! the head, the shown tab's body; under every tab, the foot's context
-//! meter.
+//! board and outside it. Its head sits in the head row over it: the
+//! `Changes`, `PR` and `Context` tabs, a `Preview` tab while a preview is
+//! open (`preview.rs`), and the toggle that hides it. Under the head, the
+//! shown tab's body; under every tab but the preview, the foot's context
+//! meter. The Review, which needs the board's width and takes line
+//! comments, still opens beside its Pane inside the board (ADR 0021).
 //!
-//! When it shows (`panel_thread`): for the focused Thread, in every view —
-//! Solo, a Group (the focused Pane's Thread), a fullscreen Pane, with
-//! something open beside the Pane — while the operator has it on
-//! (`Settings::panel_shown`, ⌥⌘B). There are no size rules: hidden, the
-//! board takes its width; shown, the board gives it up, however narrow.
-//! A draft, the empty board and the Projects coordinator have no Thread,
-//! so no panel.
+//! When it shows (`panel_pane`): for the focused Pane, in every view —
+//! Solo, a Group (the focused Pane), a fullscreen Pane, with a Review open
+//! beside the Pane — while the operator has it on
+//! (`Settings::panel_shown`, ⌥⌘B), or while that Pane has a preview open,
+//! which shows it whatever the setting. There are no other size rules:
+//! hidden, the board takes its width; shown, the board gives it up,
+//! however narrow. A draft has no Thread, so no panel but for its preview;
+//! the empty board and the Projects coordinator have none at all.
 //!
-//! One toggle (`panel_toggle`) sits at the head row's right end either
-//! way: the panel head's last control while it shows, the view head's
-//! while it is hidden.
+//! Its width (`Rest`): hidden, `PANEL_W`, or wide while the Preview tab is
+//! the one shown (`preview_w`). Moving between them the column rides
+//! (`ride_panel`, `motion::ColumnRide`, the nav's cmd-B ride mirrored):
+//! whatever moved it — ⌥⌘B, a preview opening or closing, a tab picked,
+//! focus moving to a Pane with another — the board gives up or takes back
+//! the width every frame. Coming and going the content fades on its own
+//! clock; changing width it does not. The content is laid out at its
+//! tab's width at rest (`content_w`) and never re-wraps: the Panel's own
+//! width against the window's edge, clipped where the board's edge is, and
+//! the wide preview's extra width pinned to the board's edge, so it slides
+//! in with it and out under it (`overhang`). A column riding out after its
+//! Pane left the focus still draws that Pane's tab (`Panel::last`) — a
+//! preview closed as it hid, too, held until the ride ends.
+//!
+//! One toggle (`panel_toggle_element`) sits at the head row's right end
+//! either way, laid by the frame rather than by a head, so it never moves
+//! or blinks as the panel comes and goes: the panel head leaves its room
+//! while the panel shows, the view head while it is hidden
+//! (`view_head_end`). Hiding the panel puts its preview away: a hidden
+//! panel holds none.
 //!
 //! One function per tab draws its body (`panel_changes`, `panel_context`,
-//! and the PR tab's `panel_pr`, in `pr_tab`, which also reads it): 7b adds
-//! a file's hunks under its head (`panel_file_block`, `hunks`).
+//! the PR tab's `panel_pr`, in `pr_tab`, which also reads it, and the
+//! preview's `panel_preview`): 7b adds a file's hunks under its head
+//! (`panel_file_block`, `hunks`). The body switches at once with its tab,
+//! and each Thread's tab keeps its own scroll.
 
 pub(crate) mod hunks;
+pub(crate) mod preview;
 
 use super::*;
 use crate::icons::{self, icon};
 use ferrite_core::docview::FileChange;
 use gpui::relative;
 
-/// A panel tab. A Thread the panel has not shown yet opens on `Changes`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// A panel tab. A Thread the panel has not shown yet opens on `Changes`;
+/// `Preview` is a Pane's own while its preview is open (`preview.rs`),
+/// never remembered as a Thread's tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum PanelTab {
     #[default]
     Changes,
     Pr,
     Context,
+    Preview,
+}
+
+/// Where the column rests: what the board leaves it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rest {
+    Hidden,
+    Shown,
+    /// Its Preview tab shown.
+    Wide,
 }
 
 /// The panel's own state on the cockpit.
@@ -42,37 +76,250 @@ pub(crate) enum PanelTab {
 pub(crate) struct Panel {
     /// The last tab each Thread's panel showed.
     tabs: std::collections::HashMap<ThreadId, PanelTab>,
+    /// Each Thread's tabs' scroll, so a tab comes back where it was left
+    /// rather than at another tab's offset.
+    scrolls: std::collections::HashMap<(ThreadId, PanelTab), ScrollHandle>,
     /// The Changes tab's unfolded files and their hunks.
     hunks: hunks::Hunks,
+    /// The column on its way between two widths (see the module doc).
+    ride: crate::motion::ColumnRide,
+    /// Where the column rested at the last frame; `None` before the first,
+    /// so a panel shown at launch arrives in place.
+    rest: Option<Rest>,
+    /// The Pane the panel last showed and its tab, drawn while the column
+    /// rides out.
+    last: Option<(PaneIdentity, PanelTab)>,
+    /// What the board leaves at its right this frame while the column
+    /// rides (`board_right`); `None` at rest.
+    riding: Option<f32>,
+    /// The width a preview reads at in this window (`preview_w`), as of
+    /// the last frame.
+    wide: f32,
+    /// The first frame has been tended: a preview open by then is simply
+    /// there (`tend_previews`).
+    tended: bool,
+    /// A scene's held ride out to a preview's width (`fixture_hold_panel`).
+    hold: Option<f32>,
+}
+
+/// How wide the Panel is while its Preview tab shows, in a window `width`
+/// wide (the theme's `PANEL_PREVIEW_*`).
+fn preview_w(width: f32) -> f32 {
+    use crate::theme::*;
+    (width * PANEL_PREVIEW_SHARE)
+        .clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
+        .min(width - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN)
+        .max(PANEL_W)
 }
 
 impl CockpitView {
-    /// The Thread whose panel shows this frame (see the module doc), if
-    /// any.
-    pub(super) fn panel_thread(&self) -> Option<ThreadId> {
-        self.prefs
-            .settings
-            .panel_shown
-            .then(|| self.panel_candidate())
-            .flatten()
+    /// The Pane whose panel shows this frame (see the module doc), if any.
+    pub(super) fn panel_pane(&self) -> Option<usize> {
+        let index = self.panel_candidate_index()?;
+        let pane = &self.panes[index];
+        (pane.preview.is_open() || self.prefs.settings.panel_shown && pane.thread().is_some())
+            .then_some(index)
     }
 
-    /// The Thread the panel is for, shown or hidden: the focused Pane's.
-    /// None on a draft, the empty board and the Projects coordinator.
-    pub(super) fn panel_candidate(&self) -> Option<ThreadId> {
+    /// The Thread whose panel shows this frame, if it shows for one.
+    #[cfg(test)]
+    pub(super) fn panel_thread(&self) -> Option<ThreadId> {
+        self.panes[self.panel_pane()?].thread()
+    }
+
+    /// The Pane the panel is for, shown or hidden: the focused Pane's, a
+    /// Thread's or a draft's with a preview open. None on the empty board
+    /// and the Projects coordinator.
+    pub(super) fn panel_candidate(&self) -> Option<PaneIdentity> {
+        Some(self.panes[self.panel_candidate_index()?].identity)
+    }
+
+    fn panel_candidate_index(&self) -> Option<usize> {
         if self.projects.coordinator_shown() || self.empty_board_shown() {
             return None;
         }
-        self.panes.get(self.focused())?.thread()
+        let index = self.focused();
+        let pane = self.panes.get(index)?;
+        (pane.thread().is_some() || pane.preview.is_open()).then_some(index)
     }
 
-    /// What the board leaves at its right: the panel's column, or the
-    /// frame's gutter when the panel is hidden (SPEC §4).
+    /// The tab Pane `index`'s panel shows: its preview's while that is
+    /// selected, else its Thread's last.
+    pub(super) fn shown_tab(&self, index: usize) -> PanelTab {
+        if self.preview_shown(index) {
+            return PanelTab::Preview;
+        }
+        match self.panes[index].thread() {
+            Some(thread) => self.panel_tab(thread),
+            None => PanelTab::Preview,
+        }
+    }
+
+    /// How wide the panel is at rest in this window while its Preview tab
+    /// shows.
+    fn wide_w(&self) -> f32 {
+        self.panel.wide.max(crate::theme::PANEL_W)
+    }
+
+    fn rest_w(&self, rest: Rest) -> f32 {
+        match rest {
+            Rest::Hidden => crate::theme::BOARD_PAD,
+            Rest::Shown => crate::theme::PANEL_W,
+            Rest::Wide => self.wide_w(),
+        }
+    }
+
+    /// Where the column rests this frame, and what it shows.
+    fn panel_rest(&self) -> (Rest, Option<(PaneIdentity, PanelTab)>) {
+        match self.panel_pane() {
+            Some(index) => {
+                let tab = self.shown_tab(index);
+                let rest = if tab == PanelTab::Preview {
+                    Rest::Wide
+                } else {
+                    Rest::Shown
+                };
+                (rest, Some((self.panes[index].identity, tab)))
+            }
+            None => (Rest::Hidden, None),
+        }
+    }
+
+    /// Once per frame, before anything measures the board: tend the
+    /// previews (`tend_previews`), ride the column when where it rests has
+    /// changed since the last frame, for whatever reason, and read where
+    /// the ride has the board's edge. A preview closed as the panel hid is
+    /// held while the column rides out drawing it, and let go after.
+    pub(super) fn ride_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        self.tend_previews(window);
+        self.panel.wide = preview_w(f32::from(window.viewport_size().width));
+        let (rest, shown) = self.panel_rest();
+        if let Some((identity, tab)) = shown {
+            self.panel.last = Some((identity, tab));
+            if let Some(thread) = identity.thread().filter(|_| tab != PanelTab::Preview) {
+                self.panel.scrolls.entry((thread, tab)).or_default();
+            }
+        }
+        // Until a first Pane is there to show (a machine's window before
+        // it connects, an empty board), nothing is recorded: the first
+        // panel arrives in place, as one shown at launch does.
+        if self.panel.rest.is_some() || rest != Rest::Hidden {
+            if let Some(was) = self.panel.rest.replace(rest).filter(|was| *was != rest) {
+                let fade = ((was == Rest::Hidden) != (rest == Rest::Hidden))
+                    .then_some((rest != Rest::Hidden, crate::nav::CONTENT_FADE));
+                let (from, to) = (self.rest_w(was), self.rest_w(rest));
+                self.panel.ride.ride(from, to, fade, now, reduced);
+            }
+        }
+        self.panel.riding = match self.panel.hold.filter(|_| rest == Rest::Wide) {
+            Some(progress) => Some(crate::motion::lerp(
+                crate::theme::PANEL_W,
+                self.wide_w(),
+                crate::motion::RESIZE.progress(progress.clamp(0.0, 1.0)),
+            )),
+            None => self
+                .panel
+                .rest
+                .and_then(|_| self.panel.ride.width(now, reduced)),
+        };
+        let held = match (shown, self.panel.riding, self.panel.last) {
+            (None, Some(_), Some((identity, PanelTab::Preview))) => Some(identity),
+            _ => None,
+        };
+        for pane in &self.panes {
+            if Some(pane.identity) != held {
+                pane.preview.let_go();
+            }
+        }
+    }
+
+    /// Hold the panel's ride out to a preview's width at `progress` (0 → 1
+    /// along `motion::RESIZE`) so a scene can capture it mid-ride; `None`
+    /// lets it go.
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
+    pub(crate) fn fixture_hold_panel(&mut self, progress: Option<f32>) {
+        self.panel.hold = progress;
+    }
+
+    /// Whether this frame drew the column mid-ride: the frame asks for
+    /// another.
+    pub(super) fn panel_riding(&self) -> bool {
+        self.panel.riding.is_some() && self.panel.hold.is_none()
+    }
+
+    /// What the board leaves at its right this frame: the panel's column,
+    /// the frame's gutter when the panel is hidden (SPEC §4), or wherever
+    /// the column's ride has the board's edge between the two. A measure
+    /// taken at the destination (`board_level`'s, `update_auto_rail`'s)
+    /// reads where the ride will end.
     pub(super) fn board_right(&self) -> f32 {
-        if self.panel_thread().is_some() {
-            crate::theme::PANEL_W
+        let measuring = self.nav_measure_rest.get() || self.nav_measure_full.get();
+        match self.panel.riding {
+            Some(right) if !measuring => right,
+            _ => self.board_right_rest(),
+        }
+    }
+
+    /// What the board leaves at its right once the column's ride ends.
+    pub(super) fn board_right_rest(&self) -> f32 {
+        self.rest_w(self.panel_rest().0)
+    }
+
+    /// The Pane the panel draws this frame, its tab and its column's width:
+    /// shown, or riding out after the operator hid it or its Pane left the
+    /// board's focus.
+    fn panel_drawn(&self) -> Option<(PaneIdentity, PanelTab, f32)> {
+        match (self.panel_rest(), self.panel.riding) {
+            ((rest, Some((identity, tab))), riding) => {
+                Some((identity, tab, riding.unwrap_or_else(|| self.rest_w(rest))))
+            }
+            ((_, None), Some(width)) => {
+                let (identity, tab) = self.panel.last?;
+                Some((identity, tab, width))
+            }
+            ((_, None), None) => None,
+        }
+    }
+
+    /// How much of the window's right edge the panel's column covers this
+    /// frame: the board lies left of it, and keeps a gutter of its own
+    /// where it covers none.
+    pub(super) fn panel_column_w(&self) -> f32 {
+        self.panel_drawn().map_or(0., |(_, _, width)| width)
+    }
+
+    /// Where the view head ends, in from the window's right edge, and
+    /// whether the toggle's room is its last part. Shown, it stops at the
+    /// panel, whose head holds the toggle; hidden with a Thread for the
+    /// panel, it runs to the toggle and ends in its room. While the column
+    /// rides it follows the board's edge, but never over the toggle's room,
+    /// so its own controls ride with the board to where they come to rest.
+    pub(super) fn view_head_end(&self) -> (f32, bool) {
+        use crate::theme::{ICON_BUTTON, VIEW_HEAD_GAP};
+        let toggle = self.panel_candidate().is_some();
+        let inset = panel_toggle_inset();
+        if let Some(right) = self.panel.riding {
+            let floor = if toggle {
+                inset + ICON_BUTTON + VIEW_HEAD_GAP
+            } else if crate::titlebar::CUSTOM {
+                inset
+            } else {
+                0.
+            };
+            return (right.max(floor), false);
+        }
+        // On Windows the caption buttons keep the row's right end either
+        // way.
+        if self.panel_pane().is_some() {
+            (self.board_right(), false)
+        } else if toggle {
+            (inset, true)
+        } else if crate::titlebar::CUSTOM {
+            (inset, false)
         } else {
-            crate::theme::BOARD_PAD
+            (self.board_right(), false)
         }
     }
 
@@ -87,9 +334,19 @@ impl CockpitView {
         self.toggle_panel_now(cx);
     }
 
+    /// Hiding puts the shown Pane's preview away (a hidden panel holds
+    /// none), so a panel shown for a preview alone hides too.
     pub(super) fn toggle_panel_now(&mut self, cx: &mut Context<Self>) {
-        let shown = !self.prefs.settings.panel_shown;
-        self.change_settings(|settings| settings.panel_shown = shown, cx);
+        let shown = match self.panel_pane() {
+            Some(index) => {
+                self.panes[index].preview.close();
+                false
+            }
+            None => true,
+        };
+        if self.prefs.settings.panel_shown != shown {
+            self.change_settings(|settings| settings.panel_shown = shown, cx);
+        }
         cx.notify();
     }
 
@@ -108,12 +365,31 @@ impl CockpitView {
         self.select_panel_tab(thread, tab, cx);
     }
 
-    /// The head row's one panel toggle (SPEC §5.6): the nav head's sidebar
-    /// toggle's twin (`nav::icon_button`), the `panel-right` glyph, its
-    /// tooltip and chord read from the keymap. The panel head draws it
-    /// while the panel shows, the view head while it is hidden, both with
-    /// its right edge `panel_toggle_inset` in from the window's.
-    pub(super) fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The head row's one panel toggle (SPEC §5.6), while there is a Thread
+    /// for the panel: laid over the row's right end, its right edge
+    /// `panel_toggle_inset` in from the window's, over the panel head while
+    /// the panel shows and over the view head's end while it is hidden.
+    /// The frame lays it after both heads, so it stays put — hover and all
+    /// — while the column rides between them.
+    pub(super) fn panel_toggle_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.panel_candidate()?;
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .right(px(panel_toggle_inset()))
+                .h(px(crate::theme::WIN_CHROME_H))
+                .flex()
+                .items_center()
+                .child(self.panel_toggle(cx))
+                .into_any_element(),
+        )
+    }
+
+    /// The toggle itself: the nav head's sidebar toggle's twin
+    /// (`nav::icon_button`), the `panel-right` glyph, its tooltip and chord
+    /// read from the keymap.
+    fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_TAB};
         crate::nav::icon_button(
             "panel-toggle",
@@ -135,6 +411,7 @@ impl CockpitView {
     }
 
     fn select_panel_tab(&mut self, thread: ThreadId, tab: PanelTab, cx: &mut Context<Self>) {
+        self.deselect_preview_tab(thread);
         let was = self.panel.tabs.insert(thread, tab);
         if tab == PanelTab::Context && was != Some(PanelTab::Context) {
             self.refresh_context(thread);
@@ -159,22 +436,69 @@ impl CockpitView {
 
     // ------------------------------------------------------------ drawing
 
-    /// The panel's column, when it shows: laid over the window's right
-    /// edge from the top of the head row to the bar, after the head row's
-    /// drag strip, so its tabs and button take their presses and the gaps
-    /// between them still drag the window.
+    /// The panel's column, while it shows or rides: laid over the window's
+    /// right edge from the top of the head row to the bar, after the head
+    /// row's drag strip, so its tabs take their presses and the gaps
+    /// between them still drag the window. The column is as wide as the
+    /// board leaves it this frame; its content is laid out at its tab's
+    /// width at rest (`content_w`), so a ride clips it and never re-wraps
+    /// it: the Panel's own width held against the window's edge, a wide
+    /// preview's beyond it pinned to the board's (`overhang`). Coming and
+    /// going, it fades on the ride's own clock.
     pub(super) fn panel_element(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use crate::theme::*;
-        let thread = self.panel_thread()?;
-        let tab = self.panel_tab(thread);
-        let body = match tab {
-            PanelTab::Changes => self.panel_changes(thread, cx),
-            PanelTab::Pr => self.panel_pr(thread, window, cx),
-            PanelTab::Context => self.panel_context(thread, window, cx),
+        let (owner, tab, width) = self.panel_drawn()?;
+        let opacity = self.panel.ride.opacity(
+            cx.background_executor().now(),
+            crate::motion::reduced_motion(cx),
+        );
+        let content_w = if tab == PanelTab::Preview {
+            self.wide_w()
+        } else {
+            PANEL_W
+        };
+        let thread = owner.thread();
+        let content = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(-overhang(content_w, width)))
+            .w(px(content_w))
+            .flex()
+            .flex_col()
+            .pl(px(PANEL_PAD_L))
+            .pr(px(PANEL_PAD_R))
+            .pb(px(PANEL_PAD_B))
+            .when(opacity < 1.0, |content| content.opacity(opacity))
+            .font_family(FONT_UI)
+            .text_size(px(FS_UI))
+            .line_height(px(LH_UI))
+            .text_color(rgb(TEXT))
+            .whitespace_nowrap()
+            .child(self.panel_head(owner, tab, cx));
+        let content = match (tab, thread) {
+            (PanelTab::Preview, _) => content.child(self.panel_preview(owner, cx)),
+            (_, Some(thread)) => {
+                let body = match tab {
+                    PanelTab::Pr => self.panel_pr(thread, window, cx),
+                    PanelTab::Context => self.panel_context(thread, window, cx),
+                    _ => self.panel_changes(thread, cx),
+                };
+                let scroll = self
+                    .panel
+                    .scrolls
+                    .get(&(thread, tab))
+                    .cloned()
+                    .unwrap_or_default();
+                content
+                    .child(panel_body(body, &scroll))
+                    .children(self.panel_foot(thread))
+            }
+            (_, None) => content,
         };
         Some(
             div()
@@ -183,40 +507,59 @@ impl CockpitView {
                 .top_0()
                 .right_0()
                 .bottom(px(STATUS_BAR_H))
-                .w(px(PANEL_W))
-                .flex()
-                .flex_col()
-                .pl(px(PANEL_PAD_L))
-                .pr(px(PANEL_PAD_R))
-                .pb(px(PANEL_PAD_B))
-                .bg(paint::FRAME)
-                .font_family(FONT_UI)
-                .text_size(px(FS_UI))
-                .line_height(px(LH_UI))
-                .text_color(rgb(TEXT))
-                .whitespace_nowrap()
+                .w(px(width))
                 .overflow_hidden()
-                .child(self.panel_head(thread, tab, cx))
-                .child(
-                    div()
-                        .id("panel-body")
-                        .debug_selector(|| "panel-body".into())
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .child(body),
-                )
-                .children(self.panel_foot(thread))
+                .bg(paint::FRAME)
+                .child(content)
                 .into_any_element(),
         )
     }
 
-    /// The head (46, in the head row): the three tabs, then the toggle.
-    /// On Windows it stops short of the caption buttons, which keep the
-    /// row's right end.
-    fn panel_head(&self, thread: ThreadId, shown: PanelTab, cx: &mut Context<Self>) -> Div {
+    /// The head (46, in the head row): a Thread's three tabs and its Pane's
+    /// Preview tab while it has a preview, then the toggle's room
+    /// (`panel_toggle_element` lays the toggle over it). On Windows it
+    /// stops short of the caption buttons, which keep the row's right end.
+    fn panel_head(&self, owner: PaneIdentity, shown: PanelTab, cx: &mut Context<Self>) -> Div {
+        use crate::theme::*;
+        let tabs = div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .gap(px(SPACE_0_5))
+            .when_some(owner.thread(), |tabs, thread| {
+                tabs.children(self.thread_tabs(thread, shown, cx))
+            })
+            .children(
+                self.preview_tab_label(owner)
+                    .filter(|_| {
+                        shown == PanelTab::Preview
+                            || self
+                                .index_of(owner)
+                                .is_some_and(|index| self.panes[index].preview.is_open())
+                    })
+                    .map(|label| {
+                        self.preview_tab_element(owner, label, shown == PanelTab::Preview, cx)
+                    }),
+            );
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(SPACE_1))
+            .h(px(WIN_CHROME_H))
+            .pr(px(panel_toggle_inset() - PANEL_PAD_R))
+            .child(tabs)
+            .child(toggle_room())
+    }
+
+    /// A Thread's tabs in the head: `Changes` with its count, `PR` with its
+    /// number, `Context`.
+    fn thread_tabs(
+        &self,
+        thread: ThreadId,
+        shown: PanelTab,
+        cx: &mut Context<Self>,
+    ) -> [gpui::Stateful<Div>; 3] {
         use crate::theme::*;
         let facts = self.facts.get(thread);
         let changed = facts.map_or(0, |facts| facts.changed_files.len());
@@ -239,8 +582,12 @@ impl CockpitView {
                 .font_weight(W_LABEL)
                 .occlude()
                 .map(|face| {
+                    // The shown tab carries the selection, and steps it up
+                    // under the pointer; its blend is the same key either
+                    // way, so the tab the pointer left while it was shown
+                    // has let its hover go.
                     if active {
-                        face.bg(paint::SELECTED).text_color(rgb(TEXT_STRONG))
+                        face.hover_carried(key).text_color(rgb(TEXT_STRONG))
                     } else {
                         face.text_color(rgb(TEXT_MUTED))
                             .hover_raised(key)
@@ -270,24 +617,11 @@ impl CockpitView {
                 .child(SharedString::from(format!("#{number}")))
                 .into_any_element()
         });
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(WIN_CHROME_H))
-            .pr(px(panel_toggle_inset() - PANEL_PAD_R))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(SPACE_0_5))
-                    .child(tab(PanelTab::Changes, "Changes", changes_count))
-                    .child(tab(PanelTab::Pr, "PR", pr_number))
-                    .child(tab(PanelTab::Context, "Context", None)),
-            )
-            .child(self.panel_toggle(cx))
+        [
+            tab(PanelTab::Changes, "Changes", changes_count),
+            tab(PanelTab::Pr, "PR", pr_number),
+            tab(PanelTab::Context, "Context", None),
+        ]
     }
 
     /// The Changes tab: the branch row, the section line, one block per
@@ -437,10 +771,11 @@ impl CockpitView {
     }
 
     /// One changed file's block (r8): its head (48, `RAISED`) — the name,
-    /// which opens the file in the reader as a file link does, its `+N −N`,
+    /// which opens the file in the preview as a file link does, its `+N −N`,
     /// and its directory under it — and, unfolded, its hunks (`hunks`).
     /// The rest of the head folds and unfolds them; under the pointer its
-    /// icon turns to the fold's chevron.
+    /// icon turns to the fold's chevron, which turns a quarter with the
+    /// fold (`fold_chevron`).
     fn panel_file_block(
         &self,
         thread: ThreadId,
@@ -473,11 +808,6 @@ impl CockpitView {
             .filter(|dir| !dir.is_empty());
         let unfolded = self.panel_file_unfolded(thread, file, cx);
         let group = SharedString::from(format!("panel-file-head-{index}"));
-        let chevron = if unfolded {
-            icons::CHEVRON_DOWN
-        } else {
-            icons::CHEVRON_RIGHT
-        };
         let slot = div()
             .debug_selector(move || format!("panel-file-fold-{index}"))
             .relative()
@@ -495,7 +825,12 @@ impl CockpitView {
                     .inset_0()
                     .invisible()
                     .group_hover(group.clone(), |style| style.visible())
-                    .child(icon(chevron, PANEL_ROW_ICON, TEXT_MUTED)),
+                    .child(fold_chevron(
+                        format!("panel-fold-turn-{}-{}", thread.get(), file.path),
+                        unfolded,
+                        PANEL_ROW_ICON,
+                        TEXT_MUTED,
+                    )),
             );
         let fold_path = file.path.clone();
         let head = panel_row_with(slot)
@@ -524,14 +859,7 @@ impl CockpitView {
                             .child(SharedString::from(name))
                             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
-                                view.open_beside(
-                                    beside::Beside::Reader {
-                                        path: path.clone(),
-                                        line: None,
-                                    },
-                                    window,
-                                    cx,
-                                );
+                                view.open_preview(path.clone(), None, window, cx);
                             })),
                     )
                     .child(div().flex_1())
@@ -551,11 +879,7 @@ impl CockpitView {
             .rounded(px(R_BLOCK))
             .overflow_hidden()
             .child(head)
-            .children(
-                unfolded
-                    .then(|| self.panel_hunks_element(thread, index, &file.path))
-                    .flatten(),
-            )
+            .child(self.panel_hunks_element(thread, index, &file.path, unfolded))
     }
 
     /// The Context tab: what fills the Thread's context window, by
@@ -671,6 +995,71 @@ pub(super) fn panel_toggle_inset() -> f32 {
     } else {
         PANEL_PAD_R
     }
+}
+
+/// How far content laid out `content_w` wide reaches past the window's
+/// edge in a column `width` wide: none while it fits, or for the Panel's
+/// own width (held against the edge, the board's edge clipping it); a wide
+/// preview's width beyond that is pinned to the board's edge instead, so
+/// it slides in and out with it.
+fn overhang(content_w: f32, width: f32) -> f32 {
+    (content_w - width).clamp(0., content_w - crate::theme::PANEL_W)
+}
+
+/// The toggle's room at the end of whichever head the toggle lies over
+/// (`panel_toggle_element`): the toggle's own box, kept clear.
+pub(super) fn toggle_room() -> Div {
+    div().flex_shrink_0().size(px(crate::theme::ICON_BUTTON))
+}
+
+/// The tab's body, scrolling between the head and the foot on the Thread's
+/// tab's own `scroll`, its overlay thumb in the column's right padding
+/// (`PANEL_SCROLLBAR_INSET`) beside the rows rather than over them.
+fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
+    use crate::theme::{PANEL_PAD_R, PANEL_SCROLLBAR_INSET};
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .id("panel-body")
+                .debug_selector(|| "panel-body".into())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(scroll)
+                .child(body),
+        )
+        .child(
+            crate::components::scrollbar_layer()
+                .right(px(-PANEL_PAD_R))
+                .child(
+                    crate::components::scrollbar_bar("panel-scrollbar", scroll)
+                        .gutter(px(PANEL_PAD_R), px(PANEL_SCROLLBAR_INSET)),
+                ),
+        )
+}
+
+/// A fold's chevron in the panel (a file block's, the PR tab's): pointing
+/// right while folded, a quarter turn down while unfolded. The turn eases
+/// over `motion::CHEVRON` when the fold flips under it; drawn first already
+/// unfolded, it is simply turned.
+pub(super) fn fold_chevron(
+    key: impl Into<SharedString>,
+    unfolded: bool,
+    size: f32,
+    ink: u32,
+) -> impl IntoElement {
+    crate::motion::settled(key.into(), unfolded, crate::motion::CHEVRON, move |turn| {
+        icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
+            gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
+        ))
+    })
 }
 
 /// A two-line panel row (48): its icon at the row's left, its two lines

@@ -32,11 +32,11 @@ use self::{
     scroll::TranscriptScroll,
 };
 use crate::{
-    attachment_preview::Preview,
     file_links::{PathTarget, TargetContext},
     hover_card::{CardStat, HoverCard},
     pane::{self, DisclosureId, DisclosureState, Grid},
     pointer::Pointer,
+    preview::Preview,
     rich::TextCache,
     select::{RunText, TextRuns, TranscriptText},
     theme,
@@ -593,6 +593,12 @@ impl TranscriptView {
     #[cfg(test)]
     pub(crate) fn arrivals(&self) -> usize {
         self.arrivals.len()
+    }
+
+    /// A minimap glide is in flight.
+    #[cfg(test)]
+    pub(crate) fn gliding(&self) -> bool {
+        self.glide.is_some()
     }
 
     /// How far a live-appended row is into its entrance, while it is.
@@ -1179,28 +1185,13 @@ impl TranscriptView {
         stops
     }
 
-    /// The banner (ADR 0014): one muted line — the checkout, a path target,
-    /// on its branch, and when the Thread started. Its text is selectable.
+    /// The banner (ADR 0014): one muted line — the checkout, on its branch,
+    /// and when the Thread started. The checkout is a path target in the
+    /// line's own ink, as a call's path argument is (SPEC §3.4): its
+    /// underline shows under the pointer. Its text is selectable.
     fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
         let grid = self.grid();
         let line = banner_line(facts);
-        let highlights = line
-            .path
-            .map(|len| {
-                let to = line
-                    .text
-                    .char_indices()
-                    .nth(len)
-                    .map_or(line.text.len(), |(at, _)| at);
-                vec![(
-                    0..to,
-                    gpui::HighlightStyle {
-                        color: Some(gpui::rgb(theme::LINK_INK).into()),
-                        ..Default::default()
-                    },
-                )]
-            })
-            .unwrap_or_default();
         let overlay = line.path.map(|len| {
             crate::file_links::path_overlay(
                 PathTarget::new(facts.workspace_path.clone())
@@ -1220,7 +1211,7 @@ impl TranscriptView {
             .flex_shrink_0()
             .truncate()
             .text_color(gpui::rgb(theme::TEXT_DIM))
-            .child(selection.line(BlockId::BANNER, line.text, highlights))
+            .child(selection.line(BlockId::BANNER, line.text, Vec::new()))
             .children(overlay)
             .into_any_element()
     }
@@ -1933,6 +1924,11 @@ impl Render for TranscriptView {
         let band_pad = theme::prompt_band_pad_y(solo);
         let pad_b = theme::body_pad_b(solo);
         let list = div()
+            // The wheel takes the scroll back from a minimap glide in
+            // flight, rather than the glide overriding it to its end.
+            .on_scroll_wheel(cx.listener(|view, _: &gpui::ScrollWheelEvent, _, _| {
+                view.glide = None;
+            }))
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
                 // A band jump's room: enough under the last row for the

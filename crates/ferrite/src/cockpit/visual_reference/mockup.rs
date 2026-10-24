@@ -78,6 +78,10 @@ pub(crate) enum Pr {
     Merged,
     /// No pull request for the branch.
     None,
+    /// #155 open, as the operator met it: its checks still running, no
+    /// comments, a description in three parts, and a head branch too long
+    /// for the head's line (SPEC §5.6.2's description).
+    Described,
 }
 
 /// Every Thread of the world, by role.
@@ -1198,18 +1202,33 @@ impl Pr {
                 checks(Success, Success, Success),
                 vec![retries(12 * MINUTE, true), untested(true), popped],
             ),
+            Pr::Described => (
+                PrState::Open,
+                Merge::Clean,
+                Sync::InSync,
+                checks(Running, Success, Success),
+                Vec::new(),
+            ),
             Pr::None => return PrView::NoPr,
         };
+        let (number, title, body, head) = match self {
+            Pr::Described => (155, DESCRIBED_TITLE, DESCRIBED_BODY, DESCRIBED_HEAD),
+            _ => (
+                146,
+                "Requeue scheduled work whose worktree is gone",
+                "A job whose worktree was removed while it waited no longer panics the \
+                 server: it goes back on the queue.",
+                BRANCH,
+            ),
+        };
         PrView::Pr(Box::new(PrSnapshot {
-            number: 146,
-            title: "Requeue scheduled work whose worktree is gone".into(),
-            url: "https://github.com/josephwylie/ferrite/pull/146".into(),
-            body: "A job whose worktree was removed while it waited no longer panics the \
-                   server: it goes back on the queue."
-                .into(),
+            number,
+            title: title.into(),
+            url: format!("https://github.com/josephwylie/ferrite/pull/{number}"),
+            body: body.into(),
             state,
             is_draft: false,
-            head_ref: BRANCH.into(),
+            head_ref: head.into(),
             head_is_fork: false,
             head_oid: "5be1c0d4a1f2e3b4c5d6e7f8091a2b3c4d5e6f70".into(),
             base_ref: "main".into(),
@@ -1363,6 +1382,30 @@ queue and spawn should requeue once and then be dropped.";
 
 const POPPED: &str = "`pop_front` takes the job off the queue before the spawn can fail, so a \
 failure loses it.";
+
+const DESCRIBED_TITLE: &str = "Keep background agents off the Composer shelf";
+
+const DESCRIBED_HEAD: &str = "fix/keep-background-agents-off-the-composer-shelf";
+
+const DESCRIBED_BODY: &str = "## Summary
+
+Background subagents showed up twice: once as a tab and once as a chip on the Composer's \
+background shelf.
+
+Claude's `background_tasks_changed` snapshot lists `local_agent` tasks next to shell jobs and \
+monitors. The snapshot parser now leaves `local_agent` entries out. Shell jobs, monitors and \
+workflows still become chips.
+
+## Evidence
+
+- `claude_background_snapshots_replace_tasks` puts a `local_agent` task in the snapshot: it \
+fails without the fix and passes with it.
+- `cargo test -p ferrite-core` passes.
+
+## Not covered
+
+A thread log written before this fix that ended with agents still running would show their \
+chips again on revive, until the CLI's next snapshot replaces them.";
 
 #[cfg(test)]
 mod tests {

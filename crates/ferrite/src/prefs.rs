@@ -391,19 +391,24 @@ pub fn body(
         .pb(px(HALF_ROW))
         .child(search_field(search, window, cx))
         .child(
-            div().flex().flex_col().pt(px(HALF_ROW)).children(
-                [
-                    PageKey::NewThreads,
-                    PageKey::Permissions,
-                    PageKey::Behaviour,
-                    PageKey::Notifications,
-                    PageKey::Server,
-                ]
-                .map(|key| nav_row(key, cx)),
-            ),
+            div()
+                .flex()
+                .flex_col()
+                .pt(px(HALF_ROW))
+                .px(px(FLOAT_PAD))
+                .children(
+                    [
+                        PageKey::NewThreads,
+                        PageKey::Permissions,
+                        PageKey::Behaviour,
+                        PageKey::Notifications,
+                        PageKey::Server,
+                    ]
+                    .map(|key| nav_row(key, cx)),
+                ),
         )
         .child(div().flex_1())
-        .child(nav_row(PageKey::About, cx));
+        .child(div().px(px(FLOAT_PAD)).child(nav_row(PageKey::About, cx)));
 
     let content = div()
         .id("settings-content")
@@ -457,7 +462,8 @@ pub fn body(
 }
 
 /// The search line atop the sidebar: the `search` icon, then the field,
-/// over a `HAIRLINE` — the palette's own input line.
+/// over a `HAIRLINE` — the palette's own input line. The icon stands on
+/// the page names' edge (`FLOAT_PAD_X`).
 fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     let focused = gpui::Focusable::focus_handle(search.read(cx), cx).is_focused(window);
     components::focused(
@@ -468,7 +474,7 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
             .items_center()
             .gap(px(SPACE_2))
             .h(px(ROW + 2.0 * SPACE_1))
-            .px(px(MENU_ROW_PAD_X))
+            .px(px(FLOAT_PAD_X))
             .border_b_1()
             .border_color(paint::HAIRLINE)
             .child(crate::icons::icon(
@@ -486,15 +492,17 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     )
 }
 
-/// A sidebar row: the page's name, radius `R_MENU_ROW`. The page shown is
-/// `paint::SELECTED` in `TEXT_STRONG`; the rest `TEXT`,
-/// `paint::RAISED` under the pointer. While a search runs, a page with no
-/// match reads `TEXT_DIM`.
+/// A sidebar row, a menu row of the sheet's float: inset `FLOAT_PAD` from
+/// its edges, radius `R_MENU_ROW`, the page's name. The page shown is
+/// `FLOAT_SEL` in `TEXT_STRONG`; the rest `TEXT`, `FLOAT_HOVER` under the
+/// pointer — the float's own steps, which read on every platform (the
+/// frame's `RAISED` is the float's own grey once opaque). While a search
+/// runs, a page with no match reads `TEXT_DIM`.
 fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     let (rest, hover): (gpui::Hsla, gpui::Hsla) = if selected {
-        (paint::SELECTED.into(), paint::SELECTION_HOVER.into())
+        (FLOAT_SEL.into(), FLOAT_SEL.into())
     } else {
-        (gpui::rgba(TRANSPARENT).into(), paint::RAISED.into())
+        (gpui::rgba(TRANSPARENT).into(), FLOAT_HOVER.into())
     };
     let ink = match (selected, hit) {
         (true, _) => TEXT_STRONG,
@@ -505,7 +513,7 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
         key.selector(),
         rest,
         hover,
-        paint::PRESS.into(),
+        FLOAT_SEL.into(),
         rgb(ink).into(),
         cx,
     )
@@ -694,7 +702,7 @@ pub fn chooser<T: Clone + 'static>(
         .iter()
         .find(|(_, selected, _)| *selected)
         .map(|(label, _, _)| label.clone())
-        .unwrap_or_else(|| "choose".into());
+        .unwrap_or_else(|| "Choose".into());
     Row::new(title, detail, keywords, move |_, cx| {
         let options = options.clone();
         let change = change.clone();
@@ -903,7 +911,7 @@ pub fn stepper(
 
 /// A file the operator may choose in place of a built-in (a sound): its
 /// name, or `built_in`'s words, as a fact reads, then a token per `acts`
-/// (`play`, `choose…`, `built-in`). Searchable by the name.
+/// (`Play`, `Choose…`, `Use built-in`). Searchable by the name.
 pub fn file_choice(
     id: &'static str,
     title: &'static str,

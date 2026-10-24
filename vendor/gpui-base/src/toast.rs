@@ -418,6 +418,12 @@ fn stack_geometry(
 
 impl RenderOnce for ToastStack {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        // Ferrite's patch: a measurement that moves the stack redraws the
+        // view drawing it, never every window (`cx.refresh_windows()`
+        // rebuilt every cached view in the window, each frame a toast
+        // moved). Measured in prepaint, where a notify is lost with the
+        // frame being drawn, so it is deferred past it.
+        let view = window.current_view();
         let focused = self
             .focus_handle
             .as_ref()
@@ -546,11 +552,18 @@ impl RenderOnce for ToastStack {
                     .when(!expanded && rank >= collapsed_visible, |this| {
                         this.invisible()
                     })
-                    .on_prepaint(move |bounds, _, cx| {
+                    .on_prepaint(move |bounds, window, cx| {
                         let mut heights = measured.borrow_mut();
-                        if heights.get(&measured_id).copied() != Some(bounds.size.height) {
+                        // Ferrite's patch: a pixel either way is the item's
+                        // fractional offset rounding while it slides, not a
+                        // new height; re-measuring it re-targeted the stack
+                        // every frame of a toast's entrance.
+                        let moved = heights
+                            .get(&measured_id)
+                            .is_none_or(|height| (*height - bounds.size.height).abs() > px(1.));
+                        if moved {
                             heights.insert(measured_id.clone(), bounds.size.height);
-                            cx.refresh_windows();
+                            window.defer(cx, move |_, cx| cx.notify(view));
                         }
                     })
                     .child(child)
@@ -567,7 +580,7 @@ impl RenderOnce for ToastStack {
                     |_, _, _| {},
                     move |mut bounds, _, window, cx| {
                         if measured_width.replace(bounds.size.width) != bounds.size.width {
-                            cx.refresh_windows();
+                            window.defer(cx, move |_, cx| cx.notify(view));
                         }
                         if !expanded {
                             if anchored_bottom {
@@ -579,7 +592,7 @@ impl RenderOnce for ToastStack {
                         window.on_mouse_event(move |event: &MouseMoveEvent, _, _, cx| {
                             let hovered = bounds.contains(&event.position);
                             if hovered_state.replace(hovered) != hovered {
-                                cx.refresh_windows();
+                                cx.notify(view);
                             }
                         });
                     },

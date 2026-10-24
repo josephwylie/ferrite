@@ -456,6 +456,8 @@ const STATES: &[(&str, &[&str])] = &[
     ("refresh-pr-failing", &["refresh"]),
     ("refresh-pr-merged", &["refresh"]),
     ("refresh-pr-none", &["refresh"]),
+    ("refresh-pr-described", &["refresh"]),
+    ("refresh-pr-described-open", &["refresh"]),
     ("refresh-palette", &["refresh"]),
 ];
 
@@ -954,17 +956,21 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-C)
 
         // ---- WP-D scene arms (append above the end line)
+        // An image the Composer carries, opened from its shelf chip: the
+        // image viewer in the Panel's Preview tab, wide.
         "preview" => {
             let (scene, compose) = composer();
             let setup: Setup = Box::new(move |view, window, cx| {
                 compose(view, window, cx);
                 let prompt = view.panes[0].composer.read(cx).prompt();
-                let shot = ferrite_core::prompt_files::paths(&prompt, None)
+                let images: Vec<PathBuf> = ferrite_core::prompt_files::paths(&prompt, None)
                     .into_iter()
-                    .find(|path| path.extension().is_some_and(|ext| ext == "png"));
-                if let Some(shot) = shot {
-                    let title = shot.file_name().unwrap().to_string_lossy().to_string();
-                    view.panes[0].preview.open(shot, title, window, cx);
+                    .filter(|path| crate::image_viewer::is_image(path))
+                    .collect();
+                if let Some(shot) = images.first() {
+                    view.panes[0]
+                        .preview
+                        .open(shot.clone(), None, &images, window, cx);
                 }
             });
             (scene, setup)

@@ -74,10 +74,13 @@ fn a_user_command_runs_for_the_focused_thread_into_the_reader(cx: &mut TestAppCo
             view.thread_path(thread).unwrap(),
         )
     });
-    assert_eq!(document.title, "where");
-    assert_eq!(document.kind(), "LOG");
+    assert_eq!(document.name.as_deref(), Some("where"));
+    assert!(document.path.ends_with("where.log"), "it reads as a log");
     let pwd = std::fs::canonicalize(&cwd).unwrap();
-    assert_eq!(document.source, format!("{}\n{thread}", pwd.display()));
+    assert_eq!(
+        &*document.text().unwrap().source,
+        format!("{}\n{thread}", pwd.display())
+    );
 }
 
 /// `reset keys` shows only while the operator has keys of their own, and

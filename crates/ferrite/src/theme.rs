@@ -272,6 +272,15 @@ pub const FLOAT: u32 = 0x2a2a2c;
 /// the prototype's blur softened would let the rows under a menu ghost
 /// through as sharp text; a float must stay legible on its own.
 pub const FLOAT_GLASS: u32 = 0x2c2c2fff;
+/// `#2e2e30` · `#343437` — a float's hover and cursor fills, opaque steps
+/// over its own ground: `RAISED` and `SELECTED` are tuned to the frame
+/// (#222) and land 2 under and 4 over `FLOAT`, so on a float the pointer
+/// showed nothing and the cursor next to nothing. The cursor is the clear
+/// step (+10); the hover stays faint enough (+4) to keep `TEXT_DIM` on its
+/// floor, and the cursor row lifts its dim words to `TEXT_MUTED`
+/// (`menu::row_face`), as the nav's selected row lifts its line 2.
+pub const FLOAT_RAISED: u32 = 0x2e2e30;
+pub const FLOAT_SELECTED: u32 = 0x343437;
 /// `#2e2e2e` — selected: the selected nav row, the active view and panel
 /// tab, the cursor row of a menu, a Decision option and the palette.
 pub const SELECTED: u32 = 0x2e2e2e;
@@ -296,6 +305,8 @@ pub const ON_PRIMARY: u32 = 0x161616;
 // glass and on the opaque greys, so these are `0xRRGGBBAA` and paint with
 // `rgba()` or `paint::*`.
 
+/// 1px — every hairline's width (rule 2).
+pub const HAIRLINE_W: f32 = 1.0;
 /// 6% — dividers in cards and panels: a tab strip's foot, the queued row's
 /// foot, panel sections.
 pub const HAIRLINE: u32 = 0xffffff0f;
@@ -889,10 +900,30 @@ pub const PANEL_W: f32 = 304.0;
 pub const PANEL_PAD_L: f32 = SPACE_2;
 pub const PANEL_PAD_R: f32 = 10.0;
 pub const PANEL_PAD_B: f32 = SPACE_2;
+/// The panel body's scrollbar lies in the column's right padding
+/// (`PANEL_PAD_R`), beside the rows rather than over them, as the nav's
+/// does: a 10px hit strip, the 6px hovered thumb 2px from either side.
+pub const PANEL_SCROLLBAR_INSET: f32 = 2.0;
+const _: () = assert!(PANEL_PAD_R == 2. * PANEL_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
 /// 28px — a panel tab in the head row (r7, 12.5/500), 10px inline padding,
 /// 6px to its count; 2px between tabs.
 pub const PANEL_TAB_H: f32 = 28.0;
 pub const PANEL_TAB_PAD_X: f32 = 10.0;
+/// The Preview tab's label, the file's name cut from its start, is never
+/// wider than this: the tabs beside it keep their places.
+pub const PANEL_PREVIEW_TAB_MAX_W: f32 = 160.0;
+/// The Panel while its Preview tab shows (SPEC §5.6.3): `PANEL_PREVIEW_SHARE`
+/// of the window, held between `PANEL_PREVIEW_MIN_W` and
+/// `PANEL_PREVIEW_MAX_W` — wide enough to read code at its own size — and
+/// never so wide that the board beside it and the full nav column is
+/// narrower than `PANEL_PREVIEW_BOARD_MIN`: what the nav's auto-rail asks
+/// of the board (rule 2.7.7), so opening a preview never folds the nav and
+/// the Pane beside it stays a readable Pane. Never narrower than the Panel
+/// itself (`PANEL_W`): a narrow window previews at the Panel's width.
+pub const PANEL_PREVIEW_SHARE: f32 = 0.42;
+pub const PANEL_PREVIEW_MIN_W: f32 = 420.0;
+pub const PANEL_PREVIEW_MAX_W: f32 = 820.0;
+pub const PANEL_PREVIEW_BOARD_MIN: f32 = NAV_AUTO_RAIL_BOARD_W + NAV_AUTO_RAIL_HYSTERESIS;
 /// 48px — a two-line panel row (the branch row, a file block's head): its
 /// 14px icon at x 10, y 9; its text at x 34 (SPEC §4's panel rows).
 pub const PANEL_ROW_H: f32 = 48.0;
@@ -975,6 +1006,16 @@ pub const PR_CODE_CHIP: u32 = 0x333333;
 pub const PR_BODY_LH: f32 = 18.0;
 /// The lines a folded comment body shows.
 pub const PR_BODY_LINES: usize = 3;
+/// 16px — where a list item's text starts in a comment or the description,
+/// its marker hanging dim in the box before it, 6px short of the text.
+pub const PR_LIST_HANG: f32 = 16.0;
+/// The lines the folded description shows: its opening heading, if it has
+/// one, and the first lines under it.
+pub const PR_DESCRIPTION_LINES: usize = 5;
+/// How far a flush row's hover ground (a check, `Show more`, `N resolved`)
+/// reaches past the column either side: its content keeps the section
+/// heads' inset, and the ground still clears it.
+pub const PR_ROW_BLEED: f32 = SPACE_1;
 /// 26px — a reply's indent under its comment.
 pub const PR_REPLY_INDENT: f32 = 26.0;
 /// The ink a resolved comment card keeps.
@@ -1023,10 +1064,6 @@ pub const GUTTER_GAP: f32 = 8.0;
 /// `GLYPH_BOX + GUTTER_GAP`. An elbow result sits at C2 = C1 + `ELBOW_INDENT`.
 /// (On the grid the gutter is two cells, `GLYPH_GUTTER`.)
 pub const GUTTER_W: f32 = GLYPH_BOX + GUTTER_GAP;
-/// 13px — a raised box's content inset (1px edge + 12px padding). Transcript
-/// rows sit the same distance inside the reading column, so the transcript `❯`
-/// and the Composer `❯` share one axis.
-pub const BOX_INSET_X: f32 = 13.0;
 /// 8px — between a row's glyph column and its text (tool rows, the working
 /// line, the turn diff, controls beside a label).
 pub const EVENT_GAP: f32 = 8.0;
@@ -1566,12 +1603,11 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// on its `RAISED` chip; links and file paths are `LINK_INK` with no
 /// underline at rest, every link underlining under the pointer
 /// (`PATH_UNDERLINE_*`). A list's `•` is `TEXT_DIM`, hanging in the first
-/// of two cells. A fence is the diff's block box (`BLOCK_*`), the code two
-/// cells in, `TX_BLOCK_STEP` under the prose, in full syntax colour, at most
-/// `MEASURE_CH` cells from the content column; its language tag dim at its
-/// top right and a lowercase `copy` `CODE_COPY_RIGHT_CELLS` in from the
-/// block's right edge, fading in under the pointer over
-/// `CODE_COPY_FADE_MS`. A table takes its content's width: a `W_STRONG`
+/// of two cells. A fence is the diff's block box (`BLOCK_*`), the code
+/// `CODE_PAD_CELLS` in, `TX_BLOCK_STEP` under the prose, in full syntax
+/// colour, at most `MEASURE_CH` cells from the content column; its language
+/// tag dim on its first line at the right, `Copy` before the tag blending
+/// in under the pointer. A table takes its content's width: a `W_STRONG`
 /// `TEXT_STRONG` head over a `paint::LINE2` rule, row rules in `paint::LINE`
 /// (each row exactly one line), no vertical rules and no box, the first
 /// column flush, figures tabular; a column of numbers aligns right (head
@@ -1604,13 +1640,15 @@ pub const QUOTE_RULE_W: f32 = 2.0;
 /// 4px — a horizontal rule's own margin inside its block, so it sits 16px
 /// from its neighbours.
 pub const RULE_MARGIN_Y: f32 = SPACE_1;
-/// A fence's actions overlay: the language id, html `Preview`,
-/// `Copy`/`Copied`, top-right over the block. It is always laid out (so it
-/// never moves the block) and only shown under the pointer (the 150ms
-/// hover blend), while its keys have focus, or while the caret or a
-/// selection is inside the block — those two instantly.
-pub const CODE_ACTIONS_TOP: f32 = 0.0;
-pub const CODE_ACTIONS_RIGHT: f32 = 0.0;
+/// A fence's code sits this many cells (at the fence's size) in from the
+/// block's sides. Its actions overlay — the language id, html `Preview`,
+/// `Copy`/`Copied` — keeps the same inset at the right and stands on the
+/// code's first line (`BLOCK_PAD_Y` down, one code line high), the id set
+/// as the code is, on its baseline. The overlay is always laid out (so it
+/// never moves the block); the actions show only under the pointer (the
+/// 150ms hover blend), while their keys have focus, or while the caret or
+/// a selection is inside the block — those two instantly.
+pub const CODE_PAD_CELLS: f32 = 2.0;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
 /// A reading dialog (the html preview, What's New): the reading column's
@@ -1739,14 +1777,15 @@ pub const BOARD_SEAM: f32 = GRID_GAP;
 /// held (`SEAM_HOVER`); at rest the gutter alone separates the cards.
 pub const SEAM_LINE_W: f32 = 2.0;
 
-/// 38px — the Group head (SPEC §5.9; a reader's head is its twin): the
+/// 38px — the Group head (SPEC §5.9; a preview's and a Review's heads are
+/// its twins, `preview::reading_head`): the
 /// card's tab strip height, its `HAIRLINE` inside it.
 pub const PANE_HEAD_H: f32 = 38.0;
-/// A head's inline inset: one cell (the reader's twin head).
+/// A dragged slot's ghost head's inline inset: one cell.
 pub const HEAD_PAD_X: f32 = CH;
-/// The Group head's insets and gap: 14 before the mark, 6 after the fill
-/// button (its 28px hit box carries the rest of the visual inset), 8
-/// between items.
+/// The Group head's insets and gap (and its twins', the reading heads): 14
+/// before the mark, 6 after the fill button or a reading head's × (its 28px
+/// hit box carries the rest of the visual inset), 8 between items.
 pub const PANE_HEAD_PAD_L: f32 = 14.0;
 pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
 pub const PANE_HEAD_GAP: f32 = SPACE_2;
@@ -1826,11 +1865,12 @@ pub const QUICK_ANSWER_H: f32 = LH_UI + 2.0;
 pub const QUICK_ANSWER_PAD_X: f32 = CH;
 pub const QUICK_ANSWER_GAP: f32 = CH;
 
-/// The reader beside a Pane (`cockpit/beside.rs`): line numbers in a
-/// 6-cell column, right-aligned, two cells before the code.
+/// A file's numbered lines in the Panel's preview (`cockpit/panel/
+/// preview.rs`): line numbers in a 6-cell column, right-aligned, two cells
+/// before the code.
 pub const READER_NUMBER_W: f32 = 6.0 * CH;
 pub const READER_NUMBER_GAP: f32 = 2.0 * CH;
-/// The share of a Pane's slot a reader opening beside it takes, and how
+/// The share of a Pane's slot a Review opening beside it takes, and how
 /// far a drag can take the seam between them (the board's 22–78%).
 pub const READER_SHARE: f32 = 0.5;
 
@@ -1852,7 +1892,10 @@ pub const EMPTY_PAD_X: f32 = 4.0 * CH;
 pub const EMPTY_BANNER_GAP: f32 = 3.0 * CH;
 pub const EMPTY_MARK_H: f32 = 3.0 * ROW;
 /// A command row (fit-content): the `❯` column, the verb's 30 cells, the
-/// key's 10 right-aligned, a cell of padding after it.
+/// key's 10 right-aligned, a cell of padding after it. A row's band (the
+/// selection, a recent row's hover) hangs `EMPTY_ROW_INSET` outside the
+/// text's edge, so its rounded fill clears the `❯`.
+pub const EMPTY_ROW_INSET: f32 = SPACE_2;
 pub const EMPTY_VERB_W: f32 = 30.0 * CH;
 pub const EMPTY_KEY_W: f32 = 10.0 * CH;
 /// A recent row (fit-content, 68 cells under the hover band): two cells of
@@ -1900,10 +1943,11 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 /// `COMPOSER_INSET` from the card's sides and foot: `paint::FIELD` at
 /// `R_PANE`, a 1px `FIELD_RING` laid outside it (it takes no layout).
 ///
-/// - **The shelf** stands above the box: pending files at left, background
-///   tasks at right, chips `SHELF_CHIP_H` high at `R_CHIP` on
-///   `paint::RAISED`, `FS_META`. Then the working line
-///   (`pane::working_line`), `COMPOSER_WORKING_GAP_SOLO` above the box.
+/// - **The working line** (`pane::working_line`) is the stack's top row,
+///   `COMPOSER_WORKING_GAP_SOLO` above what follows it.
+/// - **The shelf** stands `SHELF_GAP` above the box its files are for:
+///   pending files at left, background tasks at right, chips
+///   `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, `FS_META`.
 /// - **The queued row** (`QUEUED_ROW_H`, when anything is queued): `Queued`
 ///   in `FS_META`/`W_LABEL` `TEXT_DIM`, the top of the pile in
 ///   `TEXT_MUTED` on one cut line, `+N` in `TEXT_DIM`, and a
@@ -1937,10 +1981,6 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 pub const COMPOSER_PAD_Y: f32 = 6.0;
 pub const COMPOSER_ROW_H: f32 = LH_UI;
 pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
-/// Legacy names other modules still read (the Subagent footer, the send
-/// controls' corner).
-pub const COMPOSER_PAD_END: f32 = SPACE_2;
-pub const COMPOSER_INSET_B: f32 = SPACE_2;
 /// How far a table cell's text sits under the cell's top (`rich::style`):
 /// the prototype's 19px line centred in its 20px cell, rounded down to the
 /// whole pixel.
@@ -1964,7 +2004,7 @@ pub const STATUS_LOGO_FOOT: f32 = 1.0;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
-/// Between the shelf (pending files, background chips) and the band.
+/// Between the shelf (pending files, background chips) and the box.
 pub const SHELF_GAP: f32 = SPACE_1;
 /// The caret's bar: 2px wide (off the space scale: a caret is a hairline
 /// you can find), the row high.
@@ -2008,9 +2048,30 @@ pub const CTX_BUFFER: u32 = TEXT_DIM;
 pub const CTX_FREE: u32 = LINE2;
 pub const CTX_DEFERRED: u32 = TEXT_FAINT;
 pub const CTX_CYCLE: [u32; 4] = [BLUE, RED, 0x8fb2b8, 0xb5b48e];
-/// 768px — the image preview sheet's widest reading; it otherwise takes
-/// 90% × 85% of its Pane.
-pub const PREVIEW_MAX_W: f32 = 768.0;
+/// 28px — the air a fitted image keeps from its preview card's edges (the
+/// image viewer): a Solo transcript's text inset. Zoomed past the card,
+/// the picture pans right to them.
+pub const IMAGE_INSET: f32 = TX_INSET_SOLO;
+/// The scales ⌘= and ⌘- step an image through (1 is actual size: an image
+/// pixel to a point). Below the fit there is no stop: ⌘- lands on the fit.
+pub const IMAGE_ZOOM_STOPS: [f32; 11] = [
+    0.25,
+    1.0 / 3.0,
+    0.5,
+    2.0 / 3.0,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    4.0,
+    6.0,
+    8.0,
+];
+/// 8× — the closest an image zooms, by key or by pinch.
+pub const IMAGE_ZOOM_MAX: f32 = IMAGE_ZOOM_STOPS[IMAGE_ZOOM_STOPS.len() - 1];
+/// 3px — how far a press on an image travels before it is a pan rather
+/// than a click.
+pub const IMAGE_DRAG_SLOP: f32 = 3.0;
 /// A background task on the shelf above the Composer (a shelf chip): the
 /// still `RUNNING` dot, the task cut at 32 cells, and a quiet `×` that
 /// stops it.
@@ -2108,8 +2169,8 @@ pub const SLASH_MENU_W: f32 = PALETTE_W;
 /// row.
 pub const MODEL_PICKER_W: f32 = 520.0;
 /// A form field or a sheet's text button: one row in a cell of padding,
-/// inside a 1px `paint::LINE2` box (`CONTROL_FOCUS` while a field holds the
-/// caret).
+/// inside a 1px edge at `R_CONTROL` (a field's the `FIELD_RING` hairline,
+/// `CONTROL_FOCUS` while it holds the caret).
 pub const FORM_CONTROL_H: f32 = ROW + 2.0 * SPACE_1 + 2.0;
 pub const FORM_FIELD_PAD_X: f32 = CH;
 pub const FORM_BUTTON_PAD_X: f32 = CH;
@@ -2160,6 +2221,12 @@ pub const PALETTE_TOP: f32 = 56.0;
 /// departure from SPEC §5.8's `FLOAT ground`). Opaque on every platform,
 /// as every float is (FL-15).
 pub const PALETTE_GROUND: Paint = Paint(solid(FRAME));
+/// The palette's rows on that ground: the frame's own steps, opaque —
+/// `RAISED` under the pointer, `SELECTED` the cursor (the mockup's
+/// `#2e2e2e`). The float inks (`FLOAT_HOVER`, `FLOAT_SEL`) step over
+/// `FLOAT` instead.
+pub const PALETTE_HOVER: Paint = Paint(solid(RAISED));
+pub const PALETTE_SEL: Paint = Paint(solid(SELECTED));
 pub const PALETTE_INPUT_H: f32 = 50.0;
 pub const PALETTE_PAD_X: f32 = SPACE_4;
 /// 10 — between a row's parts, and the input row's (off the space scale,
@@ -2223,11 +2290,12 @@ pub const FIND_ICON: f32 = 14.0;
 ///    owner.
 ///
 /// The verdict: floats render in-window and opaque (`float::hang`), on the
-/// opaque float inks below (`FLOAT_GROUND`, `FLOAT_EDGE`, `FLOAT_RULE`,
-/// `FLOAT_SEL`, `FLOAT_HOVER` = `#2a2a2c`, `#3c3c3f`, `#2f2f31`, `#343437`,
-/// `#2c2c2e`), never a glass overlay over an opaque ground, and
-/// `FLOAT_GLASS` stays opaque. Flip `FLOAT_FROSTED` when a gpui release
-/// lifts the three blocks; the inks then follow the glass values.
+/// opaque float inks below (`FLOAT_GROUND` `#2a2a2c`, `FLOAT_SEL` and
+/// `FLOAT_HOVER` its own steps, `FLOAT_SELECTED` and `FLOAT_RAISED`; the
+/// edge and rule are hairlines), never a glass overlay over an opaque
+/// ground, and `FLOAT_GLASS` stays opaque. Flip `FLOAT_FROSTED` when a
+/// gpui release lifts the three blocks; the inks then follow the glass
+/// values.
 pub const FLOAT_FROSTED: bool = false;
 const fn float_ink(glass: u32, opaque: u32) -> Paint {
     if FLOAT_FROSTED {
@@ -2241,10 +2309,11 @@ const fn float_ink(glass: u32, opaque: u32) -> Paint {
 pub const FLOAT_GROUND: Paint = float_ink(FLOAT_GLASS, FLOAT);
 pub const FLOAT_EDGE: Paint = paint::HAIRLINE_STRONG;
 pub const FLOAT_RULE: Paint = paint::HAIRLINE;
-pub const FLOAT_SEL: Paint = float_ink(SELECTED_GLASS, SELECTED);
-pub const FLOAT_HOVER: Paint = float_ink(RAISED_GLASS, RAISED);
-/// A quick answer under the pointer on a float (a toast's buttons).
-pub const FLOAT_BAND2: Paint = float_ink(RAISED_GLASS, RAISED);
+pub const FLOAT_SEL: Paint = float_ink(SELECTED_GLASS, FLOAT_SELECTED);
+pub const FLOAT_HOVER: Paint = float_ink(RAISED_GLASS, FLOAT_RAISED);
+/// A quick answer's pill on a float (a toast's buttons), stepping up to
+/// `FLOAT_SEL` under the pointer.
+pub const FLOAT_BAND2: Paint = float_ink(RAISED_GLASS, FLOAT_RAISED);
 /// A sheet (Settings, the Project editor, the image preview) is a float at
 /// sheet size: its head two rows (the title and the one close control over
 /// a `paint::LINE`), its body two cells in, a footer under a `paint::LINE`.
@@ -2269,10 +2338,10 @@ pub const MENU_PATH_TAIL: usize = 48;
 //
 // - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (the
 //   `search` icon, then the field), a `HAIRLINE` under it, then one
-//   `SETTINGS_NAV_ROW_H` row per page, radius `R_MENU_ROW` —
-//   `paint::SELECTED` and `TEXT_STRONG` on the page shown, `TEXT` on the
-//   rest — and `About` at the foot. ↑/↓ step pages while the sheet holds
-//   focus.
+//   `SETTINGS_NAV_ROW_H` row per page, inset `FLOAT_PAD` like a menu's,
+//   radius `R_MENU_ROW` — `FLOAT_SEL` and `TEXT_STRONG` on the page shown,
+//   `TEXT` on the rest — and `About` at the foot. ↑/↓ step pages while the
+//   sheet holds focus.
 // - **Content:** the page title in `TEXT_STRONG` `W_STRONG`, then groups
 //   `SETTINGS_GROUP_GAP` apart: a group's label is a `TEXT_DIM` row (a
 //   provider's led by its logomark), its rows split by rules.
@@ -2364,9 +2433,9 @@ pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (DECISION_OPTION_H + LH_UI) + D
 /// The scroll gutter a body keeps free for its thumb.
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
 /// A question's own answer (rule 2.8.6) is not a second field: it is one
-/// bare mono input line on the text column, `LH_UI` high, placeholder
-/// `Or type your own answer…` in `TEXT_DIM`; the digit one past the last
-/// option arms it.
+/// bare input line on the option labels' column and in their face (Geist,
+/// SPEC §5.9), `LH_UI` high, placeholder `Or type your own answer…` in
+/// `TEXT_DIM`; the digit one past the last option arms it.
 pub const QUESTION_OTHER_H: f32 = LH_UI;
 /// The primary's `↵`: `ON_PRIMARY` at 70%, so the key reads under its label
 /// on the primary fill.
@@ -2515,19 +2584,28 @@ pub const NAV_HALO: f32 = 3.0;
 pub fn nav_halo_box(dot: f32) -> f32 {
     dot + 2.0 * NAV_HALO
 }
+/// The middle of a two-line row's line 1 (its two lines centred in the
+/// row): where its mark centres, on the title's own middle (§5.1.5
+/// "centred on line 1"; the mockups' marks sit 3–5px under it, on the
+/// baseline, which the eye reads as dropped).
+pub const NAV_LINE1_MID: f32 = (NAV_ROW2_H - 2.0 * NAV_LINE) / 2.0 + NAV_LINE / 2.0;
 /// Where a mark sits, `(x, y)` from its mark column's left and its row's
-/// top, as the mockups place them (measured, so off the scale): on line 1
-/// of a two-line row, centred on a one-line (member) row (`_SMALL`). The
-/// blocked dot sits where a dot does, its halo `NAV_HALO` out round it.
-pub const NAV_SPINNER_AT: (f32, f32) = (2.0, 6.0);
+/// top: centred on line 1 of a two-line row (the spinner's line box on
+/// line 1's own), centred on a one-line row (`_LINE`) and on a shown
+/// Group's member (`_SMALL`). The x are the mockups' (measured, so off the
+/// scale). The blocked dot sits where a dot does, its halo `NAV_HALO` out
+/// round it.
+pub const NAV_SPINNER_AT: (f32, f32) = (2.0, NAV_LINE1_MID - NAV_LINE / 2.0);
 pub const NAV_SPINNER_AT_SMALL: (f32, f32) = (1.0, (NAV_ROW_H - NAV_LINE) / 2.0);
 /// A full-size mark on a one-line (30px) Thread row, centred on it: at
 /// the two-line row's x, the spinner's line and the dot centred.
 pub const NAV_SPINNER_AT_LINE: (f32, f32) = (NAV_SPINNER_AT.0, NAV_SPINNER_AT_SMALL.1);
 pub const NAV_DOT_AT_LINE: (f32, f32) = (NAV_DOT_AT.0, (NAV_ROW_H - NAV_DOT) / 2.0);
-pub const NAV_DOT_AT: (f32, f32) = (4.0, 13.0);
+pub const NAV_DOT_AT: (f32, f32) = (4.0, NAV_LINE1_MID - NAV_DOT / 2.0);
 pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
-pub const NAV_ICON_AT: (f32, f32) = (0.0, 8.0);
+pub const NAV_ICON_AT: (f32, f32) = (0.0, NAV_LINE1_MID - NAV_MARK_ICON / 2.0);
+/// An icon on a one-line row, a shown Group's member's included.
+pub const NAV_ICON_AT_LINE: (f32, f32) = (0.0, (NAV_ROW_H - NAV_MARK_ICON) / 2.0);
 pub const NAV_MARK_ICON: f32 = 14.0;
 pub const NAV_MARK_ICON_SMALL: f32 = 13.0;
 pub const NAV_SPINNER_FS: f32 = 12.0;
@@ -2596,9 +2674,16 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 // that wears it). The rules every animated surface follows:
 //
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
-//   a few pixels into place. A menu or a sheet that closes goes at once:
-//   dismissals are frequent, and the closed state says it all. The
-//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly.
+//   a few pixels into place. What the operator dismisses (a menu, a sheet,
+//   the palette) goes at once: dismissals are frequent, a fading surface
+//   would hold its hit area past its state, and the closed state says it
+//   all. What leaves on its own (a toast) fades out shorter and softer than
+//   it came (`MOTION_TOAST_OUT_MS`), as a face no pointer finds. The
+//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly, and
+//   the panel's rides ⌥⌘B and a preview's wider width the same way. A
+//   board slot is no float: the Review slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
+//   `MOTION_SLOT_CLOSE_MS`), its Pane giving way and taking the room back,
+//   so the board never jumps.
 // - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
 //   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
 //   changes, a Send becoming ready) and a press land on the same frame.
@@ -2622,6 +2707,11 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`): each declares
 //   when its picture next changes, and the clock wakes only the views due
 //   then, on its grid; it parks when nothing is declared.
+// - **A frame redraws only what moves.** Every animation asks for its next
+//   frame through the cheapest view that draws it (`motion::frames_through`):
+//   a float the Cockpit draws redraws the frame around its cached parts,
+//   never every Pane. Nothing animates where its host would rebuild more
+//   than the animation shows.
 
 /// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
 pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
@@ -2629,6 +2719,10 @@ pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 /// CSS `transition-colors`' default curve: every hover blend.
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
+/// A drawer's ease-out (the iOS sheet's curve): it leaves at speed and
+/// spends its second half settling the last few pixels, so a slot sliding
+/// across half the board reads as one physical move rather than a jump.
+pub const MOTION_EASE_SLIDE: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a line arriving inside a card already open (the usage card's legend).
 pub const MOTION_ROW_IN_MS: u64 = 180;
@@ -2636,8 +2730,9 @@ pub const MOTION_ROW_IN_MS: u64 = 180;
 /// while rising `MOTION_FADE_IN_RISE` into place.
 pub const MOTION_FADE_IN_MS: u64 = 500;
 pub const MOTION_FADE_IN_RISE: f32 = 4.0;
-/// The sidebar's width between column and rail (cmd-B) — the board's
-/// width rides it every frame.
+/// The sidebar's width between column and rail (cmd-B), and the panel's
+/// between shown and hidden (⌥⌘B) — the board's width rides it every
+/// frame.
 pub const MOTION_RESIZE_MS: u64 = 200;
 /// A board seam's hover line fading in under the pointer: 120ms.
 pub const MOTION_SEAM_FADE_MS: u64 = 120;
@@ -2653,16 +2748,27 @@ pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
 /// `dialog-in`: 180ms, rising 2px (the 0.96 scale approximated likewise).
 pub const MOTION_DIALOG_IN_MS: u64 = 180;
 pub const MOTION_DIALOG_RISE: f32 = 2.0;
-/// How far a board slot opening beside its owner (the reader) settles in
-/// from the owner's side.
-pub const MOTION_SLOT_SHIFT: f32 = 6.0;
+/// A board slot opening beside its owner (the Review beside its Pane)
+/// slides in over 240ms on `MOTION_EASE_SLIDE`, the owner narrowing with
+/// it, and slides out over a shorter 200ms before it is removed.
+pub const MOTION_SLOT_OPEN_MS: u64 = 240;
+pub const MOTION_SLOT_CLOSE_MS: u64 = 200;
 /// A disclosure chevron turning: 150ms.
 pub const MOTION_CHEVRON_MS: u64 = 150;
+/// The image viewer's zoom (a click between fit and actual size, ⌘= ⌘-
+/// ⌘0): 240ms on `MOTION_EASE_OUT_EXPO`, so the picture answers the click
+/// at once and settles softly. A pinch or a pan follows the hand instead.
+pub const MOTION_IMAGE_ZOOM_MS: u64 = 240;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
 pub const MOTION_HOVER_FADE_MS: u64 = 150;
-/// A toast's stack timing: it settles in over 180ms and leaves over 100ms.
+/// A toast's timing: it rises in over 180ms and leaves over 100ms (the
+/// Needs-you toast, `motion::toast_in` / `toast_out`; the kit's toast
+/// stack settles on the same two).
 pub const MOTION_TOAST_IN_MS: u64 = 180;
 pub const MOTION_TOAST_OUT_MS: u64 = 100;
+/// How far a toast rises into place over the bottom bar; it sinks half
+/// that as it fades away.
+pub const MOTION_TOAST_RISE: f32 = 4.0;
 /// 1.4s — how long a scrollbar thumb holds after the last scroll frame
 /// (C26) before it fades out over `MOTION_HOVER_FADE_MS`. Idle, no thumb.
 pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
@@ -2833,6 +2939,20 @@ mod tests {
         // and the grounds rows sit on, 4:1 on the raised ones.
         floor(&[("TEXT_DIM", TEXT_DIM)], GROUNDS, 4.5);
         floor(&[("TEXT_DIM", TEXT_DIM)], RAISED_GROUNDS, 4.0);
+        // A float's rows: its dim words under the pointer, and lifted to
+        // `TEXT_MUTED` on the cursor row.
+        floor(
+            &[("TEXT_DIM", TEXT_DIM)],
+            &[("FLOAT_RAISED", FLOAT_RAISED)],
+            4.0,
+        );
+        floor(
+            &[("TEXT_MUTED", TEXT_MUTED)],
+            &[("FLOAT_SELECTED", FLOAT_SELECTED)],
+            4.5,
+        );
+        // Each step reads over the one under it.
+        const { assert!(FLOAT_RAISED > FLOAT && FLOAT_SELECTED > FLOAT_RAISED) };
         assert!(contrast(TEXT_DIM, FRAME) >= 4.5 && contrast(TEXT_DIM, CARD) >= 4.5);
         assert!(contrast(TEXT_DIM, SELECTED) >= 4.0);
         // Comments are the dim ink, under its floor.
@@ -3431,12 +3551,14 @@ mod tests {
             ("project_editor.rs", include_str!("project_editor.rs")),
             ("notifications.rs", include_str!("notifications.rs")),
             ("attachments.rs", include_str!("attachments.rs")),
+            ("image_viewer.rs", include_str!("image_viewer.rs")),
             ("background_chips.rs", include_str!("background_chips.rs")),
             ("keymap.rs", include_str!("keymap.rs")),
             ("decision.rs", include_str!("decision.rs")),
+            ("preview.rs", include_str!("preview.rs")),
             (
-                "attachment_preview.rs",
-                include_str!("attachment_preview.rs"),
+                "cockpit/panel/preview.rs",
+                include_str!("cockpit/panel/preview.rs"),
             ),
             ("prompt_drop.rs", include_str!("prompt_drop.rs")),
             ("transcript/rows.rs", include_str!("transcript/rows.rs")),

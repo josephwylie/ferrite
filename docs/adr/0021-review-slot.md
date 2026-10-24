@@ -31,7 +31,7 @@ take reviewr itself instead, so its fixes and features keep arriving.
    selection and comment model (`ferrite_core::review`) are gone.
 2. **The compare is the Review; one slot, no new surface.** The Review is
    a GPUI view (`review.rs`, `ReviewView`) that takes the reader slot
-   beside its Pane (`attachment_preview::Document::review`), laid out,
+   beside its Pane (`attachment_preview::Body::Review`), laid out,
    dragged and closed like any reader (F-14). ⌘⇧D (`review branch`, in the
    palette and the menu) opens it at the branch scope; the palette's
    `review changes` and the files-changed card's `review` open it at the
@@ -211,3 +211,14 @@ Solo panel's Changes tab (SPEC §5.6) lists the Thread's edited files and
 ends in `Review changes`, which opens `Beside::Review(Uncommitted)` beside
 the Pane as the card's verb did; the panel gives way while the Review is
 open.
+
+## Amendment (2026-10-24): the reader slot is the Review's
+
+Files, images and command output no longer open in the reader slot: they
+open in the Panel's Preview tab (SPEC §5.6.3, ADR 0004's amendment). The
+slot beside the Pane holds only the Review, which needs the board's width
+and takes line comments; it keeps its slide (`beside.rs`, `ReaderSlides`,
+`SLOT_OPEN`/`SLOT_CLOSE`). A Review is a Thread's, so the slot is keyed by
+its Thread. A review line's *Open file at this line* opens the file in the
+Panel, beside the Review rather than over it.
+

@@ -77,7 +77,7 @@ impl CockpitWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         // Over a cached Cockpit, its nav and Panes are cached parts too.
-        cockpit.update(cx, |view, _| view.set_parts(overlay));
+        cockpit.update(cx, |view, cx| view.set_parts(overlay, cx));
         let handle = window.window_handle();
         let clicked = cx.entity().downgrade();
         crate::system_notifications::on_click(
@@ -168,7 +168,7 @@ impl CockpitWindow {
                 .with_needs_you(needs_you)
                 .with_landing(open, until)
         });
-        view.update(cx, |view, _| view.set_parts(self.overlay.is_some()));
+        view.update(cx, |view, cx| view.set_parts(self.overlay.is_some(), cx));
         self.cockpit
             .update(cx, |left, cx| left.take_server_bands(window, cx));
         self._going = Self::follow(&view, window, cx);

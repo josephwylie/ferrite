@@ -67,13 +67,22 @@ The default Cockpit view: exactly the focused Thread's Pane.
 
 **Panel**
 The right column, beside the board: the focused Thread's changes, its
-pull request and its context, one tab each. It follows the focused Thread
-in every view (Solo, a Group's focused Pane, a fullscreen Pane, with
-something open beside it), shown while the operator has it on; there is
-none without a Thread (a draft, the empty board, the Projects
-coordinator).
+pull request and its context, one tab each, and its **preview** while one
+is open. It follows the focused Thread in every view (Solo, a Group's
+focused Pane, a fullscreen Pane, with a Review open beside it), shown
+while the operator has it on; there is none without a Thread (a draft,
+the empty board, the Projects coordinator), but for a draft's preview.
 _Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
 board).
+
+**Preview**
+A file, an image or a command's output opened from a Pane — a file link
+in an answer, a ⌘-clicked path, a tool row, a prompt's image, a shelf
+chip, a changed file, a review's line — read in the Panel's Preview tab,
+which widens the Panel while it shows. Each Pane keeps its own; the Panel
+shows the focused Pane's. Another file opening replaces it in place.
+_Avoid_: reader (the board's reader slot is the Review's), viewer (that is
+the image's part of it).
 
 **Bar**
 The window's one strip at the bottom: the view tabs, the needs-you count,
@@ -98,9 +107,10 @@ _Avoid_: layout (that is what the Roster's grid computes), tab list.
 A Group's arrangement of its Panes: a binary split tree (each split a row
 or a column with a share for its first side), persisted with the Group.
 Seams between Panes resize it; dropping a Pane on another swaps them (the
-centre) or splits that slot (an edge). A Pane's open reader takes a slot of
-its own in the same tree (in Solo too), placed for the session only — the
-persisted Layout names Threads alone.
+centre) or splits that slot (an edge). A Pane's open Review takes a slot of
+its own in the same tree (in Solo too), the reader slot, placed for the
+session only — the persisted Layout names Threads alone. Files and images
+open in the Panel's preview instead.
 _Avoid_: grid (that is what an even Layout happens to be), mosaic.
 
 **Title**

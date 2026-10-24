@@ -247,11 +247,13 @@ impl SearchPanel {
             path: hit.path.clone(),
             line: None,
             text: None,
+            matched: spans(&hit.path, &hit.spans),
         });
         let code = results.code.iter().map(|hit| Found {
             path: hit.path.clone(),
             line: Some(hit.line),
             text: Some(hit.text.clone()),
+            matched: spans(&hit.text, &hit.spans),
         });
         files.chain(code).collect()
     }
@@ -301,6 +303,23 @@ struct Found {
     path: String,
     line: Option<u64>,
     text: Option<String>,
+    /// What the engine matched: in the line's words for a line, else in
+    /// the path.
+    matched: Vec<Range<usize>>,
+}
+
+/// The engine's byte spans into `text` as ranges, any that do not fall on
+/// its characters dropped.
+fn spans(text: &str, spans: &[(u32, u32)]) -> Vec<Range<usize>> {
+    spans
+        .iter()
+        .map(|&(start, end)| start as usize..end as usize)
+        .filter(|range| {
+            range.start < range.end
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end)
+        })
+        .collect()
 }
 
 /// One drawn child of the rows' list: a row (its index in `lines`), a
@@ -378,11 +397,17 @@ pub(crate) struct ReviewView {
     /// Each row's syntax colours and changed-word washes, worked out once
     /// per read.
     highlights: Vec<Vec<(Range<usize>, HighlightStyle)>>,
+    /// The line-number columns' width in cells: a tool row's diff numbers'
+    /// (`pane::diff_number_cells`), wide enough for the shown files'
+    /// longest number, so every file's columns line up.
+    number_cells: f32,
     selection: Option<Selection>,
     /// A press on a line is held: dragging over lines stretches the pick.
     dragging: bool,
     /// The comment being written under the pick.
     editor: Option<Entity<Composer>>,
+    /// Whether that field holds the keyboard, as this frame found it.
+    editor_focused: bool,
     /// The commits scope's list; `None` while it is being read.
     commits: Option<Vec<CommitRow>>,
     /// The listed commit the arrows are on.
@@ -436,9 +461,11 @@ impl ReviewView {
             children: Vec::new(),
             child_of: Vec::new(),
             highlights: Vec::new(),
+            number_cells: DIFF_NUMBER_CELLS,
             selection: None,
             dragging: false,
             editor: None,
+            editor_focused: false,
             commits: None,
             commit_pick: 0,
             commit_anchor: None,
@@ -580,7 +607,15 @@ impl ReviewView {
 
     /// The line-number columns: as wide as a tool row's diff numbers.
     fn number_w(&self) -> f32 {
-        DIFF_NUMBER_CELLS * self.grid.cell()
+        self.number_cells * self.grid.cell()
+    }
+
+    /// Where a row's code starts: a cell of air at the slot's edge (the
+    /// file head's inset), both number columns and the sign. Folds, notices,
+    /// comments and the comment field hang from the same edge.
+    fn code_x(&self) -> f32 {
+        let cell = self.grid.cell();
+        cell + 2. * self.number_w() + DIFF_SIGN_CELLS * cell
     }
 
     /// The handle holding the keyboard in this review — a field of it, or
@@ -838,6 +873,7 @@ impl ReviewView {
         let mut children = Vec::new();
         let mut child_of = Vec::new();
         let mut highlights = Vec::new();
+        let mut max_number = 0;
         for (index, file) in self.files().iter().enumerate() {
             if file.diff.notice.is_some() {
                 children.push(Child::Notice(index));
@@ -849,6 +885,7 @@ impl ReviewView {
             }
             let language =
                 ferrite_core::transcript::language_for_path(std::path::Path::new(&file.diff.path));
+            max_number = max_number.max(rows_max_number(&file.diff.rows));
             for (at, row) in file.diff.rows.iter().enumerate() {
                 child_of.push(children.len());
                 children.push(Child::Row(lines.len()));
@@ -863,6 +900,7 @@ impl ReviewView {
         self.children = children;
         self.child_of = child_of;
         self.highlights = highlights;
+        self.number_cells = crate::pane::diff_number_cells(max_number as usize);
         self.selection = self
             .selection
             .filter(|picked| picked.last() < self.lines.len());
@@ -1355,6 +1393,12 @@ impl ReviewView {
         crate::find::washed(runs, &washes)
     }
 
+    /// The hover blend's key for one of this Review's rows: unique in the
+    /// window, though each Pane's reader slot may hold a Review.
+    fn hover_key(&self, row: String, cx: &Context<Self>) -> SharedString {
+        format!("review-{}-{row}", cx.entity_id()).into()
+    }
+
     /// A file's head: its path (a rename's `old → new`), and what it adds
     /// up to.
     fn file_head(&self, file: &ReviewFile, first: bool) -> AnyElement {
@@ -1370,24 +1414,30 @@ impl ReviewView {
             .px(px(self.grid.cell()))
             .whitespace_nowrap()
             .child(
+                // A long path gives way at its start: the file name stays.
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    .text_ellipsis_start()
                     .font_weight(W_LABEL)
                     .text_color(rgb(TEXT_STRONG))
                     .child(SharedString::from(path)),
             )
-            .when(self.file.is_none(), |head| {
-                head.child(crate::components::tabular(
-                    div().flex_shrink_0().pl(px(2. * self.grid.cell())).child(
-                        crate::pane::trail_diff_stat(
-                            file.additions as usize,
-                            file.deletions as usize,
+            // A file the model declined counts nothing: no `+0 −0`.
+            .when(
+                self.file.is_none() && (file.additions, file.deletions) != (0, 0),
+                |head| {
+                    head.child(crate::components::tabular(
+                        div().flex_shrink_0().pl(px(2. * self.grid.cell())).child(
+                            crate::pane::trail_diff_stat(
+                                file.additions as usize,
+                                file.deletions as usize,
+                            ),
                         ),
-                    ),
-                ))
-            })
+                    ))
+                },
+            )
             .into_any_element()
     }
 
@@ -1401,7 +1451,7 @@ impl ReviewView {
         let picked = self.selection.is_some_and(|picked| picked.contains(at));
         let last_picked = self.selection.is_some_and(|picked| picked.last() == at);
         let (cell, line_h, number_w) = (self.grid.cell(), self.grid.line, self.number_w());
-        let indent = 2. * number_w + 2. * cell;
+        let indent = self.code_x();
         let mut stack = div().flex().flex_col().w_full();
         if first_of_file {
             stack = stack.child(self.file_head(file, shown.file == 0));
@@ -1416,9 +1466,8 @@ impl ReviewView {
                     .items_center()
                     .h(px(line_h))
                     .pl(px(indent))
-                    .cursor_pointer()
                     .text_color(rgb(TEXT_DIM))
-                    .when(picked, |row| row.bg(paint::SELECTED))
+                    .map(|row| pickable(row, self.hover_key(format!("fold-{at}"), cx), picked))
                     .child(SharedString::from(format!(
                         "\u{22ef} {hidden} line{}",
                         if hidden == 1 { "" } else { "s" }
@@ -1433,14 +1482,22 @@ impl ReviewView {
         let ink = DiffKind::of(&row.marker().to_string()).paint();
         let text = row.text();
         let highlights = self.highlights_at(at, &text);
+        // The numbers wear a tool row's diff ink (structure on a context
+        // row, the sign's hue dimmed on a changed one); the pick's are the
+        // keyboard's `TEXT_STRONG`.
+        let number_ink = if picked {
+            TEXT_STRONG
+        } else {
+            ink.number_color
+        };
         let number = |number: Option<u32>| {
             crate::components::tabular(
                 div()
                     .flex_shrink_0()
                     .w(px(number_w))
-                    .pr(px(cell))
+                    .pr(px(DIFF_NUMBER_PAD_CELLS * cell))
                     .text_right()
-                    .text_color(rgb(if picked { TEXT_STRONG } else { TEXT_DIM }))
+                    .text_color(rgb(number_ink))
                     .children(number.map(|number| SharedString::from(number.to_string()))),
             )
         };
@@ -1449,25 +1506,19 @@ impl ReviewView {
             Row::Insertion { .. } => None,
             _ => row.old_no(),
         };
-        let line = div()
-            .id(("review-line", at))
-            .debug_selector(move || format!("review-line-{at}"))
+        // The pick lays the selection over the row's wash rather than in
+        // its place, so a picked run still reads added or removed.
+        let cells = div()
             .flex()
-            .w_full()
-            .h(px(line_h))
-            .whitespace_nowrap()
-            .cursor_pointer()
-            .map(|line| match (picked, ink.wash) {
-                (true, _) => line.bg(paint::SELECTED),
-                (false, Some(wash)) => line.bg(rgba(wash)),
-                (false, None) => line,
-            })
+            .size_full()
+            .pl(px(cell))
+            .when(picked, |cells| cells.bg(paint::SELECTED))
             .child(number(old))
             .child(number(row.new_no()))
             .child(
                 div()
                     .flex_shrink_0()
-                    .w(px(2. * cell))
+                    .w(px(DIFF_SIGN_CELLS * cell))
                     .text_color(rgb(ink.sign_color))
                     .child(ink.sign),
             )
@@ -1505,7 +1556,16 @@ impl ReviewView {
                                 ),
                         )
                     }),
-            )
+            );
+        let line = div()
+            .id(("review-line", at))
+            .debug_selector(move || format!("review-line-{at}"))
+            .w_full()
+            .h(px(line_h))
+            .whitespace_nowrap()
+            .cursor_pointer()
+            .when_some(ink.wash, |line, wash| line.bg(rgba(wash)))
+            .child(cells)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
@@ -1539,41 +1599,53 @@ impl ReviewView {
             stack = stack.child(self.comment_row(id, &comment, cx));
         }
         if let Some(editor) = self.editor.as_ref().filter(|_| last_picked) {
+            // The field's two verbs are chrome, set as the footer's key
+            // hints are: each its own `TOKEN_H` target, apart.
+            let verb = |id: &'static str, words: &'static str| {
+                div()
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .h(px(TOKEN_H))
+                    .px(px(TOKEN_PAD_X))
+                    .rounded(px(R_SMALL))
+                    .font_family(FONT_UI)
+                    .text_size(px(FS_META))
+                    .text_color(rgb(TEXT_DIM))
+                    .hover_control(self.hover_key(id.into(), cx))
+                    .child(words)
+            };
             stack = stack.child(
                 div()
                     .debug_selector(|| "review-comment-field".into())
                     .flex()
                     .items_center()
-                    .gap(px(SPACE_2))
+                    .gap(px(SPACE_1))
                     .py(px(self.grid.half() / 2.))
                     .pl(px(indent))
                     .pr(px(cell))
                     .bg(paint::RAISED)
+                    // The field holding the keyboard wears the focus ring,
+                    // so it never reads as a comment already made.
+                    .map(|field| crate::components::focused(field, self.editor_focused))
                     .child(div().min_w_0().flex_1().child(editor.clone()))
                     .child(
-                        div()
-                            .id("review-comment-save")
-                            .debug_selector(|| "review-comment-save".into())
-                            .flex_shrink_0()
-                            .text_color(rgb(TEXT_DIM))
-                            .hover_control("review-comment-save")
-                            .child("\u{21b5} add")
-                            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                        verb("review-comment-save", "\u{21b5} add").on_click(cx.listener(
+                            |view, _: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
                                 view.save(window, cx);
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        div()
-                            .id("review-comment-cancel")
-                            .flex_shrink_0()
-                            .text_color(rgb(TEXT_DIM))
-                            .hover_control("review-comment-cancel")
-                            .child("esc cancel")
-                            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+                        verb("review-comment-cancel", "esc cancel").on_click(cx.listener(
+                            |view, _: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
                                 view.close_editor(window, cx);
-                            })),
+                            },
+                        )),
                     ),
             );
         }
@@ -1590,7 +1662,7 @@ impl ReviewView {
             .flex()
             .items_center()
             .min_h(px(self.grid.line))
-            .pl(px(2. * self.number_w() + 2. * cell))
+            .pl(px(self.code_x()))
             .pr(px(cell))
             .bg(paint::RAISED)
             .child(
@@ -1603,10 +1675,16 @@ impl ReviewView {
             .child(
                 div()
                     .id(("review-uncomment", id as usize))
+                    .debug_selector(|| "review-uncomment".into())
                     .flex_shrink_0()
-                    .px(px(cell))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(2. * cell))
+                    .h(px(self.grid.line))
+                    .rounded(px(R_SMALL))
                     .text_color(rgb(TEXT_DIM))
-                    .cursor_pointer()
+                    .hover_control(self.hover_key(format!("uncomment-{id}"), cx))
                     .child("\u{d7}")
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
@@ -1622,7 +1700,7 @@ impl ReviewView {
         let message = file
             .diff
             .notice
-            .map(|notice| notice.message())
+            .map(|notice| sentence(notice.message()))
             .unwrap_or_default();
         div()
             .flex()
@@ -1631,7 +1709,7 @@ impl ReviewView {
             .child(
                 div()
                     .h(px(self.grid.line))
-                    .pl(px(2. * self.number_w() + 2. * self.grid.cell()))
+                    .pl(px(self.code_x()))
                     .text_color(rgb(TEXT_DIM))
                     .child(message),
             )
@@ -1674,9 +1752,12 @@ impl ReviewView {
             .h(px(self.grid.line))
             .px(px(cell))
             .whitespace_nowrap()
-            .cursor_pointer()
-            .when(self.commit_run().contains(&index), |row| {
-                row.bg(paint::SELECTED)
+            .map(|row| {
+                pickable(
+                    row,
+                    self.hover_key(format!("commit-{index}"), cx),
+                    self.commit_run().contains(&index),
+                )
             })
             .child(
                 div()
@@ -1733,7 +1814,7 @@ impl ReviewView {
     /// The pull request: its head, its checks and its conversation.
     fn pr_body(&self) -> AnyElement {
         let Some(pr) = &self.pr else {
-            return crate::menu::note("reading\u{2026}").into_any_element();
+            return crate::menu::note("Reading\u{2026}").into_any_element();
         };
         let pr = match &pr.pr {
             Ok(pr) => pr,
@@ -1779,7 +1860,7 @@ impl ReviewView {
             );
         }
         if !pr.checks.is_empty() {
-            body = body.child(div().mt(px(self.grid.half())).child(muted("checks".into())));
+            body = body.child(div().mt(px(self.grid.half())).child(muted("Checks".into())));
             for check in &pr.checks {
                 let (glyph, color) = match check.status {
                     WireCheckStatus::Success => ("\u{2713}", GREEN),
@@ -1787,11 +1868,18 @@ impl ReviewView {
                     WireCheckStatus::Running | WireCheckStatus::Pending => ("\u{25cb}", YELLOW),
                     WireCheckStatus::Skipped | WireCheckStatus::Unknown => ("\u{2013}", TEXT_DIM),
                 };
+                // The marks differ in width: a box of their own keeps the
+                // names on one edge.
                 body = body.child(
                     div()
                         .flex()
-                        .gap(px(cell))
-                        .child(div().text_color(rgb(color)).child(glyph))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .w(px(2. * cell))
+                                .text_color(rgb(color))
+                                .child(glyph),
+                        )
                         .child(
                             div()
                                 .text_color(rgb(TEXT))
@@ -1817,6 +1905,7 @@ impl ReviewView {
                 .debug_selector(move || format!("review-pr-comment-{index}"))
                 .mt(px(self.grid.half()))
                 .p(px(cell))
+                .rounded(px(R_BLOCK))
                 .bg(paint::RAISED)
                 // A review or a comment is anchored to its own kind's
                 // word: only a finding's place is worth a second mention.
@@ -1854,7 +1943,7 @@ impl ReviewView {
             body = body.child(card);
         }
         if pr.truncated {
-            body = body.child(muted("more on the forge".into()));
+            body = body.child(muted("More on the forge".into()));
         }
         body.into_any_element()
     }
@@ -1863,7 +1952,7 @@ impl ReviewView {
     fn search_body(&self, search: &SearchPanel, cx: &mut Context<Self>) -> AnyElement {
         let cell = self.grid.cell();
         let results: AnyElement = match &search.results {
-            None => crate::menu::note("searching\u{2026}").into_any_element(),
+            None => crate::menu::note("Searching\u{2026}").into_any_element(),
             Some(Err(error)) => crate::menu::note(error.clone()).into_any_element(),
             Some(Ok(_)) => {
                 let rows = search.rows();
@@ -1890,21 +1979,54 @@ impl ReviewView {
                                 .h(px(self.grid.line))
                                 .px(px(cell))
                                 .whitespace_nowrap()
-                                .cursor_pointer()
-                                .when(index == search.pick, |row| row.bg(paint::SELECTED))
-                                .child(div().flex_shrink_0().text_color(rgb(LINK_INK)).child(
-                                    SharedString::from(match found.line {
-                                        Some(line) => format!("{}:{line}", found.path),
-                                        None => found.path.clone(),
-                                    }),
-                                ))
+                                .map(|row| {
+                                    pickable(
+                                        row,
+                                        self.hover_key(format!("found-{index}"), cx),
+                                        index == search.pick,
+                                    )
+                                })
+                                // A long path gives way at its start, and
+                                // never past the line's words.
+                                .child(
+                                    div()
+                                        .when(found.text.is_some(), |path| {
+                                            path.flex_shrink_0().max_w(gpui::relative(0.6))
+                                        })
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_ellipsis_start()
+                                        .text_color(rgb(LINK_INK))
+                                        .child({
+                                            let path = match found.line {
+                                                Some(line) => format!("{}:{line}", found.path),
+                                                None => found.path.clone(),
+                                            };
+                                            let marks = match found.text {
+                                                Some(_) => Vec::new(),
+                                                None => crate::components::match_highlights(
+                                                    &found.matched,
+                                                    false,
+                                                ),
+                                            };
+                                            StyledText::new(SharedString::from(path))
+                                                .with_highlights(marks)
+                                        }),
+                                )
+                                // The matched words in the face every
+                                // filtering float marks its matches in.
                                 .children(found.text.map(|text| {
+                                    let marks =
+                                        crate::components::match_highlights(&found.matched, false);
                                     div()
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
                                         .text_color(rgb(TEXT))
-                                        .child(SharedString::from(text))
+                                        .child(
+                                            StyledText::new(SharedString::from(text))
+                                                .with_highlights(marks),
+                                        )
                                 }))
                                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                                     view.open_found(index, window, cx);
@@ -1939,7 +2061,7 @@ impl ReviewView {
     /// quiet.
     fn tree_body(&self, tree: &TreePanel, cx: &mut Context<Self>) -> AnyElement {
         let entries = match &tree.entries {
-            None => return crate::menu::note("reading\u{2026}").into_any_element(),
+            None => return crate::menu::note("Reading\u{2026}").into_any_element(),
             Some(Err(error)) => {
                 return crate::menu::note(format!("Can\u{2019}t list the files \u{b7} {error}"))
                     .into_any_element()
@@ -1995,8 +2117,13 @@ impl ReviewView {
                     .pl(px(cell + 2. * cell * row.depth as f32))
                     .pr(px(cell))
                     .whitespace_nowrap()
-                    .cursor_pointer()
-                    .when(index == tree.pick, |line| line.bg(paint::SELECTED))
+                    .map(|line| {
+                        pickable(
+                            line,
+                            self.hover_key(format!("tree-{index}"), cx),
+                            index == tree.pick,
+                        )
+                    })
                     .text_color(rgb(if row.ignored { TEXT_DIM } else { ink }))
                     .child(div().min_w_0().truncate().child(SharedString::from(label)))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -2012,14 +2139,14 @@ impl ReviewView {
     fn bases_body(&self, panel: &BasePanel, cx: &mut Context<Self>) -> AnyElement {
         let cell = self.grid.cell();
         let list: AnyElement = match &panel.bases {
-            None => crate::menu::note("reading\u{2026}").into_any_element(),
+            None => crate::menu::note("Reading\u{2026}").into_any_element(),
             Some(Err(error)) => crate::menu::note(error.clone()).into_any_element(),
             Some(Ok(bases)) => {
                 let visible = panel.visible(cx);
                 if visible.is_empty() {
                     let typed = panel.field.read(cx).text().trim().to_string();
                     let note = match typed.is_empty() {
-                        true => "no branches".to_string(),
+                        true => "No branches".to_string(),
                         false => format!("\u{23ce} reads the branch over {typed}"),
                     };
                     crate::menu::note(note).into_any_element()
@@ -2058,8 +2185,13 @@ impl ReviewView {
                                 .h(px(self.grid.line))
                                 .px(px(cell))
                                 .whitespace_nowrap()
-                                .cursor_pointer()
-                                .when(index == panel.pick, |line| line.bg(paint::SELECTED))
+                                .map(|line| {
+                                    pickable(
+                                        line,
+                                        self.hover_key(format!("base-{index}"), cx),
+                                        index == panel.pick,
+                                    )
+                                })
                                 .child(
                                     div()
                                         .flex_1()
@@ -2117,30 +2249,22 @@ impl ReviewView {
             return self.tree_body(tree, cx);
         }
         if let Some(error) = &self.error {
-            let what = if self.pr_open {
-                "the pull request".to_string()
-            } else if let Some(file) = &self.file {
-                file.path.clone()
-            } else {
-                self.scope.label().to_string()
-            };
-            return crate::menu::note(format!("can\u{2019}t read {what} \u{b7} {error}"))
-                .into_any_element();
+            return crate::menu::note(self.error_note(error)).into_any_element();
         }
         if self.pr_open {
             return self.pr_body();
         }
         if let Some(file) = &self.file {
             return match &file.file {
-                None => crate::menu::note("reading\u{2026}").into_any_element(),
+                None => crate::menu::note("Reading\u{2026}").into_any_element(),
                 Some(_) => self.rows_list(cx),
             };
         }
         if self.listing_commits() {
             return match &self.commits {
-                None => crate::menu::note("reading\u{2026}").into_any_element(),
+                None => crate::menu::note("Reading\u{2026}").into_any_element(),
                 Some(commits) if commits.is_empty() => {
-                    crate::menu::note("no commits on this branch").into_any_element()
+                    crate::menu::note("No commits on this branch").into_any_element()
                 }
                 Some(commits) => div()
                     .id("review-commits")
@@ -2164,12 +2288,51 @@ impl ReviewView {
             };
         }
         match &self.diff {
-            None => crate::menu::note("reading\u{2026}").into_any_element(),
+            None => crate::menu::note("Reading\u{2026}").into_any_element(),
             Some(files) if files.is_empty() => {
-                crate::menu::note(format!("nothing changed \u{b7} {}", self.scope.label()))
-                    .into_any_element()
+                crate::menu::note(self.empty_note()).into_any_element()
             }
             Some(_) => self.rows_list(cx),
+        }
+    }
+
+    /// What the slot says when a read failed. Reviewr's word for a state
+    /// that is nobody's fault — no repository, no turn yet — stands as a
+    /// plain sentence; anything else says what could not be read, and why.
+    fn error_note(&self, error: &str) -> String {
+        match error {
+            "not a git repository" => "No git repository here, so nothing to review".into(),
+            "waiting for the first turn" => {
+                "No turn has changed the checkout yet: the last turn shows here once one does"
+                    .into()
+            }
+            _ => {
+                let what = if self.pr_open {
+                    "the pull request".to_string()
+                } else if let Some(file) = &self.file {
+                    file.path.clone()
+                } else {
+                    match (self.scope, &self.commit) {
+                        (Scope::Uncommitted, _) => "the uncommitted changes",
+                        (Scope::Branch, _) => "the branch",
+                        (Scope::LastTurn, _) => "the last turn",
+                        (Scope::Commits, Some(_)) => "the commit",
+                        (Scope::Commits, None) => "the branch\u{2019}s commits",
+                    }
+                    .to_string()
+                };
+                format!("Can\u{2019}t read {what} \u{b7} {error}")
+            }
+        }
+    }
+
+    /// What the slot says when the scope's diff is empty.
+    fn empty_note(&self) -> &'static str {
+        match self.scope {
+            Scope::Uncommitted => "No uncommitted changes",
+            Scope::Branch => "No changes on this branch",
+            Scope::LastTurn => "No changes in the last turn",
+            Scope::Commits => "No changes in this commit",
         }
     }
 
@@ -2222,34 +2385,85 @@ impl ReviewView {
                     .debug_selector(move || selector.into())
                     .min_w_0()
                     .truncate()
+                    .when(selector == "review-file-shown", |shown| {
+                        shown.text_ellipsis_start()
+                    })
                     .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(text))
             }))
             .child(div().flex_1())
+            // A read that failed shows no diff, so no stat of one.
             .children(
                 self.diff
                     .as_ref()
-                    .filter(|_| self.showing_diff())
-                    .map(|files| {
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(TEXT_DIM))
-                            .child(stat(files))
-                    }),
+                    .filter(|_| self.showing_diff() && self.error.is_none())
+                    .map(|files| stat(files, CH)),
             );
         bar.into_any_element()
     }
 }
 
-/// `3 files +40 −12`: what a diff adds up to.
-fn stat(files: &[ReviewFile]) -> String {
+/// `3 files +40 −12`: what a diff adds up to, its `+N −N` inked as each
+/// file head's (and the Panel's). In a narrow slot the count gives way
+/// first, cut with `…`, and the numbers stay whole.
+fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
     let added: u32 = files.iter().map(|file| file.additions).sum();
     let removed: u32 = files.iter().map(|file| file.deletions).sum();
     let count = files.len();
-    format!(
-        "{count} file{} +{added} \u{2212}{removed}",
-        if count == 1 { "" } else { "s" }
-    )
+    let count = format!("{count} file{}", if count == 1 { "" } else { "s" });
+    div()
+        .debug_selector(|| "review-stat".into())
+        .flex()
+        .min_w_0()
+        .gap(px(gap))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_DIM))
+                .child(SharedString::from(count)),
+        )
+        .child(crate::components::tabular(
+            div()
+                .debug_selector(|| "review-stat-lines".into())
+                .flex_shrink_0()
+                .child(crate::pane::trail_diff_stat(
+                    added as usize,
+                    removed as usize,
+                )),
+        ))
+}
+
+/// `words` in sentence case: reviewr's notices are lower case, the slot's
+/// notes (like every note in Ferrite) start with a capital.
+fn sentence(words: &str) -> String {
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// A row a click picks: the row's hover face under the pointer, or, on
+/// the pick, the selection stepping up under it (`hover_carried`), so the
+/// row the arrows hold and the row the pointer is on read apart.
+fn pickable<E: crate::pointer::Pointer>(row: E, key: SharedString, picked: bool) -> E {
+    if picked {
+        row.hover_carried(key)
+    } else {
+        row.hover_row(key)
+    }
+}
+
+/// The longest line number among `rows`, a fold's hidden lines included
+/// (opening one never widens the columns).
+fn rows_max_number(rows: &[Row]) -> u32 {
+    rows.iter()
+        .map(|row| match row {
+            Row::Fold { lines } => rows_max_number(lines),
+            row => row.old_no().max(row.new_no()).unwrap_or(0),
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// A pull request's facts on one line: state, branches, mergeability and
@@ -2319,6 +2533,19 @@ impl ReviewView {
         self.pick(head, true, cx);
     }
 
+    /// The comment field open under the pick, `words` typed in it.
+    pub(crate) fn stage_comment(
+        &mut self,
+        words: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_editor(window, cx);
+        if let Some(editor) = &self.editor {
+            editor.update(cx, |editor, cx| editor.set(words.to_string(), cx));
+        }
+    }
+
     /// The PR tab open on `pr`.
     pub(crate) fn stage_pr(&mut self, pr: ReviewPullRequest, cx: &mut Context<Self>) {
         self.pr_open = true;
@@ -2350,7 +2577,11 @@ impl Focusable for ReviewView {
 }
 
 impl Render for ReviewView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.editor_focused = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.focus_handle(cx).is_focused(window));
         let footer: &[(&str, &str)] = if self.bases.is_some() {
             &BASE_FOOTER
         } else if self.search.is_some() {
@@ -2859,6 +3090,76 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(*picked.borrow(), ["feature/x", "v1.2.0"]);
+    }
+
+    /// A file whose lines run past a thousand widens both number columns
+    /// for every file shown, so the numbers never run into the sign; a fold
+    /// counts the lines it hides.
+    #[gpui::test]
+    fn long_files_widen_the_number_columns(cx: &mut TestAppContext) {
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        let cells = |cx: &mut gpui::VisualTestContext| review.read_with(cx, |r, _| r.number_cells);
+        assert_eq!(
+            cells(cx),
+            DIFF_NUMBER_CELLS,
+            "short files keep a tool row's columns"
+        );
+        let old: String = (1..=1204).map(|n| format!("line {n}\n")).collect();
+        let new = old.replace("line 1200\n", "line twelve hundred\n");
+        review.update(cx, |review, cx| {
+            let mut two = files();
+            two.push(sides("notes.txt", &old, &new));
+            review.show(Scope::Uncommitted, two, cx)
+        });
+        assert_eq!(
+            cells(cx),
+            crate::pane::diff_number_cells(1204),
+            "four digits and the pad"
+        );
+        assert!(cells(cx) > DIFF_NUMBER_CELLS);
+    }
+
+    /// In a narrow slot the bar's file count gives way, and the diff's
+    /// `+N −N` stays whole inside the slot.
+    #[gpui::test]
+    fn a_narrow_bar_keeps_the_stat_in_view(cx: &mut TestAppContext) {
+        let (_review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        cx.simulate_resize(gpui::size(px(470.), px(600.)));
+        cx.run_until_parked();
+        let slot = cx.debug_bounds("review").expect("the slot");
+        let lines = cx.debug_bounds("review-stat-lines").expect("the stat");
+        assert!(
+            lines.right() <= slot.right(),
+            "the stat ends at {:?}, past the slot's {:?}",
+            lines.right(),
+            slot.right()
+        );
+    }
+
+    /// Notes speak in sentences: reviewr's lower-case notices take a
+    /// capital, and its states that are no fault read plainly.
+    #[gpui::test]
+    fn notes_read_in_sentence_case(cx: &mut TestAppContext) {
+        assert_eq!(
+            sentence("binary file \u{b7} no line comments"),
+            "Binary file \u{b7} no line comments"
+        );
+        assert_eq!(sentence(""), "");
+        let (review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        review.read_with(cx, |review, _| {
+            assert_eq!(review.empty_note(), "No uncommitted changes");
+            assert_eq!(
+                review.error_note("not a git repository"),
+                "No git repository here, so nothing to review"
+            );
+            assert_eq!(
+                review.error_note("index.lock exists"),
+                "Can\u{2019}t read the uncommitted changes \u{b7} index.lock exists"
+            );
+        });
     }
 
     struct Host(Entity<ReviewView>);

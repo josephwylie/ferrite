@@ -1,5 +1,5 @@
 //! Find (⌘F): a query over the text a surface shows — the focused Pane's
-//! transcript, or the reader beside it. Every occurrence is washed
+//! transcript, or its preview in the Panel. Every occurrence is washed
 //! (`FIND_WASH`), the one the find is on more strongly (`FIND_ACTIVE_WASH`)
 //! and brought into view; ⏎ / ⇧⏎ (⌘G / ⌘⇧G) step through them, wrapping,
 //! and esc closes the bar — while its line holds the keyboard; elsewhere
@@ -273,7 +273,7 @@ impl Find {
     /// `search` icon in `TEXT_DIM`, the query in `TEXT_STRONG`, the count
     /// muted at the right — hung `FLOAT_OFFSET` under the top right of its host, the
     /// text it searches (`relative`). A host narrower than the bar narrows
-    /// the query, never the count.
+    /// the query, never the count. It opens like every float (`menu_in`).
     pub(crate) fn bar(&self) -> Div {
         let bar = crate::menu::float()
             .debug_selector(|| "find-bar".into())
@@ -318,7 +318,11 @@ impl Find {
             .right(px(TX_INSET_GROUP))
             .flex()
             .justify_end()
-            .child(bar)
+            .child(crate::motion::menu_in(
+                "find-bar-in",
+                bar,
+                crate::motion::Opens::Down,
+            ))
     }
 
     /// Put `text` on the line (what a test, or a reference scene, types).

@@ -9,7 +9,7 @@ pub(crate) mod empty_board;
 mod leaving;
 mod machines;
 mod palette;
-mod panel;
+pub(crate) mod panel;
 mod parts;
 mod pr_tab;
 #[cfg_attr(not(unix), path = "cockpit/projects_unavailable.rs")]
@@ -507,6 +507,9 @@ pub struct CockpitView {
     /// The Needs-you view: whether its list is down, its cursor, and which Notices
     /// and requests stand as toasts. The Notices themselves are core's.
     pub(crate) needs_you: NeedsYou,
+    /// What the toast float drew last: the toast standing and the one
+    /// fading out (`toast_float`).
+    toast_stage: std::cell::RefCell<crate::notifications::ToastStage>,
     /// What to open once the Cockpit is attached: what the window came
     /// to this machine for (ADR 0026), and until when it waits.
     landing: Option<(Landing, std::time::Instant)>,
@@ -536,7 +539,7 @@ pub struct CockpitView {
     /// the board's left edge reads it every frame. `None` at rest.
     nav_ride: std::cell::Cell<Option<f32>>,
     /// Measuring at the ride's destination (`board_level`), so a Level never
-    /// flaps mid-ride.
+    /// flaps mid-ride — the nav's or the panel's (`board_right`).
     nav_measure_rest: std::cell::Cell<bool>,
     /// A scene holding the ride at a progress (`fixture_hold_nav`).
     nav_hold: Option<f32>,
@@ -552,9 +555,12 @@ pub struct CockpitView {
     solo_beside: Option<(PaneIdentity, ThreadId)>,
     /// The plan card (`open_plan`), tied to its Thread.
     plan_card: Option<ThreadId>,
-    /// The Pane whose reader took the last press: ⌘F finds there. A press
-    /// hands the keyboard back to the Pane, so focus cannot say it.
-    reader_pressed: Option<PaneIdentity>,
+    /// The Pane whose preview took the last press: ⌘F finds there. A
+    /// press hands the keyboard back to the Pane, so focus cannot say it.
+    preview_pressed: Option<PaneIdentity>,
+    /// Each Thread's reader slot (its Review) sliding open or shut
+    /// (`beside.rs`).
+    reader_slides: beside::ReaderSlides,
     /// The Provider an empty board's first draft starts on.
     launch_provider: Provider,
     /// The machines this window can be on (ADR 0026); `None` in a window
@@ -672,12 +678,12 @@ enum Board {
     Solo(PaneIdentity),
 }
 
-/// What one leaf of a board's tree stands for: a Pane, or the reader a
-/// Pane has open (one per Pane).
+/// What one leaf of a board's tree stands for: a Pane, or the reader slot
+/// a Thread's Pane has open, its Review (one per Pane).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Slot {
     Pane(PaneIdentity),
-    Reader(PaneIdentity),
+    Reader(ThreadId),
 }
 
 /// A board slot on the move: its head is the handle. Dropped on another
@@ -1015,12 +1021,14 @@ impl NavChip {
                 nav::RowPlace::ROOT,
                 None,
                 false,
+                0,
                 &measure,
             ),
             NavChip::Group(group) => nav::group_row_with_title(
                 group,
                 group.title.clone(),
                 nav::group_fold(group),
+                0,
                 0,
                 &measure,
             ),
@@ -1573,6 +1581,7 @@ impl CockpitView {
             leave_asked: false,
             group_error: None,
             needs_you: NeedsYou::new(),
+            toast_stage: Default::default(),
             landing: None,
             #[cfg(test)]
             chimed: Vec::new(),
@@ -1598,7 +1607,8 @@ impl CockpitView {
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
             solo_beside: None,
-            reader_pressed: None,
+            preview_pressed: None,
+            reader_slides: Default::default(),
             plan_card: None,
             launch_provider,
             machines: None,
@@ -1987,9 +1997,9 @@ impl CockpitView {
                 cx.notify();
             }
             crate::transcript::TranscriptEvent::OpenReader { path, line } => {
-                // ⌘-click on a path: a reader beside the Thread.
+                // ⌘-click on a path: the Thread's preview, in the Panel.
                 self.focus_pane(index);
-                self.open_reader_from(index, path.clone(), *line, cx);
+                self.open_preview_from(index, path.clone(), *line, cx);
             }
         }
     }
@@ -2654,8 +2664,9 @@ impl CockpitView {
     /// clear their threshold by `NAV_AUTO_RAIL_HYSTERESIS`. The operator's
     /// cmd-B override (`nav_forced_open`) outranks it either way. The board
     /// beside the 264px column is the window less the column and what the
-    /// board leaves at its right (`board_right`: the panel, or `BOARD_PAD`),
-    /// so with the panel hidden the nav folds under 832px (the card keeps
+    /// board leaves at its right once the panel's ride ends
+    /// (`board_right_rest`: the panel, or `BOARD_PAD`), so with the panel
+    /// hidden the nav folds under 832px (the card keeps
     /// 560px, as it did beside the 36ch column).
     fn update_auto_rail(&mut self, window: &Window) {
         use crate::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
@@ -2663,7 +2674,7 @@ impl CockpitView {
         let held = self.nav_auto_rail.get();
         let slack = if held { NAV_AUTO_RAIL_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
-        let right = self.board_right();
+        let right = self.board_right_rest();
         let board = width - nav::WIDTH - right;
         let narrowest = |view: &Self| {
             view.pane_rects(window)
@@ -2711,9 +2722,10 @@ impl CockpitView {
         if self.projects.coordinator_shown() || self.cockpit.roster().fullscreen().is_some() {
             return Level::Transcript;
         }
-        // Mid-ride the board is measured where the ride ends (F-12): the
-        // Level is the destination's from the first frame, never flapping
-        // as the width sweeps through a threshold.
+        // Mid-ride the board is measured where the ride ends (F-12) — the
+        // sidebar's, and every reader's slide: the Level is the
+        // destination's from the first frame, never flapping as a width
+        // sweeps through a threshold.
         self.nav_measure_rest.set(true);
         let rects = self.pane_rects(window);
         self.nav_measure_rest.set(false);
@@ -2792,11 +2804,15 @@ impl CockpitView {
     }
 
     /// The board on screen, when a tree lays it out: the Group being
-    /// shown, or Solo while its one Pane has a reader open. Fullscreen and
-    /// a plain Solo Pane have none.
+    /// shown, or Solo — or a fullscreen Pane, its own cell filling the
+    /// board — while its one Pane has a reader slot. A plain Solo or
+    /// fullscreen Pane has none.
     fn board(&self) -> Option<Board> {
-        if self.cockpit.roster().fullscreen().is_some() {
-            return None;
+        if let Some(shown) = self.cockpit.roster().fullscreen() {
+            return self
+                .index_of(shown)
+                .filter(|index| self.has_reader(*index))
+                .map(|_| Board::Solo(shown));
         }
         if let Some((owner, _)) = self.solo_pair() {
             return Some(Board::Solo(owner));
@@ -2804,7 +2820,7 @@ impl CockpitView {
         match self.cockpit.roster().view() {
             View::Group(group) => Some(Board::Group(group)),
             View::Solo => match self.visible_indices().as_slice() {
-                [index] if self.panes[*index].preview.document().is_some() => {
+                [index] if self.has_reader(*index) => {
                     Some(Board::Solo(self.panes[*index].identity))
                 }
                 _ => None,
@@ -2816,20 +2832,21 @@ impl CockpitView {
     /// the operator's arrangement fitted to what is open — a Group's
     /// members (or the default grid over the board's bounds), a pending
     /// draft spliced in under a stand-in id since a draft is no Thread, and
-    /// a reader slot for every visible Pane with a document open. A draft
-    /// on a default grid joins the grid rather than splitting one Pane; a
-    /// reader the tree has not placed yet opens beside its Pane, on the
-    /// right.
+    /// a reader slot for every visible Pane with a document open or sliding
+    /// shut. A draft on a default grid joins the grid rather than splitting
+    /// one Pane; a reader the tree has not placed yet opens beside its
+    /// Pane, on the right. Every slot is at rest here: `slid_tree` draws a
+    /// slide.
     fn board_tree(&self, board: Board) -> Option<Tree> {
         if let Some(drag) = self.seam_drag.as_ref().filter(|drag| drag.board == board) {
             return Some(drag.tree.clone());
         }
         let bounds = self.rest_board();
-        let readers: Vec<PaneIdentity> = self
+        let readers: Vec<ThreadId> = self
             .visible_indices()
             .into_iter()
-            .filter(|index| self.panes[*index].preview.document().is_some())
-            .map(|index| self.panes[index].identity)
+            .filter(|index| self.has_reader(*index))
+            .filter_map(|index| self.panes[index].thread())
             .collect();
         let (base, mut panes) = match board {
             Board::Group(group) => {
@@ -2876,7 +2893,7 @@ impl CockpitView {
         };
         let readers: Vec<(ThreadId, ThreadId)> = readers
             .into_iter()
-            .map(|owner| (pane_leaf(owner), reader_leaf(owner)))
+            .map(|owner| (owner, reader_leaf(owner)))
             .filter(|(owner, _)| panes.contains(owner))
             .collect();
         let mut tree = base;
@@ -2945,9 +2962,10 @@ impl CockpitView {
     }
 
     /// Every visible Pane's rect on the board, in window coordinates —
-    /// from the board's tree, or the one Solo cell. Reader slots are no
-    /// Panes and are left out. Fullscreen is the
-    /// whole board.
+    /// from the board's tree as this frame draws it (or, measuring at rest,
+    /// where every reader's slide ends), or the one Solo cell. Reader slots
+    /// are no Panes and are left out. Fullscreen is the whole board, split
+    /// with its reader.
     fn pane_rects(&self, window: &Window) -> Vec<(usize, layout::Rect)> {
         let bounds = self.board_bounds(window);
         if self.projects.coordinator_shown() {
@@ -2967,15 +2985,14 @@ impl CockpitView {
                 })
                 .unwrap_or_default();
         }
-        if let Some(identity) = self.cockpit.roster().fullscreen() {
-            return self
-                .index_of(identity)
-                .map(|index| vec![(index, bounds)])
-                .unwrap_or_default();
-        }
         if let Some(board) = self.board() {
             let Some(tree) = self.board_tree(board) else {
                 return Vec::new();
+            };
+            let tree = if self.nav_measure_rest.get() || self.nav_measure_full.get() {
+                self.rest_tree(tree)
+            } else {
+                self.slid_tree(tree, bounds)
             };
             return tree
                 .rects(bounds, crate::theme::BOARD_SEAM)
@@ -2985,6 +3002,12 @@ impl CockpitView {
                     Slot::Reader(_) => None,
                 })
                 .collect();
+        }
+        if let Some(identity) = self.cockpit.roster().fullscreen() {
+            return self
+                .index_of(identity)
+                .map(|index| vec![(index, bounds)])
+                .unwrap_or_default();
         }
         // Solo is one Pane — or a pending pair (a draft beside its Thread),
         // laid out on the same default grid a Group gets.
@@ -3696,11 +3719,7 @@ impl CockpitView {
                 });
                 if let (Some((path, number)), Some(index)) = (place, self.pane_for(thread)) {
                     self.focus_pane(index);
-                    let reader = beside::Beside::Reader {
-                        path,
-                        line: Some(number),
-                    };
-                    self.open_beside(reader, window, cx);
+                    self.open_preview(path, Some(number), window, cx);
                 }
             }
             (MenuTarget::Review { thread, .. }, MenuVerb::CopySelection) => {
@@ -3873,10 +3892,12 @@ impl CockpitView {
         )
     }
 
-    /// A board: Panes and readers at their tree rects, seams over the
-    /// gaps, the drop preview on top. Coordinates are the board's own — the
-    /// frame is `relative`, its origin the nav's right edge — so the rects
-    /// the tree computes for the window are shifted back by that origin.
+    /// A board: Panes and readers at their tree rects as this frame draws
+    /// them (`slid_tree`: a reader sliding takes the room it has so far),
+    /// seams over the gaps, the drop preview on top. Coordinates are the
+    /// board's own — the frame is `relative`, its origin the nav's right
+    /// edge — so the rects the tree computes for the window are shifted
+    /// back by that origin.
     fn tree_board(
         &self,
         on: Board,
@@ -3894,7 +3915,17 @@ impl CockpitView {
         // One Level for the whole board: no Pane draws a tier its
         // neighbours do not (rule 2.3.5).
         let level = self.board_level(window);
-        let rects = tree.rects(bounds, crate::theme::BOARD_SEAM);
+        let rest: std::collections::HashMap<ThreadId, layout::Rect> = tree
+            .rects(bounds, crate::theme::BOARD_SEAM)
+            .into_iter()
+            .collect();
+        let tree = self.slid_tree(tree, bounds);
+        // A slot slid all the way shut takes no room and draws nothing.
+        let rects: Vec<(ThreadId, layout::Rect)> = tree
+            .rects(bounds, crate::theme::BOARD_SEAM)
+            .into_iter()
+            .filter(|(_, rect)| rect.w > 0.0 && rect.h > 0.0)
+            .collect();
         *self.slot_sizes.borrow_mut() = rects
             .iter()
             .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
@@ -3912,7 +3943,10 @@ impl CockpitView {
                     self.pane_slot(index, level, window, cx)
                 }
                 Slot::Reader(owner) => {
-                    let Some(cell) = self.reader_cell(owner, leaf, cx) else {
+                    let pin = rest
+                        .get(&leaf)
+                        .and_then(|at_rest| beside::reader_pin(&tree, leaf, rect, *at_rest));
+                    let Some(cell) = self.reader_cell(owner, leaf, pin, cx) else {
                         continue;
                     };
                     // A reader is a card beside the Pane, at rest.
@@ -4121,6 +4155,7 @@ impl CockpitView {
     /// A press on a seam: the drag begins from the persisted tree, and
     /// the moves until release re-derive the ratio from the pointer.
     fn begin_seam_drag(&mut self, board: Board, seam: SeamId, cx: &mut Context<Self>) {
+        self.land_reader_slides(cx);
         let Some(tree) = self.board_tree(board) else {
             return;
         };
@@ -4226,9 +4261,7 @@ impl CockpitView {
         };
         let view = self.cockpit.roster().view();
         let shown = match leaf_slot(target) {
-            Slot::Pane(PaneIdentity::Thread(shown)) | Slot::Reader(PaneIdentity::Thread(shown)) => {
-                Some(shown)
-            }
+            Slot::Pane(PaneIdentity::Thread(shown)) | Slot::Reader(shown) => Some(shown),
             _ => None,
         };
         // Groups are non-exclusive (R1): the board's Group is the one being
@@ -4653,7 +4686,7 @@ impl CockpitView {
             self.refresh_names();
         }
         let reading = self.prefs.settings.reading_size;
-        for review in self.panes.iter().filter_map(|pane| pane.preview.review()) {
+        for review in self.panes.iter().filter_map(|pane| pane.review.review()) {
             review.update(cx, |review, cx| review.set_reading(reading, cx));
         }
         cx.notify();
@@ -4701,8 +4734,8 @@ impl CockpitView {
     }
 
     /// Settings' line for one chime: the file it plays (or the built-in),
-    /// `play` to hear it, `choose…` for a file of the operator's own, and
-    /// `built-in` to go back.
+    /// `Play` to hear it, `Choose…` for a file of the operator's own, and
+    /// `Use built-in` to go back.
     fn sound_file_row(
         &self,
         id: &'static str,
@@ -4723,11 +4756,11 @@ impl CockpitView {
                 let _ = view.update(cx, |view, cx| view.choose_sound_file(sound, cx));
             }
         });
-        let mut acts = vec![("play", play), ("choose\u{2026}", choose)];
+        let mut acts = vec![("Play", play), ("Choose\u{2026}", choose)];
         if file.is_some() {
             let reset = self.setting_change(cx, move |s, ()| s.set_sound_file(sound, None));
             acts.push((
-                "built-in",
+                "Use built-in",
                 std::rc::Rc::new(move |cx: &mut gpui::App| reset((), cx)),
             ));
         }
@@ -6305,8 +6338,9 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// ⌘F: find in the focused Pane's transcript — or in its reader, when
-    /// the reader took the last press or holds the keyboard (`crate::find`).
+    /// ⌘F: find in the focused Pane's transcript — or in its preview, when
+    /// the preview took the last press or holds the keyboard
+    /// (`crate::find`).
     /// A wall tile draws no transcript to search.
     fn open_find(&mut self, _: &crate::find::Open, window: &mut Window, cx: &mut Context<Self>) {
         if self.level_now(window) == Level::Wall {
@@ -6317,8 +6351,8 @@ impl CockpitView {
             return;
         };
         let reading =
-            self.reader_pressed == Some(pane.identity) || pane.preview.reader_focused(window, cx);
-        if reading && self.open_reader_find(index, window, cx) {
+            self.preview_pressed == Some(pane.identity) || pane.preview.focused(window, cx);
+        if reading && self.preview_shown(index) && self.open_preview_find(index, window, cx) {
             return;
         }
         if let Some(transcript) = self.panes.get(index).and_then(PaneView::transcript) {
@@ -7160,10 +7194,11 @@ impl CockpitView {
                     selected = Some(rows.len());
                 }
                 // The picker's voice (the prototype's `#picker`): the CLI's
-                // own default reads `default`, every description
+                // own default reads `Default`, a name in sentence case as
+                // every model's is (SPEC §7), every description
                 // lowercase-first.
                 let name = if model.value == "default" {
-                    "default".to_string()
+                    "Default".to_string()
                 } else {
                     model.display.clone()
                 };
@@ -8332,19 +8367,18 @@ impl CockpitView {
                 view.attach_files(index, cx);
             }))
             .into_any_element();
-        let mut lead = vec![attach];
-        let mut trail = match pane.thread() {
-            None => {
-                lead.extend(self.draft_band_chips(index, cx));
-                self.draft_model_chips(index, cx)
-            }
-            Some(_) => {
-                lead.extend(self.mode_chip(index, cx));
-                self.model_chips(index, cx)
-            }
+        let (lead, trail) = match pane.thread() {
+            None => (
+                self.draft_band_chips(index, cx),
+                self.draft_model_chips(index, cx),
+            ),
+            Some(_) => (
+                self.mode_chip(index, cx).into_iter().collect(),
+                self.model_chips(index, cx),
+            ),
         };
-        trail.push(self.send_button(index, false, cx));
-        Some(pane::composer_toolbar(lead, trail).into_any_element())
+        let send = self.send_button(index, false, cx);
+        Some(pane::composer_toolbar(attach, lead, trail, send).into_any_element())
     }
 
     /// The send circle: Enter's act — or, while Main is busy (a turn runs
@@ -9262,12 +9296,18 @@ impl CockpitView {
     /// Close the focused Pane — cmd-w. The core decides what that means
     /// (park, leave, defer onto a draft, discard); the mirror follows.
     fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
-        // ⌘W in a reader closes the reader, not its Pane (F-14).
-        if let Some(index) = self.panes.iter().position(|pane| {
-            pane.preview.document().is_some() && pane.preview.reader_focused(window, cx)
-        }) {
-            self.close_reader(index, cx);
-            return;
+        // ⌘W in the focused Pane's preview or Review closes that, not the
+        // Pane (F-14).
+        let index = self.focused();
+        if let Some(pane) = self.panes.get(index) {
+            if self.preview_shown(index) && pane.preview.focused(window, cx) {
+                self.close_preview(index, cx);
+                return;
+            }
+            if pane.review.focused(window, cx) {
+                self.close_review(index, cx);
+                return;
+            }
         }
         let Some(identity) = self.cockpit.roster().focused() else {
             return;
@@ -9756,7 +9796,7 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::motion::hover_frame_start(cx);
-        self.tend_reader_finds(window);
+        self.tend_reader_slides(cx);
         // Seen is on screen while the window has focus: the Cockpit follows
         // the window's activation from its first frame — a window that opens
         // unfocused sees nothing until it is focused — and the window coming
@@ -9772,27 +9812,32 @@ impl Render for CockpitView {
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
-        // hover blend or the nav's width mid-flight keeps frames coming;
-        // with neither, nothing is scheduled (the pulse clock drives loops).
-        let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
-        let nav_moving = self
-            .nav_tween
-            .is_some_and(|tween| tween.running(now, reduced));
+        // hover blend, a column's width (the nav's, the panel's) or a
+        // reader's slide mid-flight keeps frames coming; with none, nothing
+        // is scheduled (the pulse clock drives loops).
+        // Each reads what this frame drew, never the clock again: a ride
+        // that ended between the draw and here still asks for the one frame
+        // that lands it at rest. A scene's held ride asks for none.
+        let column_moving = self.nav_ride.get().is_some() && self.nav_hold.is_none();
+        let sliding = self.reader_slides.moving() || self.panel_riding();
         let fading = crate::motion::hover_fades_active();
-        if nav_moving {
-            // The column's width moves the whole board: every part redraws.
+        if column_moving {
+            // The nav's width moves the whole board, and the nav with it:
+            // every part redraws.
             window.request_animation_frame();
-        } else if fading {
+        } else if fading || sliding {
             // A blend is drawn again by the view that paints it alone: a
             // part (a nav row, a Pane's control, a transcript's link), or,
-            // for the frame's own controls, the frame around the parts.
-            let root = cx.entity_id();
-            let frame = self.frame_tick_id();
-            let views: Vec<_> = crate::motion::hover_fading_views()
-                .into_iter()
-                .map(|view| if view == root { frame } else { view })
-                .collect();
+            // for the frame's own controls, the frame around the parts
+            // (`motion::frames_through`). A Review's slide and the Panel's
+            // ride redraw the frame, which lays the board and the Panel
+            // out: only the parts whose cells move are built again (their
+            // cache holds their bounds), the rest — the nav — replay.
+            let mut views = crate::motion::hover_fading_views();
+            let frame = crate::motion::frames_through(cx.entity_id());
+            if sliding && !views.contains(&frame) {
+                views.push(frame);
+            }
             if views.is_empty() {
                 window.request_animation_frame();
             } else {
@@ -9901,8 +9946,10 @@ impl CockpitView {
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
         // The board rides the sidebar's width every frame of a cmd-B fold
-        // (F-12); a Solo pair lasts while focus stays on one of its Panes.
+        // (F-12), and the panel's as it comes and goes; a Solo pair lasts
+        // while focus stays on one of its Panes.
         self.nav_ride.set(self.nav_ride_now(cx));
+        self.ride_panel(window, cx);
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
@@ -10111,17 +10158,20 @@ impl CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
-            // A review beside the focused Pane keeps the keyboard it took,
-            // from its first frame (its comment field's too).
+            // A review beside the focused Pane, or an image in its preview
+            // while the Panel shows it, keeps the keyboard it took, from its
+            // first frame (a review's comment field's too).
             .or_else(|| {
-                self.panes
-                    .get(self.focused())
-                    .and_then(|pane| pane.preview.review())
-                    .and_then(|review| review.read(cx).held_focus(window, cx))
+                let index = self.focused();
+                let pane = self.panes.get(index)?;
+                pane.review.held_focus(window, cx).or_else(|| {
+                    self.preview_shown(index)
+                        .then(|| pane.preview.held_focus(window, cx))
+                        .flatten()
+                })
             })
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
-                    _ if pane.preview.focus_target().is_some() => pane.preview.focus_target(),
                     // A parked member's tile draws no Composer: the root holds
                     // the keyboard, where ⏎ wakes it (F-8).
                     _ if pane
@@ -10189,15 +10239,19 @@ impl CockpitView {
                         && !pane.controls_focus.is_focused(window)
                         && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
             });
-        // A reader sits beside its Pane, outside the transcript, so its text
-        // needs its own exemption or a click to select in it is undone.
-        let reader_text_focused = self
-            .panes
-            .iter()
-            .any(|pane| pane.preview.reader_text_focused(window, cx));
+        // The focused Pane's preview and Review sit outside its transcript,
+        // so their text needs its own exemption or a click to select in it
+        // is undone. The focused Pane's only: focus moving to another Pane
+        // takes the keyboard with it, and the image viewer's own focus is
+        // no text (`Preview::text_focused`).
+        let reader_text_focused = self.panes.get(self.focused()).is_some_and(|pane| {
+            (self.preview_shown(self.focused()) && pane.preview.text_focused(window, cx))
+                || pane.review.inner_focused(window, cx)
+        });
         // The find bar's line keeps the keyboard while the operator types.
         let find_focused = self.panes.get(self.focused()).is_some_and(|pane| {
-            pane.reader_find
+            pane.preview_tab
+                .find
                 .as_ref()
                 .is_some_and(|find| find.holds_focus(window, cx))
                 || pane
@@ -10242,16 +10296,17 @@ impl CockpitView {
         // The cards start under the head row (`titlebar::board_top`), with
         // `BOARD_PAD` of frame under them and right of them — none at the
         // right beside the panel, whose column is the frame there
-        // (`board_bounds`).
+        // (`board_bounds`), riding or at rest.
         let board_top = crate::titlebar::board_top();
-        let panel_shown = self.panel_thread().is_some();
+        let panel_w = self.panel_column_w();
+        let frame_right = self.board_right() - panel_w;
         let frame = || {
             div()
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
                 .pt(px(board_top))
-                .when(!panel_shown, |frame| frame.pr(px(crate::theme::BOARD_PAD)))
+                .pr(px(frame_right))
                 .pb(px(crate::theme::BOARD_PAD))
         };
         let visible = self.visible_indices();
@@ -10276,9 +10331,10 @@ impl CockpitView {
         } else if self.empty_shown && fullscreen.is_none() {
             // Shown on purpose while Threads stay open (`show_empty_board`).
             frame().flex().child(self.empty_board(cx))
-        } else if let Some(index) = fullscreen {
-            // The fullscreened Pane takes the whole window. The other Panes
-            // are not laid out at all — hidden siblings would still cost
+        } else if let Some(index) = fullscreen.filter(|index| !self.has_reader(*index)) {
+            // The fullscreened Pane takes the whole window (with a reader,
+            // its own cell splits: the board below). The other Panes are
+            // not laid out at all — hidden siblings would still cost
             // layout — while their Sessions keep streaming through the pump
             // regardless (#20).
             frame()
@@ -10455,10 +10511,10 @@ impl CockpitView {
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
             .map(|root| self.register_palette_actions(root, cx))
-            // Every press forgets the reader; one in a reader marks it again
-            // as it bubbles (`reader_cell`).
+            // Every press forgets the preview; one in a preview marks it
+            // again as it bubbles (`panel_preview`).
             .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
-                view.reader_pressed = None;
+                view.preview_pressed = None;
             }))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press. Moves
@@ -10577,11 +10633,7 @@ impl CockpitView {
                             .absolute()
                             .top_0()
                             .bottom_0()
-                            .right(px(if panel_shown {
-                                crate::theme::PANEL_W
-                            } else {
-                                0.
-                            }))
+                            .right(px(panel_w))
                             .left(px(self.board_left()))
                             .flex()
                             .child(grid),
@@ -10600,8 +10652,10 @@ impl CockpitView {
             ))
             .children(self.view_head(cx))
             // The panel over the strip's right end: its tabs take
-            // their presses, the gaps between them still drag.
+            // their presses, the gaps between them still drag. Its toggle
+            // over both heads, in one place.
             .children(self.panel_element(window, cx))
+            .children(self.panel_toggle_element(cx))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
             .children(self.session_controls_element(window, cx))
@@ -10634,7 +10688,6 @@ impl CockpitView {
         if self.settings_open || self.project_editor.is_some() {
             return content;
         }
-        let content = self.panes[index].preview.mount(content);
         if !self.panes[index].is_main() {
             return content;
         }
@@ -10908,12 +10961,20 @@ impl CockpitView {
         let view = self.cockpit.roster().view();
         let empty = self.empty_board_shown();
         let mut tabs = Vec::new();
-        let solo = self
-            .panes
-            .iter()
-            .filter_map(PaneView::thread)
-            .filter(|thread| self.cockpit.groups().of(*thread).is_none())
-            .max_by_key(|thread| self.last_used(*thread));
+        // Solo's one Thread: the one it shows while it is the view, else
+        // the loose Thread used last, where a press on the tab lands. (The
+        // Thread written last is not always the one on screen: the current
+        // tab's dot must not speak for another, nor its press move off it.)
+        let solo = (!empty && view == View::Solo)
+            .then(|| self.focused_thread())
+            .flatten()
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .filter_map(PaneView::thread)
+                    .filter(|thread| self.cockpit.groups().of(*thread).is_none())
+                    .max_by_key(|thread| self.last_used(*thread))
+            });
         // A tab's dot rolls up the Threads its view shows: Solo's one
         // Thread, a Group's members.
         let roll_up = |threads: &mut dyn Iterator<Item = ThreadId>| {
@@ -12691,9 +12752,13 @@ impl CockpitView {
     fn notice_handle(&self, cx: &mut Context<Self>) -> Handle {
         let view = cx.entity().downgrade();
         std::rc::Rc::new(move |verb, window, cx| {
-            let _ = view.update(cx, |view, cx| match verb {
-                Verb::Answer(id, answer) => view.answer_from_toast(id, answer, window, cx),
-                verb => view.notice_verb(verb, cx),
+            let _ = view.update(cx, |view, cx| {
+                // An answered toast goes at once (`ToastStage::dismiss`).
+                view.toast_stage.borrow_mut().dismiss();
+                match verb {
+                    Verb::Answer(id, answer) => view.answer_from_toast(id, answer, window, cx),
+                    verb => view.notice_verb(verb, cx),
+                }
             });
         })
     }
@@ -12743,7 +12808,7 @@ impl CockpitView {
             title,
             state,
             detail,
-            when: crate::facts::age_label(notice.at, now),
+            when: crate::facts::since_label(notice.at, now),
             read: notice.read,
             folded: Vec::new(),
         }
@@ -12995,7 +13060,7 @@ impl CockpitView {
             title: self.facts.name(thread),
             state: State::NeedsYou(notice.kind),
             detail,
-            when: crate::facts::age_label(notice.at, now),
+            when: crate::facts::since_label(notice.at, now),
             read: notice.read,
             folded: Vec::new(),
         }
@@ -13243,6 +13308,7 @@ impl CockpitView {
                             nav::RowPlace::ROOT,
                             None,
                             false,
+                            0,
                             &nav::Measure::Text(cx),
                         );
                         div()
@@ -13272,9 +13338,11 @@ impl CockpitView {
                     list = list.child(nav::note("nav-parked-empty", "Nothing parked"));
                 }
                 let sections = self.view_tree(state.parked.clone());
-                list = list.children(self.view_sections(&sections, cx, |view, row, place, cx| {
-                    view.thread_element(row, None, place, cx)
-                }));
+                list = list.children(self.view_sections(
+                    &sections,
+                    cx,
+                    |view, row, place, ends, cx| view.thread_element(row, None, place, ends, cx),
+                ));
                 let list = if self.machine_lost() {
                     machines::held(list, "machine-lost-parked")
                 } else {
@@ -13295,7 +13363,7 @@ impl CockpitView {
                 let list = nav::view_list("nav-view-smart-list").children(self.view_sections(
                     &sections,
                     cx,
-                    |_, row, place, cx| {
+                    |_, row, place, ends, cx| {
                         let thread = row.thread;
                         nav::thread_row_with_title(
                             row,
@@ -13303,6 +13371,7 @@ impl CockpitView {
                             place,
                             None,
                             false,
+                            ends,
                             &nav::Measure::Text(cx),
                         )
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -13378,30 +13447,38 @@ impl CockpitView {
     /// Project heading over its rows, one level in with the Project's
     /// guide, each Group's row (a press opens it, its chevron folds it as
     /// the tree's does) over its members, one level further with the
-    /// Group's guide. `thread` draws a row and wires its press, which
-    /// differs by view.
+    /// Group's guide. `thread` draws a row (its place, and how many of its
+    /// guides end at it) and wires its press, which differs by view.
     fn view_sections(
         &self,
         sections: &[nav::ViewSection],
         cx: &mut Context<Self>,
-        thread: impl Fn(&Self, &nav::ThreadRow, nav::RowPlace, &mut Context<Self>) -> AnyElement,
+        thread: impl Fn(&Self, &nav::ThreadRow, nav::RowPlace, usize, &mut Context<Self>) -> AnyElement,
     ) -> Vec<AnyElement> {
         sections
             .iter()
             .enumerate()
             .map(|(index, section)| {
+                let loose = section.solos.len();
                 let mut rows: Vec<AnyElement> = section
                     .solos
                     .iter()
-                    .map(|row| thread(self, row, nav::RowPlace::Row(1), cx))
+                    .enumerate()
+                    .map(|(at, row)| {
+                        let ends = usize::from(at + 1 == loose && section.groups.is_empty());
+                        thread(self, row, nav::RowPlace::Row(1), ends, cx)
+                    })
                     .collect();
-                for group in &section.groups {
+                for (at, group) in section.groups.iter().enumerate() {
                     let id = group.id;
+                    let last = at + 1 == section.groups.len();
+                    let shut = group.folded || group.members.is_empty();
                     let head = nav::group_row_with_title(
                         group,
                         group.title.clone(),
                         self.group_fold(group, cx),
                         1,
+                        usize::from(last && shut),
                         &nav::Measure::Text(cx),
                     )
                     .on_mouse_down(
@@ -13412,12 +13489,17 @@ impl CockpitView {
                     );
                     let mut block = nav::group_block(id).child(head);
                     if !group.folded {
+                        let count = group.members.len();
                         let members = group
                             .members
                             .iter()
-                            .map(|row| thread(self, row, nav::RowPlace::Row(2), cx))
+                            .enumerate()
+                            .map(|(at, row)| {
+                                let ends = member_ends(last, at, count);
+                                thread(self, row, nav::RowPlace::Row(2), ends, cx)
+                            })
                             .collect();
-                        block = block.child(nav::members(id, 1, members));
+                        block = block.child(nav::members(members));
                     }
                     rows.push(block.into_any_element());
                 }
@@ -13427,7 +13509,7 @@ impl CockpitView {
                         section.label.clone(),
                         &nav::Measure::Text(cx),
                     ))
-                    .child(nav::project_rows(index, rows))
+                    .child(nav::project_rows(rows))
                     .into_any_element()
             })
             .collect()
@@ -13436,12 +13518,20 @@ impl CockpitView {
     /// The Needs-you list's `Recent` heading, with `Mark all read` at its
     /// right: every row read, none removed.
     fn recent_heading(&self, cx: &mut Context<Self>) -> Div {
+        // A text control in the heading's ink, the `+`'s height and its
+        // ground under the pointer and pressed, so it reads as one.
         nav::heading("nav-recent", "Recent").child(
             div()
                 .id("notifications-mark-read")
                 .debug_selector(|| "notifications-mark-read".into())
+                .flex()
                 .flex_shrink_0()
+                .items_center()
+                .h(px(crate::theme::NAV_HEADING_BUTTON))
                 .px(px(crate::theme::SPACE_1))
+                .rounded(px(crate::theme::R_SMALL))
+                .hover_row("notifications-mark-read")
+                .press_row()
                 .font_weight(crate::theme::W_BODY)
                 .child("Mark all read")
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
@@ -13613,14 +13703,18 @@ impl CockpitView {
                 let depth = usize::from(!section.mixed);
                 let mut rows: Vec<AnyElement> = Vec::new();
                 if !section.solos.is_empty() {
+                    let loose = section.solos.len();
                     let solos = section
                         .solos
                         .iter()
-                        .map(|row| {
+                        .enumerate()
+                        .map(|(at, row)| {
+                            let last = at + 1 == loose && section.groups.is_empty();
                             self.thread_element(
                                 &state.solos[*row],
                                 None,
                                 nav::RowPlace::Row(depth),
+                                usize::from(last),
                                 cx,
                             )
                         })
@@ -13628,13 +13722,14 @@ impl CockpitView {
                     rows.push(self.loose_run(zones, solos, cx));
                     zones += 1;
                 }
-                for group in &section.groups {
-                    rows.push(self.group_element(&state.groups[*group], depth, origin, cx));
+                for (at, group) in section.groups.iter().enumerate() {
+                    let last = at + 1 == section.groups.len();
+                    rows.push(self.group_element(&state.groups[*group], depth, last, origin, cx));
                 }
                 block = if section.mixed {
                     block.children(rows)
                 } else {
-                    block.child(nav::project_rows(index, rows))
+                    block.child(nav::project_rows(rows))
                 };
             }
             own.push(block.into_any_element());
@@ -13766,11 +13861,13 @@ impl CockpitView {
     /// the way in, its triangle the fold (N-4) — then, unfolded, the member
     /// rows; and over the header's top edge the "insert before this Group"
     /// drop band, laid last so it is the topmost target there. Its row is
-    /// `depth` levels into the tree, its members one further.
+    /// `depth` levels into the tree, its members one further; `last` says
+    /// it closes its section, so the section's guide ends at its last row.
     fn group_element(
         &self,
         group: &nav::GroupBlock,
         depth: usize,
+        last: bool,
         origin: View,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -13787,7 +13884,15 @@ impl CockpitView {
         let folded = group.folded;
         let fold = self.group_fold(group, cx);
         let title = self.editable_group_title(id, group.title.clone(), cx);
-        let head = nav::group_row_with_title(group, title, fold, depth, &nav::Measure::Text(cx));
+        let shut = folded || group.members.is_empty();
+        let head = nav::group_row_with_title(
+            group,
+            title,
+            fold,
+            depth,
+            usize::from(last && shut),
+            &nav::Measure::Text(cx),
+        );
         let chip = NavChip::Group(group.clone());
         let lifted = self.nav_dragging == Some(Drag::Group(id));
         let mut block = nav::group_block(id)
@@ -13830,22 +13935,27 @@ impl CockpitView {
             // Pane's title strong (§5.1.6); any other Group's are two-line
             // rows, nested under it.
             let focused = self.cockpit.roster().focused_thread();
+            let count = group.members.len();
             let rows = group
                 .members
                 .iter()
-                .map(|row| {
+                .enumerate()
+                .map(|(at, row)| {
+                    let ends = member_ends(last, at, count);
                     if group.selected {
                         let member = nav::ThreadRow {
                             selected: focused == Some(row.thread),
                             ..row.clone()
                         };
-                        self.thread_element(&member, Some(id), nav::RowPlace::Member(depth), cx)
+                        let place = nav::RowPlace::Member(depth);
+                        self.thread_element(&member, Some(id), place, ends, cx)
                     } else {
-                        self.thread_element(row, Some(id), nav::RowPlace::Row(depth + 1), cx)
+                        let place = nav::RowPlace::Row(depth + 1);
+                        self.thread_element(row, Some(id), place, ends, cx)
                     }
                 })
                 .collect();
-            let mut members = nav::members(id, depth, rows);
+            let mut members = nav::members(rows);
             // Appending to the Group means dropping past its last row —
             // an index one beyond the end, aimed at the last member.
             if let Some(last) = group.members.last().map(|row| row.thread) {
@@ -13904,6 +14014,7 @@ impl CockpitView {
         row: &nav::ThreadRow,
         group: Option<GroupId>,
         place: nav::RowPlace,
+        ends: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thread = row.thread;
@@ -13925,8 +14036,15 @@ impl CockpitView {
             &self.rename,
             Some((RenameTarget::Thread(editing), _)) if *editing == thread
         );
-        let head =
-            nav::thread_row_with_title(row, title, place, group, editing, &nav::Measure::Text(cx));
+        let head = nav::thread_row_with_title(
+            row,
+            title,
+            place,
+            group,
+            editing,
+            ends,
+            &nav::Measure::Text(cx),
+        );
         let face = self.thread_ghost(thread);
         let nav_edge = self.nav_width();
         let chip = NavChip::Thread(row.clone());
@@ -13982,6 +14100,19 @@ impl CockpitView {
     }
 }
 
+/// How many of a nav member row's guides end at it (`nav::guides`),
+/// innermost first: none above its Group's last member; there its Group's,
+/// and its section's too when its Group is the section's last (`last`).
+/// The row clamps the count to the levels it has (a Group at the root has
+/// no section guide).
+fn member_ends(last: bool, at: usize, count: usize) -> usize {
+    if at + 1 == count {
+        1 + usize::from(last)
+    } else {
+        0
+    }
+}
+
 /// What a Project heading says of its rows' checkouts
 /// (`CockpitView::section_checkout`): the shared branch and whether it is
 /// the default, and its drift (ahead, behind) when that is shared too.
@@ -13990,14 +14121,12 @@ type SectionCheckout = (Option<(SharedString, bool)>, Option<(u32, u32)>);
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.
 /// A slot's leaf in a board's tree. A Thread's Pane is its own id; drafts
-/// and readers are no Threads and never persist, so stand-in ids nothing
-/// real reaches name them: a draft counts down from the top, and a reader
-/// is its Pane's number under the `READER_LEAF` bit (`READER_DRAFT` marks
-/// a draft's reader).
+/// and reader slots are no Threads and never persist, so stand-in ids
+/// nothing real reaches name them: a draft counts down from the top, and a
+/// reader slot is its Thread's number under the `READER_LEAF` bit.
 const READER_LEAF: u64 = 1 << 62;
-const READER_DRAFT: u64 = 1 << 61;
 
-/// A reader's share of its Pane's slot when it first opens beside it.
+/// A Review's share of its Pane's slot when it first opens beside it.
 const READER_SHARE: f32 = crate::theme::READER_SHARE;
 
 /// The approval a wall tile's digit gives (R9): `1` allow, `2` allow for
@@ -14018,11 +14147,8 @@ fn pane_leaf(identity: PaneIdentity) -> ThreadId {
     }
 }
 
-fn reader_leaf(owner: PaneIdentity) -> ThreadId {
-    ThreadId::new(match owner {
-        PaneIdentity::Thread(thread) => READER_LEAF | thread.get(),
-        PaneIdentity::Draft(draft) => READER_LEAF | READER_DRAFT | draft.get(),
-    })
+fn reader_leaf(owner: ThreadId) -> ThreadId {
+    ThreadId::new(READER_LEAF | owner.get())
 }
 
 fn leaf_slot(leaf: ThreadId) -> Slot {
@@ -14035,12 +14161,7 @@ fn leaf_slot(leaf: ThreadId) -> Slot {
     if raw & READER_LEAF == 0 {
         return Slot::Pane(PaneIdentity::Thread(leaf));
     }
-    let number = raw & !(READER_LEAF | READER_DRAFT);
-    Slot::Reader(if raw & READER_DRAFT != 0 {
-        PaneIdentity::Draft(ferrite_core::roster::DraftId::new(number))
-    } else {
-        PaneIdentity::Thread(ThreadId::new(number))
-    })
+    Slot::Reader(ThreadId::new(raw & !READER_LEAF))
 }
 
 /// A drag move's pointer and the hovered slot's bounds, in the tree's units.
@@ -14128,13 +14249,16 @@ mod tests {
     mod find;
     mod floats_parity;
     mod frame_parity;
+    mod image_viewer;
     mod interaction_regressions;
     mod layout_polish;
     mod leaving;
+    mod link_clicks;
     mod loops_overlay;
     mod machines;
     mod nav_parity;
     mod panel;
+    mod panel_preview;
     mod pr;
     mod pr_tab;
     #[cfg(unix)]
@@ -14142,6 +14266,7 @@ mod tests {
     mod provider_controls;
     mod provider_forms;
     mod provider_navigation;
+    mod reader_motion;
     mod render_performance;
     mod retention;
     mod review;
@@ -15344,7 +15469,9 @@ mod tests {
         // The queue stays flat: no Project heading, no guide, every row at
         // the root, so its order is the queue's.
         assert!(cx.debug_bounds("nav-view-project-0").is_none());
-        assert!(cx.debug_bounds("nav-guide-project-0").is_none());
+        assert!(cx
+            .debug_bounds(format!("nav-guide-{}-0", threads[2].get()).leak())
+            .is_none());
         let title = cx
             .debug_bounds(format!("nav-title-{}", threads[2].get()).leak())
             .expect("its title");
@@ -15508,7 +15635,9 @@ mod tests {
             .debug_bounds("nav-view-project-0")
             .expect("its Project's heading");
         assert!(heading.bottom() <= row.top());
-        assert!(cx.debug_bounds("nav-guide-project-0").is_some());
+        assert!(cx
+            .debug_bounds(format!("nav-guide-{}-0", away.get()).leak())
+            .is_some());
         assert!(
             cx.debug_bounds("nav-project-summary-0").is_none(),
             "no summary"
@@ -19756,9 +19885,9 @@ mod tests {
         );
         assert!(
             cx.debug_bounds("panel").is_some(),
-            "the panel stays beside the reader"
+            "the preview is the Panel's"
         );
-        view.update(cx, |view, cx| view.close_reader(0, cx));
+        view.update(cx, |view, cx| view.close_preview(0, cx));
         tick(cx);
         let code = cx
             .debug_bounds("panel-file-1")
@@ -24009,10 +24138,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The image viewer's head opens the original with the OS by its
+    /// canonical file URL, leaving the viewer open and sending nothing;
+    /// esc then closes the slot.
     #[gpui::test]
-    fn image_preview_opens_the_canonical_original_without_sending_or_closing(
-        cx: &mut TestAppContext,
-    ) {
+    fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("open-original-image", 1);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -24027,12 +24157,12 @@ mod tests {
         view.update_in(cx, |view, window, cx| {
             view.panes[0]
                 .preview
-                .open(unresolved, "Screenshot".into(), window, cx);
+                .open(unresolved, None, &[], window, cx);
         });
         tick(cx);
         let open = cx
-            .debug_bounds("open-original-attachment")
-            .expect("the preview exposes its original image");
+            .debug_bounds("open-original-image")
+            .expect("the viewer's head offers the original");
         cx.simulate_click(open.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         let opened =
@@ -24047,10 +24177,16 @@ mod tests {
             fake.sent.borrow().is_empty(),
             "inspection never submits a prompt"
         );
-        assert!(cx.debug_bounds("attachment-preview-content").is_some());
+        assert!(cx.debug_bounds("image-viewer").is_some());
         cx.simulate_keystrokes("escape");
         tick(cx);
-        assert!(cx.debug_bounds("attachment-preview-content").is_none());
+        assert!(cx.debug_bounds("image-viewer").is_none());
+        assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            0,
+            "esc closed the image, not the turn"
+        );
     }
 
     #[gpui::test]
@@ -24135,14 +24271,14 @@ mod tests {
                 "the attachment island stays above the editable prompt"
             );
             // The thumbnail overlay and card share a hit area: one click must
-            // open one preview, so one Escape must dismiss it completely.
+            // open one image, so one Escape must close it completely.
             let island = cx.debug_bounds("attachment-island-content").unwrap();
             cx.simulate_click(
                 island.origin + gpui::point(px(24.), island.size.height / 2.),
                 gpui::Modifiers::none(),
             );
             tick(cx);
-            let popup = cx.debug_bounds("attachment-preview-content").unwrap();
+            let viewer = cx.debug_bounds("image-viewer").unwrap();
             let owner = cx.update(|window, cx| {
                 let view = view.read(cx);
                 view.pane_rects(window)
@@ -24151,14 +24287,15 @@ mod tests {
                     .unwrap()
                     .1
             });
-            assert!((popup.center().x - px(owner.x + owner.w / 2.)).abs() <= px(2.));
-            assert!((popup.center().y - px(owner.y + owner.h / 2.)).abs() <= px(2.));
-            assert!(popup.size.width < px(owner.w) && popup.size.height < px(owner.h));
+            assert!(
+                viewer.left() >= px(owner.x + owner.w),
+                "the image opens in the Panel beside its Pane: {viewer:?} / {owner:?}"
+            );
             cx.simulate_keystrokes("escape");
             tick(cx);
             assert!(
-                cx.debug_bounds("attachment-preview-content").is_none(),
-                "one Escape dismisses the only preview"
+                cx.debug_bounds("image-viewer").is_none(),
+                "one Escape closes the only image"
             );
             cx.simulate_click(editor.center(), gpui::Modifiers::none());
             tick(cx);
@@ -24186,26 +24323,31 @@ mod tests {
                 keystroke: gpui::Keystroke::parse("enter").unwrap(),
             });
             tick(cx);
-            let popup = cx
-                .debug_bounds("attachment-preview-content")
-                .expect("keyboard image preview");
-            assert!(fake.sent.borrow().len() == n, "preview never submits");
+            let viewer = cx
+                .debug_bounds("image-viewer")
+                .expect("an image opened from the keyboard");
+            assert!(
+                fake.sent.borrow().len() == n,
+                "opening an image never submits"
+            );
             cx.simulate_resize(gpui::size(px(1000.), px(480.)));
             tick(cx);
             tick(cx);
-            let smaller = cx.debug_bounds("attachment-preview-content").unwrap();
+            let smaller = cx.debug_bounds("image-viewer").unwrap();
             assert!(
-                smaller.size.width < popup.size.width && smaller.size.height < popup.size.height,
-                "preview resizes with its pane: {popup:?} -> {smaller:?}"
+                smaller.size.height < viewer.size.height,
+                "the image's slot resizes with the board: {viewer:?} -> {smaller:?}"
             );
             cx.simulate_keystrokes("escape");
             tick(cx);
-            assert!(cx.debug_bounds("attachment-preview-content").is_none());
+            assert!(cx.debug_bounds("image-viewer").is_none());
             cx.simulate_resize(gpui::size(px(1200.), px(700.)));
             tick(cx);
             cx.executor().advance_clock(Duration::from_millis(300));
             cx.run_until_parked();
-            cx.simulate_keystrokes("tab tab");
+            // Esc handed the keyboard back to the Composer: past the
+            // image's two controls to the other file's ×.
+            cx.simulate_keystrokes("tab tab tab");
             tick(cx);
             cx.simulate_keystrokes("space");
             cx.simulate_event(gpui::KeyUpEvent {
@@ -24222,8 +24364,8 @@ mod tests {
                 );
             });
             assert!(
-                cx.debug_bounds("attachment-preview-content").is_none(),
-                "closed preview leaves no hitbox"
+                cx.debug_bounds("image-viewer").is_none(),
+                "a closed image leaves no hitbox"
             );
             // A repeated drop restores the removed file and deduplicates the image.
             cx.simulate_event(gpui::FileDropEvent::Entered {

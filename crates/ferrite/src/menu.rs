@@ -112,7 +112,7 @@ const ARMED_SEAM: &str = " \u{b7} ";
 const ARMED_ASK: &str = "press again";
 
 /// A row's inks: its label, and the ground (`FLOAT_SEL` on the cursor and
-/// an armed row). Its description and key are always `TEXT_DIM`.
+/// an armed row). Its description and key are `TEXT_DIM` (`detail_ink`).
 fn label_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
     if item.disabled {
         TEXT_DIM
@@ -122,6 +122,16 @@ fn label_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
         TEXT_STRONG
     } else {
         TEXT
+    }
+}
+
+/// A row's description and key: `TEXT_DIM`, lifted to `TEXT_MUTED` on
+/// the filled cursor row so they keep their floor on its step.
+fn detail_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
+    if armed || (cursor && !item.disabled) {
+        TEXT_MUTED
+    } else {
+        TEXT_DIM
     }
 }
 
@@ -150,6 +160,7 @@ pub fn key_label(keys: &str, ink: u32) -> AnyElement {
 /// with its label `TEXT_STRONG`.
 pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
     let ink = label_ink(item, cursor, armed);
+    let dim = detail_ink(item, cursor, armed);
     let (label, highlights): (SharedString, _) = if armed {
         let at = item.label.len();
         let text = format!("{}{ARMED_SEAM}{ARMED_ASK}", item.label);
@@ -198,11 +209,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         )
         .map(|row| match item.detail.clone() {
             Some(detail) => {
-                let cell = div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(TEXT_DIM));
+                let cell = div().flex_1().min_w_0().truncate().text_color(rgb(dim));
                 row.child(if item.mono {
                     cell.font_family(FONT_CODE)
                         .text_ellipsis_start()
@@ -214,12 +221,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
             None => row.child(div().flex_1()),
         })
         .when_some(item.shortcut.clone(), |row, keys| {
-            row.child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .child(key_label(&keys, TEXT_DIM)),
-            )
+            row.child(div().flex().flex_shrink_0().child(key_label(&keys, dim)))
         })
         .when(item.checked, |row| {
             row.child(
@@ -747,7 +749,11 @@ impl ChoiceContent {
             surface = surface.child(footer(&self.hints));
         }
         let menu = self.clone();
-        components::on_bounds(surface, move |bounds, window, cx| {
+        // It enters (`menu-in`, in place: it measures its own box) from its
+        // first frame on its measured place; until then it is drawn at zero
+        // opacity, so the entrance is keyed on being placed.
+        let entrance = ("choice-menu-in", self.state.read(cx).placed as usize);
+        let surface = components::on_bounds(surface, move |bounds, window, cx| {
             let place = menu.place;
             // Inside the surface's 1px edge: add it back.
             let bounds = bounds.dilate(px(1.));
@@ -786,8 +792,8 @@ impl ChoiceContent {
             if first {
                 menu.focus.focus(window, cx);
             }
-        })
-        .into_any_element()
+        });
+        crate::motion::menu_in(entrance, surface, crate::motion::Opens::InPlace).into_any_element()
     }
 
     fn step_ladder(self: &Rc<Self>, delta: isize, window: &mut gpui::Window, cx: &mut gpui::App) {

@@ -321,6 +321,69 @@ impl Tree {
         true
     }
 
+    /// The split `leaf` shares with its sibling: that split's axis, and
+    /// whether `leaf` is its `first`. None for a lone leaf or one not here.
+    pub fn side_of(&self, leaf: ThreadId) -> Option<(Axis, bool)> {
+        let mut path = Vec::new();
+        if !self.root.as_ref()?.path_to(leaf, &mut path) {
+            return None;
+        }
+        let second = path.pop()?;
+        let Some(Node::Split { axis, .. }) = self.node(&path) else {
+            return None;
+        };
+        Some((*axis, !second))
+    }
+
+    /// Each `(leaf, reveal)` drawn `reveal` of the way in (0 shut, 1 as
+    /// laid out): the leaf slides in along its split's axis from the side
+    /// away from its sibling, and the sibling gives up the room it takes,
+    /// the gap with it. At 0 the sibling fills the split's whole area; at 1
+    /// the split is as it was. Leaves are revealed outermost first, each in
+    /// the area the splits above it now give it. A frame of a slot opening
+    /// or closing beside a Pane: the ratios it leaves may lie outside 0..1
+    /// (`is_corrupt`), so the tree is for drawing, never for keeping. False
+    /// when no leaf named has a sibling.
+    pub fn reveal(&mut self, leaves: &[(ThreadId, f32)], bounds: Rect, gap: f32) -> bool {
+        let mut splits: Vec<(Vec<bool>, bool, f32)> = leaves
+            .iter()
+            .filter_map(|(leaf, reveal)| {
+                let mut path = Vec::new();
+                if !self.root.as_ref()?.path_to(*leaf, &mut path) {
+                    return None;
+                }
+                let second = path.pop()?;
+                Some((path, !second, reveal.clamp(0.0, 1.0)))
+            })
+            .collect();
+        splits.sort_by_key(|(path, ..)| path.len());
+        let mut changed = false;
+        for (path, leaf_first, reveal) in splits {
+            let seam = SeamId(path);
+            let Some((&Node::Split { axis, ratio, .. }, area)) = self.locate(&seam, bounds, gap)
+            else {
+                continue;
+            };
+            let length = axis.length(area);
+            let usable = length - gap;
+            if usable <= 0.0 {
+                continue;
+            }
+            let own = usable * if leaf_first { ratio } else { 1.0 - ratio };
+            let sibling = length - reveal * (own + gap);
+            let first = if leaf_first {
+                usable - sibling
+            } else {
+                sibling
+            };
+            if let Some(Node::Split { ratio, .. }) = self.node_mut(&seam.0) {
+                *ratio = first / usable;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Fit the tree to exactly `members`: a corrupt or empty tree is rebuilt
     /// as the default grid over `bounds`; otherwise stale leaves go and
     /// missing members come in (in `members` order), keeping the operator's
@@ -597,6 +660,17 @@ impl Tree {
             };
         }
         Some((node, area))
+    }
+
+    fn node(&self, path: &[bool]) -> Option<&Node> {
+        let mut node = self.root.as_ref()?;
+        for &step in path {
+            let Node::Split { first, second, .. } = node else {
+                return None;
+            };
+            node = if step { second } else { first };
+        }
+        Some(node)
     }
 
     fn node_mut(&mut self, path: &[bool]) -> Option<&mut Node> {
@@ -883,13 +957,21 @@ fn clamp_share(ratio: f32) -> f32 {
 
 /// The two areas a split hands its children: the length minus the gap is
 /// shared by `ratio`, and `second` ends where the area ends — so neither
-/// child ever leaves the area, even when the gap is wider than it.
+/// child ever leaves the area, even when the gap is wider than it, or a
+/// drawn ratio outside 0..1 (`Tree::reveal`) hands one child all of it.
 fn halves(axis: Axis, ratio: f32, area: Rect, gap: f32) -> (Rect, Rect) {
+    let share = |length: f32| {
+        let length = length.max(0.0);
+        let usable = (length - gap).max(0.0);
+        let first = usable * ratio;
+        (
+            first.clamp(0.0, length),
+            (usable - first).clamp(0.0, length),
+        )
+    };
     match axis {
         Axis::Row => {
-            let usable = (area.w - gap).max(0.0);
-            let first = usable * ratio;
-            let second = usable - first;
+            let (first, second) = share(area.w);
             (
                 Rect { w: first, ..area },
                 Rect {
@@ -900,9 +982,7 @@ fn halves(axis: Axis, ratio: f32, area: Rect, gap: f32) -> (Rect, Rect) {
             )
         }
         Axis::Column => {
-            let usable = (area.h - gap).max(0.0);
-            let first = usable * ratio;
-            let second = usable - first;
+            let (first, second) = share(area.h);
             (
                 Rect { h: first, ..area },
                 Rect {
@@ -1822,5 +1902,63 @@ mod tests {
         let rects = tree.rects(LAPTOP, GRID_GAP);
         let line = rects[0].1.y + rects[0].1.h + GRID_GAP / 2.0;
         assert!(close(line, 0.78 * LAPTOP.h), "{line}");
+    }
+
+    /// A slot sliding in beside a Pane: shut, the Pane has the split's
+    /// whole area and the slot none; halfway, it has given up half the
+    /// slot and its gap; open, the split is as laid out. The slot's far
+    /// edge never moves.
+    #[test]
+    fn a_revealed_leaf_slides_in_from_its_far_side() {
+        let bounds = rect(0.0, 0.0, 1008.0, 600.0);
+        let laid = of(split(Row, 0.5, leaf(1), leaf(2)));
+        let drawn = |reveal: f32| {
+            let mut tree = laid.clone();
+            assert!(tree.reveal(&[(id(2), reveal)], bounds, 8.0));
+            tree.rects(bounds, 8.0)
+        };
+        let shut = drawn(0.0);
+        assert!(same(shut[0].1, bounds), "{shut:?}");
+        assert!(close(shut[1].1.w, 0.0) && close(shut[1].1.x, 1008.0));
+        let half = drawn(0.5);
+        assert!(close(half[0].1.w, 1008.0 - 0.5 * (500.0 + 8.0)), "{half:?}");
+        assert!(close(half[1].1.x - (half[0].1.x + half[0].1.w), 8.0));
+        assert!(
+            close(half[1].1.x + half[1].1.w, 1008.0),
+            "the far edge holds"
+        );
+        assert_eq!(drawn(1.0), laid.rects(bounds, 8.0));
+        let mut shut = laid.clone();
+        shut.reveal(&[(id(2), 0.0)], bounds, 8.0);
+        assert!(shut.is_corrupt(), "a drawn tree says it is not for keeping");
+    }
+
+    /// A leaf first in its split slides in from the split's start, and a
+    /// column's leaf down its height; each reveal takes the area the
+    /// splits above it leave it, outermost first.
+    #[test]
+    fn reveals_follow_the_axis_and_nest_outermost_first() {
+        let bounds = rect(0.0, 0.0, 1008.0, 608.0);
+        let mut first = of(split(Row, 0.3, leaf(2), leaf(1)));
+        assert_eq!(first.side_of(id(2)), Some((Row, true)));
+        first.reveal(&[(id(2), 0.0)], bounds, 8.0);
+        let rects = first.rects(bounds, 8.0);
+        assert!(same(rects[1].1, bounds), "{rects:?}");
+        assert!(close(rects[0].1.w, 0.0) && close(rects[0].1.x, 0.0));
+
+        let mut column = of(split(Column, 0.5, leaf(1), leaf(2)));
+        assert_eq!(column.side_of(id(2)), Some((Column, false)));
+        column.reveal(&[(id(2), 0.0)], bounds, 8.0);
+        assert!(same(column.rects(bounds, 8.0)[0].1, bounds));
+
+        // 1 | 2 inside a split with 3: shutting both leaves 1 everything,
+        // whichever order they are named in.
+        let nested = of(split(Row, 0.5, split(Row, 0.5, leaf(1), leaf(2)), leaf(3)));
+        let mut tree = nested.clone();
+        tree.reveal(&[(id(2), 0.0), (id(3), 0.0)], bounds, 8.0);
+        assert!(same(tree.rects(bounds, 8.0)[0].1, bounds));
+        assert_eq!(nested.side_of(id(1)), Some((Row, true)));
+        assert_eq!(of(leaf(1)).side_of(id(1)), None, "a lone leaf");
+        assert!(!of(leaf(1)).reveal(&[(id(1), 0.0)], bounds, 8.0));
     }
 }
