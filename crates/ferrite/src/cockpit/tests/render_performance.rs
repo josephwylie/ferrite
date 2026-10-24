@@ -2345,14 +2345,40 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
     assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
 }
 
-/// The Needs-you toast (FL-18) rises in over `motion::TOAST_IN` and, when it
-/// goes on its own, fades away over `TOAST_OUT` as a face with no answers
-/// to press — frames only while it moves.
-#[gpui::test]
-fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
+/// One display frame: the clock moves on 16ms and the frame the window
+/// asked for, if it asked for one, is delivered (`1`; `0` when it asked
+/// for none, however many of its animations asked). With `rebuild_nav`,
+/// the nav part is rebuilt alone first, as a row's hover or a working
+/// row's clock does.
+fn display_frame(
+    view: &Entity<CockpitView>,
+    rebuild_nav: bool,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    if rebuild_nav {
+        view.update(cx, |view, cx| view.notify_part(super::parts::Part::Nav, cx));
+    }
+    cx.executor().advance_clock(Duration::from_millis(16));
+    cx.run_until_parked();
+    (display_frames(cx) > 0).into()
+}
+
+/// A finished Thread off the board toasts: the toast rises in and, when
+/// it times out, its face fades out where it stood. The clock moves a
+/// display frame at a time across both, as a display delivers them, so
+/// each fade starts where the clock is: a single jump across the toast's
+/// timeout would draw its going at the timeout and then skip the frames
+/// a stalled display skips. What the operator sees is asserted on every
+/// frame — the toast up, then its face up until `TOAST_OUT` has passed.
+/// The rise and the fade frame counts.
+fn needs_you_toast_comes_and_goes(
+    name: &str,
+    rebuild_nav: bool,
+    cx: &mut TestAppContext,
+) -> (usize, usize) {
     crate::motion::testing::drive();
     // A board of two, and a third Thread off it, working.
-    let (mut core, fake) = cockpit("toast-motion", 3);
+    let (mut core, fake) = cockpit(name, 3);
     let threads = core.threads().to_vec();
     core.apply_group(GroupChange::Create {
         first: threads[0],
@@ -2363,7 +2389,7 @@ fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
     core.send(threads[2], "task".into());
     core.pump();
     core.enter_group(group).unwrap();
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     settle(cx);
@@ -2375,35 +2401,69 @@ fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     settle(cx);
+    if rebuild_nav {
+        // The recipe that first looked like starvation: the nav rebuilt
+        // alone a few times while the finish waits out its delay.
+        for _ in 0..11 {
+            display_frame(&view, true, cx);
+        }
+    }
     let toast: &'static str = format!("toast-{}", threads[2].get()).leak();
+
+    // It rings once the finish has waited out its delay.
     cx.executor()
-        .advance_clock(crate::notifications::ALERT_DELAY);
-    tick(cx);
-    assert!(cx.debug_bounds(toast).is_some(), "the toast is up");
-    let rising = frames_over(cx, theme::MOTION_TOAST_IN_MS + 32);
-    assert!(rising > 0, "it rises in");
+        .advance_clock(crate::notifications::ALERT_DELAY / 2);
+    cx.run_until_parked();
+    let mut waited = 0;
+    while cx.debug_bounds(toast).is_none() {
+        display_frame(&view, rebuild_nav, cx);
+        waited += 1;
+        assert!(waited < 120, "the toast never came");
+    }
+    let mut rising = 0;
+    for _ in 0..(theme::MOTION_TOAST_IN_MS + 32) / 16 {
+        rising += display_frame(&view, rebuild_nav, cx);
+        assert!(cx.debug_bounds(toast).is_some(), "it stays up as it rises");
+    }
+    assert!(
+        rising + 1 >= (theme::MOTION_TOAST_IN_MS / 16) as usize,
+        "it rises in a frame at a time: {rising}"
+    );
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 
     // It times out, the window drawing a frame at a time.
     cx.executor()
-        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_millis(200));
+        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_secs(1));
     cx.run_until_parked();
     let mut waited = 0;
     while cx.debug_bounds(toast).is_some() {
-        frames_over(cx, 16);
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
+        display_frame(&view, rebuild_nav, cx);
         waited += 1;
-        assert!(waited < 30, "the toast never timed out");
+        assert!(waited < 120, "the toast never timed out");
     }
+    // It went at most a frame ago.
+    let went = cx.executor().now();
     assert!(
         cx.debug_bounds("toast-leaving").is_some(),
         "its face fades out where it stood"
     );
     let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
     assert!(cx.debug_bounds(open).is_none(), "with nothing to press");
-    let leaving = frames_over(cx, theme::MOTION_TOAST_OUT_MS + 32);
-    assert!(leaving > 1, "it fades out a frame at a time: {leaving}");
+    let mut leaving = 0;
+    for _ in 0..(theme::MOTION_TOAST_OUT_MS + 32) / 16 {
+        leaving += display_frame(&view, rebuild_nav, cx);
+        let shown = cx.executor().now() - went + Duration::from_millis(16);
+        if shown < crate::motion::TOAST_OUT.duration() {
+            assert!(
+                cx.debug_bounds("toast-leaving").is_some(),
+                "its face is drawn until it has faded: gone at {shown:?}"
+            );
+        }
+    }
+    assert!(
+        leaving + 1 >= (theme::MOTION_TOAST_OUT_MS / 16) as usize,
+        "it fades out a frame at a time: {leaving}"
+    );
     assert_eq!(display_frames(cx), 0, "gone: no more frames");
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
@@ -2411,7 +2471,26 @@ fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
         cx.debug_bounds("toast-leaving").is_none(),
         "and its face is gone"
     );
+    (rising, leaving)
+}
+
+/// The Needs-you toast (FL-18) rises in over `motion::TOAST_IN` and, when it
+/// goes on its own, fades away over `TOAST_OUT` as a face with no answers
+/// to press — frames only while it moves.
+#[gpui::test]
+fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
+    let (rising, leaving) = needs_you_toast_comes_and_goes("toast-motion", false, cx);
     eprintln!("NEEDS_YOU_TOAST rising={rising} leaving={leaving}");
+}
+
+/// The nav rebuilt alone — before the toast comes, and on every frame of
+/// its rise and its fade — starves neither: a part's rebuild redraws the
+/// Cockpit around it (its ancestors are dirtied with it), which draws the
+/// floats again, and each one-shot asks for its next frame there.
+#[gpui::test]
+fn nav_rebuilds_starve_no_toast_frame(cx: &mut TestAppContext) {
+    let (rising, leaving) = needs_you_toast_comes_and_goes("toast-motion-nav", true, cx);
+    eprintln!("NEEDS_YOU_TOAST_NAV rising={rising} leaving={leaving}");
 }
 
 /// The palette comes in on `dialog-in` over its veil darkening in: frames
