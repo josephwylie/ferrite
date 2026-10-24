@@ -1,5 +1,5 @@
 //! Find (⌘F): a query over the text a surface shows — the focused Pane's
-//! transcript, or the reader beside it. Every occurrence is washed
+//! transcript, or its preview in the Panel. Every occurrence is washed
 //! (`FIND_WASH`), the one the find is on more strongly (`FIND_ACTIVE_WASH`)
 //! and brought into view; ⏎ / ⇧⏎ (⌘G / ⌘⇧G) step through them, wrapping,
 //! and esc closes the bar — while its line holds the keyboard; elsewhere

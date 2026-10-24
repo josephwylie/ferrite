@@ -9,7 +9,7 @@ pub(crate) mod empty_board;
 mod leaving;
 mod machines;
 mod palette;
-mod panel;
+pub(crate) mod panel;
 mod parts;
 mod pr_tab;
 #[cfg_attr(not(unix), path = "cockpit/projects_unavailable.rs")]
@@ -566,10 +566,11 @@ pub struct CockpitView {
     solo_beside: Option<(PaneIdentity, ThreadId)>,
     /// The plan card (`open_plan`), tied to its Thread.
     plan_card: Option<ThreadId>,
-    /// The Pane whose reader took the last press: ⌘F finds there. A press
-    /// hands the keyboard back to the Pane, so focus cannot say it.
-    reader_pressed: Option<PaneIdentity>,
-    /// Each Pane's reader slot sliding open or shut (`beside.rs`).
+    /// The Pane whose preview took the last press: ⌘F finds there. A
+    /// press hands the keyboard back to the Pane, so focus cannot say it.
+    preview_pressed: Option<PaneIdentity>,
+    /// Each Thread's reader slot (its Review) sliding open or shut
+    /// (`beside.rs`).
     reader_slides: beside::ReaderSlides,
     /// The Provider an empty board's first draft starts on.
     launch_provider: Provider,
@@ -688,12 +689,12 @@ enum Board {
     Solo(PaneIdentity),
 }
 
-/// What one leaf of a board's tree stands for: a Pane, or the reader a
-/// Pane has open (one per Pane).
+/// What one leaf of a board's tree stands for: a Pane, or the reader slot
+/// a Thread's Pane has open, its Review (one per Pane).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Slot {
     Pane(PaneIdentity),
-    Reader(PaneIdentity),
+    Reader(ThreadId),
 }
 
 /// A board slot on the move: its head is the handle. Dropped on another
@@ -1618,7 +1619,7 @@ impl CockpitView {
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
             solo_beside: None,
-            reader_pressed: None,
+            preview_pressed: None,
             reader_slides: Default::default(),
             plan_card: None,
             launch_provider,
@@ -2008,9 +2009,9 @@ impl CockpitView {
                 cx.notify();
             }
             crate::transcript::TranscriptEvent::OpenReader { path, line } => {
-                // ⌘-click on a path: a reader beside the Thread.
+                // ⌘-click on a path: the Thread's preview, in the Panel.
                 self.focus_pane(index);
-                self.open_reader_from(index, path.clone(), *line, cx);
+                self.open_preview_from(index, path.clone(), *line, cx);
             }
         }
     }
@@ -2853,11 +2854,11 @@ impl CockpitView {
             return Some(drag.tree.clone());
         }
         let bounds = self.rest_board();
-        let readers: Vec<PaneIdentity> = self
+        let readers: Vec<ThreadId> = self
             .visible_indices()
             .into_iter()
             .filter(|index| self.has_reader(*index))
-            .map(|index| self.panes[index].identity)
+            .filter_map(|index| self.panes[index].thread())
             .collect();
         let (base, mut panes) = match board {
             Board::Group(group) => {
@@ -2904,7 +2905,7 @@ impl CockpitView {
         };
         let readers: Vec<(ThreadId, ThreadId)> = readers
             .into_iter()
-            .map(|owner| (pane_leaf(owner), reader_leaf(owner)))
+            .map(|owner| (owner, reader_leaf(owner)))
             .filter(|(owner, _)| panes.contains(owner))
             .collect();
         let mut tree = base;
@@ -3730,11 +3731,7 @@ impl CockpitView {
                 });
                 if let (Some((path, number)), Some(index)) = (place, self.pane_for(thread)) {
                     self.focus_pane(index);
-                    let reader = beside::Beside::Reader {
-                        path,
-                        line: Some(number),
-                    };
-                    self.open_beside(reader, window, cx);
+                    self.open_preview(path, Some(number), window, cx);
                 }
             }
             (MenuTarget::Review { thread, .. }, MenuVerb::CopySelection) => {
@@ -4276,9 +4273,7 @@ impl CockpitView {
         };
         let view = self.cockpit.roster().view();
         let shown = match leaf_slot(target) {
-            Slot::Pane(PaneIdentity::Thread(shown)) | Slot::Reader(PaneIdentity::Thread(shown)) => {
-                Some(shown)
-            }
+            Slot::Pane(PaneIdentity::Thread(shown)) | Slot::Reader(shown) => Some(shown),
             _ => None,
         };
         // Groups are non-exclusive (R1): the board's Group is the one being
@@ -4703,7 +4698,7 @@ impl CockpitView {
             self.refresh_names();
         }
         let reading = self.prefs.settings.reading_size;
-        for review in self.panes.iter().filter_map(|pane| pane.preview.review()) {
+        for review in self.panes.iter().filter_map(|pane| pane.review.review()) {
             review.update(cx, |review, cx| review.set_reading(reading, cx));
         }
         cx.notify();
@@ -6348,8 +6343,9 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// ⌘F: find in the focused Pane's transcript — or in its reader, when
-    /// the reader took the last press or holds the keyboard (`crate::find`).
+    /// ⌘F: find in the focused Pane's transcript — or in its preview, when
+    /// the preview took the last press or holds the keyboard
+    /// (`crate::find`).
     /// A wall tile draws no transcript to search.
     fn open_find(&mut self, _: &crate::find::Open, window: &mut Window, cx: &mut Context<Self>) {
         if self.level_now(window) == Level::Wall {
@@ -6360,8 +6356,8 @@ impl CockpitView {
             return;
         };
         let reading =
-            self.reader_pressed == Some(pane.identity) || pane.preview.reader_focused(window, cx);
-        if reading && self.open_reader_find(index, window, cx) {
+            self.preview_pressed == Some(pane.identity) || pane.preview.focused(window, cx);
+        if reading && self.preview_shown(index) && self.open_preview_find(index, window, cx) {
             return;
         }
         if let Some(transcript) = self.panes.get(index).and_then(PaneView::transcript) {
@@ -9386,12 +9382,18 @@ impl CockpitView {
     /// Close the focused Pane — cmd-w. The core decides what that means
     /// (park, leave, defer onto a draft, discard); the mirror follows.
     fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
-        // ⌘W in a reader closes the reader, not its Pane (F-14).
-        if let Some(index) = self.panes.iter().position(|pane| {
-            pane.preview.document().is_some() && pane.preview.reader_focused(window, cx)
-        }) {
-            self.close_reader(index, cx);
-            return;
+        // ⌘W in the focused Pane's preview or Review closes that, not the
+        // Pane (F-14).
+        let index = self.focused();
+        if let Some(pane) = self.panes.get(index) {
+            if self.preview_shown(index) && pane.preview.focused(window, cx) {
+                self.close_preview(index, cx);
+                return;
+            }
+            if pane.review.focused(window, cx) {
+                self.close_review(index, cx);
+                return;
+            }
         }
         let Some(identity) = self.cockpit.roster().focused() else {
             return;
@@ -9881,7 +9883,6 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::motion::hover_frame_start(cx);
         self.tend_reader_slides(cx);
-        self.tend_reader_finds(window);
         // Seen is on screen while the window has focus: the Cockpit follows
         // the window's activation from its first frame — a window that opens
         // unfocused sees nothing until it is focused — and the window coming
@@ -9903,21 +9904,21 @@ impl Render for CockpitView {
         // Each reads what this frame drew, never the clock again: a ride
         // that ended between the draw and here still asks for the one frame
         // that lands it at rest. A scene's held ride asks for none.
-        let column_moving =
-            (self.nav_ride.get().is_some() && self.nav_hold.is_none()) || self.panel_riding();
-        let sliding = self.reader_slides.moving();
+        let column_moving = self.nav_ride.get().is_some() && self.nav_hold.is_none();
+        let sliding = self.reader_slides.moving() || self.panel_riding();
         let fading = crate::motion::hover_fades_active();
         if column_moving {
-            // The column's width moves the whole board: every part redraws.
+            // The nav's width moves the whole board, and the nav with it:
+            // every part redraws.
             window.request_animation_frame();
         } else if fading || sliding {
             // A blend is drawn again by the view that paints it alone: a
             // part (a nav row, a Pane's control, a transcript's link), or,
             // for the frame's own controls, the frame around the parts
-            // (`motion::frames_through`). A reader's slide redraws the
-            // frame, which lays the board out: only the parts whose cells
-            // move are built again (their cache holds their bounds), the
-            // rest replay.
+            // (`motion::frames_through`). A Review's slide and the Panel's
+            // ride redraw the frame, which lays the board and the Panel
+            // out: only the parts whose cells move are built again (their
+            // cache holds their bounds), the rest — the nav — replay.
             let mut views = crate::motion::hover_fading_views();
             let frame = crate::motion::frames_through(cx.entity_id());
             if sliding && !views.contains(&frame) {
@@ -10034,7 +10035,7 @@ impl CockpitView {
         // (F-12), and the panel's as it comes and goes; a Solo pair lasts
         // while focus stays on one of its Panes.
         self.nav_ride.set(self.nav_ride_now(cx));
-        self.ride_panel(cx);
+        self.ride_panel(window, cx);
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
@@ -10243,13 +10244,17 @@ impl CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
-            // A review or an image beside the focused Pane keeps the
-            // keyboard it took, from its first frame (a review's comment
-            // field's too).
+            // A review beside the focused Pane, or an image in its preview
+            // while the Panel shows it, keeps the keyboard it took, from its
+            // first frame (a review's comment field's too).
             .or_else(|| {
-                self.panes
-                    .get(self.focused())
-                    .and_then(|pane| pane.preview.held_focus(window, cx))
+                let index = self.focused();
+                let pane = self.panes.get(index)?;
+                pane.review.held_focus(window, cx).or_else(|| {
+                    self.preview_shown(index)
+                        .then(|| pane.preview.held_focus(window, cx))
+                        .flatten()
+                })
             })
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
@@ -10320,15 +10325,19 @@ impl CockpitView {
                         && !pane.controls_focus.is_focused(window)
                         && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
             });
-        // A reader sits beside its Pane, outside the transcript, so its text
-        // needs its own exemption or a click to select in it is undone.
-        let reader_text_focused = self
-            .panes
-            .iter()
-            .any(|pane| pane.preview.reader_text_focused(window, cx));
+        // The focused Pane's preview and Review sit outside its transcript,
+        // so their text needs its own exemption or a click to select in it
+        // is undone. The focused Pane's only: focus moving to another Pane
+        // takes the keyboard with it, and the image viewer's own focus is
+        // no text (`Preview::text_focused`).
+        let reader_text_focused = self.panes.get(self.focused()).is_some_and(|pane| {
+            (self.preview_shown(self.focused()) && pane.preview.text_focused(window, cx))
+                || pane.review.inner_focused(window, cx)
+        });
         // The find bar's line keeps the keyboard while the operator types.
         let find_focused = self.panes.get(self.focused()).is_some_and(|pane| {
-            pane.reader_find
+            pane.preview_tab
+                .find
                 .as_ref()
                 .is_some_and(|find| find.holds_focus(window, cx))
                 || pane
@@ -10588,10 +10597,10 @@ impl CockpitView {
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
             .map(|root| self.register_palette_actions(root, cx))
-            // Every press forgets the reader; one in a reader marks it again
-            // as it bubbles (`reader_cell`).
+            // Every press forgets the preview; one in a preview marks it
+            // again as it bubbles (`panel_preview`).
             .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
-                view.reader_pressed = None;
+                view.preview_pressed = None;
             }))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press. Moves
@@ -14200,14 +14209,12 @@ type SectionCheckout = (Option<(SharedString, bool)>, Option<(u32, u32)>);
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.
 /// A slot's leaf in a board's tree. A Thread's Pane is its own id; drafts
-/// and readers are no Threads and never persist, so stand-in ids nothing
-/// real reaches name them: a draft counts down from the top, and a reader
-/// is its Pane's number under the `READER_LEAF` bit (`READER_DRAFT` marks
-/// a draft's reader).
+/// and reader slots are no Threads and never persist, so stand-in ids
+/// nothing real reaches name them: a draft counts down from the top, and a
+/// reader slot is its Thread's number under the `READER_LEAF` bit.
 const READER_LEAF: u64 = 1 << 62;
-const READER_DRAFT: u64 = 1 << 61;
 
-/// A reader's share of its Pane's slot when it first opens beside it.
+/// A Review's share of its Pane's slot when it first opens beside it.
 const READER_SHARE: f32 = crate::theme::READER_SHARE;
 
 /// The approval a wall tile's digit gives (R9): `1` allow, `2` allow for
@@ -14228,11 +14235,8 @@ fn pane_leaf(identity: PaneIdentity) -> ThreadId {
     }
 }
 
-fn reader_leaf(owner: PaneIdentity) -> ThreadId {
-    ThreadId::new(match owner {
-        PaneIdentity::Thread(thread) => READER_LEAF | thread.get(),
-        PaneIdentity::Draft(draft) => READER_LEAF | READER_DRAFT | draft.get(),
-    })
+fn reader_leaf(owner: ThreadId) -> ThreadId {
+    ThreadId::new(READER_LEAF | owner.get())
 }
 
 fn leaf_slot(leaf: ThreadId) -> Slot {
@@ -14245,12 +14249,7 @@ fn leaf_slot(leaf: ThreadId) -> Slot {
     if raw & READER_LEAF == 0 {
         return Slot::Pane(PaneIdentity::Thread(leaf));
     }
-    let number = raw & !(READER_LEAF | READER_DRAFT);
-    Slot::Reader(if raw & READER_DRAFT != 0 {
-        PaneIdentity::Draft(ferrite_core::roster::DraftId::new(number))
-    } else {
-        PaneIdentity::Thread(ThreadId::new(number))
-    })
+    Slot::Reader(ThreadId::new(raw & !READER_LEAF))
 }
 
 /// A drag move's pointer and the hovered slot's bounds, in the tree's units.
@@ -14347,6 +14346,7 @@ mod tests {
     mod machines;
     mod nav_parity;
     mod panel;
+    mod panel_preview;
     mod pr;
     mod pr_tab;
     #[cfg(unix)]
@@ -20189,9 +20189,9 @@ mod tests {
         );
         assert!(
             cx.debug_bounds("panel").is_some(),
-            "the panel stays beside the reader"
+            "the preview is the Panel's"
         );
-        view.update(cx, |view, cx| view.close_reader(0, cx));
+        view.update(cx, |view, cx| view.close_preview(0, cx));
         tick(cx);
         let code = cx
             .debug_bounds("panel-file-1")
@@ -24461,7 +24461,7 @@ mod tests {
         view.update_in(cx, |view, window, cx| {
             view.panes[0]
                 .preview
-                .open_image(unresolved, &[], window, cx);
+                .open(unresolved, None, &[], window, cx);
         });
         tick(cx);
         let open = cx
@@ -24593,7 +24593,7 @@ mod tests {
             });
             assert!(
                 viewer.left() >= px(owner.x + owner.w),
-                "the image opens in the reader beside its Pane: {viewer:?} / {owner:?}"
+                "the image opens in the Panel beside its Pane: {viewer:?} / {owner:?}"
             );
             cx.simulate_keystrokes("escape");
             tick(cx);

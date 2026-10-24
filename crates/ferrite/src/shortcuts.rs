@@ -98,7 +98,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::ToggleFullscreen" => Row(Board, "Fullscreen pane"),
         "cockpit::ToggleNav" => Row(Board, "Toggle sidebar"),
         "cockpit::TogglePanel" => Row(Board, "Toggle panel"),
-        "reader::Close" => Row(Board, "Close the reader"),
+        "reader::Close" => Row(Board, "Close the preview or the review"),
         "cockpit::TextLarger" => Row(Board, "Text larger"),
         "cockpit::TextSmaller" => Row(Board, "Text smaller"),
         "cockpit::TextReset" => Row(Board, "Text reset"),

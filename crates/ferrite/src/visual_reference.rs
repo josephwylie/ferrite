@@ -958,7 +958,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
 
         // ---- WP-D scene arms (append above the end line)
         // An image the Composer carries, opened from its shelf chip: the
-        // image viewer in the reader slot beside the Pane.
+        // image viewer in the Panel's Preview tab, wide.
         "preview" => {
             let (scene, compose) = composer();
             let setup: Setup = Box::new(move |view, window, cx| {
@@ -971,7 +971,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 if let Some(shot) = images.first() {
                     view.panes[0]
                         .preview
-                        .open_image(shot.clone(), &images, window, cx);
+                        .open(shot.clone(), None, &images, window, cx);
                 }
             });
             (scene, setup)

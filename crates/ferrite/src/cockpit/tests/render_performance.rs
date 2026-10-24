@@ -350,10 +350,10 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
             .document()
             .map(|document| document.path)),
         Some(file.clone()),
-        "the file card opens the Thread-workspace file in the native reader"
+        "the file card opens the Thread-workspace file in the preview"
     );
-    // The reader closes from the keyboard (escape, or cmd-w in it; F-14).
-    view.update(cx, |view, cx| view.close_reader(0, cx));
+    // The preview closes from the keyboard (escape, or cmd-w in it; F-14).
+    view.update(cx, |view, cx| view.close_preview(0, cx));
     tick(cx);
 
     let id = view.read_with(cx, |view, _| {
@@ -1594,6 +1594,176 @@ fn reduced_motion_snaps_the_panel(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0);
 }
 
+/// A preview opening in a shown Panel rides it out to its wide width over
+/// `motion::RESIZE`, and closing rides it back: every frame the board gives
+/// the width up or takes it back, the preview's card keeps the width it
+/// rests at (laid out once, clipped, never re-wrapped) pinned to the board's
+/// edge, the nav is built no more than once a frame (as under ⌥⌘B), frames
+/// come only while it rides — about as many as the ride's 200ms holds —
+/// and none once it lands.
+#[gpui::test]
+fn a_preview_rides_the_panel_wide_and_back_and_settles_without_frames(cx: &mut TestAppContext) {
+    use crate::theme::{MOTION_RESIZE_MS, PANEL_PAD_L, PANEL_PAD_R, PANEL_W};
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (view, cx) = panel_window("motion-panel-preview", cx);
+    let dir = scratch("motion-panel-preview-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.md");
+    std::fs::write(
+        &file,
+        "# Notes\n\n".to_string()
+            + &"A line of notes long enough to wrap in a card.\n\n".repeat(40),
+    )
+    .unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_preview(file.clone(), None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let wide = view.read_with(cx, |view, _| view.board_right_rest());
+    assert!(wide > PANEL_W + 100., "a 1600 window previews wide: {wide}");
+    let card_w = wide - PANEL_PAD_L - PANEL_PAD_R;
+    let ride = |what: &str, widening: bool, cx: &mut gpui::VisualTestContext| {
+        let nav = crate::cockpit::drawn::nav_renders();
+        let mut frames = 0;
+        let mut last = panel_width(cx).expect("drawn");
+        for _ in 0..64 {
+            cx.executor().advance_clock(Duration::from_millis(8));
+            let asked = display_frames(cx);
+            let width = panel_width(cx).expect("drawn while it rides");
+            assert!(
+                if widening {
+                    width >= last
+                } else {
+                    width <= last
+                },
+                "{what}: one way only, {last} -> {width}"
+            );
+            last = width;
+            assert!(
+                (solo_card_right(&view, cx) - (1600. - width)).abs() <= 1.,
+                "{what}: the board rides with it"
+            );
+            if widening {
+                let card = cx
+                    .debug_bounds("panel-preview")
+                    .expect("the preview's card");
+                assert!(
+                    (f32::from(card.size.width) - card_w).abs() <= 0.5,
+                    "{what}: laid out at its width at rest: {card:?}"
+                );
+                assert!(
+                    (f32::from(card.left()) - (1600. - width + PANEL_PAD_L)).abs() <= 1.,
+                    "{what}: pinned to the board's edge: {card:?} at {width}"
+                );
+            }
+            if asked == 0 {
+                break;
+            }
+            frames += 1;
+        }
+        let most = (MOTION_RESIZE_MS / 8 + 3) as usize;
+        assert!(frames > 2 && frames <= most, "{what}: {frames} frames");
+        // Any Panel ride builds the nav once a frame, ⌥⌘B's as well: the
+        // preview's ride costs no more than that.
+        let nav = crate::cockpit::drawn::nav_renders() - nav;
+        assert!(
+            nav <= frames + 2,
+            "{what}: the nav built {nav} times in {frames} frames"
+        );
+        assert_eq!(display_frames(cx), 0, "{what}: landed, no frame");
+    };
+    ride("open", true, cx);
+    assert_eq!(panel_width(cx), Some(wide), "at rest, wide");
+    assert!(cx.debug_bounds("panel-tab-Preview").is_some());
+
+    view.update(cx, |view, cx| view.close_preview(0, cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("panel-changes-section").is_some()
+            || cx.debug_bounds("panel-no-changes").is_some(),
+        "the tab it showed before, at once"
+    );
+    ride("close", false, cx);
+    assert_eq!(panel_width(cx), Some(PANEL_W), "back to its own width");
+    assert!(
+        cx.debug_bounds("panel-tab-Preview").is_none(),
+        "its tab is gone"
+    );
+}
+
+/// A preview opened while the Panel is hidden shows it, riding in from
+/// nothing straight to its wide width, and closing it hides the Panel
+/// again — riding out with the preview still drawn — while the setting
+/// never changes. Reduced motion snaps both ways with no frame.
+#[gpui::test]
+fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
+    use crate::theme::MOTION_RESIZE_MS;
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS + 50));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None, "the premise: hidden");
+    let dir = scratch("motion-panel-preview-hidden-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("lines.rs");
+    std::fs::write(&file, "fn one() {}\nfn two() {}\n").unwrap();
+    let open = |cx: &mut gpui::VisualTestContext| {
+        let file = file.clone();
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.open_preview(file, Some(2), window, cx))
+        });
+        cx.run_until_parked();
+    };
+    open(cx);
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert!(display_frames(cx) > 0, "it rides in");
+    let mid = panel_width(cx).expect("riding in");
+    cx.executor()
+        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS));
+    display_frames(cx);
+    let wide = panel_width(cx).expect("shown");
+    assert!(mid < wide, "{mid} on the way to {wide}");
+    assert_eq!(wide, view.read_with(cx, |view, _| view.board_right_rest()));
+    assert!(
+        !view.read_with(cx, |view, _| view.prefs.settings.panel_shown),
+        "still off"
+    );
+
+    view.update(cx, |view, cx| view.close_preview(0, cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    display_frames(cx);
+    assert!(panel_width(cx).is_some(), "riding out");
+    assert!(
+        cx.debug_bounds("panel-preview").is_some(),
+        "the preview still drawn as it goes"
+    );
+    cx.executor()
+        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None, "hidden again");
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].preview.shown().is_none()),
+        "and the preview let go"
+    );
+    assert_eq!(display_frames(cx), 0);
+
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    open(cx);
+    assert_eq!(panel_width(cx), Some(wide), "reduced: in at once");
+    assert_eq!(display_frames(cx), 0);
+    view.update(cx, |view, cx| view.close_preview(0, cx));
+    cx.run_until_parked();
+    assert_eq!(panel_width(cx), None, "and out at once");
+    assert_eq!(display_frames(cx), 0);
+}
+
 /// Step a slide a 120Hz display frame at a time until the window asks
 /// for none: the frames it took, and the wall time they cost.
 fn slide_frames(cx: &mut gpui::VisualTestContext) -> (usize, Duration) {
@@ -1609,14 +1779,14 @@ fn slide_frames(cx: &mut gpui::VisualTestContext) -> (usize, Duration) {
     (frames, started.elapsed())
 }
 
-/// A reader sliding open beside one Pane of a Group, and shut again: each
+/// A Review sliding open beside one Pane of a Group, and shut again: each
 /// frame of the slide redraws the frame around the parts, which lays the
-/// board out again and draws the reader (at its final width), and builds
+/// board out again and draws the review (at its final width), and builds
 /// the one Pane whose cell moves — its transcript re-wrapping at the new
 /// width, as under a cmd-B fold — and nothing else: its neighbour and the
 /// nav replay from their caches. Landed, the window asks for no frame.
 #[gpui::test]
-fn a_reader_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
+fn a_review_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
     crate::motion::testing::drive();
     let _clock = hold_wall_clock();
     let (mut core, fake) = cockpit("reader-slide-budget", 2);
@@ -1647,14 +1817,6 @@ fn a_reader_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
         (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
             + 1_000,
     );
-    let dir = scratch("reader-slide-budget-file");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("notes.md");
-    std::fs::write(
-        &file,
-        "# Notes\n\n".to_string() + &"A line of notes to wrap.\n\n".repeat(60),
-    )
-    .unwrap();
     let prefix = view.read_with(cx, |view, _| {
         format!("markdown-{}-", view.panes[0].text_namespace())
     });
@@ -1670,11 +1832,9 @@ fn a_reader_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
             .map(|(after, before)| after - before)
             .collect();
         let rewrapped = native_text_renders(&prefix, cx);
-        let reader = native_text_renders("document-", cx);
         eprintln!(
-            "READER_SLIDE {what} frames={frames} pane_builds={} neighbour_builds={} \
-             nav_builds={nav} transcript_text_renders={rewrapped} reader_text_renders={reader} \
-             ms_per_frame={:.2}",
+            "REVIEW_SLIDE {what} frames={frames} pane_builds={} neighbour_builds={} \
+             nav_builds={nav} transcript_text_renders={rewrapped} ms_per_frame={:.2}",
             built[0],
             built[1],
             took.as_secs_f64() * 1_000.0 / frames.max(1) as f64,
@@ -1683,7 +1843,7 @@ fn a_reader_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
         assert!(frames > 2 && frames <= most, "{what}: {frames} frames");
         assert!(
             built[0] <= frames + 2,
-            "{what}: the Pane beside the reader built {} times in {frames} frames",
+            "{what}: the Pane beside the review built {} times in {frames} frames",
             built[0]
         );
         assert_eq!(built[1], 0, "{what}: the neighbour was built again");
@@ -1691,22 +1851,24 @@ fn a_reader_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
         assert_eq!(display_frames(cx), 0, "{what}: landed, no frame");
     };
 
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.open_beside(
-                beside::Beside::Reader {
-                    path: file.clone(),
-                    line: None,
-                },
-                window,
+    view.update(cx, |view, cx| {
+        let composer = view.panes[0].composer.clone();
+        let reading = view.prefs.settings.reading_size;
+        let review = cx.new(|cx| {
+            crate::review::ReviewView::new(
+                composer,
+                ferrite_reviewr::model::Scope::Uncommitted,
+                reading,
                 cx,
             )
-        })
+        });
+        view.panes[0].review.show(review, "main".into());
+        cx.notify();
     });
     // The open itself is the Cockpit's own change: every part builds once.
     cx.run_until_parked();
     measure("open", cx);
-    view.update(cx, |view, cx| view.close_reader(0, cx));
+    view.update(cx, |view, cx| view.close_review(0, cx));
     cx.run_until_parked();
     measure("close", cx);
 }

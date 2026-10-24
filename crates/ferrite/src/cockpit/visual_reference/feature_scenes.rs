@@ -1,7 +1,8 @@
 //! Scenes for the features the first references predate: the work board
 //! (every group, a row that asks, the chat and each panel) and its rows in
 //! the nav (ADR 0031), the Review slot (ADR
-//! 0021), the reader beside a Pane at rest and mid-slide, find in a
+//! 0021) at rest and mid-slide, a file in the Panel's preview at rest and
+//! mid-ride, find in a
 //! transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
@@ -56,6 +57,7 @@ pub(super) const STATES: &[&str] = &[
     "review-search",
     "reader-line",
     "reader-slide",
+    "review-slide",
     "review-comment",
     "review-notices",
     "review-error",
@@ -83,6 +85,15 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "review-search" => review(Staged::Search),
         "reader-line" => reader(None),
         "reader-slide" => reader(Some(0.5)),
+        "review-slide" => {
+            // The Review halfway through its slide in beside the Pane.
+            let (scene, setup) = review(Staged::Uncommitted);
+            let held: Setup = Box::new(move |view, window, cx| {
+                view.fixture_hold_reader(Some(0.5));
+                setup(view, window, cx)
+            });
+            (scene, held)
+        }
         "review-comment" => review(Staged::Comment),
         "review-notices" => review(Staged::Notices),
         "review-error" => review(Staged::Error),
@@ -435,7 +446,6 @@ enum Staged {
 /// way its readers would answer: no git read and no forge call.
 fn review(staged: Staged) -> (Scene, Setup) {
     let scene = conversation("review");
-    let workspace = scene.root.join("work").join("ferrite");
     let setup: Setup = Box::new(move |view, window, cx| {
         let index = view.focused();
         let composer = view.panes[index].composer.clone();
@@ -443,9 +453,7 @@ fn review(staged: Staged) -> (Scene, Setup) {
         let review =
             cx.new(|cx| ReviewView::new(composer.clone(), ReviewScope::Uncommitted, reading, cx));
         view.empty_shown = false;
-        view.panes[index]
-            .preview
-            .open_review(workspace, "main".into(), review.clone());
+        view.panes[index].review.show(review.clone(), "main".into());
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| {
             review.show(ReviewScope::Uncommitted, changed_files(), cx)
@@ -716,9 +724,10 @@ fn search_results() -> SearchResults {
 
 // -------------------------------------------------------------------- reader
 
-/// The conversation scene's Thread with a file open beside it at a line:
-/// at rest, or held `held` of the way through its slide in (the Pane
-/// giving way, the reader at its final width, cut at the board's edge).
+/// The conversation scene's Thread with a file open in the Panel's
+/// Preview tab at a line: at rest, or held `held` of the way through the
+/// Panel's ride out to its preview width (the board giving way, the
+/// preview laid out at its final width and pinned to the board's edge).
 fn reader(held: Option<f32>) -> (Scene, Setup) {
     let scene = conversation("reader");
     let file = scene
@@ -730,15 +739,8 @@ fn reader(held: Option<f32>) -> (Scene, Setup) {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, NAV_RS).unwrap();
         view.empty_shown = false;
-        view.fixture_hold_reader(held);
-        view.open_beside(
-            crate::cockpit::beside::Beside::Reader {
-                path: file.clone(),
-                line: Some(14),
-            },
-            window,
-            cx,
-        );
+        view.fixture_hold_panel(held);
+        view.open_preview(file.clone(), Some(14), window, cx);
     });
     (scene, setup)
 }

@@ -1,42 +1,38 @@
-//! The reader slot's slide (`beside.rs`): it opens and closes beside its
-//! Pane as one move, the Pane giving way and taking the room back, turns
-//! around mid-flight, never slides for a document swapped in place, stays
-//! inside a Group's or a fullscreen Pane's cell, lands for a seam drag, and
-//! snaps under reduced motion; esc in its text closes it, the keyboard the
-//! Pane's at once.
+//! The reader slot's slide (`beside.rs`), the Review's: it opens and
+//! closes beside its Pane as one move, the Pane giving way and taking the
+//! room back, turns around mid-flight, never slides again for a scope
+//! switched in place, stays inside a Group's or a fullscreen Pane's cell,
+//! lands for a seam drag, and snaps under reduced motion. Files open in
+//! the Panel instead (`panel_preview.rs`).
 
 use super::*;
 use crate::theme::{BOARD_SEAM, MOTION_SLOT_CLOSE_MS, MOTION_SLOT_OPEN_MS};
 
-/// A source file of `lines` numbered lines, in its own scratch directory.
-fn source(name: &str, lines: usize) -> std::path::PathBuf {
-    let dir = scratch(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("lines.rs");
-    let text: String = (1..=lines)
-        .map(|n| format!("fn line_{n}() {{}}\n"))
-        .collect();
-    std::fs::write(&file, text).unwrap();
-    file
-}
-
-fn read(
-    view: &Entity<CockpitView>,
-    path: &std::path::Path,
-    line: Option<u32>,
-    cx: &mut gpui::VisualTestContext,
-) {
-    let path = path.to_path_buf();
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.open_beside(beside::Beside::Reader { path, line }, window, cx)
-        })
+/// The focused Pane's Review, beside it: shown in its slot as the
+/// Changes tab's button opens one, no checkout read.
+fn read(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| {
+        let index = view.focused();
+        let review = view.panes[index].review.review().unwrap_or_else(|| {
+            let composer = view.panes[index].composer.clone();
+            let reading = view.prefs.settings.reading_size;
+            cx.new(|cx| {
+                crate::review::ReviewView::new(
+                    composer,
+                    ferrite_reviewr::model::Scope::Uncommitted,
+                    reading,
+                    cx,
+                )
+            })
+        });
+        view.panes[index].review.show(review, "main".into());
+        cx.notify();
     });
     cx.run_until_parked();
 }
 
 fn close(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, cx| view.close_reader(0, cx));
+    view.update(cx, |view, cx| view.close_review(0, cx));
     cx.run_until_parked();
 }
 
@@ -107,11 +103,10 @@ fn near(a: f32, b: f32) -> bool {
 #[gpui::test]
 fn the_reader_slides_open_and_shut_beside_its_pane(cx: &mut TestAppContext) {
     let (view, cx) = solo("reader-slide", cx);
-    let file = source("reader-slide-file", 200);
     let whole = pane(&view, 0, cx);
     let half = (whole.w - BOARD_SEAM) / 2.0;
 
-    read(&view, &file, Some(120), cx);
+    read(&view, cx);
     assert!(
         near(pane(&view, 0, cx).w, whole.w),
         "its first frame is the board as it was"
@@ -140,7 +135,7 @@ fn the_reader_slides_open_and_shut_beside_its_pane(cx: &mut TestAppContext) {
 
     close(&view, cx);
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()),
+        view.read_with(cx, |view, _| !view.panes[0].review.is_open()),
         "closed at once"
     );
     assert!(
@@ -158,8 +153,8 @@ fn the_reader_slides_open_and_shut_beside_its_pane(cx: &mut TestAppContext) {
     assert!(near(pane(&view, 0, cx).w, whole.w), "the board as it was");
     assert!(cx.debug_bounds("reader-head").is_none(), "the slot is gone");
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.shown().is_none()),
-        "and its document let go"
+        view.read_with(cx, |view, _| view.panes[0].review.review().is_none()),
+        "and its review let go"
     );
     assert_eq!(frame(cx), 0);
 }
@@ -168,10 +163,9 @@ fn the_reader_slides_open_and_shut_beside_its_pane(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_reader_turns_around_mid_slide(cx: &mut TestAppContext) {
     let (view, cx) = solo("reader-turn", cx);
-    let file = source("reader-turn-file", 40);
     let whole = pane(&view, 0, cx).w;
 
-    read(&view, &file, None, cx);
+    read(&view, cx);
     at(MOTION_SLOT_OPEN_MS / 3, cx);
     let opening = pane(&view, 0, cx).w;
     close(&view, cx);
@@ -183,43 +177,34 @@ fn a_reader_turns_around_mid_slide(cx: &mut TestAppContext) {
     let closing = pane(&view, 0, cx).w;
     assert!(closing > opening + 1.0, "and widens from there: {closing}");
 
-    read(&view, &file, None, cx);
+    read(&view, cx);
     assert!(
         near(pane(&view, 0, cx).w, closing),
         "reopened, it turns around on screen"
     );
     settle(cx);
     assert!(near(pane(&view, 0, cx).w, (whole - BOARD_SEAM) / 2.0));
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_some()));
+    assert!(view.read_with(cx, |view, _| view.panes[0].review.is_open()));
 }
 
-/// Another document opening in an open reader swaps in place: the board
-/// holds still and no slide runs.
+/// A review opening again in an open slot (another scope) reads in place:
+/// the board holds still and no slide runs.
 #[gpui::test]
-fn another_document_swaps_in_without_sliding(cx: &mut TestAppContext) {
+fn a_review_reopened_in_place_does_not_slide(cx: &mut TestAppContext) {
     let (view, cx) = solo("reader-swap", cx);
-    let first = source("reader-swap-first", 40);
-    let second = source("reader-swap-second", 80);
-    read(&view, &first, None, cx);
+    read(&view, cx);
     settle(cx);
     let open = pane(&view, 0, cx);
 
-    read(&view, &second, Some(60), cx);
+    read(&view, cx);
     assert!(
         !view.read_with(cx, |view, _| view.reader_slides.moving()),
-        "no slide for a swap"
+        "no slide for a review read in place"
     );
     for _ in 0..4 {
         at(30, cx);
         assert_eq!(pane(&view, 0, cx), open, "the board holds still");
     }
-    assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0]
-            .preview
-            .document()
-            .map(|document| document.path)),
-        Some(second)
-    );
 }
 
 /// In a Group the Pane's own cell splits as the reader slides in: its
@@ -241,9 +226,8 @@ fn in_a_group_the_slide_stays_inside_the_pane_cell(cx: &mut TestAppContext) {
     tick(cx);
     settle(cx);
     let (cell, neighbour) = (pane(&view, 0, cx), pane(&view, 1, cx));
-    let file = source("reader-slide-group-file", 40);
 
-    read(&view, &file, None, cx);
+    read(&view, cx);
     for step in 1..=4 {
         at(MOTION_SLOT_OPEN_MS / 4, cx);
         assert_eq!(
@@ -272,9 +256,8 @@ fn in_a_group_the_slide_stays_inside_the_pane_cell(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_seam_grabbed_mid_slide_lands_it(cx: &mut TestAppContext) {
     let (view, cx) = solo("reader-slide-drag", cx);
-    let file = source("reader-slide-drag-file", 40);
     let whole = pane(&view, 0, cx).w;
-    read(&view, &file, None, cx);
+    read(&view, cx);
     at(MOTION_SLOT_OPEN_MS / 4, cx);
     view.update(cx, |view, cx| {
         let board = view.board().expect("a reader board");
@@ -292,87 +275,18 @@ fn a_seam_grabbed_mid_slide_lands_it(cx: &mut TestAppContext) {
 fn reduced_motion_snaps_the_reader(cx: &mut TestAppContext) {
     let (view, cx) = solo("reader-slide-reduced", cx);
     cx.update(|_, cx| cx.set_reduce_motion(true));
-    let file = source("reader-slide-reduced-file", 40);
     let whole = pane(&view, 0, cx).w;
-    read(&view, &file, None, cx);
+    read(&view, cx);
     assert!(near(pane(&view, 0, cx).w, (whole - BOARD_SEAM) / 2.0));
     assert_eq!(frame(cx), 0);
     close(&view, cx);
     assert!(near(pane(&view, 0, cx).w, whole));
     assert!(cx.debug_bounds("reader-head").is_none());
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.shown().is_none()));
+    assert!(view.read_with(cx, |view, _| view.panes[0].review.review().is_none()));
     assert_eq!(frame(cx), 0);
 }
 
-/// Esc with the reader's own text holding the keyboard closes the reader
-/// — not the Pane's turn — and the keyboard is the Pane's at once, while
-/// the reader is still sliding out.
-#[gpui::test]
-fn escape_in_the_reader_closes_it_and_hands_the_keyboard_back(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
-    let (core, fake) = cockpit("reader-escape", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let dir = scratch("reader-escape-file");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("notes.md");
-    std::fs::write(
-        &file,
-        "# Notes\n\nA paragraph long enough to select a few words in.\n",
-    )
-    .unwrap();
-    read(&view, &file, None, cx);
-    settle(cx);
-    // Select a word or two of the rendered document: its text holds the
-    // keyboard.
-    let text = cx
-        .update(|_, cx| {
-            crate::rich::testing::bounds(&format!("document-{}", file.display()), 0, cx)
-        })
-        .expect("the document is drawn");
-    let y = text.top() + px(12.);
-    let from = gpui::point(text.left() + px(4.), y);
-    let to = gpui::point(text.left() + px(60.), y);
-    cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
-    tick(cx);
-    assert!(
-        cx.update(|window, cx| view.read(cx).panes[0]
-            .preview
-            .reader_text_focused(window, cx)),
-        "the premise: the reader's text holds the keyboard"
-    );
-
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()),
-        "esc closed the reader"
-    );
-    assert_eq!(*fake.interrupts.borrow(), 0, "and interrupted nothing");
-    assert!(
-        cx.debug_bounds("reader-head").is_some(),
-        "the reader is still sliding out"
-    );
-    cx.simulate_input("x");
-    assert_eq!(
-        view.read_with(cx, |view, cx| view.panes[0]
-            .composer
-            .read(cx)
-            .text()
-            .to_string()),
-        "x",
-        "the keyboard is the Pane's already"
-    );
-    settle(cx);
-    assert!(cx.debug_bounds("reader-head").is_none());
-}
-
-/// A fullscreen Pane's own cell fills the board, so a reader opened from
+/// A fullscreen Pane's own cell fills the board, so a review opened from
 /// it splits that cell, where it can be seen, and slides like any other;
 /// closed, the Pane fills the board again.
 #[gpui::test]
@@ -392,9 +306,8 @@ fn a_fullscreen_pane_splits_its_cell_with_its_reader(cx: &mut TestAppContext) {
     tick(cx);
     settle(cx);
     let whole = pane(&view, 0, cx);
-    let file = source("reader-fullscreen-file", 40);
 
-    read(&view, &file, None, cx);
+    read(&view, cx);
     at(MOTION_SLOT_OPEN_MS / 4, cx);
     let opening = pane(&view, 0, cx).w;
     assert!(opening < whole.w - 1.0, "the Pane gives way: {opening}");

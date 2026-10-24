@@ -16,17 +16,17 @@
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | [`TOAST_IN`] 180ms, 4px rise / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18) rises into place from 0.3 ([`toast_in`]); one that goes on its own fades away sinking 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server, update and Projects toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or the reader's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
+//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`]; the palette, the shortcuts sheet and the Projects popup with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
-//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel (⌥⌘B, and focus moving to or from a draft or the Projects coordinator, which have none) rides the same way at the board's right edge, through [`ColumnRide`]: its content keeps its layout, clipped and anchored to the window's edge, fading on the nav's clock |
-//! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the reader beside its Pane (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
+//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel rides the same way at the board's right edge, through [`ColumnRide`], between hidden, its 304 and a preview's wide width (`cockpit/panel.rs`): coming and going (⌥⌘B, a preview opening while it is hidden, focus moving to or from a Pane with none) its content fades on the nav's clock; changing width (a preview opening or closing, a tab picked) it does not. Its content keeps its layout at rest and never re-wraps — the Panel's own width anchored to the window's edge, a preview's beyond it pinned to the board's edge, so it slides in with it |
+//! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
 //! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
-//! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its slot is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
+//! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks, the PR tab's `N resolved` and `Show more`) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); another document replacing the open one in the reader, from 0.3 ([`swap_in`]) — the slot does not slide again |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); a preview opening in the Panel, or another document replacing it, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
 //! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
@@ -44,7 +44,10 @@
 //! ([`draw_frames_through`]), so they rebuild no cached part; one inside a
 //! part (a Pane's Composer menu) rebuilds that part alone. A loop draws in
 //! the loops overlay (ADR 0011). The nav's ride rebuilds every part on each
-//! frame: the board's width moves under them.
+//! frame: the board's width moves under them, and the nav's own. The
+//! Panel's ride and a Review's slide redraw the frame around the parts
+//! instead, so only the parts whose cells move are built again (the
+//! Panel's ride still builds the nav once a frame).
 //!
 //! # What gpui here cannot do, and what stands in
 //!
@@ -230,7 +233,7 @@ pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const IMAGE_ZOOM: MotionSpec = MotionSpec::new(theme::MOTION_IMAGE_ZOOM_MS, EASE_OUT_EXPO);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
 /// A board slot sliding in beside its owner, and out again a little
-/// quicker (a [`Reveal`]): the reader beside its Pane.
+/// quicker (a [`Reveal`]): the Review beside its Pane.
 pub const SLOT_OPEN: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_OPEN_MS, EASE_SLIDE);
 pub const SLOT_CLOSE: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_CLOSE_MS, EASE_SLIDE);
 // An exit is quicker than its entrance (the rules in `theme.rs`).
@@ -350,10 +353,10 @@ where
     })
 }
 
-/// `row-in` for content replacing what an open slot showed (another
-/// document in the reader): opacity alone, up from
+/// `row-in` for content arriving in a place already open (a preview in the
+/// Panel, another document replacing it): opacity alone, up from
 /// `MOTION_MENU_FROM_OPACITY` so its first frame is already legible; the
-/// slot itself holds still.
+/// place itself holds still.
 pub fn swap_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
@@ -611,12 +614,13 @@ impl Tween {
     }
 }
 
-/// A column that opens and closes by riding its width (the catalog's
-/// column-width row): its width rides [`RESIZE`] while its content's
-/// opacity rides `fade` on its own clock, 0 → 1 opening and 1 → 0 closing.
-/// A turn mid-flight starts both from where they are on screen. The
-/// default is at rest — nothing rides until the first turn, so a column
-/// restored open or closed arrives in place.
+/// A column that opens, closes and changes width by riding its width (the
+/// catalog's column-width row): its width rides [`RESIZE`] between any two
+/// widths while, as it opens or closes, its content's opacity rides `fade`
+/// on its own clock, 0 → 1 opening and 1 → 0 closing. A ride mid-flight
+/// starts both from where they are on screen. The default is at rest —
+/// nothing rides until the first ride, so a column restored open or closed
+/// arrives in place.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ColumnRide {
     width: Option<Tween>,
@@ -624,24 +628,26 @@ pub struct ColumnRide {
 }
 
 impl ColumnRide {
-    /// Turn toward open (`open_w` wide) or closed (`closed_w`).
-    pub fn turn(
+    /// Ride from `from` wide — or from the width on screen, mid-flight —
+    /// to `to`. `fade` turns the content toward shown (`true`, opening) or
+    /// gone (closing) on its spec; `None` leaves it as it is, for a column
+    /// that only changes width.
+    pub fn ride(
         &mut self,
-        open: bool,
-        closed_w: f32,
-        open_w: f32,
-        fade: MotionSpec,
+        from: f32,
+        to: f32,
+        fade: Option<(bool, MotionSpec)>,
         now: Instant,
         reduced: bool,
     ) {
-        let (from, to) = if open {
-            (closed_w, open_w)
-        } else {
-            (open_w, closed_w)
-        };
-        self.width = Some(Tween::retarget(self.width, from, to, RESIZE, now, reduced));
-        let (from, to) = if open { (0.0, 1.0) } else { (1.0, 0.0) };
-        self.fade = Some(Tween::retarget(self.fade, from, to, fade, now, reduced));
+        // A ride long done holds the width it ended at, which a window
+        // resized since has made stale: start from the width at rest.
+        let riding = self.width.filter(|width| width.running(now, reduced));
+        self.width = Some(Tween::retarget(riding, from, to, RESIZE, now, reduced));
+        if let Some((shown, spec)) = fade {
+            let (from, to) = if shown { (0.0, 1.0) } else { (1.0, 0.0) };
+            self.fade = Some(Tween::retarget(self.fade, from, to, spec, now, reduced));
+        }
     }
 
     /// Mid-flight: the owner must ask for another frame.
@@ -676,7 +682,7 @@ impl ColumnRide {
 /// owner lays the slot out at [`Reveal::value`] (a share of a split, a
 /// column's width), asks for frames while it is [`Reveal::running`], and
 /// keeps the slot until it is [`Reveal::shut`]: a slot outlives its close
-/// by its exit. The reader beside its Pane rides one (`SLOT_OPEN`,
+/// by its exit. The Review beside its Pane rides one (`SLOT_OPEN`,
 /// `SLOT_CLOSE`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Reveal {
@@ -1604,7 +1610,7 @@ mod tests {
         assert_eq!(ride.width(t0, false), None, "at rest before any turn");
         assert_eq!(ride.opacity(t0, false), 1.0);
 
-        ride.turn(true, 8.0, 304.0, fade, t0, false);
+        ride.ride(8.0, 304.0, Some((true, fade)), t0, false);
         let mid = ride.width(ms(100), false).expect("riding");
         assert!(mid > 8.0 && mid < 304.0, "mid-ride {mid}");
         let shown = ride.opacity(ms(100), false);
@@ -1612,15 +1618,30 @@ mod tests {
         assert_eq!(ride.opacity(ms(170), false), 1.0, "its fade is done first");
         assert!(ride.running(ms(170), false), "while the width still rides");
 
-        ride.turn(false, 8.0, 304.0, fade, ms(100), false);
+        ride.ride(304.0, 8.0, Some((false, fade)), ms(100), false);
         close(ride.width(ms(100), false).unwrap(), mid, 1e-3, "continuity");
         close(ride.opacity(ms(100), false), shown, 1e-3, "the fade too");
         assert_eq!(ride.width(ms(300), false), None, "settled");
         assert!(!ride.running(ms(300), false));
 
-        ride.turn(true, 8.0, 304.0, fade, ms(400), true);
+        ride.ride(8.0, 304.0, Some((true, fade)), ms(400), true);
         assert_eq!(ride.width(ms(400), true), None, "reduced: no ride");
         assert_eq!(ride.opacity(ms(400), true), 1.0);
+
+        // Wider, with no fade: the content stays as it is while the width
+        // rides, from the width at rest however long ago the last ride
+        // ended.
+        ride.ride(304.0, 600.0, None, ms(1000), false);
+        let wider = ride.width(ms(1100), false).expect("riding wider");
+        assert!(wider > 304.0 && wider < 600.0, "{wider}");
+        assert_eq!(ride.opacity(ms(1100), false), 1.0, "no fade");
+        ride.ride(600.0, 304.0, None, ms(1100), false);
+        close(
+            ride.width(ms(1100), false).unwrap(),
+            wider,
+            1e-3,
+            "it turns around",
+        );
     }
 
     /// A slot slides in over `SLOT_OPEN` and out over `SLOT_CLOSE`, turns

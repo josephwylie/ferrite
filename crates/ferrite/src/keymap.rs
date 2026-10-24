@@ -434,8 +434,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("a".into(), "review::AllFiles", Some(REVIEW)),
         ("shift-b".into(), "review::PickBase", Some(REVIEW)),
         ("escape".into(), "review::Close", Some(REVIEW)),
-        // The reader's own text holding the keyboard (a selection in it):
-        // esc closes the reader, not the Pane's turn.
+        // A preview's own text (a selection in it) or the Review's slot
+        // holding the keyboard: esc closes it, not the Pane's turn.
         ("escape".into(), "reader::Close", Some(READER)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
         (
@@ -451,10 +451,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("down".into(), "review::Next", Some("ReviewBase")),
         ("enter".into(), "review::ChooseBase", Some("ReviewBase")),
         ("escape".into(), "review::CloseBases", Some("ReviewBase")),
-        // The image viewer (an image in the reader slot), while it holds
+        // The image viewer (an image in the Panel's preview), while it holds
         // the keyboard: ⌘= and ⌘- step the zoom and ⌘0 fits it again (the
         // image's zoom, not the reading size) and ← → step among the images
-        // it was opened with; esc is the reader's, around it. Its context is
+        // it was opened with; esc is the preview's, around it. Its context is
         // deeper than the Cockpit's.
         (
             with_primary("="),
@@ -546,9 +546,11 @@ pub const UNBOUND: [(&str, Option<&str>); 2] = [
 /// The Review slot holds the keyboard itself, not a field inside it.
 const REVIEW: &str = "Review && !Composer";
 
-/// The reader slot beside a Pane (`cockpit/beside.rs`), around whatever it
-/// shows: a review, the find bar or a viewer inside it binds its own keys
-/// deeper.
+/// A reading surface, around whatever it shows: the Panel's preview card
+/// (`cockpit/panel/preview.rs`) and the Review's slot beside a Pane
+/// (`cockpit/beside.rs`). A review, the find bar or the image viewer inside
+/// binds its own keys deeper; this context's esc beats the Cockpit's
+/// interrupt.
 pub const READER: &str = "Reader";
 /// The image viewer's key context.
 const IMAGE_VIEWER: &str = crate::image_viewer::KEY_CONTEXT;
