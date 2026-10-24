@@ -1590,6 +1590,123 @@ fn reduced_motion_snaps_the_panel(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0);
 }
 
+/// Step a slide a 120Hz display frame at a time until the window asks
+/// for none: the frames it took, and the wall time they cost.
+fn slide_frames(cx: &mut gpui::VisualTestContext) -> (usize, Duration) {
+    let started = std::time::Instant::now();
+    let mut frames = 0;
+    for _ in 0..64 {
+        cx.executor().advance_clock(Duration::from_millis(8));
+        if display_frames(cx) == 0 {
+            break;
+        }
+        frames += 1;
+    }
+    (frames, started.elapsed())
+}
+
+/// A reader sliding open beside one Pane of a Group, and shut again: each
+/// frame of the slide redraws the frame around the parts, which lays the
+/// board out again and draws the reader (at its final width), and builds
+/// the one Pane whose cell moves — its transcript re-wrapping at the new
+/// width, as under a cmd-B fold — and nothing else: its neighbour and the
+/// nav replay from their caches. Landed, the window asks for no frame.
+#[gpui::test]
+fn a_reader_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (mut core, fake) = cockpit("reader-slide-budget", 2);
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
+    let threads = core.threads().to_vec();
+    long_transcripts(&fake);
+    for stream in fake.streams.borrow().iter() {
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    // The off-board finishes' toasts come and go first.
+    cockpit_renders_over(
+        cx,
+        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
+            + 1_000,
+    );
+    let dir = scratch("reader-slide-budget-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.md");
+    std::fs::write(
+        &file,
+        "# Notes\n\n".to_string() + &"A line of notes to wrap.\n\n".repeat(60),
+    )
+    .unwrap();
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[0].text_namespace())
+    });
+
+    let measure = |what: &str, cx: &mut gpui::VisualTestContext| {
+        let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
+        reset_native_text_renders(cx);
+        let (frames, took) = slide_frames(cx);
+        let nav = crate::cockpit::drawn::nav_renders() - nav;
+        let built: Vec<usize> = pane_builds(&threads)
+            .iter()
+            .zip(&panes)
+            .map(|(after, before)| after - before)
+            .collect();
+        let rewrapped = native_text_renders(&prefix, cx);
+        let reader = native_text_renders("document-", cx);
+        eprintln!(
+            "READER_SLIDE {what} frames={frames} pane_builds={} neighbour_builds={} \
+             nav_builds={nav} transcript_text_renders={rewrapped} reader_text_renders={reader} \
+             ms_per_frame={:.2}",
+            built[0],
+            built[1],
+            took.as_secs_f64() * 1_000.0 / frames.max(1) as f64,
+        );
+        let most = (crate::theme::MOTION_SLOT_OPEN_MS / 8 + 2) as usize;
+        assert!(frames > 2 && frames <= most, "{what}: {frames} frames");
+        assert!(
+            built[0] <= frames + 2,
+            "{what}: the Pane beside the reader built {} times in {frames} frames",
+            built[0]
+        );
+        assert_eq!(built[1], 0, "{what}: the neighbour was built again");
+        assert_eq!(nav, 0, "{what}: the nav was built again");
+        assert_eq!(display_frames(cx), 0, "{what}: landed, no frame");
+    };
+
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_beside(
+                beside::Beside::Reader {
+                    path: file.clone(),
+                    line: None,
+                },
+                window,
+                cx,
+            )
+        })
+    });
+    // The open itself is the Cockpit's own change: every part builds once.
+    cx.run_until_parked();
+    measure("open", cx);
+    view.update(cx, |view, cx| view.close_reader(0, cx));
+    cx.run_until_parked();
+    measure("close", cx);
+}
+
 /// A nav row's hover blends in over `motion::HOVER_FADE`: frames while it
 /// fades, none once it has landed or once the pointer has left and the
 /// blend has returned to rest.

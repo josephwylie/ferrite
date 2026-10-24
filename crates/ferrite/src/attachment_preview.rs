@@ -36,6 +36,9 @@ pub struct Document {
 struct State {
     image: Option<(PathBuf, String)>,
     document: Option<Document>,
+    /// The document just closed, still drawn while its slot slides shut;
+    /// the cockpit lets it go when the slide ends (`let_go`).
+    closing: Option<Document>,
     return_focus: Option<FocusHandle>,
 }
 
@@ -64,7 +67,9 @@ impl Preview {
     /// plain text being selected in. The slot itself taking focus on a click
     /// is not text, and does not count.
     pub fn reader_text_focused(&self, window: &Window, cx: &App) -> bool {
-        self.reader_focus.contains_focused(window, cx) && !self.reader_focus.is_focused(window)
+        self.is_open()
+            && self.reader_focus.contains_focused(window, cx)
+            && !self.reader_focus.is_focused(window)
     }
 
     pub fn focus_target(&self) -> Option<FocusHandle> {
@@ -171,9 +176,14 @@ impl Preview {
     }
 
     /// Close the reader with no window in hand (a test, the cockpit's own
-    /// key handler).
+    /// key handler). It is closed at once — `document` is `None`, and the
+    /// keyboard is the Pane's — while the document it showed stays drawn
+    /// (`shown`) until its slot has slid shut.
     pub fn close_reader(&self) {
-        self.state.lock().unwrap().document = None;
+        let mut state = self.state.lock().unwrap();
+        if let Some(document) = state.document.take() {
+            state.closing = Some(document);
+        }
     }
 
     /// Whether the reader slot (or anything in it) holds focus — what lets
@@ -199,6 +209,23 @@ impl Preview {
         self.state.lock().unwrap().document.clone()
     }
 
+    /// Whether a document is open in the reader.
+    pub fn is_open(&self) -> bool {
+        self.state.lock().unwrap().document.is_some()
+    }
+
+    /// What the reader slot draws: the open document, else the one sliding
+    /// shut.
+    pub fn shown(&self) -> Option<Document> {
+        let state = self.state.lock().unwrap();
+        state.document.clone().or_else(|| state.closing.clone())
+    }
+
+    /// The closed document's slot has slid shut: stop holding it.
+    pub fn let_go(&self) {
+        self.state.lock().unwrap().closing = None;
+    }
+
     /// The review in the reader slot, when that is what it shows.
     pub fn review(&self) -> Option<gpui::Entity<crate::review::ReviewView>> {
         self.state
@@ -221,7 +248,7 @@ impl Preview {
     }
 
     pub fn close_document(&self, window: &mut Window) {
-        self.state.lock().unwrap().document = None;
+        self.close_reader();
         window.refresh();
     }
 
@@ -253,16 +280,17 @@ impl Preview {
         .child(PreviewLayer(self.clone()))
     }
 
-    /// The open document as a board slot (F-14): a Pane-shaped shell on the
-    /// plane whose head row is handed to `head` (the cockpit wires the drag
-    /// that moves the slot) and whose body is the rendered `body`. The head
-    /// is the Group head's twin — `PANE_HEAD_H`, its `paint::LINE` rule, a
-    /// cell in from each side — reading the file's path (its `title`) in
-    /// `LINK_INK` and its `:line` in `TEXT_DIM`, or `review` and the
-    /// workspace, with a dim × at the right. None while no document is open.
+    /// The shown document as a board slot (F-14): a Pane-shaped shell on
+    /// the plane whose head row is handed to `head` (the cockpit wires the
+    /// drag that moves the slot) and whose body is the rendered `body`. The
+    /// head is the Group head's twin — `PANE_HEAD_H` over its `HAIRLINE`,
+    /// its insets — so a Pane's head and its reader's read as one band. It
+    /// reads the file's path (its `title`) in `LINK_INK` and its `:line` in
+    /// `TEXT_DIM`, or `review` and the workspace, with a dim × at the right
+    /// in the fill button's 28px door. None while nothing is shown.
     pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
         use crate::theme::*;
-        let document = self.document()?;
+        let document = self.shown()?;
         let label = match &document.review {
             Some(_) => div()
                 .min_w_0()
@@ -274,9 +302,12 @@ impl Preview {
                 .min_w_0()
                 .overflow_hidden()
                 .child(
+                    // A narrow reader cuts the path's head, keeping its
+                    // file name.
                     div()
                         .min_w_0()
-                        .truncate()
+                        .overflow_hidden()
+                        .text_ellipsis_start()
                         .text_color(rgb(LINK_INK))
                         .child(document.title.clone()),
                 )
@@ -293,10 +324,13 @@ impl Preview {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .h(px(PANE_HEAD_H))
-            .px(px(HEAD_PAD_X))
+            .gap(px(PANE_HEAD_GAP))
+            // The hairline lies under the row's 38, as the Group head's does.
+            .h(px(PANE_HEAD_H + 1.))
+            .pl(px(PANE_HEAD_PAD_L))
+            .pr(px(PANE_HEAD_PAD_R))
             .border_b_1()
-            .border_color(paint::LINE)
+            .border_color(paint::HAIRLINE)
             .whitespace_nowrap()
             .child(label)
             .child(div().flex_1())
@@ -308,17 +342,29 @@ impl Preview {
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .w(px(ICON_BUTTON))
-                    .h(px(PANE_HEAD_H))
-                    .hover_control("reader-close")
+                    .size(px(ICON_BUTTON))
+                    .rounded(px(R_TAB))
+                    // One blend per Pane's reader (two can be open on a
+                    // Group): keyed by this Preview's own state.
+                    .hover_control(format!(
+                        "reader-close-{}",
+                        Arc::as_ptr(&self.state) as usize
+                    ))
                     // A press here closes; it must not also pick the slot
                     // up as a drag.
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .tooltip(|window, cx| {
-                        gpui::component::tooltip::Tooltip::new("Close the reader \u{b7} esc")
-                            .build(window, cx)
-                    })
-                    .child(crate::icons::icon(crate::icons::CLOSE, GLYPH_BOX, TEXT_DIM))
+                    .tooltip(crate::menu::tooltip_with_key(
+                        "Close the reader",
+                        crate::components::bound_chord_in(
+                            "reader::Close",
+                            Some(crate::keymap::READER),
+                        ),
+                    ))
+                    .child(crate::icons::icon(
+                        crate::icons::CLOSE,
+                        ICON_BUTTON_GLYPH,
+                        TEXT_DIM,
+                    ))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         close.close_document(window);

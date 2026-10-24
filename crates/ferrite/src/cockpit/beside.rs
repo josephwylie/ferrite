@@ -4,11 +4,28 @@
 //!
 //! A reader and a review take the reader slot the Pane already has
 //! (`attachment_preview::Preview`'s document, laid out by `board_tree`): in
-//! Solo the board becomes `Pane | reader`, in a Group the Pane's own cell
-//! splits, half and half (`READER_SHARE`), the seam between them dragging
-//! like any other (22–78%). Escape in the reader — or ⌘W while it holds
-//! focus — closes it, and the tree it was spliced into closes back over it,
-//! restoring the board as it was.
+//! Solo the board becomes `Pane | reader`, in a Group (or a fullscreen
+//! Pane) the Pane's own cell splits, half and half (`READER_SHARE`), the
+//! seam between them dragging like any other (22–78%). Escape in the
+//! reader, its ×, or ⌘W while it holds focus closes it, and the tree it was
+//! spliced into closes back over it, restoring the board as it was.
+//!
+//! The slot slides (`ReaderSlides`). Opening, its split's share rides a
+//! `motion::Reveal` from nothing to rest (`Tree::reveal`) over `SLOT_OPEN`:
+//! the Pane narrows every frame, re-wrapping as it does under a cmd-B
+//! fold, while the reader slides in from its far edge — its content laid
+//! out at its size at rest and pinned to the seam (`reader_pin`), the cell
+//! clipping what is not in yet, so the reader's own text never re-wraps.
+//! Closing is the reverse over the quicker `SLOT_CLOSE`: the keyboard is
+//! the Pane's at once, the document stays drawn (`Preview::shown`) until
+//! the slot has slid shut, and only then is it removed from the tree. A
+//! flip mid-slide turns around from where it is; another document opening
+//! in an open reader (or a review's scope changing) does not slide again,
+//! the new document's body fading in (`motion::swap_in`) instead; a seam
+//! grabbed mid-slide lands it, and a drag is never tweened. The board's
+//! Level and the narrow-window rail are measured where the slide ends.
+//! Each frame of a slide redraws the frame around the parts, so only the
+//! Pane whose cell moves is built again; reduced motion snaps.
 //!
 //! A review reads here, where the checkout is — by the Server that owns
 //! the Thread, or off the UI thread when this window runs its agents
@@ -25,13 +42,90 @@
 //! a member.
 
 use super::*;
+use crate::motion::{Reveal, SLOT_CLOSE, SLOT_OPEN};
 use crate::review::{
     BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
     ScopePicked, Searched,
 };
 use ferrite_reviewr::ferrite::Read;
 use ferrite_reviewr::model::{CommitPick, Scope};
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+gpui::actions!(reader, [Close]);
+
+/// Every Pane's reader slot while it is open or sliding (see the module
+/// doc), keyed by the Pane that owns it, and what this frame draws of each.
+#[derive(Default)]
+pub(crate) struct ReaderSlides {
+    slides: HashMap<PaneIdentity, Slide>,
+    /// The first frame has been tended: a reader open by then arrives in
+    /// place, with no entrance (nothing animates on first paint).
+    tended: bool,
+    /// A slide mid-flight this frame: the board moves, so frames keep
+    /// coming.
+    moving: bool,
+    /// A scene's held reveal (`fixture_hold_reader`).
+    hold: Option<f32>,
+}
+
+impl ReaderSlides {
+    /// Whether a slot is sliding this frame.
+    pub(crate) fn moving(&self) -> bool {
+        self.moving
+    }
+}
+
+/// One reader slot's slide.
+struct Slide {
+    reveal: Reveal,
+    /// How far in this frame draws it (the board's geometry between frames
+    /// reads what is on screen).
+    drawn: f32,
+    /// The document it shows (`swap_key`).
+    shown: u64,
+    /// That document replaced another while the slot stayed open: its body
+    /// fades in.
+    swapped: bool,
+}
+
+/// Which document a reader shows, for telling one opening over another:
+/// its path and line (a review is its workspace, whatever its scope).
+fn swap_key(document: &crate::attachment_preview::Document) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    document.path.hash(&mut hash);
+    document.line.hash(&mut hash);
+    hash.finish()
+}
+
+/// Where a sliding reader's content lies in its cell `drawn`: at its size
+/// at rest (`rest`) along the axis it slides on, pinned to the seam it
+/// slides from, so its text never re-wraps while the cell grows or
+/// shrinks and the cell clips what is not in yet. `None` at rest.
+pub(super) fn reader_pin(
+    tree: &Tree,
+    leaf: ThreadId,
+    drawn: layout::Rect,
+    rest: layout::Rect,
+) -> Option<layout::Rect> {
+    let (axis, first) = tree.side_of(leaf)?;
+    match axis {
+        layout::Axis::Row if rest.w > drawn.w => Some(layout::Rect {
+            x: if first { drawn.w - rest.w } else { 0.0 },
+            y: 0.0,
+            w: rest.w,
+            h: drawn.h,
+        }),
+        layout::Axis::Column if rest.h > drawn.h => Some(layout::Rect {
+            x: 0.0,
+            y: if first { drawn.h - rest.h } else { 0.0 },
+            w: drawn.w,
+            h: rest.h,
+        }),
+        _ => None,
+    }
+}
 
 /// Find in the reader (⌘F when the reader took the last press or holds the
 /// keyboard; the bar is the transcript's, `crate::find`): a file's lines, or
@@ -608,7 +702,8 @@ impl CockpitView {
     }
 
     /// Close the reader beside `index` (escape in it, ⌘W while it holds
-    /// focus): its slot closes and the board is as it was.
+    /// focus): the keyboard is the Pane's at once, and its slot slides shut
+    /// until the board is as it was.
     pub(super) fn close_reader(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get(index) {
             pane.preview.close_reader();
@@ -617,21 +712,147 @@ impl CockpitView {
         }
     }
 
+    /// Whether Pane `index` has a reader slot on the board: a document
+    /// open in it, or one sliding shut.
+    pub(super) fn has_reader(&self, index: usize) -> bool {
+        self.panes.get(index).is_some_and(|pane| {
+            pane.preview.is_open() || self.reader_slides.slides.contains_key(&pane.identity)
+        })
+    }
+
+    /// Each frame, before the board is measured: a reader that opened
+    /// starts sliding in (in place on first paint), one that closed starts
+    /// sliding out, one reopened mid-slide turns around, another document
+    /// opening in an open one is marked to fade in, and a slot that has
+    /// slid shut lets its document go. Then what this frame draws of each.
+    pub(super) fn tend_reader_slides(&mut self, cx: &gpui::App) {
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let panes = &self.panes;
+        let slides = &mut self.reader_slides;
+        let first = !std::mem::replace(&mut slides.tended, true);
+        slides
+            .slides
+            .retain(|owner, _| panes.iter().any(|pane| pane.identity == *owner));
+        for pane in panes {
+            let owner = pane.identity;
+            let shown = pane.preview.document().map(|document| swap_key(&document));
+            match (slides.slides.get_mut(&owner), shown) {
+                (None, Some(shown)) => {
+                    let reveal = if first {
+                        Reveal::open(SLOT_OPEN, SLOT_CLOSE, now)
+                    } else {
+                        Reveal::opening(SLOT_OPEN, SLOT_CLOSE, now)
+                    };
+                    let slide = Slide {
+                        reveal,
+                        drawn: 0.0,
+                        shown,
+                        swapped: false,
+                    };
+                    slides.slides.insert(owner, slide);
+                }
+                (Some(slide), Some(shown)) => {
+                    if !slide.reveal.is_open() {
+                        slide.reveal.set(true, now, reduced);
+                        pane.preview.let_go();
+                    }
+                    if slide.shown != shown {
+                        slide.shown = shown;
+                        slide.swapped = true;
+                    }
+                }
+                (Some(slide), None) => {
+                    slide.reveal.set(false, now, reduced);
+                    if slide.reveal.shut(now, reduced) {
+                        slides.slides.remove(&owner);
+                        pane.preview.let_go();
+                    }
+                }
+                // Closed before a frame drew it: nothing to slide.
+                (None, None) => pane.preview.let_go(),
+            }
+        }
+        let hold = slides.hold;
+        let mut moving = false;
+        for slide in slides.slides.values_mut() {
+            slide.drawn = hold.unwrap_or_else(|| slide.reveal.value(now, reduced));
+            moving |= hold.is_none() && slide.reveal.running(now, reduced);
+        }
+        slides.moving = moving;
+    }
+
+    /// A seam grabbed mid-slide: every slot lands where it was going — a
+    /// closing one is gone — so the drag starts from the board at rest.
+    pub(super) fn land_reader_slides(&mut self, cx: &gpui::App) {
+        let now = cx.background_executor().now();
+        let panes = &self.panes;
+        self.reader_slides.slides.retain(|owner, slide| {
+            slide.reveal.land(now);
+            slide.drawn = 1.0;
+            if !slide.reveal.is_open() {
+                if let Some(pane) = panes.iter().find(|pane| pane.identity == *owner) {
+                    pane.preview.let_go();
+                }
+            }
+            slide.reveal.is_open()
+        });
+    }
+
+    /// `tree` as this frame draws it: each sliding reader as far in as it
+    /// is (`Tree::reveal`). A seam drag draws its tree as it is.
+    pub(super) fn slid_tree(&self, mut tree: Tree, bounds: layout::Rect) -> Tree {
+        if self.seam_drag.is_some() {
+            return tree;
+        }
+        let reveals: Vec<(ThreadId, f32)> = self
+            .reader_slides
+            .slides
+            .iter()
+            .filter(|(_, slide)| slide.drawn < 1.0)
+            .map(|(owner, slide)| (reader_leaf(*owner), slide.drawn))
+            .collect();
+        if !reveals.is_empty() {
+            tree.reveal(&reveals, bounds, crate::theme::BOARD_SEAM);
+        }
+        tree
+    }
+
+    /// `tree` where every slide ends: the readers sliding shut gone, the
+    /// ones sliding in at rest.
+    pub(super) fn rest_tree(&self, mut tree: Tree) -> Tree {
+        for (owner, slide) in &self.reader_slides.slides {
+            if !slide.reveal.is_open() {
+                tree.remove(reader_leaf(*owner));
+            }
+        }
+        tree
+    }
+
+    /// Hold every reader's slide at `reveal` (0 shut → 1 at rest) so a
+    /// scene can capture the board mid-slide; `None` lets it go.
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
+    pub(crate) fn fixture_hold_reader(&mut self, reveal: Option<f32>) {
+        self.reader_slides.hold = reveal;
+    }
+
     /// A Pane's reader as its own board slot (F-14, F-15): the reader shell
     /// (`Preview::reader` — its head the path in `LINK_INK` and `:line` dim,
     /// or `review · dev`, the slot's drag handle) over the body: the file's
     /// numbered lines in syntax colour with the target line marked,
     /// rendered Markdown, or the review. A press lands on the Pane that
-    /// opened it; escape closes it.
+    /// opened it; escape closes it. Mid-slide the shell lies at `pin`
+    /// (`reader_pin`), the cell clipping it.
     pub(super) fn reader_cell(
         &self,
         owner: PaneIdentity,
         leaf: ThreadId,
+        pin: Option<layout::Rect>,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let index = self.index_of(owner)?;
         let pane = &self.panes[index];
-        let document = pane.preview.document()?;
+        let document = pane.preview.shown()?;
         let find = pane.reader_find.as_ref();
         let face = GhostFace {
             title: document.title.clone().into(),
@@ -677,17 +898,31 @@ impl CockpitView {
             .min_w_0()
             .min_h_0()
             .child(body)
-            .children(find.map(|find| find.bar.bar()))
-            .into_any_element();
-        let preview = pane.preview.clone();
+            .children(find.map(|find| find.bar.bar()));
+        // A document that replaced another while the slot stayed open
+        // fades in where the last one was; the slot holds still.
+        let body = match self
+            .reader_slides
+            .slides
+            .get(&owner)
+            .filter(|slide| slide.swapped)
+        {
+            Some(slide) => crate::motion::swap_in(
+                SharedString::from(format!("reader-swap-{}-{}", leaf.get(), slide.shown)),
+                body,
+            )
+            .into_any_element(),
+            None => body.into_any_element(),
+        };
         let slot = pane
             .preview
             .reader(body, head_drag(leaf, face))?
-            .on_key_down(move |event, window, _| {
-                if event.keystroke.key == "escape" {
-                    preview.close_document(window);
+            .key_context(crate::keymap::READER)
+            .on_action(cx.listener(move |view, _: &Close, _, cx| {
+                if let Some(index) = view.index_of(owner) {
+                    view.close_reader(index, cx);
                 }
-            })
+            }))
             .on_action(cx.listener(move |view, _: &crate::find::Next, _, cx| {
                 view.step_reader_find(owner, true, cx)
             }))
@@ -714,27 +949,26 @@ impl CockpitView {
                     }
                 }),
             );
-        // The reader settles in from its Pane's side each time a document
-        // opens in it (keyed by the document, so a new one replays).
-        let key = {
-            use std::hash::{Hash, Hasher};
-            let mut hash = std::collections::hash_map::DefaultHasher::new();
-            document.path.hash(&mut hash);
-            document.line.hash(&mut hash);
-            hash.finish()
+        let reader = match pin {
+            None => div().size_full().flex().child(slot.flex_1()),
+            Some(pin) => div().size_full().relative().overflow_hidden().child(
+                slot.absolute()
+                    .left(px(pin.x))
+                    .top(px(pin.y))
+                    .w(px(pin.w))
+                    .h(px(pin.h)),
+            ),
         };
-        let reader = div().size_full().flex().child(crate::motion::slot_in(
-            SharedString::from(format!("reader-in-{}-{key}", leaf.get())),
-            slot.flex_1(),
-        ));
         Some(self.slot_drop_target(reader, leaf, cx))
     }
 }
 
-/// A file's lines, numbered (F-14): a `READER_NUMBER_W` column of numbers,
-/// right-aligned and dim, `READER_NUMBER_GAP` before the code, the code in
-/// its syntax colours (`highlight_tokens` for the path's language). The
-/// target line lies on `paint::SELECTED` with its number in `TEXT_STRONG`.
+/// A file's lines, numbered (F-14), in the code face on the grid's cells
+/// (`CH`, what the cut below counts in): a `READER_NUMBER_W` column of
+/// numbers, right-aligned and dim, `READER_NUMBER_GAP` before the code,
+/// the code in its syntax colours (`highlight_tokens` for the path's
+/// language). The target line lies on `paint::SELECTED` with its number in
+/// `TEXT_STRONG`.
 /// A line wider than the reader is cut at its edge; the one holding the
 /// find's occurrence starts further in when that would lie past it
 /// (`shown_from`). Virtualised: only the rows in view are laid out.
@@ -821,6 +1055,7 @@ fn numbered_lines(
     .min_h_0()
     .w_full()
     .py(px(HALF_ROW))
+    .font_family(FONT_CODE)
     .into_any_element()
 }
 

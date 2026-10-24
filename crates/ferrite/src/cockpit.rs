@@ -555,6 +555,8 @@ pub struct CockpitView {
     /// The Pane whose reader took the last press: ⌘F finds there. A press
     /// hands the keyboard back to the Pane, so focus cannot say it.
     reader_pressed: Option<PaneIdentity>,
+    /// Each Pane's reader slot sliding open or shut (`beside.rs`).
+    reader_slides: beside::ReaderSlides,
     /// The Provider an empty board's first draft starts on.
     launch_provider: Provider,
     /// The machines this window can be on (ADR 0026); `None` in a window
@@ -1601,6 +1603,7 @@ impl CockpitView {
             empty_focus: cx.focus_handle(),
             solo_beside: None,
             reader_pressed: None,
+            reader_slides: Default::default(),
             plan_card: None,
             launch_provider,
             machines: None,
@@ -2714,9 +2717,10 @@ impl CockpitView {
         if self.projects.coordinator_shown() || self.cockpit.roster().fullscreen().is_some() {
             return Level::Transcript;
         }
-        // Mid-ride the board is measured where the ride ends (F-12): the
-        // Level is the destination's from the first frame, never flapping
-        // as the width sweeps through a threshold.
+        // Mid-ride the board is measured where the ride ends (F-12) — the
+        // sidebar's, and every reader's slide: the Level is the
+        // destination's from the first frame, never flapping as a width
+        // sweeps through a threshold.
         self.nav_measure_rest.set(true);
         let rects = self.pane_rects(window);
         self.nav_measure_rest.set(false);
@@ -2795,11 +2799,15 @@ impl CockpitView {
     }
 
     /// The board on screen, when a tree lays it out: the Group being
-    /// shown, or Solo while its one Pane has a reader open. Fullscreen and
-    /// a plain Solo Pane have none.
+    /// shown, or Solo — or a fullscreen Pane, its own cell filling the
+    /// board — while its one Pane has a reader slot. A plain Solo or
+    /// fullscreen Pane has none.
     fn board(&self) -> Option<Board> {
-        if self.cockpit.roster().fullscreen().is_some() {
-            return None;
+        if let Some(shown) = self.cockpit.roster().fullscreen() {
+            return self
+                .index_of(shown)
+                .filter(|index| self.has_reader(*index))
+                .map(|_| Board::Solo(shown));
         }
         if let Some((owner, _)) = self.solo_pair() {
             return Some(Board::Solo(owner));
@@ -2807,7 +2815,7 @@ impl CockpitView {
         match self.cockpit.roster().view() {
             View::Group(group) => Some(Board::Group(group)),
             View::Solo => match self.visible_indices().as_slice() {
-                [index] if self.panes[*index].preview.document().is_some() => {
+                [index] if self.has_reader(*index) => {
                     Some(Board::Solo(self.panes[*index].identity))
                 }
                 _ => None,
@@ -2819,10 +2827,11 @@ impl CockpitView {
     /// the operator's arrangement fitted to what is open — a Group's
     /// members (or the default grid over the board's bounds), a pending
     /// draft spliced in under a stand-in id since a draft is no Thread, and
-    /// a reader slot for every visible Pane with a document open. A draft
-    /// on a default grid joins the grid rather than splitting one Pane; a
-    /// reader the tree has not placed yet opens beside its Pane, on the
-    /// right.
+    /// a reader slot for every visible Pane with a document open or sliding
+    /// shut. A draft on a default grid joins the grid rather than splitting
+    /// one Pane; a reader the tree has not placed yet opens beside its
+    /// Pane, on the right. Every slot is at rest here: `slid_tree` draws a
+    /// slide.
     fn board_tree(&self, board: Board) -> Option<Tree> {
         if let Some(drag) = self.seam_drag.as_ref().filter(|drag| drag.board == board) {
             return Some(drag.tree.clone());
@@ -2831,7 +2840,7 @@ impl CockpitView {
         let readers: Vec<PaneIdentity> = self
             .visible_indices()
             .into_iter()
-            .filter(|index| self.panes[*index].preview.document().is_some())
+            .filter(|index| self.has_reader(*index))
             .map(|index| self.panes[index].identity)
             .collect();
         let (base, mut panes) = match board {
@@ -2948,9 +2957,10 @@ impl CockpitView {
     }
 
     /// Every visible Pane's rect on the board, in window coordinates —
-    /// from the board's tree, or the one Solo cell. Reader slots are no
-    /// Panes and are left out. Fullscreen is the
-    /// whole board.
+    /// from the board's tree as this frame draws it (or, measuring at rest,
+    /// where every reader's slide ends), or the one Solo cell. Reader slots
+    /// are no Panes and are left out. Fullscreen is the whole board, split
+    /// with its reader.
     fn pane_rects(&self, window: &Window) -> Vec<(usize, layout::Rect)> {
         let bounds = self.board_bounds(window);
         if self.projects.coordinator_shown() {
@@ -2970,15 +2980,14 @@ impl CockpitView {
                 })
                 .unwrap_or_default();
         }
-        if let Some(identity) = self.cockpit.roster().fullscreen() {
-            return self
-                .index_of(identity)
-                .map(|index| vec![(index, bounds)])
-                .unwrap_or_default();
-        }
         if let Some(board) = self.board() {
             let Some(tree) = self.board_tree(board) else {
                 return Vec::new();
+            };
+            let tree = if self.nav_measure_rest.get() || self.nav_measure_full.get() {
+                self.rest_tree(tree)
+            } else {
+                self.slid_tree(tree, bounds)
             };
             return tree
                 .rects(bounds, crate::theme::BOARD_SEAM)
@@ -2988,6 +2997,12 @@ impl CockpitView {
                     Slot::Reader(_) => None,
                 })
                 .collect();
+        }
+        if let Some(identity) = self.cockpit.roster().fullscreen() {
+            return self
+                .index_of(identity)
+                .map(|index| vec![(index, bounds)])
+                .unwrap_or_default();
         }
         // Solo is one Pane — or a pending pair (a draft beside its Thread),
         // laid out on the same default grid a Group gets.
@@ -3876,10 +3891,12 @@ impl CockpitView {
         )
     }
 
-    /// A board: Panes and readers at their tree rects, seams over the
-    /// gaps, the drop preview on top. Coordinates are the board's own — the
-    /// frame is `relative`, its origin the nav's right edge — so the rects
-    /// the tree computes for the window are shifted back by that origin.
+    /// A board: Panes and readers at their tree rects as this frame draws
+    /// them (`slid_tree`: a reader sliding takes the room it has so far),
+    /// seams over the gaps, the drop preview on top. Coordinates are the
+    /// board's own — the frame is `relative`, its origin the nav's right
+    /// edge — so the rects the tree computes for the window are shifted
+    /// back by that origin.
     fn tree_board(
         &self,
         on: Board,
@@ -3897,7 +3914,17 @@ impl CockpitView {
         // One Level for the whole board: no Pane draws a tier its
         // neighbours do not (rule 2.3.5).
         let level = self.board_level(window);
-        let rects = tree.rects(bounds, crate::theme::BOARD_SEAM);
+        let rest: std::collections::HashMap<ThreadId, layout::Rect> = tree
+            .rects(bounds, crate::theme::BOARD_SEAM)
+            .into_iter()
+            .collect();
+        let tree = self.slid_tree(tree, bounds);
+        // A slot slid all the way shut takes no room and draws nothing.
+        let rects: Vec<(ThreadId, layout::Rect)> = tree
+            .rects(bounds, crate::theme::BOARD_SEAM)
+            .into_iter()
+            .filter(|(_, rect)| rect.w > 0.0 && rect.h > 0.0)
+            .collect();
         *self.slot_sizes.borrow_mut() = rects
             .iter()
             .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
@@ -3915,7 +3942,10 @@ impl CockpitView {
                     self.pane_slot(index, level, window, cx)
                 }
                 Slot::Reader(owner) => {
-                    let Some(cell) = self.reader_cell(owner, leaf, cx) else {
+                    let pin = rest
+                        .get(&leaf)
+                        .and_then(|at_rest| beside::reader_pin(&tree, leaf, rect, *at_rest));
+                    let Some(cell) = self.reader_cell(owner, leaf, pin, cx) else {
                         continue;
                     };
                     // A reader is a card beside the Pane, at rest.
@@ -4124,6 +4154,7 @@ impl CockpitView {
     /// A press on a seam: the drag begins from the persisted tree, and
     /// the moves until release re-derive the ratio from the pointer.
     fn begin_seam_drag(&mut self, board: Board, seam: SeamId, cx: &mut Context<Self>) {
+        self.land_reader_slides(cx);
         let Some(tree) = self.board_tree(board) else {
             return;
         };
@@ -9759,6 +9790,7 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::motion::hover_frame_start(cx);
+        self.tend_reader_slides(cx);
         self.tend_reader_finds(window);
         // Seen is on screen while the window has focus: the Cockpit follows
         // the window's activation from its first frame — a window that opens
@@ -9775,29 +9807,36 @@ impl Render for CockpitView {
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
-        // hover blend or a column's width mid-flight (the nav's, the
-        // panel's) keeps frames coming; with neither, nothing is scheduled
-        // (the pulse clock drives loops).
+        // hover blend, a column's width (the nav's, the panel's) or a
+        // reader's slide mid-flight keeps frames coming; with none, nothing
+        // is scheduled (the pulse clock drives loops).
         let now = cx.background_executor().now();
         let reduced = crate::motion::reduced_motion(cx);
         let column_moving = self
             .nav_tween
             .is_some_and(|tween| tween.running(now, reduced))
             || self.panel_rides(now, reduced);
+        let sliding = self.reader_slides.moving();
         let fading = crate::motion::hover_fades_active();
         if column_moving {
             // The column's width moves the whole board: every part redraws.
             window.request_animation_frame();
-        } else if fading {
+        } else if fading || sliding {
             // A blend is drawn again by the view that paints it alone: a
             // part (a nav row, a Pane's control, a transcript's link), or,
-            // for the frame's own controls, the frame around the parts.
+            // for the frame's own controls, the frame around the parts. A
+            // reader's slide redraws the frame, which lays the board out:
+            // only the parts whose cells move are built again (their cache
+            // holds their bounds), the rest replay.
             let root = cx.entity_id();
             let frame = self.frame_tick_id();
-            let views: Vec<_> = crate::motion::hover_fading_views()
+            let mut views: Vec<_> = crate::motion::hover_fading_views()
                 .into_iter()
                 .map(|view| if view == root { frame } else { view })
                 .collect();
+            if sliding && !views.contains(&frame) {
+                views.push(if self.parts.borrow().on { frame } else { root });
+            }
             if views.is_empty() {
                 window.request_animation_frame();
             } else {
@@ -10284,9 +10323,10 @@ impl CockpitView {
         } else if self.empty_shown && fullscreen.is_none() {
             // Shown on purpose while Threads stay open (`show_empty_board`).
             frame().flex().child(self.empty_board(cx))
-        } else if let Some(index) = fullscreen {
-            // The fullscreened Pane takes the whole window. The other Panes
-            // are not laid out at all — hidden siblings would still cost
+        } else if let Some(index) = fullscreen.filter(|index| !self.has_reader(*index)) {
+            // The fullscreened Pane takes the whole window (with a reader,
+            // its own cell splits: the board below). The other Panes are
+            // not laid out at all — hidden siblings would still cost
             // layout — while their Sessions keep streaming through the pump
             // regardless (#20).
             frame()
@@ -14222,6 +14262,7 @@ mod tests {
     mod provider_controls;
     mod provider_forms;
     mod provider_navigation;
+    mod reader_motion;
     mod render_performance;
     mod retention;
     mod review;
