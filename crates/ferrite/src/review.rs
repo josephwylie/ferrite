@@ -1386,10 +1386,12 @@ impl ReviewView {
             .px(px(self.grid.cell()))
             .whitespace_nowrap()
             .child(
+                // A long path gives way at its start: the file name stays.
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    .text_ellipsis_start()
                     .font_weight(W_LABEL)
                     .text_color(rgb(TEXT_STRONG))
                     .child(SharedString::from(path)),
@@ -1923,12 +1925,22 @@ impl ReviewView {
                                 .whitespace_nowrap()
                                 .cursor_pointer()
                                 .when(index == search.pick, |row| row.bg(paint::SELECTED))
-                                .child(div().flex_shrink_0().text_color(rgb(LINK_INK)).child(
-                                    SharedString::from(match found.line {
-                                        Some(line) => format!("{}:{line}", found.path),
-                                        None => found.path.clone(),
-                                    }),
-                                ))
+                                // A long path gives way at its start, and
+                                // never past the line's words.
+                                .child(
+                                    div()
+                                        .when(found.text.is_some(), |path| {
+                                            path.flex_shrink_0().max_w(gpui::relative(0.6))
+                                        })
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_ellipsis_start()
+                                        .text_color(rgb(LINK_INK))
+                                        .child(SharedString::from(match found.line {
+                                            Some(line) => format!("{}:{line}", found.path),
+                                            None => found.path.clone(),
+                                        })),
+                                )
                                 .children(found.text.map(|text| {
                                     div()
                                         .flex_1()
@@ -2253,34 +2265,53 @@ impl ReviewView {
                     .debug_selector(move || selector.into())
                     .min_w_0()
                     .truncate()
+                    .when(selector == "review-file-shown", |shown| {
+                        shown.text_ellipsis_start()
+                    })
                     .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(text))
             }))
             .child(div().flex_1())
+            // A read that failed shows no diff, so no stat of one.
             .children(
                 self.diff
                     .as_ref()
-                    .filter(|_| self.showing_diff())
-                    .map(|files| {
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(TEXT_DIM))
-                            .child(stat(files))
-                    }),
+                    .filter(|_| self.showing_diff() && self.error.is_none())
+                    .map(|files| stat(files, CH)),
             );
         bar.into_any_element()
     }
 }
 
-/// `3 files +40 −12`: what a diff adds up to.
-fn stat(files: &[ReviewFile]) -> String {
+/// `3 files +40 −12`: what a diff adds up to, its `+N −N` inked as each
+/// file head's (and the Panel's). In a narrow slot the count gives way
+/// first, cut with `…`, and the numbers stay whole.
+fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
     let added: u32 = files.iter().map(|file| file.additions).sum();
     let removed: u32 = files.iter().map(|file| file.deletions).sum();
     let count = files.len();
-    format!(
-        "{count} file{} +{added} \u{2212}{removed}",
-        if count == 1 { "" } else { "s" }
-    )
+    let count = format!("{count} file{}", if count == 1 { "" } else { "s" });
+    div()
+        .debug_selector(|| "review-stat".into())
+        .flex()
+        .min_w_0()
+        .gap(px(gap))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_DIM))
+                .child(SharedString::from(count)),
+        )
+        .child(crate::components::tabular(
+            div()
+                .debug_selector(|| "review-stat-lines".into())
+                .flex_shrink_0()
+                .child(crate::pane::trail_diff_stat(
+                    added as usize,
+                    removed as usize,
+                )),
+        ))
 }
 
 /// The longest line number among `rows`, a fold's hidden lines included
@@ -2943,6 +2974,24 @@ mod tests {
             "four digits and the pad"
         );
         assert!(cells(cx) > DIFF_NUMBER_CELLS);
+    }
+
+    /// In a narrow slot the bar's file count gives way, and the diff's
+    /// `+N −N` stays whole inside the slot.
+    #[gpui::test]
+    fn a_narrow_bar_keeps_the_stat_in_view(cx: &mut TestAppContext) {
+        let (_review, mut cx) = open(files(), cx);
+        let cx = &mut cx;
+        cx.simulate_resize(gpui::size(px(470.), px(600.)));
+        cx.run_until_parked();
+        let slot = cx.debug_bounds("review").expect("the slot");
+        let lines = cx.debug_bounds("review-stat-lines").expect("the stat");
+        assert!(
+            lines.right() <= slot.right(),
+            "the stat ends at {:?}, past the slot's {:?}",
+            lines.right(),
+            slot.right()
+        );
     }
 
     struct Host(Entity<ReviewView>);
