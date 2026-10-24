@@ -4991,11 +4991,15 @@ pub(crate) fn prompt_row(
     // A prompt of attachments alone has no words to register or draw.
     let words = match text {
         PromptText::Literal(words) if words.is_empty() => None,
+        // A clamped band ends its last line in `…`, so it says there is
+        // more of the prompt above.
         PromptText::Literal(words) if pinned => Some(
             div()
                 .w_full()
                 .min_w_0()
-                .when_some(preview_lines, |words, lines| words.line_clamp(lines))
+                .when_some(preview_lines, |words, lines| {
+                    words.line_clamp(lines).text_ellipsis()
+                })
                 .child(SharedString::from(words))
                 .into_any_element(),
         ),
