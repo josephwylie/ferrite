@@ -1312,7 +1312,7 @@ impl Decoder {
         let Some(task_id) = string(value, "task_id") else {
             return;
         };
-        if value["ambient"] == true || value["skip_transcript"] == true {
+        if wire::hidden_task(value) {
             self.excluded_tasks.insert(task_id.into());
             return;
         }
@@ -1321,7 +1321,7 @@ impl Decoder {
         }
         // Bash jobs have task IDs too. Classification or an existing agent
         // alias is necessary; owned_by_subagent means a child tool, not a child.
-        if string(value, "task_type").is_some_and(|kind| kind != "local_agent") {
+        if string(value, "task_type").is_some() && !wire::agent_task(value) {
             self.progress(value, events);
             return;
         }
@@ -1331,7 +1331,7 @@ impl Decoder {
             invocation.and_then(|id| self.aliases.get(&Alias::Invocation(id.to_owned())).cloned());
         let key = match known_task.or(known_invocation) {
             Some(key) => key,
-            None if string(value, "task_type") == Some("local_agent") => invocation
+            None if wire::agent_task(value) => invocation
                 .and_then(|id| self.aliases.get(&Alias::Invocation(id.to_owned())).cloned())
                 .unwrap_or_else(|| self.native_key(&format!("task:{task_id}"))),
             None => {

@@ -139,12 +139,12 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
 }
 
 /// The provider's task kind in the operator's words. Claude names its
-/// kinds `local_bash`, `local_agent`, `monitor`, `workflow`, …; an unknown
-/// kind is shown as the provider wrote it rather than hidden.
+/// kinds `local_bash`, `remote_agent`, `monitor`, `workflow`, …; an unknown
+/// kind is shown as the provider wrote it rather than hidden. A local agent
+/// never reaches the shelf: it is a Subagent, with its own tab.
 fn kind_label(detail: &str) -> &str {
     match detail {
         "local_bash" | "bash" | "shell" => "shell",
-        "local_agent" | "agent" | "subagent" => "agent",
         "remote_agent" => "remote agent",
         "monitor" => "monitor",
         "workflow" => "workflow",
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn kinds_read_in_plain_words() {
         assert_eq!(kind_label("local_bash"), "shell");
-        assert_eq!(kind_label("local_agent"), "agent");
+        assert_eq!(kind_label("remote_agent"), "remote agent");
         assert_eq!(kind_label("monitor"), "monitor");
         assert_eq!(kind_label(""), "task");
         assert_eq!(kind_label("something_new"), "something_new");

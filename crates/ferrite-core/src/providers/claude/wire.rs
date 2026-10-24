@@ -245,6 +245,17 @@ pub(super) fn parse_value(value: &Value) -> Option<SessionEvent> {
 }
 
 /// The tools by which an agent schedules work it starts itself.
+/// A task Claude keeps to itself (its own upkeep), shown nowhere.
+pub(super) fn hidden_task(task: &Value) -> bool {
+    task["ambient"] == true || task["skip_transcript"] == true
+}
+
+/// A background agent: Ferrite shows it as a Subagent, with its own tab and
+/// stop, never as a background task too.
+pub(super) fn agent_task(task: &Value) -> bool {
+    task["task_type"] == "local_agent"
+}
+
 const SCHEDULERS: [&str; 3] = ["ScheduleWakeup", "CronCreate", "Monitor"];
 
 /// Whether `value` shows the agent taking on work it will start itself,
@@ -389,7 +400,7 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                         event: ProgressEvent::BackgroundSnapshot {
                             tasks: tasks
                                 .iter()
-                                .filter(|task| task["ambient"] != true)
+                                .filter(|task| !hidden_task(task) && !agent_task(task))
                                 .filter_map(|task| {
                                     Some(crate::progress::BackgroundTask {
                                         id: task.get("task_id")?.as_str()?.into(),
