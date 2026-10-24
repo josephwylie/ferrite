@@ -561,10 +561,11 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
     }
 }
 
-/// F-14: a reader opens beside the Solo Pane at a line — half and half,
-/// the panel giving way — and closing it gives the Pane its board back.
+/// F-14: a file opens at a line in the Panel's preview — the Panel wide,
+/// the board giving up the width — and closing it gives the Pane its board
+/// back.
 #[gpui::test]
-fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
+fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
     let dir = scratch("frame-reader");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("nav.rs");
@@ -581,18 +582,14 @@ fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
     let whole = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1.w);
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.open_beside(
-                beside::Beside::Reader {
-                    path: file.clone(),
-                    line: Some(3),
-                },
-                window,
-                cx,
-            )
+            view.open_preview(file.clone(), Some(3), window, cx)
         })
     });
     tick(cx);
-    let (line, half) = cx.update(|window, cx| {
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS + 50));
+    tick(cx);
+    let (line, narrowed) = cx.update(|window, cx| {
         let view = view.read(cx);
         (
             view.panes[0].preview.document().and_then(|doc| doc.line()),
@@ -600,15 +597,19 @@ fn a_reader_opens_beside_the_pane_and_closes_back(cx: &mut TestAppContext) {
         )
     });
     assert_eq!(line, Some(3));
-    // The panel stays beside it (SPEC §5.6): the reader halves the board
-    // the Pane had.
-    let board = whole;
+    // The Panel widens to read it (SPEC §5.6.3): the board gives up what
+    // it gains.
+    let wide = view.read_with(cx, |view, _| view.board_right_rest());
+    assert!(wide > crate::theme::PANEL_W);
     assert!(
-        (half - (board - crate::theme::BOARD_SEAM) / 2.0).abs() <= 1.0,
-        "half and half: {half} of {board}"
+        (narrowed - (whole - (wide - crate::theme::PANEL_W))).abs() <= 1.0,
+        "the board gives way: {narrowed} of {whole}"
     );
-    assert!(cx.debug_bounds("reader-head").is_some());
-    view.update(cx, |view, cx| view.close_reader(0, cx));
+    assert!(cx.debug_bounds("panel-preview").is_some());
+    view.update(cx, |view, cx| view.close_preview(0, cx));
+    tick(cx);
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS + 50));
     tick(cx);
     let back = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1.w);
     assert!(

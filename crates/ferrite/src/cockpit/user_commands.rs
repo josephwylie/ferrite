@@ -1,8 +1,8 @@
 //! The operator's own commands and keys (Settings `commands` and `keys`,
 //! ADR 0024): a command runs for the focused Thread, in its working
 //! directory, on a thread of its own, until it ends or its palette row
-//! stops it, and says how it went in a toast or shows its output in the
-//! reader beside that Thread's Pane; a key the launch refused is said
+//! stops it, and says how it went in a toast or shows its output in that
+//! Thread's preview, in the Panel; a key the launch refused is said
 //! once; `reset keys` puts the defaults back.
 
 use super::*;
@@ -120,7 +120,7 @@ impl CockpitView {
         .detach();
     }
 
-    /// A command ended: its toast, or its output in the reader beside the
+    /// A command ended: its toast, or its output in the preview of the
     /// Pane it was run from (and a toast too when it failed or was
     /// stopped, or when that Pane has gone).
     fn user_command_ran(
@@ -142,7 +142,7 @@ impl CockpitView {
             if let Some(index) = pane {
                 self.empty_shown = false;
                 // Named as a log in the directory it ran in, so the
-                // reader's chip reads LOG; nothing is written there.
+                // preview reads it as plain text; nothing is written there.
                 self.panes[index].preview.open_source(
                     cwd.join(format!("{}.log", command.name)),
                     command.name.clone(),

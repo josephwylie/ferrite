@@ -3,7 +3,6 @@
 // own console window at launch. Left on in debug builds so `cargo run`
 // still prints.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-mod attachment_preview;
 mod attachments;
 mod background_chips;
 #[cfg(unix)]
@@ -37,6 +36,7 @@ mod platform_text;
 mod pointer;
 mod pr;
 mod prefs;
+mod preview;
 mod project_editor;
 mod projects;
 mod prompt_drop;

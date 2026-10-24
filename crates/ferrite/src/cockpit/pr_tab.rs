@@ -168,8 +168,9 @@ impl PrTab {
 impl CockpitView {
     /// The Thread whose PR tab is on screen, if one is.
     fn pr_tab_thread(&self) -> Option<ThreadId> {
-        let thread = self.panel_thread()?;
-        (self.panel_tab(thread) == PanelTab::Pr).then_some(thread)
+        let index = self.panel_pane()?;
+        let thread = self.panes[index].thread()?;
+        (self.shown_tab(index) == PanelTab::Pr).then_some(thread)
     }
 
     /// Each pump: read the snapshot of the PR tab on screen when it has
@@ -691,14 +692,7 @@ impl CockpitView {
                             Some(cwd) if !raw.is_absolute() => cwd.join(raw),
                             _ => raw,
                         };
-                        view.open_beside(
-                            beside::Beside::Reader {
-                                path,
-                                line: Some(start),
-                            },
-                            window,
-                            cx,
-                        );
+                        view.open_preview(path, Some(start), window, cx);
                     }))
             }))
             .child(comment_body(

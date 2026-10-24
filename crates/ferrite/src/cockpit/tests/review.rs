@@ -158,7 +158,7 @@ fn a_comment_on_the_uncommitted_work_rides_the_next_prompt(cx: &mut TestAppConte
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()),
+        view.read_with(cx, |view, _| !view.panes[0].review.is_open()),
         "esc closes the slot"
     );
     cx.simulate_input("Please address these.");
@@ -200,7 +200,7 @@ fn the_mouse_picks_comments_and_switches_scope(cx: &mut TestAppContext) {
         [("src/nav.rs:1".into(), "why?".into())]
     );
     let review = view
-        .read_with(cx, |view, _| view.panes[0].preview.review())
+        .read_with(cx, |view, _| view.panes[0].review.review())
         .expect("a review is open");
     let token = cx.debug_bounds("review-scope-branch").expect("on the bar");
     cx.simulate_click(token.center(), gpui::Modifiers::none());
@@ -210,7 +210,7 @@ fn the_mouse_picks_comments_and_switches_scope(cx: &mut TestAppContext) {
         Scope::Branch
     );
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.review()) == Some(review),
+        view.read_with(cx, |view, _| view.panes[0].review.review()) == Some(review),
         "switched in place"
     );
 }
@@ -282,7 +282,7 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
     cx.simulate_click(review.center(), gpui::Modifiers::none());
     until(cx, |cx| cx.debug_bounds("review-lines").is_some());
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.review().is_some()),
+        view.read_with(cx, |view, _| view.panes[0].review.review().is_some()),
         "the button opens the Review"
     );
     assert!(
@@ -317,7 +317,7 @@ fn shift_click_ranges_and_the_chip_drops_the_comments(cx: &mut TestAppContext) {
 /// A right-click in the diff opens the context menu on the pick — kept
 /// when the line is in it, else the line picked — and its rows act: copy
 /// takes the lines' text, comment opens the field, and open reads the
-/// line's file in the reader.
+/// line's file in the Panel's preview, the review staying beside the Pane.
 #[gpui::test]
 fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     let (core, _fake, _repo) = edited("review-menu");
@@ -387,13 +387,15 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     tick(cx);
     let document = view
         .read_with(cx, |view, _| view.panes[0].preview.document())
-        .expect("the reader replaces the review");
+        .expect("the file opens in the preview");
     assert!(document.path.ends_with("src/nav.rs"), "{:?}", document.path);
     assert_eq!(document.line(), Some(2), "the removed line's old number");
-    assert!(matches!(
-        document.body,
-        crate::attachment_preview::Body::Text { .. }
-    ));
+    assert!(matches!(document.body, crate::preview::Body::Text { .. }));
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].review.is_open()),
+        "the review stays on the board"
+    );
+    assert!(cx.debug_bounds("panel-preview").is_some(), "in the Panel");
 }
 
 /// A turn snapshots its checkout as it begins, reviewed or not (the
@@ -468,7 +470,7 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
     );
     open_review(&view, Scope::LastTurn, cx);
     let review = view
-        .read_with(cx, |view, _| view.panes[0].preview.review())
+        .read_with(cx, |view, _| view.panes[0].review.review())
         .expect("a review is open");
     until(cx, |cx| {
         review.read_with(cx, |review, _| {

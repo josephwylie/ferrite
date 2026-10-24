@@ -144,14 +144,7 @@ fn the_panel_stays_with_the_beside_slot_open(cx: &mut TestAppContext) {
     std::fs::write(&file, "one\ntwo\n").unwrap();
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-            view.open_beside(
-                beside::Beside::Reader {
-                    path: file.clone(),
-                    line: None,
-                },
-                window,
-                cx,
-            )
+            view.open_preview(file.clone(), None, window, cx)
         })
     });
     tick(cx);
@@ -159,12 +152,12 @@ fn the_panel_stays_with_the_beside_slot_open(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view
             .pane_for(threads[0])
             .is_some_and(|index| view.panes[index].preview.document().is_some())),
-        "the premise: a reader beside the Pane"
+        "the premise: a preview open"
     );
-    assert_eq!(shown(&view, cx), Some(threads[0]), "a reader keeps it");
+    assert_eq!(shown(&view, cx), Some(threads[0]), "a preview keeps it");
     view.update(cx, |view, cx| {
         let index = view.pane_for(threads[0]).unwrap();
-        view.close_reader(index, cx)
+        view.close_preview(index, cx)
     });
     tick(cx);
 

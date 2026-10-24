@@ -135,11 +135,11 @@ impl CockpitView {
         }
     }
 
-    /// ⌘-click on a path target: the file in a reader beside the Thread
-    /// (`open_beside(Beside::Reader)`), at the link's line. The transcript's
-    /// event carries no window, so the reader opens on the next turn of the
+    /// ⌘-click on a path target: the file in the Thread's preview, in the
+    /// Panel (`open_preview`), at the link's line. The transcript's event
+    /// carries no window, so the preview opens on the next turn of the
     /// loop, in the window that holds the cockpit.
-    pub(super) fn open_reader_from(
+    pub(super) fn open_preview_from(
         &mut self,
         index: usize,
         path: PathBuf,
@@ -154,7 +154,7 @@ impl CockpitView {
             let _ = window.update(cx, |_, window, cx| {
                 let _ = cockpit.update(cx, |view, cx| {
                     view.focus_pane(index);
-                    view.open_beside(super::beside::Beside::Reader { path, line }, window, cx);
+                    view.open_preview(path, line, window, cx);
                 });
             });
         });
