@@ -920,7 +920,8 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
         MarkSeat::OneLine if dot => NAV_DOT_AT_LINE,
         MarkSeat::Member if spinner => NAV_SPINNER_AT_SMALL,
         MarkSeat::Member if dot => NAV_DOT_AT_SMALL,
-        _ => NAV_ICON_AT,
+        MarkSeat::TwoLine => NAV_ICON_AT,
+        MarkSeat::OneLine | MarkSeat::Member => NAV_ICON_AT_LINE,
     };
     let halo = if status == RowStatus::NeedsYou {
         NAV_HALO

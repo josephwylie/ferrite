@@ -2515,19 +2515,28 @@ pub const NAV_HALO: f32 = 3.0;
 pub fn nav_halo_box(dot: f32) -> f32 {
     dot + 2.0 * NAV_HALO
 }
+/// The middle of a two-line row's line 1 (its two lines centred in the
+/// row): where its mark centres, on the title's own middle (§5.1.5
+/// "centred on line 1"; the mockups' marks sit 3–5px under it, on the
+/// baseline, which the eye reads as dropped).
+pub const NAV_LINE1_MID: f32 = (NAV_ROW2_H - 2.0 * NAV_LINE) / 2.0 + NAV_LINE / 2.0;
 /// Where a mark sits, `(x, y)` from its mark column's left and its row's
-/// top, as the mockups place them (measured, so off the scale): on line 1
-/// of a two-line row, centred on a one-line (member) row (`_SMALL`). The
-/// blocked dot sits where a dot does, its halo `NAV_HALO` out round it.
-pub const NAV_SPINNER_AT: (f32, f32) = (2.0, 6.0);
+/// top: centred on line 1 of a two-line row (the spinner's line box on
+/// line 1's own), centred on a one-line row (`_LINE`) and on a shown
+/// Group's member (`_SMALL`). The x are the mockups' (measured, so off the
+/// scale). The blocked dot sits where a dot does, its halo `NAV_HALO` out
+/// round it.
+pub const NAV_SPINNER_AT: (f32, f32) = (2.0, NAV_LINE1_MID - NAV_LINE / 2.0);
 pub const NAV_SPINNER_AT_SMALL: (f32, f32) = (1.0, (NAV_ROW_H - NAV_LINE) / 2.0);
 /// A full-size mark on a one-line (30px) Thread row, centred on it: at
 /// the two-line row's x, the spinner's line and the dot centred.
 pub const NAV_SPINNER_AT_LINE: (f32, f32) = (NAV_SPINNER_AT.0, NAV_SPINNER_AT_SMALL.1);
 pub const NAV_DOT_AT_LINE: (f32, f32) = (NAV_DOT_AT.0, (NAV_ROW_H - NAV_DOT) / 2.0);
-pub const NAV_DOT_AT: (f32, f32) = (4.0, 13.0);
+pub const NAV_DOT_AT: (f32, f32) = (4.0, NAV_LINE1_MID - NAV_DOT / 2.0);
 pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
-pub const NAV_ICON_AT: (f32, f32) = (0.0, 8.0);
+pub const NAV_ICON_AT: (f32, f32) = (0.0, NAV_LINE1_MID - NAV_MARK_ICON / 2.0);
+/// An icon on a one-line row, a shown Group's member's included.
+pub const NAV_ICON_AT_LINE: (f32, f32) = (0.0, (NAV_ROW_H - NAV_MARK_ICON) / 2.0);
 pub const NAV_MARK_ICON: f32 = 14.0;
 pub const NAV_MARK_ICON_SMALL: f32 = 13.0;
 pub const NAV_SPINNER_FS: f32 = 12.0;
