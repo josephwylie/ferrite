@@ -2054,3 +2054,31 @@ fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
     eprintln!("MENU_ROW_HOVER pane_builds={built:?}");
     assert_eq!(built, [0, 0, 0, 0], "a menu row's hover rebuilt a Pane");
 }
+
+/// The kit's toast stack measures a toast as it slides in: that redraws
+/// the stack's own view, never every view in the window (its upstream
+/// `refresh_windows` rebuilt every Pane on every frame a toast moved).
+#[gpui::test]
+fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (_view, _fake, threads, cx) = group_board("kit-toast", &[], cx);
+    cockpit_renders_over(cx, 2_500);
+    let panes = pane_builds(&threads);
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt;
+        window.push_notification(
+            gpui::component::notification::Notification::new().message("Server restarted"),
+            cx,
+        )
+    });
+    // The kit's card slides on the wall clock: let real time pass with the
+    // frames, so it moves through its fractional offsets.
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(16));
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        display_frames(cx);
+    }
+    let built = built_since(&threads, &panes);
+    eprintln!("KIT_TOAST_IN pane_builds={built:?}");
+    assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
+}
