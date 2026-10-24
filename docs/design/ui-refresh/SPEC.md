@@ -575,7 +575,8 @@ box has a `FIELD` ground, radius 10, and a 1px `FIELD_RING` (§3.2).
 Above the box, inside the card, is the **shelf**: attachment chips
 (`Composer::attachments`) on the left and background chips
 (`background_chips`) on the right. Chips are 24 high, radius 7,
-`RAISED`, 12px. Then the working line (§5.4).
+`RAISED`, 12px. The shelf stands directly on the box its files are
+for; above it, the stack's top row, is the working line (§5.4).
 
 Inside the box, top to bottom:
 1. **Queued row (34, when anything is queued).**

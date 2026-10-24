@@ -1897,10 +1897,11 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 /// `COMPOSER_INSET` from the card's sides and foot: `paint::FIELD` at
 /// `R_PANE`, a 1px `FIELD_RING` laid outside it (it takes no layout).
 ///
-/// - **The shelf** stands above the box: pending files at left, background
-///   tasks at right, chips `SHELF_CHIP_H` high at `R_CHIP` on
-///   `paint::RAISED`, `FS_META`. Then the working line
-///   (`pane::working_line`), `COMPOSER_WORKING_GAP_SOLO` above the box.
+/// - **The working line** (`pane::working_line`) is the stack's top row,
+///   `COMPOSER_WORKING_GAP_SOLO` above what follows it.
+/// - **The shelf** stands `SHELF_GAP` above the box its files are for:
+///   pending files at left, background tasks at right, chips
+///   `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, `FS_META`.
 /// - **The queued row** (`QUEUED_ROW_H`, when anything is queued): `Queued`
 ///   in `FS_META`/`W_LABEL` `TEXT_DIM`, the top of the pile in
 ///   `TEXT_MUTED` on one cut line, `+N` in `TEXT_DIM`, and a
@@ -1957,7 +1958,7 @@ pub const STATUS_LOGO_FOOT: f32 = 1.0;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
-/// Between the shelf (pending files, background chips) and the band.
+/// Between the shelf (pending files, background chips) and the box.
 pub const SHELF_GAP: f32 = SPACE_1;
 /// The caret's bar: 2px wide (off the space scale: a caret is a hairline
 /// you can find), the row high.

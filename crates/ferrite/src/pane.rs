@@ -3226,11 +3226,13 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .child(field)
 }
 
-/// What stands over either Composer: the shelf — pending files at left,
-/// background chips at right; the chips give way first, cutting their
-/// labels — then the working line (`.comp > .r`), on the transcript rows'
-/// axis, `COMPACT_WORKING_GAP` (Solo: `COMPOSER_WORKING_GAP_SOLO`) over
-/// the input. Each shelf keeps to its box's inset (`boxed`: Solo's).
+/// What stands over either Composer: on top the working line (`.comp >
+/// .r`, SPEC §5.4: the stack's top row), on the transcript rows' axis,
+/// `COMPACT_WORKING_GAP` (Solo: `COMPOSER_WORKING_GAP_SOLO`) over what
+/// follows; then, `SHELF_GAP` over the box it belongs to, the shelf —
+/// pending files at left, background chips at right; the chips give way
+/// first, cutting their labels. The shelf keeps to its box's inset
+/// (`boxed`: Solo's).
 fn composer_stack(
     attachments: Option<AnyElement>,
     background: Option<AnyElement>,
@@ -3247,6 +3249,21 @@ fn composer_stack(
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
+        .when_some(working, |stack, working| {
+            stack.child(
+                div()
+                    .debug_selector(|| "transcript-progress".into())
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .px(px(theme::tx_inset(boxed)))
+                    .mb(px(if boxed {
+                        theme::COMPOSER_WORKING_GAP_SOLO
+                    } else {
+                        theme::COMPACT_WORKING_GAP
+                    }))
+                    .child(working),
+            )
+        })
         .when(attachments.is_some() || background.is_some(), |stack| {
             stack.child(
                 div()
@@ -3264,21 +3281,6 @@ fn composer_stack(
                     .when_some(background, |shelf, chips| {
                         shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
                     }),
-            )
-        })
-        .when_some(working, |stack, working| {
-            stack.child(
-                div()
-                    .debug_selector(|| "transcript-progress".into())
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .px(px(theme::tx_inset(boxed)))
-                    .mb(px(if boxed {
-                        theme::COMPOSER_WORKING_GAP_SOLO
-                    } else {
-                        theme::COMPACT_WORKING_GAP
-                    }))
-                    .child(working),
             )
         })
 }
