@@ -1240,6 +1240,7 @@ pub fn view_row(
     } else {
         motion::mix(rgb(rest).into(), rgb(TEXT).into(), t)
     };
+    let words = matches!(tail, Trailing::Text(_));
     let end: Option<AnyElement> = match tail {
         Trailing::None => None,
         Trailing::Chord(keys) => Some(
@@ -1254,14 +1255,30 @@ pub fn view_row(
                 .debug_selector(move || format!("{key}-count"))
                 .into_any_element(),
         ),
-        Trailing::Text(text) => Some(trailing(text, FS_META, TEXT_DIM).into_any_element()),
+        // Words give way before the label: the Tasks tally is cut, never
+        // the `Tasks` beside it.
+        Trailing::Text(text) => Some(
+            trailing(text, FS_META, TEXT_DIM)
+                .debug_selector(move || format!("{key}-words"))
+                .ml_auto()
+                .flex_shrink(1.)
+                .min_w_0()
+                .truncate()
+                .into_any_element(),
+        ),
     };
     line_frame(key, blend, active)
         .debug_selector(move || key.into())
         .gap(px(NAV_ICON_GAP))
         .text_color(ink)
         .child(div().flex().flex_shrink_0().size(px(NAV_ICON)).child(glyph))
-        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(
+            div()
+                .debug_selector(move || format!("{key}-label"))
+                .when(words, |label| label.flex_shrink_0())
+                .when(!words, |label| label.flex_1().min_w_0().truncate())
+                .child(label),
+        )
         .children(end)
 }
 

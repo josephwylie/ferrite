@@ -504,6 +504,34 @@ fn the_board_is_reached_by_its_key_not_the_bar(cx: &mut TestAppContext) {
     );
 }
 
+/// The nav's `Tasks` view keeps its label whole beside a tally too long
+/// for the row: the tally is what gives way, inside the row.
+#[gpui::test]
+fn a_long_tally_never_cuts_the_tasks_label(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("tasks-tally-cut", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.projects.live = true;
+        view.projects.sidebar.tally =
+            "12 need you \u{b7} 4 ready \u{b7} 31 working \u{b7} 9 to do \u{b7} 2 done".into();
+        cx.notify();
+    });
+    tick(cx);
+    let row = cx.debug_bounds("nav-view-tasks").expect("the Tasks view");
+    let label = cx.debug_bounds("nav-view-tasks-label").expect("its label");
+    let words = cx.debug_bounds("nav-view-tasks-words").expect("its tally");
+    assert!(
+        label.size.width >= px(4.0 * crate::theme::CH),
+        "`Tasks` keeps its width: {:?}",
+        label.size.width
+    );
+    assert!(
+        words.right() <= row.right() && words.left() >= label.right(),
+        "the tally is cut inside the row, after the label"
+    );
+}
+
 /// Two Projects: `here()`'s, with `threads[0]`, and another repo's, with
 /// `threads[1]`, focused. Their roots, in the registry's order.
 fn two_projects(name: &str) -> (Cockpit, Fake, [ThreadId; 2], [std::path::PathBuf; 2]) {
