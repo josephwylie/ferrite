@@ -2176,3 +2176,38 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
+
+/// A Composer's choice menu fades in where it measured itself to stand,
+/// from its first placed frame (`Opens::InPlace`), standing still as it
+/// comes in, and asks for nothing once it lands.
+#[gpui::test]
+fn a_choice_menu_fades_in_in_place_and_then_rests(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
+    view.update(cx, |view, cx| {
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    cockpit_renders_over(cx, 300);
+    view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
+    cx.run_until_parked();
+    let mut frames = 0;
+    let mut stood = Vec::new();
+    for _ in 0..(theme::MOTION_MENU_IN_MS + 48) / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        frames += display_frames(cx);
+        if crate::menu::testing::drawn().placed {
+            stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
+        }
+    }
+    assert!(frames > 0, "it fades in");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+    assert!(
+        stood.len() > 2,
+        "the premise: it was drawn placed as it came in"
+    );
+    assert!(
+        stood.windows(2).all(|pair| pair[0] == pair[1]),
+        "it stood still as it came in: {stood:?}"
+    );
+}

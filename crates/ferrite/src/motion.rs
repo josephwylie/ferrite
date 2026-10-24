@@ -249,6 +249,10 @@ pub enum Opens {
     Down,
     /// Above its opener (the Composer's menus, the footer cards).
     Up,
+    /// Where it stands, without settling: a float that measures its own
+    /// box to place itself (the Composer's choice menus) would chase the
+    /// shift and re-place itself every frame.
+    InPlace,
 }
 
 impl Opens {
@@ -256,6 +260,7 @@ impl Opens {
         let toward = match self {
             Opens::Down => -1.0,
             Opens::Up => 1.0,
+            Opens::InPlace => 0.0,
         };
         toward * theme::MOTION_MENU_SHIFT * (1.0 - t)
     }
