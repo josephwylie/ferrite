@@ -8027,7 +8027,7 @@ fn diff_max_number(diff: &Diff, cap: usize) -> usize {
 
 /// The number column in cells: `DIFF_NUMBER_CELLS` (three digits and the
 /// `DIFF_NUMBER_PAD_CELLS` after them), wider only for a longer number.
-fn diff_number_cells(max: usize) -> f32 {
+pub(crate) fn diff_number_cells(max: usize) -> f32 {
     let digits = max.max(1).ilog10() as f32 + 1.;
     theme::DIFF_NUMBER_CELLS.max(digits + theme::DIFF_NUMBER_PAD_CELLS)
 }

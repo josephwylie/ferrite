@@ -14,6 +14,7 @@ use ferrite_core::protocol::{
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::{CheckState, PrState, PullRequest};
 use ferrite_core::{SessionEvent, TurnOutcome};
+use ferrite_reviewr::diff::Notice;
 use ferrite_reviewr::ferrite::FileSides;
 use ferrite_reviewr::git::CommitRow;
 use ferrite_reviewr::model::{ChangeKind, ChangedFile, Comment, Rev, Scope as ReviewScope, Side};
@@ -55,6 +56,9 @@ pub(super) const STATES: &[&str] = &[
     "review-search",
     "reader-line",
     "reader-slide",
+    "review-comment",
+    "review-notices",
+    "review-error",
     "find",
     "nav-states",
     "mermaid",
@@ -79,6 +83,9 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "review-search" => review(Staged::Search),
         "reader-line" => reader(None),
         "reader-slide" => reader(Some(0.5)),
+        "review-comment" => review(Staged::Comment),
+        "review-notices" => review(Staged::Notices),
+        "review-error" => review(Staged::Error),
         "find" => find(),
         "nav-states" => nav_states(),
         "mermaid" => mermaid(),
@@ -415,6 +422,13 @@ enum Staged {
     Pr,
     /// File search over the diff.
     Search,
+    /// A comment being written under a one-line pick.
+    Comment,
+    /// The files the model declines (binary, too large) beside a renamed
+    /// file deep in the tree whose lines run past a thousand.
+    Notices,
+    /// A path that is no repository.
+    Error,
 }
 
 /// The conversation scene's Thread with its review beside it, seeded the
@@ -466,6 +480,16 @@ fn review(staged: Staged) -> (Scene, Setup) {
             Staged::Search => review.update(cx, |review, cx| {
                 review.stage_search("status_line", search_results(), window, cx)
             }),
+            Staged::Comment => review.update(cx, |review, cx| {
+                review.stage_pick(8, 8, cx);
+                review.stage_comment("Keep this to open Threads?", window, cx);
+            }),
+            Staged::Notices => review.update(cx, |review, cx| {
+                review.show(ReviewScope::Uncommitted, notice_files(), cx)
+            }),
+            Staged::Error => review.update(cx, |review, cx| {
+                review.fail("not a git repository".into(), cx)
+            }),
         }
         cx.notify();
     });
@@ -501,6 +525,40 @@ fn thread_row(&self, thread: ThreadId, cx: &App) -> Div {
     vec![
         sides("crates/ferrite/src/nav.rs", nav_old, nav_new, 5, 3),
         sides("crates/ferrite/src/theme.rs", theme_old, theme_new, 1, 0),
+    ]
+}
+
+/// A binary and an over-budget file, and a renamed file deep in the tree
+/// whose change sits past line a thousand.
+fn notice_files() -> Vec<FileSides> {
+    let declined = |path: &str, notice| FileSides {
+        file: ChangedFile {
+            path: path.into(),
+            kind: ChangeKind::Modified,
+            additions: 0,
+            deletions: 0,
+            previous_path: None,
+            binary: false,
+            old_size: 0,
+            new_size: None,
+        },
+        sides: Err(notice),
+    };
+    let old: String = (1..=1204).map(|n| format!("    step({n});\n")).collect();
+    let new = old.replace("    step(1200);\n", "    step(1200).await;\n");
+    let mut long = sides(
+        "crates/ferrite/src/cockpit/visual_reference/feature_scenes/review_states.rs",
+        &old,
+        &new,
+        1,
+        1,
+    );
+    long.file.previous_path =
+        Some("crates/ferrite/src/cockpit/visual_reference/review_scenes.rs".into());
+    vec![
+        declined("assets/icons/app.icns", Notice::Binary),
+        declined("fixtures/transcript-large.jsonl", Notice::TooLarge),
+        long,
     ]
 }
 
