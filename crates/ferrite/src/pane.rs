@@ -2695,7 +2695,8 @@ fn chip_face(
 
 /// A toolbar chip's button (SPEC §5.5): `TOOL_CHIP_H` high at `R_CHIP`,
 /// `TOOL_CHIP_PAD_X` at each side, no ground at rest, `paint::RAISED`
-/// under the pointer. The cockpit gives it its face and its menu.
+/// under the pointer. The cockpit gives it its face and its menu. It may
+/// narrow past its label, which then cuts (`composer_toolbar`).
 pub fn toolbar_chip(
     id: impl Into<gpui::ElementId>,
     cx: &gpui::App,
@@ -2704,7 +2705,8 @@ pub fn toolbar_chip(
         .p_0()
         .h(px(theme::TOOL_CHIP_H))
         .px(px(theme::TOOL_CHIP_PAD_X))
-        .flex_shrink_0()
+        .min_w_0()
+        .flex_shrink(1.)
         .rounded(px(theme::R_CHIP))
 }
 
@@ -2763,10 +2765,38 @@ pub fn send_button(stop: bool, compact: bool, cx: &gpui::App) -> gpui::component
     ))
 }
 
-/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): `lead` from the left —
-/// the `+`, a draft's chips, the mode — then a spacer and `trail` — the
-/// model, the effort, send.
-pub fn composer_toolbar(lead: Vec<AnyElement>, trail: Vec<AnyElement>) -> Div {
+/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): the `+`, `lead` — a
+/// draft's chips, the mode — a spacer, `trail` — the model, the effort —
+/// and the send circle. In a narrow box the lead chips give way first,
+/// their labels cut at the end (the mode keeps its shield and its ink);
+/// the model and effort stay whole; narrower still, the chips clip at the
+/// row's end. The `+` and send always stand whole inside the box.
+pub fn composer_toolbar(
+    attach: AnyElement,
+    lead: Vec<AnyElement>,
+    trail: Vec<AnyElement>,
+    send: AnyElement,
+) -> Div {
+    // A lead chip's slot may grow narrower than the chip: the chip, a
+    // block in it, takes the slot's width and cuts its label.
+    let give = |chip: AnyElement| {
+        div()
+            .min_w_0()
+            .flex_shrink(1.)
+            .overflow_hidden()
+            .child(chip)
+    };
+    let keep = |chip: AnyElement| div().flex_shrink_0().child(chip);
+    let chips = div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .items_center()
+        .gap(px(theme::COMPOSER_TOOLBAR_GAP))
+        .children(lead.into_iter().map(give))
+        .child(div().flex_1().min_w_0())
+        .children(trail.into_iter().map(keep));
     div()
         .debug_selector(|| "composer-toolbar".into())
         .flex()
@@ -2776,9 +2806,9 @@ pub fn composer_toolbar(lead: Vec<AnyElement>, trail: Vec<AnyElement>) -> Div {
         .h(px(theme::COMPOSER_TOOLBAR_H))
         .min_w_0()
         .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
-        .children(lead)
-        .child(div().flex_1().min_w_0())
-        .children(trail)
+        .child(attach)
+        .child(chips)
+        .child(send)
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
