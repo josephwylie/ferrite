@@ -296,6 +296,8 @@ pub const ON_PRIMARY: u32 = 0x161616;
 // glass and on the opaque greys, so these are `0xRRGGBBAA` and paint with
 // `rgba()` or `paint::*`.
 
+/// 1px — every hairline's width (rule 2).
+pub const HAIRLINE_W: f32 = 1.0;
 /// 6% — dividers in cards and panels: a tab strip's foot, the queued row's
 /// foot, panel sections.
 pub const HAIRLINE: u32 = 0xffffff0f;

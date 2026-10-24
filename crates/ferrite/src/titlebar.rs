@@ -159,38 +159,56 @@ fn drag_region(maximized: bool) -> Div {
 /// hairline, `BAR_PAD_X` in from each end, `BAR_GAP` between its items,
 /// Geist `FS_META` in `TEXT_DIM` (`CHROME_MUTED`, its step up on glass).
 /// Left the view `tabs`; the `vitals` pushed to the right end.
+///
+/// The hairline lies on the frame's last row above the bar, as the
+/// mockups draw it, not inside the bar's 30px: inside, it would leave 29
+/// for the 22px tabs, and the half pixel the snap rounds down would seat
+/// them 4 under the line and 3 over the window's foot.
 pub fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
     div()
         .debug_selector(|| "bottom-bar".into())
-        .flex()
-        .flex_row()
-        .items_center()
+        .relative()
         .flex_shrink_0()
         .w_full()
         .h(px(STATUS_BAR_H))
-        .px(px(BAR_PAD_X))
-        .gap(px(BAR_GAP))
         .bg(paint::BAR)
-        .border_t_1()
-        .border_color(paint::BAR_TOP)
-        .font_family(FONT_UI)
-        .text_size(px(FS_META))
-        .line_height(px(LH_META))
-        .text_color(rgb(CHROME_MUTED))
-        .whitespace_nowrap()
-        .overflow_hidden()
         .child(
             div()
-                .debug_selector(|| "bottom-bar-tabs".into())
+                .debug_selector(|| "bottom-bar-rule".into())
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(-HAIRLINE_W))
+                .h(px(HAIRLINE_W))
+                .bg(paint::BAR_TOP),
+        )
+        .child(
+            div()
                 .flex()
                 .flex_row()
-                .flex_shrink_0()
                 .items_center()
-                .gap(px(SPACE_0_5))
-                .children(tabs),
+                .size_full()
+                .px(px(BAR_PAD_X))
+                .gap(px(BAR_GAP))
+                .font_family(FONT_UI)
+                .text_size(px(FS_META))
+                .line_height(px(LH_META))
+                .text_color(rgb(CHROME_MUTED))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .debug_selector(|| "bottom-bar-tabs".into())
+                        .flex()
+                        .flex_row()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(SPACE_0_5))
+                        .children(tabs),
+                )
+                .child(div().flex_1())
+                .child(vitals),
         )
-        .child(div().flex_1())
-        .child(vitals)
 }
 
 /// The bar's right end, in order: the need-you count, a usage segment per
@@ -261,6 +279,7 @@ pub fn bar_tab(
 ) -> Stateful<Div> {
     let selector = id.clone();
     let key = id.clone();
+    let key_dot = id.clone();
     div()
         .id(gpui::ElementId::Name(id))
         .debug_selector(move || selector.to_string())
@@ -286,14 +305,21 @@ pub fn bar_tab(
                 .child(SharedString::from(ordinal.to_string())),
         )
         .child(label)
-        .children(roll_up.map(|dot| bar_dot(BAR_TAB_DOT, dot.ink())))
+        .children(roll_up.map(|dot| {
+            bar_dot(BAR_TAB_DOT, dot.ink()).debug_selector(move || format!("{key_dot}-dot"))
+        }))
 }
 
 /// The need-you count (SPEC §5.7): a `BAR_NEED_DOT` `ATTENTION` dot and
 /// `N need you` in `TEXT_BAR`. `None` at zero. The cockpit wires the press
-/// to the Needs-you view.
+/// to the Needs-you view. A press target among the vitals, it answers the
+/// pointer as the nav's doors do — its words brighten to `TEXT_STRONG`
+/// over the hover blend — rather than with a ground: a ground would need
+/// padding the vitals' even gaps cannot spare.
 pub fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
     (count > 0).then(|| {
+        let blend = SharedString::from("bottom-bar-needs-you");
+        let ink = crate::motion::hover_blend(&blend, rgb(TEXT_BAR).into(), rgb(TEXT_STRONG).into());
         div()
             .id("bottom-bar-needs-you")
             .debug_selector(|| "bottom-bar-needs-you".into())
@@ -302,9 +328,10 @@ pub fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
             .items_center()
             .gap(px(SPACE_1_5))
             .cursor_pointer()
+            .on_hover(crate::motion::hover_listener(blend))
             .child(bar_dot(BAR_NEED_DOT, ATTENTION))
             .child(
-                components::tabular(div().text_color(rgb(TEXT_BAR)))
+                components::tabular(div().text_color(ink))
                     .child(SharedString::from(format!("{count} need you"))),
             )
     })

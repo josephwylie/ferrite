@@ -10910,12 +10910,20 @@ impl CockpitView {
         let view = self.cockpit.roster().view();
         let empty = self.empty_board_shown();
         let mut tabs = Vec::new();
-        let solo = self
-            .panes
-            .iter()
-            .filter_map(PaneView::thread)
-            .filter(|thread| self.cockpit.groups().of(*thread).is_none())
-            .max_by_key(|thread| self.last_used(*thread));
+        // Solo's one Thread: the one it shows while it is the view, else
+        // the loose Thread used last, where a press on the tab lands. (The
+        // Thread written last is not always the one on screen: the current
+        // tab's dot must not speak for another, nor its press move off it.)
+        let solo = (!empty && view == View::Solo)
+            .then(|| self.focused_thread())
+            .flatten()
+            .or_else(|| {
+                self.panes
+                    .iter()
+                    .filter_map(PaneView::thread)
+                    .filter(|thread| self.cockpit.groups().of(*thread).is_none())
+                    .max_by_key(|thread| self.last_used(*thread))
+            });
         // A tab's dot rolls up the Threads its view shows: Solo's one
         // Thread, a Group's members.
         let roll_up = |threads: &mut dyn Iterator<Item = ThreadId>| {
@@ -13455,12 +13463,20 @@ impl CockpitView {
     /// The Needs-you list's `Recent` heading, with `Mark all read` at its
     /// right: every row read, none removed.
     fn recent_heading(&self, cx: &mut Context<Self>) -> Div {
+        // A text control in the heading's ink, the `+`'s height and its
+        // ground under the pointer and pressed, so it reads as one.
         nav::heading("nav-recent", "Recent").child(
             div()
                 .id("notifications-mark-read")
                 .debug_selector(|| "notifications-mark-read".into())
+                .flex()
                 .flex_shrink_0()
+                .items_center()
+                .h(px(crate::theme::NAV_HEADING_BUTTON))
                 .px(px(crate::theme::SPACE_1))
+                .rounded(px(crate::theme::R_SMALL))
+                .hover_row("notifications-mark-read")
+                .press_row()
                 .font_weight(crate::theme::W_BODY)
                 .child("Mark all read")
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
