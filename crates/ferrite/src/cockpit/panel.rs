@@ -600,7 +600,8 @@ impl CockpitView {
     /// which opens the file in the reader as a file link does, its `+N −N`,
     /// and its directory under it — and, unfolded, its hunks (`hunks`).
     /// The rest of the head folds and unfolds them; under the pointer its
-    /// icon turns to the fold's chevron.
+    /// icon turns to the fold's chevron, which turns a quarter with the
+    /// fold (`fold_chevron`).
     fn panel_file_block(
         &self,
         thread: ThreadId,
@@ -633,11 +634,6 @@ impl CockpitView {
             .filter(|dir| !dir.is_empty());
         let unfolded = self.panel_file_unfolded(thread, file, cx);
         let group = SharedString::from(format!("panel-file-head-{index}"));
-        let chevron = if unfolded {
-            icons::CHEVRON_DOWN
-        } else {
-            icons::CHEVRON_RIGHT
-        };
         let slot = div()
             .debug_selector(move || format!("panel-file-fold-{index}"))
             .relative()
@@ -655,7 +651,7 @@ impl CockpitView {
                     .inset_0()
                     .invisible()
                     .group_hover(group.clone(), |style| style.visible())
-                    .child(icon(chevron, PANEL_ROW_ICON, TEXT_MUTED)),
+                    .child(fold_chevron(unfolded, PANEL_ROW_ICON, TEXT_MUTED)),
             );
         let fold_path = file.path.clone();
         let head = panel_row_with(slot)
@@ -711,11 +707,7 @@ impl CockpitView {
             .rounded(px(R_BLOCK))
             .overflow_hidden()
             .child(head)
-            .children(
-                unfolded
-                    .then(|| self.panel_hunks_element(thread, index, &file.path))
-                    .flatten(),
-            )
+            .child(self.panel_hunks_element(thread, index, &file.path, unfolded))
     }
 
     /// The Context tab: what fills the Thread's context window, by
@@ -870,6 +862,18 @@ fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
                         .gutter(px(PANEL_PAD_R), px(PANEL_SCROLLBAR_INSET)),
                 ),
         )
+}
+
+/// A fold's chevron in the panel (a file block's, the PR tab's): pointing
+/// right while folded, a quarter turn down while unfolded. The turn eases
+/// over `motion::CHEVRON` when the fold flips under it; drawn first already
+/// unfolded, it is simply turned.
+pub(super) fn fold_chevron(unfolded: bool, size: f32, ink: u32) -> impl IntoElement {
+    crate::motion::settled("fold-turn", unfolded, crate::motion::CHEVRON, move |turn| {
+        icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
+            gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
+        ))
+    })
 }
 
 /// A two-line panel row (48): its icon at the row's left, its two lines

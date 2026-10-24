@@ -687,10 +687,12 @@ still open beside the Pane inside the board (ADR 0021).
       `TEXT_DIM` 12. Clicking the name opens the file the way file links
       do.
     - Hunks (phase 7b): folded by default, and the head's chevron unfolds
-      them. They draw on `BAR` in Geist Mono 11/19, with a 2.5ch sign
-      column, the add/delete washes, and no line numbers. Fetch the hunks
-      through the Review core (Uncommitted scope) off the UI thread, only
-      for an unfolded file.
+      them, turning a quarter as it does (`motion::CHEVRON`). They draw on
+      `BAR` in Geist Mono 11/19, with a 2.5ch sign column, the add/delete
+      washes, and no line numbers. Fetch the hunks through the Review core
+      (Uncommitted scope) off the UI thread, only for an unfolded file.
+      Nothing draws until the read lands; then the hunks fade in
+      (`motion::ROW_IN`, opacity only). Folding takes them away at once.
   - **Foot button:** `Review changes` (secondary, full width). It opens
     `Beside::Review(Uncommitted)`, the changed-files card's `review` verb
     today.
