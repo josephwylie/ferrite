@@ -1,9 +1,10 @@
 //! The panel's PR tab (SPEC §5.6.2): a read-only view of the branch's pull
-//! request, answering at a glance "can this merge, and what's in the way".
-//! Top to bottom: the head (state pill, `#N`, refresh and open buttons,
-//! title, branches), the readiness group, the checks, the comments, and
-//! `Review PR`. With no pull request, the empty state; with no `gh` or no
-//! login, its line says how to sign in.
+//! request, answering at a glance "can this merge, and what's in the way",
+//! and saying what it is. Top to bottom: the head (state pill, `#N`,
+//! refresh and open buttons, title, branches), the readiness group, the
+//! description (its body, clamped), the checks, the comments, and `Review
+//! PR`. With no pull request, the empty state; with no `gh` or no login,
+//! its line says how to sign in.
 //!
 //! It reads the Review's own snapshot (`Cockpit::review_pull_request`, the
 //! forge's CLI where the checkout is), off the UI thread: when the tab is
@@ -11,7 +12,8 @@
 //! the operator's focus — never while it is hidden (`tend_pr_tab`). The last
 //! snapshot stays on screen while the next is read, the `refresh` icon
 //! turning; before the first lands, the tab says what the nav label's
-//! reading knows (`PrWatch`): the head, or no pull request. Each snapshot also moves that label: its
+//! reading knows (`PrWatch`): the head, or — the label knowing nothing
+//! either — that it is checking. Each snapshot also moves that label: its
 //! checks and state are the newer word.
 //!
 //! The snapshot has no per-check page or duration, no review decision and
@@ -29,7 +31,7 @@ use ferrite_core::protocol::{
     WirePrState, WirePrUnread, WireSync,
 };
 use ferrite_core::workspace::{PrState, PullRequest};
-use gpui::base::text::{InlineCodeWash, TextView, TextViewStyle};
+use gpui::base::text::{InlineCodeWash, TextView, TextViewState, TextViewStyle};
 use gpui::StyledText;
 
 /// The PR tab's state on the cockpit.
@@ -76,6 +78,8 @@ enum Unfold {
     Resolved,
     /// The checks past the first `PR_CHECKS_SHOWN`.
     Checks,
+    /// The description past its clamp.
+    Description,
 }
 
 impl PrTab {
@@ -100,6 +104,19 @@ impl PrTab {
     #[cfg(test)]
     pub(crate) fn fetching(&self, thread: ThreadId) -> bool {
         self.reads.get(&thread).is_some_and(|read| read.fetching)
+    }
+
+    /// Hold a first read of `thread`'s pull request out, as though `gh`
+    /// were still answering.
+    #[cfg(test)]
+    pub(crate) fn hold_first_read(&mut self, thread: ThreadId) {
+        self.reads.insert(
+            thread,
+            PrRead {
+                fetching: true,
+                ..PrRead::default()
+            },
+        );
     }
 
     fn unfolded(&self, thread: ThreadId, unfold: &Unfold) -> bool {
@@ -151,8 +168,9 @@ impl PrTab {
 impl CockpitView {
     /// The Thread whose PR tab is on screen, if one is.
     fn pr_tab_thread(&self) -> Option<ThreadId> {
-        let thread = self.panel_thread()?;
-        (self.panel_tab(thread) == PanelTab::Pr).then_some(thread)
+        let index = self.panel_pane()?;
+        let thread = self.panes[index].thread()?;
+        (self.shown_tab(index) == PanelTab::Pr).then_some(thread)
     }
 
     /// Each pump: read the snapshot of the PR tab on screen when it has
@@ -238,6 +256,12 @@ impl CockpitView {
         }
     }
 
+    /// Unfold `thread`'s description, as a scene showing it whole does.
+    #[cfg(feature = "visual-reference")]
+    pub(crate) fn fixture_unfold_description(&mut self, thread: ThreadId) {
+        self.pr_tab.unfolded.insert((thread, Unfold::Description));
+    }
+
     /// Open `url`, or the pull request's own page without one.
     fn open_pr_link(&mut self, thread: ThreadId, url: Option<String>, cx: &mut Context<Self>) {
         match url {
@@ -279,7 +303,10 @@ impl CockpitView {
                         .child(self.pr_head(thread, pill, reading.number, None, fetching, cx))
                         .into_any_element()
                 }
-                // Nor has the label's: no pull request, as far as is known.
+                // Nor has the label's: say it is asking rather than claim
+                // there is none.
+                None if fetching => checking(),
+                // Nobody is asking: no pull request, as far as is known.
                 None => self.no_pr(thread, Absent::NoPr),
             },
         }
@@ -304,6 +331,7 @@ impl CockpitView {
             .flex_col()
             .child(self.pr_head(thread, pill, pr.number, Some(pr), fetching, cx))
             .children(readiness_group(pr))
+            .children(self.description_section(thread, pr, cx))
             .children(self.checks_section(thread, pr, cx))
             .children(self.comments_section(thread, pr, window, cx))
             .child(
@@ -423,6 +451,39 @@ impl CockpitView {
             }))
     }
 
+    /// The description (a heading, then the pull request's body as its
+    /// author wrote it, Markdown set small), clamped to
+    /// `PR_DESCRIPTION_LINES` until the operator unfolds it; none for an
+    /// empty body.
+    fn description_section(
+        &self,
+        thread: ThreadId,
+        pr: &WirePr,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let body = pr.body.trim();
+        if body.is_empty() {
+            return None;
+        }
+        let unfolded = self.pr_tab.unfolded(thread, &Unfold::Description);
+        Some(
+            div()
+                .debug_selector(|| "pr-description".into())
+                .flex()
+                .flex_col()
+                .child(section_head("pr-description-head", "Description", None))
+                .child(Description {
+                    id: SharedString::from(format!("pr-description-{}", thread.get())),
+                    body: SharedString::from(body.to_string()),
+                    unfolded,
+                    toggle: Box::new(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.pr_tab.toggle(thread, Unfold::Description);
+                        cx.notify();
+                    })),
+                }),
+        )
+    }
+
     /// The checks (a heading with their count, a 30px row each, worst
     /// first), none without checks.
     fn checks_section(&self, thread: ThreadId, pr: &WirePr, cx: &mut Context<Self>) -> Option<Div> {
@@ -443,7 +504,7 @@ impl CockpitView {
         let mut section = div().flex().flex_col().child(section_head(
             "pr-checks-head",
             "Checks",
-            checks.len().to_string(),
+            Some(checks.len().to_string()),
         ));
         for (index, check) in checks.iter().take(checks.len() - hidden).enumerate() {
             let url = runs.as_ref().and_then(|runs| {
@@ -453,15 +514,9 @@ impl CockpitView {
             });
             let (mark, word, word_ink) = check_face(check.status);
             section = section.child(
-                div()
-                    .id(("pr-check", index))
+                flush_row(gpui::ElementId::from(("pr-check", index)), SPACE_0_5)
                     .debug_selector(move || format!("pr-check-{index}"))
-                    .flex()
-                    .items_center()
                     .gap(px(PR_ROW_GAP))
-                    .h(px(PANEL_SECTION_H))
-                    .px(px(SPACE_0_5))
-                    .cursor_pointer()
                     .child(mark)
                     .child(
                         div()
@@ -522,29 +577,18 @@ impl CockpitView {
         }
         if !resolved.is_empty() {
             let unfolded = self.pr_tab.unfolded(thread, &Unfold::Resolved);
-            let chevron = if unfolded {
-                icons::CHEVRON_DOWN
-            } else {
-                icons::CHEVRON_RIGHT
-            };
+            let words = format!("{} resolved", resolved.len());
             cards = cards.child(
-                div()
-                    .id("pr-resolved")
-                    .debug_selector(|| "pr-resolved".into())
-                    .flex()
-                    .items_center()
-                    .gap(px(SPACE_2))
-                    .h(px(PANEL_SECTION_H))
-                    .px(px(SPACE_1))
-                    .cursor_pointer()
-                    .text_size(px(FS_LABEL))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(icon(chevron, ICON_CHEVRON, TEXT_DIM))
-                    .child(SharedString::from(format!("{} resolved", resolved.len())))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.pr_tab.toggle(thread, Unfold::Resolved);
-                        cx.notify();
-                    })),
+                fold_row(
+                    "pr-resolved",
+                    format!("pr-resolved-turn-{}", thread.get()).into(),
+                    unfolded,
+                    words,
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    view.pr_tab.toggle(thread, Unfold::Resolved);
+                    cx.notify();
+                })),
             );
             if unfolded {
                 for (index, comment) in resolved.iter().enumerate() {
@@ -566,7 +610,7 @@ impl CockpitView {
                 .child(section_head(
                     "pr-comments-head",
                     "Comments",
-                    comments_tally(&pr.comments),
+                    Some(comments_tally(&pr.comments)),
                 ))
                 .child(cards),
         )
@@ -648,14 +692,7 @@ impl CockpitView {
                             Some(cwd) if !raw.is_absolute() => cwd.join(raw),
                             _ => raw,
                         };
-                        view.open_beside(
-                            beside::Beside::Reader {
-                                path,
-                                line: Some(start),
-                            },
-                            window,
-                            cx,
-                        );
+                        view.open_preview(path, Some(start), window, cx);
                     }))
             }))
             .child(comment_body(
@@ -901,8 +938,9 @@ impl RenderOnce for RefreshSpin {
     }
 }
 
-/// A section's heading (30): its name in 12/500, its count at the right.
-fn section_head(selector: &'static str, name: &'static str, count: String) -> Div {
+/// A section's heading (30): its name in 12/500, its count, if it has
+/// one, at the right.
+fn section_head(selector: &'static str, name: &'static str, count: Option<String>) -> Div {
     use crate::theme::*;
     div()
         .debug_selector(move || selector.into())
@@ -914,23 +952,140 @@ fn section_head(selector: &'static str, name: &'static str, count: String) -> Di
         .text_size(px(FS_META))
         .text_color(rgb(TEXT_DIM))
         .child(div().flex_1().font_weight(W_LABEL).child(name))
-        .child(SharedString::from(count))
+        .children(count.map(SharedString::from))
 }
 
-/// A quiet 30px row (`Show N more`, `More on GitHub`).
-fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
+/// A 30px row a click opens or unfolds, its content `inset` into the
+/// column as the section heads' is: under the pointer its hover ground
+/// reaches `PR_ROW_BLEED` past the column either side, so the mark or text
+/// keeps its place and the ground still clears it.
+fn flush_row(id: gpui::ElementId, inset: f32) -> Stateful<Div> {
     use crate::theme::*;
+    let key = crate::pointer::hover_key(&id);
     div()
         .id(id)
-        .debug_selector(move || id.into())
         .flex()
+        .flex_shrink_0()
         .items_center()
         .h(px(PANEL_SECTION_H))
-        .px(px(SPACE_1))
-        .cursor_pointer()
+        .mx(px(-PR_ROW_BLEED))
+        .px(px(inset + PR_ROW_BLEED))
+        .rounded(px(R_CONTROL))
+        .hover_row(key)
+        .press_row()
+}
+
+/// A quiet row (`Show N more`, `More on GitHub`).
+fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
+    use crate::theme::*;
+    flush_row(id.into(), SPACE_1)
+        .debug_selector(move || id.into())
         .text_size(px(FS_LABEL))
         .text_color(rgb(TEXT_DIM))
         .child(SharedString::from(words))
+}
+
+/// A fold's quiet row (`N resolved`, `Show more`): its chevron turning a
+/// quarter as it unfolds, then its words. The chevron's turn is kept under
+/// `turn`, its Thread's own, so another Thread's fold never turns it.
+fn fold_row(
+    id: &'static str,
+    turn: SharedString,
+    unfolded: bool,
+    words: impl Into<SharedString>,
+) -> Stateful<Div> {
+    use crate::theme::*;
+    flush_row(id.into(), SPACE_1)
+        .debug_selector(move || id.into())
+        .gap(px(SPACE_2))
+        .text_size(px(FS_LABEL))
+        .text_color(rgb(TEXT_DIM))
+        .child(super::panel::fold_chevron(
+            turn,
+            unfolded,
+            ICON_CHEVRON,
+            TEXT_DIM,
+        ))
+        .child(words.into())
+}
+
+/// The first read is out and nothing is known yet: a quiet line where the
+/// tab will draw, as the Context tab's before its first reading.
+fn checking() -> AnyElement {
+    use crate::theme::*;
+    div()
+        .debug_selector(|| "panel-pr-checking".into())
+        .pt(px(SPACE_2))
+        .px(px(PANEL_ROW_ICON_X))
+        .text_size(px(FS_META))
+        .text_color(rgb(TEXT_DIM))
+        .child("Checking for a pull request\u{2026}")
+        .into_any_element()
+}
+
+/// The description's body and its fold (`description_section`). The body
+/// keeps its own document state per Thread, so the clamp can say whether
+/// it cut anything (`TextViewState::is_clamped`): `Show more` shows only
+/// when it did; unfolded, `Show less` always does.
+#[derive(IntoElement)]
+struct Description {
+    id: SharedString,
+    body: SharedString,
+    unfolded: bool,
+    toggle: OnClick,
+}
+
+/// A click's listener, carried into an element built later.
+type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App)>;
+
+impl RenderOnce for Description {
+    fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
+        use crate::theme::*;
+        let body = self.body;
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| {
+            TextViewState::markdown(&body, cx)
+        });
+        state.update(cx, |state, cx| state.set_text(&body, cx));
+        let view = small_markdown(TextView::new(&state), window).px(px(SPACE_0_5));
+        let view = if self.unfolded {
+            view
+        } else {
+            clamp(view, PR_DESCRIPTION_LINES)
+        };
+        let clamped = state.read(cx).is_clamped();
+        if !self.unfolded {
+            // The clamp measures as the frame is laid out, after this
+            // render: when it finds otherwise than this frame drew, the
+            // cockpit draws again with its answer — once, for a body that
+            // has just come or changed.
+            let cockpit = window.current_view();
+            let state = state.clone();
+            window.defer(cx, move |_, cx| {
+                if state.read(cx).is_clamped() != clamped {
+                    // The frame draws the panel: it alone draws again.
+                    cx.notify(crate::motion::frames_through(cockpit));
+                }
+            });
+        }
+        let more = self.unfolded || clamped;
+        let words = if self.unfolded {
+            "Show less"
+        } else {
+            "Show more"
+        };
+        let toggle = self.toggle;
+        div().flex().flex_col().child(view).when(more, |section| {
+            section.child(
+                fold_row(
+                    "pr-description-more",
+                    format!("{}-turn", self.id).into(),
+                    self.unfolded,
+                    words,
+                )
+                .on_click(move |event, window, cx| toggle(event, window, cx)),
+            )
+        })
+    }
 }
 
 /// A row's mark: a 15px icon, or the braille spinner centred in its box.
@@ -1296,9 +1451,33 @@ impl Anchor {
     }
 }
 
-/// A comment's body, Markdown set small (12.5/18 `TEXT`, inline code as
-/// chips), clamped to `PR_BODY_LINES` while `folded`.
+/// A comment's body, Markdown set small (`small_markdown`), clamped to
+/// `PR_BODY_LINES` while `folded`.
 fn comment_body(id: String, body: &str, folded: bool, window: &Window) -> TextView {
+    let view = small_markdown(
+        TextView::markdown(SharedString::from(id), body.to_string()),
+        window,
+    );
+    if folded {
+        clamp(view, crate::theme::PR_BODY_LINES)
+    } else {
+        view
+    }
+}
+
+/// `view` cut to its first `lines`. The clamp clips the laid-out document
+/// to whole lines; the ellipsis comes from each paragraph's own clamp, so a
+/// body whose first paragraph runs past the clamp ends on `…`
+/// (pr-states.png). One that runs past it in a later block is cut without
+/// one, never with a stray `…` above the clip.
+fn clamp(view: TextView, lines: usize) -> TextView {
+    view.max_lines(lines).line_clamp(lines).text_ellipsis()
+}
+
+/// Markdown set small, as a comment card or the description reads it:
+/// 12.5/18 `TEXT`, inline code as chips, and every heading at the body's
+/// size — set apart by weight, not size, in a column this narrow.
+fn small_markdown(view: TextView, window: &Window) -> TextView {
     use crate::theme::*;
     let rem = f32::from(window.rem_size());
     let style = TextViewStyle::default()
@@ -1330,9 +1509,35 @@ fn comment_body(id: String, body: &str, folded: bool, window: &Window) -> TextVi
             pad: px(0.),
             ..crate::rich::inline_code_wash()
         }))
-        .with_code_background(rgb(PR_CODE_CHIP).into());
-    let view = TextView::markdown(SharedString::from(id), body.to_string())
-        .style(style)
+        .with_code_background(rgb(PR_CODE_CHIP).into())
+        // A heading is a line of the body in its strong weight, with a
+        // paragraph's gap more above it than below, so it heads what
+        // follows; a list's markers hang dim in their own box, as the
+        // transcript's, its text on one edge.
+        .with_heading_base_font_size(px(FS_LABEL))
+        .with_heading_font_size(|_, base| base)
+        .with_heading_spacing(
+            gpui::rems(PR_BODY_LH / 2. / rem),
+            Some(gpui::rems(SPACE_1 / rem)),
+        )
+        .with_list_hang(Some(gpui::base::text::ListHang {
+            width: px(PR_LIST_HANG),
+            gap: px(SPACE_1_5),
+        }))
+        .with_list_markers(
+            gpui::StyleRefinement::default().text_color(rgb(TEXT_DIM)),
+            gpui::StyleRefinement::default().text_color(rgb(TEXT_DIM)),
+        );
+    let style = (1..=6).fold(style, |style, level| {
+        style.with_heading(
+            level,
+            gpui::StyleRefinement::default()
+                .font_weight(W_STRONG)
+                .text_color(rgb(TEXT_STRONG))
+                .line_height(px(PR_BODY_LH)),
+        )
+    });
+    view.style(style)
         .selectable(false)
         .font_family(FONT_UI)
         .text_size(px(FS_LABEL))
@@ -1341,19 +1546,7 @@ fn comment_body(id: String, body: &str, folded: bool, window: &Window) -> TextVi
         // A line's trailing space hangs past the edge (as the title's),
         // by the narrower face's space.
         .mr(px(-SPACE_0_5))
-        .whitespace_normal();
-    if folded {
-        // The clamp clips the laid-out document to whole lines; the
-        // ellipsis comes from each paragraph's own clamp, so a body whose
-        // first paragraph runs past the clamp ends on `…` (pr-states.png).
-        // One that runs past it in a later block is cut without one, never
-        // with a stray `…` above the clip.
-        view.max_lines(PR_BODY_LINES)
-            .line_clamp(PR_BODY_LINES)
-            .text_ellipsis()
-    } else {
-        view
-    }
+        .whitespace_normal()
 }
 
 /// A finding's hunk, as the forge quotes it: its last lines in the code

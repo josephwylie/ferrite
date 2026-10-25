@@ -621,6 +621,40 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
     }
 }
 
+/// SPEC §5.5: however narrow the box, send stands whole inside it, its
+/// toolbar padding from the box's end — the chips give way, never the
+/// circle — and the mode chip, the one that gives way first, never runs
+/// under the model chip.
+#[gpui::test]
+fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("toolbar-narrow", 1);
+    *fake.native_controls.borrow_mut() = true;
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::PermissionMode {
+            mode: "a-long-native-permission-mode".into(),
+        })
+        .unwrap();
+    for width in [1200., 900., 720.] {
+        cx.simulate_resize(gpui::size(px(width), px(800.)));
+        tick(cx);
+        let field = cx.debug_bounds("composer-block").expect("the box");
+        let send = cx.debug_bounds("composer-send").expect("the send circle");
+        assert!(
+            send.left() >= field.left()
+                && send.right() <= field.right() - px(crate::theme::COMPOSER_TOOLBAR_PAD_X - 0.5),
+            "at {width}px send stands inside the box: {send:?} / {field:?}"
+        );
+        let mode = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");
+        let model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
+        assert!(
+            mode.right() <= model.left(),
+            "at {width}px the mode gives way before the model: {mode:?} / {model:?}"
+        );
+    }
+}
+
 /// SPEC §5.5: the queued row says what waits — the top of the pile, `+N`
 /// for the rest — and its close button drops it, as ⌫ does. The send circle
 /// sends what is typed; with a turn running and nothing typed it is `stop`,

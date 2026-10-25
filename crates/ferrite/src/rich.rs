@@ -1,10 +1,7 @@
 //! Native rich text with a stable parser per answer run. Appending tokens
 //! advances the toolkit parser; unrelated pane renders do not parse again.
 use gpui::base::text::{TextView, TextViewState, TextViewStyle};
-use gpui::component::input::{
-    Editor, EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter, Rope,
-    Textarea, TextareaState,
-};
+use gpui::component::input::{Textarea, TextareaState};
 use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, Focusable, SharedString, Window};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -26,32 +23,32 @@ pub(crate) fn code_actions_focused(window: &Window) -> bool {
         .any(|context| context.contains("TranscriptCodeActions"))
 }
 
-/// Replace a native text control's source without losing the reader's
-/// place: the selection, its direction, and the scroll offset. A macro
-/// because the textarea and the editor share these methods but no type.
-macro_rules! keep_place {
-    ($state:expr, $source:expr, $window:expr, $cx:expr) => {{
-        let state = $state;
-        let mut selected = state.selected_range();
-        // The native range setter accepts anchor → caret order.
-        // Keep backward selections backward across new chunks.
-        if !selected.is_empty() && state.cursor() == selected.start {
-            selected = selected.end..selected.start;
-        }
-        let scroll = state.scroll_offset();
-        state.set_value($source.to_string(), $window, $cx);
-        // Native setters clip replacement offsets to UTF-8 and
-        // defer scroll clamping until the new layout is ready.
-        state.set_selected_range(selected, $cx);
-        state.set_scroll_offset(scroll, $cx);
-    }};
+/// Replace a native text output's source without losing the reader's
+/// place: the selection, its direction, and the scroll offset.
+fn keep_place(
+    state: &mut TextareaState,
+    source: &str,
+    window: &mut Window,
+    cx: &mut gpui::Context<TextareaState>,
+) {
+    let mut selected = state.selected_range();
+    // The native range setter accepts anchor → caret order.
+    // Keep backward selections backward across new chunks.
+    if !selected.is_empty() && state.cursor() == selected.start {
+        selected = selected.end..selected.start;
+    }
+    let scroll = state.scroll_offset();
+    state.set_value(source.to_string(), window, cx);
+    // Native setters clip replacement offsets to UTF-8 and
+    // defer scroll clamping until the new layout is ready.
+    state.set_selected_range(selected, cx);
+    state.set_scroll_offset(scroll, cx);
 }
 
 #[derive(Clone)]
 enum NativeText {
     Rich(Entity<TextViewState>),
     Output(Entity<TextareaState>),
-    Code(Entity<EditorState>),
 }
 
 /// Which native control a cached source is shown in.
@@ -59,17 +56,13 @@ enum NativeText {
 enum Kind {
     Rich,
     Output,
-    /// A source file, coloured by the lexer for this language.
-    Code(&'static str),
 }
 
 impl NativeText {
     fn is(&self, kind: Kind) -> bool {
         matches!(
             (self, kind),
-            (NativeText::Rich(_), Kind::Rich)
-                | (NativeText::Output(_), Kind::Output)
-                | (NativeText::Code(_), Kind::Code(_))
+            (NativeText::Rich(_), Kind::Rich) | (NativeText::Output(_), Kind::Output)
         )
     }
 }
@@ -108,12 +101,7 @@ fn held(source: &str) -> usize {
 #[derive(Clone, Default)]
 pub struct TextCache(
     Rc<RefCell<(u64, HashMap<SharedString, CachedText>, usize)>>,
-    Rc<
-        RefCell<(
-            Option<std::path::PathBuf>,
-            Option<crate::attachment_preview::Preview>,
-        )>,
-    >,
+    Rc<RefCell<(Option<std::path::PathBuf>, Option<crate::preview::Preview>)>>,
     /// The transcript (its namespace) that hosts this cache's path targets:
     /// their hover card and ⌘-click (`file_links::PathTarget::scope`).
     Rc<RefCell<Option<SharedString>>>,
@@ -131,11 +119,7 @@ impl TextCache {
         self.0.borrow().1.keys().cloned().collect()
     }
 
-    pub fn file_context(
-        &self,
-        cwd: Option<&std::path::Path>,
-        preview: &crate::attachment_preview::Preview,
-    ) {
+    pub fn file_context(&self, cwd: Option<&std::path::Path>, preview: &crate::preview::Preview) {
         *self.1.borrow_mut() = (cwd.map(std::path::Path::to_path_buf), Some(preview.clone()));
     }
 
@@ -261,26 +245,6 @@ impl TextCache {
                     state.set_value(source.to_string(), window, cx);
                     state
                 })),
-                // A reader, not an editor: line numbers to find your place,
-                // but no folds or guides.
-                Kind::Code(language) => NativeText::Code(cx.new(|cx| {
-                    let mut state = EditorState::new(window, cx)
-                        .language(language)
-                        .line_number(true)
-                        .folding(false)
-                        .indent_guides(false);
-                    state.set_highlighter_factory(
-                        Rc::new(|language: &str| {
-                            Some(Box::new(Lexed {
-                                language: SharedString::from(language.to_string()),
-                                runs: Vec::new(),
-                            }) as Box<dyn InputHighlighter>)
-                        }),
-                        cx,
-                    );
-                    state.set_value(source.to_string(), window, cx);
-                    state
-                })),
                 Kind::Rich => NativeText::Rich(cx.new(|cx| TextViewState::markdown(source, cx))),
             },
             touched,
@@ -295,10 +259,7 @@ impl TextCache {
                     }
                 }),
                 NativeText::Output(state) => {
-                    state.update(cx, |state, cx| keep_place!(state, source, window, cx))
-                }
-                NativeText::Code(state) => {
-                    state.update(cx, |state, cx| keep_place!(state, source, window, cx))
+                    state.update(cx, |state, cx| keep_place(state, source, window, cx))
                 }
             }
             text.source = source.to_string();
@@ -324,14 +285,18 @@ impl TextCache {
 #[derive(IntoElement)]
 pub struct Markdown {
     id: SharedString,
-    source: String,
+    /// Shared, so a preview's document renders without being copied.
+    source: SharedString,
     cache: TextCache,
     muted: bool,
     /// Body ink in place of `TEXT` (a prompt's `TEXT_STRONG`).
     ink: Option<u32>,
     /// `ferrite-chip:` links draw as a prompt's inline file chips, opening
-    /// in this preview (`pane::prompt_chip`).
-    chips: Option<crate::attachment_preview::Preview>,
+    /// in this Pane's preview among the prompt's images (`pane::prompt_chip`).
+    chips: Option<(
+        crate::preview::Preview,
+        std::sync::Arc<[std::path::PathBuf]>,
+    )>,
     document: Option<gpui::base::TextSelectionDocument>,
     /// A find's occurrences to mark (`crate::find`).
     find: Option<gpui::base::text::TextFind>,
@@ -363,16 +328,25 @@ impl Markdown {
     }
 
     /// Draw `ferrite-chip:` links as a prompt's inline chips (a prompt's
-    /// band: its words, then its files), opening in `preview`.
-    pub fn chips(mut self, preview: crate::attachment_preview::Preview) -> Self {
-        self.chips = Some(preview);
+    /// band: its words, then its files), opening in `preview` — an image
+    /// among the prompt's `images`.
+    pub fn chips(
+        mut self,
+        preview: crate::preview::Preview,
+        images: std::sync::Arc<[std::path::PathBuf]>,
+    ) -> Self {
+        self.chips = Some((preview, images));
         self
     }
 
-    pub fn new(id: impl Into<SharedString>, source: String, cache: TextCache) -> Self {
+    pub fn new(
+        id: impl Into<SharedString>,
+        source: impl Into<SharedString>,
+        cache: TextCache,
+    ) -> Self {
         Self {
             id: id.into(),
-            source,
+            source: source.into(),
             cache,
             muted: false,
             ink: None,
@@ -440,11 +414,12 @@ impl gpui::RenderOnce for Markdown {
             .link_renderer(move |url, label, window, cx| {
                 // A prompt's file, as its band's chip.
                 if let Some(path) = url.strip_prefix(CHIP_SCHEME) {
-                    let chips = chips.as_ref()?;
+                    let (preview, images) = chips.as_ref()?;
                     return Some(crate::pane::prompt_chip(
                         std::path::PathBuf::from(path),
                         label,
-                        Some(chips),
+                        preview,
+                        images,
                         window,
                         cx,
                     ));
@@ -610,14 +585,21 @@ impl gpui::Render for CodeActions {
         }
         // The prototype's `.code .lang` and `.code .copy`: the language tag
         // always shows, dim, at the block's top right; the actions before it
-        // blend in under the pointer.
+        // blend in under the pointer. The row stands on the code's first
+        // line — the block's padding down, the code's own inset in from the
+        // right — and the tag is set as the code is, on its baseline.
+        let code_size = window.text_style().font_size.to_pixels(window.rem_size());
+        let code_line = window.line_height();
         let mut actions = gpui::div()
             .key_context("TranscriptCodeActions")
             .track_focus(&self.focus)
             .debug_selector(|| "code-actions".into())
             .absolute()
-            .top(px(theme::CODE_ACTIONS_TOP))
-            .right(px(theme::CODE_ACTIONS_RIGHT))
+            .top(px(theme::BLOCK_PAD_Y))
+            .right(px(
+                theme::CODE_PAD_CELLS * theme::tx_cell(f32::from(code_size))
+            ))
+            .h(code_line)
             .flex()
             .items_center()
             .justify_end()
@@ -688,12 +670,15 @@ impl gpui::Render for CodeActions {
                         .debug_selector(|| "code-language".into())
                         .flex_shrink_0()
                         .font_family(theme::FONT_CODE)
+                        .text_size(code_size)
+                        .line_height(code_line)
                         .child(language),
                 )
             },
         );
         gpui::div()
             .id(SharedString::from(format!("{}-overlay", self.key)))
+            .debug_selector(|| "code-overlay".into())
             .relative()
             .size_full()
             .on_hover(crate::motion::hover_listener(self.key.clone()))
@@ -776,11 +761,11 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         })
         // A fence is the diff's block box (`pane::block_box`): `BAR`,
         // `R_CONTROL` corners, a 1px `HAIRLINE`, `BLOCK_PAD_Y` above and
-        // below, the code two cells in, a half step under the prose.
+        // below, the code `CODE_PAD_CELLS` in, a half step under the prose.
         .with_code_background(gpui::transparent_black())
         .with_code_block(
             gpui::StyleRefinement::default()
-                .px(px(2.0 * code_cell))
+                .px(px(theme::CODE_PAD_CELLS * code_cell))
                 .py(px(theme::BLOCK_PAD_Y))
                 // A fence holds to the measure too (`max-width: 108ch`): its
                 // language word sits at that edge.
@@ -1084,163 +1069,6 @@ pub fn reading_dialog(
         )
 }
 
-/// The reader's body for an open document: Markdown rendered, a file in a
-/// language the lexer knows coloured, anything else as plain text.
-pub fn document_body(
-    document: crate::attachment_preview::Document,
-    cache: TextCache,
-    find: Option<gpui::base::text::TextFind>,
-) -> gpui::AnyElement {
-    let id = SharedString::from(format!("file-{}", document.path.display()));
-    if document.is_markdown() {
-        return Markdown::new(
-            format!("document-{}", document.path.display()),
-            document.source,
-            cache,
-        )
-        .find(find)
-        .into_any_element();
-    }
-    let aria_label = SharedString::from("File contents");
-    match ferrite_core::transcript::language_for_path(&document.path) {
-        Some(language) => Code {
-            id,
-            text: document.source.into(),
-            language,
-            cache,
-            aria_label,
-        }
-        .into_any_element(),
-        None => Output {
-            id,
-            text: document.source.into(),
-            cache,
-            aria_label,
-            fill: true,
-            find: None,
-        }
-        .into_any_element(),
-    }
-}
-
-/// A source file in the reader: the same bounded, virtualized native text
-/// as `Output`, in the control's code mode so Ferrite's lexer can colour it.
-#[derive(IntoElement)]
-pub struct Code {
-    pub id: SharedString,
-    pub text: SharedString,
-    pub language: &'static str,
-    pub cache: TextCache,
-    pub aria_label: SharedString,
-}
-
-impl gpui::RenderOnce for Code {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let NativeText::Code(state) = self.cache.cached(
-            self.id.clone(),
-            &self.text,
-            Kind::Code(self.language),
-            window,
-            cx,
-        ) else {
-            unreachable!("a mismatched kind is rebuilt, never returned")
-        };
-        #[cfg(test)]
-        testing::record_code(self.id, state.clone(), cx);
-        Editor::new(&state)
-            .readonly(true)
-            .appearance(false)
-            .bordered(false)
-            .aria_label(self.aria_label)
-            .w_full()
-            .min_w_0()
-            .h_full()
-            .p_0()
-            .font_family(window.text_style().font_family.clone())
-            .text_size(window.text_style().font_size.to_pixels(window.rem_size()))
-            .text_color(window.text_style().color)
-    }
-}
-
-/// Ferrite's own lexer behind the editor's highlighter seam, painting the
-/// inks a transcript code block does, except for plain text. A file is lexed
-/// whole on each change: the lexer is linear and a reader's source changes
-/// only when the file does.
-struct Lexed {
-    language: SharedString,
-    /// Contiguous runs covering every byte of the source, in order.
-    runs: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
-}
-
-impl InputHighlighter for Lexed {
-    fn language(&self) -> SharedString {
-        self.language.clone()
-    }
-
-    fn update(
-        &mut self,
-        _: Option<InputEdit>,
-        text: &Rope,
-        _: bool,
-        _: &mut Window,
-        _: &mut gpui::Context<EditorState>,
-    ) {
-        let source = text.to_string();
-        let tokens = ferrite_core::transcript::highlight_tokens(Some(&self.language), &source);
-        let mut runs = crate::pane::code(&source, Some(&tokens));
-        // A transcript block's plain ink is the body's grey, which sits too
-        // close to the comment grey across a whole file. The reader's plain
-        // text is the reader's own ink.
-        for ((_, style), token) in runs.iter_mut().zip(&tokens) {
-            if token.class == ferrite_core::transcript::Class::Plain {
-                style.color = Some(rgb(theme::TEXT).into());
-            }
-        }
-        self.runs = runs;
-    }
-
-    fn styles(
-        &self,
-        range: &std::ops::Range<usize>,
-        _: &dyn HighlightStyleResolver,
-    ) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
-        lexed_styles(&self.runs, range)
-    }
-
-    fn fold_ranges(&self, _: &Rope) -> Vec<FoldRange> {
-        Vec::new()
-    }
-}
-
-/// The runs over `range`, clipped to it, with any gap the runs leave filled
-/// unstyled — the seam asks for ordered runs that cover the range exactly.
-fn lexed_styles(
-    runs: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
-    range: &std::ops::Range<usize>,
-) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
-    let first = runs.partition_point(|(run, _)| run.end <= range.start);
-    let mut styles = Vec::new();
-    let mut at = range.start;
-    for (run, style) in &runs[first..] {
-        if run.start >= range.end {
-            break;
-        }
-        let start = run.start.max(at);
-        if start > at {
-            styles.push((at..start, gpui::HighlightStyle::default()));
-        }
-        let end = run.end.min(range.end);
-        if end > start {
-            styles.push((start..end, *style));
-            at = end;
-        }
-    }
-    if at < range.end {
-        styles.push((at..range.end, gpui::HighlightStyle::default()));
-    }
-    styles
-}
-
 #[cfg(test)]
 pub mod testing {
     use super::*;
@@ -1255,10 +1083,6 @@ pub mod testing {
     #[derive(Default)]
     struct Outputs(HashMap<SharedString, Entity<TextareaState>>);
     impl gpui::Global for Outputs {}
-
-    #[derive(Default)]
-    struct Codes(HashMap<SharedString, Entity<EditorState>>);
-    impl gpui::Global for Codes {}
 
     /// Native text wrapper renders, keyed by the stable text identity. Kept
     /// separate from the entity registries: a cached entity may render again
@@ -1313,18 +1137,6 @@ pub mod testing {
 
     pub fn output(id: &str, cx: &App) -> Option<Entity<TextareaState>> {
         cx.try_global::<Outputs>()?.0.get(id).cloned()
-    }
-
-    pub fn record_code(id: SharedString, state: Entity<EditorState>, cx: &mut App) {
-        if cx.try_global::<Codes>().is_none() {
-            cx.set_global(Codes::default());
-        }
-        record_render(&id, cx);
-        cx.global_mut::<Codes>().0.insert(id, state);
-    }
-
-    pub fn code(id: &str, cx: &App) -> Option<Entity<EditorState>> {
-        cx.try_global::<Codes>()?.0.get(id).cloned()
     }
 
     pub fn first_entity(prefix: &str, cx: &App) -> Option<gpui::EntityId> {
@@ -1491,52 +1303,31 @@ mod file_link_tests {
 
     struct LinkFixture {
         cache: TextCache,
-        document_cache: TextCache,
         source: String,
         cwd: std::path::PathBuf,
-        preview: crate::attachment_preview::Preview,
+        preview: crate::preview::Preview,
         font_size: f32,
         line_height: Option<f32>,
     }
     impl Render for LinkFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.cache.file_context(Some(&self.cwd), &self.preview);
-            let document_body = self.preview.document().map(|document| {
-                self.document_cache
-                    .file_context(document.path.parent(), &self.preview);
-                document_body(document, self.document_cache.clone(), None)
-            });
             use gpui::base::ElementExt;
-            // The reader is a board slot of its own; beside the fixture's
-            // Pane is where the cockpit first opens it.
-            let reader = document_body
-                .and_then(|body| self.preview.reader(body, |head| head.into_any_element()))
-                .map(|reader| div().flex_1().min_w_0().child(reader));
-            div()
-                .flex()
-                .size_full()
-                .child(
-                    div().flex_1().min_w_0().child(
-                        self.preview.mount(
-                            div().size_full().child(
-                                div()
-                                    .text_size(px(self.font_size))
-                                    .when_some(self.line_height, |this, line| {
-                                        this.line_height(px(line))
-                                    })
-                                    .child(Markdown::new(
-                                        "file-link-fixture",
-                                        self.source.clone(),
-                                        self.cache.clone(),
-                                    ))
-                                    .text_selection_scope(
-                                        gpui::base::TextSelectionScopeId::default(),
-                                    ),
-                            ),
-                        ),
+            div().flex().size_full().child(
+                div().flex_1().min_w_0().child(
+                    div().size_full().child(
+                        div()
+                            .text_size(px(self.font_size))
+                            .when_some(self.line_height, |this, line| this.line_height(px(line)))
+                            .child(Markdown::new(
+                                "file-link-fixture",
+                                self.source.clone(),
+                                self.cache.clone(),
+                            ))
+                            .text_selection_scope(gpui::base::TextSelectionScopeId::default()),
                     ),
-                )
-                .children(reader)
+                ),
+            )
         }
     }
 
@@ -1546,10 +1337,9 @@ mod file_link_tests {
     ) -> (Entity<LinkFixture>, &'a mut VisualTestContext) {
         cx.update(crate::theme::init_components);
         let (root, cx) = cx.add_window_view(|window, cx| {
-            let preview = crate::attachment_preview::Preview::new(cx);
+            let preview = crate::preview::Preview::new(cx);
             let view = cx.new(|_| LinkFixture {
                 cache: TextCache::default(),
-                document_cache: TextCache::default(),
                 source: source.into(),
                 cwd: std::env::temp_dir(),
                 preview,
@@ -1863,6 +1653,35 @@ mod file_link_tests {
         );
     }
 
+    /// A fence's language tag stands on its code's first line: the block's
+    /// padding down, the code's own inset in from the right, one code line
+    /// high, so it shares that line's baseline.
+    #[gpui::test]
+    fn a_fence_sets_its_language_on_its_first_line(cx: &mut TestAppContext) {
+        let (_, cx) = fixture(
+            cx,
+            "```rust
+let count = 2;
+```",
+        );
+        cx.simulate_resize(gpui::size(px(520.), px(400.)));
+        cx.run_until_parked();
+        let block = cx
+            .debug_bounds("code-overlay")
+            .expect("the block's overlay");
+        let row = cx.debug_bounds("code-actions").expect("the actions row");
+        let language = cx.debug_bounds("code-language").expect("the language");
+        let code_size = theme::FS_PROSE - theme::TX_BLOCK_STEP;
+        assert_eq!(row.top() - block.top(), px(theme::BLOCK_PAD_Y));
+        let inset = block.right() - row.right();
+        assert!((inset - px(theme::CODE_PAD_CELLS * theme::tx_cell(code_size))).abs() < px(0.01));
+        assert_eq!(language.right(), row.right());
+        assert_eq!(
+            (language.top(), language.size.height),
+            (row.top(), px(theme::prose_line_height(code_size)))
+        );
+    }
+
     #[gpui::test]
     fn code_copy_uses_the_new_source_after_a_stream_update(cx: &mut TestAppContext) {
         let (view, cx) = fixture(cx, "```\n    before\n```");
@@ -1884,8 +1703,10 @@ mod file_link_tests {
         );
     }
 
+    /// A file link opens in the Pane's preview (the Panel shows it), at
+    /// the link's line; the OS is never asked.
     #[gpui::test]
-    fn markdown_file_click_opens_the_native_reader(cx: &mut TestAppContext) {
+    fn a_file_link_opens_in_the_preview_at_its_line(cx: &mut TestAppContext) {
         let path = std::env::temp_dir().join("ferrite-report.md");
         std::fs::write(&path, "fixture").unwrap();
         let source = format!("[report]({}:12)", path.display());
@@ -1897,112 +1718,29 @@ mod file_link_tests {
             .read_with(cx, |view, _| view.preview.document())
             .expect("the Markdown document is retained by its Pane");
         assert_eq!(document.path, path);
-        assert_eq!(document.source, "fixture");
-        let reader = cx
-            .debug_bounds("markdown-reader")
-            .expect("the reader is rendered beside the transcript");
-        // Beside the transcript, not over it: it starts right of the Pane
-        // and takes only its share of the window.
-        let window_w = cx.update(|window, _| window.viewport_size().width);
-        assert!(reader.left() > px(0.) && reader.size.width < window_w);
-        let close = cx
-            .debug_bounds("close-markdown-reader")
-            .expect("the reader has an explicit close control");
-        cx.simulate_click(close.center(), Modifiers::default());
-        assert!(view.read_with(cx, |view, _| view.preview.document().is_none()));
-    }
-
-    #[gpui::test]
-    fn code_file_click_opens_the_native_reader(cx: &mut TestAppContext) {
-        let path = std::env::temp_dir().join("ferrite-reader.rs");
-        std::fs::write(&path, "fn ferrite() {}\n").unwrap();
-        let source = format!("[source]({})", path.display());
-        let (view, cx) = fixture(cx, &source);
-
+        assert_eq!(&*document.text().unwrap().source, "fixture");
+        assert_eq!(document.line(), Some(12));
+        let code = std::env::temp_dir().join("ferrite-reader.rs");
+        std::fs::write(&code, "fn ferrite() {}\n").unwrap();
+        view.update(cx, |view, cx| {
+            view.source = format!("[source]({})", code.display());
+            cx.notify();
+        });
+        cx.run_until_parked();
         let target = card(cx, "ferrite-reader.rs").center();
         cx.simulate_click(target, Modifiers::default());
-
-        assert_eq!(cx.opened_url(), None);
         let document = view
             .read_with(cx, |view, _| view.preview.document())
-            .expect("the code file is retained by the built-in reader");
-        assert_eq!(document.path, path);
-        assert_eq!(document.source, "fn ferrite() {}\n");
+            .expect("another file replaces it");
+        assert_eq!(document.path, code);
         assert!(!document.is_markdown());
-        assert!(cx.debug_bounds("markdown-reader").is_some());
+        assert_eq!(document.line(), None);
     }
 
+    /// A binary file opens in the preview too, which says it is no text
+    /// and offers the original: the OS is asked only from there.
     #[gpui::test]
-    fn large_code_file_uses_the_virtualized_reader(cx: &mut TestAppContext) {
-        let path = std::env::temp_dir().join("ferrite-large-reader.rs");
-        let source = (0..5_000)
-            .map(|line| format!("fn line_{line}() {{}}\n"))
-            .collect::<String>();
-        std::fs::write(&path, source).unwrap();
-        let link = format!("[large source]({})", path.display());
-        let (_, cx) = fixture(cx, &link);
-        let target = card(cx, "ferrite-large-reader.rs").center();
-
-        cx.simulate_click(target, Modifiers::default());
-
-        let id = format!("file-{}", path.display());
-        assert!(
-            cx.update(|_, cx| testing::code(&id, cx).is_some()),
-            "large source files must use the bounded, virtualized code reader"
-        );
-    }
-
-    /// Only a language the lexer knows gets the code reader; anything else
-    /// stays the plain text control, with no syntax claims about it.
-    #[gpui::test]
-    fn unknown_text_files_use_the_plain_reader(cx: &mut TestAppContext) {
-        let path = std::env::temp_dir().join("ferrite-reader-notes.txt");
-        std::fs::write(&path, "fn not code\n").unwrap();
-        let link = format!("[notes]({})", path.display());
-        let (_, cx) = fixture(cx, &link);
-        let target = card(cx, "ferrite-reader-notes.txt").center();
-
-        cx.simulate_click(target, Modifiers::default());
-
-        let id = format!("file-{}", path.display());
-        assert!(cx.update(|_, cx| testing::output(&id, cx).is_some()));
-        assert!(cx.update(|_, cx| testing::code(&id, cx).is_none()));
-    }
-
-    #[test]
-    fn lexed_styles_cover_exactly_the_asked_range() {
-        let ink = |color: u32| gpui::HighlightStyle {
-            color: Some(rgb(color).into()),
-            ..Default::default()
-        };
-        let runs = vec![(0..3, ink(1)), (3..7, ink(2)), (7..10, ink(3))];
-        let covered = |range: std::ops::Range<usize>| {
-            let styles = lexed_styles(&runs, &range);
-            let mut at = range.start;
-            for (run, _) in &styles {
-                assert_eq!(run.start, at, "{styles:?}");
-                assert!(run.end > run.start, "{styles:?}");
-                at = run.end;
-            }
-            assert_eq!(at, range.end, "{styles:?}");
-            styles
-        };
-        assert_eq!(covered(0..10).len(), 3);
-        assert_eq!(
-            covered(2..8),
-            [(2..3, ink(1)), (3..7, ink(2)), (7..8, ink(3))]
-        );
-        assert_eq!(covered(4..5), [(4..5, ink(2))]);
-        // Past the lexed source — a file mid-reload — is unstyled, not lost.
-        assert_eq!(
-            covered(8..14),
-            [(8..10, ink(3)), (10..14, gpui::HighlightStyle::default())]
-        );
-        assert_eq!(covered(12..14), [(12..14, gpui::HighlightStyle::default())]);
-    }
-
-    #[gpui::test]
-    fn binary_file_card_falls_back_to_the_os(cx: &mut TestAppContext) {
+    fn a_binary_file_link_opens_a_preview_that_says_so(cx: &mut TestAppContext) {
         let path = std::env::temp_dir().join("ferrite-reader.bin");
         std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
         let source = format!("[binary]({})", path.display());
@@ -2011,11 +1749,12 @@ mod file_link_tests {
 
         cx.simulate_click(target, Modifiers::default());
 
-        assert_eq!(
-            cx.opened_url(),
-            Some(url::Url::from_file_path(path).unwrap().to_string())
-        );
-        assert!(view.read_with(cx, |view, _| view.preview.document().is_none()));
+        assert_eq!(cx.opened_url(), None);
+        let document = view.read_with(cx, |view, _| view.preview.document().unwrap());
+        assert!(matches!(
+            document.body,
+            crate::preview::Body::Unshown(crate::preview::Unshown::Binary)
+        ));
     }
 
     #[gpui::test]
@@ -2133,8 +1872,11 @@ mod file_link_tests {
         assert!(chip.size.width >= name, "{chip:?} holds {name:?}");
     }
 
+    /// A file link to an image opens it in the Pane's preview, as every
+    /// image does (`Preview::open`), the viewer holding the keyboard;
+    /// the OS is never asked.
     #[gpui::test]
-    fn image_file_card_uses_the_existing_pane_preview(cx: &mut TestAppContext) {
+    fn an_image_link_opens_in_the_panes_preview(cx: &mut TestAppContext) {
         let path = std::env::temp_dir().join("ferrite-link-image.svg");
         std::fs::write(
             &path,
@@ -2144,10 +1886,13 @@ mod file_link_tests {
         let (view, cx) = fixture(cx, "[image](ferrite-link-image.svg)");
         let target = card(cx, "ferrite-link-image.svg").center();
         cx.simulate_click(target, Modifiers::default());
-        assert!(view.read_with(cx, |view, _| view.preview.focus_target().is_some()));
+        let document = view
+            .read_with(cx, |view, _| view.preview.document())
+            .expect("the image opened");
+        assert!(matches!(document.body, crate::preview::Body::Image { .. }));
+        assert_eq!(document.path, path);
+        assert!(cx.update(|window, cx| view.read(cx).preview.held_focus(window, cx).is_some()));
         assert_eq!(cx.opened_url(), None);
-        cx.simulate_keystrokes("escape");
-        assert!(view.read_with(cx, |view, _| view.preview.focus_target().is_none()));
     }
 
     #[gpui::test]
@@ -2210,9 +1955,8 @@ mod file_link_tests {
             view.read_with(cx, |view, _| view.preview.document().map(|file| file.path)),
             Some(path)
         );
-        let close = cx.debug_bounds("close-markdown-reader").unwrap();
-        cx.simulate_click(close.center(), Modifiers::default());
-        // Closing the reader leaves the keyboard on the card that opened
+        view.read_with(cx, |view, _| view.preview.close());
+        // Closing the preview leaves the keyboard on the card that opened
         // it, so the next Tab stop is the second card.
         cx.update(|window, cx| window.focus_next(cx));
         cx.simulate_keystrokes("enter");

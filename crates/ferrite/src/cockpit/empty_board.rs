@@ -5,6 +5,12 @@
 //! behind a `❯` selection bar, each with its key from the platform's key
 //! table, and the four Threads used last.
 //!
+//! In the chrome's grammar (SPEC §2, §5.8): the labels sentence case, the
+//! selection a rounded `SELECTED` row (`R_CONTROL`) that hangs
+//! `EMPTY_ROW_INSET` outside the text's edge, so the `❯` and the words keep
+//! the banner's column while the fill clears them, and a recent row the
+//! same band under the pointer.
+//!
 //! The rows are a list with its own focus and key context (`EmptyBoard`):
 //! `empty_board::Next` / `Previous` move the `❯` and the selection ground,
 //! `Run` does what the row says (the floats package binds ↑ ↓ ⏎). A press
@@ -22,25 +28,25 @@ pub(crate) const KEY_CONTEXT: &str = "EmptyBoard";
 /// the row says, and what it dispatches.
 fn rows() -> [(&'static str, &'static str, Box<dyn gpui::Action>); 5] {
     [
-        ("cockpit::NewThread", "new thread", Box::new(NewThread)),
+        ("cockpit::NewThread", "New thread", Box::new(NewThread)),
         (
             "cockpit::NewWorktreeThread",
-            "new worktree thread",
+            "New worktree thread",
             Box::new(NewWorktreeThread),
         ),
         (
             "cockpit::ReopenThread",
-            "reopen last",
+            "Reopen last",
             Box::new(ReopenThread),
         ),
         (
             "palette::OpenGroups",
-            "open a group",
+            "Open a group",
             Box::new(crate::palette::OpenGroups),
         ),
         (
             "palette::Toggle",
-            "everything else",
+            "Everything else",
             Box::new(crate::palette::Toggle),
         ),
     ]
@@ -132,13 +138,17 @@ impl CockpitView {
             format!("{count} {word}{}", if count == 1 { "" } else { "s" })
         };
         // `claude 2.1.289 · codex 0.160.0 · 3 projects · 9 open threads`:
-        // one dim run of words, each logo half a cell before its name.
-        let seam = || crate::components::cells("\u{b7}");
+        // one dim run of words, each logo `SPACE_1` before its name, a
+        // word space either side of each `·`. The words are Geist, so
+        // they take their own widths (a mono cell a character would pad
+        // each by a different amount and leave the seams uneven).
+        let words = |text: String| div().flex_shrink_0().child(SharedString::from(text));
+        let seam = || words("\u{b7}".into());
         let mut facts = div()
             .debug_selector(|| "empty-board-facts".into())
             .flex()
             .items_center()
-            .gap(px(CH))
+            .gap(px(SPACE_1))
             .whitespace_nowrap()
             .text_color(rgb(TEXT_DIM));
         for (provider, version) in &clis {
@@ -152,23 +162,23 @@ impl CockpitView {
                         .flex()
                         .flex_shrink_0()
                         .items_center()
-                        .gap(px(CH / 2.0))
+                        .gap(px(SPACE_1))
                         // Inline in the line, `vertical-align: -1px`, as the
                         // status line's logos sit (`STATUS_LOGO_FOOT`).
                         .child(
                             crate::icons::icon(glyph, BAR_MARK, ink)
                                 .mt(px(-crate::theme::STATUS_LOGO_FOOT)),
                         )
-                        .child(crate::components::cells(format!("{name} {version}"))),
+                        .child(words(format!("{name} {version}"))),
                 )
                 .child(seam());
         }
         facts = facts
-            .child(crate::components::cells(plural(projects, "project")))
+            .child(words(plural(projects, "project")))
             .child(seam())
-            .child(crate::components::cells(plural(open, "open thread")));
-        // The launch directory, `~`-abbreviated, as a path reads: cyan, its
-        // underline under the pointer, a press opening it.
+            .child(words(plural(open, "open thread")));
+        // The launch directory, `~`-abbreviated, as a path reads: the link
+        // ink, its underline under the pointer, a press opening it.
         let root = self
             .launch_dir
             .clone()
@@ -180,8 +190,8 @@ impl CockpitView {
             })
             .map(|root| {
                 let shown = SharedString::from(home_relative(&root));
-                // A path as every path reads (`file_links::path_text`): cyan,
-                // its underline under the pointer; a press opens it.
+                // A path as every path reads (`file_links::path_text`): the
+                // link ink, its underline under the pointer; a press opens it.
                 let target = crate::file_links::PathTarget::new(root.clone());
                 div()
                     .id("empty-board-path")
@@ -246,7 +256,10 @@ impl CockpitView {
                     .flex()
                     .items_center()
                     .h(px(ROW))
+                    .ml(px(-EMPTY_ROW_INSET))
+                    .pl(px(EMPTY_ROW_INSET))
                     .pr(px(CH))
+                    .rounded(px(R_CONTROL))
                     .map(|row| {
                         if selected {
                             row.bg(paint::SELECTED).cursor_pointer()
@@ -316,10 +329,14 @@ impl CockpitView {
                     .flex()
                     .items_center()
                     .h(px(ROW))
+                    .ml(px(-EMPTY_ROW_INSET))
+                    .pl(px(EMPTY_ROW_INSET))
+                    .rounded(px(R_CONTROL))
                     .hover_row(format!("empty-board-recent-{}", thread.get()))
                     .press_row()
                     .child(div().flex_shrink_0().w(px(GLYPH_GUTTER)))
-                    // The row's mark (`nav::mark`), at its column's start.
+                    // The row's mark (`nav::mark`), at its column's start,
+                    // the nav's gap before the title.
                     .child(
                         div()
                             .flex()
@@ -327,6 +344,7 @@ impl CockpitView {
                             .flex_shrink_0()
                             .w(px(GLYPH_GUTTER))
                             .h(px(ROW))
+                            .mr(px(NAV_ICON_GAP))
                             .child(nav::mark(row.status, false)),
                     )
                     .child(
@@ -383,7 +401,14 @@ impl CockpitView {
             .when(has_recent, |board| {
                 board
                     .child(div().flex_shrink_0().h(px(2.0 * ROW)))
-                    .child(div().text_color(rgb(TEXT_DIM)).child("Recent"))
+                    // A section heading, as the nav's and the palette's.
+                    .child(
+                        div()
+                            .text_size(px(FS_META))
+                            .font_weight(W_LABEL)
+                            .text_color(rgb(TEXT_DIM))
+                            .child("Recent"),
+                    )
                     .child(div().flex_shrink_0().h(px(HALF_ROW)))
                     .child(rows_list)
             })

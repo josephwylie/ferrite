@@ -1,15 +1,15 @@
 //! The files a draft carries, as shelf chips over the Composer (SPEC §5.5):
 //! `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, Geist `FS_META`,
 //! the image mark (or the file mark) and the name in `LINK_INK`. This module owns presentation and
-//! image preview; callers only supply paths and, for a draft, a removal
-//! callback. The prompt codec owns persistence. A draft's review comments
+//! opening (in the Pane's preview, the Panel's Preview tab: `Preview::open`); callers
+//! only supply paths and, for a draft, a removal callback. The prompt codec owns persistence. A draft's review comments
 //! (ADR 0021) ride the same shelf as one more chip.
 
 use std::{path::PathBuf, rc::Rc};
 
 use gpui::{prelude::*, px, App, ElementId, IntoElement, Window};
 
-use crate::attachment_preview::Preview;
+use crate::preview::Preview;
 
 /// Nothing to install now: delivered files draw in the float grammar rather
 /// than on the kit's stock attachment cards, so the kit's own tokens are no
@@ -72,12 +72,13 @@ impl Attachments {
 
 /// The files as shelf chips, wrapping (`SHELF_CHIP_H` on `paint::RAISED`),
 /// a mark — an image's is a real button (a tab stop,
-/// Enter/Space) that opens the preview; any other file's the `FILE` mark —
+/// Enter/Space) that opens it in the Pane's preview, among the shelf's
+/// images; any other file's the `FILE` mark (the chip opens it there too) —
 /// then the name in `LINK_INK` cut at `ATTACH_CHIP_MAX_W` (a file name is
 /// machine text), and, on a draft, a quiet `×` that removes it (a button
 /// too). The buttons sit in the `PromptAttachment` key context, so their
 /// Enter never sends. A click anywhere else on a chip opens the image
-/// preview or the file.
+/// or the file.
 fn chips(attachments: Attachments) -> gpui::AnyElement {
     use crate::pointer::Pointer as _;
     use crate::theme;
@@ -91,22 +92,23 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         on_drop_review,
         island,
     } = attachments;
+    let gallery: Vec<PathBuf> = files
+        .iter()
+        .filter(|path| crate::image_viewer::is_image(path))
+        .cloned()
+        .collect();
+    let gallery: Rc<[PathBuf]> = gallery.into();
     let chips = files.into_iter().enumerate().map(|(index, path)| {
         let name = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let image = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| {
-                gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str())
-            });
+        let image = crate::image_viewer::is_image(&path);
         let mark = if image {
             let host = preview.clone();
             let open = path.clone();
-            let title = name.clone();
+            let gallery = gallery.clone();
             crate::components::button(("preview-attachment", index))
                 .tab_stop(true)
                 .p_0()
@@ -122,7 +124,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 ))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    host.open(open.clone(), title.clone(), window, cx);
+                    host.open(open.clone(), None, &gallery, window, cx);
                 })
                 .into_any_element()
         } else {
@@ -141,7 +143,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         };
         let host = preview.clone();
         let open = path.clone();
-        let title = name.clone();
+        let gallery = gallery.clone();
         div()
             .id(("attachment", index))
             .flex()
@@ -191,15 +193,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             })
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
-                if image {
-                    host.open(open.clone(), title.clone(), window, cx);
-                } else {
-                    crate::file_links::FileLink {
-                        path: open.clone(),
-                        location: None,
-                    }
-                    .open(window, cx);
-                }
+                host.open(open.clone(), None, &gallery, window, cx);
             })
     });
     let review = (review > 0).then(|| review_chip(review, on_drop_review));
@@ -284,8 +278,8 @@ impl RenderOnce for Attachments {
 /// wrote it in `LINK_INK` with no chip, a `:line` suffix in `TEXT_DIM`. It
 /// is a path target (`file_links::wire_inline`): a `LINK_INK` underline only
 /// under the pointer, the hover card while it is there (hosted by `scope`,
-/// the transcript it sits in), ⌘-click to a reader beside the Thread; a
-/// plain click opens it in the Pane's preview. The native Markdown flow
+/// the transcript it sits in), ⌘-click to the Thread's preview; a plain
+/// click opens it in the Pane's preview too, at its `:line`. The native Markdown flow
 /// reserves the returned size and wraps the link atomically, so the width is
 /// measured in the face and size it is drawn in (the prose's own): the path
 /// and the location each shaped whole.
@@ -307,12 +301,6 @@ pub fn inline_file(
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let extension = file
-        .path
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_ascii_lowercase();
     let location = file
         .location
         .as_ref()
@@ -326,7 +314,7 @@ pub fn inline_file(
     } else {
         label.to_string()
     };
-    let image = gpui::Img::extensions().contains(&extension.as_str());
+    let image = crate::image_viewer::is_image(&file.path);
     let size_px = window.text_style().font_size.to_pixels(window.rem_size());
     let link_w = inline_file_width(&name, &location, image, size_px, window);
     let line_h = window.line_height();
@@ -358,20 +346,16 @@ pub fn inline_file(
             crate::file_links::open_target(&reader, window, cx);
             return;
         }
-        if image && file.path.exists() {
-            if let Some(host) = &host {
-                host.open(file.path.clone(), base.clone(), window, cx);
-                return;
+        match &host {
+            Some(host) if file.path.exists() => {
+                let line = file
+                    .location
+                    .as_deref()
+                    .and_then(crate::file_links::location_line);
+                host.open(file.path.clone(), line, &[], window, cx);
             }
+            _ => file.open(window, cx),
         }
-        if !image && file.path.exists() {
-            if let Some(host) = &host {
-                if host.open_text_document(file.path.clone(), base.clone(), window, cx) {
-                    return;
-                }
-            }
-        }
-        file.open(window, cx);
     };
     let link = gpui::div()
         .id("inline-file-chip")

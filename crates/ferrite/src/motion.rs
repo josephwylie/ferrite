@@ -1,6 +1,8 @@
-//! The motion kit: Zeron's animation catalog as helpers over gpui's
-//! [`Animation`], plus the two clocks gpui does not give us — a throttled,
-//! shared pulse for loops and a hover blend for colour. Ported from Zeron
+//! The motion kit: Zeron's animation catalog as one-shot elements on the
+//! executor's clock ([`Played`]), plus the clocks gpui does not give us — a
+//! throttled, shared pulse for loops, a hover blend for colour, and
+//! interruptible tweens. Every clock asks for its frames through the view
+//! that redraws it most cheaply ([`frames_through`]). Ported from Zeron
 //! (MIT, (c) 2026 Wing). The numbers are tokens in `theme.rs` (the motion
 //! section), which also holds the rules; this module is the machinery.
 //!
@@ -12,23 +14,40 @@
 //! | --- | --- | --- |
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
-//! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
+//! | toasts | [`TOAST_IN`] 180ms, 4px rise / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18) rises into place from 0.3 ([`toast_in`]); one that goes on its own fades away sinking 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server, update and Projects toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`], settling away from their opener ([`Opens`]) |
+//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
-//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column |
+//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`]; the palette, the shortcuts sheet and the Projects popup with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
+//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel rides the same way at the board's right edge, through [`ColumnRide`], between hidden, its 304 and a preview's wide width (`cockpit/panel.rs`): coming and going (⌥⌘B, a preview opening while it is hidden, focus moving to or from a Pane with none) its content fades on the nav's clock; changing width (a preview opening or closing, a tab picked) it does not. Its content keeps its layout at rest and never re-wraps — the Panel's own width anchored to the window's edge, a preview's beyond it pinned to the board's edge, so it slides in with it |
+//! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
-//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
+//! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
+//! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
+//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks, the PR tab's `N resolved` and `Show more`) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend) |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); a preview opening in the Panel, or another document replacing it, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
-//! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
-//! `PopupMenu`) keep the kit's own behaviour. A tool group's disclosure in
-//! the transcript opens without a height tween: its rows are one item of a
-//! virtualized list inside a kit `Collapsible`, and an item mid-reveal would
-//! clip rows the pointer can already reach.
+//! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
+//! keep the kit's own behaviour. A tool group's disclosure in the transcript
+//! opens without a height tween: its rows are one item of a virtualized
+//! list inside a kit `Collapsible`, and an item mid-reveal would clip rows
+//! the pointer can already reach. The hover card (`hover_card.rs`) hangs at
+//! once: the transcript hosting it would draw every frame of an entrance
+//! again, rebuilding its native text (15 text renders for one `menu-in`).
+//!
+//! **What a frame costs.** gpui asks for an animation's next frame by
+//! notifying the view drawing it, and redraws that view's ancestors with
+//! it. A one-shot, a settled flip and a hover blend in the Cockpit's own
+//! tree (its floats, the frame's controls) notify its `FrameTick` instead
+//! ([`draw_frames_through`]), so they rebuild no cached part; one inside a
+//! part (a Pane's Composer menu) rebuilds that part alone. A loop draws in
+//! the loops overlay (ADR 0011). The nav's ride rebuilds every part on each
+//! frame: the board's width moves under them, and the nav's own. The
+//! Panel's ride and a Review's slide redraw the frame around the parts
+//! instead, so only the parts whose cells move are built again (the
+//! Panel's ride still builds the nav once a frame).
 //!
 //! # What gpui here cannot do, and what stands in
 //!
@@ -40,19 +59,21 @@
 //! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
 //!   dropped; opacity and scale carry it.
 //! - **Frost and edge fades.** Fork-only paint effects; not ported.
-//! - **Toast enter and exit.** Ferrite sets the stack's timing
+//! - **The kit's toast card.** Ferrite sets the kit stack's timing
 //!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
 //!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px
-//!   and 200ms exit on the card itself, so the card's 4px / 0.3-opacity
-//!   entrance waits on that crate.
+//!   and 200ms exit on the card itself, so the Server, update and Projects
+//!   toasts keep that slide; the Needs-you toast, Ferrite's own, wears the
+//!   catalog's.
 //!
 //! # Reduced motion
 //!
 //! gpui's `App::reduce_motion` flag snaps every `with_animation` element (a
 //! one-shot to its end state, a loop to its start) and every kit spring. The
-//! clocks here follow the same rule: [`loop_phase`] returns 0 and declares
-//! nothing, a [`Tween`] reads its target, and a hover snaps. [`init`] sets
-//! the flag from the system setting at launch.
+//! clocks here follow the same rule: a [`Played`] one-shot lands on its
+//! first frame (an exit is not drawn at all), [`loop_phase`] returns 0 and
+//! declares nothing, a [`Tween`] reads its target, and a hover snaps.
+//! [`init`] sets the flag from the system setting at launch.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -60,8 +81,7 @@ use std::time::{Duration, Instant};
 
 use ferrite_core::cadence;
 use gpui::{
-    px, Animation, AnimationElement, AnimationExt, App, ElementId, EntityId, Global, Hsla,
-    IntoElement, Rgba, SharedString, Styled, Window,
+    px, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba, SharedString, Styled, Window,
 };
 
 use crate::theme;
@@ -156,6 +176,7 @@ impl CubicBezier {
 pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
+pub const EASE_SLIDE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_SLIDE);
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -192,17 +213,6 @@ impl MotionSpec {
         }
         self.progress(elapsed.as_secs_f32() / self.duration().as_secs_f32())
     }
-
-    /// This entry as a one-shot gpui [`Animation`]. gpui snaps it to its end
-    /// state under reduced motion.
-    pub fn animation(&self) -> Animation {
-        let spec = *self;
-        if !live() {
-            // Resting (see `live`): lands on its end state at once.
-            return Animation::new(Duration::from_nanos(1)).with_easing(|_| 1.0);
-        }
-        Animation::new(spec.duration()).with_easing(move |raw| spec.progress(raw))
-    }
 }
 
 pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
@@ -218,7 +228,21 @@ pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, 
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
+/// The image viewer's zoom, tweened on the scale's logarithm so every
+/// step of it reads as the same zoom.
+pub const IMAGE_ZOOM: MotionSpec = MotionSpec::new(theme::MOTION_IMAGE_ZOOM_MS, EASE_OUT_EXPO);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
+/// A board slot sliding in beside its owner, and out again a little
+/// quicker (a [`Reveal`]): the Review beside its Pane.
+pub const SLOT_OPEN: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_OPEN_MS, EASE_SLIDE);
+pub const SLOT_CLOSE: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_CLOSE_MS, EASE_SLIDE);
+// An exit is quicker than its entrance (the rules in `theme.rs`).
+const _: () = assert!(theme::MOTION_SLOT_CLOSE_MS < theme::MOTION_SLOT_OPEN_MS);
+
+/// A toast rising in over the bottom bar, and fading away when it goes on
+/// its own: the toast tokens, on the menus' curve.
+pub const TOAST_IN: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_IN_MS, EASE);
+pub const TOAST_OUT: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_OUT_MS, EASE);
 
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
@@ -232,9 +256,16 @@ pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
 // A rise or drop is a relative `top` inset: taffy applies relative insets
 // after layout, so, like a CSS transform, siblings never move. The entrances
 // play once when their element id first mounts, so a caller mounts one only
-// for a change the operator watched. There are no exits: a menu or sheet
-// that closes is gone at once (an exit costs the operator a wait on every
-// dismissal and says nothing the closed state does not).
+// for a change the operator watched. A surface the operator dismisses (a
+// menu, a sheet, the palette) has no exit: it is gone at once, because an
+// exit costs a wait on every dismissal, its hit area would outlive it, and
+// the closed state says it all. A surface that leaves on its own (a toast)
+// fades out instead, drawn as a face that answers no pointer.
+//
+// Each plays on the executor's clock ([`Played`]), not gpui's wall-clock
+// `with_animation`, so a test steps it like every other clock here, and it
+// asks for its frames through [`frames_through`]: a menu the Cockpit draws
+// redraws the frame around the cached parts, never every Pane.
 //
 // gpui paints a surface's shadow under it and has no group compositing, so
 // a surface still fading in would show its own shadow through it as a dark
@@ -250,6 +281,10 @@ pub enum Opens {
     Down,
     /// Above its opener (the Composer's menus, the footer cards).
     Up,
+    /// Where it stands, without settling: a float that measures its own
+    /// box to place itself (the Composer's choice menus) would chase the
+    /// shift and re-place itself every frame.
+    InPlace,
 }
 
 impl Opens {
@@ -257,24 +292,32 @@ impl Opens {
         let toward = match self {
             Opens::Down => -1.0,
             Opens::Up => 1.0,
+            Opens::InPlace => 0.0,
         };
         toward * theme::MOTION_MENU_SHIFT * (1.0 - t)
     }
 }
 
+/// A floating surface at `opacity`, its float shadow ramped under it.
 fn float_face<E: Styled>(el: E, opacity: f32) -> E {
+    faded(el, opacity, crate::components::float_shadow())
+}
+
+/// A surface at `opacity` casting `shadow`, the shadow's ink ramped by the
+/// square of the fade.
+fn faded<E: Styled>(el: E, opacity: f32, shadow: Vec<gpui::BoxShadow>) -> E {
     el.opacity(opacity)
-        .shadow(crate::components::float_shadow_faded(opacity * opacity))
+        .shadow(crate::components::shadow_faded(shadow, opacity * opacity))
 }
 
 /// `menu-in` for a floating surface in flow (inside `anchored` or a
 /// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` while settling
 /// `MOTION_MENU_SHIFT` away from its opener.
-pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> AnimationElement<E>
+pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, MENU_IN.animation(), move |el, t| {
+    entrance(id, MENU_IN, element, move |el, t| {
         float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
             .relative()
             .top(px(opens.shift(t)))
@@ -282,30 +325,79 @@ where
 }
 
 /// `dialog-in` for a sheet: opacity 0 → 1 rising `MOTION_DIALOG_RISE`.
-pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
+    entrance(id, DIALOG_IN, element, |el, t| {
         float_face(el, t)
             .relative()
             .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })
 }
 
-/// `slot-in` for a board slot that opens beside its owner (the reader
-/// beside its Pane): no surface of its own to lift, so no shadow — it fades
-/// up from `MOTION_MENU_FROM_OPACITY` while settling `MOTION_SLOT_SHIFT`
-/// in from the owner's side, over `DIALOG_IN`.
-pub fn slot_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+/// `dialog_in` for a sheet that casts its own `shadow` rather than the
+/// float's (the palette's dialog, `components::dialog_shadow`).
+pub fn dialog_in_casting<E>(
+    id: impl Into<ElementId>,
+    element: E,
+    shadow: fn() -> Vec<gpui::BoxShadow>,
+) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
-        el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+    entrance(id, DIALOG_IN, element, move |el, t| {
+        faded(el, t, shadow())
             .relative()
-            .left(px(-theme::MOTION_SLOT_SHIFT * (1.0 - t)))
+            .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })
+}
+
+/// `row-in` for content arriving in a place already open (a preview in the
+/// Panel, another document replacing it): opacity alone, up from
+/// `MOTION_MENU_FROM_OPACITY` so its first frame is already legible; the
+/// place itself holds still.
+pub fn swap_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, ROW_IN, element, |el, t| {
+        el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+    })
+}
+
+/// `toast-in` for a toast hung over the bottom bar: fades up from
+/// `MOTION_MENU_FROM_OPACITY` while rising `MOTION_TOAST_RISE` into place,
+/// over `TOAST_IN`.
+pub fn toast_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, TOAST_IN, element, |el, t| {
+        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+            .relative()
+            .top(px(theme::MOTION_TOAST_RISE * (1.0 - t)))
+    })
+}
+
+/// `toast-out` for a toast that went on its own at `left`: fades away over
+/// `TOAST_OUT`, sinking half its rise — shorter and softer than it came.
+/// The caller draws it as a face that answers no pointer, and stops once
+/// [`TOAST_OUT`] has passed.
+pub fn toast_out<E>(left: Instant, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    Played {
+        origin: Origin::At(left),
+        spec: TOAST_OUT,
+        element,
+        face: |el: E, t: f32| {
+            float_face(el, 1.0 - t)
+                .relative()
+                .top(px(theme::MOTION_TOAST_RISE / 2.0 * t))
+        },
+    }
 }
 
 /// `fade-in` over `spec`: opacity 0 → `to`, nothing moves — a mark or a
@@ -315,28 +407,105 @@ pub fn fade_in<E>(
     element: E,
     spec: MotionSpec,
     to: f32,
-) -> AnimationElement<E>
+) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, spec.animation(), move |el, t| {
-        el.opacity(lerp(0.0, to, t))
-    })
+    entrance(id, spec, element, move |el, t| el.opacity(lerp(0.0, to, t)))
 }
 
 /// A sheet's veil darkening in over `FADE_QUICK`: only its ground fades, so
 /// the sheet on it keeps its own entrance.
-pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, FADE_QUICK.animation(), |el, t| {
+    entrance(id, FADE_QUICK, element, |el, t| {
         el.bg(mix(
             gpui::transparent_black(),
             gpui::rgba(theme::VEIL).into(),
             t,
         ))
     })
+}
+
+fn entrance<E, F>(id: impl Into<ElementId>, spec: MotionSpec, element: E, face: F) -> Played<E, F>
+where
+    E: IntoElement + 'static,
+    F: FnOnce(E, f32) -> E + 'static,
+{
+    Played {
+        origin: Origin::Mount(id.into()),
+        spec,
+        element,
+        face,
+    }
+}
+
+/// Where a [`Played`] one-shot starts.
+enum Origin {
+    /// When the element under this id first mounts (an entrance): kept in
+    /// its element state, so it plays once and a remount plays it again.
+    Mount(ElementId),
+    /// At an instant the caller holds (an exit: when its subject went).
+    At(Instant),
+}
+
+/// A one-shot drawn at its spec's eased progress on the executor's clock:
+/// `face` draws `element` at 0..1, asking for the next frame while it
+/// plays and none once it lands. Reduced motion lands it at once.
+pub struct Played<E, F> {
+    origin: Origin,
+    spec: MotionSpec,
+    element: E,
+    face: F,
+}
+
+impl<E, F> gpui::RenderOnce for Played<E, F>
+where
+    E: IntoElement + 'static,
+    F: FnOnce(E, f32) -> E + 'static,
+{
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = play(self.origin, self.spec, window, cx);
+        (self.face)(self.element, t)
+    }
+}
+
+impl<E, F> IntoElement for Played<E, F>
+where
+    E: IntoElement + 'static,
+    F: FnOnce(E, f32) -> E + 'static,
+{
+    type Element = gpui::ViewElement<Self>;
+
+    #[track_caller]
+    fn into_element(self) -> Self::Element {
+        gpui::ViewElement::new(self)
+    }
+}
+
+/// How far a one-shot from `origin` has played along `spec` now.
+fn play(origin: Origin, spec: MotionSpec, window: &mut Window, cx: &mut App) -> f32 {
+    if reduced_motion(cx) {
+        return 1.0;
+    }
+    let now = cx.background_executor().now();
+    let started = match origin {
+        Origin::At(at) => at,
+        Origin::Mount(id) => window.with_global_id(id, |id, window| {
+            window.with_element_state(id, |started: Option<Instant>, _| {
+                let started = started.unwrap_or(now);
+                (started, started)
+            })
+        }),
+    };
+    let elapsed = now.saturating_duration_since(started);
+    if elapsed >= spec.duration() {
+        return 1.0;
+    }
+    request_frame(window);
+    spec.progress_at(elapsed)
 }
 
 /// `fade-in` at progress `t`: opacity with a `MOTION_FADE_IN_RISE` rise,
@@ -347,6 +516,45 @@ pub fn fade_in_at<E: Styled>(element: E, t: f32) -> E {
         .opacity(t)
         .relative()
         .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
+}
+
+// ---------------------------------------------------------------------------
+// Frames: who an animation's next frame redraws
+// ---------------------------------------------------------------------------
+//
+// gpui's `request_animation_frame` notifies the view drawing the animation.
+// For the Cockpit that is the costliest notify in the window: its cached
+// parts (the nav, every Pane) all read it, so a menu fading in over 140ms
+// rebuilt every Pane on each of its frames. A view names a cheaper one that
+// redraws the same elements ([`draw_frames_through`]); every clock here —
+// the one-shots, the settled flips, the hover blends — asks for its frames
+// through it.
+
+thread_local! {
+    static FRAMES_THROUGH: RefCell<HashMap<EntityId, EntityId>> = RefCell::default();
+}
+
+/// `view`'s animations draw their frames by notifying `through` instead of
+/// `view` itself; `None` forgets it. The Cockpit names the frame around its
+/// cached parts (ADR 0012's `FrameTick`): its floats and frame controls
+/// redraw without rebuilding a part.
+pub fn draw_frames_through(view: EntityId, through: Option<EntityId>) {
+    FRAMES_THROUGH.with(|map| match through {
+        Some(through) => map.borrow_mut().insert(view, through),
+        None => map.borrow_mut().remove(&view),
+    });
+}
+
+/// The view to notify for a frame of an animation `view` draws.
+pub fn frames_through(view: EntityId) -> EntityId {
+    FRAMES_THROUGH.with(|map| map.borrow().get(&view).copied().unwrap_or(view))
+}
+
+/// Ask for the next frame for an animation the current view is drawing,
+/// through the view that redraws it most cheaply.
+pub fn request_frame(window: &mut Window) {
+    let view = frames_through(window.current_view());
+    window.on_next_frame(move |_, cx| cx.notify(view));
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +614,148 @@ impl Tween {
     }
 }
 
+/// A column that opens, closes and changes width by riding its width (the
+/// catalog's column-width row): its width rides [`RESIZE`] between any two
+/// widths while, as it opens or closes, its content's opacity rides `fade`
+/// on its own clock, 0 → 1 opening and 1 → 0 closing. A ride mid-flight
+/// starts both from where they are on screen. The default is at rest —
+/// nothing rides until the first ride, so a column restored open or closed
+/// arrives in place.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ColumnRide {
+    width: Option<Tween>,
+    fade: Option<Tween>,
+}
+
+impl ColumnRide {
+    /// Ride from `from` wide — or from the width on screen, mid-flight —
+    /// to `to`. `fade` turns the content toward shown (`true`, opening) or
+    /// gone (closing) on its spec; `None` leaves it as it is, for a column
+    /// that only changes width.
+    pub fn ride(
+        &mut self,
+        from: f32,
+        to: f32,
+        fade: Option<(bool, MotionSpec)>,
+        now: Instant,
+        reduced: bool,
+    ) {
+        // A ride long done holds the width it ended at, which a window
+        // resized since has made stale: start from the width at rest.
+        let riding = self.width.filter(|width| width.running(now, reduced));
+        self.width = Some(Tween::retarget(riding, from, to, RESIZE, now, reduced));
+        if let Some((shown, spec)) = fade {
+            let (from, to) = if shown { (0.0, 1.0) } else { (1.0, 0.0) };
+            self.fade = Some(Tween::retarget(self.fade, from, to, spec, now, reduced));
+        }
+    }
+
+    /// Mid-flight: the owner must ask for another frame.
+    pub fn running(&self, now: Instant, reduced: bool) -> bool {
+        self.width.is_some_and(|width| width.running(now, reduced))
+    }
+
+    /// The width this frame while the column rides; `None` at rest.
+    pub fn width(&self, now: Instant, reduced: bool) -> Option<f32> {
+        self.width
+            .filter(|width| width.running(now, reduced))
+            .map(|width| width.value(now, reduced))
+    }
+
+    /// The content's opacity this frame: its fade's while the width rides
+    /// (a fade that has finished holds its end), and 1 at rest.
+    pub fn opacity(&self, now: Instant, reduced: bool) -> f32 {
+        match self.fade {
+            Some(fade) if self.running(now, reduced) => fade.value(now, reduced),
+            _ => 1.0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reveal: a slot that slides open and shut
+// ---------------------------------------------------------------------------
+
+/// How far a slot that opens and closes is in — 0 shut, 1 open at rest —
+/// riding a [`Tween`] that eases in over `enter` and out over the shorter
+/// `exit`, and turns around from where it is when flipped mid-flight. The
+/// owner lays the slot out at [`Reveal::value`] (a share of a split, a
+/// column's width), asks for frames while it is [`Reveal::running`], and
+/// keeps the slot until it is [`Reveal::shut`]: a slot outlives its close
+/// by its exit. The Review beside its Pane rides one (`SLOT_OPEN`,
+/// `SLOT_CLOSE`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reveal {
+    open: bool,
+    tween: Tween,
+    enter: MotionSpec,
+    exit: MotionSpec,
+}
+
+impl Reveal {
+    /// A slot opening now, from shut.
+    pub fn opening(enter: MotionSpec, exit: MotionSpec, now: Instant) -> Self {
+        Self {
+            open: true,
+            tween: Tween::new(0.0, 1.0, enter, now),
+            enter,
+            exit,
+        }
+    }
+
+    /// A slot already open, at rest: what first paint finds arrives in
+    /// place, with no entrance.
+    pub fn open(enter: MotionSpec, exit: MotionSpec, now: Instant) -> Self {
+        Self {
+            open: true,
+            tween: Tween::new(1.0, 1.0, enter, now),
+            enter,
+            exit,
+        }
+    }
+
+    /// Open or close it, from wherever it is on screen; no change is a
+    /// no-op.
+    pub fn set(&mut self, open: bool, now: Instant, reduced: bool) {
+        if self.open == open {
+            return;
+        }
+        self.open = open;
+        let (to, spec) = if open {
+            (1.0, self.enter)
+        } else {
+            (0.0, self.exit)
+        };
+        self.tween = Tween::retarget(Some(self.tween), 1.0 - to, to, spec, now, reduced);
+    }
+
+    /// Land it where it is going (a seam grabbed mid-slide).
+    pub fn land(&mut self, now: Instant) {
+        let to = self.tween.to;
+        self.tween = Tween::new(to, to, self.tween.spec, now);
+    }
+
+    /// Whether it is open, or opening.
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// How far in it is at `now`.
+    pub fn value(&self, now: Instant, reduced: bool) -> f32 {
+        self.tween.value(now, reduced)
+    }
+
+    /// Mid-slide: the owner must ask for another frame.
+    pub fn running(&self, now: Instant, reduced: bool) -> bool {
+        self.tween.running(now, reduced)
+    }
+
+    /// Closed and done sliding: the owner lets the slot go.
+    pub fn shut(&self, now: Instant, reduced: bool) -> bool {
+        !self.open && !self.running(now, reduced)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Settled: a state change that eases, held in element state
 // ---------------------------------------------------------------------------
@@ -455,7 +805,7 @@ fn settle_with(
         })
     });
     if running {
-        window.request_animation_frame();
+        request_frame(window);
     }
     value
 }
@@ -958,11 +1308,13 @@ pub fn hover_listener_with(
                 .set_with(&key, *hovered, reduced, now, spec, view)
         });
         // Only the view that painted the blend draws it: notifying that
-        // view redraws it and its ancestors, and reuses every other cached
-        // view (the transcripts). Called from outside a painted listener,
-        // refresh, as a gpui `.hover()` style does on the same event.
+        // view (through the one that redraws it most cheaply) redraws it
+        // and its ancestors, and reuses every other cached view (the
+        // transcripts, the Cockpit's parts). Called from outside a painted
+        // listener, refresh, as a gpui `.hover()` style does on the same
+        // event.
         match view {
-            Some(view) => cx.notify(view),
+            Some(view) => cx.notify(frames_through(view)),
             None => window.refresh(),
         }
     }
@@ -976,11 +1328,22 @@ pub fn hover_fades_active() -> bool {
     HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(now))
 }
 
-/// The views painting a blend still mid-flight, as of the last
-/// [`hover_fades_active`]: the root draws them again with its next frame (a
-/// cached view would otherwise be reused, its blend frozen).
+/// The views to draw again for the blends still mid-flight, as of the last
+/// [`hover_fades_active`] (each painting view through [`frames_through`]):
+/// the root notifies them with its next frame (a cached view would
+/// otherwise be reused, its blend frozen).
 pub fn hover_fading_views() -> Vec<EntityId> {
-    HOVER_FADES.with(|fades| fades.borrow().fading.clone())
+    let mut views: Vec<EntityId> = HOVER_FADES.with(|fades| {
+        fades
+            .borrow()
+            .fading
+            .iter()
+            .map(|view| frames_through(*view))
+            .collect()
+    });
+    views.sort_unstable();
+    views.dedup();
+    views
 }
 
 /// Blend two colours the way a browser transitions them: sRGB components
@@ -1026,9 +1389,10 @@ pub fn reduced_motion(cx: &App) -> bool {
 /// Whether the kit animates at all. Always, except in unit tests, where it
 /// rests unless a test asks for it (`testing::drive`). The suite asserts
 /// layout and hit targets straight after a state change, on a clock it
-/// steps by hand, and gpui's `with_animation` runs on the wall clock: live
-/// entrances would make those readings depend on when they were taken. A
-/// pulse tick nobody asked for would also blank the transcripts' test
+/// steps by hand: live entrances would put those readings mid-flight, and
+/// the kit's own springs and cards (gpui's `with_animation`) run on the
+/// wall clock besides. A pulse tick nobody asked for would also blank the
+/// transcripts' test
 /// selectors (gpui's test window keeps no `debug_bounds` for a cached view
 /// it reuses). Resting, the kit behaves as it does under reduced motion.
 pub(crate) fn live() -> bool {
@@ -1231,6 +1595,101 @@ mod tests {
         let tween = Tween::new(52.0, 286.0, DIALOG_IN, t0);
         assert_eq!(tween.value(t0, true), 286.0);
         assert!(!tween.running(t0, true), "no frame is asked for");
+    }
+
+    /// A column rides its width over `RESIZE` and fades its content over
+    /// its own (shorter) clock; turned back mid-flight both start from
+    /// where they are; at rest it reads no width and full opacity, and under
+    /// reduced motion it is always at rest.
+    #[test]
+    fn a_column_ride_turns_around_from_where_it_is() {
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let fade = MotionSpec::new(150, EASE);
+        let mut ride = ColumnRide::default();
+        assert_eq!(ride.width(t0, false), None, "at rest before any turn");
+        assert_eq!(ride.opacity(t0, false), 1.0);
+
+        ride.ride(8.0, 304.0, Some((true, fade)), t0, false);
+        let mid = ride.width(ms(100), false).expect("riding");
+        assert!(mid > 8.0 && mid < 304.0, "mid-ride {mid}");
+        let shown = ride.opacity(ms(100), false);
+        assert!(shown > 0.0 && shown < 1.0, "fading in {shown}");
+        assert_eq!(ride.opacity(ms(170), false), 1.0, "its fade is done first");
+        assert!(ride.running(ms(170), false), "while the width still rides");
+
+        ride.ride(304.0, 8.0, Some((false, fade)), ms(100), false);
+        close(ride.width(ms(100), false).unwrap(), mid, 1e-3, "continuity");
+        close(ride.opacity(ms(100), false), shown, 1e-3, "the fade too");
+        assert_eq!(ride.width(ms(300), false), None, "settled");
+        assert!(!ride.running(ms(300), false));
+
+        ride.ride(8.0, 304.0, Some((true, fade)), ms(400), true);
+        assert_eq!(ride.width(ms(400), true), None, "reduced: no ride");
+        assert_eq!(ride.opacity(ms(400), true), 1.0);
+
+        // Wider, with no fade: the content stays as it is while the width
+        // rides, from the width at rest however long ago the last ride
+        // ended.
+        ride.ride(304.0, 600.0, None, ms(1000), false);
+        let wider = ride.width(ms(1100), false).expect("riding wider");
+        assert!(wider > 304.0 && wider < 600.0, "{wider}");
+        assert_eq!(ride.opacity(ms(1100), false), 1.0, "no fade");
+        ride.ride(600.0, 304.0, None, ms(1100), false);
+        close(
+            ride.width(ms(1100), false).unwrap(),
+            wider,
+            1e-3,
+            "it turns around",
+        );
+    }
+
+    /// A slot slides in over `SLOT_OPEN` and out over `SLOT_CLOSE`, turns
+    /// around mid-flight from where it is, and is shut only once its exit
+    /// has run.
+    #[test]
+    fn a_reveal_slides_open_and_shut_and_turns_around() {
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let mut slot = Reveal::opening(SLOT_OPEN, SLOT_CLOSE, t0);
+        assert_eq!(slot.value(t0, false), 0.0, "it starts shut");
+        let mid = slot.value(ms(60), false);
+        assert!(mid > 0.0 && mid < 1.0 && slot.running(ms(60), false));
+        assert!(mid > 0.5, "an ease-out is past halfway at a quarter: {mid}");
+
+        slot.set(false, ms(60), false);
+        close(
+            slot.value(ms(60), false),
+            mid,
+            1e-4,
+            "turns around on screen",
+        );
+        assert!(
+            !slot.shut(ms(60), false),
+            "a closing slot outlives its close"
+        );
+        assert!(slot.shut(ms(60 + theme::MOTION_SLOT_CLOSE_MS), false));
+        assert_eq!(slot.value(ms(60 + theme::MOTION_SLOT_CLOSE_MS), false), 0.0);
+
+        slot.set(true, ms(400), false);
+        slot.land(ms(410));
+        assert_eq!(slot.value(ms(410), false), 1.0, "landed where it was going");
+        assert!(!slot.running(ms(410), false));
+
+        // At rest from the start: no entrance.
+        let rest = Reveal::open(SLOT_OPEN, SLOT_CLOSE, t0);
+        assert_eq!(rest.value(t0, false), 1.0);
+        assert!(!rest.running(t0, false));
+    }
+
+    #[test]
+    fn reduced_motion_snaps_a_reveal() {
+        let t0 = Instant::now();
+        let mut slot = Reveal::opening(SLOT_OPEN, SLOT_CLOSE, t0);
+        assert_eq!(slot.value(t0, true), 1.0);
+        assert!(!slot.running(t0, true));
+        slot.set(false, t0, true);
+        assert!(slot.shut(t0, true), "closed at once: the slot can go");
     }
 
     #[test]
@@ -1524,6 +1983,130 @@ mod tests {
         flip(&view, true, cx);
         assert_eq!(drawn.get(), 1.0);
         assert_eq!(next_frame(cx), 0);
+    }
+
+    struct Entering {
+        mounted: bool,
+        left: Option<Instant>,
+        drawn: std::rc::Rc<std::cell::Cell<f32>>,
+    }
+
+    impl Render for Entering {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let drawn = self.drawn.clone();
+            let face = move |el: gpui::Div, t: f32| {
+                drawn.set(t);
+                el
+            };
+            div().when(self.mounted, |root| match self.left {
+                None => root.child(entrance("entering", MENU_IN, div().size_4(), face)),
+                Some(left) => root.child(Played {
+                    origin: Origin::At(left),
+                    spec: TOAST_OUT,
+                    element: div().size_4(),
+                    face,
+                }),
+            })
+        }
+    }
+
+    fn entering(
+        cx: &mut TestAppContext,
+        left: Option<Instant>,
+    ) -> (
+        gpui::Entity<Entering>,
+        std::rc::Rc<std::cell::Cell<f32>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let drawn = std::rc::Rc::new(std::cell::Cell::new(-1.0));
+        let seen = drawn.clone();
+        let (view, cx) = cx.add_window_view(move |_, _| Entering {
+            mounted: true,
+            left,
+            drawn: seen,
+        });
+        cx.run_until_parked();
+        (view, drawn, cx)
+    }
+
+    /// An entrance plays from its element's first mount on the executor's
+    /// clock, asking for frames only while it plays; unmounted and mounted
+    /// again, it plays again.
+    #[gpui::test]
+    fn an_entrance_plays_from_its_first_mount_and_then_asks_for_nothing(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, drawn, cx) = entering(cx, None);
+        assert_eq!(drawn.get(), 0.0, "its first frame is its first");
+        cx.executor().advance_clock(Duration::from_millis(70));
+        assert!(next_frame(cx) > 0, "it asks for the next frame");
+        let mid = drawn.get();
+        assert!(mid > 0.0 && mid < 1.0, "mid-flight at 70ms: {mid}");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_MENU_IN_MS));
+        next_frame(cx);
+        assert_eq!(drawn.get(), 1.0, "landed");
+        assert_eq!(next_frame(cx), 0, "and asks for nothing");
+
+        for mounted in [false, true] {
+            view.update(cx, |view, cx| {
+                view.mounted = mounted;
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        assert_eq!(drawn.get(), 0.0, "mounted again, it plays again");
+    }
+
+    /// An exit plays from the instant its subject went, not from its mount.
+    #[gpui::test]
+    fn an_exit_plays_from_the_instant_its_subject_went(cx: &mut TestAppContext) {
+        testing::drive();
+        let left = cx.executor().now() - Duration::from_millis(50);
+        let (_view, drawn, cx) = entering(cx, Some(left));
+        let at = drawn.get();
+        assert!(at > 0.0 && at < 1.0, "50ms into its 100ms: {at}");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_TOAST_OUT_MS));
+        assert!(next_frame(cx) > 0);
+        assert_eq!(drawn.get(), 1.0, "gone");
+        assert_eq!(next_frame(cx), 0, "and asks for nothing");
+    }
+
+    /// Reduced motion lands an entrance on its first frame.
+    #[gpui::test]
+    fn reduced_motion_lands_an_entrance(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (_view, drawn, cx) = entering(cx, None);
+        assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0);
+    }
+
+    /// A view that draws its frames through another notifies that one for
+    /// its animation's next frame, not itself.
+    #[gpui::test]
+    fn an_animation_draws_its_frames_through_the_view_named(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, drawn, cx) = entering(cx, None);
+        let through = cx.update(|_, cx| cx.new(|_| ()));
+        let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = notified.clone();
+        cx.update(|_, cx| {
+            cx.observe(&through, move |_, _| seen.set(seen.get() + 1))
+                .detach()
+        });
+        draw_frames_through(view.entity_id(), Some(through.entity_id()));
+        // The frame its first draw asked for redraws it, and that draw asks
+        // through the view named.
+        next_frame(cx);
+        notified.set(0);
+        let before = drawn.get();
+        cx.executor().advance_clock(Duration::from_millis(30));
+        assert!(next_frame(cx) > 0);
+        assert_eq!(notified.get(), 1, "the frame went to the view named");
+        assert_eq!(drawn.get(), before, "and did not redraw the drawing view");
+        draw_frames_through(view.entity_id(), None);
+        assert_eq!(frames_through(view.entity_id()), view.entity_id());
     }
 
     /// Reduced motion holds a loop at its start and leases nothing.

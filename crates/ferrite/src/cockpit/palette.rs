@@ -1410,7 +1410,10 @@ impl CockpitView {
             return Vec::new();
         };
         let board = self.board_bounds(window);
-        let veil = deferred(
+        // The veil darkens in under the sheet's own entrance, as Settings'
+        // does; a press on it takes effect from its first frame.
+        let veil = deferred(crate::motion::veil_in(
+            "palette-veil-in",
             div()
                 .debug_selector(|| "palette-veil".into())
                 .absolute()
@@ -1428,7 +1431,7 @@ impl CockpitView {
                         view.close_shortcuts(cx);
                     }),
                 ),
-        )
+        ))
         .with_priority(float::VEIL_PRIORITY)
         .into_any_element();
         let anchor = gpui::Bounds::new(
@@ -1449,15 +1452,23 @@ impl CockpitView {
     }
 
     /// The newest standing toast (FL-18), its right edge two cells in from
-    /// the window's, its foot 36px over the bottom bar.
+    /// the window's, its foot 36px over the bottom bar: rising in when it
+    /// comes, and over the face of the one before it while that fades
+    /// away (`notifications::ToastStage`).
     pub(super) fn toast_float(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let alert = &self.needs_you.toasts().last()?.alert;
+    ) -> Vec<AnyElement> {
         let machines = self.machines.as_ref().map(|machines| machines.read(cx));
-        let row = self.alert_row(alert, machines, ferrite_core::clock::system_time())?;
+        let standing = self.needs_you.toasts().last().and_then(|toast| {
+            self.alert_row(&toast.alert, machines, ferrite_core::clock::system_time())
+        });
+        let leaving = self.toast_stage.borrow_mut().stage(
+            standing.as_ref(),
+            cx.background_executor().now(),
+            crate::motion::reduced_motion(cx),
+        );
         let viewport = window.viewport_size();
         let anchor = gpui::Bounds::new(
             gpui::point(
@@ -1466,11 +1477,21 @@ impl CockpitView {
             ),
             gpui::size(px(crate::theme::TOAST_W), px(0.)),
         );
-        let handle = self.notice_handle(cx);
-        Some(float::hang_element(
-            crate::notifications::toast(&row, handle).into_any_element(),
-            anchor,
-            FloatPlace::Above { gap: 0. },
-        ))
+        let hang =
+            |toast: AnyElement| float::hang_element(toast, anchor, FloatPlace::Above { gap: 0. });
+        let leaving = leaving.map(|(row, left)| {
+            hang(
+                crate::motion::toast_out(left, crate::notifications::toast_face(&row))
+                    .into_any_element(),
+            )
+        });
+        let standing = standing.map(|row| {
+            let toast = crate::notifications::toast(&row, self.notice_handle(cx));
+            hang(
+                crate::motion::toast_in(crate::notifications::toast_key(&row), toast)
+                    .into_any_element(),
+            )
+        });
+        leaving.into_iter().chain(standing).collect()
     }
 }

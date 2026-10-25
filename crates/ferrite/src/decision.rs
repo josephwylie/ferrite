@@ -952,6 +952,8 @@ pub struct Row {
 /// `TEXT` (`TEXT_STRONG` under the cursor, `TEXT_DIM` disabled), a pattern
 /// in Geist Mono 12. The cursor's row is `SELECTED` (selector
 /// `decision-cursor`); under the pointer `RAISED`. No `❯`, no keycaps.
+/// The key and the trailing word stand on the label's first line, as a
+/// list's number does, when a description (or a wrap) adds lines under it.
 pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     let id = id.into();
     let hover = crate::pointer::hover_key(&id);
@@ -1014,7 +1016,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         .min_h(px(theme::DECISION_OPTION_H))
         .flex_shrink_0()
         .justify_start()
-        .items_center()
+        .items_start()
         .gap(px(theme::DECISION_OPTION_GAP))
         .px(px(theme::DECISION_OPTION_PAD_X))
         .py(px((theme::DECISION_OPTION_H - theme::LH_UI) / 2.0))
@@ -1172,8 +1174,8 @@ pub fn footer<S: AsRef<str>>(parts: &[S], actions: impl IntoIterator<Item = AnyE
         .children(actions)
 }
 
-/// The completing action (`Send`, `Complete`): the steel primary, its label
-/// at `W_BODY`. `enter` adds the key that sends — a mono `↵` at
+/// The completing action (`Send`, `Complete`): the primary, its label at
+/// `W_BODY`. `enter` adds the key that sends — a mono `↵` at
 /// `ON_PRIMARY` 70% — so the key lives on the button, not in the hints.
 pub fn send_button(
     id: impl Into<ElementId>,

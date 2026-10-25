@@ -98,6 +98,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::ToggleFullscreen" => Row(Board, "Fullscreen pane"),
         "cockpit::ToggleNav" => Row(Board, "Toggle sidebar"),
         "cockpit::TogglePanel" => Row(Board, "Toggle panel"),
+        "reader::Close" => Row(Board, "Close the preview or the review"),
         "cockpit::TextLarger" => Row(Board, "Text larger"),
         "cockpit::TextSmaller" => Row(Board, "Text smaller"),
         "cockpit::TextReset" => Row(Board, "Text reset"),
@@ -206,6 +207,12 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::PickBase"
         | "review::ChooseBase"
         | "review::CloseBases" => Hidden,
+        // And the image viewer's: the zoom keys every viewer has, ← → and esc.
+        "image_viewer::ZoomIn"
+        | "image_viewer::ZoomOut"
+        | "image_viewer::Fit"
+        | "image_viewer::Next"
+        | "image_viewer::Previous" => Hidden,
         _ => return None,
     })
 }
@@ -373,12 +380,17 @@ impl Render for Shortcuts {
                     .child(crate::palette::NO_MATCHES),
             );
         }
-        crate::palette::dialog()
-            .debug_selector(|| "shortcuts-sheet".into())
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(input)
-            .child(list)
-            .child(crate::palette::footer_row(FOOTER.into(), String::new()))
+        // In on the palette's entrance, over the same veil.
+        crate::motion::dialog_in_casting(
+            "shortcuts-sheet-in",
+            crate::palette::dialog()
+                .debug_selector(|| "shortcuts-sheet".into())
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(input)
+                .child(list)
+                .child(crate::palette::footer_row(FOOTER.into(), String::new())),
+            crate::components::dialog_shadow,
+        )
     }
 }
 

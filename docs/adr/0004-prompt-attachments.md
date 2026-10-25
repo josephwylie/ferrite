@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended by the 2026-10-24 update below
 date: 2026-09-05
 ---
 
@@ -46,6 +46,44 @@ One file-link resolver handles absolute paths, file URLs, home-relative paths,
 and paths relative to the Thread's checkout. It removes source-line annotations
 and encodes a proper file URL before calling the OS opener. Raw paths previously
 went unchanged to macOS's URL API, including source-line suffixes. Missing files
-produce an in-app error message. Images use the Pane's existing preview; other files
-(including sent-prompt attachments) open in the system's associated application.
+produce an in-app error message. Images open in the Pane's reader slot (see the
+2026-10-24 amendment); other files (including sent-prompt attachments) open in
+the system's associated application.
 Web links retain the native link presentation and destination.
+
+## Amendment (2026-10-24): images open in the reader slot
+
+The modal image preview is gone. Images now open in the same reader slot
+a text file opens in, beside the Pane (`attachment_preview::Body::Image`,
+drawn by `image_viewer.rs`). The slot is laid out by the board tree, and
+nothing dims. A sent image, a prompt's chip, a chip on the Composer's
+shelf, a file link and a ⌘-clicked path all go through one entry point,
+`Preview::open_image`, so they all behave the same way.
+
+The image sits centred on the reader's ground. It is fitted inside the
+slot's inset and never drawn larger than its own size, one image pixel
+to one point. Its edge is a white-at-10% ring at `R_CHIP`. A click
+toggles between fit and actual size around the pointer. ⌘= and ⌘- step
+the zoom, and ⌘0 fits again; these ease interruptibly. A pinch zooms and
+a drag or scroll pans, following the hand. When an image is opened among
+others (a prompt's, the shelf's), ← and → step through them.
+
+A second image swaps in place, crossfading. An image replaces a text
+reader, as another file would. Esc closes the slot (never interrupting
+the turn), as does ⌘W while the viewer holds focus, and the keyboard
+returns to the Pane. The head keeps the original one click away, opened
+by the OS at its canonical file URL. An image that cannot be read says
+so quietly in the slot.
+
+## Amendment (2026-10-24, later): previews open in the Panel
+
+The reader slot beside the Pane is the Review's alone now (ADR 0021).
+Every file preview — text at a line, rendered Markdown, a command's
+output, an image — opens in the right Panel's Preview tab (SPEC §5.6.3),
+which widens while it shows. The Pane still owns its preview
+(`preview::Preview`), shared by its Composer, transcript and rendered
+documents; `Preview::open` is the one way a file opens, image or not, so a
+non-image chip, a sent file and a binary file open there too: a file the
+preview cannot show says so, with its original a click away. The image
+viewer is unchanged; its inset is the preview card's.
+

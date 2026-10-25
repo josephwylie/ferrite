@@ -251,8 +251,10 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
 /// and a Group's members one more under the Group, while every row keeps
 /// the column's full width for its fills. A guide runs down from under the
 /// Project's folder icon, and one from under the Group's chevron, each to
-/// `NAV_GUIDE_TAIL` short of its last row's foot. The shown Group's
-/// one-line members move in with their Group.
+/// `NAV_GUIDE_TAIL` short of its last row's foot — drawn a row at a time,
+/// each row its own stretch, so the selected row's fill covers the guide
+/// on glass too: it draws none. The shown Group's one-line members move in
+/// with their Group.
 #[gpui::test]
 fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     use crate::theme::{
@@ -312,30 +314,62 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     let (last, _) = indent(cx, threads[1]);
     assert!(loose.top() < group_row.top() && group_row.bottom() <= first.top());
 
-    let guide = at(cx, "nav-guide-project-0".into());
+    // The loose row is the selected one (Solo shows it): its fill covers
+    // the guide, so it draws no stretch of it.
+    assert_eq!(
+        loose.top(),
+        heading.bottom(),
+        "the first row, under the heading"
+    );
+    assert!(
+        cx.debug_bounds(format!("nav-guide-{}-0", threads[2].get()).leak())
+            .is_none(),
+        "the selected row draws none of the guide"
+    );
+    let stretch = |cx: &mut gpui::VisualTestContext, row: String, level: usize| {
+        at(cx, format!("nav-guide-{row}-{level}"))
+    };
+    let on_group = stretch(cx, format!("group-{}", group.get()), 0);
     close(
-        guide.left(),
+        on_group.left(),
         left + NAV_PROJECT_GUIDE_X,
         "the Project's guide",
     );
-    close(guide.size.width, NAV_GUIDE_W, "1px");
-    assert_eq!(guide.top(), heading.bottom(), "from under the heading");
+    close(on_group.size.width, NAV_GUIDE_W, "1px");
+    assert_eq!(
+        (on_group.top(), on_group.bottom()),
+        (group_row.top(), group_row.bottom()),
+        "down the whole Group row"
+    );
+    let on_first = stretch(cx, threads[0].get().to_string(), 0);
+    assert_eq!(on_first.top(), on_group.bottom(), "the stretches join");
+    assert_eq!(on_first.left(), on_group.left());
+    let on_last = stretch(cx, threads[1].get().to_string(), 0);
     close(
-        guide.bottom(),
+        on_last.bottom(),
         f32::from(last.bottom()) - NAV_GUIDE_TAIL,
         "to short of the Project's last row",
     );
-    let guide = at(cx, format!("nav-guide-group-{}", group.get()));
+    let group_guide = stretch(cx, threads[0].get().to_string(), 1);
     close(
-        guide.left(),
+        group_guide.left(),
         left + NAV_TREE_INDENT + NAV_GROUP_GUIDE_X,
         "the Group's guide, under its chevron",
     );
-    assert_eq!(guide.top(), group_row.bottom(), "from under the Group row");
+    assert_eq!(
+        group_guide.top(),
+        group_row.bottom(),
+        "from under the Group row"
+    );
     close(
-        guide.bottom(),
+        stretch(cx, threads[1].get().to_string(), 1).bottom(),
         f32::from(last.bottom()) - NAV_GUIDE_TAIL,
         "to short of its last member",
+    );
+    assert_eq!(
+        on_first.bottom(),
+        first.bottom(),
+        "a member above the last runs the guide to its foot"
     );
 
     view.update(cx, |view, cx| view.enter_group(group, cx));
@@ -411,8 +445,10 @@ fn the_working_view_groups_by_project_then_group(cx: &mut TestAppContext) {
         );
         assert!(at(cx, format!("nav-thread-{}", member.get())).top() >= group_row.bottom());
     }
-    at(cx, "nav-guide-project-0".into());
-    at(cx, format!("nav-guide-group-{}", group.get()));
+    // The guides: the Project's down the Group row, the Group's down its
+    // members.
+    at(cx, format!("nav-guide-group-{}-0", group.get()));
+    at(cx, format!("nav-guide-{}-1", threads[0].get()));
 
     let fold = at(cx, format!("nav-group-fold-{}", group.get()));
     cx.simulate_click(fold.center(), gpui::Modifiers::none());

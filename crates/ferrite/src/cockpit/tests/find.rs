@@ -253,26 +253,19 @@ fn find_settles_an_occurrence_inside_a_tall_row(cx: &mut TestAppContext) {
     assert!(!transcript(&view, cx).read_with(cx, |view, _| view.is_following_tail()));
 }
 
-/// Open `file` in a reader beside the Solo Pane and press in it.
+/// Open `file` in the Solo Pane's preview, in the Panel, let the Panel
+/// ride out to its width and press in it.
 fn read_beside(
     view: &Entity<CockpitView>,
     file: std::path::PathBuf,
     cx: &mut gpui::VisualTestContext,
 ) {
-    cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-            view.open_beside(
-                beside::Beside::Reader {
-                    path: file,
-                    line: None,
-                },
-                window,
-                cx,
-            )
-        })
-    });
+    cx.update(|window, cx| view.update(cx, |view, cx| view.open_preview(file, None, window, cx)));
     tick(cx);
-    // Under the reader's head: its body.
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS + 50));
+    tick(cx);
+    // Under the preview's head: its body.
     let head = cx.debug_bounds("reader-head").expect("the reader is open");
     let body = gpui::point(head.center().x, head.bottom() + px(100.));
     cx.simulate_click(body, gpui::Modifiers::none());
@@ -284,7 +277,11 @@ fn reader_state(
     cx: &mut gpui::VisualTestContext,
 ) -> Option<(Option<SharedString>, Option<gpui::Bounds<gpui::Pixels>>)> {
     view.read_with(cx, |view, _| {
-        view.panes[0].reader_find.as_ref().map(|find| find.state())
+        view.panes[0]
+            .preview_tab
+            .find
+            .as_ref()
+            .map(|find| find.state())
     })
 }
 
@@ -321,7 +318,8 @@ fn find_in_a_code_reader_centres_its_line(cx: &mut TestAppContext) {
     assert_eq!(reader_state(&view, cx).unwrap().0.as_deref(), Some("1/1"));
     let scrolled = view.read_with(cx, |view, _| {
         view.panes[0]
-            .reader_scroll
+            .preview_tab
+            .scroll
             .0
             .borrow()
             .base_handle
@@ -380,7 +378,9 @@ fn find_in_a_markdown_reader_scrolls_to_the_occurrence(cx: &mut TestAppContext) 
     let (count, painted) = reader_state(&view, cx).unwrap();
     assert_eq!(count.as_deref(), Some("1/1"));
     let painted = painted.expect("the occurrence painted");
-    let shown = view.read_with(cx, |view, _| view.panes[0].reader_markdown_scroll.bounds());
+    let shown = view.read_with(cx, |view, _| {
+        view.panes[0].preview_tab.markdown_scroll.bounds()
+    });
     assert!(
         painted.top() >= shown.top() && painted.bottom() <= shown.bottom(),
         "the occurrence is in view: {painted:?} in {shown:?}"
@@ -413,7 +413,9 @@ fn reader_shows(
     painted: gpui::Bounds<gpui::Pixels>,
     cx: &mut gpui::VisualTestContext,
 ) -> bool {
-    let shown = view.read_with(cx, |view, _| view.panes[0].reader_markdown_scroll.bounds());
+    let shown = view.read_with(cx, |view, _| {
+        view.panes[0].preview_tab.markdown_scroll.bounds()
+    });
     painted.top() >= shown.top() && painted.bottom() <= shown.bottom()
 }
 
@@ -553,9 +555,7 @@ fn the_reader_bar_closes_with_its_reader(cx: &mut TestAppContext) {
     cx.simulate_input("needle");
     tick(cx);
     assert!(reader_state(&view, cx).is_some());
-    let close = cx
-        .debug_bounds("close-markdown-reader")
-        .expect("the reader's ×");
+    let close = cx.debug_bounds("preview-close").expect("the preview's ×");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(reader_state(&view, cx).is_none(), "the bar closed with it");

@@ -1,7 +1,9 @@
 //! Scenes for the features the first references predate: the work board
 //! (every group, a row that asks, the chat and each panel) and its rows in
 //! the nav (ADR 0031), the Review slot (ADR
-//! 0021), find in a transcript (ADR 0020), the nav's PR labels and the four
+//! 0021) at rest and mid-slide, a file in the Panel's preview at rest and
+//! mid-ride, find in a
+//! transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
 //! nothing of the operator's (the projects root is under the scene's own).
@@ -13,6 +15,7 @@ use ferrite_core::protocol::{
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::{CheckState, PrState, PullRequest};
 use ferrite_core::{SessionEvent, TurnOutcome};
+use ferrite_reviewr::diff::Notice;
 use ferrite_reviewr::ferrite::FileSides;
 use ferrite_reviewr::git::CommitRow;
 use ferrite_reviewr::model::{ChangeKind, ChangedFile, Comment, Rev, Scope as ReviewScope, Side};
@@ -52,6 +55,12 @@ pub(super) const STATES: &[&str] = &[
     "review-commits",
     "review-pr",
     "review-search",
+    "reader-line",
+    "reader-slide",
+    "review-slide",
+    "review-comment",
+    "review-notices",
+    "review-error",
     "find",
     "nav-states",
     "mermaid",
@@ -74,6 +83,20 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "review-commits" => review(Staged::Commits),
         "review-pr" => review(Staged::Pr),
         "review-search" => review(Staged::Search),
+        "reader-line" => reader(None),
+        "reader-slide" => reader(Some(0.5)),
+        "review-slide" => {
+            // The Review halfway through its slide in beside the Pane.
+            let (scene, setup) = review(Staged::Uncommitted);
+            let held: Setup = Box::new(move |view, window, cx| {
+                view.fixture_hold_reader(Some(0.5));
+                setup(view, window, cx)
+            });
+            (scene, held)
+        }
+        "review-comment" => review(Staged::Comment),
+        "review-notices" => review(Staged::Notices),
+        "review-error" => review(Staged::Error),
         "find" => find(),
         "nav-states" => nav_states(),
         "mermaid" => mermaid(),
@@ -410,13 +433,19 @@ enum Staged {
     Pr,
     /// File search over the diff.
     Search,
+    /// A comment being written under a one-line pick.
+    Comment,
+    /// The files the model declines (binary, too large) beside a renamed
+    /// file deep in the tree whose lines run past a thousand.
+    Notices,
+    /// A path that is no repository.
+    Error,
 }
 
 /// The conversation scene's Thread with its review beside it, seeded the
 /// way its readers would answer: no git read and no forge call.
 fn review(staged: Staged) -> (Scene, Setup) {
     let scene = conversation("review");
-    let workspace = scene.root.join("work").join("ferrite");
     let setup: Setup = Box::new(move |view, window, cx| {
         let index = view.focused();
         let composer = view.panes[index].composer.clone();
@@ -424,9 +453,7 @@ fn review(staged: Staged) -> (Scene, Setup) {
         let review =
             cx.new(|cx| ReviewView::new(composer.clone(), ReviewScope::Uncommitted, reading, cx));
         view.empty_shown = false;
-        view.panes[index]
-            .preview
-            .open_review(workspace, "main".into(), review.clone());
+        view.panes[index].review.show(review.clone(), "main".into());
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| {
             review.show(ReviewScope::Uncommitted, changed_files(), cx)
@@ -460,6 +487,16 @@ fn review(staged: Staged) -> (Scene, Setup) {
             Staged::Pr => review.update(cx, |review, cx| review.stage_pr(pull_request(), cx)),
             Staged::Search => review.update(cx, |review, cx| {
                 review.stage_search("status_line", search_results(), window, cx)
+            }),
+            Staged::Comment => review.update(cx, |review, cx| {
+                review.stage_pick(8, 8, cx);
+                review.stage_comment("Keep this to open Threads?", window, cx);
+            }),
+            Staged::Notices => review.update(cx, |review, cx| {
+                review.show(ReviewScope::Uncommitted, notice_files(), cx)
+            }),
+            Staged::Error => review.update(cx, |review, cx| {
+                review.fail("not a git repository".into(), cx)
             }),
         }
         cx.notify();
@@ -496,6 +533,40 @@ fn thread_row(&self, thread: ThreadId, cx: &App) -> Div {
     vec![
         sides("crates/ferrite/src/nav.rs", nav_old, nav_new, 5, 3),
         sides("crates/ferrite/src/theme.rs", theme_old, theme_new, 1, 0),
+    ]
+}
+
+/// A binary and an over-budget file, and a renamed file deep in the tree
+/// whose change sits past line a thousand.
+fn notice_files() -> Vec<FileSides> {
+    let declined = |path: &str, notice| FileSides {
+        file: ChangedFile {
+            path: path.into(),
+            kind: ChangeKind::Modified,
+            additions: 0,
+            deletions: 0,
+            previous_path: None,
+            binary: false,
+            old_size: 0,
+            new_size: None,
+        },
+        sides: Err(notice),
+    };
+    let old: String = (1..=1204).map(|n| format!("    step({n});\n")).collect();
+    let new = old.replace("    step(1200);\n", "    step(1200).await;\n");
+    let mut long = sides(
+        "crates/ferrite/src/cockpit/visual_reference/feature_scenes/review_states.rs",
+        &old,
+        &new,
+        1,
+        1,
+    );
+    long.file.previous_path =
+        Some("crates/ferrite/src/cockpit/visual_reference/review_scenes.rs".into());
+    vec![
+        declined("assets/icons/app.icns", Notice::Binary),
+        declined("fixtures/transcript-large.jsonl", Notice::TooLarge),
+        long,
     ]
 }
 
@@ -650,6 +721,61 @@ fn search_results() -> SearchResults {
         code_more: false,
     }
 }
+
+// -------------------------------------------------------------------- reader
+
+/// The conversation scene's Thread with a file open in the Panel's
+/// Preview tab at a line: at rest, or held `held` of the way through the
+/// Panel's ride out to its preview width (the board giving way, the
+/// preview laid out at its final width and pinned to the board's edge).
+fn reader(held: Option<f32>) -> (Scene, Setup) {
+    let scene = conversation("reader");
+    let file = scene
+        .root
+        .join("work")
+        .join("ferrite")
+        .join("crates/ferrite/src/nav.rs");
+    let setup: Setup = Box::new(move |view, window, cx| {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, NAV_RS).unwrap();
+        view.empty_shown = false;
+        view.fixture_hold_panel(held);
+        view.open_preview(file.clone(), Some(14), window, cx);
+    });
+    (scene, setup)
+}
+
+/// What the reader scene's file reads: the nav row the conversation is
+/// about.
+const NAV_RS: &str = "\
+use crate::facts::Facts;
+use crate::theme::{ROW_H, ROW_LINE_H};
+
+/// One Thread's row in the nav: its mark, its title and, while the Thread
+/// is open, the status line under it.
+pub(crate) struct ThreadRow {
+    pub title: SharedString,
+    pub status: Option<SharedString>,
+}
+
+impl NavState {
+    fn thread_row(&self, thread: ThreadId) -> Div {
+        let facts = self.facts.get(thread);
+        let mut row = div().h(px(ROW_H));
+        let summary = facts
+            .summary
+            .clone()
+            .unwrap_or_else(|| \"waiting for first output\".into());
+        row = row.child(status_line(summary));
+        row
+    }
+
+    /// A parked Thread keeps its compact height: it has no live facts.
+    fn parked_row(&self, thread: ThreadId) -> Div {
+        div().h(px(ROW_H)).child(self.title(thread))
+    }
+}
+";
 
 // ---------------------------------------------------------------------- find
 

@@ -74,12 +74,11 @@ pub struct PaneView {
     /// Built once; the wall must not format names per frame.
     pub name: SharedString,
     pub composer: Entity<Composer>,
-    pub preview: crate::attachment_preview::Preview,
+    pub preview: crate::preview::Preview,
     pub controls_focus: FocusHandle,
     pub selected: Subject,
     pub generation: u64,
     pub rich: crate::rich::TextCache,
-    pub document_rich: crate::rich::TextCache,
     pub agent_menu_open: bool,
     pub subject_strip_width: f32,
     pub tab_interaction: crate::cockpit::subagents::TabInteraction,
@@ -104,14 +103,13 @@ pub struct PaneView {
     /// What the working line reads besides its transcript, as of this
     /// Pane's last render (`working_line`).
     pub(crate) working: std::cell::Cell<WorkingFacts>,
-    /// The reader beside this Pane scrolls on its own (`cockpit/beside.rs`):
-    /// kept here so its position survives every frame, and so opening it at
-    /// a line can scroll that line into view.
-    pub reader_scroll: gpui::UniformListScrollHandle,
-    /// A rendered Markdown document's own scroll in the reader.
-    pub reader_markdown_scroll: gpui::ScrollHandle,
-    /// The reader's find bar, while it is open.
-    pub reader_find: Option<crate::cockpit::beside::ReaderFind>,
+    /// What the Panel keeps of this Pane's preview (`cockpit/panel/
+    /// preview.rs`): its scroll, its find bar, whether its tab is the one
+    /// shown. Kept on the Pane, so a draft's first send — which makes the
+    /// Pane a Thread's — keeps it as it was.
+    pub preview_tab: crate::cockpit::panel::preview::PreviewTab,
+    /// The Review beside this Pane on the board (`cockpit/beside.rs`).
+    pub review: crate::cockpit::beside::ReviewSlot,
 }
 
 /// A Pane's last laid-out card and Composer bounds, recorded in prepaint.
@@ -204,7 +202,7 @@ impl BandChip {
 
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
-        let preview = crate::attachment_preview::Preview::new(cx);
+        let preview = crate::preview::Preview::new(cx);
         let rich = crate::rich::TextCache::default();
         let transcript_preview = preview.clone();
         let transcript_rich = rich.clone();
@@ -228,7 +226,6 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
-            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -250,9 +247,8 @@ impl PaneView {
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
-            reader_scroll: gpui::UniformListScrollHandle::new(),
-            reader_markdown_scroll: gpui::ScrollHandle::new(),
-            reader_find: None,
+            preview_tab: Default::default(),
+            review: crate::cockpit::beside::ReviewSlot::new(cx),
         }
     }
 
@@ -263,7 +259,7 @@ impl PaneView {
         binding: DraftBinding,
         cx: &mut Context<T>,
     ) -> Self {
-        let preview = crate::attachment_preview::Preview::new(cx);
+        let preview = crate::preview::Preview::new(cx);
         let rich = crate::rich::TextCache::default();
         let transcript_preview = preview.clone();
         let transcript_rich = rich.clone();
@@ -287,7 +283,6 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
-            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -309,9 +304,8 @@ impl PaneView {
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
-            reader_scroll: gpui::UniformListScrollHandle::new(),
-            reader_markdown_scroll: gpui::ScrollHandle::new(),
-            reader_find: None,
+            preview_tab: Default::default(),
+            review: crate::cockpit::beside::ReviewSlot::new(cx),
         }
     }
 
@@ -1120,10 +1114,7 @@ pub(crate) fn working_line(
             view.thread().map_or(0, |thread| thread.get()),
         )
     } else if facts.starting {
-        starting_line(
-            facts.reduce_motion || !focused,
-            provider_ink(facts.provider),
-        )
+        starting_line(facts.reduce_motion || !focused, solo)
     } else {
         return None;
     };
@@ -1148,9 +1139,11 @@ pub(crate) fn working_line(
 /// The working line's shape while a Session starts: nothing the provider
 /// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
 /// the focused Pane, assembled and still elsewhere and under reduced motion
-/// — and `Starting` in `TEXT_DIM`. Its element id is a constant: the
-/// timeline has to survive every re-render of the line.
-fn starting_line(still: bool, _ink: u32) -> Div {
+/// — and `Starting` in `TEXT_DIM`, on the working line's own grid (Solo's
+/// or a Group Pane's), so the line never shifts when the turn's words
+/// replace it. Its element id is a constant: the timeline has to survive
+/// every re-render of the line.
+fn starting_line(still: bool, solo: bool) -> Div {
     let mark = if still {
         div()
             .debug_selector(|| "starting-mark-still".into())
@@ -1165,23 +1158,24 @@ fn starting_line(still: bool, _ink: u32) -> Div {
             ))
             .into_any_element()
     };
+    let grid = Grid::pane(Default::default(), solo);
     div()
         .debug_selector(|| "transcript-starting".into())
         .flex()
         .items_center()
         .w_full()
         .min_w_0()
-        .h(px(theme::LH_UI))
+        .h(px(grid.line))
         .font_family(theme::FONT_CODE)
-        .text_size(px(theme::FS_UI))
-        .line_height(px(theme::LH_UI))
+        .text_size(px(grid.size))
+        .line_height(px(grid.line))
         .text_color(rgb(TEXT_DIM))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .w(px(theme::GLYPH_GUTTER))
+                .w(px(grid.gutter()))
                 .child(mark),
         )
         .child(div().min_w_0().truncate().child("Starting"))
@@ -1222,19 +1216,13 @@ fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
 /// WP-D · the L1 Composer, or a Subagent's footer in its place.
 fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
     if let Some(footer) = cx.child_footer.take() {
-        // A subagent's tab keeps the working line over its footer.
+        // A subagent's tab keeps the working line over its footer, spaced
+        // as it stands over the Composer.
         let working = cx
             .transcript
             .and_then(|transcript| working_line(cx.view, transcript, !cx.grid, cx.focused));
         return Some(
-            div()
-                .flex()
-                .flex_col()
-                .flex_shrink_0()
-                .min_w_0()
-                .when_some(working, |stack, line| {
-                    stack.child(div().px(px(theme::tx_inset(!cx.grid))).child(line))
-                })
+            composer_stack(None, None, working, !cx.grid)
                 .child(footer)
                 .into_any_element(),
         );
@@ -2620,9 +2608,7 @@ fn tasks_strip(key: u64, todos: Todos, current: Option<&str>, streaming: bool) -
     meter(done, todos.total, streaming && current.is_some())
         .id(("tasks-meter", key as usize))
         .debug_selector(move || format!("tasks-meter-{key}"))
-        .tooltip(move |window, cx| {
-            gpui::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-        })
+        .tooltip(crate::menu::tooltip(tip))
 }
 
 /// The name a model shows under, from any spelling the wire uses:
@@ -2695,7 +2681,8 @@ fn chip_face(
 
 /// A toolbar chip's button (SPEC §5.5): `TOOL_CHIP_H` high at `R_CHIP`,
 /// `TOOL_CHIP_PAD_X` at each side, no ground at rest, `paint::RAISED`
-/// under the pointer. The cockpit gives it its face and its menu.
+/// under the pointer. The cockpit gives it its face and its menu. It may
+/// narrow past its label, which then cuts (`composer_toolbar`).
 pub fn toolbar_chip(
     id: impl Into<gpui::ElementId>,
     cx: &gpui::App,
@@ -2704,7 +2691,8 @@ pub fn toolbar_chip(
         .p_0()
         .h(px(theme::TOOL_CHIP_H))
         .px(px(theme::TOOL_CHIP_PAD_X))
-        .flex_shrink_0()
+        .min_w_0()
+        .flex_shrink(1.)
         .rounded(px(theme::R_CHIP))
 }
 
@@ -2763,10 +2751,38 @@ pub fn send_button(stop: bool, compact: bool, cx: &gpui::App) -> gpui::component
     ))
 }
 
-/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): `lead` from the left —
-/// the `+`, a draft's chips, the mode — then a spacer and `trail` — the
-/// model, the effort, send.
-pub fn composer_toolbar(lead: Vec<AnyElement>, trail: Vec<AnyElement>) -> Div {
+/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): the `+`, `lead` — a
+/// draft's chips, the mode — a spacer, `trail` — the model, the effort —
+/// and the send circle. In a narrow box the lead chips give way first,
+/// their labels cut at the end (the mode keeps its shield and its ink);
+/// the model and effort stay whole; narrower still, the chips clip at the
+/// row's end. The `+` and send always stand whole inside the box.
+pub fn composer_toolbar(
+    attach: AnyElement,
+    lead: Vec<AnyElement>,
+    trail: Vec<AnyElement>,
+    send: AnyElement,
+) -> Div {
+    // A lead chip's slot may grow narrower than the chip: the chip, a
+    // block in it, takes the slot's width and cuts its label.
+    let give = |chip: AnyElement| {
+        div()
+            .min_w_0()
+            .flex_shrink(1.)
+            .overflow_hidden()
+            .child(chip)
+    };
+    let keep = |chip: AnyElement| div().flex_shrink_0().child(chip);
+    let chips = div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .items_center()
+        .gap(px(theme::COMPOSER_TOOLBAR_GAP))
+        .children(lead.into_iter().map(give))
+        .child(div().flex_1().min_w_0())
+        .children(trail.into_iter().map(keep));
     div()
         .debug_selector(|| "composer-toolbar".into())
         .flex()
@@ -2776,9 +2792,9 @@ pub fn composer_toolbar(lead: Vec<AnyElement>, trail: Vec<AnyElement>) -> Div {
         .h(px(theme::COMPOSER_TOOLBAR_H))
         .min_w_0()
         .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
-        .children(lead)
-        .child(div().flex_1().min_w_0())
-        .children(trail)
+        .child(attach)
+        .child(chips)
+        .child(send)
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -3202,11 +3218,13 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .child(field)
 }
 
-/// What stands over either Composer: the shelf — pending files at left,
-/// background chips at right; the chips give way first, cutting their
-/// labels — then the working line (`.comp > .r`), on the transcript rows'
-/// axis, `COMPACT_WORKING_GAP` (Solo: `COMPOSER_WORKING_GAP_SOLO`) over
-/// the input. Each shelf keeps to its box's inset (`boxed`: Solo's).
+/// What stands over either Composer: on top the working line (`.comp >
+/// .r`, SPEC §5.4: the stack's top row), on the transcript rows' axis,
+/// `COMPACT_WORKING_GAP` (Solo: `COMPOSER_WORKING_GAP_SOLO`) over what
+/// follows; then, `SHELF_GAP` over the box it belongs to, the shelf —
+/// pending files at left, background chips at right; the chips give way
+/// first, cutting their labels. The shelf keeps to its box's inset
+/// (`boxed`: Solo's).
 fn composer_stack(
     attachments: Option<AnyElement>,
     background: Option<AnyElement>,
@@ -3223,6 +3241,21 @@ fn composer_stack(
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
+        .when_some(working, |stack, working| {
+            stack.child(
+                div()
+                    .debug_selector(|| "transcript-progress".into())
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .px(px(theme::tx_inset(boxed)))
+                    .mb(px(if boxed {
+                        theme::COMPOSER_WORKING_GAP_SOLO
+                    } else {
+                        theme::COMPACT_WORKING_GAP
+                    }))
+                    .child(working),
+            )
+        })
         .when(attachments.is_some() || background.is_some(), |stack| {
             stack.child(
                 div()
@@ -3240,21 +3273,6 @@ fn composer_stack(
                     .when_some(background, |shelf, chips| {
                         shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
                     }),
-            )
-        })
-        .when_some(working, |stack, working| {
-            stack.child(
-                div()
-                    .debug_selector(|| "transcript-progress".into())
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .px(px(theme::tx_inset(boxed)))
-                    .mb(px(if boxed {
-                        theme::COMPOSER_WORKING_GAP_SOLO
-                    } else {
-                        theme::COMPACT_WORKING_GAP
-                    }))
-                    .child(working),
             )
         })
 }
@@ -4625,7 +4643,7 @@ pub(crate) struct RowCx<'a> {
     pub rich: &'a crate::rich::TextCache,
     pub timings: Option<&'a HashMap<String, ToolTiming>>,
     pub provider: Option<Provider>,
-    pub preview: &'a crate::attachment_preview::Preview,
+    pub preview: &'a crate::preview::Preview,
     pub grid: Grid,
     /// The Pane stands alone (Solo), not on a Group's board.
     pub solo: bool,
@@ -4957,6 +4975,12 @@ pub(crate) fn prompt_row(
     let grid = row_cx.grid();
     let pinned = preview_lines.is_some();
     let (text, files) = prompt_text(line);
+    // The images a chip or a picture opens among: ← → step through them.
+    let gallery: std::sync::Arc<[std::path::PathBuf]> = files
+        .iter()
+        .filter(|path| crate::image_viewer::is_image(path))
+        .cloned()
+        .collect();
     // The chips close the prompt; their line stands taller, as the
     // prototype's inline chip makes it.
     let chip_line = if files.is_empty() {
@@ -4967,11 +4991,15 @@ pub(crate) fn prompt_row(
     // A prompt of attachments alone has no words to register or draw.
     let words = match text {
         PromptText::Literal(words) if words.is_empty() => None,
+        // A clamped band ends its last line in `…`, so it says there is
+        // more of the prompt above.
         PromptText::Literal(words) if pinned => Some(
             div()
                 .w_full()
                 .min_w_0()
-                .when_some(preview_lines, |words, lines| words.line_clamp(lines))
+                .when_some(preview_lines, |words, lines| {
+                    words.line_clamp(lines).text_ellipsis()
+                })
                 .child(SharedString::from(words))
                 .into_any_element(),
         ),
@@ -4989,7 +5017,7 @@ pub(crate) fn prompt_row(
                 row_cx.rich.clone(),
             )
             .ink(TEXT_STRONG)
-            .chips(row_cx.preview.clone())
+            .chips(row_cx.preview.clone(), gallery.clone())
             .into_any_element(),
         ),
         PromptText::Markdown(source) => Some(
@@ -4997,7 +5025,7 @@ pub(crate) fn prompt_row(
                 .selection
                 .markdown(block.id, source)
                 .ink(TEXT_STRONG)
-                .chips(row_cx.preview.clone())
+                .chips(row_cx.preview.clone(), gallery.clone())
                 .into_any_element(),
         ),
     };
@@ -5056,11 +5084,10 @@ pub(crate) fn prompt_row(
     if pinned {
         return band.into_any_element();
     }
-    let images: Vec<_> = files
+    let images: Vec<_> = gallery
         .iter()
         .enumerate()
-        .filter(|(_, path)| is_image(path))
-        .map(|(index, path)| inline_image(block.id, index, path, row_cx.preview, grid))
+        .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview, grid))
         .collect();
     if images.is_empty() {
         return band.into_any_element();
@@ -5086,46 +5113,29 @@ pub(crate) fn prompt_row(
         .into_any_element()
 }
 
-/// Whether a file is an image gpui can draw.
-fn is_image(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| gpui::Img::extensions().contains(&ext.to_ascii_lowercase().as_str()))
-}
-
-/// Open a sent file: an image in the Pane's preview, anything else with the
-/// system.
+/// Open a sent file in the Pane's preview (the Panel's Preview tab), an
+/// image stepping among its prompt's `gallery`.
 fn open_file(
     path: &std::path::Path,
-    preview: &crate::attachment_preview::Preview,
+    gallery: &[std::path::PathBuf],
+    preview: &crate::preview::Preview,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    if is_image(path) {
-        preview.open(path.to_path_buf(), name, window, cx);
-    } else {
-        crate::file_links::FileLink {
-            path: path.to_path_buf(),
-            location: None,
-        }
-        .open(window, cx);
-    }
+    preview.open(path.to_path_buf(), None, gallery, window, cx);
 }
 
 /// A prompt's file as its band's inline chip (SPEC §5.4): the 12px image
 /// mark (or the file mark), a cell, the name, all `TEXT_STRONG`, on
 /// `paint::RAISED` at `R_INLINE` with a cell of padding each side. A click opens it (an
-/// image in the Pane's preview). Sized for the Markdown flow that places
-/// it: monospace cells at the size it is drawn in.
+/// image in the Pane's preview, in the Panel, among its prompt's `gallery`).
+/// Sized for the Markdown flow that places it: monospace cells at the size
+/// it is drawn in.
 pub(crate) fn prompt_chip(
     path: std::path::PathBuf,
     label: &str,
-    preview: Option<&crate::attachment_preview::Preview>,
+    preview: &crate::preview::Preview,
+    gallery: &std::sync::Arc<[std::path::PathBuf]>,
     window: &mut gpui::Window,
     _cx: &mut gpui::App,
 ) -> (gpui::Size<gpui::Pixels>, AnyElement) {
@@ -5133,8 +5143,9 @@ pub(crate) fn prompt_chip(
     let cell = theme::tx_cell(size);
     let line = window.line_height();
     let width = 3.0 * cell + theme::GLYPH_BOX + label.chars().count() as f32 * cell;
-    let image = is_image(&path);
-    let host = preview.cloned();
+    let image = crate::image_viewer::is_image(&path);
+    let host = preview.clone();
+    let gallery = gallery.clone();
     let open = path.clone();
     let element = div()
         .id(SharedString::from(format!(
@@ -5172,14 +5183,7 @@ pub(crate) fn prompt_chip(
         )
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
-            match &host {
-                Some(host) => open_file(&open, host, window, cx),
-                None => crate::file_links::FileLink {
-                    path: open.clone(),
-                    location: None,
-                }
-                .open(window, cx),
-            }
+            open_file(&open, &gallery, &host, window, cx);
         });
     (gpui::size(px(width), line), element.into_any_element())
 }
@@ -5188,12 +5192,14 @@ pub(crate) fn prompt_chip(
 /// frame `IMAGE_CELLS` wide at the reading size, its 1px `paint::LINE2`
 /// border included (374.4px at Standard, drawn 374), the picture filling
 /// it at its own proportions; under it `name · W×H · 41 KB`, all of it
-/// `TEXT_DIM`. A click opens the preview.
+/// `TEXT_DIM`. A click opens it in the Pane's preview, among its
+/// prompt's `gallery`.
 fn inline_image(
     block: BlockId,
     index: usize,
     path: &std::path::Path,
-    preview: &crate::attachment_preview::Preview,
+    gallery: &std::sync::Arc<[std::path::PathBuf]>,
+    preview: &crate::preview::Preview,
     grid: Grid,
 ) -> AnyElement {
     let name = path
@@ -5219,6 +5225,7 @@ fn inline_image(
     .floor();
     let caption = image_caption(&name, facts);
     let host = preview.clone();
+    let gallery = gallery.clone();
     let open = path.to_path_buf();
     div()
         .id(SharedString::from(format!("sent-image-{block:?}-{index}")))
@@ -5229,7 +5236,7 @@ fn inline_image(
         .cursor_pointer()
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
-            open_file(&open, &host, window, cx);
+            open_file(&open, &gallery, &host, window, cx);
         })
         .child(
             div()
@@ -6389,14 +6396,18 @@ pub(crate) fn render_tool(
                 // elbow; open, the rest hangs under it.
                 // Each run holds exactly its cells: a measured run rounds
                 // up a pixel and would push the fold's words off the grid.
+                // Where the line is narrower, the first line gives way, cut
+                // at its end: the fold's words always stay in the row.
                 let first_w = first.chars().count() as f32 * grid.cell();
                 card = card.child(
                     elbow_line(grid, TEXT_DIM)
                         .child(
                             div()
-                                .flex_shrink_0()
+                                .debug_selector(|| "tool-fold-head".into())
+                                .flex_shrink(1.)
+                                .min_w_0()
                                 .w(px(first_w))
-                                .whitespace_nowrap()
+                                .truncate()
                                 .child(selection.line(
                                     block,
                                     first.clone(),
@@ -8002,7 +8013,7 @@ fn diff_max_number(diff: &Diff, cap: usize) -> usize {
 
 /// The number column in cells: `DIFF_NUMBER_CELLS` (three digits and the
 /// `DIFF_NUMBER_PAD_CELLS` after them), wider only for a longer number.
-fn diff_number_cells(max: usize) -> f32 {
+pub(crate) fn diff_number_cells(max: usize) -> f32 {
     let digits = max.max(1).ilog10() as f32 + 1.;
     theme::DIFF_NUMBER_CELLS.max(digits + theme::DIFF_NUMBER_PAD_CELLS)
 }
@@ -8292,6 +8303,48 @@ mod tests {
         }
     }
 
+    struct StartingAndWorking(Transcript);
+
+    impl Render for StartingAndWorking {
+        fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+            let line = |selector: &'static str, line: Div| {
+                div().debug_selector(move || selector.into()).child(line)
+            };
+            let working =
+                |solo| working_line_for(&self.0, false, solo, false, false, true, None, 0);
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(line("solo-starting", starting_line(true, true)))
+                .child(line("solo-working", working(true)))
+                .child(line("group-starting", starting_line(true, false)))
+                .child(line("group-working", working(false)))
+        }
+    }
+
+    /// `Starting` holds the working line's own row, Solo's and a Group
+    /// Pane's, so the line never moves when the turn's words replace it.
+    #[gpui::test]
+    fn the_starting_line_stands_on_the_working_line_grid(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            StartingAndWorking(Transcript::default())
+        });
+        cx.simulate_resize(size(px(640.), px(400.)));
+        cx.run_until_parked();
+        for (starting, working) in [
+            ("solo-starting", "solo-working"),
+            ("group-starting", "group-working"),
+        ] {
+            assert_eq!(
+                cx.debug_bounds(starting).unwrap().size.height,
+                cx.debug_bounds(working).unwrap().size.height,
+                "{starting} is {working}'s height"
+            );
+        }
+    }
+
     /// A transcript holding one of every Block kind the Pane can draw.
     fn every_kind() -> Transcript {
         let (lexer, answers) = Lexer::new();
@@ -8413,7 +8466,7 @@ mod tests {
                 focused: true,
                 reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
-                preview: crate::attachment_preview::Preview::new(cx),
+                preview: crate::preview::Preview::new(cx),
                 expanded,
                 target: None,
                 disclosure_focus: cx.focus_handle(),
@@ -8453,7 +8506,7 @@ mod tests {
                     focused: true,
                     reading_size: Default::default(),
                     selection_scope: gpui::base::TextSelectionScopeId::new(),
-                    preview: crate::attachment_preview::Preview::new(cx),
+                    preview: crate::preview::Preview::new(cx),
                     expanded: HashSet::new(),
                     target: None,
                     disclosure_focus: cx.focus_handle(),

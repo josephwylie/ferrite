@@ -26,8 +26,9 @@
 //! **A tree with guides** (§5.1.4). Everything inside a Project hangs one
 //! `NAV_TREE_INDENT` under its heading and a Group's members one more
 //! under the Group (`RowPlace`), each level with a hairline guide down its
-//! left (`branch`). Only content moves in; the fills keep the width. The
-//! Parked, Working and Done views group their rows the same way
+//! left, which each row draws down its own height (`guides`) so a fill
+//! can take its stretch away. Only content moves in; the fills keep the
+//! width. The Parked, Working and Done views group their rows the same way
 //! (`ViewSection`); the Needs-you queue stays flat.
 //!
 //! Colour is state (ADR 0033): the mark, a blocked or failed row's line 2,
@@ -70,17 +71,6 @@ gpui::actions!(nav, [CloseView]);
 
 /// The column's inner width: its rows reach this far.
 const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
-
-/// The slack a truncating title's budget gets over its visible box.
-///
-/// gpui truncates by summing each character's advance measured **alone**
-/// (gpui text_system/line_wrapper.rs `width_for_char`, cached per char) and
-/// keeps a prefix only while `width + suffix_width < truncate_width` — a
-/// strict `<`, against CSS's `<=`. At an exact fit the last glyph that
-/// would still fit is dropped. Handing the truncator this much extra budget
-/// restores the glyph; the visible box stays exactly its pinned width, and
-/// clips.
-const TRUNCATE_SLOP: f32 = SPACE_1;
 
 const COLLAPSE_KEY: &str = "nav-collapse";
 
@@ -628,6 +618,15 @@ impl RowPlace {
     /// A flat list's row, at the tree's root.
     pub const ROOT: RowPlace = RowPlace::Row(0);
 
+    /// How many levels of the tree it hangs under, each with its guide: a
+    /// row's own depth, a member's Group's and the Group's own.
+    fn levels(self) -> usize {
+        match self {
+            RowPlace::Row(depth) => depth,
+            RowPlace::Member(depth) => depth + 1,
+        }
+    }
+
     /// How far its content is indented.
     fn indent(self) -> f32 {
         match self {
@@ -718,6 +717,13 @@ impl Measure<'_> {
 /// **column** whose own available width is definite — which taffy derives
 /// from the child's own min/max width. Hence: flex **column**, with min and
 /// max width pinned to the box.
+///
+/// The truncator gets exactly the box. The vendored text element keeps a
+/// line whole when its shaped width fits (a layout unit of slack, so an
+/// exact fit keeps its last glyph) and otherwise cuts it to fit with the
+/// ellipsis, so nothing reaches past the box to be clipped: a budget
+/// wider than the box would lay a slightly-too-long title out whole and
+/// shave its last glyph with no ellipsis (`Supplier Price Reviev`).
 fn fitted(width: f32, size: f32, ink: u32, weight: FontWeight, text: impl IntoElement) -> Div {
     div()
         .flex()
@@ -730,8 +736,8 @@ fn fitted(width: f32, size: f32, ink: u32, weight: FontWeight, text: impl IntoEl
                 div()
                     .flex()
                     .flex_col()
-                    .min_w(px(width.max(0.0) + TRUNCATE_SLOP))
-                    .max_w(px(width.max(0.0) + TRUNCATE_SLOP))
+                    .min_w(px(width.max(0.0)))
+                    .max_w(px(width.max(0.0)))
                     .truncate()
                     .h(px(NAV_LINE))
                     .text_size(px(size))
@@ -920,7 +926,8 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
         MarkSeat::OneLine if dot => NAV_DOT_AT_LINE,
         MarkSeat::Member if spinner => NAV_SPINNER_AT_SMALL,
         MarkSeat::Member if dot => NAV_DOT_AT_SMALL,
-        _ => NAV_ICON_AT,
+        MarkSeat::TwoLine => NAV_ICON_AT,
+        MarkSeat::OneLine | MarkSeat::Member => NAV_ICON_AT_LINE,
     };
     let halo = if status == RowStatus::NeedsYou {
         NAV_HALO
@@ -1233,6 +1240,7 @@ pub fn view_row(
     } else {
         motion::mix(rgb(rest).into(), rgb(TEXT).into(), t)
     };
+    let words = matches!(tail, Trailing::Text(_));
     let end: Option<AnyElement> = match tail {
         Trailing::None => None,
         Trailing::Chord(keys) => Some(
@@ -1247,14 +1255,30 @@ pub fn view_row(
                 .debug_selector(move || format!("{key}-count"))
                 .into_any_element(),
         ),
-        Trailing::Text(text) => Some(trailing(text, FS_META, TEXT_DIM).into_any_element()),
+        // Words give way before the label: the Tasks tally is cut, never
+        // the `Tasks` beside it.
+        Trailing::Text(text) => Some(
+            trailing(text, FS_META, TEXT_DIM)
+                .debug_selector(move || format!("{key}-words"))
+                .ml_auto()
+                .flex_shrink(1.)
+                .min_w_0()
+                .truncate()
+                .into_any_element(),
+        ),
     };
     line_frame(key, blend, active)
         .debug_selector(move || key.into())
         .gap(px(NAV_ICON_GAP))
         .text_color(ink)
         .child(div().flex().flex_shrink_0().size(px(NAV_ICON)).child(glyph))
-        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(
+            div()
+                .debug_selector(move || format!("{key}-label"))
+                .when(words, |label| label.flex_shrink_0())
+                .when(!words, |label| label.flex_1().min_w_0().truncate())
+                .child(label),
+        )
         .children(end)
 }
 
@@ -1505,6 +1529,7 @@ pub fn group_row(row: &GroupBlock, depth: usize) -> Stateful<Div> {
         row.title.clone(),
         group_fold(row),
         depth,
+        0,
         &Measure::Cells(7.0),
     )
 }
@@ -1514,11 +1539,14 @@ pub fn group_row(row: &GroupBlock, depth: usize) -> Stateful<Div> {
 /// while renaming, and wires the chevron's press. The row lays the chevron
 /// at its own depth. The title box is pinned
 /// (`fitted`), so the title truncates and renaming never moves the row.
+/// It draws the guides of the `depth` levels it hangs under (`guides`),
+/// the innermost `ends` of them ending at it.
 pub fn group_row_with_title(
     row: &GroupBlock,
     title: impl IntoElement,
     fold: Stateful<Div>,
     depth: usize,
+    ends: usize,
     measure: &Measure,
 ) -> Stateful<Div> {
     let id = row.id;
@@ -1539,6 +1567,12 @@ pub fn group_row_with_title(
     } else {
         (TEXT, W_BODY)
     };
+    let cover = if row.selected {
+        1.0
+    } else {
+        motion::hover_t(&key)
+    };
+    let guides = guides(&format!("nav-guide-group-{}", id.get()), depth, ends, cover);
     row_frame(("nav-group", id.get() as usize), key, row.selected)
         .debug_selector(move || format!("nav-group-{}", id.get()))
         .flex_row()
@@ -1546,6 +1580,7 @@ pub fn group_row_with_title(
         .h(px(NAV_ROW_H))
         .pl(px(RowPlace::Row(depth).title_x()))
         .pr(px(NAV_ROW_PAD_X))
+        .children(guides)
         .child(div().absolute().top_0().left(px(indent(depth))).child(fold))
         .child(fitted(
             RowPlace::Row(depth).text_w() - right_w,
@@ -1598,48 +1633,69 @@ pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
 }
 
 /// A Project's rows (its loose Threads and its Groups) one level under
-/// its heading, the Project's guide under its folder icon. `index` names
-/// the guide.
-pub fn project_rows(index: usize, rows: Vec<AnyElement>) -> Div {
-    branch(
-        format!("nav-guide-project-{index}"),
-        NAV_PROJECT_GUIDE_X,
-        rows,
-    )
+/// its heading. The rows draw the Project's guide themselves (`guides`).
+pub fn project_rows(rows: Vec<AnyElement>) -> Div {
+    branch(rows)
 }
 
-/// The members container: the member rows under their Group, whose row is
-/// `depth` levels in, with the Group's guide under its chevron.
-pub fn members(id: GroupId, depth: usize, rows: Vec<AnyElement>) -> Div {
-    branch(
-        format!("nav-guide-group-{}", id.get()),
-        indent(depth) + NAV_GROUP_GUIDE_X,
-        rows,
-    )
+/// The members container: the member rows under their Group. They draw
+/// the Group's guide themselves (`guides`).
+pub fn members(rows: Vec<AnyElement>) -> Div {
+    branch(rows)
 }
 
-/// One level of the tree (§5.1.4): `rows` under the row above them — a
-/// Project's heading, a Group's row — with a guide down their left at
-/// `guide_x` from the column's inner edge, stopping `NAV_GUIDE_TAIL` short
-/// of the last row's foot. The guide is laid first, so a row's hover and
-/// selected fills cover it. `guide` names the guide for tests.
-pub fn branch(guide: String, guide_x: f32, rows: Vec<AnyElement>) -> Div {
-    div()
-        .relative()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .child(
-            div()
-                .debug_selector(move || guide.clone())
-                .absolute()
-                .left(px(guide_x))
-                .top_0()
-                .bottom(px(NAV_GUIDE_TAIL))
-                .w(px(NAV_GUIDE_W))
-                .bg(NAV_GUIDE),
-        )
-        .children(rows)
+/// One level of the tree (§5.1.4): `rows` flush under the row above them
+/// — a Project's heading, a Group's row — so the stretches of guide each
+/// row draws (`guides`) join into one line down their left.
+fn branch(rows: Vec<AnyElement>) -> Div {
+    div().flex().flex_col().flex_shrink_0().children(rows)
+}
+
+/// The guides down one row's height (§5.1.4): one per level of the tree
+/// the row hangs under (`levels`) — the Project's under its folder icon
+/// (`NAV_PROJECT_GUIDE_X`), a Group's under its chevron, each level
+/// `NAV_TREE_INDENT` further in — and the innermost `ends` of them, whose
+/// branch ends at this row, stopping `NAV_GUIDE_TAIL` short of its foot.
+/// Consecutive rows' stretches join into the tree's lines.
+///
+/// A row draws its own stretch so it can take it away under its fill:
+/// `cover` is how much fill the row wears (1 selected, its hover blend
+/// under the pointer), and the guides fade by as much. On glass a fill is
+/// a white overlay, so a guide laid under it would show straight through
+/// (§5.1.4: "rows keep their full-width hover and selected fills, which
+/// cover the guide"). `key` names the stretches for tests
+/// (`{key}-{level}`).
+fn guides(key: &str, levels: usize, ends: usize, cover: f32) -> Option<Div> {
+    let shown = 1.0 - cover.clamp(0.0, 1.0);
+    (levels > 0 && shown > 0.0).then(|| {
+        div()
+            .absolute()
+            .inset_0()
+            .opacity(shown)
+            .children((0..levels).map(|level| {
+                let name = format!("{key}-{level}");
+                div()
+                    .debug_selector(move || name.clone())
+                    .absolute()
+                    .left(px(guide_x(level)))
+                    .top_0()
+                    .bottom(px(if level + ends >= levels {
+                        NAV_GUIDE_TAIL
+                    } else {
+                        0.0
+                    }))
+                    .w(px(NAV_GUIDE_W))
+                    .bg(NAV_GUIDE)
+            }))
+    })
+}
+
+/// Where level `level`'s guide runs, from the column's inner edge: a
+/// Project's under its folder icon, a Group's under its chevron, which
+/// the theme seats on the same x so the levels step by the indent.
+fn guide_x(level: usize) -> f32 {
+    const _: () = assert!(NAV_PROJECT_GUIDE_X == NAV_GROUP_GUIDE_X);
+    indent(level) + NAV_GROUP_GUIDE_X
 }
 
 /// The Thread row at root — see `thread_row_with_title`.
@@ -1651,6 +1707,7 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
         RowPlace::ROOT,
         None,
         false,
+        0,
         &Measure::Cells(7.0),
     )
 }
@@ -1678,13 +1735,16 @@ fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
 /// Group (`RowPlace::Member`), one line: the mark at 35, the title, and
 /// its state's word (`NavTail::member_word`). `group` scopes the row's blend
 /// when the Thread is listed under several Groups. `editing` is a rename in
-/// progress: the field takes the title's box.
+/// progress: the field takes the title's box. The row draws the guides of
+/// the levels it hangs under (`guides`), the innermost `ends` of them
+/// ending at it.
 pub fn thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
     place: RowPlace,
     group: Option<GroupId>,
     editing: bool,
+    ends: usize,
     measure: &Measure,
 ) -> Stateful<Div> {
     let thread = row.thread;
@@ -1702,10 +1762,18 @@ pub fn thread_row_with_title(
         face => face,
     };
     let text_w = place.text_w();
+    let cover = if filled { 1.0 } else { motion::hover_t(&key) };
+    let guides = guides(
+        &format!("nav-guide-{}", thread.get()),
+        place.levels(),
+        ends,
+        cover,
+    );
     let frame = row_frame(("nav-thread", thread.get() as usize), key, filled)
         .debug_selector(move || format!("nav-thread-{}", thread.get()))
         .pl(px(place.title_x()))
-        .pr(px(NAV_ROW_PAD_X));
+        .pr(px(NAV_ROW_PAD_X))
+        .children(guides);
     if let RowPlace::Member(_) = place {
         let word = (!editing).then(|| row.tail.member_word()).flatten();
         let word_w = word.as_ref().map_or(0.0, |(text, _)| {
@@ -1860,7 +1928,12 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         format!("{} \u{b7} {detail}", row.word())
     };
     let text_w = RowPlace::ROOT.text_w();
-    let age_w = measure.ui(&row.when, FS_META, W_BODY) + NAV_WORD_GAP;
+    // In its first minute a Notice has no age to say: the title takes the
+    // line.
+    let age = (!row.when.is_empty()).then(|| row.when.clone());
+    let age_w = age
+        .as_ref()
+        .map_or(0.0, |age| measure.ui(age, FS_META, W_BODY) + NAV_WORD_GAP);
     let title_ink = if cursor || !row.read {
         TEXT_STRONG
     } else {
@@ -1886,17 +1959,13 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
                     W_BODY,
                     row.title.clone(),
                 ))
-                .child(
+                .children(age.map(|age| {
                     div()
                         .flex()
                         .flex_1()
                         .justify_end()
-                        .child(components::tabular(trailing(
-                            row.when.clone(),
-                            FS_META,
-                            TEXT_DIM,
-                        ))),
-                ),
+                        .child(components::tabular(trailing(age, FS_META, TEXT_DIM)))
+                })),
         )
         .child(div().flex().h(px(NAV_LINE)).child(fitted(
             text_w,
@@ -2383,6 +2452,22 @@ mod tests {
         assert_eq!(RowPlace::ROOT.text_w(), 203.0);
     }
 
+    /// §5.1.4: a row draws its stretch of the guides only where nothing
+    /// covers it — none at the root, none under a fill, fading under the
+    /// pointer's blend.
+    #[test]
+    fn a_rows_guides_give_way_to_its_fill() {
+        assert!(
+            guides("k", 0, 0, 0.0).is_none(),
+            "the root hangs under none"
+        );
+        assert!(guides("k", 2, 1, 1.0).is_none(), "a filled row draws none");
+        let mut fading = guides("k", 2, 1, 0.25).expect("a quarter covered: still drawn");
+        assert_eq!(fading.style().opacity, Some(0.75));
+        let mut rest = guides("k", 1, 0, 0.0).expect("at rest");
+        assert_eq!(rest.style().opacity, Some(1.0));
+    }
+
     /// N-5, the selection rule: one selection, on the row of what the board
     /// shows — `SELECTED`, never a coloured outline.
     #[test]
@@ -2398,6 +2483,7 @@ mod tests {
                 RowPlace::Member(0),
                 Some(GroupId::new(1)),
                 false,
+                0,
                 &Measure::Cells(7.0)
             )),
             None,
@@ -2645,6 +2731,7 @@ mod tests {
             RowPlace::Member(0),
             None,
             false,
+            0,
             &Measure::Cells(7.0),
         );
         assert_eq!(member.style().size.height, Some(px(NAV_ROW_H).into()));

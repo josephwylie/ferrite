@@ -517,13 +517,19 @@ impl Render for Palette {
             (None, PaletteScope::Groups) => GROUPS_FOOTER.into(),
             (None, PaletteScope::Sessions) => SESSIONS_FOOTER.into(),
         };
-        dialog()
-            .debug_selector(|| "palette".into())
-            // A press inside never reaches the veil or the board under it.
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(input)
-            .child(list)
-            .child(footer_row(footer, results_word(self.shown.len())))
+        // It comes in as every sheet does (`dialog-in`), over its veil
+        // darkening in (`cockpit::palette`); it closes at once.
+        crate::motion::dialog_in_casting(
+            "palette-in",
+            dialog()
+                .debug_selector(|| "palette".into())
+                // A press inside never reaches the veil or the board under it.
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(input)
+                .child(list)
+                .child(footer_row(footer, results_word(self.shown.len()))),
+            components::dialog_shadow,
+        )
     }
 }
 
@@ -713,9 +719,9 @@ fn row_element(
             ))
         });
     if cursor {
-        element.float_cursor().press_float()
+        element.palette_cursor().press_float()
     } else {
-        element.hover_float(key).press_float()
+        element.hover_palette(key).press_float()
     }
 }
 

@@ -1,5 +1,5 @@
 //! Diagrams: a ` ```mermaid ` fence drawn as the diagram it describes, in an
-//! answer and in the reader (ADR 0016).
+//! answer and in a preview (ADR 0016).
 //!
 //! The same off-screen engine that draws agents' visuals (ADR 0013) renders
 //! the fence once, with the vendored `mermaid.js` inlined in the page and

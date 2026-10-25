@@ -6,7 +6,12 @@
 //! Every piece starts at the cell the board measured for it. A glyph
 //! Geist Mono lacks (the marks `◐ ✓ ◆`, the box's `╭╮`, CJK, emoji) is set
 //! by a fallback face of its own advance, so it gets a box of exactly its
-//! cells; runs of the face's own glyphs are drawn as one text each.
+//! cells; runs of the face's own glyphs are drawn as one text each. The
+//! words are set in the UI face on the code face's cells, so a run is never
+//! clipped to its box: a bold run of wide letters (the menu's `Menu`) may
+//! reach a little into the cell after it, which the board leaves blank
+//! between pieces, rather than lose its last glyph; a fallback glyph wider
+//! than its cells (the marks) is centred on them, whole.
 //!
 //! The theme is `board.theme`: `herdr` (and `dark`, Ferrite having one
 //! appearance) is Ferrite's own colours under the board's rules
@@ -225,11 +230,15 @@ pub(crate) fn lines(lines: &[Inked], theme: &Theme) -> Vec<AnyElement> {
 }
 
 fn run_element(run: Run) -> AnyElement {
+    // A glyph of a fallback face (a row's `◐` mark) is often wider than its
+    // cell: centred, it shares the overflow with the blank cells either side
+    // instead of being cut to its left half.
+    let fallback = run.text.graphemes(true).nth(1).is_none() && !in_face(&run.text);
     div()
         .flex_none()
         .w(px(run.cells as f32 * CH))
         .h(px(ROW))
-        .overflow_hidden()
+        .when(fallback, |el| el.flex().justify_center())
         .text_color(rgb(run.fg))
         .when_some(run.bg, |el, bg| el.bg(rgb(bg)))
         .when(run.bold, |el| el.font_weight(W_STRONG))

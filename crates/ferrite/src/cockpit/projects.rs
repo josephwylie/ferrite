@@ -707,15 +707,24 @@ impl CockpitView {
             gpui::point(px(board.x), px(board.y)),
             gpui::size(px(board.w), px(board.h)),
         );
+        let board_face = div()
+            .flex()
+            .flex_col()
+            .w(px(width))
+            .h(px(height))
+            .child(self.tasks_header(cx))
+            .child(view);
+        // As the popup, it comes in as a sheet does (`dialog-in`, casting no
+        // shadow: it has none), over its veil darkening in; in a tab it
+        // takes the board's place at once, as any view swap does.
+        let board_face = if popup {
+            crate::motion::dialog_in_casting("projects-popup-in", board_face, Vec::new)
+                .into_any_element()
+        } else {
+            board_face.into_any_element()
+        };
         let float = float::hang_element(
-            div()
-                .flex()
-                .flex_col()
-                .w(px(width))
-                .h(px(height))
-                .child(self.tasks_header(cx))
-                .child(view)
-                .into_any_element(),
+            board_face,
             anchor,
             FloatPlace::BoardTop {
                 top: (board.h - height) / 2.0,
@@ -725,7 +734,8 @@ impl CockpitView {
         if !popup {
             return vec![float];
         }
-        let veil = deferred(
+        let veil = deferred(crate::motion::veil_in(
+            "projects-veil-in",
             div()
                 .debug_selector(|| "projects-veil".into())
                 .absolute()
@@ -742,7 +752,7 @@ impl CockpitView {
                         view.leave_board(window, cx);
                     }),
                 ),
-        )
+        ))
         .with_priority(float::VEIL_PRIORITY)
         .into_any_element();
         vec![veil, float]

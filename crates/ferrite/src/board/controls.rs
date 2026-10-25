@@ -13,11 +13,14 @@ use sw_board::json::*;
 use super::BoardView;
 use crate::components::{self, Tip};
 use crate::theme::{
-    paint, CH, CONTROL_H, ICON_CHEVRON, ON_PRIMARY, ROW, SPACE_3, TEXT, TEXT_DIM, TEXT_STRONG,
-    W_STRONG,
+    paint, CH, CONTROL_H, HAIRLINE_W, ICON_CHEVRON, ON_PRIMARY, SPACE_1, SPACE_3, TEXT, TEXT_DIM,
+    TEXT_STRONG, W_STRONG,
 };
 
-pub(super) const HEIGHT: f32 = ROW * 3.;
+/// The controls' two rows of `CONTROL_H` buttons, `SPACE_1` above, between
+/// and below them, so no button touches a hairline or its neighbour, over
+/// their own hairline (the box's border takes its height too).
+pub(super) const HEIGHT: f32 = 2. * CONTROL_H + 3. * SPACE_1 + HAIRLINE_W;
 
 #[derive(Default)]
 pub(super) struct Controls {
@@ -37,7 +40,9 @@ impl BoardView {
         } else {
             "board-project-all"
         };
-        components::form_button_on(id, if selected { paint::RAISED } else { paint::CARD }, cx)
+        // The Tasks header's tabs (`tasks_header`): the scope in force
+        // selected and strong, the other quiet, both on no frame.
+        components::form_button(id, cx)
             .tab_stop(false)
             .h(px(CONTROL_H))
             .px(px(CH))
@@ -46,6 +51,11 @@ impl BoardView {
             .child(
                 components::text_ui()
                     .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_DIM }))
+                    .font_weight(if selected {
+                        W_STRONG
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
                     .child(label),
             )
             .on_click(cx.listener(move |view, _, _, cx| {
@@ -98,6 +108,7 @@ impl BoardView {
             .px(px(CH))
             .disabled(disabled)
             .accessibility_label(label)
+            .tip_with_key(label, Some(chord(key)))
             .child(
                 components::text_ui()
                     .text_color(rgb(if disabled {
@@ -178,9 +189,14 @@ impl BoardView {
                         .font_weight(W_STRONG)
                         .child(task.t("title")),
                 ),
+            // Before its first read the board has no tasks to choose from.
             _ => div()
                 .flex_1()
-                .child(components::text_meta().child("Select a task")),
+                .child(components::text_meta().child(if state.is_none() {
+                    "Loading tasks…"
+                } else {
+                    "Select a task"
+                })),
         };
         components::text_ui()
             .flex()
@@ -189,6 +205,8 @@ impl BoardView {
             .h(px(HEIGHT))
             .text_color(rgb(TEXT))
             .px(px(SPACE_3))
+            .py(px(SPACE_1))
+            .gap(px(SPACE_1))
             .border_b_1()
             .border_color(paint::LINE)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -197,7 +215,7 @@ impl BoardView {
                     .flex()
                     .items_center()
                     .gap(px(CH * 2.))
-                    .h(px(HEIGHT / 2.))
+                    .h(px(CONTROL_H))
                     .child(selected)
                     .child(actions.items_center().gap(px(CH / 2.)).flex_shrink_0()),
             )
@@ -205,7 +223,7 @@ impl BoardView {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(HEIGHT / 2.))
+                    .h(px(CONTROL_H))
                     .gap(px(CH))
                     .child(self.role_picker("worker.agent", "Developer", disabled, cx))
                     .child(self.role_picker("reviewer.agent", "Reviewer", disabled, cx))
@@ -213,7 +231,7 @@ impl BoardView {
                     .child(self.action_button(
                         "board-talk",
                         if state.is_some_and(|s| s.reply) {
-                            "Coordinator"
+                            "Back to Coordinator"
                         } else {
                             "Talk about task"
                         },
@@ -373,7 +391,10 @@ impl BoardView {
                 .tab_stop(false)
                 .debug_selector(move || name.into())
                 .h(px(CONTROL_H))
-                .px(px(CH / 2.))
+                .px(px(CH))
+                // The row's first label stands on the controls' text edge,
+                // its ground reaching out past it (`aim_strip` does the same).
+                .when(name == "worker.agent", |button| button.ml(px(-CH)))
                 .max_w(px(29. * CH))
                 .gap(px(CH / 2.))
                 .disabled(disabled || setting.is_none() || archived)
@@ -419,5 +440,38 @@ impl BoardView {
             }),
         }
         .into_any_element()
+    }
+}
+
+/// A board key as a tooltip spells it (`components::spell_chord`): its
+/// first chord (`ctrl+l` → `⌃L`, `tab` → `⇥`), or the character it is typed
+/// as (`space`, `y`).
+fn chord(key: K) -> String {
+    let key = entry(key);
+    let typed = match key.keys.first() {
+        Some(chord) => chord.replace('+', "-"),
+        None => match key.raw.first().copied() {
+            Some(" ") | None => "space".into(),
+            Some(raw) => raw.into(),
+        },
+    };
+    components::spell_chord(&typed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each button's tooltip names the key that does the same, as the
+    /// window's tooltips spell keys.
+    #[test]
+    fn board_keys_are_spelled_as_tooltips_spell_keys() {
+        let spelled = |key| components::chord_text(&chord(key));
+        assert_eq!(spelled(K::Delegate), "\u{21e5}");
+        assert_eq!(spelled(K::Enter), "\u{23ce}");
+        assert_eq!(spelled(K::Panel), "\u{2325}T");
+        assert_eq!(spelled(K::Talk), "space");
+        assert_eq!(spelled(K::Back), "esc");
+        assert_eq!(spelled(K::SayYes), "Y");
     }
 }

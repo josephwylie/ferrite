@@ -350,10 +350,10 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
             .document()
             .map(|document| document.path)),
         Some(file.clone()),
-        "the file card opens the Thread-workspace file in the native reader"
+        "the file card opens the Thread-workspace file in the preview"
     );
-    // The reader closes from the keyboard (escape, or cmd-w in it; F-14).
-    view.update(cx, |view, cx| view.close_reader(0, cx));
+    // The preview closes from the keyboard (escape, or cmd-w in it; F-14).
+    view.update(cx, |view, cx| view.close_preview(0, cx));
     tick(cx);
 
     let id = view.read_with(cx, |view, _| {
@@ -1348,6 +1348,10 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     }
     tick(cx);
     settle(cx);
+    // The finished Threads' toasts ring and rise in first: an entrance is
+    // no loop.
+    ring(cx);
+    settle(cx);
     assert!(
         cx.debug_bounds("progress-mark-live").is_some(),
         "the premise: a working mark is on screen"
@@ -1447,6 +1451,426 @@ fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!((nav_column_width(cx) - nav::FOLDED_WIDTH).abs() <= 0.5);
     assert_eq!(display_frames(cx), 0);
+}
+
+/// A Solo window of one Thread at 1600 wide whose settings are its own
+/// (the panel's toggle saves them), settled on its first paint.
+fn panel_window<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (gpui::Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
+    let (core, _fake) = cockpit(name, 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let dir = scratch(&format!("{name}-settings"));
+    std::fs::create_dir_all(&dir).unwrap();
+    view.update(cx, |view, _| view.prefs.dir = dir);
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    tick(cx);
+    settle(cx);
+    (view, cx)
+}
+
+fn panel_width(cx: &mut gpui::VisualTestContext) -> Option<f32> {
+    cx.debug_bounds("panel")
+        .map(|panel| f32::from(panel.size.width))
+}
+
+fn solo_card_right(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f32 {
+    let card = cx.update(|window, cx| view.read(cx).pane_rects(window))[0].1;
+    card.x + card.w
+}
+
+/// ⌥⌘B rides the panel's column over `motion::RESIZE`, as cmd-B rides the
+/// nav's: the board gives up or takes back the width every frame, the
+/// panel's content holds still against the window's edge (clipped, never
+/// re-laid), the toggle never moves, frames come only while it rides, and
+/// a flip mid-flight turns around from the width on screen.
+#[gpui::test]
+fn the_panel_rides_in_and_out_and_settles_without_frames(cx: &mut TestAppContext) {
+    use crate::theme::{BOARD_PAD, PANEL_W};
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel", cx);
+    assert_eq!(panel_width(cx), Some(PANEL_W), "first paint: no ride");
+    let tab = cx.debug_bounds("panel-tab-Context").expect("a tab");
+    let toggle = cx.debug_bounds("panel-toggle").expect("the toggle");
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert!(display_frames(cx) > 0, "a riding column asks for frames");
+    let mid = panel_width(cx).expect("still drawn while it rides out");
+    assert!(mid > BOARD_PAD && mid < PANEL_W, "mid-ride at 100ms: {mid}");
+    assert!(
+        (solo_card_right(&view, cx) - (1600. - mid)).abs() <= 1.,
+        "the board takes the width back with it"
+    );
+    assert_eq!(
+        cx.debug_bounds("panel-tab-Context"),
+        Some(tab),
+        "the content holds its layout against the window's edge"
+    );
+    assert_eq!(cx.debug_bounds("panel-toggle"), Some(toggle), "in place");
+    // The view head follows the board's edge, short of the toggle's room
+    // (the toggle, a gap): where its controls come to rest once hidden.
+    let room = 1600. - f32::from(toggle.left()) + crate::theme::VIEW_HEAD_GAP;
+    let head = cx.debug_bounds("view-head").expect("the view head");
+    assert!(
+        (f32::from(head.right()) - (1600. - mid.max(room))).abs() <= 1.,
+        "the head rides with the board: {head:?} at {mid}"
+    );
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    let turned = panel_width(cx).expect("riding back in");
+    assert!(
+        (turned - mid).abs() < 1.,
+        "the flip starts from the width on screen: {mid} -> {turned}"
+    );
+
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), Some(PANEL_W), "settled on its target");
+    assert_eq!(solo_card_right(&view, cx), 1600. - PANEL_W);
+    assert_eq!(display_frames(cx), 0, "and asks for nothing more");
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None, "gone once it has ridden out");
+    assert_eq!(solo_card_right(&view, cx), 1600. - BOARD_PAD);
+    assert_eq!(cx.debug_bounds("panel-toggle"), Some(toggle), "still there");
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// Focus moving to a draft, which has no panel, takes the panel away on
+/// the same ride: the column keeps drawing the Thread it showed until it
+/// has gone, and the toggle, with no Thread to show the panel for, goes at
+/// once.
+#[gpui::test]
+fn the_panel_rides_out_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
+    use crate::theme::PANEL_W;
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel-draft", cx);
+    view.update(cx, |view, cx| {
+        view.open_draft_with_provider(DraftTarget::Main, Provider::Claude, cx)
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    display_frames(cx);
+    let mid = panel_width(cx).expect("riding out");
+    assert!(mid < PANEL_W, "mid-ride: {mid}");
+    assert!(
+        cx.debug_bounds("panel-tab-Changes").is_some(),
+        "still the Thread's"
+    );
+    assert!(
+        cx.debug_bounds("panel-toggle").is_none(),
+        "no Thread: no toggle"
+    );
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None);
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// Reduced motion: the panel comes and goes at once, asking for no frame.
+#[gpui::test]
+fn reduced_motion_snaps_the_panel(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel-reduced", cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    assert_eq!(panel_width(cx), None);
+    assert_eq!(display_frames(cx), 0);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    assert_eq!(panel_width(cx), Some(crate::theme::PANEL_W));
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// A preview opening in a shown Panel rides it out to its wide width over
+/// `motion::RESIZE`, and closing rides it back: every frame the board gives
+/// the width up or takes it back, the preview's card keeps the width it
+/// rests at (laid out once, clipped, never re-wrapped) pinned to the board's
+/// edge, the nav is built no more than once a frame (as under ⌥⌘B), frames
+/// come only while it rides — about as many as the ride's 200ms holds —
+/// and none once it lands.
+#[gpui::test]
+fn a_preview_rides_the_panel_wide_and_back_and_settles_without_frames(cx: &mut TestAppContext) {
+    use crate::theme::{MOTION_RESIZE_MS, PANEL_PAD_L, PANEL_PAD_R, PANEL_W};
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (view, cx) = panel_window("motion-panel-preview", cx);
+    let dir = scratch("motion-panel-preview-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.md");
+    std::fs::write(
+        &file,
+        "# Notes\n\n".to_string()
+            + &"A line of notes long enough to wrap in a card.\n\n".repeat(40),
+    )
+    .unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_preview(file.clone(), None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let wide = view.read_with(cx, |view, _| view.board_right_rest());
+    assert!(wide > PANEL_W + 100., "a 1600 window previews wide: {wide}");
+    let card_w = wide - PANEL_PAD_L - PANEL_PAD_R;
+    let ride = |what: &str, widening: bool, cx: &mut gpui::VisualTestContext| {
+        let nav = crate::cockpit::drawn::nav_renders();
+        let mut frames = 0;
+        let mut last = panel_width(cx).expect("drawn");
+        for _ in 0..64 {
+            cx.executor().advance_clock(Duration::from_millis(8));
+            let asked = display_frames(cx);
+            let width = panel_width(cx).expect("drawn while it rides");
+            assert!(
+                if widening {
+                    width >= last
+                } else {
+                    width <= last
+                },
+                "{what}: one way only, {last} -> {width}"
+            );
+            last = width;
+            assert!(
+                (solo_card_right(&view, cx) - (1600. - width)).abs() <= 1.,
+                "{what}: the board rides with it"
+            );
+            if widening {
+                let card = cx
+                    .debug_bounds("panel-preview")
+                    .expect("the preview's card");
+                assert!(
+                    (f32::from(card.size.width) - card_w).abs() <= 0.5,
+                    "{what}: laid out at its width at rest: {card:?}"
+                );
+                assert!(
+                    (f32::from(card.left()) - (1600. - width + PANEL_PAD_L)).abs() <= 1.,
+                    "{what}: pinned to the board's edge: {card:?} at {width}"
+                );
+            }
+            if asked == 0 {
+                break;
+            }
+            frames += 1;
+        }
+        let most = (MOTION_RESIZE_MS / 8 + 3) as usize;
+        assert!(frames > 2 && frames <= most, "{what}: {frames} frames");
+        // Any Panel ride builds the nav once a frame, ⌥⌘B's as well: the
+        // preview's ride costs no more than that.
+        let nav = crate::cockpit::drawn::nav_renders() - nav;
+        assert!(
+            nav <= frames + 2,
+            "{what}: the nav built {nav} times in {frames} frames"
+        );
+        assert_eq!(display_frames(cx), 0, "{what}: landed, no frame");
+    };
+    ride("open", true, cx);
+    assert_eq!(panel_width(cx), Some(wide), "at rest, wide");
+    assert!(cx.debug_bounds("panel-tab-Preview").is_some());
+
+    view.update(cx, |view, cx| view.close_preview(0, cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("panel-changes-section").is_some()
+            || cx.debug_bounds("panel-no-changes").is_some(),
+        "the tab it showed before, at once"
+    );
+    ride("close", false, cx);
+    assert_eq!(panel_width(cx), Some(PANEL_W), "back to its own width");
+    assert!(
+        cx.debug_bounds("panel-tab-Preview").is_none(),
+        "its tab is gone"
+    );
+}
+
+/// A preview opened while the Panel is hidden shows it, riding in from
+/// nothing straight to its wide width, and closing it hides the Panel
+/// again — riding out with the preview still drawn — while the setting
+/// never changes. Reduced motion snaps both ways with no frame.
+#[gpui::test]
+fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
+    use crate::theme::MOTION_RESIZE_MS;
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS + 50));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None, "the premise: hidden");
+    let dir = scratch("motion-panel-preview-hidden-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("lines.rs");
+    std::fs::write(&file, "fn one() {}\nfn two() {}\n").unwrap();
+    let open = |cx: &mut gpui::VisualTestContext| {
+        let file = file.clone();
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.open_preview(file, Some(2), window, cx))
+        });
+        cx.run_until_parked();
+    };
+    open(cx);
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert!(display_frames(cx) > 0, "it rides in");
+    let mid = panel_width(cx).expect("riding in");
+    cx.executor()
+        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS));
+    display_frames(cx);
+    let wide = panel_width(cx).expect("shown");
+    assert!(mid < wide, "{mid} on the way to {wide}");
+    assert_eq!(wide, view.read_with(cx, |view, _| view.board_right_rest()));
+    assert!(
+        !view.read_with(cx, |view, _| view.prefs.settings.panel_shown),
+        "still off"
+    );
+
+    view.update(cx, |view, cx| view.close_preview(0, cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    display_frames(cx);
+    assert!(panel_width(cx).is_some(), "riding out");
+    assert!(
+        cx.debug_bounds("panel-preview").is_some(),
+        "the preview still drawn as it goes"
+    );
+    cx.executor()
+        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(panel_width(cx), None, "hidden again");
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].preview.shown().is_none()),
+        "and the preview let go"
+    );
+    assert_eq!(display_frames(cx), 0);
+
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    open(cx);
+    assert_eq!(panel_width(cx), Some(wide), "reduced: in at once");
+    assert_eq!(display_frames(cx), 0);
+    view.update(cx, |view, cx| view.close_preview(0, cx));
+    cx.run_until_parked();
+    assert_eq!(panel_width(cx), None, "and out at once");
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// Step a slide a 120Hz display frame at a time until the window asks
+/// for none: the frames it took, and the wall time they cost.
+fn slide_frames(cx: &mut gpui::VisualTestContext) -> (usize, Duration) {
+    let started = std::time::Instant::now();
+    let mut frames = 0;
+    for _ in 0..64 {
+        cx.executor().advance_clock(Duration::from_millis(8));
+        if display_frames(cx) == 0 {
+            break;
+        }
+        frames += 1;
+    }
+    (frames, started.elapsed())
+}
+
+/// A Review sliding open beside one Pane of a Group, and shut again: each
+/// frame of the slide redraws the frame around the parts, which lays the
+/// board out again and draws the review (at its final width), and builds
+/// the one Pane whose cell moves — its transcript re-wrapping at the new
+/// width, as under a cmd-B fold — and nothing else: its neighbour and the
+/// nav replay from their caches. Landed, the window asks for no frame.
+#[gpui::test]
+fn a_review_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let _clock = hold_wall_clock();
+    let (mut core, fake) = cockpit("reader-slide-budget", 2);
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
+    let threads = core.threads().to_vec();
+    long_transcripts(&fake);
+    for stream in fake.streams.borrow().iter() {
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    // The off-board finishes' toasts come and go first.
+    cockpit_renders_over(
+        cx,
+        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
+            + 1_000,
+    );
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[0].text_namespace())
+    });
+
+    let measure = |what: &str, cx: &mut gpui::VisualTestContext| {
+        let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
+        reset_native_text_renders(cx);
+        let (frames, took) = slide_frames(cx);
+        let nav = crate::cockpit::drawn::nav_renders() - nav;
+        let built: Vec<usize> = pane_builds(&threads)
+            .iter()
+            .zip(&panes)
+            .map(|(after, before)| after - before)
+            .collect();
+        let rewrapped = native_text_renders(&prefix, cx);
+        eprintln!(
+            "REVIEW_SLIDE {what} frames={frames} pane_builds={} neighbour_builds={} \
+             nav_builds={nav} transcript_text_renders={rewrapped} ms_per_frame={:.2}",
+            built[0],
+            built[1],
+            took.as_secs_f64() * 1_000.0 / frames.max(1) as f64,
+        );
+        let most = (crate::theme::MOTION_SLOT_OPEN_MS / 8 + 2) as usize;
+        assert!(frames > 2 && frames <= most, "{what}: {frames} frames");
+        assert!(
+            built[0] <= frames + 2,
+            "{what}: the Pane beside the review built {} times in {frames} frames",
+            built[0]
+        );
+        assert_eq!(built[1], 0, "{what}: the neighbour was built again");
+        assert_eq!(nav, 0, "{what}: the nav was built again");
+        assert_eq!(display_frames(cx), 0, "{what}: landed, no frame");
+    };
+
+    view.update(cx, |view, cx| {
+        let composer = view.panes[0].composer.clone();
+        let reading = view.prefs.settings.reading_size;
+        let review = cx.new(|cx| {
+            crate::review::ReviewView::new(
+                composer,
+                ferrite_reviewr::model::Scope::Uncommitted,
+                reading,
+                cx,
+            )
+        });
+        view.panes[0].review.show(review, "main".into());
+        cx.notify();
+    });
+    // The open itself is the Cockpit's own change: every part builds once.
+    cx.run_until_parked();
+    measure("open", cx);
+    view.update(cx, |view, cx| view.close_review(0, cx));
+    cx.run_until_parked();
+    measure("close", cx);
 }
 
 /// A nav row's hover blends in over `motion::HOVER_FADE`: frames while it
@@ -1719,9 +2143,16 @@ fn reduced_motion_still_advances_a_working_clock(cx: &mut TestAppContext) {
 /// A path the pointer rests on keeps its underline while its transcript
 /// streams: the Cockpit around the cached transcript redraws on every step
 /// of the working Thread's loops without drawing the transcript, and the
-/// hover must outlive those frames.
+/// hover must outlive those frames and the transcript's own next draw.
+///
+/// The stream runs on along the link's own line, so the link stays under
+/// the pointer: a new paragraph would lift the tail-following transcript
+/// and carry the link out from under it, a leave the blend rightly fades.
+/// The wall clock is held, as the working clock's turnover would otherwise
+/// draw a frame inside the test's last step on some runs and not others.
 #[gpui::test]
 fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
     crate::motion::testing::drive();
     let (mut core, fake, workspace) = bound_cockpit("hovered-link-streams", Provider::Claude);
     let file = workspace.join("docs").join("guide.md");
@@ -1732,21 +2163,25 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(700.)));
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "See [guide](docs/guide.md:12) for the notes.\n\n".into(),
-        })
-        .unwrap();
+    let stream = |text: &str| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: text.into() })
+            .unwrap();
+    };
+    stream("See [guide](docs/guide.md:12) for the notes");
     tick(cx);
     tick(cx);
     // The loops redraw the Cockpit and reuse the cached transcript, whose
     // selectors a test window keeps only for a frame that drew it.
-    cx.update(|window, _| window.refresh());
-    cx.run_until_parked();
-    let link = debug_bounds(cx, format!("file-attachment-{}", file.display()))
-        .or_else(|| debug_bounds(cx, "inline-file".to_string()))
-        .expect("the transcript draws the link");
-    cx.simulate_mouse_move(link.center(), None, gpui::Modifiers::none());
+    let link = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        debug_bounds(cx, format!("file-attachment-{}", file.display()))
+            .or_else(|| debug_bounds(cx, "inline-file".to_string()))
+            .expect("the transcript draws the link")
+    };
+    let before = link(cx);
+    cx.simulate_mouse_move(before.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
     cockpit_renders_over(cx, 300);
     let underlined = |cx: &mut gpui::VisualTestContext| {
@@ -1757,15 +2192,18 @@ fn a_hovered_link_keeps_its_underline_while_its_transcript_streams(cx: &mut Test
     assert!(underlined(cx), "the premise: the link is underlined");
     // The working loops redraw the Cockpit; the cached transcript is reused.
     cockpit_renders_over(cx, 600);
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "One more streamed line.\n\n".into(),
-        })
-        .unwrap();
+    stream(", and a few more words.");
     tick(cx);
+    // Past a fade: a hover lost on that draw has faded out by now.
+    cockpit_renders_over(cx, 300);
     assert!(
         underlined(cx),
         "the transcript drew again under the pointer and lost the link's underline"
+    );
+    assert_eq!(
+        link(cx),
+        before,
+        "the premise: the link stayed under the pointer"
     );
 }
 
@@ -1968,4 +2406,465 @@ fn a_pickers_arrows_rebuild_only_its_own_pane(cx: &mut TestAppContext) {
         "its Pane redraws the cursor: {built:?}"
     );
     assert_eq!(built[1..], [0, 0, 0], "an arrow rebuilt another Pane");
+}
+
+// ----------------------------------------------- what an entrance redraws
+
+/// Pane builds since `before`, Pane by Pane.
+fn built_since(threads: &[ThreadId], before: &[usize]) -> Vec<usize> {
+    pane_builds(threads)
+        .iter()
+        .zip(before)
+        .map(|(after, before)| after - before)
+        .collect()
+}
+
+/// Display frames while `ms` pass a frame at a time, each delivered.
+fn frames_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
+    let mut frames = 0;
+    for _ in 0..ms / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        frames += display_frames(cx);
+    }
+    frames
+}
+
+/// A menu the Cockpit draws fades in over `motion::MENU_IN` by redrawing
+/// the frame around the cached parts: after the frame that opens it, no
+/// Pane is rebuilt for its entrance, and it parks once it lands.
+#[gpui::test]
+fn a_menu_entrance_redraws_the_frame_and_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("menu-entrance", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    // The frame that opens it is the Cockpit's change; the entrance is
+    // every frame after.
+    let mut frames = frames_over(cx, 16);
+    let panes = pane_builds(&threads);
+    frames += frames_over(cx, theme::MOTION_MENU_IN_MS + 16);
+    let built = built_since(&threads, &panes);
+    eprintln!("MENU_ENTRANCE frames={frames} pane_builds={built:?}");
+    assert!(frames > 0, "the menu fades in");
+    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}
+
+/// The pointer on a row of a menu the Cockpit draws blends the row's wash
+/// in the frame around the parts: no Pane is rebuilt for it.
+#[gpui::test]
+fn a_hover_on_a_menu_row_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("menu-row-hover", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cockpit_renders_over(cx, 300);
+    let panes = pane_builds(&threads);
+    // A row with a shortcut: its key glyph sits on the row.
+    let row = cx
+        .debug_bounds("command-key")
+        .expect("the Pane menu's shortcuts draw the glyph");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cockpit_renders_over(cx, 300);
+    assert!(
+        cx.update(|_, _| crate::motion::testing::hover_values())
+            .iter()
+            .any(|(key, value)| key.contains("context-menu-row") && *value == 1.0),
+        "the premise: the pointer is on a menu row"
+    );
+    cx.simulate_mouse_move(
+        gpui::point(px(1200.), px(900.)),
+        None,
+        gpui::Modifiers::none(),
+    );
+    cockpit_renders_over(cx, 300);
+    let built = built_since(&threads, &panes);
+    eprintln!("MENU_ROW_HOVER pane_builds={built:?}");
+    assert_eq!(built, [0, 0, 0, 0], "a menu row's hover rebuilt a Pane");
+}
+
+/// The kit's toast stack measures a toast as it slides in: that redraws
+/// the stack's own view, never every view in the window (its upstream
+/// `refresh_windows` rebuilt every Pane on every frame a toast moved).
+#[gpui::test]
+fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (_view, _fake, threads, cx) = group_board("kit-toast", &[], cx);
+    cockpit_renders_over(cx, 2_500);
+    let panes = pane_builds(&threads);
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt;
+        window.push_notification(
+            gpui::component::notification::Notification::new().message("Server restarted"),
+            cx,
+        )
+    });
+    // The kit's card slides on the wall clock: let real time pass with the
+    // frames, so it moves through its fractional offsets.
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(16));
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        display_frames(cx);
+    }
+    let built = built_since(&threads, &panes);
+    eprintln!("KIT_TOAST_IN pane_builds={built:?}");
+    assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
+}
+
+/// One display frame: the clock moves on 16ms and the frame the window
+/// asked for, if it asked for one, is delivered (`1`; `0` when it asked
+/// for none, however many of its animations asked). With `rebuild_nav`,
+/// the nav part is rebuilt alone first, as a row's hover or a working
+/// row's clock does.
+fn display_frame(
+    view: &Entity<CockpitView>,
+    rebuild_nav: bool,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    if rebuild_nav {
+        view.update(cx, |view, cx| view.notify_part(super::parts::Part::Nav, cx));
+    }
+    cx.executor().advance_clock(Duration::from_millis(16));
+    cx.run_until_parked();
+    (display_frames(cx) > 0).into()
+}
+
+/// A finished Thread off the board toasts: the toast rises in and, when
+/// it times out, its face fades out where it stood. The clock moves a
+/// display frame at a time across both, as a display delivers them, so
+/// each fade starts where the clock is: a single jump across the toast's
+/// timeout would draw its going at the timeout and then skip the frames
+/// a stalled display skips. What the operator sees is asserted on every
+/// frame — the toast up, then its face up until `TOAST_OUT` has passed.
+/// The rise and the fade frame counts.
+fn needs_you_toast_comes_and_goes(
+    name: &str,
+    rebuild_nav: bool,
+    cx: &mut TestAppContext,
+) -> (usize, usize) {
+    crate::motion::testing::drive();
+    // A board of two, and a third Thread off it, working.
+    let (mut core, fake) = cockpit(name, 3);
+    let threads = core.threads().to_vec();
+    core.apply_group(GroupChange::Create {
+        first: threads[0],
+        second: threads[1],
+    })
+    .unwrap();
+    let group = core.groups().of(threads[0]).unwrap().id;
+    core.send(threads[2], "task".into());
+    core.pump();
+    core.enter_group(group).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    fake.streams.borrow()[2]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    settle(cx);
+    if rebuild_nav {
+        // The recipe that first looked like starvation: the nav rebuilt
+        // alone a few times while the finish waits out its delay.
+        for _ in 0..11 {
+            display_frame(&view, true, cx);
+        }
+    }
+    let toast: &'static str = format!("toast-{}", threads[2].get()).leak();
+
+    // It rings once the finish has waited out its delay.
+    cx.executor()
+        .advance_clock(crate::notifications::ALERT_DELAY / 2);
+    cx.run_until_parked();
+    let mut waited = 0;
+    while cx.debug_bounds(toast).is_none() {
+        display_frame(&view, rebuild_nav, cx);
+        waited += 1;
+        assert!(waited < 120, "the toast never came");
+    }
+    let mut rising = 0;
+    for _ in 0..(theme::MOTION_TOAST_IN_MS + 32) / 16 {
+        rising += display_frame(&view, rebuild_nav, cx);
+        assert!(cx.debug_bounds(toast).is_some(), "it stays up as it rises");
+    }
+    assert!(
+        rising + 1 >= (theme::MOTION_TOAST_IN_MS / 16) as usize,
+        "it rises in a frame at a time: {rising}"
+    );
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+
+    // It times out, the window drawing a frame at a time.
+    cx.executor()
+        .advance_clock(crate::notifications::DONE_TOAST - Duration::from_secs(1));
+    cx.run_until_parked();
+    let mut waited = 0;
+    while cx.debug_bounds(toast).is_some() {
+        display_frame(&view, rebuild_nav, cx);
+        waited += 1;
+        assert!(waited < 120, "the toast never timed out");
+    }
+    // It went at most a frame ago.
+    let went = cx.executor().now();
+    assert!(
+        cx.debug_bounds("toast-leaving").is_some(),
+        "its face fades out where it stood"
+    );
+    let open: &'static str = format!("toast-open-{}", threads[2].get()).leak();
+    assert!(cx.debug_bounds(open).is_none(), "with nothing to press");
+    let mut leaving = 0;
+    for _ in 0..(theme::MOTION_TOAST_OUT_MS + 32) / 16 {
+        leaving += display_frame(&view, rebuild_nav, cx);
+        let shown = cx.executor().now() - went + Duration::from_millis(16);
+        if shown < crate::motion::TOAST_OUT.duration() {
+            assert!(
+                cx.debug_bounds("toast-leaving").is_some(),
+                "its face is drawn until it has faded: gone at {shown:?}"
+            );
+        }
+    }
+    assert!(
+        leaving + 1 >= (theme::MOTION_TOAST_OUT_MS / 16) as usize,
+        "it fades out a frame at a time: {leaving}"
+    );
+    assert_eq!(display_frames(cx), 0, "gone: no more frames");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("toast-leaving").is_none(),
+        "and its face is gone"
+    );
+    (rising, leaving)
+}
+
+/// The Needs-you toast (FL-18) rises in over `motion::TOAST_IN` and, when it
+/// goes on its own, fades away over `TOAST_OUT` as a face with no answers
+/// to press — frames only while it moves.
+#[gpui::test]
+fn the_needs_you_toast_rises_in_and_leaves_softly(cx: &mut TestAppContext) {
+    let (rising, leaving) = needs_you_toast_comes_and_goes("toast-motion", false, cx);
+    eprintln!("NEEDS_YOU_TOAST rising={rising} leaving={leaving}");
+}
+
+/// The nav rebuilt alone — before the toast comes, and on every frame of
+/// its rise and its fade — starves neither: a part's rebuild redraws the
+/// Cockpit around it (its ancestors are dirtied with it), which draws the
+/// floats again, and each one-shot asks for its next frame there.
+#[gpui::test]
+fn nav_rebuilds_starve_no_toast_frame(cx: &mut TestAppContext) {
+    let (rising, leaving) = needs_you_toast_comes_and_goes("toast-motion-nav", true, cx);
+    eprintln!("NEEDS_YOU_TOAST_NAV rising={rising} leaving={leaving}");
+}
+
+/// Plays out a one-shot of `ms` a display frame at a time, the nav rebuilt
+/// alone before each frame: it asks for a frame on every one but about its
+/// last, and for none once it has landed.
+fn plays_beside_nav_rebuilds(
+    view: &Entity<CockpitView>,
+    ms: u64,
+    what: &str,
+    cx: &mut gpui::VisualTestContext,
+) {
+    let mut frames = 0;
+    for _ in 0..(ms + 32) / 16 {
+        frames += display_frame(view, true, cx);
+    }
+    eprintln!("NAV_REBUILDS {what} frames={frames}");
+    assert!(
+        frames + 2 >= (ms / 16) as usize,
+        "{what}: a part's rebuild starved its frames: {frames} in {ms}ms"
+    );
+    assert_eq!(display_frame(view, true, cx), 0, "{what}: landed, no frame");
+}
+
+/// A part's rebuild landing mid-entrance — the nav rebuilt alone on every
+/// frame — starves no `motion::Played` entrance the Cockpit draws: a menu,
+/// the palette, a sheet. The part's ancestors are dirtied with it, so the
+/// Cockpit around it draws again and each entrance asks there for its
+/// next frame.
+#[gpui::test]
+fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("nav-rebuild-entrances", &[], cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(threads[0]),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_MENU_IN_MS, "menu", cx);
+    cx.simulate_keystrokes("escape");
+    cockpit_renders_over(cx, 300);
+
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_DIALOG_IN_MS, "palette", cx);
+    cx.simulate_keystrokes("escape");
+    cockpit_renders_over(cx, 300);
+
+    view.update(cx, |view, cx| view.toggle_settings(cx));
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_DIALOG_IN_MS, "settings sheet", cx);
+}
+
+/// The Panel's ride and a reader's slide with the nav rebuilt alone on
+/// every frame: each still moves on every frame until it lands, then asks
+/// for none.
+#[gpui::test]
+fn nav_rebuilds_starve_no_ride(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (view, cx) = panel_window("nav-rebuild-panel", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    let mut widths = vec![crate::theme::PANEL_W];
+    for _ in 0..(theme::MOTION_RESIZE_MS + 32) / 16 {
+        display_frame(&view, true, cx);
+        widths.extend(panel_width(cx));
+    }
+    assert!(
+        widths.len() + 2 >= (theme::MOTION_RESIZE_MS / 16) as usize,
+        "it rode out a frame at a time: {widths:?}"
+    );
+    assert!(
+        widths.windows(2).all(|pair| pair[1] < pair[0]),
+        "and moved on every frame: {widths:?}"
+    );
+    assert_eq!(panel_width(cx), None, "gone once it has ridden out");
+    assert_eq!(display_frame(&view, true, cx), 0, "landed, no frame");
+}
+
+#[gpui::test]
+fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
+    let (view, _fake, _threads, cx) = group_board("nav-rebuild-review", &[], cx);
+    view.update(cx, |view, cx| {
+        let composer = view.panes[0].composer.clone();
+        let reading = view.prefs.settings.reading_size;
+        let review = cx.new(|cx| {
+            crate::review::ReviewView::new(
+                composer,
+                ferrite_reviewr::model::Scope::Uncommitted,
+                reading,
+                cx,
+            )
+        });
+        view.panes[0].review.show(review, "main".into());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    plays_beside_nav_rebuilds(&view, theme::MOTION_SLOT_OPEN_MS, "review open", cx);
+}
+
+/// The palette comes in on `dialog-in` over its veil darkening in: frames
+/// while it does, no Pane rebuilt for them, none once it has landed.
+#[gpui::test]
+fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("palette-entrance", &[], cx);
+    view.update_in(cx, |view, window, cx| {
+        view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
+    });
+    cx.run_until_parked();
+    // Its first frame takes the keyboard from the Composer, whose Pane
+    // redraws its line once; the entrance is every frame after.
+    let mut frames = frames_over(cx, 16);
+    let panes = pane_builds(&threads);
+    frames += frames_over(cx, theme::MOTION_DIALOG_IN_MS + 16);
+    let built = built_since(&threads, &panes);
+    eprintln!("PALETTE_ENTRANCE frames={frames} pane_builds={built:?}");
+    assert!(frames > 0, "the palette comes in");
+    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}
+
+/// A Composer's choice menu fades in where it measured itself to stand,
+/// from its first placed frame (`Opens::InPlace`), standing still as it
+/// comes in, and asks for nothing once it lands.
+#[gpui::test]
+fn a_choice_menu_fades_in_in_place_and_then_rests(cx: &mut TestAppContext) {
+    let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
+    view.update(cx, |view, cx| {
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    cockpit_renders_over(cx, 300);
+    view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
+    cx.run_until_parked();
+    let mut frames = 0;
+    let mut stood = Vec::new();
+    for _ in 0..(theme::MOTION_MENU_IN_MS + 48) / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        frames += display_frames(cx);
+        if crate::menu::testing::drawn().placed {
+            stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
+        }
+    }
+    assert!(frames > 0, "it fades in");
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+    assert!(
+        stood.len() > 2,
+        "the premise: it was drawn placed as it came in"
+    );
+    assert!(
+        stood.windows(2).all(|pair| pair[0] == pair[1]),
+        "it stood still as it came in: {stood:?}"
+    );
+}
+
+/// A minimap glide is a scroll the operator asked for, and the wheel is
+/// one too: a turn of the wheel mid-glide takes the scroll back, rather
+/// than the glide overriding it to its end.
+#[gpui::test]
+fn the_wheel_takes_the_scroll_back_from_a_minimap_glide(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, fake) = cockpit("minimap-glide", 1);
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    let gliding = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .is_some_and(|transcript| transcript.read(cx).gliding())
+        })
+    };
+    let rail = cx
+        .debug_bounds("transcript-minimap")
+        .expect("the transcript draws its minimap");
+    // Near the rail's top: far from the tail the transcript follows.
+    let top = gpui::point(rail.center().x, rail.top() + px(4.));
+    cx.simulate_mouse_move(top, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(top, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(top, MouseButton::Left, gpui::Modifiers::none());
+    cx.executor().advance_clock(Duration::from_millis(50));
+    display_frames(cx);
+    assert!(gliding(cx), "the premise: the click glides");
+    let body = gpui::point(rail.left() - px(200.), rail.center().y);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: body,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert!(!gliding(cx), "the wheel took the scroll back");
+    frames_over(cx, theme::MINIMAP_SCROLL_MS);
+    assert_eq!(display_frames(cx), 0, "and nothing glides on");
 }

@@ -1,14 +1,31 @@
-//! What opens beside a Pane on the board (F-14, F-15): a reader on a file
-//! at a line, a review of the Thread's changes (ADR 0021), or another
-//! Thread.
+//! What opens beside a Pane on the board (F-15): a review of the Thread's
+//! changes (ADR 0021), or another Thread. A file, an image or a command's
+//! output opens in the Panel instead (`panel/preview.rs`).
 //!
-//! A reader and a review take the reader slot the Pane already has
-//! (`attachment_preview::Preview`'s document, laid out by `board_tree`): in
-//! Solo the board becomes `Pane | reader`, in a Group the Pane's own cell
-//! splits, half and half (`READER_SHARE`), the seam between them dragging
-//! like any other (22–78%). Escape in the reader — or ⌘W while it holds
-//! focus — closes it, and the tree it was spliced into closes back over it,
-//! restoring the board as it was.
+//! A review takes the reader slot the Pane has (`ReviewSlot`, laid out by
+//! `board_tree`): it needs the board's width, and takes line comments. In
+//! Solo the board becomes `Pane | review`, in a Group (or a fullscreen
+//! Pane) the Pane's own cell splits, half and half (`READER_SHARE`), the
+//! seam between them dragging like any other (22–78%). Escape in it, its
+//! ×, or ⌘W while it holds focus closes it, and the tree it was spliced
+//! into closes back over it, restoring the board as it was.
+//!
+//! The slot slides (`ReaderSlides`). Opening, its split's share rides a
+//! `motion::Reveal` from nothing to rest (`Tree::reveal`) over `SLOT_OPEN`:
+//! the Pane narrows every frame, re-wrapping as it does under a cmd-B
+//! fold, while the review slides in from its far edge — its content laid
+//! out at its size at rest and pinned to the seam (`reader_pin`), the cell
+//! clipping what is not in yet, so its own text never re-wraps. Closing is
+//! the reverse over the quicker `SLOT_CLOSE`: the keyboard is the Pane's at
+//! once, the review stays drawn (`ReviewSlot::shown`) until the slot has
+//! slid shut, and only then is it removed from the tree. A flip mid-slide
+//! turns around from where it is; a review switching scope reads in place,
+//! and the slot does not slide again; a seam grabbed mid-slide lands it,
+//! and a drag is never tweened. The board's Level and the narrow-window
+//! rail are measured where the slide ends. Each frame of a slide redraws
+//! the frame around the parts, so only the Pane whose cell moves is built
+//! again; reduced motion snaps. A review is a Thread's — a draft has none
+//! — so a slot is keyed by its Thread.
 //!
 //! A review reads here, where the checkout is — by the Server that owns
 //! the Thread, or off the UI thread when this window runs its agents
@@ -25,49 +42,153 @@
 //! a member.
 
 use super::*;
+use crate::motion::{Reveal, SLOT_CLOSE, SLOT_OPEN};
+use crate::preview::{head_door, reading_head};
 use crate::review::{
     BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
     ScopePicked, Searched,
 };
 use ferrite_reviewr::ferrite::Read;
 use ferrite_reviewr::model::{CommitPick, Scope};
-use std::path::PathBuf;
+use std::collections::HashMap;
 
-/// Find in the reader (⌘F when the reader took the last press or holds the
-/// keyboard; the bar is the transcript's, `crate::find`): a file's lines, or
-/// a rendered Markdown document's text. A review finds in its own rows
-/// (`review.rs`), while it holds the keyboard.
-pub(crate) struct ReaderFind {
-    bar: crate::find::Find,
-    /// The document it searches: the bar closes with it, and another one
-    /// opening in the reader closes it too (`tend_reader_finds`).
-    path: PathBuf,
-    /// Frames left to settle a Markdown occurrence into view.
-    reveal: u8,
-    /// A new query in a Markdown document, waiting for its paint to say
-    /// which occurrence is the first in view.
-    start_in_view: bool,
+/// A Pane's Review on the board (ADR 0021): open in its reader slot, or
+/// sliding shut.
+pub(crate) struct ReviewSlot {
+    open: Option<OpenReview>,
+    /// The review just closed, still drawn while its slot slides shut; the
+    /// cockpit lets it go when the slide ends (`let_go`).
+    closing: Option<OpenReview>,
+    /// Tracked by the slot, so ⌘W in it closes the review rather than its
+    /// Pane.
+    focus: FocusHandle,
 }
 
-impl ReaderFind {
-    /// Whether the bar's line holds the keyboard.
-    pub(crate) fn holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.bar.holds_focus(window, cx)
+#[derive(Clone)]
+struct OpenReview {
+    view: Entity<ReviewView>,
+    /// What its head reads after `review ·`: the branch, else the workspace.
+    title: String,
+}
+
+impl ReviewSlot {
+    pub(crate) fn new(cx: &mut gpui::App) -> Self {
+        Self {
+            open: None,
+            closing: None,
+            focus: cx.focus_handle(),
+        }
+    }
+
+    /// The review open in the slot.
+    pub(crate) fn review(&self) -> Option<Entity<ReviewView>> {
+        self.open.as_ref().map(|open| open.view.clone())
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Show `view` in the slot under `title`.
+    pub(crate) fn show(&mut self, view: Entity<ReviewView>, title: String) {
+        self.open = Some(OpenReview { view, title });
+        self.closing = None;
+    }
+
+    /// What the slot draws: the open review, else the one sliding shut.
+    fn shown(&self) -> Option<&OpenReview> {
+        self.open.as_ref().or(self.closing.as_ref())
+    }
+
+    /// Close it: closed at once, the keyboard the Pane's, while it stays
+    /// drawn until its slot has slid shut.
+    fn close(&mut self) {
+        if let Some(open) = self.open.take() {
+            self.closing = Some(open);
+        }
+    }
+
+    /// The slot has slid shut: stop holding the review.
+    fn let_go(&mut self) {
+        self.closing = None;
+    }
+
+    /// Whether the review (or anything in it) holds the keyboard.
+    pub(crate) fn focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.is_open() && self.focus.contains_focused(window, cx)
+    }
+
+    /// Whether something inside the open review holds the keyboard — its
+    /// text, a field — rather than the slot itself, taking focus on a
+    /// click that hands it back to the Pane.
+    pub(crate) fn inner_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.focused(window, cx) && !self.focus.is_focused(window)
+    }
+
+    /// The keyboard focus the open review holds (a comment field's too),
+    /// kept from its first frame.
+    pub(crate) fn held_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
+        self.review()?.read(cx).held_focus(window, cx)
     }
 }
 
-#[cfg(test)]
-impl ReaderFind {
-    /// What the bar reads, and where a Markdown occurrence last painted.
-    pub(crate) fn state(&self) -> (Option<SharedString>, Option<gpui::Bounds<Pixels>>) {
-        (self.bar.count(), self.bar.report().revealed.get())
+/// Every Thread's reader slot while it is open or sliding (see the module
+/// doc), keyed by the Thread whose Pane owns it, and what this frame draws
+/// of each.
+#[derive(Default)]
+pub(crate) struct ReaderSlides {
+    slides: HashMap<ThreadId, Slide>,
+    /// The first frame has been tended: a review open by then arrives in
+    /// place, with no entrance (nothing animates on first paint).
+    tended: bool,
+    /// A slide mid-flight this frame: the board moves, so frames keep
+    /// coming.
+    moving: bool,
+    /// A scene's held reveal (`fixture_hold_reader`).
+    hold: Option<f32>,
+}
+
+impl ReaderSlides {
+    /// Whether a slot is sliding this frame.
+    pub(crate) fn moving(&self) -> bool {
+        self.moving
     }
 }
 
-/// Whether the reader renders `document` as Markdown (a file opened at a
-/// line reads as numbered lines, to mark it).
-fn renders_markdown(document: &crate::attachment_preview::Document) -> bool {
-    document.is_markdown() && document.line.is_none()
+/// One reader slot's slide.
+struct Slide {
+    reveal: Reveal,
+    /// How far in this frame draws it (the board's geometry between frames
+    /// reads what is on screen).
+    drawn: f32,
+}
+
+/// Where a sliding review's content lies in its cell `drawn`: at its size
+/// at rest (`rest`) along the axis it slides on, pinned to the seam it
+/// slides from, so its text never re-wraps while the cell grows or
+/// shrinks and the cell clips what is not in yet. `None` at rest.
+pub(super) fn reader_pin(
+    tree: &Tree,
+    leaf: ThreadId,
+    drawn: layout::Rect,
+    rest: layout::Rect,
+) -> Option<layout::Rect> {
+    let (axis, first) = tree.side_of(leaf)?;
+    match axis {
+        layout::Axis::Row if rest.w > drawn.w => Some(layout::Rect {
+            x: if first { drawn.w - rest.w } else { 0.0 },
+            y: 0.0,
+            w: rest.w,
+            h: drawn.h,
+        }),
+        layout::Axis::Column if rest.h > drawn.h => Some(layout::Rect {
+            x: 0.0,
+            y: if first { drawn.h - rest.h } else { 0.0 },
+            w: drawn.w,
+            h: rest.h,
+        }),
+        _ => None,
+    }
 }
 
 /// How often a read on another thread (a review's git, a PR's `gh`) is
@@ -77,8 +198,6 @@ const ANSWER_POLL: std::time::Duration = std::time::Duration::from_millis(30);
 /// What `open_beside` opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Beside {
-    /// A file, marked and scrolled to `line` (1-based) when there is one.
-    Reader { path: PathBuf, line: Option<u32> },
     /// The focused Thread's changes, at a scope.
     Review(Scope),
     /// Another Thread, as its own Pane.
@@ -94,47 +213,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match beside {
-            Beside::Reader { path, line } => self.open_reader(path, line, window, cx),
             Beside::Review(scope) => self.open_review(scope, window, cx),
             Beside::Thread(thread) => self.open_thread_beside(thread, cx),
         }
-    }
-
-    /// The reader beside the focused Pane, at `line`.
-    fn open_reader(
-        &mut self,
-        path: PathBuf,
-        line: Option<u32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.empty_shown = false;
-        let index = self.focused();
-        // The head reads the path from the Thread's workspace, else `~`.
-        let workspace = self
-            .panes
-            .get(index)
-            .and_then(PaneView::thread)
-            .and_then(|thread| self.thread_path(thread));
-        let Some(pane) = self.panes.get(index) else {
-            return;
-        };
-        let title = workspace
-            .as_deref()
-            .and_then(|root| path.strip_prefix(root).ok())
-            .map(|relative| relative.display().to_string())
-            .unwrap_or_else(|| home_relative(&path));
-        if !pane.preview.open_text_at(path.clone(), title.clone(), line) {
-            // Not a UTF-8 file: the image preview, or the OS, takes it.
-            pane.preview.open_document(path, title, window, cx);
-            cx.notify();
-            return;
-        }
-        if let Some(line) = line.filter(|line| *line > 0) {
-            pane.reader_scroll
-                .scroll_to_item(line as usize - 1, gpui::ScrollStrategy::Center);
-        }
-        cx.notify();
     }
 
     /// The review beside the focused Pane, at `scope`, holding the
@@ -151,7 +232,7 @@ impl CockpitView {
         else {
             return;
         };
-        let review = pane.preview.review().unwrap_or_else(|| {
+        let review = pane.review.review().unwrap_or_else(|| {
             let composer = pane.composer.clone();
             let reading = self.prefs.settings.reading_size;
             let review = cx.new(|cx| ReviewView::new(composer, scope, reading, cx));
@@ -202,7 +283,8 @@ impl CockpitView {
             .get(thread)
             .and_then(|facts| facts.branch.clone())
             .map_or_else(|| home_relative(&workspace), |branch| branch.to_string());
-        pane.preview.open_review(workspace, title, review.clone());
+        let index = self.focused();
+        self.panes[index].review.show(review.clone(), title);
         window.focus(&review.focus_handle(cx), cx);
         review.update(cx, |review, cx| review.pick_scope(scope, cx));
         cx.notify();
@@ -210,7 +292,7 @@ impl CockpitView {
 
     /// The review open beside `thread`'s Pane, if one is.
     pub(super) fn review_of(&self, thread: ThreadId) -> Option<Entity<ReviewView>> {
-        self.panes.get(self.pane_for(thread)?)?.preview.review()
+        self.panes.get(self.pane_for(thread)?)?.review.review()
     }
 
     /// Read `scope` for `thread` into `review`, where the checkout is — by
@@ -492,393 +574,225 @@ impl CockpitView {
         .then_some((owner, companion))
     }
 
-    /// ⌘F in Pane `index`'s reader: the bar over the reader (or the keyboard
-    /// back to it). False when the reader shows nothing to search.
-    pub(super) fn open_reader_find(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(pane) = self.panes.get_mut(index) else {
-            return false;
-        };
-        let Some(document) = pane.preview.document().filter(|doc| doc.review.is_none()) else {
-            return false;
-        };
-        let owner = pane.identity;
-        if pane
-            .reader_find
-            .as_ref()
-            .is_none_or(|find| find.path != document.path)
-        {
-            pane.reader_find = Some(ReaderFind {
-                bar: crate::find::Find::new(cx, move |view: &mut Self, cx| {
-                    view.refind_reader(owner, cx)
-                }),
-                path: document.path,
-                reveal: 0,
-                start_in_view: false,
-            });
-            cx.notify();
-        }
-        if let Some(find) = &pane.reader_find {
-            find.bar.focus(window, cx);
-        }
-        true
-    }
-
-    /// Search the reader's document again (its line changed): a new query
-    /// starts on its first occurrence in view, or the first below it.
-    fn refind_reader(&mut self, owner: PaneIdentity, cx: &mut Context<Self>) {
-        let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) else {
-            return;
-        };
-        let (Some(document), Some(find)) = (pane.preview.document(), pane.reader_find.as_mut())
-        else {
-            return;
-        };
-        let changed = if renders_markdown(&document) {
-            let text = gpui::base::text::TextView::markdown_find_text(&document.source);
-            find.bar.search([text.as_str()], 0, cx)
-        } else {
-            let top = -pane.reader_scroll.0.borrow().base_handle.offset().y;
-            let from = (f32::from(top) / crate::theme::LH_UI) as usize;
-            find.bar.search(document.source.lines(), from, cx)
-        };
-        if changed {
-            reveal_in_reader(pane, &document, true);
-        }
-        cx.notify();
-    }
-
-    /// ⏎ / ⇧⏎ in the reader's bar.
-    fn step_reader_find(&mut self, owner: PaneIdentity, forward: bool, cx: &mut Context<Self>) {
-        let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) else {
-            return;
-        };
-        let Some(document) = pane.preview.document() else {
-            return;
-        };
-        if pane
-            .reader_find
-            .as_mut()
-            .is_some_and(|find| find.bar.step(forward).is_some())
-        {
-            reveal_in_reader(pane, &document, false);
-            cx.notify();
-        }
-    }
-
-    /// Esc in the reader's bar: it closes, the reader stays, and the
-    /// keyboard goes back to the Pane. The line held it inside the reader,
-    /// where the focus snap (`render`) leaves the reader's own text alone,
-    /// so it is let go first.
-    fn close_reader_find(
-        &mut self,
-        owner: PaneIdentity,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(pane) = self.index_of(owner).map(|index| &mut self.panes[index]) {
-            pane.reader_find = None;
-            window.blur(cx);
-            cx.notify();
-        }
-    }
-
-    /// Each frame, before the board draws: a reader's bar closes with its
-    /// document (esc, its ×, another file opening), and a Markdown reveal
-    /// that is due settles.
-    pub(super) fn tend_reader_finds(&mut self, window: &mut Window) {
-        for pane in &mut self.panes {
-            let Some(find) = &mut pane.reader_find else {
-                continue;
-            };
-            if pane
-                .preview
-                .document()
-                .is_none_or(|document| document.path != find.path)
-            {
-                pane.reader_find = None;
-                continue;
-            }
-            settle_markdown_found(find, &pane.reader_markdown_scroll, window);
-        }
-    }
-
-    /// Close the reader beside `index` (escape in it, ⌘W while it holds
-    /// focus): its slot closes and the board is as it was.
-    pub(super) fn close_reader(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(pane) = self.panes.get(index) {
-            pane.preview.close_reader();
+    /// Close the review beside `index` (escape in it, ⌘W while it holds
+    /// focus): the keyboard is the Pane's at once, and its slot slides shut
+    /// until the board is as it was.
+    pub(super) fn close_review(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(pane) = self.panes.get_mut(index) {
+            pane.review.close();
             self.focus_pane(index);
             cx.notify();
         }
     }
 
-    /// A Pane's reader as its own board slot (F-14, F-15): the reader shell
-    /// (`Preview::reader` — its head the path in `LINK_INK` and `:line` dim,
-    /// or `review · dev`, the slot's drag handle) over the body: the file's
-    /// numbered lines in syntax colour with the target line marked,
-    /// rendered Markdown, or the review. A press lands on the Pane that
-    /// opened it; escape closes it.
+    /// Whether Pane `index` has a reader slot on the board: a review open
+    /// in it, or one sliding shut.
+    pub(super) fn has_reader(&self, index: usize) -> bool {
+        self.panes.get(index).is_some_and(|pane| {
+            pane.review.is_open()
+                || pane
+                    .thread()
+                    .is_some_and(|thread| self.reader_slides.slides.contains_key(&thread))
+        })
+    }
+
+    /// Each frame, before the board is measured: a review that opened
+    /// starts sliding in (in place on first paint), one that closed starts
+    /// sliding out, one reopened mid-slide turns around, and a slot that
+    /// has slid shut lets its review go. Then what this frame draws of
+    /// each.
+    pub(super) fn tend_reader_slides(&mut self, cx: &gpui::App) {
+        let now = cx.background_executor().now();
+        let reduced = crate::motion::reduced_motion(cx);
+        let panes = &mut self.panes;
+        let slides = &mut self.reader_slides;
+        let first = !std::mem::replace(&mut slides.tended, true);
+        slides
+            .slides
+            .retain(|owner, _| panes.iter().any(|pane| pane.thread() == Some(*owner)));
+        for pane in panes {
+            let Some(owner) = pane.thread() else {
+                continue;
+            };
+            match (slides.slides.get_mut(&owner), pane.review.is_open()) {
+                (None, true) => {
+                    let reveal = if first {
+                        Reveal::open(SLOT_OPEN, SLOT_CLOSE, now)
+                    } else {
+                        Reveal::opening(SLOT_OPEN, SLOT_CLOSE, now)
+                    };
+                    slides.slides.insert(owner, Slide { reveal, drawn: 0.0 });
+                }
+                (Some(slide), true) => {
+                    if !slide.reveal.is_open() {
+                        slide.reveal.set(true, now, reduced);
+                        pane.review.let_go();
+                    }
+                }
+                (Some(slide), false) => {
+                    slide.reveal.set(false, now, reduced);
+                    if slide.reveal.shut(now, reduced) {
+                        slides.slides.remove(&owner);
+                        pane.review.let_go();
+                    }
+                }
+                // Closed before a frame drew it: nothing to slide.
+                (None, false) => pane.review.let_go(),
+            }
+        }
+        let hold = slides.hold;
+        let mut moving = false;
+        for slide in slides.slides.values_mut() {
+            slide.drawn = hold.unwrap_or_else(|| slide.reveal.value(now, reduced));
+            moving |= hold.is_none() && slide.reveal.running(now, reduced);
+        }
+        slides.moving = moving;
+    }
+
+    /// A seam grabbed mid-slide: every slot lands where it was going — a
+    /// closing one is gone — so the drag starts from the board at rest.
+    pub(super) fn land_reader_slides(&mut self, cx: &gpui::App) {
+        let now = cx.background_executor().now();
+        let panes = &mut self.panes;
+        self.reader_slides.slides.retain(|owner, slide| {
+            slide.reveal.land(now);
+            slide.drawn = 1.0;
+            if !slide.reveal.is_open() {
+                if let Some(pane) = panes.iter_mut().find(|pane| pane.thread() == Some(*owner)) {
+                    pane.review.let_go();
+                }
+            }
+            slide.reveal.is_open()
+        });
+    }
+
+    /// `tree` as this frame draws it: each sliding review as far in as it
+    /// is (`Tree::reveal`). A seam drag draws its tree as it is.
+    pub(super) fn slid_tree(&self, mut tree: Tree, bounds: layout::Rect) -> Tree {
+        if self.seam_drag.is_some() {
+            return tree;
+        }
+        let reveals: Vec<(ThreadId, f32)> = self
+            .reader_slides
+            .slides
+            .iter()
+            .filter(|(_, slide)| slide.drawn < 1.0)
+            .map(|(owner, slide)| (reader_leaf(*owner), slide.drawn))
+            .collect();
+        if !reveals.is_empty() {
+            tree.reveal(&reveals, bounds, crate::theme::BOARD_SEAM);
+        }
+        tree
+    }
+
+    /// `tree` where every slide ends: the reviews sliding shut gone, the
+    /// ones sliding in at rest.
+    pub(super) fn rest_tree(&self, mut tree: Tree) -> Tree {
+        for (owner, slide) in &self.reader_slides.slides {
+            if !slide.reveal.is_open() {
+                tree.remove(reader_leaf(*owner));
+            }
+        }
+        tree
+    }
+
+    /// Hold every review's slide at `reveal` (0 shut → 1 at rest) so a
+    /// scene can capture the board mid-slide; `None` lets it go.
+    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
+    pub(crate) fn fixture_hold_reader(&mut self, reveal: Option<f32>) {
+        self.reader_slides.hold = reveal;
+    }
+
+    /// A Thread's review as its own board slot (ADR 0021): the review under
+    /// its head (`reading_head` — `review · dev` and its ×, the slot's drag
+    /// handle). A press lands on the Pane that opened it; escape closes it.
+    /// Mid-slide the slot lies at `pin` (`reader_pin`), the cell clipping
+    /// it.
     pub(super) fn reader_cell(
         &self,
-        owner: PaneIdentity,
+        owner: ThreadId,
         leaf: ThreadId,
+        pin: Option<layout::Rect>,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
-        let index = self.index_of(owner)?;
-        let pane = &self.panes[index];
-        let document = pane.preview.document()?;
-        let find = pane.reader_find.as_ref();
+        use crate::theme::*;
+        let index = self.pane_for(owner)?;
+        let slot = &self.panes[index].review;
+        let shown = slot.shown()?;
         let face = GhostFace {
-            title: document.title.clone().into(),
-            detail: Some(SharedString::from(document.kind())),
+            title: shown.title.clone().into(),
+            detail: Some("DIFF".into()),
             reader: true,
             size: self.slot_size(leaf),
         };
-        let body = match &document.review {
-            Some(review) => review.clone().into_any_element(),
-            None if renders_markdown(&document) => {
-                pane.document_rich
-                    .file_context(document.path.parent(), &pane.preview);
-                let marks = find.and_then(|find| find.bar.marks(0));
-                div()
-                    .id(("markdown-reader-scroll", leaf.get() as usize))
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&pane.reader_markdown_scroll)
-                    .px(px(crate::theme::TX_INSET_SOLO))
-                    .pt(px(crate::theme::BODY_PAD_T))
-                    .pb(px(crate::theme::HALF_ROW))
-                    .child(crate::rich::document_body(
-                        document.clone(),
-                        pane.document_rich.clone(),
-                        marks,
-                    ))
-                    .into_any_element()
+        let label = div()
+            .min_w_0()
+            .truncate()
+            .text_color(rgb(TEXT_DIM))
+            .child(format!("review \u{b7} {}", shown.title));
+        let close = head_door(
+            "close-review",
+            format!("review-close-{}", owner.get()),
+            crate::icons::CLOSE,
+        )
+        .tooltip(crate::menu::tooltip_with_key(
+            "Close the review",
+            crate::components::bound_chord_in("reader::Close", Some(crate::keymap::READER)),
+        ))
+        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            if let Some(index) = view.pane_for(owner) {
+                view.close_review(index, cx);
             }
-            None => numbered_lines(
-                leaf,
-                &document,
-                pane.reader_scroll.clone(),
-                find.map(|find| &find.bar),
-            ),
-        };
-        // The bar hangs over the body's top right.
-        let body = div()
+        }))
+        .into_any_element();
+        let slot = div()
+            .debug_selector(|| "review-slot".into())
+            .track_focus(&slot.focus)
+            .key_context(crate::keymap::READER)
             .relative()
             .flex()
             .flex_col()
-            .flex_1()
+            .size_full()
             .min_w_0()
             .min_h_0()
-            .child(body)
-            .children(find.map(|find| find.bar.bar()))
-            .into_any_element();
-        let preview = pane.preview.clone();
-        let slot = pane
-            .preview
-            .reader(body, head_drag(leaf, face))?
-            .on_key_down(move |event, window, _| {
-                if event.keystroke.key == "escape" {
-                    preview.close_document(window);
+            .overflow_hidden()
+            .bg(paint::CARD)
+            .font_family(FONT_UI)
+            .text_size(px(FS_UI))
+            .line_height(px(LH_UI))
+            .child(head_drag(leaf, face)(reading_head(label, [close])))
+            .child(shown.view.clone())
+            .on_action(cx.listener(move |view, _: &panel::preview::Close, _, cx| {
+                if let Some(index) = view.pane_for(owner) {
+                    view.close_review(index, cx);
                 }
-            })
-            .on_action(cx.listener(move |view, _: &crate::find::Next, _, cx| {
-                view.step_reader_find(owner, true, cx)
             }))
-            .on_action(cx.listener(move |view, _: &crate::find::Previous, _, cx| {
-                view.step_reader_find(owner, false, cx)
-            }))
-            .on_action(
-                cx.listener(move |view, _: &crate::find::Close, window, cx| {
-                    view.close_reader_find(owner, window, cx)
-                }),
-            )
             .on_action(cx.listener(move |view, _: &crate::review::Close, _, cx| {
-                if let Some(index) = view.index_of(owner) {
-                    view.close_reader(index, cx);
+                if let Some(index) = view.pane_for(owner) {
+                    view.close_review(index, cx);
                 }
             }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.reader_pressed = Some(owner);
-                    if let Some(index) = view.index_of(owner) {
+                    if let Some(index) = view.pane_for(owner) {
                         view.focus_pane(index);
                         cx.notify();
                     }
                 }),
             );
-        // The reader settles in from its Pane's side each time a document
-        // opens in it (keyed by the document, so a new one replays).
-        let key = {
-            use std::hash::{Hash, Hasher};
-            let mut hash = std::collections::hash_map::DefaultHasher::new();
-            document.path.hash(&mut hash);
-            document.line.hash(&mut hash);
-            hash.finish()
+        let reader = match pin {
+            None => div().size_full().flex().child(slot.flex_1()),
+            Some(pin) => div().size_full().relative().overflow_hidden().child(
+                slot.absolute()
+                    .left(px(pin.x))
+                    .top(px(pin.y))
+                    .w(px(pin.w))
+                    .h(px(pin.h)),
+            ),
         };
-        let reader = div().size_full().flex().child(crate::motion::slot_in(
-            SharedString::from(format!("reader-in-{}-{key}", leaf.get())),
-            slot.flex_1(),
-        ));
         Some(self.slot_drop_target(reader, leaf, cx))
-    }
-}
-
-/// A file's lines, numbered (F-14): a `READER_NUMBER_W` column of numbers,
-/// right-aligned and dim, `READER_NUMBER_GAP` before the code, the code in
-/// its syntax colours (`highlight_tokens` for the path's language). The
-/// target line lies on `paint::SELECTED` with its number in `TEXT_STRONG`.
-/// A line wider than the reader is cut at its edge; the one holding the
-/// find's occurrence starts further in when that would lie past it
-/// (`shown_from`). Virtualised: only the rows in view are laid out.
-fn numbered_lines(
-    leaf: ThreadId,
-    document: &crate::attachment_preview::Document,
-    scroll: gpui::UniformListScrollHandle,
-    find: Option<&crate::find::Find>,
-) -> AnyElement {
-    use crate::theme::*;
-    let lines: std::rc::Rc<Vec<String>> =
-        std::rc::Rc::new(document.source.lines().map(str::to_string).collect());
-    let language = ferrite_core::transcript::language_for_path(&document.path);
-    let target = document.line;
-    let count = lines.len();
-    // A find's occurrences: its query, and the line and ordinal it is on.
-    let find = find.map(|find| {
-        (
-            find.query().clone(),
-            find.active().map(|hit| (hit.unit, hit.ordinal)),
-        )
-    });
-    let list = scroll.clone();
-    gpui::uniform_list(
-        ("reader-lines", leaf.get() as usize),
-        count,
-        move |range, _window, _cx| {
-            // The cells a line shows before the reader's edge cuts it.
-            let width = list.0.borrow().base_handle.bounds().size.width;
-            let columns = ((f32::from(width) - READER_NUMBER_W) / CH).max(0.) as usize;
-            range
-                .map(|at| {
-                    let text = lines[at].clone();
-                    let tokens = ferrite_core::transcript::highlight_tokens(language, &text);
-                    let highlights = pane::code(&text, Some(tokens.as_slice()));
-                    let mut washes = Vec::new();
-                    let mut from = 0;
-                    if let Some((query, active)) = &find {
-                        for (ordinal, range) in query.matches(&text).into_iter().enumerate() {
-                            let on = *active == Some((at, ordinal));
-                            if on {
-                                from = shown_from(&text, &range, columns);
-                            }
-                            washes.push((range, if on { FIND_ACTIVE_WASH } else { FIND_WASH }));
-                        }
-                    }
-                    let (text, highlights) =
-                        cut_head(text, crate::find::washed(highlights, &washes), from);
-                    let number = at + 1;
-                    let marked = target == Some(number as u32);
-                    div()
-                        .flex()
-                        .w_full()
-                        .h(px(LH_UI))
-                        .whitespace_nowrap()
-                        .when(marked, |row| row.bg(paint::SELECTED))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_shrink_0()
-                                .justify_end()
-                                .w(px(READER_NUMBER_W))
-                                .pr(px(READER_NUMBER_GAP))
-                                .text_color(rgb(if marked { TEXT_STRONG } else { TEXT_DIM }))
-                                .child(SharedString::from(number.to_string())),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
-                                .text_color(rgb(SYN_PLAIN))
-                                .child(
-                                    gpui::StyledText::new(SharedString::from(text))
-                                        .with_highlights(highlights),
-                                ),
-                        )
-                })
-                .collect::<Vec<_>>()
-        },
-    )
-    .track_scroll(&scroll)
-    .flex_1()
-    .min_h_0()
-    .w_full()
-    .py(px(HALF_ROW))
-    .into_any_element()
-}
-
-/// Where a file's line starts drawing so the occurrence the find is on
-/// (`found`) shows in the `columns` cells before the reader's edge: its
-/// head (0) when it fits, else the occurrence a third of the way in.
-fn shown_from(text: &str, found: &std::ops::Range<usize>, columns: usize) -> usize {
-    if columns == 0 || text[..found.end].chars().count() <= columns {
-        return 0;
-    }
-    let lead = (text[..found.start].chars().count()).saturating_sub(columns / 3);
-    text.char_indices().nth(lead).map_or(0, |(at, _)| at)
-}
-
-/// `text` from byte `from` on, a `…` in place of the head it skips, its
-/// highlights moved with it.
-fn cut_head(
-    text: String,
-    highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
-    from: usize,
-) -> (String, Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>) {
-    if from == 0 {
-        return (text, highlights);
-    }
-    let shift = |at: usize| at.max(from) - from + '…'.len_utf8();
-    let highlights = highlights
-        .into_iter()
-        .filter(|(range, _)| range.end > from)
-        .map(|(range, style)| (shift(range.start)..shift(range.end), style))
-        .collect();
-    (format!("…{}", &text[from..]), highlights)
-}
-
-/// Bring the reader's active occurrence into view: a file's line centred
-/// (the list scrolls itself), or a Markdown occurrence once it has painted
-/// (`settle_markdown_found`). A new query (`start_in_view`) in a Markdown
-/// document is on its first occurrence until that paint says which is the
-/// first in view.
-fn reveal_in_reader(
-    pane: &mut PaneView,
-    document: &crate::attachment_preview::Document,
-    start_in_view: bool,
-) {
-    let Some(find) = &mut pane.reader_find else {
-        return;
-    };
-    let Some(hit) = find.bar.active().copied() else {
-        return;
-    };
-    if renders_markdown(document) {
-        let report = find.bar.report();
-        report.revealed.set(None);
-        report.ahead.set(None);
-        find.reveal = crate::find::REVEAL_FRAMES;
-        find.start_in_view = start_in_view;
-    } else {
-        pane.reader_scroll
-            .scroll_to_item(hit.unit, gpui::ScrollStrategy::Center);
     }
 }
 
@@ -927,67 +841,4 @@ fn land<T: 'static>(
             .ok();
     })
     .detach();
-}
-
-/// Each frame while a Markdown reveal is due: once the active occurrence
-/// has painted, a new query moves to the first occurrence in view (or the
-/// first below it) and paints again; then an occurrence outside the
-/// reader's view scrolls a third of the way down.
-fn settle_markdown_found(find: &mut ReaderFind, scroll: &gpui::ScrollHandle, window: &mut Window) {
-    if find.reveal == 0 {
-        return;
-    }
-    let report = find.bar.report().clone();
-    let Some(found) = report.revealed.get() else {
-        find.reveal -= 1;
-        if find.reveal > 0 {
-            window.request_animation_frame();
-        }
-        return;
-    };
-    let start = std::mem::take(&mut find.start_in_view);
-    let on = find.bar.active().map(|hit| hit.ordinal);
-    if let Some(ahead) = report
-        .ahead
-        .get()
-        .filter(|ahead| start && Some(*ahead) != on)
-    {
-        find.bar.go_to(ahead);
-        report.revealed.set(None);
-        find.reveal = crate::find::REVEAL_FRAMES;
-        window.request_animation_frame();
-        return;
-    }
-    find.reveal = 0;
-    let view = scroll.bounds();
-    if found.top() < view.top() || found.bottom() > view.bottom() {
-        let goal = view.top() + view.size.height / 3.;
-        let offset = scroll.offset();
-        let lowest = -scroll.max_offset().y;
-        let y = (offset.y - (found.top() - goal)).clamp(lowest, px(0.));
-        scroll.set_offset(gpui::point(offset.x, y));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A file's line too long for the reader starts further in on the
-    /// line the find is on, so its occurrence shows: a third of the way
-    /// across, a `…` for the head, the highlights moved with the text.
-    #[test]
-    fn a_long_line_slides_its_occurrence_into_view() {
-        let text = format!("{}needle()", "x".repeat(100));
-        let found = 100..106;
-        assert_eq!(shown_from(&text, &found, 120), 0, "it fits");
-        let from = shown_from(&text, &found, 60);
-        assert_eq!(from, 80, "a third of 60 cells before it");
-        let wash = gpui::HighlightStyle::default();
-        let (shown, highlights) = cut_head(text, vec![(0..4, wash), (100..106, wash)], from);
-        assert_eq!(shown, format!("…{}needle()", "x".repeat(20)));
-        let at = &highlights[0].0;
-        assert_eq!(highlights.len(), 1, "the skipped head's highlight is gone");
-        assert_eq!(&shown[at.clone()], "needle");
-    }
 }
