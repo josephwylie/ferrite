@@ -387,14 +387,14 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     );
 }
 
-/// §5.1.2: the Working view groups its rows as the tree does — under the
-/// Project's plain heading, a home Group's members under the Group's row
-/// with its guide, two levels in — and the Group's chevron folds it there
-/// as in the tree.
+/// §5.1.2: the Parked view groups its rows as the tree does — under the
+/// Project's plain heading, a home Group's parked members under the
+/// Group's row with its guide, two levels in — and the Group's chevron
+/// folds it there as in the tree.
 #[gpui::test]
-fn the_working_view_groups_by_project_then_group(cx: &mut TestAppContext) {
+fn the_parked_view_groups_by_project_then_group(cx: &mut TestAppContext) {
     use crate::theme::{NAV_TITLE_X, NAV_TREE_INDENT};
-    let (mut core, fake) = cockpit("nav-working-tree", 3);
+    let (mut core, _fake) = cockpit("nav-parked-tree", 3);
     let threads = core.threads();
     let group = core
         .apply_group(GroupChange::Create {
@@ -404,21 +404,14 @@ fn the_working_view_groups_by_project_then_group(cx: &mut TestAppContext) {
         .unwrap()
         .group
         .unwrap();
+    for thread in &threads {
+        core.park(*thread).unwrap();
+    }
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    view.update(cx, |view, cx| {
-        view.change_settings(|settings| settings.smart_filtering = true, cx)
-    });
-    for stream in 0..3 {
-        fake.streams.borrow()[stream]
-            .send(SessionEvent::TextDelta {
-                text: "thinking".into(),
-            })
-            .unwrap();
-    }
     tick(cx);
     view.update(cx, |view, cx| {
-        view.show_nav_view(nav::NavView::Working, None, cx)
+        view.show_nav_view(nav::NavView::Parked, None, cx)
     });
     tick(cx);
     let at = |cx: &mut gpui::VisualTestContext, key: String| {

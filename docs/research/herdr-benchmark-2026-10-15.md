@@ -234,8 +234,12 @@ Start with "`ferrited` must already be on the remote PATH". Phone access later
   on screen while the window had focus. Ferrite already tracks `unread` but
   ignores it on the dot (`ferrite/src/cockpit.rs` `thread_status`).
   Glyphs/colors: working ● yellow, blocked ● red, done ✓ teal, idle ○.
-- **Attention sort** toggle (Herdr #318) and **roll-up status** on Project and
-  Group headings (max priority of members).
+- **An always-on Agents panel** (Herdr #318): every agent with its state,
+  whichever space it is in, sorted by space or by priority. #318 made that
+  panel always show all agents; it was not a tree-sort toggle (corrected
+  2026-10-24 — Ferrite's answer is the nav's Attention list, ADR 0015).
+  Also **roll-up status** on Project and Group headings (max priority of
+  members).
 - **Collapsed rail** that keeps numbered rows with dots (Ferrite folds to 0).
 - **Row details:** git ahead/behind (#7, already collected in
   `ferrite-core/src/workspace/mod.rs` but unused), CI glyph, waiting reason

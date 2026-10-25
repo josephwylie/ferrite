@@ -335,10 +335,8 @@ a 10px gap, a label in `TEXT_MUTED`, and a trailing item:
 - **`Tasks`**: only when Projects is live (ADR 0031). It replaces the
   bar's `board_door`, and its trailing text is the `projects_bar_word`
   tally.
-- With `smart_filtering` on, its `working N` and `done N` rows join this
-  group in the same style.
 
-The Parked, Working and Done lists are grouped as the tree is (§5.1.4):
+The Parked list is grouped as the tree is (§5.1.4):
 by Project in creation order (`other` last), then by home Group within
 the Project, with the same indents and guides. Their Project headings
 are plain: the folder and the label, with no fold and no summary. A
@@ -352,6 +350,50 @@ Row states:
 - active view: `SELECTED` fill, `TEXT_STRONG`.
 
 Esc or clicking the active view returns to the tree.
+
+**Attention list (2026-10-24).** Under the views and over `Projects`,
+always on and with no setting, the nav lists the Threads in flight by
+their Attention: herdr's Agents panel (ADR 0015's amendment), without its
+idle agents, which the tree below already lists. It replaces smart
+filtering's `Working` and `Done` views. Three sections, in this order:
+- **`Needs you`**: Attention::Blocked, oldest request first (⌘D's order,
+  `Cockpit::needs_you()`);
+- **`Done`**: a finish whose Notice is not yet seen, newest first;
+- **`Working`**: Main at work, a failing suite, or only Subagents and
+  background tasks; in creation order, so rows never shuffle under the
+  pointer.
+
+There is no idle section and no failed one: failed ranks as idle (ADR
+0015). Each section's head is in §5.1.3's grammar, with its row count at
+the right in tabular figures. A press on the head folds the section to
+that head and its count, a fold held as the tree's are. A section with no
+rows is not drawn. With none at all, the list and the gap under it are
+gone. Each row is one 30px line:
+- the tree row's mark (§6);
+- its title;
+- at the right, what its line 2 would say in a word, in line 2's ink and
+  tabular figures: the request's kind (`approval`), `failing`, the
+  working elapsed time, `background`, or for a finish how long ago it
+  was last used.
+
+A row behaves as its tree row does: the same hover and selection, the
+Thread's context menu, and a drag from it is a drag of the tree row. A
+press lands on the Thread, as a rail cell's does. Renaming is done from
+the tree. Its Thread's own row stays in the tree, which carries no queue.
+
+A finish never leaves from under the operator (CONTEXT.md "Attention
+list"). The focused Thread is held under `Done` when it was listed there
+(opening a done Thread reads its Notice, yet it stays) or when it
+finished while focused (seen at once, it moves from `Working` to `Done`).
+It leaves once focus moves to another Thread. Nothing else is held: a
+state that moves a Thread to another section moves it at once, and an
+interrupt (no Notice) leaves. Rows arrive and leave at
+once. A `ROW_IN` fade was tried and dropped: each of its frames rebuilt
+the nav part alone, and a nav-only rebuild after a finish cost that
+finish's toast the frames of its fade-out (the toast test in
+`render_performance`).
+A view (Needs you, Parked) shows its list in place of the Attention list
+and the tree. The folded rail (§5.1.7) is unchanged.
 
 **5.1.3 Section heading (26).** `Projects` in 12/500 `TEXT_DIM`, with a
 22px `+` icon button (new Project, the same act as today's) at the right.
