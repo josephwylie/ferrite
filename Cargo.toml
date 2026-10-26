@@ -57,7 +57,7 @@ taffy = { path = "vendor/taffy" }
 [profile.release]
 lto = "thin"
 
-# Local installs (scripts/install-app.sh, unsigned): release speed without
+# Local installs (scripts/install-app.sh but for --dmg): release speed without
 # the cross-crate ThinLTO pass, which took most of a rebuild.
 [profile.local]
 inherits = "release"
