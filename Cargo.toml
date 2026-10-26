@@ -56,3 +56,17 @@ taffy = { path = "vendor/taffy" }
 
 [profile.release]
 lto = "thin"
+
+# Local installs (scripts/install-app.sh but for --dmg): release speed without
+# the cross-crate ThinLTO pass, which took most of a rebuild.
+[profile.local]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true
+
+# Optimise dependencies (the GPUI stack) in dev and test builds: built once,
+# they halve the test suites' run time. Workspace crates stay unoptimised,
+# so an edit rebuilds as fast as before.
+[profile.dev.package."*"]
+opt-level = 2

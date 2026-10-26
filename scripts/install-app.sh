@@ -27,6 +27,9 @@
 # where the Server and the board find it and hand it to agents and hooks
 # (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is.
 #
+# --dmg (the published release) builds with the release profile; installs
+# here use the `local` profile (Cargo.toml), which skips ThinLTO.
+#
 #   MACOS_LOCAL_IDENTITY=<name>   sign local builds with this keychain
 #                    identity, so macOS's privacy grants outlive a rebuild
 #   --bundle-only    build the .app in the target dir, don't install it
@@ -82,8 +85,13 @@ if [ -z "${FERRITE_NO_CEF:-}" ]; then
   FEATURES=(--features cef)
 fi
 
-cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite "${FEATURES[@]+"${FEATURES[@]}"}"
-cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p herdr-projects --bin ferrite-projects
+PROFILE=local
+if [ -n "$DMG" ]; then
+  PROFILE=release
+fi
+
+cargo build --profile "$PROFILE" --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite "${FEATURES[@]+"${FEATURES[@]}"}"
+cargo build --profile "$PROFILE" --locked --manifest-path "$ROOT/Cargo.toml" -p herdr-projects --bin ferrite-projects
 
 metadata="$(cargo metadata --no-deps --format-version 1 --manifest-path "$ROOT/Cargo.toml")"
 TARGET="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
@@ -91,8 +99,8 @@ TARGET="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
 VERSION="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
   'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ferrite"))')"
 
-BIN="$TARGET/release/ferrite"
-PROJECTS_BIN="$TARGET/release/ferrite-projects"
+BIN="$TARGET/$PROFILE/ferrite"
+PROJECTS_BIN="$TARGET/$PROFILE/ferrite-projects"
 for built in "$BIN" "$PROJECTS_BIN"; do
   if [ ! -x "$built" ]; then
     echo "no release binary at $built" >&2
@@ -100,7 +108,7 @@ for built in "$BIN" "$PROJECTS_BIN"; do
   fi
 done
 
-BUILT="$TARGET/release/bundle/macos/$NAME.app"
+BUILT="$TARGET/$PROFILE/bundle/macos/$NAME.app"
 rm -rf "$BUILT"
 mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
 cp "$BIN" "$BUILT/Contents/MacOS/ferrite"
@@ -108,7 +116,7 @@ cp "$PROJECTS_BIN" "$BUILT/Contents/MacOS/ferrite-projects"
 
 # iconutil expects this exact set of filenames. Generate the platform resource
 # from the checked-in 1254px source so the Dock gets sharp 1x and 2x variants.
-ICONSET="$TARGET/release/bundle/macos/Ferrite.iconset"
+ICONSET="$TARGET/$PROFILE/bundle/macos/Ferrite.iconset"
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
@@ -247,7 +255,7 @@ else
     # Chromium's helpers JIT (V8) and load the framework: under the
     # hardened runtime they need these entitlements. The renderers stay in
     # Chromium's own sandbox regardless.
-    ENTITLEMENTS="$TARGET/release/bundle/macos/helper.entitlements"
+    ENTITLEMENTS="$TARGET/$PROFILE/bundle/macos/helper.entitlements"
     cat >"$ENTITLEMENTS" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -278,7 +286,7 @@ fi
 
 if [ "$BUNDLE_ONLY" = true ]; then
   if [ -n "$DMG" ]; then
-    DMG_ROOT="$TARGET/release/bundle/dmg"
+    DMG_ROOT="$TARGET/$PROFILE/bundle/dmg"
     rm -rf "$DMG_ROOT"
     mkdir -p "$DMG_ROOT"
     ditto "$BUILT" "$DMG_ROOT/$NAME.app"
