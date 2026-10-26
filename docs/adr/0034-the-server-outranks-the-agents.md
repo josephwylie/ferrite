@@ -63,8 +63,9 @@ whole machine: P-cores, unthrottled disk.
     inherited across fork and exec. Autogroup weighs nice only within a
     session, and agents share the Server's session. Nothing more (cgroups,
     `SCHED_BATCH`) until a machine shows the need.
-- **`spawn::serve_the_operator()` on the pump and on each window
-  connection's reader and writer threads.** On macOS it requests
+- **`spawn::serve_the_operator()` on the pump, on each window
+  connection's reader and writer threads, and on the threads that read
+  for a window off the pump (a Thread's history, a review's git).** On macOS it requests
   USER_INITIATED: the pump's work is replies the operator waits for, not
   frames. A thread does not inherit its creator's QoS there, so each of
   these threads asks for its own. On Windows the threads run at

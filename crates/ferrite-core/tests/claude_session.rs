@@ -230,7 +230,7 @@ fn what_a_session_starts_runs_below_the_server() {
     } else {
         // SAFETY: getpriority has no preconditions.
         let ours = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
-        assert!(reported > ours, "nice {reported} against {ours}");
+        assert_eq!(reported, (ours + 10).min(19), "against {ours}");
     }
 }
 

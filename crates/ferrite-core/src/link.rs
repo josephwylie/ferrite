@@ -641,6 +641,7 @@ impl Connection {
         let spawned = std::thread::Builder::new()
             .name(format!("ferrite-history-{thread}"))
             .spawn(move || {
+                crate::spawn::serve_the_operator();
                 let _reading = READERS.take();
                 let _ = read(&mut |message| {
                     pieces

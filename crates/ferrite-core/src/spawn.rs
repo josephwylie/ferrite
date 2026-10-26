@@ -88,7 +88,8 @@ pub fn agent(program: impl AsRef<OsStr>) -> Command {
 
 /// Run the calling thread as one the operator waits on: the Server's pump
 /// and the threads that carry a window's commands to it and its replies
-/// back. The counterpart of `agent`: what the agents start runs below, so
+/// back, and the reads it answers a window with off the pump. The
+/// counterpart of `agent`: what the agents start runs below, so
 /// this wins the CPU when the machine is full (ADR 0034). Best effort; a
 /// thread left where it was runs as it did before.
 ///
@@ -203,17 +204,18 @@ mod tests {
 
     /// What a process the agent's own child starts reports about its class:
     /// the agent's builds and tests are its grandchildren.
-    fn grandchilds_class(report: &str) -> String {
+    fn grandchild_class(report: &str) -> String {
         #[cfg(unix)]
         let mut command = agent("/bin/sh");
         #[cfg(unix)]
         command.args(["-c", &format!("/bin/sh -c '{report}'")]);
         #[cfg(windows)]
-        let mut command = agent("cmd");
+        let mut command = agent("powershell");
         #[cfg(windows)]
         command.args([
-            "/c",
-            &format!("powershell -NoProfile -Command \"{report}\""),
+            "-NoProfile",
+            "-Command",
+            &format!("powershell -NoProfile -Command '{report}'"),
         ]);
         let output = command.output().expect("the agent child runs");
         assert!(output.status.success(), "{output:?}");
@@ -225,7 +227,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn an_agents_descendants_run_clamped_to_utility() {
-        let priority: u32 = grandchilds_class("ps -o pri= -p $$").parse().unwrap();
+        let priority: u32 = grandchild_class("ps -o pri= -p $$").parse().unwrap();
         assert!(priority <= 20, "priority {priority}");
     }
 
@@ -233,7 +235,7 @@ mod tests {
     #[test]
     fn an_agents_descendants_run_niced_below_the_server() {
         let ours = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
-        let theirs: i32 = grandchilds_class("nice").parse().unwrap();
+        let theirs: i32 = grandchild_class("nice").parse().unwrap();
         assert_eq!(theirs, (ours + AGENT_NICE).min(19));
     }
 
@@ -241,7 +243,7 @@ mod tests {
     #[test]
     fn an_agents_descendants_run_below_normal() {
         assert_eq!(
-            grandchilds_class("(Get-Process -Id $PID).PriorityClass"),
+            grandchild_class("(Get-Process -Id $PID).PriorityClass"),
             "BelowNormal"
         );
     }
