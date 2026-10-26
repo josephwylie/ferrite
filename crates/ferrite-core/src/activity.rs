@@ -966,8 +966,8 @@ pub struct Activity {
     aliases: BTreeMap<AgentKey, AgentKey>,
     /// Main's subagents, working first, each group in discovery order.
     order: Vec<AgentKey>,
-    /// An agent arrived or left, or a parent or alias moved, since the order
-    /// was last settled. Set only where the tree changes.
+    /// An agent arrived, a parent or alias moved, or a reset emptied the tree
+    /// since the order was last settled. Set only where the tree changes.
     tree_changed: bool,
     pending: Vec<PendingDecision>,
     limits: ActivityLimits,
@@ -1345,7 +1345,11 @@ impl Activity {
                     return update;
                 }
                 let agent = self.agents.get_mut(&key).expect("ensured child");
-                if let Some(parent) = &info.parent {
+                if let Some(parent) = info
+                    .parent
+                    .as_ref()
+                    .filter(|parent| agent.info.parent.as_ref() != Some(*parent))
+                {
                     agent.info.parent = Some(parent.clone());
                     self.tree_changed = true;
                 }
@@ -1942,8 +1946,8 @@ impl Activity {
 
     /// Re-sort Main's subagents if what the order depends on moved since it
     /// was last settled — the tree, or an agent's working flag — and report
-    /// whether the order changed. Most inputs move neither, so replaying a
-    /// Thread costs its inputs, not its inputs times its agents.
+    /// whether the order changed. Most inputs move neither, so they cost a
+    /// scan of the agents' working flags rather than a sort.
     fn settle_order(&mut self) -> bool {
         let stale = std::mem::take(&mut self.tree_changed)
             || self
