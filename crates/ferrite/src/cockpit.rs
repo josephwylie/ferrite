@@ -7526,12 +7526,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.board_gives_way();
-        // The Thread the press came from, if it came from one: the draft
-        // starts in that Thread's Project — the one the operator is in.
-        let pressed_on = match placement {
+        // The draft starts in the Project of the Thread the operator is in:
+        // the focused one, else the one focus last left.
+        let current = match placement {
             DraftPlacement::NewGroupWith(thread) => Some(thread),
-            _ => self.focused_thread(),
-        };
+            _ => self.cockpit.roster().current_thread(),
+        }
+        .and_then(|thread| self.cockpit.project_id(thread));
         // A second press with a draft already up must not stack another:
         // focus the standing draft and re-aim it at the caller's target.
         // A draft mid-bootstrap is on its way out and does not count.
@@ -7540,14 +7541,10 @@ impl CockpitView {
                 .draft()
                 .is_some_and(|draft| !self.cockpit.draft_starting(draft))
         }) {
-            // A named Project, or a press from a Thread, re-aims the
-            // standing draft as well: the chip must not sit there naming
-            // the Project of an earlier press while the operator has just
-            // asked for another. A press on the draft itself keeps its chip.
-            let aim = chosen.or_else(|| {
-                pressed_on
-                    .and_then(|thread| self.nav_filter.or_else(|| self.cockpit.project_id(thread)))
-            });
+            // The standing draft is re-aimed at the Project as well: the
+            // chip must not sit there naming the Project of an earlier
+            // press while the operator is in another.
+            let aim = chosen.or(current);
             let identity = self.panes[index].identity;
             if let Some(draft) = self.panes[index].draft_mut() {
                 draft.binding.choose_target(target);
@@ -7574,26 +7571,13 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        // The project starts where the operator is looking, unless the
-        // caller named one outright. A chosen filter
-        // is the most explicit statement of that there is — the operator
-        // named a Project and is looking at nothing else — so a draft
-        // opened under one starts on it, with its directories, rather than
-        // on the launch project. `All Projects` names nothing, and the
-        // draft starts in the pressed-on Thread's Project, else a Group's
-        // own, and only then where the last draft ran.
+        // A Project the caller named outright wins, then the current
+        // Thread's. With no Thread to go by, a chosen nav filter names the
+        // Project the operator is looking at, and only then does the draft
+        // start where the last one ran.
         let project = chosen
+            .or(current)
             .or(self.nav_filter)
-            .or_else(|| pressed_on.and_then(|thread| self.cockpit.project_id(thread)))
-            .or_else(|| match self.cockpit.roster().view() {
-                View::Group(group) => self
-                    .cockpit
-                    .groups()
-                    .get(group)
-                    .and_then(|group| group.members.first())
-                    .and_then(|thread| self.cockpit.project_id(*thread)),
-                View::Solo => None,
-            })
             .or(self.launch_project);
         let Some(project) = project else {
             self.open_project_creator(cx);
@@ -15334,12 +15318,12 @@ mod tests {
         );
     }
 
-    /// A draft opened while the nav names a Project starts on that Project,
-    /// so the Thread it becomes runs in that Project's directories rather
-    /// than the launch one's.
+    /// With no Thread to go by, a draft opened while the nav names a
+    /// Project starts on that Project, so the Thread it becomes runs in
+    /// that Project's directories rather than the launch one's.
     #[gpui::test]
     fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
-        let (mut core, _) = cockpit("draft-follows-filter", 1);
+        let (mut core, _) = cockpit("draft-follows-filter", 0);
         let repo = repo_in(&scratch("draft-follows-filter-repo"));
         let chosen = core.register_project(&repo).unwrap();
         let extra = scratch("draft-follows-filter-extra");
@@ -20544,9 +20528,32 @@ mod tests {
         });
     }
 
+    /// The Thread cmd-t is pressed on outranks the nav filter: the operator
+    /// is in that Thread's Project, whatever the nav is narrowed to.
+    #[gpui::test]
+    fn cmd_t_from_a_thread_outranks_the_nav_filter(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("cmd-t-over-filter", 1);
+        let here = core.project_id(core.threads()[0]).expect("a bound Thread");
+        let filtered = core
+            .register_project(&std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.nav_filter = Some(filtered));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-t");
+        view.read_with(cx, |view, _| {
+            let draft = view.panes[view.focused()]
+                .draft()
+                .expect("cmd-t opened a draft");
+            assert_eq!(draft.binding.project(), here);
+        });
+    }
+
     /// A draft left standing in another Project follows cmd-t to the
-    /// Thread it was pressed on; pressed on the draft itself, the draft
-    /// keeps its Project.
+    /// Thread the operator is in: the one it was pressed on, or, pressed on
+    /// the draft itself, the Thread focus last left.
     #[gpui::test]
     fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("cmd-t-standing-draft", 1);
@@ -20572,12 +20579,13 @@ mod tests {
         cx.simulate_keystrokes("cmd-t");
         assert_eq!(
             project(&view, cx),
-            elsewhere,
-            "pressed on the draft, it stays"
+            here,
+            "pressed on the draft, it follows the Thread focus last left"
         );
 
-        view.update(cx, |view, _| {
-            view.cockpit.focus(PaneIdentity::Thread(thread))
+        view.update(cx, |view, cx| {
+            view.open_draft_in_project(elsewhere, cx);
+            view.cockpit.focus(PaneIdentity::Thread(thread));
         });
         tick(cx);
         cx.simulate_keystrokes("cmd-t");

@@ -101,6 +101,9 @@ pub struct Roster {
     /// store keeps no park order, so a relaunch forgets it and reopen falls
     /// back to creation order (accepted v1 behavior).
     park_order: Vec<ThreadId>,
+    /// The Thread focus last left: while a draft holds focus, the operator
+    /// is still in that Thread's Project.
+    left_thread: Option<ThreadId>,
     drafts: BTreeMap<DraftId, DraftScope>,
     next_draft: u64,
 }
@@ -123,6 +126,14 @@ impl Roster {
 
     pub fn focused_thread(&self) -> Option<ThreadId> {
         self.focused().and_then(PaneIdentity::thread)
+    }
+
+    /// The Thread the operator is in: the focused one, else the open one
+    /// focus last left.
+    pub fn current_thread(&self) -> Option<ThreadId> {
+        self.focused_thread().or(self
+            .left_thread
+            .filter(|thread| self.pane_of(*thread).is_some()))
     }
 
     pub fn view(&self) -> View {
@@ -225,6 +236,9 @@ impl Roster {
     }
 
     pub(crate) fn focus_index(&mut self, index: usize) {
+        if let Some(thread) = self.focused_thread() {
+            self.left_thread = Some(thread);
+        }
         self.focused = index.min(self.panes.len().saturating_sub(1));
         if self.fullscreen.is_some() {
             self.fullscreen = self.focused();
