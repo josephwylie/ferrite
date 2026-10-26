@@ -45,7 +45,10 @@ mod commands;
 mod history;
 mod launch_args;
 mod queue;
+mod threads;
 mod windows;
+
+use threads::Threads;
 
 pub use windows::WindowId;
 
@@ -416,6 +419,10 @@ struct Awaiting {
 }
 
 impl Awaiting {
+    fn is_empty(&self) -> bool {
+        self.prompts.is_empty() && !self.asks()
+    }
+
     /// Whether anything besides prompts waits.
     fn asks(&self) -> bool {
         !self.controls.is_empty() || self.search.is_some()
@@ -644,6 +651,11 @@ struct Thread {
     /// (`thread.start`). Every Session of that Provider starts with them;
     /// saved, so a revive does too (`launch_args`).
     agent_args: Option<launch_args::LaunchArgs>,
+    /// The Project it was created in: a header fact no amendment changes.
+    project: Option<ProjectId>,
+    /// Its state may differ from what its windows were last told
+    /// (`Threads`).
+    state_changed: bool,
 }
 
 impl Thread {
@@ -705,6 +717,8 @@ impl Thread {
             suggestion_revision: 0,
             tuning: None,
             agent_args: None,
+            project: None,
+            state_changed: true,
         };
         if let Some(notice) = state.native_queue.take_unreadable() {
             state.apply(Input::Notice(notice));
@@ -1077,7 +1091,7 @@ impl Thread {
 }
 
 pub struct Engine {
-    threads: BTreeMap<ThreadId, Thread>,
+    threads: Threads,
     store: Store,
     /// The workspace registry (#29): registered projects and their
     /// worktrees, living beside the Thread logs. The selector reads it; the
@@ -1148,6 +1162,9 @@ pub struct Engine {
     removed_worktrees: Vec<PathBuf>,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
+    /// How many Thread states `publish` has built (`states_built`).
+    #[cfg(test)]
+    states_built: usize,
 }
 
 /// A boot's identity, unlike every other boot's.
@@ -1171,7 +1188,7 @@ impl Engine {
         let model_cache = crate::providers::models::ModelCache::load(store.dir());
         let limit_cache = crate::providers::limits::LimitCache::load(store.dir());
         Ok(Self {
-            threads: BTreeMap::new(),
+            threads: Threads::default(),
             store,
             registry,
             groups,
@@ -1209,6 +1226,8 @@ impl Engine {
             removed_worktrees: Vec::new(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
+            #[cfg(test)]
+            states_built: 0,
         })
     }
 
@@ -1427,9 +1446,10 @@ impl Engine {
     /// and its next use starts a Session on the same conversation.
     fn end_unused_sessions(&mut self) {
         let now = crate::clock::instant();
-        for (id, thread) in &mut self.threads {
+        for (id, thread) in self.threads.walk_mut() {
             if thread.outlived_use(now, self.stale_sessions.contains(id)) {
                 crate::log!("thread {id}: session ended, settled");
+                thread.state_changed = true;
                 thread.end_session();
                 self.stale_sessions.remove(id);
             }
@@ -1637,6 +1657,7 @@ impl Engine {
         );
         if let Some(state) = self.threads.get_mut(&id) {
             state.agent_args = agent_args;
+            state.project = Some(project);
         }
         self.note_open(id);
         Ok(id)
@@ -1714,6 +1735,7 @@ impl Engine {
             .is_some_and(SessionLifecycle::is_starting)
         {
             self.bootstraps.insert(id, pending);
+            self.threads.restate(id);
         } else if let Err(error) = self.finish_bootstrap(id, &pending) {
             self.rollback_bootstrap(id)?;
             return Err(error);
@@ -2102,8 +2124,12 @@ impl Engine {
         self.try_project_id(thread).ok().flatten()
     }
 
+    /// An open Thread's from memory; a parked one's from its log.
     pub fn try_project_id(&self, thread: ThreadId) -> Result<Option<ProjectId>, LoadError> {
-        self.store.peek(thread).map(|meta| meta.project_id)
+        match self.threads.get(&thread) {
+            Some(state) => Ok(state.project),
+            None => self.store.peek(thread).map(|meta| meta.project_id),
+        }
     }
 
     /// Delete a Thread for good: its log and directory. Registered project
@@ -2281,6 +2307,7 @@ impl Engine {
         });
         let mut workspace = snapshot.workspace();
         let session_project_root = snapshot.session_project_root();
+        let project = snapshot.project_id();
         let model = snapshot.model();
         let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
@@ -2336,6 +2363,7 @@ impl Engine {
             self.store.dir().join(thread.to_string()),
         );
         state.title = title;
+        state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
             state.apply(Input::Notice(format!(
@@ -2973,11 +3001,20 @@ impl Engine {
     fn advance_startups(&mut self) -> Vec<PaneUpdate> {
         let mut changed = Vec::new();
         let ids: Vec<_> = self.threads.keys().copied().collect();
+        // Only a Thread with something under way is touched: the rest are
+        // as their windows were told (`Threads`).
         for id in ids {
-            let replacement = self
+            let replacing = self
                 .threads
-                .get_mut(&id)
-                .and_then(|state| state.replacement.take());
+                .get(&id)
+                .is_some_and(|state| state.replacement.is_some());
+            let replacement = if replacing {
+                self.threads
+                    .get_mut(&id)
+                    .and_then(|state| state.replacement.take())
+            } else {
+                None
+            };
             if let Some(mut replacement) = replacement {
                 // A handover whose exchanges are being read was ready already.
                 let ready = if replacement.exchanges.is_some() {
@@ -3028,12 +3065,14 @@ impl Engine {
                 }
                 changed.push(id);
             }
-            let state = self.threads.get_mut(&id).expect("exists");
-            let starting = state
-                .session
-                .as_ref()
-                .is_some_and(SessionLifecycle::is_starting);
+            let starting = self.threads.get(&id).is_some_and(|state| {
+                state
+                    .session
+                    .as_ref()
+                    .is_some_and(SessionLifecycle::is_starting)
+            });
             if starting {
+                let state = self.threads.get_mut(&id).expect("exists");
                 let result = state.session.as_mut().expect("exists").poll();
                 if matches!(result, Ok(false)) {
                     continue;
@@ -3086,11 +3125,12 @@ impl Engine {
                 }
                 changed.push(id);
             }
-            let Some(state) = self.threads.get_mut(&id) else {
+            if self
+                .threads
+                .get(&id)
+                .is_none_or(|state| state.awaiting.is_empty())
+            {
                 continue;
-            };
-            if let Some(session) = state.session.as_ref().and_then(SessionLifecycle::session) {
-                state.announced.ask(session);
             }
             if self.serve_awaiting(id) {
                 changed.push(id);
@@ -3136,8 +3176,13 @@ impl Engine {
         let mut ended: Vec<ThreadId> = Vec::new();
         frame.extend(self.advance_history());
         let mut history_reloads = Vec::new();
-        for (id, thread) in &mut self.threads {
+        // A Thread is told again when the walk hears from its Session or
+        // says its Pane changed (below, after the walk).
+        for (id, thread) in self.threads.walk_mut() {
             let mut update = PaneUpdate::new(*id);
+            if let Some(session) = thread.session.as_ref().and_then(SessionLifecycle::session) {
+                thread.state_changed |= thread.announced.ask(session);
+            }
             // Fold answers from the previous frame before asking the Lexer
             // for new work; highlighted Blocks remain an explicit next-frame wake.
             let highlighted = thread.activity.apply(ActivityInput::DrainHighlights);
@@ -3199,6 +3244,7 @@ impl Engine {
                 else {
                     break;
                 };
+                thread.state_changed = true;
                 if let SessionEvent::Queue(event) = event {
                     let change = thread.native_queue.observe(event);
                     if let Some(text) = change.prompt {
@@ -3478,6 +3524,9 @@ impl Engine {
                     state.history_errors.insert(key, error.to_string());
                 }
             }
+        }
+        for update in &frame {
+            self.threads.restate(update.thread);
         }
         frame
     }
@@ -4521,6 +4570,13 @@ impl Engine {
         &self.boot_id
     }
 
+    /// How many Thread states have been built to publish: one per Thread
+    /// that may have changed, never one per Thread open.
+    #[cfg(test)]
+    pub(crate) fn states_built(&self) -> usize {
+        self.states_built
+    }
+
     /// The open Threads, in the order they opened.
     pub fn open_threads(&self) -> &[ThreadId] {
         &self.open
@@ -4538,8 +4594,10 @@ impl Engine {
         self.count_attention();
         self.forget_closed_composing();
         let now = protocol::ms_since(crate::clock::instant(), self.boot);
-        for (&id, thread) in &mut self.threads {
+        for (&id, thread) in self.threads.walk_mut() {
             let published = self.published.entry(id).or_default();
+            // What its Activity applied may change what it is doing.
+            thread.state_changed |= thread.activity.reset || !thread.activity.applied.is_empty();
             if std::mem::take(&mut thread.activity.reset) {
                 // The reset takes a `seq` of its own, so a client that saw
                 // it is told apart from one that did not.
@@ -4592,11 +4650,18 @@ impl Engine {
         }
         self.publish_digests();
         self.let_go_unused();
+        #[cfg(debug_assertions)]
+        self.check_told();
         let states: Vec<_> = self
             .threads
-            .iter()
-            .map(|(&id, _)| self.thread_state(id))
+            .take_changed()
+            .into_iter()
+            .map(|id| self.thread_state(id))
             .collect();
+        #[cfg(test)]
+        {
+            self.states_built += states.len();
+        }
         for state in states {
             let published = self.published.entry(state.thread).or_default();
             if published.state.as_ref() != Some(&state) {
@@ -4670,6 +4735,23 @@ impl Engine {
         self.publish_parked();
     }
 
+    /// Every Thread not marked changed is as its windows were last told:
+    /// a change made without saying so (`Threads`) would never reach them.
+    #[cfg(debug_assertions)]
+    fn check_told(&self) {
+        for (&id, thread) in self.threads.iter() {
+            if thread.state_changed {
+                continue;
+            }
+            let told = self.published.get(&id).and_then(|told| told.state.as_ref());
+            debug_assert_eq!(
+                told,
+                Some(&self.thread_state(id)),
+                "thread {id} changed without saying so"
+            );
+        }
+    }
+
     /// Let go of the Activity of each Thread with no Session that no window
     /// watches, once at rest and its digest says so: that is all anyone
     /// reads of it until it is used (`hold`). Only while a Server says what
@@ -4679,7 +4761,7 @@ impl Engine {
             return;
         };
         let now = crate::clock::instant();
-        for (id, thread) in &mut self.threads {
+        for (id, thread) in self.threads.walk_mut() {
             let current = self
                 .published
                 .get(id)
@@ -4697,6 +4779,7 @@ impl Engine {
                 thread.activity.forget();
                 thread.history.clear();
                 thread.held = false;
+                thread.state_changed = true;
             }
         }
     }
@@ -4894,6 +4977,7 @@ impl Engine {
         match self.bootstraps.get_mut(&thread) {
             Some(pending) => {
                 pending.draft = Some(draft);
+                self.threads.restate(thread);
                 Ok(None)
             }
             None => Ok(Some(thread)),

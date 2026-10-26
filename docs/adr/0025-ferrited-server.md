@@ -146,6 +146,16 @@ messages into outboxes. At boot it revives every Thread marked open (the
 existing `.open` markers, staggered as in ADR 0018), so after a crash or
 reboot the Threads resume without a window.
 
+What the pump publishes costs what changed, not what is open (amended
+2026-10-26). Every change to an open Thread goes through the Engine's
+`Threads`, which marks it; a publish builds the `ThreadState` of the
+marked Threads alone, and sends one that differs from the last it sent.
+The walks that look at every Thread on every pass mark only the Threads
+they change. A debug build checks each publish that every unmarked
+Thread still reads as it was last sent. An open Thread's Project is
+answered from memory, never from its log: it is a header fact no
+amendment changes.
+
 **Stopping.** SIGTERM and SIGINT set a flag the pump sees. On Windows so
 do a console's Ctrl+C and close (a Server run by hand) and `WM_ENDSESSION`
 at logout and shutdown: the Server the app starts has no console, so it
