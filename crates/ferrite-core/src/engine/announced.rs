@@ -97,17 +97,19 @@ impl Announced {
     }
 
     /// Take what a ready Session offers without saying it: its permission
-    /// modes and controls.
-    pub fn ask(&mut self, session: &dyn Session) {
+    /// modes and controls. Answers whether that changed anything.
+    pub fn ask(&mut self, session: &dyn Session) -> bool {
         let said = &mut self.said;
         let controls: Vec<ControlKind> = CONTROLS
             .into_iter()
             .filter(|kind| session.supports_control(*kind))
             .collect();
         let modes = replace(&mut said.permission_modes, &session.permission_modes());
-        if replace(&mut said.controls, &controls) | modes {
+        let changed = replace(&mut said.controls, &controls) | modes;
+        if changed {
             self.save();
         }
+        changed
     }
 
     /// Another Provider's agent said all this: none of it holds for the
