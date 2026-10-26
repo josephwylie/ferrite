@@ -382,6 +382,7 @@ impl Server {
     }
 
     fn serve(mut self, hear: Receiver<Heard>) -> i32 {
+        crate::spawn::serve_the_operator();
         loop {
             let wait = if self.engine.threads().is_empty() {
                 IDLE

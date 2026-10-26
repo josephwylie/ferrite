@@ -9,6 +9,8 @@
 		<string>/Applications/Ferrite &amp; Co.app/Contents/MacOS/ferrite</string>
 		<string>server</string>
 	</array>
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>

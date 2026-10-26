@@ -306,8 +306,6 @@ impl CodexSession {
         command
             .arg("app-server")
             .args(&config.args)
-            .no_console_window()
-            .agent_environment()
             .envs(config.env.iter().cloned());
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the

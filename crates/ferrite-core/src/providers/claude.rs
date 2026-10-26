@@ -242,10 +242,7 @@ impl ClaudeSession {
         check_version(&program)?;
 
         let mut command = super::launched(&config.launcher, &program);
-        command
-            .no_console_window()
-            .agent_environment()
-            .envs(config.env.iter().cloned());
+        command.envs(config.env.iter().cloned());
         command.args([
             "-p",
             "--input-format",

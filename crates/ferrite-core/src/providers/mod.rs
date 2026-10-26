@@ -62,15 +62,16 @@ pub(crate) fn spawnable_program(program: &str) -> String {
 
 /// The command that runs `program` through `launcher` (`bwrap … --`,
 /// `thread.start --launcher`): the launcher's words, then the program;
-/// the program itself without one. Its arguments follow.
+/// the program itself without one. Its arguments follow. An agent's
+/// child (`spawn::agent`), whichever runs first.
 pub(crate) fn launched(launcher: &[String], program: &str) -> std::process::Command {
     match launcher.split_first() {
         Some((first, rest)) => {
-            let mut command = std::process::Command::new(first);
+            let mut command = crate::spawn::agent(first);
             command.args(rest).arg(program);
             command
         }
-        None => std::process::Command::new(program),
+        None => crate::spawn::agent(program),
     }
 }
 

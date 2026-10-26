@@ -5,11 +5,10 @@
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStdin, ChildStdout, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use crate::{store::Provider, ModelInfo, SessionCommand};
 use serde_json::{json, Value};
 
@@ -52,7 +51,7 @@ fn probe<T: Send + 'static>(
     timeout: Duration,
     query: fn(ChildStdin, BufReader<ChildStdout>, Provider, &Path) -> io::Result<T>,
 ) -> io::Result<T> {
-    let mut command = Command::new(super::spawnable_program(program));
+    let mut command = crate::spawn::agent(super::spawnable_program(program));
     match provider {
         Provider::Codex => {
             command.arg("app-server");
@@ -69,8 +68,6 @@ fn probe<T: Send + 'static>(
         }
     }
     let mut child = command
-        .no_console_window()
-        .agent_environment()
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
