@@ -7334,8 +7334,8 @@ impl CockpitView {
 
     /// cmd-t's answer (#29): a draft Pane — a Composer, the pre-prompt
     /// band, and nothing durable until the first send bootstraps a Thread.
-    /// The provider follows the Pane the operator is on; the project starts
-    /// on the launch project; `target` is the caller's (cmd-shift-n drafts
+    /// The provider and the project follow the Pane the operator is on;
+    /// `target` is the caller's (cmd-shift-n drafts
     /// straight onto "new worktree").
     fn open_draft(&mut self, target: DraftTarget, cx: &mut Context<Self>) {
         self.open_draft_with_placement(target, DraftPlacement::Loose, cx);
@@ -7526,6 +7526,12 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.board_gives_way();
+        // The Thread the press came from, if it came from one: the draft
+        // starts in that Thread's Project — the one the operator is in.
+        let pressed_on = match placement {
+            DraftPlacement::NewGroupWith(thread) => Some(thread),
+            _ => self.focused_thread(),
+        };
         // A second press with a draft already up must not stack another:
         // focus the standing draft and re-aim it at the caller's target.
         // A draft mid-bootstrap is on its way out and does not count.
@@ -7534,14 +7540,19 @@ impl CockpitView {
                 .draft()
                 .is_some_and(|draft| !self.cockpit.draft_starting(draft))
         }) {
+            // A named Project, or a press from a Thread, re-aims the
+            // standing draft as well: the chip must not sit there naming
+            // the Project of an earlier press while the operator has just
+            // asked for another. A press on the draft itself keeps its chip.
+            let aim = chosen.or_else(|| {
+                pressed_on
+                    .and_then(|thread| self.nav_filter.or_else(|| self.cockpit.project_id(thread)))
+            });
             let identity = self.panes[index].identity;
             if let Some(draft) = self.panes[index].draft_mut() {
                 draft.binding.choose_target(target);
-                // A named Project re-aims the standing draft as well: the
-                // chip must not sit there naming the Project of an earlier
-                // press while the operator has just asked for another.
-                if let Some(chosen) = chosen {
-                    draft.binding.choose_project(chosen);
+                if let Some(aim) = aim {
+                    draft.binding.choose_project(aim);
                     draft.error = None;
                 }
             }
@@ -7569,31 +7580,21 @@ impl CockpitView {
         // named a Project and is looking at nothing else — so a draft
         // opened under one starts on it, with its directories, rather than
         // on the launch project. `All Projects` names nothing, and the
-        // draft falls back to a Group's own Project.
-        let project = match chosen.or(self.nav_filter) {
-            Some(project) => Some(project),
-            None => match placement {
-                DraftPlacement::NewGroupWith(thread) => {
-                    self.cockpit.project_id(thread).or(self.launch_project)
-                }
-                _ => match self.cockpit.roster().view() {
-                    View::Group(group) => self
-                        .cockpit
-                        .roster()
-                        .focused_thread()
-                        .and_then(|thread| self.cockpit.project_id(thread))
-                        .or_else(|| {
-                            self.cockpit
-                                .groups()
-                                .get(group)
-                                .and_then(|group| group.members.first())
-                                .and_then(|thread| self.cockpit.project_id(*thread))
-                        })
-                        .or(self.launch_project),
-                    View::Solo => self.launch_project,
-                },
-            },
-        };
+        // draft starts in the pressed-on Thread's Project, else a Group's
+        // own, and only then where the last draft ran.
+        let project = chosen
+            .or(self.nav_filter)
+            .or_else(|| pressed_on.and_then(|thread| self.cockpit.project_id(thread)))
+            .or_else(|| match self.cockpit.roster().view() {
+                View::Group(group) => self
+                    .cockpit
+                    .groups()
+                    .get(group)
+                    .and_then(|group| group.members.first())
+                    .and_then(|thread| self.cockpit.project_id(*thread)),
+                View::Solo => None,
+            })
+            .or(self.launch_project);
         let Some(project) = project else {
             self.open_project_creator(cx);
             return;
@@ -20481,6 +20482,110 @@ mod tests {
             assert_eq!(view.panes.len(), 2, "and cmd-n reuses the standing draft");
             assert!(view.panes[view.focused()].draft().is_some());
         });
+    }
+
+    /// cmd-t on a Thread opens the new draft in that Thread's Project, not
+    /// wherever the last draft ran: the operator is in that Project now.
+    #[gpui::test]
+    fn cmd_t_from_a_solo_thread_starts_in_its_project(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("cmd-t-project", 1);
+        let elsewhere = core
+            .register_project(&std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        let here = core.project_id(core.threads()[0]).expect("a bound Thread");
+        assert_ne!(here, elsewhere);
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.launch_project = Some(elsewhere));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-t");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
+            let draft = view.panes[view.focused()]
+                .draft()
+                .expect("cmd-t opened a draft");
+            assert_eq!(draft.binding.project(), here);
+        });
+    }
+
+    /// In a Group that spans Projects, cmd-t follows the focused member's
+    /// Project, not the Group's first member or the last draft's.
+    #[gpui::test]
+    fn cmd_t_from_a_grouped_thread_starts_in_its_project(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("cmd-t-group-project", 1);
+        let first = core.threads()[0];
+        let home = core.project_id(first).expect("a bound Thread");
+        let repo = repo_in(&scratch("cmd-t-group-other"));
+        let other = core.register_project(&repo).unwrap();
+        let second = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: repo })
+            .unwrap();
+        let group = core
+            .apply_group(GroupChange::Create { first, second })
+            .unwrap()
+            .group
+            .unwrap();
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.launch_project = Some(home);
+            view.enter_group(group, cx);
+            view.cockpit.focus(PaneIdentity::Thread(second));
+        });
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-t");
+        view.read_with(cx, |view, _| {
+            let draft = view.panes[view.focused()]
+                .draft()
+                .expect("cmd-t opened a draft");
+            assert_eq!(draft.binding.project(), other);
+        });
+    }
+
+    /// A draft left standing in another Project follows cmd-t to the
+    /// Thread it was pressed on; pressed on the draft itself, the draft
+    /// keeps its Project.
+    #[gpui::test]
+    fn cmd_t_from_a_thread_brings_the_standing_draft_to_its_project(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("cmd-t-standing-draft", 1);
+        let thread = core.threads()[0];
+        let here = core.project_id(thread).expect("a bound Thread");
+        let elsewhere = core
+            .register_project(&std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.open_draft_in_project(elsewhere, cx));
+        tick(cx);
+        let project = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                view.panes[view.focused()]
+                    .draft()
+                    .expect("the draft is focused")
+                    .binding
+                    .project()
+            })
+        };
+
+        cx.simulate_keystrokes("cmd-t");
+        assert_eq!(
+            project(&view, cx),
+            elsewhere,
+            "pressed on the draft, it stays"
+        );
+
+        view.update(cx, |view, _| {
+            view.cockpit.focus(PaneIdentity::Thread(thread))
+        });
+        tick(cx);
+        cx.simulate_keystrokes("cmd-t");
+        assert_eq!(
+            project(&view, cx),
+            here,
+            "pressed on the Thread, it follows"
+        );
     }
 
     /// #20: ⌘⇧⏎ gives the focused Pane the whole cockpit at L1, and ⌘⇧⏎
