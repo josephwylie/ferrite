@@ -949,13 +949,26 @@ struct AgentState {
     state: SubjectState,
     discovered: u64,
     last_live: u64,
+    /// Whether this agent sorted as working when the order was last settled.
+    sorted_working: bool,
+}
+
+impl AgentState {
+    /// Working agents sort first; see `Activity::settle_order`.
+    fn working(&self) -> bool {
+        self.state.fresh && self.state.status == AgentStatus::Working
+    }
 }
 
 pub struct Activity {
     main: SubjectState,
     agents: BTreeMap<AgentKey, AgentState>,
     aliases: BTreeMap<AgentKey, AgentKey>,
+    /// Main's subagents, working first, each group in discovery order.
     order: Vec<AgentKey>,
+    /// An agent arrived, a parent or alias moved, or a reset emptied the tree
+    /// since the order was last settled. Set only where the tree changes.
+    tree_changed: bool,
     pending: Vec<PendingDecision>,
     limits: ActivityLimits,
     generation: u64,
@@ -979,6 +992,7 @@ impl Activity {
             agents: BTreeMap::new(),
             aliases: BTreeMap::new(),
             order: Vec::new(),
+            tree_changed: false,
             pending: Vec::new(),
             limits,
             generation: 0,
@@ -1017,7 +1031,6 @@ impl Activity {
 
     pub fn apply(&mut self, input: ActivityInput) -> ActivityUpdate {
         self.sequence = self.sequence.wrapping_add(1);
-        let old_order = self.order.clone();
         let mut update = match input {
             ActivityInput::Main { input, at } => self.main_input(input, at, true),
             ActivityInput::Observe {
@@ -1091,8 +1104,7 @@ impl Activity {
             ActivityInput::Evict(subject) => self.evict(subject),
             ActivityInput::DrainHighlights => self.drain_highlights(),
         };
-        self.reorder();
-        update.order_changed |= old_order != self.order;
+        update.order_changed |= self.settle_order();
         update
     }
 
@@ -1142,12 +1154,7 @@ impl Activity {
             .agents
             .iter()
             .filter(|(candidate, agent)| **candidate != key && agent.state.retained)
-            .min_by_key(|(_, agent)| {
-                (
-                    agent.state.fresh && agent.state.status == AgentStatus::Working,
-                    agent.discovered,
-                )
-            })
+            .min_by_key(|(_, agent)| (agent.working(), agent.discovered))
             .map(|(candidate, _)| candidate.clone())
         {
             update = self.evict(Subject::Subagent(evict));
@@ -1312,7 +1319,7 @@ impl Activity {
         evicted.extend(blocks.evicted);
         self.agents.clear();
         self.aliases.clear();
-        self.order.clear();
+        self.tree_changed = true;
         self.pending.clear();
         self.limited = false;
         self.main_operator_turn = false;
@@ -1338,8 +1345,13 @@ impl Activity {
                     return update;
                 }
                 let agent = self.agents.get_mut(&key).expect("ensured child");
-                if let Some(parent) = &info.parent {
+                if let Some(parent) = info
+                    .parent
+                    .as_ref()
+                    .filter(|parent| agent.info.parent.as_ref() != Some(*parent))
+                {
                     agent.info.parent = Some(parent.clone());
+                    self.tree_changed = true;
                 }
                 if info.name.is_some() {
                     agent.info.name.clone_from(&info.name);
@@ -1460,6 +1472,7 @@ impl Activity {
                 let key = self.resolve(key);
                 if let Some(agent) = self.agents.get_mut(&key) {
                     agent.info.parent = None;
+                    self.tree_changed = true;
                     agent.state.fresh = false;
                     agent.state.busy = false;
                     agent.state.coverage = TranscriptCoverage::Unavailable;
@@ -1791,8 +1804,10 @@ impl Activity {
                 state,
                 discovered: self.sequence,
                 last_live: 0,
+                sorted_working: false,
             },
         );
+        self.tree_changed = true;
         true
     }
 
@@ -1929,7 +1944,30 @@ impl Activity {
         false
     }
 
-    fn reorder(&mut self) {
+    /// Re-sort Main's subagents if what the order depends on moved since it
+    /// was last settled — the tree, or an agent's working flag — and report
+    /// whether the order changed. Most inputs move neither, so they cost a
+    /// scan of the agents' working flags rather than a sort.
+    fn settle_order(&mut self) -> bool {
+        let stale = std::mem::take(&mut self.tree_changed)
+            || self
+                .agents
+                .values()
+                .any(|agent| agent.sorted_working != agent.working());
+        if !stale {
+            debug_assert_eq!(self.order, self.sorted_order(), "order missed a change");
+            return false;
+        }
+        for agent in self.agents.values_mut() {
+            agent.sorted_working = agent.working();
+        }
+        let order = self.sorted_order();
+        let changed = order != self.order;
+        self.order = order;
+        changed
+    }
+
+    fn sorted_order(&self) -> Vec<AgentKey> {
         let mut keys: Vec<_> = self
             .agents
             .keys()
@@ -1938,12 +1976,9 @@ impl Activity {
             .collect();
         keys.sort_by_key(|key| {
             let agent = &self.agents[key];
-            (
-                !(agent.state.fresh && agent.state.status == AgentStatus::Working),
-                agent.discovered,
-            )
+            (!agent.working(), agent.discovered)
         });
-        self.order = keys;
+        keys
     }
 
     fn alias(&mut self, from: &AgentKey, to: &AgentKey) -> ActivityUpdate {
@@ -1962,6 +1997,7 @@ impl Activity {
                 ..ActivityUpdate::default()
             };
         }
+        self.tree_changed = true;
         let mut update = ActivityUpdate::default();
         if let Some(mut source) = self.agents.remove(&from) {
             if let Some(target) = self.agents.get_mut(&to) {
@@ -2113,10 +2149,7 @@ impl<'a> ActivityView<'a> {
         self.activity
             .order
             .iter()
-            .filter(|key| {
-                let state = &self.activity.agents[*key].state;
-                state.fresh && state.status == AgentStatus::Working
-            })
+            .filter(|key| self.activity.agents[*key].working())
             .count()
     }
     /// Is an operator prompt out and unanswered — from the live prompt
