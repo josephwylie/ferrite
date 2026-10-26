@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use crate::activity::{AgentKey, DecisionHandle, Subject};
 pub use crate::engine::{
     title_from_prompt, AgentLaunch, BootstrapResult, Bootstrapped, DeleteError, Engine,
-    HistoryDirection, LogReader, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart,
+    HistoryDirection, PaneUpdate, Preparation, ProviderChoice, ProvisionError, Restart,
     ReviveGroupError, RssSampler, SpawnRequest, Spawner, SubjectUpdate, ToolTiming,
 };
 use crate::groups::{
@@ -52,8 +52,11 @@ struct FocusedMember {
 
 pub struct Cockpit {
     link: Link,
-    /// What a parked Thread says.
+    /// What a parked Thread says: the rows its Server published.
     parked: parked::Parked,
+    /// This computer's logs, read-only, for what an open Thread's header
+    /// and last write say, which no message carries; `None` on a machine.
+    logs: Option<Store>,
     /// What is on screen (#28): the roster of Panes, focus, view, fullscreen
     /// and park order. Read through `roster()`; changed only by the acts
     /// below, which keep it showing exactly the open Threads plus drafts.
@@ -171,10 +174,12 @@ enum Link {
 impl Cockpit {
     /// A window driving an Engine of its own, in this process.
     pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
-        let reader = parked::Parked::Store(store.clone());
+        let logs = store.clone();
         let dir = store.dir().to_path_buf();
-        let engine = Engine::try_new(store, spawner)?;
-        let mut cockpit = Self::with(Link::InProcess(Box::new(engine)), reader, &dir);
+        let mut engine = Engine::try_new(store, spawner)?;
+        // Its window pumps it: a park is listed by the pump that parked it.
+        engine.read_parked_in_place();
+        let mut cockpit = Self::with(Link::InProcess(Box::new(engine)), Some(logs), &dir);
         cockpit.receive();
         Ok(cockpit)
     }
@@ -188,19 +193,15 @@ impl Cockpit {
     /// A window attached to its Server: this computer's, starting one when
     /// none answers, or a machine's, connected to in the background. Without
     /// one it starts detached (`server`) and keeps trying; it never runs
-    /// the agents itself. A machine's parked Threads are what its Server
-    /// publishes: their logs stay there.
+    /// the agents itself. Its parked Threads are what its Server publishes
+    /// (ADR 0026), wherever the logs are.
     pub fn attach(attach: Attach) -> io::Result<Self> {
         let local = matches!(attach.server, Endpoint::Local { .. });
-        let parked = if local {
-            parked::Parked::Store(Store::reader(&attach.store)?)
-        } else {
-            parked::Parked::published()
-        };
+        let logs = local.then(|| Store::reader(&attach.store)).transpose()?;
         let dir = attach.store.clone();
         let mut remote = remote::Remote::new(attach);
         let arrived = if local { remote.attach_now() } else { None };
-        let mut cockpit = Self::with(Link::Server(Box::new(remote)), parked, &dir);
+        let mut cockpit = Self::with(Link::Server(Box::new(remote)), logs, &dir);
         // A window streams only what it draws, from its first attach on: it
         // draws nothing yet (ADR 0032).
         cockpit.drawn = Some(Drawn::default());
@@ -208,12 +209,12 @@ impl Cockpit {
         Ok(cockpit)
     }
 
-    fn with(link: Link, parked: parked::Parked, dir: &Path) -> Self {
-        let local = matches!(parked, parked::Parked::Store(_));
+    fn with(link: Link, logs: Option<Store>, dir: &Path) -> Self {
         Self {
             link,
-            shared: shared::Shared::new(dir, local),
-            parked,
+            shared: shared::Shared::new(dir, logs.is_some()),
+            parked: parked::Parked::default(),
+            logs,
             roster: Roster::default(),
             synced: Vec::new(),
             mirrors: mirror::Mirrors::default(),
@@ -1433,14 +1434,20 @@ impl Cockpit {
     }
 
     pub fn try_project_id(&self, thread: ThreadId) -> Result<Option<ProjectId>, LoadError> {
-        self.parked.peek(thread).map(|meta| meta.project_id)
+        self.peek(thread).map(|meta| meta.project_id)
     }
 
+    /// Delete a Thread for good. Its parked row goes at once, not when the
+    /// Server next publishes the rows.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
-        self.act(
+        let deleted = self.act(
             |engine| engine.delete(thread),
             |server| run(server, Op::Delete { thread }).map_err(DeleteError::Io),
-        )
+        );
+        if deleted.is_ok() {
+            self.parked.forget(thread);
+        }
+        deleted
     }
 
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
@@ -1780,12 +1787,12 @@ impl Cockpit {
         )
     }
 
-    /// The Threads not open, in creation order.
+    /// The Threads not open, in creation order, as the Server published
+    /// them.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
         Ok(self
             .parked
-            .thread_ids()?
-            .into_iter()
+            .thread_ids()
             .filter(|thread| self.thread(*thread).is_none())
             .collect())
     }
@@ -1815,30 +1822,44 @@ impl Cockpit {
         )
     }
 
+    /// A Thread's header: a parked one's from its published row; an open
+    /// one's off its log's header line, on this computer only.
     pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
-        self.parked.peek(thread)
-    }
-
-    /// The subagents a Thread knows, live or parked. A parked Thread's are
-    /// read off its log: callers cache this rather than ask per frame.
-    pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        if let Some(open) = self.thread(thread) {
-            return Ok(open.subagents());
+        match self.open_log(thread) {
+            Some(logs) => logs.peek(thread),
+            None => self.parked.peek(thread),
         }
-        self.log_reader().subagent_count(thread)
     }
 
-    /// A read-only handle on the Thread logs, for the parked-Thread reads
-    /// too slow for the UI thread: it can be moved to a background task.
-    pub fn log_reader(&self) -> LogReader {
-        self.parked.log_reader()
+    /// This computer's logs, when `thread` is open and its log is here.
+    fn open_log(&self, thread: ThreadId) -> Option<&Store> {
+        self.logs.as_ref().filter(|_| self.thread(thread).is_some())
+    }
+
+    /// The subagents a Thread knows, live or parked: a parked Thread's as
+    /// its Server counted them.
+    pub fn subagent_count(&self, thread: ThreadId) -> Option<usize> {
+        match self.thread(thread) {
+            Some(open) => Some(open.subagents()),
+            None => self.parked.subagents(thread),
+        }
+    }
+
+    /// The turns a parked Thread holds, as its Server counted them — the
+    /// wall's parked tile reads `11 turns`.
+    pub fn parked_turns(&self, thread: ThreadId) -> Option<usize> {
+        self.parked.turns(thread)
     }
 
     /// When a Thread was last used, live or parked — the nav's default
-    /// order and its "3 days" line. One `stat`, so callers still cache it
-    /// rather than ask per frame.
+    /// order and its "3 days" line. A parked Thread's is in its row; an
+    /// open one's is a `stat`, so callers still cache it rather than ask
+    /// per frame.
     pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
-        self.parked.last_used(thread)
+        match self.open_log(thread) {
+            Some(logs) => logs.last_used(thread),
+            None => self.parked.last_used(thread),
+        }
     }
 
     /// The open Threads.
@@ -1853,16 +1874,16 @@ impl Cockpit {
     /// Thread names a registered Project, which is what a fresh
     /// installation looks like.
     ///
-    /// One `stat` and one header line per Thread, and it stops at the
-    /// first answer, so the common case is two reads. Launch-time only:
-    /// callers keep the answer rather than ask it per frame.
+    /// A parked Thread answers from its row; an open one costs a `stat`
+    /// and a header line. Launch-time only: callers keep the answer rather
+    /// than ask it per frame.
     pub fn last_worked_project(&self) -> Option<ProjectId> {
         let mut threads: Vec<(Option<std::time::SystemTime>, ThreadId)> = self
-            .parked
-            .thread_ids()
+            .parked()
             .unwrap_or_default()
             .into_iter()
-            .map(|thread| (self.parked.last_used(thread), thread))
+            .chain(self.threads())
+            .map(|thread| (self.last_used(thread), thread))
             .collect();
         // Newest first, and a Thread whose log cannot be stat'd sorts last
         // rather than counting as the epoch's most recent.
@@ -1893,9 +1914,7 @@ impl Cockpit {
 
     /// What a Thread is called on screen: the title the operator gave it;
     /// else, when `auto` is on, the first line of its first prompt,
-    /// shortened; else its number. Reads one header line (and at most
-    /// the first few records) off disk for a parked Thread — callers cache
-    /// it by moment, never per frame.
+    /// shortened; else its number. A parked Thread's is in its row.
     pub fn display_title(&self, thread: ThreadId, auto: bool) -> String {
         let numbered = || format!("thread-{}", thread.get());
         if let Some(open) = self.thread(thread) {
@@ -2077,8 +2096,8 @@ impl Cockpit {
         self.shared.account_limits(provider)
     }
 
-    /// Whether a machine's parked Threads moved since the last ask: its
-    /// Server said so. This computer's are read at the window's moments.
+    /// Whether the parked Threads' rows moved since the last ask: the
+    /// Server published them.
     pub fn take_parked_changed(&mut self) -> bool {
         self.parked.take_changed()
     }

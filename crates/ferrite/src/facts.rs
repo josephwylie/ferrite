@@ -67,11 +67,13 @@ pub struct ThreadFacts {
     /// read, or for a Thread no Project claims: then `main` and `master`
     /// stand in for it.
     pub default_branch: Option<SharedString>,
-    /// Subagents observed for this Thread, retained while parked without
-    /// reopening logs. (The nav row no longer names the count.)
+    /// Subagents observed for this Thread: counted while open, as its
+    /// Server counted them while parked. (The nav row no longer names the
+    /// count.)
     pub subagents: usize,
     /// How many turns the Thread holds (its prompts): counted while open,
-    /// read back from a parked log once — the parked tile's `11 turns`.
+    /// as its Server counted them while parked — the parked tile's `11
+    /// turns`.
     pub turns: Option<usize>,
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. A frame never walks Blocks at L3.
@@ -85,9 +87,6 @@ pub struct ThreadFacts {
     /// Whether `branch` has been asked for (a `None` answer included), so a
     /// parked row's checkout costs one `git` call, ever.
     branch_asked: bool,
-    /// Whether `subagents` is known: counted while open, or a parked log's
-    /// replay has come back.
-    subagents_known: bool,
 }
 impl ThreadFacts {
     /// Whether `branch` is the Project's default, which the nav row and the
@@ -292,16 +291,15 @@ impl Facts {
         changed
     }
 
-    /// The parked set changed — a park, a revive, an import, a rename: the
-    /// nav's parked rows are rebuilt. Each costs a `Store::peek`, one header
-    /// line off disk, and the strings built here are what every frame after
-    /// reuses. An unreadable log still gets a row — the Thread exists, and
-    /// a nav that hides it would hide the problem — it just claims nothing
-    /// it cannot know.
+    /// The parked set changed — a park, a revive, an import, a rename, or
+    /// the Server published its rows: the nav's parked rows are rebuilt
+    /// from those rows, reading no log, and the strings built here are what
+    /// every frame after reuses. An unreadable log still gets a row — the
+    /// Thread exists, and a nav that hides it would hide the problem — it
+    /// just claims nothing it cannot know.
     ///
-    /// What costs more than a peek — a `git` call for the checkout or the
-    /// Project's default branch, a replay of the whole log for the subagent
-    /// count — is not done here: it is returned, once per Thread (and
+    /// What only `git` can say — the checkout or the Project's default
+    /// branch — is not done here: it is returned, once per Thread (and
     /// Project), for the caller to run off the UI thread and hand back
     /// through `looked_up`. A launch with dozens of parked Threads would
     /// otherwise hold the first frame for seconds.
@@ -313,6 +311,8 @@ impl Facts {
             let facts = self.threads.entry(*thread).or_default();
             facts.last_used = last_used;
             facts.name = display_name(cockpit, *thread, self.auto_title);
+            facts.turns = cockpit.parked_turns(*thread);
+            facts.subagents = cockpit.subagent_count(*thread).unwrap_or_default();
             let Ok(meta) = cockpit.peek(*thread) else {
                 facts.provider = None;
                 facts.project = None;
@@ -333,10 +333,6 @@ impl Facts {
                 &mut lookups,
             );
             facts.project_label = project_label(cockpit, meta.project_id, meta.workspace.as_ref());
-            if !facts.subagents_known {
-                facts.subagents_known = true;
-                lookups.subagents.push(*thread);
-            }
             // The checkout, for a parked Thread, in the order that costs
             // least: the registry already knows a worktree's branch, and a
             // main checkout is asked `git` exactly once, ever.
@@ -369,7 +365,7 @@ impl Facts {
     /// The answers to `parked_changed`'s and `opened`'s lookups, back from
     /// off the UI thread. A Thread opened meanwhile keeps what its open
     /// Pane read — that answer is the newer one.
-    pub fn looked_up(&mut self, cockpit: &Cockpit, answers: Answers) {
+    pub fn looked_up(&mut self, answers: Answers) {
         for (project, branch) in answers.default_branches {
             let branch = SharedString::from(branch);
             for facts in self.threads.values_mut() {
@@ -383,16 +379,6 @@ impl Facts {
             let facts = self.threads.entry(thread).or_default();
             if facts.branch.is_none() {
                 facts.branch = branch.map(SharedString::from);
-            }
-        }
-        for (thread, count) in answers.subagents {
-            if cockpit.thread(thread).is_none() {
-                self.threads.entry(thread).or_default().subagents = count;
-            }
-        }
-        for (thread, turns) in answers.turns {
-            if cockpit.thread(thread).is_none() {
-                self.threads.entry(thread).or_default().turns = turns;
             }
         }
     }
@@ -475,7 +461,6 @@ impl Facts {
             facts.turns = Some(digest.turns);
             facts.changed_files = digest.changed_files.clone();
             facts.subagents = digest.subagents;
-            facts.subagents_known = true;
             facts.main_busy = open.busy();
         } else {
             facts.wall = WallCard::default();
@@ -648,9 +633,6 @@ fn at_word_boundary(title: &str) -> String {
 pub struct Lookups {
     /// Threads whose checkout branch only `git` can say.
     pub branches: Vec<(ThreadId, std::path::PathBuf)>,
-    /// Parked Threads whose subagent count (and turn count) needs a read
-    /// of their log.
-    pub subagents: Vec<ThreadId>,
     /// Projects whose default branch only `git` can say, each with a
     /// checkout of it.
     pub default_branches: Vec<(ProjectId, std::path::PathBuf)>,
@@ -658,12 +640,12 @@ pub struct Lookups {
 
 impl Lookups {
     pub fn is_empty(&self) -> bool {
-        self.branches.is_empty() && self.subagents.is_empty() && self.default_branches.is_empty()
+        self.branches.is_empty() && self.default_branches.is_empty()
     }
 
-    /// Run the lookups: blocking `git` calls and whole-log reads, so call
-    /// this from a background task.
-    pub fn run(self, logs: &ferrite_core::cockpit::LogReader) -> Answers {
+    /// Run the lookups: blocking `git` calls, so call this from a
+    /// background task.
+    pub fn run(self) -> Answers {
         Answers {
             default_branches: self
                 .default_branches
@@ -679,16 +661,6 @@ impl Lookups {
                     (thread, ferrite_core::workspace::checkout_branch(&checkout))
                 })
                 .collect(),
-            turns: self
-                .subagents
-                .iter()
-                .map(|thread| (*thread, logs.turn_count(*thread).ok()))
-                .collect(),
-            subagents: self
-                .subagents
-                .into_iter()
-                .map(|thread| (thread, logs.subagent_count(thread).unwrap_or_default()))
-                .collect(),
         }
     }
 }
@@ -697,8 +669,6 @@ impl Lookups {
 pub struct Answers {
     default_branches: Vec<(ProjectId, String)>,
     branches: Vec<(ThreadId, Option<String>)>,
-    subagents: Vec<(ThreadId, usize)>,
-    turns: Vec<(ThreadId, Option<usize>)>,
 }
 
 #[cfg(test)]
@@ -828,7 +798,6 @@ mod tests {
         let lookups = facts.parked_changed(&cockpit);
         assert_eq!(facts.parked(), &[thread]);
         assert_eq!(lookups.branches, vec![(thread, checkout.clone())]);
-        assert_eq!(lookups.subagents, vec![thread]);
         assert_eq!(facts.get(thread).unwrap().branch, None, "no git ran here");
 
         assert!(
@@ -836,12 +805,60 @@ mod tests {
             "a rebuilt parked set asks nothing it already asked"
         );
 
-        let answers = lookups.run(&cockpit.log_reader());
-        facts.looked_up(&cockpit, answers);
+        facts.looked_up(lookups.run());
         assert_eq!(
             facts.get(thread).unwrap().branch,
             ferrite_core::workspace::checkout_branch(&checkout).map(SharedString::from),
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What the nav's parked rows say: a titled Thread its title, an
+    /// untitled one its first prompt; each its provider, Project, age,
+    /// turns and Subagents.
+    #[test]
+    fn parked_rows_say_what_their_logs_say() {
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-facts-{}-parked-rows-say",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = ferrite_core::store::Store::open(&dir).unwrap();
+        let project: ProjectId = serde_json::from_str("7").unwrap();
+        let binding = WorkspaceBinding::Main {
+            checkout: dir.clone(),
+        };
+        let (titled, mut writer) = store
+            .create(Provider::Codex, Some(project), binding.clone())
+            .unwrap();
+        writer.record_prompt("Tidy the release notes").unwrap();
+        store
+            .set_title(titled, "Release notes".into(), Some(&mut writer))
+            .unwrap();
+        writer.flush().unwrap();
+        writer.park();
+        let (untitled, mut writer) = store.create(Provider::Claude, None, binding).unwrap();
+        writer.record_prompt("Fix the flaky\nsecond line").unwrap();
+        writer.record_prompt("And again").unwrap();
+        writer.flush().unwrap();
+        writer.park();
+        let cockpit = Cockpit::new(store, Box::new(crate::demo::Spawn::new(false)));
+        let mut facts = Facts::default();
+
+        facts.parked_changed(&cockpit);
+        assert_eq!(facts.parked(), &[titled, untitled]);
+        let row = facts.get(titled).unwrap();
+        assert_eq!(row.name.as_ref(), "Release notes");
+        assert_eq!(row.provider, Some(Provider::Codex));
+        assert_eq!(row.project, Some(project));
+        assert!(row.last_used.is_some());
+        let row = facts.get(untitled).unwrap();
+        assert_eq!(row.name.as_ref(), "Fix the flaky");
+        assert_eq!(row.provider, Some(Provider::Claude));
+        assert_eq!(row.project, None);
+        assert_eq!(facts.turns(titled), Some(1));
+        assert_eq!(facts.turns(untitled), Some(2));
+        assert_eq!(facts.get(untitled).unwrap().subagents, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -883,7 +900,7 @@ mod tests {
             "a Project's default branch is asked once"
         );
 
-        facts.looked_up(&cockpit, lookups.run(&cockpit.log_reader()));
+        facts.looked_up(lookups.run());
         let opened = facts.get(thread).unwrap();
         assert_eq!(
             opened.branch,

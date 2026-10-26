@@ -1740,8 +1740,8 @@ impl CockpitView {
         self.refresh_names();
     }
 
-    /// The parked set changed: rebuild the nav's parked rows now, from
-    /// peeks, and fetch what only `git` or a whole-log replay can say on the
+    /// The parked set changed: rebuild the nav's parked rows now, from the
+    /// rows the Server published, and fetch what only `git` can say on the
     /// background executor — the rows fill in when it answers.
     fn parked_changed(&mut self, cx: &mut Context<Self>) {
         let lookups = self.facts.parked_changed(&self.cockpit);
@@ -1824,14 +1824,13 @@ impl CockpitView {
         if lookups.is_empty() {
             return;
         }
-        let logs = self.cockpit.log_reader();
         cx.spawn(async move |this, cx| {
             let answers = cx
                 .background_executor()
-                .spawn(async move { lookups.run(&logs) })
+                .spawn(async move { lookups.run() })
                 .await;
             this.update(cx, |view, cx| {
-                view.facts.looked_up(&view.cockpit, answers);
+                view.facts.looked_up(answers);
                 cx.notify();
             })
             .ok();
@@ -2153,7 +2152,7 @@ impl CockpitView {
         self.poll_remote_path(cx);
         self.poll_machine_repo(cx);
         let server_moved = self.server_moved();
-        // A machine's Server says when its parked Threads moved.
+        // The Server says when its parked Threads' rows moved.
         let parked_moved = self.cockpit.take_parked_changed();
         if parked_moved {
             self.parked_changed(cx);

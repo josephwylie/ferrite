@@ -213,7 +213,7 @@ Client → Server:
 
 | Message | Meaning |
 |---|---|
-| `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capabilities: `render_visual` (this client can draw Visuals); `parked_threads` (it lists the Server's parked Threads off `parked`, ADR 0026). |
+| `hello {generation, client:{name, version}, capabilities[]}` | Gen-1 capabilities: `render_visual` (this client can draw Visuals); `parked_threads` (it lists the Server's parked Threads off `parked`, ADR 0026; every window says it, and a Server now publishes rows to every window). |
 | `watch {thread, resume?:{boot_id, after}}` / `unwatch {thread}` | Stream a Thread's inputs. Without `resume`, or when it cannot be met, the stream starts with its history. Only watched Threads stream; every Thread's `ThreadState` and `digest` are always sent. A window watches the Threads it draws at Transcript level, and unwatches one 30 seconds after it stops drawing it (ADR 0032). |
 | `command {id, op, …}` | One per act that changes shared or durable state: `open`, `bootstrap` (a Draft's first prompt; replied once the Thread starts), `cancel_bootstrap {request}`, `send`, `queue`, `unqueue`, `cancel_queued {edit?}`, `take_recovered`, `recall`, `interrupt`, `stop_subagent {thread, key}`, `answer {thread, handle, answer}`, `control`, `set_model`, `set_effort`, `set_provider`, `rename`, `park`, `revive`, `revive_group`, `delete`, `import`, `group` (replied with what dissolved), `layout`, `project`, `notice` (open, dismiss, read, seen), `show_subject`, `load_subject`, `say`, `worktrees_listed`, `cli_replaced`, `settings_changed`, `search_files`, `list_dir {path}`, `list_repo {project}` (ADR 0026), `review_diff {path, scope, commit?}` (replied `diff`), `review_read {path, scope, commit?, since?}` (replied `review`; a window falls back to `review_diff` on `unsupported`), `list_commits {path}`, `search_repo {path, query}`, `read_file {path, file}`, `review_pull_request {path}`, `list_files {path}`, `list_bases {path}`, `pick_base {path, base}` (ADR 0021), `pull_request {path}` (ADR 0026), `restart {when}`, `stop {when}`. Each gets exactly one `reply`. |
 | `rendered {request, png?, error?}` | The answer to a `render`. |
@@ -233,7 +233,7 @@ Server → Client:
 | `digest {thread, digest}` | latest-wins per Thread | What every surface away from the Transcript reads (ADR 0032): Main's status, turn and outcome, pending Decisions, work behind Main, the Wall card (Main's, and the shown Subagent's), turn and Subagent counts, changed files, the latest turn's finish. Refolded at once when a turn, a phase, a Decision or a Subagent changes, else at most every 250 ms. |
 | `roster`, `groups`, `registry`, `notices`, `providers` `{revision, …}` | latest-wins | Replaces the snapshot's field. |
 | `dissolved {group, survivor}` | reliable | A Group left with one member is gone, sent ahead of the `groups` without it: every window showing it lands Solo on `survivor`, as the window whose act dissolved it does. A window cannot tell from `groups` alone which member left, and the `roster` that closes the leaver may come in a later read. |
-| `parked {revision, threads[]}` | latest-wins | The Threads not open, as the Store says them: header facts, first-prompt title, last use, turn and Subagent counts. Added for machines (ADR 0026), whose windows have no Store to read: sent only while a `parked_threads` client is attached. |
+| `parked {revision, threads[]}` | latest-wins | The Threads not open, as the Store says them: header facts, first-prompt title, last use, turn and Subagent counts. Added for machines (ADR 0026), whose windows have no Store to read; every window lists off it now, and only the rows of Threads that changed are read again. |
 | `render {request, …}` | reliable | A Visual to draw, sent to one `render_visual` client (the one most recently focused). With none attached the agent is answered at once: no Ferrite window is open to draw it. |
 | `allowance_warning {provider, window, threshold, used_fraction}` | reliable | A provider's allowance rose past one of the operator's thresholds. |
 | `restarting {when}` / `stopping` | reliable | The client reconnects. |
@@ -330,12 +330,14 @@ still pending means the operator answers again.
   and tests use (injected inputs, fixture Notices, the launch-time revival
   the Server does itself) exist in-process only.
 - What a parked Thread says (titles, its Project, last use, the parked
-  list, Subagent counts) the window reads itself, through a Store handle
-  that never takes the claim (`Store::reader`), so a Server started after
-  the window still finds it free. So do the derived reads — Needs-you
-  order, display titles, the last Project worked in. Discovery of CLI
-  session files and workspace commands reads the operator's own files and
-  stays in the window too.
+  list, turn and Subagent counts) the window lists off the Server's
+  `parked` rows (ADR 0026): reading every parked log itself held the UI
+  thread for hundreds of milliseconds per change. What an open Thread's
+  header and last write say (its Project, its age) it still reads
+  itself, through a Store handle that never takes the claim
+  (`Store::reader`), so a Server started after the window still finds it
+  free. Discovery of CLI session files and workspace commands reads the
+  operator's own files and stays in the window too.
 - Per window: focus, View (Solo or a Group), fullscreen, Drafts, the
   Composer's prompt history, find. Shared through the Server: which
   Threads are open, Groups and Layouts, projects, Notices and whether they

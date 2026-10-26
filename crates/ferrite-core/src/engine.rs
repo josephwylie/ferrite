@@ -44,6 +44,7 @@ mod announced;
 mod commands;
 mod history;
 mod launch_args;
+mod parked;
 mod queue;
 mod threads;
 mod windows;
@@ -743,19 +744,6 @@ struct PublishedShared {
     parked: Option<Vec<protocol::ParkedThread>>,
 }
 
-/// The `parked` message (ADR 0026): what a window on a machine lists of
-/// the Threads not open. Read only while such a window is attached, and
-/// off the pump thread: a row's reads wait for a park's final mark, and a
-/// log from before schema 13 is replayed once for its counts.
-#[derive(Default)]
-struct ParkedListing {
-    /// A window that lists them is attached (`list_parked`).
-    wanted: bool,
-    /// Something may have changed a row since the last read began.
-    stale: bool,
-    reading: Option<Receiver<Vec<protocol::ParkedThread>>>,
-}
-
 /// `now`, when it is not what was last published: it is from here on.
 fn changed<T: Clone + PartialEq>(published: &mut Option<T>, now: T) -> Option<T> {
     if published.as_ref() == Some(&now) {
@@ -1112,7 +1100,7 @@ pub struct Engine {
     published: BTreeMap<ThreadId, Published>,
     published_open: Vec<ThreadId>,
     published_shared: PublishedShared,
-    parked_listing: ParkedListing,
+    parked_listing: parked::ParkedListing,
     revision: u64,
     spawner: Box<dyn Spawner>,
     model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
@@ -1199,7 +1187,7 @@ impl Engine {
             published: BTreeMap::new(),
             published_open: Vec::new(),
             published_shared: PublishedShared::default(),
-            parked_listing: ParkedListing::default(),
+            parked_listing: parked::ParkedListing::default(),
             revision: 0,
             spawner,
             model_discovery,
@@ -1863,7 +1851,7 @@ impl Engine {
         thread: ThreadId,
         choice: ProviderChoice,
     ) -> Result<(), ProvisionError> {
-        self.parked_listing.stale = true;
+        self.parked_listing.reread(thread);
         let Some(state) = self.threads.get(&thread) else {
             // Parked: the lock is whether a prompt was ever sent, which the
             // log's tail says without a full load.
@@ -2137,7 +2125,7 @@ impl Engine {
     /// legacy unregistered worktree binding is removed, and then only when
     /// clean (`git status` defines clean); its branch is never deleted.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
-        self.parked_listing.stale = true;
+        self.parked_listing.moved();
         if self.bootstraps.contains_key(&thread) {
             return self.park(thread).map_err(DeleteError::Io);
         }
@@ -2239,6 +2227,9 @@ impl Engine {
             return Err(error);
         }
         let mut state = self.threads.remove(&thread).expect("checked");
+        // Its log moved while it was open, and a read begun before it was
+        // revived would bring back the row it had then.
+        self.parked_listing.reread(thread);
         self.count_closed(thread);
         if state.session.is_some() {
             crate::log!("thread {thread}: session ended: parked");
@@ -2444,7 +2435,7 @@ impl Engine {
     /// session id. A refusal is the import module's, unchanged: readable,
     /// and no Thread was created.
     pub fn import(&mut self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
-        self.parked_listing.stale = true;
+        self.parked_listing.moved();
         crate::import::import_registered(&self.store, &mut self.registry, path)
     }
 
@@ -2810,12 +2801,7 @@ impl Engine {
     /// Threads the store holds that no Pane is showing — what a restart finds,
     /// and what "reopen" reopens.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
-        Ok(self
-            .store
-            .thread_ids()?
-            .into_iter()
-            .filter(|id| !self.threads.contains_key(id))
-            .collect())
+        parked_ids(&self.store, &self.threads)
     }
 
     /// A parked Thread's binding, read from its log's header; `None` for an
@@ -2840,7 +2826,7 @@ impl Engine {
         let Some(WorkspaceBinding::Worktree { repo, path }) = meta.workspace else {
             return Ok(());
         };
-        self.parked_listing.stale = true;
+        self.parked_listing.reread(thread);
         let main = WorkspaceBinding::Main { checkout: repo };
         self.store
             .set_workspace(thread, &main, None)
@@ -2967,7 +2953,7 @@ impl Engine {
                 "Thread title cannot be blank",
             ));
         }
-        self.parked_listing.stale = true;
+        self.parked_listing.reread(thread);
         let mut state = self.threads.get_mut(&thread);
         if let Some(state) = state.as_mut() {
             state.history.clear();
@@ -4676,7 +4662,7 @@ impl Engine {
                 }
             }
             self.published_open = self.open.clone();
-            self.parked_listing.stale = true;
+            self.parked_listing.moved();
             self.revision += 1;
             self.outbox.push(ServerMessage::Roster {
                 revision: self.revision,
@@ -4862,55 +4848,26 @@ impl Engine {
         }
     }
 
-    /// Whether a window that lists this Server's parked Threads is attached
-    /// (`Capability::ParkedThreads`): only then are their rows read. A
-    /// window on this computer reads the Store itself.
-    pub fn list_parked(&mut self, wanted: bool) {
-        if wanted == self.parked_listing.wanted {
-            return;
-        }
-        self.parked_listing = ParkedListing {
-            wanted,
-            stale: true,
-            reading: None,
-        };
-        self.published_shared.parked = None;
+    /// Read the parked Threads' rows on the caller's thread: an Engine its
+    /// window pumps, which must list a park at once.
+    pub(crate) fn read_parked_in_place(&mut self) {
+        self.parked_listing.read_in_place();
     }
 
-    /// Publish the rows a read brought back, unless something changed
-    /// since it began; then start the next read if one is due.
+    /// Publish the parked Threads' rows once they are all read: only the
+    /// rows of Threads that changed are read again.
     fn publish_parked(&mut self) {
-        if let Some(reading) = &self.parked_listing.reading {
-            match reading.try_recv() {
-                Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Ok(rows) if !self.parked_listing.stale => {
-                    if let Some(threads) = changed(&mut self.published_shared.parked, rows) {
-                        self.revision += 1;
-                        self.outbox.push(ServerMessage::Parked {
-                            revision: self.revision,
-                            threads,
-                        });
-                    }
-                }
-                // Out of date, or the read died: the next one starts below.
-                _ => self.parked_listing.stale = true,
-            }
-            self.parked_listing.reading = None;
-        }
-        if !self.parked_listing.wanted || !std::mem::take(&mut self.parked_listing.stale) {
+        let (store, threads) = (&self.store, &self.threads);
+        let parked = || parked_ids(store, threads).unwrap_or_default();
+        let Some(rows) = self.parked_listing.poll(store, parked) else {
             return;
-        }
-        let store = self.store.clone();
-        let threads = self.parked().unwrap_or_default();
-        let (rows, reading) = channel();
-        let read = std::thread::Builder::new()
-            .name("ferrite-parked-rows".into())
-            .spawn(move || {
-                let _ = rows.send(parked_rows(&store, threads));
+        };
+        if let Some(threads) = changed(&mut self.published_shared.parked, rows) {
+            self.revision += 1;
+            self.outbox.push(ServerMessage::Parked {
+                revision: self.revision,
+                threads,
             });
-        match read {
-            Ok(_) => self.parked_listing.reading = Some(reading),
-            Err(error) => crate::log!("the parked Threads could not be read: {error}"),
         }
     }
 
@@ -5767,78 +5724,17 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
     }
 }
 
-/// Reads a Thread's log without the Cockpit: `Cockpit::log_reader`. It
-/// never writes, so a copy may replay parked logs off the UI thread. On a
-/// machine it reads what the machine's Server counted (ADR 0026).
-#[derive(Clone)]
-pub struct LogReader {
-    logs: Logs,
+/// The Threads `store` holds that are not `open`, in creation order.
+fn parked_ids(store: &Store, open: &Threads) -> io::Result<Vec<ThreadId>> {
+    Ok(store
+        .thread_ids()?
+        .into_iter()
+        .filter(|id| !open.contains_key(id))
+        .collect())
 }
 
-#[derive(Clone)]
-enum Logs {
-    Store(Store),
-    Published(Vec<protocol::ParkedThread>),
-}
-
-impl LogReader {
-    pub(crate) fn new(store: Store) -> Self {
-        Self {
-            logs: Logs::Store(store),
-        }
-    }
-
-    pub(crate) fn published(threads: Vec<protocol::ParkedThread>) -> Self {
-        Self {
-            logs: Logs::Published(threads),
-        }
-    }
-
-    /// The subagents a parked Thread's durable activity knows — a replay of
-    /// its whole log, so never on the UI thread for more than one Thread.
-    /// Read off the log's tail for a schema-13 log; a log from before is
-    /// replayed once and remembered (`Store::summary`).
-    pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        match &self.logs {
-            Logs::Store(store) => Ok(store
-                .summary(thread, replayed_subagents)?
-                .subagents
-                .unwrap_or_default()),
-            Logs::Published(threads) => published(threads, thread, |row| row.subagents),
-        }
-    }
-
-    /// How many turns a parked Thread's log holds — its prompts since the
-    /// last conversation reset: the wall's parked tile reads `11 turns`.
-    /// Off the log's tail, or remembered like `subagent_count`.
-    pub fn turn_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
-        match &self.logs {
-            Logs::Store(store) => Ok(store.summary(thread, replayed_subagents)?.turns),
-            Logs::Published(threads) => published(threads, thread, |row| row.turns),
-        }
-    }
-}
-
-/// A count the machine's Server published for `thread`, when it could.
-fn published(
-    threads: &[protocol::ParkedThread],
-    thread: ThreadId,
-    count: impl Fn(&protocol::ParkedThread) -> Option<usize>,
-) -> Result<usize, LoadError> {
-    threads
-        .iter()
-        .find(|row| row.thread == thread)
-        .and_then(count)
-        .ok_or_else(|| {
-            LoadError::Io(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("thread {thread}: the machine did not say"),
-            ))
-        })
-}
-
-/// Each of `threads`' row, as a window on a machine lists it: a header
-/// line, the log's tail and a `stat` each.
+/// Each of `threads`' row, as a window lists it: a header line, the
+/// log's tail and a `stat` each.
 fn parked_rows(store: &Store, threads: Vec<ThreadId>) -> Vec<protocol::ParkedThread> {
     threads
         .into_iter()
