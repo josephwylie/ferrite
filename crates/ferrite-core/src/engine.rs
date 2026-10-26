@@ -1735,7 +1735,7 @@ impl Engine {
             .is_some_and(SessionLifecycle::is_starting)
         {
             self.bootstraps.insert(id, pending);
-            self.threads.restate(id);
+            self.threads.mark_changed(id);
         } else if let Err(error) = self.finish_bootstrap(id, &pending) {
             self.rollback_bootstrap(id)?;
             return Err(error);
@@ -3004,17 +3004,10 @@ impl Engine {
         // Only a Thread with something under way is touched: the rest are
         // as their windows were told (`Threads`).
         for id in ids {
-            let replacing = self
+            let replacement = self
                 .threads
-                .get(&id)
-                .is_some_and(|state| state.replacement.is_some());
-            let replacement = if replacing {
-                self.threads
-                    .get_mut(&id)
-                    .and_then(|state| state.replacement.take())
-            } else {
-                None
-            };
+                .get_mut_if(&id, |state| state.replacement.is_some())
+                .and_then(|state| state.replacement.take());
             if let Some(mut replacement) = replacement {
                 // A handover whose exchanges are being read was ready already.
                 let ready = if replacement.exchanges.is_some() {
@@ -3065,14 +3058,13 @@ impl Engine {
                 }
                 changed.push(id);
             }
-            let starting = self.threads.get(&id).is_some_and(|state| {
+            let starting = self.threads.get_mut_if(&id, |state| {
                 state
                     .session
                     .as_ref()
                     .is_some_and(SessionLifecycle::is_starting)
             });
-            if starting {
-                let state = self.threads.get_mut(&id).expect("exists");
+            if let Some(state) = starting {
                 let result = state.session.as_mut().expect("exists").poll();
                 if matches!(result, Ok(false)) {
                     continue;
@@ -3526,7 +3518,7 @@ impl Engine {
             }
         }
         for update in &frame {
-            self.threads.restate(update.thread);
+            self.threads.mark_changed(update.thread);
         }
         frame
     }
@@ -4797,7 +4789,7 @@ impl Engine {
     /// but on its live writer, its Session's generation kept: nothing a
     /// window holds of it changes.
     pub(crate) fn hold(&mut self, thread: ThreadId) {
-        let Some(state) = self.threads.get_mut(&thread).filter(|state| !state.held) else {
+        let Some(state) = self.threads.get_mut_if(&thread, |state| !state.held) else {
             return;
         };
         let replay = state
@@ -4977,7 +4969,7 @@ impl Engine {
         match self.bootstraps.get_mut(&thread) {
             Some(pending) => {
                 pending.draft = Some(draft);
-                self.threads.restate(thread);
+                self.threads.mark_changed(thread);
                 Ok(None)
             }
             None => Ok(Some(thread)),

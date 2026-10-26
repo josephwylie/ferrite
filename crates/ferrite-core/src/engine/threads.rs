@@ -29,6 +29,20 @@ impl Threads {
         Some(thread)
     }
 
+    /// A Thread to change only when `wants` says so of it as it is: one
+    /// it does not want is left as told.
+    pub fn get_mut_if(
+        &mut self,
+        id: &ThreadId,
+        wants: impl FnOnce(&Thread) -> bool,
+    ) -> Option<&mut Thread> {
+        if self.0.get(id).is_some_and(wants) {
+            self.get_mut(id)
+        } else {
+            None
+        }
+    }
+
     /// Every Thread, to change each: every state is told again.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Thread> {
         for thread in self.0.values_mut() {
@@ -55,7 +69,7 @@ impl Threads {
 
     /// A Thread's state changed by what the Engine holds beside it (a
     /// Draft starting it): it is told again.
-    pub fn restate(&mut self, id: ThreadId) {
+    pub fn mark_changed(&mut self, id: ThreadId) {
         self.get_mut(&id);
     }
 

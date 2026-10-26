@@ -147,12 +147,14 @@ existing `.open` markers, staggered as in ADR 0018), so after a crash or
 reboot the Threads resume without a window.
 
 What the pump publishes costs what changed, not what is open (amended
-2026-10-26). Every change to an open Thread goes through the Engine's
-`Threads`, which marks it; a publish builds the `ThreadState` of the
-marked Threads alone, and sends one that differs from the last it sent.
-The walks that look at every Thread on every pass mark only the Threads
-they change. A debug build checks each publish that every unmarked
-Thread still reads as it was last sent. An open Thread's Project is
+2026-10-26). The Engine's open Threads are a `Threads`, which marks a
+Thread changed whenever it hands one out to change; a publish builds the
+`ThreadState` of the marked Threads alone, and sends one that differs
+from the last it sent. The one exception is `walk_mut`, for the walks
+that look at every Thread on every pass: it marks nothing, and each
+walker marks the Threads it changes. A debug build checks each publish
+that every unmarked Thread still reads as it was last sent, rebuilding
+them all as before, so a debug Server's latency is not a release one's. An open Thread's Project is
 answered from memory, never from its log: it is a header fact no
 amendment changes.
 
