@@ -2465,6 +2465,23 @@ fn a_change_to_one_parked_thread_reads_only_its_row() {
     );
 }
 
+/// A Thread revived, prompted and parked again before the Engine next
+/// publishes is read again: its row says the later park, not the one before.
+#[test]
+fn a_thread_parked_again_is_read_again() {
+    let dir = scratch("parked-again");
+    let (spawner, _providers) = spawn();
+    let mut engine = engine(&dir.join("threads"), spawner);
+    let thread = open_in(&mut engine, &dir);
+    engine.park(thread).unwrap();
+    assert_eq!(next_parked(&mut engine)[0].turns, Some(0));
+
+    engine.revive(thread).unwrap();
+    engine.send(thread, "again".into());
+    engine.park(thread).unwrap();
+    assert_eq!(next_parked(&mut engine)[0].turns, Some(1));
+}
+
 /// A window on this computer lists its parked Threads as a machine's
 /// window does (ADR 0026), off the rows its Server publishes: what a row
 /// says is never read off the log on the window's thread, and a delete

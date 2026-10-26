@@ -87,11 +87,14 @@ impl Parked {
         self.rows.get(&thread)?.prompt_title.clone()
     }
 
-    /// The turns and Subagents the Server counted off the log's tail.
-    pub(crate) fn counts(&self, thread: ThreadId) -> (Option<usize>, Option<usize>) {
-        self.rows
-            .get(&thread)
-            .map_or((None, None), |row| (row.turns, row.subagents))
+    /// The turns the Server counted off the log's tail.
+    pub(crate) fn turns(&self, thread: ThreadId) -> Option<usize> {
+        self.rows.get(&thread)?.turns
+    }
+
+    /// The Subagents the Server counted off the log's tail.
+    pub(crate) fn subagents(&self, thread: ThreadId) -> Option<usize> {
+        self.rows.get(&thread)?.subagents
     }
 }
 

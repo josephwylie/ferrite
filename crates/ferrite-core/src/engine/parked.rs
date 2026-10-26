@@ -1,10 +1,10 @@
 //! The `parked` message (ADR 0026): every window lists the Threads not
-//! open off the rows its Server publishes. A row is read off its log once,
-//! and again only when its Thread changes while it stays parked; the reads
-//! run on a thread of their own rather than the pump — a row waits for a
-//! park's final mark, and a log from before schema 13 is replayed once for
-//! its counts — except in an Engine a window pumps itself, which reads
-//! them in place.
+//! open off the rows its Server publishes. A row is read off its log once.
+//! It is read again only when its Thread is parked again or changes while
+//! parked. The reads run on a thread of their own, not the pump: a row
+//! waits for a park's final mark, and a log from before schema 13 is
+//! replayed once for its counts. An Engine its window pumps reads them in
+//! place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -16,8 +16,8 @@ use crate::ThreadId;
 pub(super) struct ParkedListing {
     /// The parked Threads' rows as last read.
     rows: BTreeMap<ThreadId, ParkedThread>,
-    /// Threads whose rows changed since they were read.
-    changed: BTreeSet<ThreadId>,
+    /// Threads whose rows must be read again.
+    stale: BTreeSet<ThreadId>,
     /// The parked set may have moved since it was last listed.
     moved: bool,
     /// The parked Threads, in creation order, as last listed.
@@ -25,6 +25,7 @@ pub(super) struct ParkedListing {
     /// Something changed since the rows were last handed out.
     unpublished: bool,
     reading: Option<Reading>,
+    /// Read on the caller's thread rather than one of its own.
     in_place: bool,
 }
 
@@ -37,7 +38,7 @@ impl Default for ParkedListing {
     fn default() -> Self {
         Self {
             rows: BTreeMap::new(),
-            changed: BTreeSet::new(),
+            stale: BTreeSet::new(),
             moved: true,
             parked: Vec::new(),
             unpublished: true,
@@ -59,9 +60,10 @@ impl ParkedListing {
         self.moved = true;
     }
 
-    /// `thread` changed while parked: its row is read again.
-    pub(super) fn changed(&mut self, thread: ThreadId) {
-        self.changed.insert(thread);
+    /// `thread`'s log moved — it was parked, or changed while parked: its
+    /// row is read again.
+    pub(super) fn reread(&mut self, thread: ThreadId) {
+        self.stale.insert(thread);
     }
 
     /// The rows to publish, once every parked Thread's is read and none is
@@ -79,7 +81,7 @@ impl ParkedListing {
                 Ok(rows) => self.adopt(rows),
                 // The read died: its rows are due again.
                 Err(TryRecvError::Disconnected) => {
-                    self.changed.extend(reading.threads.iter().copied())
+                    self.stale.extend(reading.threads.iter().copied())
                 }
             }
             self.reading = None;
@@ -89,17 +91,17 @@ impl ParkedListing {
             let listed: BTreeSet<ThreadId> = self.parked.iter().copied().collect();
             let before = self.rows.len();
             self.rows.retain(|thread, _| listed.contains(thread));
-            self.changed.retain(|thread| listed.contains(thread));
+            self.stale.retain(|thread| listed.contains(thread));
             self.unpublished |= self.rows.len() != before;
         }
         let due: Vec<ThreadId> = self
             .parked
             .iter()
             .copied()
-            .filter(|thread| self.changed.contains(thread) || !self.rows.contains_key(thread))
+            .filter(|thread| self.stale.contains(thread) || !self.rows.contains_key(thread))
             .collect();
         if !due.is_empty() {
-            self.changed.clear();
+            self.stale.clear();
             if self.in_place {
                 let rows = super::parked_rows(store, due);
                 self.adopt(rows);
@@ -123,7 +125,7 @@ impl ParkedListing {
     /// while it was out: that one is read again.
     fn adopt(&mut self, rows: Vec<ParkedThread>) {
         for row in rows {
-            if !self.changed.contains(&row.thread) {
+            if !self.stale.contains(&row.thread) {
                 self.rows.insert(row.thread, row);
             }
         }
@@ -148,7 +150,7 @@ impl ParkedListing {
             }
             Err(error) => {
                 crate::log!("the parked Threads could not be read: {error}");
-                self.changed.extend(threads);
+                self.stale.extend(threads);
             }
         }
     }

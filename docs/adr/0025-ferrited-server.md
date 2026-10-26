@@ -336,9 +336,8 @@ still pending means the operator answers again.
   header and last write say (its Project, its age) it still reads
   itself, through a Store handle that never takes the claim
   (`Store::reader`), so a Server started after the window still finds it
-  free. Discovery of CLI
-  session files and workspace commands reads the operator's own files and
-  stays in the window too.
+  free. Discovery of CLI session files and workspace commands reads the
+  operator's own files and stays in the window too.
 - Per window: focus, View (Solo or a Group), fullscreen, Drafts, the
   Composer's prompt history, find. Shared through the Server: which
   Threads are open, Groups and Layouts, projects, Notices and whether they

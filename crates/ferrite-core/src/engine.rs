@@ -1851,7 +1851,7 @@ impl Engine {
         thread: ThreadId,
         choice: ProviderChoice,
     ) -> Result<(), ProvisionError> {
-        self.parked_listing.changed(thread);
+        self.parked_listing.reread(thread);
         let Some(state) = self.threads.get(&thread) else {
             // Parked: the lock is whether a prompt was ever sent, which the
             // log's tail says without a full load.
@@ -2227,6 +2227,9 @@ impl Engine {
             return Err(error);
         }
         let mut state = self.threads.remove(&thread).expect("checked");
+        // Its log moved while it was open, and a read begun before it was
+        // revived would bring back the row it had then.
+        self.parked_listing.reread(thread);
         self.count_closed(thread);
         if state.session.is_some() {
             crate::log!("thread {thread}: session ended: parked");
@@ -2798,12 +2801,7 @@ impl Engine {
     /// Threads the store holds that no Pane is showing — what a restart finds,
     /// and what "reopen" reopens.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
-        Ok(self
-            .store
-            .thread_ids()?
-            .into_iter()
-            .filter(|id| !self.threads.contains_key(id))
-            .collect())
+        parked_ids(&self.store, &self.threads)
     }
 
     /// A parked Thread's binding, read from its log's header; `None` for an
@@ -2828,7 +2826,7 @@ impl Engine {
         let Some(WorkspaceBinding::Worktree { repo, path }) = meta.workspace else {
             return Ok(());
         };
-        self.parked_listing.changed(thread);
+        self.parked_listing.reread(thread);
         let main = WorkspaceBinding::Main { checkout: repo };
         self.store
             .set_workspace(thread, &main, None)
@@ -2955,7 +2953,7 @@ impl Engine {
                 "Thread title cannot be blank",
             ));
         }
-        self.parked_listing.changed(thread);
+        self.parked_listing.reread(thread);
         let mut state = self.threads.get_mut(&thread);
         if let Some(state) = state.as_mut() {
             state.history.clear();
@@ -4860,14 +4858,7 @@ impl Engine {
     /// rows of Threads that changed are read again.
     fn publish_parked(&mut self) {
         let (store, threads) = (&self.store, &self.threads);
-        let parked = || {
-            store
-                .thread_ids()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|id| !threads.contains_key(id))
-                .collect()
-        };
+        let parked = || parked_ids(store, threads).unwrap_or_default();
         let Some(rows) = self.parked_listing.poll(store, parked) else {
             return;
         };
@@ -5731,6 +5722,15 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
         }
         _ => {}
     }
+}
+
+/// The Threads `store` holds that are not `open`, in creation order.
+fn parked_ids(store: &Store, open: &Threads) -> io::Result<Vec<ThreadId>> {
+    Ok(store
+        .thread_ids()?
+        .into_iter()
+        .filter(|id| !open.contains_key(id))
+        .collect())
 }
 
 /// Each of `threads`' row, as a window lists it: a header line, the

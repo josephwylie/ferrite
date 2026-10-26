@@ -154,12 +154,12 @@ publishes them always.
 The Engine reads each row once, on a thread of its own rather than the
 pump (`engine::parked::ParkedListing`): a row waits for a park's final
 mark, and a log from before schema 13 is replayed once for its counts
-(`Store::summary`). It reads a row again only for a Thread that changed
-while parked (a rename, a provider change, a retired worktree); a
-Thread parked or imported is read because it has no row, and a Thread
-revived or deleted loses its row unread. A row that changed again while
-its read was out is read again; the rows are published once none is
-due, when they differ from the last published. An Engine its window
+(`Store::summary`). It reads a row again only for a Thread that was
+parked, or changed while parked (a rename, a provider change, a retired
+worktree); a Thread imported is read because it has no row, and a
+Thread revived or deleted loses its row unread. A row that went stale
+while its read was out is read again; the rows are published once none
+is due, when they differ from the last published. An Engine its window
 pumps in-process (`--demo`, `--load`, the tests) reads them in place, so
 a park is listed by the pump that parked it.
 

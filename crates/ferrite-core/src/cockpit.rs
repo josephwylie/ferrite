@@ -1825,10 +1825,15 @@ impl Cockpit {
     /// A Thread's header: a parked one's from its published row; an open
     /// one's off its log's header line, on this computer only.
     pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
-        match (&self.logs, self.thread(thread)) {
-            (Some(logs), Some(_)) => logs.peek(thread),
-            _ => self.parked.peek(thread),
+        match self.open_log(thread) {
+            Some(logs) => logs.peek(thread),
+            None => self.parked.peek(thread),
         }
+    }
+
+    /// This computer's logs, when `thread` is open and its log is here.
+    fn open_log(&self, thread: ThreadId) -> Option<&Store> {
+        self.logs.as_ref().filter(|_| self.thread(thread).is_some())
     }
 
     /// The subagents a Thread knows, live or parked: a parked Thread's as
@@ -1836,14 +1841,14 @@ impl Cockpit {
     pub fn subagent_count(&self, thread: ThreadId) -> Option<usize> {
         match self.thread(thread) {
             Some(open) => Some(open.subagents()),
-            None => self.parked.counts(thread).1,
+            None => self.parked.subagents(thread),
         }
     }
 
     /// The turns a parked Thread holds, as its Server counted them — the
     /// wall's parked tile reads `11 turns`.
     pub fn parked_turns(&self, thread: ThreadId) -> Option<usize> {
-        self.parked.counts(thread).0
+        self.parked.turns(thread)
     }
 
     /// When a Thread was last used, live or parked — the nav's default
@@ -1851,9 +1856,9 @@ impl Cockpit {
     /// open one's is a `stat`, so callers still cache it rather than ask
     /// per frame.
     pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
-        match (&self.logs, self.thread(thread)) {
-            (Some(logs), Some(_)) => logs.last_used(thread),
-            _ => self.parked.last_used(thread),
+        match self.open_log(thread) {
+            Some(logs) => logs.last_used(thread),
+            None => self.parked.last_used(thread),
         }
     }
 
