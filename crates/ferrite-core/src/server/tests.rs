@@ -1331,7 +1331,8 @@ fn a_window_attached_over_the_socket_drives_the_servers_threads() {
 
     window.park(thread).unwrap();
     assert!(window.thread(thread).is_none());
-    assert_eq!(window.parked().unwrap(), vec![thread]);
+    // Its row arrives once the Server has read it.
+    pump_until(&mut window, |window| window.parked().unwrap() == [thread]);
     pump_until(&mut second, |second| second.thread(thread).is_none());
 }
 
@@ -2377,9 +2378,9 @@ fn next_parked(engine: &mut Engine) -> Vec<protocol::ParkedThread> {
     panic!("no parked message");
 }
 
-/// ADR 0026: a window on a machine lists its parked Threads off the
-/// `parked` message. Nothing is read until such a window asks, and a row
-/// is read again whenever its Thread changes while it stays parked.
+/// ADR 0026: every window lists its parked Threads off the `parked`
+/// message, and a row is read again whenever its Thread changes while it
+/// stays parked.
 #[test]
 fn the_parked_rows_follow_every_change_to_a_parked_thread() {
     let dir = scratch("parked-rows");
@@ -2387,18 +2388,7 @@ fn the_parked_rows_follow_every_change_to_a_parked_thread() {
     let mut engine = engine(&dir.join("threads"), spawner);
     let thread = open_in(&mut engine, &dir);
     engine.park(thread).unwrap();
-    for _ in 0..5 {
-        assert!(
-            !engine
-                .take_messages()
-                .iter()
-                .any(|message| matches!(message, ServerMessage::Parked { .. })),
-            "no window lists them: nothing is read"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
 
-    engine.list_parked(true);
     let rows = next_parked(&mut engine);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].thread, thread);
@@ -2440,6 +2430,80 @@ fn the_parked_rows_follow_every_change_to_a_parked_thread() {
 
     engine.delete(thread).unwrap();
     assert_eq!(listed(next_parked(&mut engine)), [imported]);
+}
+
+/// A row is read again only for the Thread that changed: the others are
+/// published as they were last read, whatever their logs now say.
+#[test]
+fn a_change_to_one_parked_thread_reads_only_its_row() {
+    let dir = scratch("parked-one-row");
+    let (spawner, _providers) = spawn();
+    let mut engine = engine(&dir.join("threads"), spawner);
+    let renamed = open_in(&mut engine, &dir);
+    let untouched = open_in(&mut engine, &dir);
+    engine.park(renamed).unwrap();
+    engine.park(untouched).unwrap();
+    let rows = next_parked(&mut engine);
+    assert_eq!(rows.len(), 2);
+    assert!(rows
+        .iter()
+        .all(|row| row.provider == Some(Provider::Claude)));
+
+    // Behind the Engine's back: a read of this log would say nothing now.
+    let log = dir
+        .join("threads")
+        .join(untouched.to_string())
+        .join("log.jsonl");
+    std::fs::rename(&log, dir.join("moved.jsonl")).unwrap();
+    engine.rename_thread(renamed, "Release notes").unwrap();
+    let rows = next_parked(&mut engine);
+    assert_eq!(rows[0].title.as_deref(), Some("Release notes"));
+    assert_eq!(
+        rows[1].provider,
+        Some(Provider::Claude),
+        "the untouched row was not read again"
+    );
+}
+
+/// A window on this computer lists its parked Threads as a machine's
+/// window does (ADR 0026), off the rows its Server publishes: what a row
+/// says is never read off the log on the window's thread, and a delete
+/// drops the row at once.
+#[test]
+fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
+    let harness = start("parked-off-rows");
+    let mut window = cockpit(&harness);
+    let thread = window
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: harness.dir.clone(),
+            },
+        )
+        .unwrap();
+    window.rename_thread(thread, "Release notes").unwrap();
+    window.park_thread(thread).unwrap();
+    pump_until(&mut window, |window| {
+        window.parked().unwrap() == [thread]
+            && window.display_title(thread, true) == "Release notes"
+    });
+
+    // The log goes where the window cannot read it.
+    let log = harness
+        .dir
+        .join("threads")
+        .join(thread.to_string())
+        .join("log.jsonl");
+    let moved = harness.dir.join("moved.jsonl");
+    std::fs::rename(&log, &moved).unwrap();
+    assert_eq!(window.display_title(thread, true), "Release notes");
+    assert_eq!(window.peek(thread).unwrap().provider, Provider::Claude);
+    assert!(window.last_used(thread).is_some());
+    assert!(window.parked_turns(thread).is_some());
+    std::fs::rename(&moved, &log).unwrap();
+
+    window.delete(thread).unwrap();
+    assert_eq!(window.parked().unwrap(), [], "the row drops at once");
 }
 
 /// The far end of `ssh box ferrited bridge`, played by the harness's own

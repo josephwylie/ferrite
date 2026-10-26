@@ -169,9 +169,8 @@ fn lab_store_costs_on_a_real_log() {
     cockpit.peek(thread).unwrap();
     eprintln!("LAB peek_ms={:.3}", ms(started));
     let started = Instant::now();
-    let reader = cockpit.log_reader();
-    let turns = reader.turn_count(thread).unwrap();
-    let subagents = reader.subagent_count(thread).unwrap();
+    let turns = cockpit.parked_turns(thread).unwrap();
+    let subagents = cockpit.subagent_count(thread).unwrap();
     eprintln!(
         "LAB parked_lookup_ms={:.1} turns={turns} subagents={subagents}",
         ms(started)
@@ -191,9 +190,8 @@ fn lab_store_costs_on_a_real_log() {
         eprintln!("LAB park#{round}_ms={:.1}", ms(started));
     }
     let started = Instant::now();
-    let reader = cockpit.log_reader();
-    let turns = reader.turn_count(thread).unwrap();
-    let subagents = reader.subagent_count(thread).unwrap();
+    let turns = cockpit.parked_turns(thread).unwrap();
+    let subagents = cockpit.subagent_count(thread).unwrap();
     eprintln!(
         "LAB parked_lookup_after_ms={:.1} turns={turns} subagents={subagents}",
         ms(started)
@@ -230,12 +228,11 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
     cockpit.pump();
     let live_count = cockpit.thread(thread).unwrap().activity().children().len();
     assert_eq!(live_count, 1);
+    let read = cockpit.engine().store.bytes_read();
     cockpit.park(thread).unwrap();
 
-    let reader = cockpit.log_reader();
-    let read = cockpit.engine().store.bytes_read();
-    assert_eq!(reader.subagent_count(thread).unwrap(), live_count);
-    assert_eq!(reader.turn_count(thread).unwrap(), 1);
+    assert_eq!(cockpit.subagent_count(thread), Some(live_count));
+    assert_eq!(cockpit.parked_turns(thread), Some(1));
     let size = std::fs::metadata(
         cockpit
             .engine()
@@ -247,10 +244,10 @@ fn parked_lookups_read_the_tail_of_a_parked_thread() {
     .unwrap()
     .len();
     assert!(size > 3_000_000);
-    // Each lookup: the header line and one chunk back from the end.
+    // Its row: the header line and one chunk back from the end.
     assert!(
         cockpit.engine().store.bytes_read() - read <= 256 * 1024,
-        "parked lookups read {} bytes of a {size} byte log",
+        "the parked row read {} bytes of a {size} byte log",
         cockpit.engine().store.bytes_read() - read
     );
     let _ = std::fs::remove_dir_all(cockpit.engine().store.dir());

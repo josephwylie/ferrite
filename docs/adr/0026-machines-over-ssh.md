@@ -142,23 +142,36 @@ off the log — provider, title, the first prompt's title, binding,
 Project, last use (ms since the epoch), turns and Subagents — or only
 its age when the log cannot be read.
 
-Only a window that says `parked_threads` in its hello is sent rows: a
-window on a machine. While none is attached the Engine reads nothing,
-so this computer's Server and the in-process Engine pay nothing for
-them. While one is, the Engine reads the rows afresh after something
-may have moved one (the open Threads changed, a rename, delete, import
-or provider change), on a thread of their own rather than the pump: a
-row waits for a park's final mark, and a log from before schema 13 is
-replayed once for its counts (`Store::summary`). A read that began
-before the latest change is dropped and read again; rows that differ
-from the last published are published.
+Every window lists its parked Threads this way, this computer's too: a
+window that read this computer's Store itself peeked every parked log
+on the UI thread whenever the parked set moved — about three header
+reads, a `stat` and a first-prompt read per Thread, 155–480 ms with the
+operator's ~500 parked Threads, after every delete, park or rename. A
+window still says `parked_threads` in its hello, for a Server from
+before that sent rows only to a window that did; a Server now keeps and
+publishes them always.
+
+The Engine reads each row once, on a thread of its own rather than the
+pump (`engine::parked::ParkedListing`): a row waits for a park's final
+mark, and a log from before schema 13 is replayed once for its counts
+(`Store::summary`). It reads a row again only for a Thread that changed
+while parked (a rename, a provider change, a retired worktree); a
+Thread parked or imported is read because it has no row, and a Thread
+revived or deleted loses its row unread. A row that changed again while
+its read was out is read again; the rows are published once none is
+due, when they differ from the last published. An Engine its window
+pumps in-process (`--demo`, `--load`, the tests) reads them in place, so
+a park is listed by the pump that parked it.
 
 `Cockpit` reads parked Threads through one seam (`cockpit::Parked`):
-this computer's Store (`Store::reader`, unchanged) or, on a machine,
-the published rows; the off-thread counts (`LogReader`) follow it. A
-row that moved tells the window to rebuild its parked rows
-(`take_parked_changed`), since on a machine there are none until the
-Server says so. Reopening is the `revive` command, as for any Thread.
+the rows its Server last published, from which the nav's names,
+providers, Projects, ages, turns and Subagent counts come with no log
+read. A row that moved tells the window to rebuild its parked rows
+(`take_parked_changed`); a delete drops the row from the window's copy
+at once. On this computer the window keeps a read-only Store for what
+an open Thread's header and last write say (its Project, its age),
+which no message carries yet. Reopening is the `revive` command, as for
+any Thread.
 
 The empty per-machine Store is gone: nothing reads a machine's Threads
 from `Attach::store`, which only names the directory the window's

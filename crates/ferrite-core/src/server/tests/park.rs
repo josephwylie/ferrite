@@ -131,7 +131,9 @@ fn an_api_park_of_a_member_of_the_shown_group_leaves_it() {
     );
     assert_eq!(window.roster().focused_thread(), Some(threads[0]));
     every_member_has_a_pane(&window, group);
-    assert!(window.parked().unwrap().contains(&threads[1]));
+    pump_until(&mut window, |window| {
+        window.parked().unwrap().contains(&threads[1])
+    });
 }
 
 /// Parked while the operator looks elsewhere: it leaves the Group all the

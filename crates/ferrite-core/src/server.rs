@@ -287,7 +287,6 @@ struct Client {
     /// Said hello in a generation this Server speaks.
     welcomed: bool,
     renders_visuals: bool,
-    lists_parked: bool,
     watching: BTreeSet<ThreadId>,
 }
 
@@ -448,7 +447,6 @@ impl Server {
                         connection,
                         welcomed: false,
                         renders_visuals: false,
-                        lists_parked: false,
                         watching: BTreeSet::new(),
                     },
                 );
@@ -457,7 +455,6 @@ impl Server {
                 self.clients.remove(&id);
                 self.engine.window_gone(id);
                 self.renders.client_gone(id);
-                self.list_parked();
             }
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
@@ -493,8 +490,6 @@ impl Server {
                     };
                     client.welcomed = true;
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
-                    client.lists_parked = capabilities.contains(&Capability::ParkedThreads);
-                    self.list_parked();
                     let snapshot = self.engine.snapshot();
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
@@ -907,15 +902,6 @@ impl Server {
                 self.send(drawer, message);
             }
         }
-    }
-
-    /// Read the parked Threads' rows only while a window lists them.
-    fn list_parked(&mut self) {
-        let wanted = self
-            .clients
-            .values()
-            .any(|client| client.welcomed && client.lists_parked);
-        self.engine.list_parked(wanted);
     }
 
     /// Tell the Engine what the windows watch, when that changed: what

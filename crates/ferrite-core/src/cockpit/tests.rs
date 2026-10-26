@@ -4327,9 +4327,10 @@ fn effort_changes_in_place_and_persists() {
     // Parked: the header alone changes, and a revive reads it.
     cockpit.park(thread).unwrap();
     cockpit.set_effort(thread, None).unwrap();
-    assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+    let store = &cockpit.engine().store;
+    assert_eq!(store.peek(thread).unwrap().effort, None);
     assert_eq!(
-        cockpit.peek(thread).unwrap().model.as_deref(),
+        store.peek(thread).unwrap().model.as_deref(),
         Some("claude-fable-5-1")
     );
     revive_awake(&mut cockpit, thread);
