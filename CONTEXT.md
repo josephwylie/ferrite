@@ -240,6 +240,12 @@ _Avoid_: smart filtering (the setting it replaced), agents panel
 A Pane's pending Provider, Effort, Project, and Workspace choices before its
 first prompt creates a Thread. It has no durable history or Session.
 
+**Current Thread**
+The Thread the operator is in: the focused one, else the open Thread focus
+last left (focus on a Draft). A new Thread starts in its Project; only a
+Project named outright (the palette's "New thread in …") outranks it.
+_Avoid_: active thread, last thread.
+
 **Remote**
 Following and answering Decisions away from the desktop. Wanted soon;
 scope under discussion.
