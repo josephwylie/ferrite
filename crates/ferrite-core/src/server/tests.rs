@@ -1419,15 +1419,20 @@ fn a_reopened_window_can_answer_questions() {
         if !already_pending {
             provider.send(question).unwrap();
         }
-        pump_until(&mut reopened, pending);
+        // The window must retain the Server's identity. The question and
+        // the Server's handle for it are two messages, and until the handle
+        // lands the window numbers the question itself, so wait for the
+        // Server's serial rather than read the first one shown.
+        pump_until(&mut reopened, |window| {
+            pending(window)
+                && window.thread(thread).unwrap().pending_decisions()[0]
+                    .handle
+                    .serial
+                    == first_handle.serial + 1
+        });
         let handle = reopened.thread(thread).unwrap().pending_decisions()[0]
             .handle
             .clone();
-        assert_eq!(
-            handle.serial,
-            first_handle.serial + 1,
-            "the window must retain the Server's identity"
-        );
         let answer = DecisionAnswer::Questions {
             answers: vec![if already_pending {
                 crate::questions::Answer {
