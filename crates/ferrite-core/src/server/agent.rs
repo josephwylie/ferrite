@@ -105,8 +105,11 @@ pub(super) fn start_detached(executable: &Path, args: &[&str]) -> io::Result<()>
 pub const LABEL: &str = "com.github.josephwylie.ferrite.server";
 
 /// The LaunchAgent: the Server at login, and again after a crash — not
-/// after a clean stop (`SuccessfulExit = false`). No `ProcessType`: a
-/// Background agent is throttled, and the agents' builds run under it.
+/// after a clean stop (`SuccessfulExit = false`). `ProcessType` is
+/// `Interactive`: every act of the window waits on this process, and a job
+/// with none (Standard) or Background is throttled — launchd clamps it,
+/// and everything it starts, to UTILITY or below (ADR 0034). The agents
+/// it starts take their own lower class (`spawn::agent`).
 pub fn plist(executable: &Path) -> String {
     let executable = executable
         .display()
@@ -126,6 +129,8 @@ pub fn plist(executable: &Path) -> String {
 		<string>{executable}</string>
 		<string>server</string>
 	</array>
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>

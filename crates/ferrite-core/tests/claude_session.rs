@@ -194,6 +194,46 @@ exit 0",
     ClaudeSession::spawn(config(program)).expect("an untested major must still spawn");
 }
 
+/// A Session's CLI runs at the agents' class, and so does what it starts:
+/// the operator's acts wait on the Server, never behind an agent's build
+/// (ADR 0034).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn what_a_session_starts_runs_below_the_server() {
+    let report = std::env::temp_dir().join(format!("ferrite-claude-class-{}", std::process::id()));
+    let _ = fs::remove_file(&report);
+    let class = if cfg!(target_os = "macos") {
+        "ps -o pri= -p $$"
+    } else {
+        "nice"
+    };
+    let program = stub(
+        "claude-class",
+        &format!(
+            "{VERSION_CASE}\n/bin/sh -c '{class}' > '{0}.part' && mv '{0}.part' '{0}'\nexit 0",
+            report.display()
+        ),
+    );
+    ClaudeSession::spawn(config(program)).expect("the stub spawns");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let reported = loop {
+        if let Ok(reported) = fs::read_to_string(&report) {
+            break reported;
+        }
+        assert!(Instant::now() < deadline, "the stub never reported");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let reported: i32 = reported.trim().parse().unwrap();
+    if cfg!(target_os = "macos") {
+        // UTILITY's ceiling.
+        assert!(reported <= 20, "priority {reported}");
+    } else {
+        // SAFETY: getpriority has no preconditions.
+        let ours = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        assert_eq!(reported, (ours + 10).min(19), "against {ours}");
+    }
+}
+
 /// The whole 2.x line is inside the tested window.
 #[test]
 fn the_last_release_below_the_next_major_is_accepted() {

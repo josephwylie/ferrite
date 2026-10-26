@@ -2,9 +2,8 @@
 //! Provider adapters own flags, models and output formats. Callers supply
 //! text; the runner owns stdin, pipe draining, the scratch cwd and deadline.
 
-use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::io::{Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -57,10 +56,8 @@ fn predict_using(provider: Provider, program: &str, system: &str, context: &str)
 pub(crate) fn run(form: &Form, input: Option<&str>, timeout: Duration) -> Option<String> {
     let dir = std::env::temp_dir().join(format!("ferrite-oneshot-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
-    let mut child = Command::new(spawnable_program(&form.program))
+    let mut child = crate::spawn::agent(spawnable_program(&form.program))
         .args(&form.args)
-        .no_console_window()
-        .agent_environment()
         .current_dir(dir)
         .stdin(if input.is_some() {
             Stdio::piped()

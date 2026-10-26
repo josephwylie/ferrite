@@ -564,6 +564,7 @@ impl Connection {
         std::thread::Builder::new()
             .name(format!("ferrite-client-{id}-out"))
             .spawn(move || {
+                crate::spawn::serve_the_operator();
                 let (lock, ready) = &*outbox;
                 loop {
                     let next = {
@@ -612,6 +613,7 @@ impl Connection {
         std::thread::Builder::new()
             .name(format!("ferrite-client-{id}-in"))
             .spawn(move || {
+                crate::spawn::serve_the_operator();
                 let mut lines = Lines::new(stream);
                 while let Ok(Some(message)) = lines.next_message::<ClientMessage>() {
                     if heard.send(Heard::Message(id, message)).is_err() {
@@ -639,6 +641,7 @@ impl Connection {
         let spawned = std::thread::Builder::new()
             .name(format!("ferrite-history-{thread}"))
             .spawn(move || {
+                crate::spawn::serve_the_operator();
                 let _reading = READERS.take();
                 let _ = read(&mut |message| {
                     pieces

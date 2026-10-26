@@ -117,8 +117,9 @@ setting: it would point the operator's LaunchAgent at `target/`). It writes
 `~/Library/LaunchAgents/com.github.josephwylie.ferrite.server.plist` —
 `ProgramArguments` = the bundle's executable and `server`, `RunAtLoad`,
 `KeepAlive { SuccessfulExit = false }` (restarted after a crash, not after
-a clean stop), no `ProcessType` (Background would throttle the agents'
-builds) — then `launchctl bootstrap gui/<uid>` (a label already loaded
+a clean stop), `ProcessType` = `Interactive` (amended 2026-10-26 by ADR
+0034: no `ProcessType` is Standard, which clamps the Server and the agents
+alike to UTILITY; the agents take their own lower class) — then `launchctl bootstrap gui/<uid>` (a label already loaded
 counts as done). Turning it off only deletes the plist: `bootout` would
 SIGTERM the running Server, so the job stays loaded until logout and
 nothing starts it at the next login. Each launch rewrites the plist if

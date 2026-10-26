@@ -1,8 +1,7 @@
 //! Model discovery without a Thread: initialize, model/list, then exit.
 
-use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use std::io::{self, BufRead, BufReader, Write};
-use std::process::{ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStdin, ChildStdout, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -28,10 +27,8 @@ pub(super) fn request_only<T: Send + 'static>(
 ) -> io::Result<T> {
     let program = super::super::spawnable_program(program);
     super::check_version(&program).map_err(io::Error::other)?;
-    let mut child = Command::new(program)
+    let mut child = crate::spawn::agent(program)
         .arg("app-server")
-        .no_console_window()
-        .agent_environment()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -160,6 +157,7 @@ mod tests {
     #[test]
     fn a_silent_catalog_times_out_and_reaps_its_process() {
         use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
         let dir =
             std::env::temp_dir().join(format!("ferrite-model-timeout-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -382,6 +382,7 @@ impl Server {
     }
 
     fn serve(mut self, hear: Receiver<Heard>) -> i32 {
+        crate::spawn::serve_the_operator();
         loop {
             let wait = if self.engine.threads().is_empty() {
                 IDLE
@@ -863,6 +864,7 @@ impl Server {
     ) {
         let (answer, answered) = mpsc::channel();
         std::thread::spawn(move || {
+            crate::spawn::serve_the_operator();
             let _ = answer.send(read());
         });
         self.reads.push((client, request, answered));
