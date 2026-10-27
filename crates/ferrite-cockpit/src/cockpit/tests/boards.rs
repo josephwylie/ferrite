@@ -14,11 +14,9 @@ fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut Tes
     let directory = scratch("original-image-path");
     std::fs::create_dir_all(directory.join("nested")).unwrap();
     let image = directory.join("résumé #50%.png");
-    std::fs::write(
-        &image,
-        include_bytes!("../../../../ferrite/assets/app-icon.png"),
-    )
-    .unwrap();
+    image::RgbaImage::from_pixel(40, 30, image::Rgba([90, 140, 200, 255]))
+        .save(&image)
+        .unwrap();
     // Include a parent component so the route must canonicalize, not
     // concatenate a file:// prefix or hand the OS the unresolved path.
     let unresolved = directory.join("nested/../résumé #50%.png");

@@ -28,6 +28,7 @@ pub mod diagram;
 pub(crate) mod element;
 pub mod engine;
 pub mod renderer;
+pub mod samples;
 mod shelf;
 #[cfg(feature = "visual-reference")]
 pub mod shots;

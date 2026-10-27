@@ -1557,9 +1557,9 @@ fn visual_input(title: &str, caption: &str, html: &str) -> serde_json::Value {
     serde_json::json!({ "title": title, "caption": caption, "html": html })
 }
 
-const STATS_PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/stats.html");
-const MOCKUPS_PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/mockups.html");
-const TREEMAP_PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/treemap.html");
+use ferrite_pane::visual::samples::{
+    MOCKUPS as MOCKUPS_PAGE, STATS as STATS_PAGE, TREEMAP as TREEMAP_PAGE,
+};
 const VISUAL: &str = ferrite_core::visual::CLAUDE_NAME;
 
 /// A conversation with visuals in every state: one shown (a dashboard),

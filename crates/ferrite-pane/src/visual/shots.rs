@@ -67,9 +67,9 @@ pub fn snapshots(output: String) {
     );
     cx.update(super::init);
     let pages = [
-        ("stats", include_str!("../../assets/visuals/stats.html")),
-        ("mockups", include_str!("../../assets/visuals/mockups.html")),
-        ("treemap", include_str!("../../assets/visuals/treemap.html")),
+        ("stats", super::samples::STATS),
+        ("mockups", super::samples::MOCKUPS),
+        ("treemap", super::samples::TREEMAP),
     ];
     let started = Instant::now();
     let done = std::rc::Rc::new(std::cell::Cell::new(0usize));

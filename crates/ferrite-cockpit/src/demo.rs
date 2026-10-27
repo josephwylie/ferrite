@@ -999,7 +999,7 @@ fn asks_for_a_visual(prompt: &str) -> bool {
 /// whose HTML streams in (the page builds up while it is drawn), the
 /// screenshot's answer, and a closing line.
 fn visual_reply() -> Vec<Step> {
-    const PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/stats.html");
+    const PAGE: &str = ferrite_pane::visual::samples::STATS;
     const ID: &str = "demo_visual";
     let name = ferrite_core::visual::CLAUDE_NAME;
     let input = |html: &str| {
