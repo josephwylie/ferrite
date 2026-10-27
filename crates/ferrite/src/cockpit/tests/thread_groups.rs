@@ -730,23 +730,25 @@ fn pointer_drag_joins_then_reorders_to_the_after_last_target(cx: &mut TestAppCon
     });
 }
 
+/// A Group whose member rows run several viewports past the nav's bottom
+/// still reaches its last member by scrolling.
 #[gpui::test]
-fn a_hundred_member_group_remains_reachable_through_nav_scroll(cx: &mut TestAppContext) {
-    let (mut core, _) = cockpit("group-nav-scroll", 100);
+fn a_long_group_remains_reachable_through_nav_scroll(cx: &mut TestAppContext) {
+    let (mut core, _) = cockpit("group-nav-scroll", 24);
     group_all(&mut core);
+    let last = format!("nav-thread-{}", core.threads().last().unwrap().get());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(320.)));
     cx.run_until_parked();
-    let before = cx.debug_bounds("nav-thread-100").unwrap();
+    let before = debug_bounds(cx, last.clone()).unwrap();
     assert!(
         before.center().y > px(320.),
         "the last row starts below the viewport"
     );
 
-    // Past the end and clamped there, rather than a measured distance:
-    // a member row is `THREAD_ROW_H` tall, so 100 of them are ~4600px of
-    // column and any number tuned to a shorter row would stop short.
+    // Past the end and clamped there, rather than a measured distance a
+    // change of row height would make stop short.
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: gpui::point(px(100.), px(200.)),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40_000.))),
@@ -754,7 +756,7 @@ fn a_hundred_member_group_remains_reachable_through_nav_scroll(cx: &mut TestAppC
         touch_phase: gpui::TouchPhase::default(),
     });
     cx.run_until_parked();
-    let after = cx.debug_bounds("nav-thread-100").unwrap();
+    let after = debug_bounds(cx, last).unwrap();
     assert!(
         after.center().y < px(320.),
         "scrolling exposes the final member: {after:?}"
