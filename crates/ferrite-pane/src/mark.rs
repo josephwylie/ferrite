@@ -165,7 +165,7 @@ pub fn mark(status: RowStatus, small: bool) -> AnyElement {
 /// and 13px icons, laid out at the width the mockup's box takes
 /// (`PANE_HEAD_DOT_W`: a dot's halo overflows it), so the title starts
 /// where it is drawn.
-pub fn head_mark(status: RowStatus) -> AnyElement {
+pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
     let face = mark_sized(status, NAV_DOT, ferrite_ui::theme::PANE_HEAD_ICON);
     match status {
         RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background => div()
