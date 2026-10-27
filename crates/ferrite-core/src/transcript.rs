@@ -4045,6 +4045,36 @@ mod tests {
         }
     }
 
+    /// A link however long its target — a signed URL, a data URL — is a
+    /// link, and streams like the rest.
+    #[test]
+    fn a_link_with_a_long_url_streams_in_time_linear_in_its_length() {
+        let link = format!("see [the file](https://x.y/{}) and ", "u".repeat(4096));
+        let mut transcript = Transcript::default();
+        let budget = std::time::Duration::from_millis(1500);
+        let started = std::time::Instant::now();
+        for (sent, delta) in link.repeat(100).as_bytes().chunks(32).enumerate() {
+            transcript.apply(text(std::str::from_utf8(delta).unwrap()));
+            assert!(
+                started.elapsed() < budget,
+                "{sent} deltas of long links took {:?}",
+                started.elapsed()
+            );
+        }
+        let mut whole = Transcript::default();
+        whole.apply(text(&link.repeat(100)));
+        assert_eq!(transcript.blocks()[0].body, whole.blocks()[0].body);
+        let Body::Paragraph { spans } = &transcript.blocks()[0].body else {
+            panic!("a paragraph");
+        };
+        let links: Vec<_> = spans
+            .iter()
+            .filter(|span| span.style == Style::Link)
+            .collect();
+        assert_eq!(links.len(), 100);
+        assert!(links.iter().all(|span| span.text == "the file"));
+    }
+
     /// However the provider splits an answer, every delta leaves the Blocks
     /// the text so far folds to in one piece: markers that close late, or
     /// never; sections that open as one kind and turn out another.
@@ -4069,28 +4099,21 @@ mod tests {
             "```\n\n\nx\n\r\n```",
             "`a` `b` **c** **d** [e](f) [g](h)`i` j `k`l ``m`` *n*`o`",
         ];
-        // Markers whose closer comes just inside, at, or past the reach a
-        // marker looks for one in, or never.
-        let reach = markdown::REACH;
-        let far = "w ".repeat(reach / 2);
-        let edges: Vec<String> = [reach - 3, reach - 2, reach - 1, reach]
-            .into_iter()
-            .flat_map(|n| {
-                let w = "w".repeat(n);
-                [
-                    format!("`{w}` then `x` done"),
-                    format!("**{w}** then **b** done"),
-                    format!("[{w}](u) then [l](u) done"),
-                    format!("[l]({w}) then done"),
-                ]
-            })
-            .chain([
-                format!("a lone ` tick {far} then `x` y"),
-                format!("a lone ** star {far} then **b** y"),
-                format!("array[i] {far} then [l](u) and ](late) y"),
-                format!("a ` b **c** {far} d"),
-            ])
-            .collect();
+        // Markers whose closer comes far on, or never, with more markers
+        // waiting between: each closes however far it has to look.
+        let far = "w ".repeat(700);
+        let long = "w".repeat(1500);
+        let edges = [
+            format!("a lone ` tick {far} then `x` y"),
+            format!("a lone ** star {far} then **b** y"),
+            format!("array[i] {far} then [l](u) and ](late) y"),
+            format!("a ` b **c** {far} d"),
+            format!("a ` b {far} **c `d` [e {far} f` g** h"),
+            format!("`{long}` then `x` done"),
+            format!("**{long}** then **b** done"),
+            format!("[l](https://x.y/{long}) then [m](u) done"),
+            format!("[{far}](u) a [](x) [b [c {far} ](d) e) f"),
+        ];
         for answer in answers
             .iter()
             .copied()

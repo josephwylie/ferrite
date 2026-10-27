@@ -48,20 +48,80 @@ struct Lines {
     count: usize,
 }
 
-/// A prose section's leading spans that no later text can restyle: what
-/// the open Block's spans keep between deltas, and where in the section's
-/// text the rest starts.
+/// A prose section's spans as folded so far: where its text is cut, and
+/// the markers before the cut still waiting on a closer. Its spans before
+/// the cut stay as they are until one of those markers closes.
 struct Settled {
     shape: Shape,
     /// Where the section's inline text starts in its source, past any
     /// indent and marker.
     start: usize,
-    /// Bytes of the inline text settled.
+    cut: Cut,
+    /// The first waiting marker of each kind, earliest first.
+    waiting: Vec<Wait>,
+}
+
+/// A point the section's inline text is folded up to: the text after it
+/// reads again with the next delta, as the rest of the span it falls in.
+#[derive(Clone, Copy, Default)]
+struct Cut {
+    /// Bytes of the inline text before it.
     bytes: usize,
-    /// Spans settled, the last of them Plain and cut short at `last` bytes:
-    /// the rest of its run reads again with the tail.
+    /// Spans before it, the last of them cut short at `last` bytes.
     spans: usize,
     last: usize,
+    /// Whether it falls in code a lone backtick opened, which runs on.
+    code: bool,
+}
+
+/// A marker the cut has passed while it still waits on its closer: the
+/// cut from before it, and how far the text after it has been looked
+/// through for a closer.
+struct Wait {
+    marker: Marker,
+    at: usize,
+    before: Cut,
+    looked: usize,
+    /// For a `[`: where its `](` is, once found.
+    pair: Option<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    Tick,
+    Bold,
+    Link,
+}
+
+impl Wait {
+    /// Whether `text` now closes the marker, looking only past where the
+    /// last look ended.
+    fn closes(&mut self, text: &str) -> bool {
+        // A two-byte closer may straddle the last look's end.
+        let from = |least: usize, looked: usize| least.max(looked.saturating_sub(1));
+        let closed = match self.marker {
+            Marker::Tick => text[self.looked.max(self.at + 1)..].contains('`'),
+            Marker::Bold => find(text, from(self.at + 2, self.looked), "**").is_some(),
+            Marker::Link => {
+                if self.pair.is_none() {
+                    self.pair = find(text, from(self.at + 1, self.looked), "](");
+                }
+                self.pair
+                    .is_some_and(|pair| text[self.looked.max(pair + 2)..].contains(')'))
+            }
+        };
+        self.looked = text.len();
+        closed
+    }
+}
+
+/// Where `needle` first is in `text` at or past `from`.
+fn find(text: &str, from: usize, needle: &str) -> Option<usize> {
+    let from = from.min(text.len());
+    text.as_bytes()[from..]
+        .windows(needle.len())
+        .position(|window| window == needle.as_bytes())
+        .map(|found| from + found)
 }
 
 impl OpenSection {
@@ -152,9 +212,8 @@ impl OpenSection {
                 Folded::Prose(Settled {
                     shape,
                     start: offset(&self.source, text),
-                    bytes: 0,
-                    spans: 0,
-                    last: 0,
+                    cut: Cut::default(),
+                    waiting: Vec::new(),
                 })
             })
         };
@@ -233,33 +292,91 @@ impl Settled {
             _ => return false,
         };
 
-        let tail = Inline::read(&text[self.bytes..]);
-        spans.truncate(self.spans);
-        let merged = self.spans > 0;
-        let mut read = tail.spans.iter();
+        // A marker the new text closes restyles what followed it: read
+        // again from the cut before it.
+        if let Some(closed) = self.waiting.iter_mut().position(|wait| wait.closes(text)) {
+            self.cut = self.waiting[closed].before;
+            self.waiting.truncate(closed);
+        }
+
+        // In code a lone backtick opened, the tail reads on from that
+        // backtick.
+        let from = self.cut;
+        let reopened;
+        let (read, shift) = if from.code {
+            reopened = format!("`{}", &text[from.bytes..]);
+            (reopened.as_str(), 1)
+        } else {
+            (&text[from.bytes..], 0)
+        };
+        let tail = Inline::read(read);
+
+        spans.truncate(from.spans);
+        let merged = from.spans > 0;
+        let mut runs = tail.spans.iter();
         if merged {
-            let last = &mut spans[self.spans - 1].text;
-            last.truncate(self.last);
-            if let Some((style, run)) = read.next() {
-                debug_assert_eq!(*style, Style::Plain, "a settled cut lies inside plain text");
-                last.push_str(run);
+            let last = &mut spans[from.spans - 1];
+            last.text.truncate(from.last);
+            if let Some((style, run)) = runs.next() {
+                debug_assert_eq!(*style, last.style, "a cut reads on as its own span");
+                last.text.push_str(run);
             }
         }
-        spans.extend(read.map(|&(style, text)| Span {
+        spans.extend(runs.map(|&(style, text)| Span {
             text: text.to_string(),
             style,
         }));
 
-        if let Some((index, cut)) = tail.cut() {
-            let base = self.spans - usize::from(merged);
-            self.last = if merged && index == 0 {
-                self.last + cut
-            } else {
-                cut - offset(tail.text, tail.spans[index].1)
-            };
-            self.spans = base + index + 1;
-            self.bytes += cut;
+        // Settle past every marker still waiting, keeping the cut before
+        // the first of each kind for when it closes.
+        let mut found = [
+            (Marker::Tick, tail.tick.filter(|&at| at >= shift)),
+            (Marker::Bold, tail.bold),
+            (Marker::Link, tail.link),
+        ];
+        found.sort_by_key(|&(_, at)| at);
+        let advance = |cut: Option<(usize, usize, bool)>| match cut {
+            None => from,
+            Some((index, at, code)) => Cut {
+                bytes: from.bytes + at - shift,
+                spans: from.spans - usize::from(merged) + index + 1,
+                last: if merged && index == 0 {
+                    from.last + at - shift
+                } else {
+                    at - offset(tail.text, tail.spans[index].1)
+                },
+                code,
+            },
+        };
+        // A cut on a waiting marker would read it again as the span it
+        // was cut from: cut before it.
+        let cut_before = |mut limit: usize| loop {
+            let cut = tail.cut(limit);
+            match cut {
+                Some((_, at, _)) if found.iter().any(|&(_, wait)| wait == Some(at)) => limit = at,
+                _ => break cut,
+            }
+        };
+        let end = cut_before(tail.text.len());
+        for (marker, at) in found {
+            let Some(at) = at else { continue };
+            if end.is_none_or(|(_, cut, _)| cut <= at)
+                || self.waiting.iter().any(|wait| wait.marker == marker)
+            {
+                continue;
+            }
+            self.waiting.push(Wait {
+                marker,
+                at: from.bytes + at - shift,
+                before: advance(cut_before(at)),
+                looked: text.len(),
+                // Its `](` may be here already, its `)` still coming.
+                pair: (marker == Marker::Link)
+                    .then(|| find(text, from.bytes + at - shift + 1, "]("))
+                    .flatten(),
+            });
         }
+        self.cut = advance(end);
         true
     }
 }
@@ -448,36 +565,17 @@ pub(super) fn spans(text: &str) -> Vec<Span> {
         .collect()
 }
 
-/// How far past a marker its closer may come: a backtick, `**` or `[`
-/// with none within this many bytes, its own included, is literal text.
-/// Real code spans, bold runs and links fit well inside it; the bound is
-/// what lets a marker that never closes stop holding back the prose after
-/// it while an answer streams.
-pub(super) const REACH: usize = 1024;
-
-/// The text a marker at the front of `rest` may find its closer in.
-fn within(rest: &str) -> &str {
-    let mut end = REACH.min(rest.len());
-    while !rest.is_char_boundary(end) {
-        end -= 1;
-    }
-    &rest[..end]
-}
-
-/// Whether text still to come could close a marker at the front of `rest`
-/// that has found no closer yet.
-fn may_close(rest: &str) -> bool {
-    rest.len() < REACH
-}
-
-/// A line's spans, as slices of it, and the first marker in it still
-/// waiting on text to come: a backtick or `**` with no closer yet, or a
-/// `[` its link's `](…)` has not followed, each while its reach is still
-/// open.
+/// A line's spans, as slices of it, and the first marker of each kind in
+/// it still waiting on text to come: a backtick or `**` with no closer
+/// yet, or a `[` its link's `](…)` has not followed.
 struct Inline<'a> {
     text: &'a str,
     spans: Vec<(Style, &'a str)>,
-    waiting: usize,
+    tick: Option<usize>,
+    bold: Option<usize>,
+    link: Option<usize>,
+    /// The Code span a lone backtick opened that runs to the line's end.
+    open_code: Option<usize>,
 }
 
 impl<'a> Inline<'a> {
@@ -491,21 +589,22 @@ impl<'a> Inline<'a> {
         let mut inline = Self {
             text,
             spans: Vec::new(),
-            waiting: text.len(),
+            tick: None,
+            bold: None,
+            link: None,
+            open_code: None,
         };
         let mut plain = 0;
         let mut at = 0;
         while at < text.len() {
             let rest = &text[at..];
-            if rest.starts_with('`') {
+            if let Some(code) = rest.strip_prefix('`') {
                 // Step over a closed code span; an unclosed backtick opens
                 // none here (`code_split` reads it).
-                at += match within(rest)[1..].find('`') {
+                at += match code.find('`') {
                     Some(end) => end + 2,
                     None => {
-                        if may_close(rest) {
-                            inline.wait(at);
-                        }
+                        inline.tick.get_or_insert(at);
                         1
                     }
                 };
@@ -520,47 +619,31 @@ impl<'a> Inline<'a> {
             }
             // `**` with no `**` after it yet: the text to come may close it.
             // (`****` is settled: its closer is already its first `**`.)
-            if at < inline.waiting
-                && rest.starts_with("**")
-                && may_close(rest)
-                && !rest[2..].contains("**")
-            {
-                inline.wait(at);
+            if inline.bold.is_none() && rest.starts_with("**") && !rest[2..].contains("**") {
+                inline.bold = Some(at);
             }
             at += skip(rest, |b| matches!(b, b'`' | b'*'));
-        }
-        // A `*` at the end may be half of a `**` still to come.
-        if text.ends_with('*') {
-            inline.wait(text.len() - 1);
         }
         inline.code_split(&text[plain..], Style::Plain);
         inline
     }
 
-    fn wait(&mut self, at: usize) {
-        self.waiting = self.waiting.min(at);
-    }
-
     /// Cut the backticked code out of one run, pairing backticks in turn:
-    /// the text between a pair is Code, and one whose pair is still to come
-    /// makes the rest of the run Code; one with no pair in reach is text.
-    /// The rest wears `style`, and a plain piece still folds its links.
+    /// the text between a pair is Code, and a lone one makes the rest of
+    /// the run Code. The rest wears `style`, and a plain piece still folds
+    /// its links.
     fn code_split(&mut self, text: &'a str, style: Style) {
         let mut piece = 0;
         let mut at = 0;
         while let Some(found) = text[at..].find('`') {
             let tick = at + found;
             let rest = &text[tick..];
-            let end = match within(rest)[1..].find('`') {
-                Some(end) => tick + 1 + end,
-                None if may_close(rest) => text.len(),
-                None => {
-                    at = tick + 1;
-                    continue;
-                }
-            };
+            let end = rest[1..].find('`').map_or(text.len(), |end| tick + 1 + end);
             self.styled_piece(&text[piece..tick], style);
             if end > tick + 1 {
+                if end == text.len() && self.reaches_end(text) {
+                    self.open_code = Some(self.spans.len());
+                }
                 self.spans.push((Style::Code, &text[tick + 1..end]));
             }
             at = text.len().min(end + 1);
@@ -580,8 +663,9 @@ impl<'a> Inline<'a> {
     /// Fold one plain run into Plain/Bold/Link spans. An unclosed marker
     /// stays literal text — prose is never eaten on a guess.
     fn styled(&mut self, text: &'a str) {
-        // A `[` in a run the line's end leaves open may yet find its `](…)`.
-        let open = offset(self.text, text) + text.len() == self.text.len();
+        // A `[` in a run the line's end leaves open may yet find its `](…)`
+        // — unless its `]` is the first: `[](` never links.
+        let open = self.reaches_end(text);
         let mut plain = 0;
         let mut at = 0;
         while at < text.len() {
@@ -596,12 +680,17 @@ impl<'a> Inline<'a> {
                 plain = at;
                 continue;
             }
-            if open && rest.starts_with('[') && may_close(rest) {
-                self.wait(offset(self.text, rest));
+            if open && self.link.is_none() && rest.starts_with('[') && !rest[1..].starts_with("](")
+            {
+                self.link = Some(offset(self.text, rest));
             }
             at += skip(rest, |b| matches!(b, b'*' | b'['));
         }
         self.plain(&text[plain..]);
+    }
+
+    fn reaches_end(&self, run: &str) -> bool {
+        offset(self.text, run) + run.len() == self.text.len()
     }
 
     fn plain(&mut self, text: &'a str) {
@@ -610,22 +699,27 @@ impl<'a> Inline<'a> {
         }
     }
 
-    /// The latest point the line can be cut at for good, as the index of
-    /// the span it falls in and its byte: inside a Plain span, at a plain
-    /// character before any marker still waiting. The text before it spans
-    /// the same whatever follows, and the text after it reads as the rest
-    /// of that span.
-    fn cut(&self) -> Option<(usize, usize)> {
+    /// The latest point before `limit` the line can be cut at, as the index
+    /// of the span it falls in, its byte, and whether it falls in open
+    /// code: a character of a Plain span, or of the code a lone backtick
+    /// opened. Whatever follows, and unless a marker before it closes, the
+    /// text before it spans the same, and the text from it reads as the
+    /// rest of that span. A `*` at the end may be half of a `**` to come.
+    fn cut(&self, limit: usize) -> Option<(usize, usize, bool)> {
+        let limit = limit.min(self.text.len() - usize::from(self.text.ends_with('*')));
         self.spans
             .iter()
             .enumerate()
             .rev()
-            .filter(|(_, (style, _))| *style == Style::Plain)
-            .find_map(|(index, &(_, run))| {
+            .filter_map(|(index, &(style, run))| {
+                let code = self.open_code == Some(index);
+                (style == Style::Plain || code).then_some((index, run, code))
+            })
+            .find_map(|(index, run, code)| {
                 let start = offset(self.text, run);
-                let end = self.waiting.min(start + run.len());
+                let end = limit.min(start + run.len());
                 let (last, _) = self.text.get(start..end)?.char_indices().next_back()?;
-                Some((index, start + last))
+                Some((index, start + last, code))
             })
     }
 }
@@ -641,14 +735,14 @@ fn skip(rest: &str, marker: impl Fn(u8) -> bool) -> usize {
 
 /// `**bold** …` → ("bold", bytes consumed).
 fn bold_at(rest: &str) -> Option<(&str, usize)> {
-    let body = within(rest).strip_prefix("**")?;
+    let body = rest.strip_prefix("**")?;
     let end = body.find("**")?;
     (end > 0).then_some((&body[..end], end + 4))
 }
 
 /// `[text](url) …` → ("text", bytes consumed). Only the text survives.
 fn link_at(rest: &str) -> Option<(&str, usize)> {
-    let body = within(rest).strip_prefix('[')?;
+    let body = rest.strip_prefix('[')?;
     let close = body.find("](")?;
     let target = &body[close + 2..];
     let end = target.find(')')?;
