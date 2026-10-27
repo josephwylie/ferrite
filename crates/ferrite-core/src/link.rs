@@ -791,7 +791,11 @@ impl Client {
                     if deliver.send(message).is_err() {
                         return;
                     }
+                    crate::doorbell::ring();
                 }
+                // The Server is gone: news too.
+                drop(deliver);
+                crate::doorbell::ring();
             })?;
         Ok(Attached {
             client: Self {
