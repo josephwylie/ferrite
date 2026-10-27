@@ -51,7 +51,7 @@ cockpit its feel. It can:
 
 ## Decision
 
-1. **One engine seam, app-side.** `crates/ferrite/src/visual/web` keeps the
+1. **One engine seam, app-side.** `crates/ferrite-pane/src/visual/web` keeps the
    spike's `Engine`/`View` seam (GPUI-free), with two real adapters: Chromium
    (macOS and Windows: one adapter, its OS differences — where CEF lives,
    how it loads, the sandbox, `NSApp` — behind a per-OS module) and a fake that draws synthetic frames (tests, and every build
