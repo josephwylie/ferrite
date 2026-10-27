@@ -449,6 +449,73 @@ fn every_decision_surface_shares_one_subject_derivation() {
     );
 }
 
+/// #173: a reply streaming as one long paragraph is in every digest the
+/// Server folds while it streams, so the digest carries only what a tile
+/// or a toast can show of it: the same digest at 8 KB of reply as at 400
+/// KB.
+#[test]
+fn a_long_streaming_reply_digests_only_what_a_tile_shows() {
+    let boot = crate::clock::instant();
+    let mut activity = asked("write it all down");
+    let mut words = 0;
+    let mut stream_to = |activity: &mut Activity, bytes: usize| {
+        while words * "word ".len() < bytes {
+            // A delta of a few hundred words: the fold re-reads the open
+            // paragraph on each one.
+            let text = "word ".repeat(200);
+            words += 200;
+            said(activity, SessionEvent::TextDelta { text });
+        }
+    };
+
+    stream_to(&mut activity, 8 << 10);
+    let early = Digest::of(ThreadId::new(1), activity.view(), None, boot);
+    stream_to(&mut activity, 400 << 10);
+    let late = Digest::of(ThreadId::new(1), activity.view(), None, boot);
+
+    assert_eq!(early, late);
+    let line = &late.wall.lines.last().unwrap().text;
+    // Two rows of the widest tile, cut mid-word: `… word wo`.
+    let rows = &"word ".repeat(1000)[..2 * crate::progress::ROW_CHARS];
+    assert_eq!(*line, format!("\u{25cf} {rows}"));
+    assert!(serde_json::to_vec(&late).unwrap().len() < 2 << 10);
+
+    // Done, it is no answer a toast can word.
+    said(
+        &mut activity,
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        },
+    );
+    let done = Digest::of(ThreadId::new(1), activity.view(), None, boot);
+    assert_eq!(done.finish.answer, None);
+    assert!(serde_json::to_vec(&done).unwrap().len() < 2 << 10);
+}
+
+/// A long first line still leaves the tile its continuation: the prose's
+/// own next line.
+#[test]
+fn a_long_first_line_keeps_its_next_line_on_the_tile() {
+    let mut transcript = Transcript::default();
+    transcript.apply(Input::Prompt("explain".into()));
+    let head = "x".repeat(10_000);
+    transcript.apply(Input::Event(SessionEvent::TextDelta {
+        text: format!("{head}\nthe second line"),
+    }));
+
+    let card = WallCard::of(&transcript, None, None);
+
+    let expected = format!(
+        "\u{25cf} {}\nthe second line",
+        "x".repeat(2 * crate::progress::ROW_CHARS)
+    );
+    assert_eq!(
+        card.lines.last().map(|line| line.text.as_str()),
+        Some(expected.as_str())
+    );
+}
+
 #[test]
 fn a_finished_turn_reads_its_length_as_the_tile_says_it() {
     assert_eq!(worked_label(Duration::from_secs(192)), "3m 12s");

@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::activity::{ActivityView, Subject, ToolTiming};
 use crate::docview::{is_test_run, passed_count, FileChange, Instruments, Tests};
+use crate::progress::ROW_CHARS;
 use crate::protocol::{PendingEntry, WireHandle, WireOutcome, WireStatus, WireSubject};
-use crate::transcript::{Block, Body, Status, ToolBlock, ToolState, Transcript};
+use crate::transcript::{Block, Body, Span, Status, ToolBlock, ToolState, Transcript};
 use crate::{Decision, ThreadId, TurnOutcome};
 
 /// The agent's and a tool call's bullet: Geist Mono's own `●`.
@@ -114,7 +115,7 @@ pub struct ShownWall {
 }
 
 /// What a finished turn left for the bell: the tests it left failing, else
-/// its answer when that is one paragraph after its last call.
+/// its answer when that is one row of words after its last call.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Finish {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -272,7 +273,7 @@ impl Finish {
                     ..
                 }),
                 None,
-            ) => Some(spans.iter().map(|span| span.text.as_str()).collect()),
+            ) => one_row(spans),
             _ => None,
         };
         let worked_ms = turn.iter().rev().find_map(|block| match &block.body {
@@ -285,6 +286,18 @@ impl Finish {
             worked_ms,
         }
     }
+}
+
+/// A paragraph that is one row of words, trimmed: a toast words only that
+/// (#173). `None` for a longer one, read no further than a row.
+fn one_row(spans: &[Span]) -> Option<String> {
+    let mut chars = spans
+        .iter()
+        .flat_map(|span| span.text.chars())
+        .skip_while(|c| c.is_whitespace());
+    let row: String = chars.by_ref().take(ROW_CHARS).collect();
+    let row = row.trim_end();
+    (!row.contains('\n') && chars.all(char::is_whitespace)).then(|| row.to_string())
 }
 
 /// A test run's summary from its output (`357 passed; 2 failed`): the last
@@ -378,7 +391,7 @@ pub struct WallCard {
     pub done_after: Option<String>,
     /// The transcript's last lines as the tile prints them, oldest first
     /// (the tile shows the last `WALL_LINES` rows), a pending Decision's
-    /// lines last.
+    /// lines last. Prose is cut to the rows it can fill (`ROW_CHARS` each).
     pub lines: Vec<WallLine>,
 }
 
@@ -505,16 +518,15 @@ fn wall_lines(
     for block in tail {
         match &block.body {
             Body::Paragraph { spans } | Body::Bullet { spans } | Body::Heading { spans, .. } => {
-                let text: String = spans.iter().map(|span| span.text.as_str()).collect();
-                if text.trim().is_empty() {
-                    continue;
-                }
                 // Two source lines at most: a line break in the prose is
-                // where its continuation starts.
-                let mut source = text.lines().filter(|line| !line.trim().is_empty());
-                let head = source.next().unwrap_or_default().trim().to_string();
-                let text = match source.next() {
-                    Some(next) => format!("{BULLET} {head}\n{}", next.trim()),
+                // where its continuation starts. The head may wrap to the
+                // second row, so it keeps two rows of characters.
+                let mut source = spans.iter().flat_map(|span| span.text.chars());
+                let Some(head) = source_line(&mut source, 2 * ROW_CHARS) else {
+                    continue;
+                };
+                let text = match source_line(&mut source, ROW_CHARS) {
+                    Some(next) => format!("{BULLET} {head}\n{next}"),
                     None => format!("{BULLET} {head}"),
                 };
                 lines.push(WallLine { text, wraps: true });
@@ -546,6 +558,32 @@ fn wall_lines(
         lines.extend(wall_decision_lines(decision));
     }
     lines
+}
+
+/// The next non-blank line of `source`, trimmed and cut to `max`
+/// characters: a reply streaming as one long paragraph puts no more of
+/// itself in every digest than a row can show (#173). `None` at its end.
+fn source_line(source: &mut impl Iterator<Item = char>, max: usize) -> Option<String> {
+    loop {
+        let (mut line, mut count, mut read) = (String::new(), 0, false);
+        for c in source.by_ref() {
+            read = true;
+            if c == '\n' {
+                break;
+            }
+            if count < max && !(count == 0 && c.is_whitespace()) {
+                line.push(c);
+                count += 1;
+            }
+        }
+        line.truncate(line.trim_end().len());
+        if !line.is_empty() {
+            return Some(line);
+        }
+        if !read {
+            return None;
+        }
+    }
 }
 
 /// `● Name(args) trail`: the call as the transcript names it, its trail
