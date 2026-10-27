@@ -56,5 +56,7 @@ gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
 ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
 ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }
+# The window's frame the app installs (ADR 0035): the tests draw it too.
+ferrite-frame = { path = "../ferrite-frame" }
 # The image viewer's tests draw their images. Already in the tree via gpui.
 image = { version = "0.25.1", default-features = false, features = ["png"] }

@@ -2143,6 +2143,7 @@ version = "0.4.0"
 dependencies = [
  "ferrite-cockpit",
  "ferrite-core",
+ "ferrite-frame",
  "ferrite-pane",
  "ferrite-ui",
  "gpui-kit",
@@ -2156,6 +2157,7 @@ version = "0.4.0"
 dependencies = [
  "ferrite-core",
  "ferrite-focus-notify",
+ "ferrite-frame",
  "ferrite-pane",
  "ferrite-reviewr",
  "ferrite-ui",
@@ -2195,6 +2197,16 @@ version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ferrite-frame"
+version = "0.4.0"
+dependencies = [
+ "ferrite-core",
+ "ferrite-pane",
+ "ferrite-ui",
+ "gpui-kit",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@
 //! shows; the branch and its diffstat are the panel's.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
-//! (`titlebar::strip`), over the frame the board column already paints
+//! (the frame's titlebar), over the frame the board column already paints
 //! (`components::frame_around`): it paints nothing and adds no layout. Only
 //! its controls occlude, so a press anywhere else in the row still lands on
 //! the strip beneath and drags the window (on Windows, the controls take

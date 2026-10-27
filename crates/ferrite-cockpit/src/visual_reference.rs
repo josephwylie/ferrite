@@ -748,12 +748,12 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         | "settings-about" => {
             let scene = conversation(label);
             let page = match state {
-                "settings-permissions" => crate::prefs::PageKey::Permissions,
-                "settings-behaviour" => crate::prefs::PageKey::Behaviour,
-                "settings-notifications" => crate::prefs::PageKey::Notifications,
-                "settings-about" => crate::prefs::PageKey::About,
-                "settings-server" => crate::prefs::PageKey::Server,
-                _ => crate::prefs::PageKey::NewThreads,
+                "settings-permissions" => ferrite_ui::frame::settings::PageKey::Permissions,
+                "settings-behaviour" => ferrite_ui::frame::settings::PageKey::Behaviour,
+                "settings-notifications" => ferrite_ui::frame::settings::PageKey::Notifications,
+                "settings-about" => ferrite_ui::frame::settings::PageKey::About,
+                "settings-server" => ferrite_ui::frame::settings::PageKey::Server,
+                _ => ferrite_ui::frame::settings::PageKey::NewThreads,
             };
             let setup: Setup = Box::new(move |view, _, cx| {
                 // Seeded, so opening never probes the operator's CLIs.

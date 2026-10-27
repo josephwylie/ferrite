@@ -2722,7 +2722,7 @@ mod tests {
         cx.update(|cx| {
             ferrite_pane::pane::init_components(cx);
             let table = ferrite_ui::keymap::bindings(ferrite_ui::keymap::Platform::Mac);
-            let bindings = crate::load_bindings(table, cx);
+            let bindings = ferrite_frame::keys::load(table, cx);
             cx.bind_keys(bindings);
         });
         let window = cx.add_window(|_, cx| {

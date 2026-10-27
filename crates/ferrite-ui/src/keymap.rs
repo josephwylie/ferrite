@@ -16,6 +16,9 @@ use std::sync::RwLock;
 
 use gpui::Keystroke;
 
+// The table's one verb no view owns: the app quits on it.
+gpui::actions!(ferrite, [Quit]);
+
 /// Which convention the primary modifier follows. Linux, when it arrives,
 /// sits on the ctrl side.
 // One variant is always the other target's: each build constructs only its

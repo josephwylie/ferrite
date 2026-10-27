@@ -2,6 +2,7 @@
 pub mod components;
 #[cfg(any(test, feature = "test-support"))]
 pub mod face;
+pub mod frame;
 pub mod icons;
 pub mod keymap;
 pub mod loops_overlay;
@@ -10,6 +11,7 @@ pub mod motion;
 pub mod platform_text;
 pub mod pointer;
 mod scrollbar;
+pub mod sheet;
 pub mod theme;
 
 use gpui::App;

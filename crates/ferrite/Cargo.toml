@@ -37,6 +37,9 @@ ferrite-ui = { path = "../ferrite-ui" }
 ferrite-pane = { path = "../ferrite-pane" }
 # The Cockpit the window shows: the grid, the nav and the Roster glue.
 ferrite-cockpit = { path = "../ferrite-cockpit" }
+# The window's frame around it: the titlebar, the bottom bar, Settings and
+# the key table (ADR 0035).
+ferrite-frame = { path = "../ferrite-frame" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
