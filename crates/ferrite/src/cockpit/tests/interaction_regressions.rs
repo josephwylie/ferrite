@@ -12,16 +12,14 @@ fn wheel(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, dy: f3
 
 #[gpui::test]
 fn wheel_over_a_large_pinned_prompt_scrolls_the_transcript(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("large-pinned-wheel", 1);
-    bind_production_keys(cx);
+    let (mut core, fake) = cockpit("large-pinned-wheel", 1);
+    let thread = core.threads()[0];
+    core.send(
+        thread,
+        (0..60).map(|n| format!("Long prompt line {n}\n")).collect(),
+    );
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    cx.simulate_input(
-        &(0..60)
-            .map(|n| format!("Long prompt line {n}\n"))
-            .collect::<String>(),
-    );
-    cx.simulate_keystrokes("enter");
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: (0..80).map(|n| format!("Answer line {n}\n\n")).collect(),
@@ -38,6 +36,7 @@ fn wheel_over_a_large_pinned_prompt_scrolls_the_transcript(cx: &mut TestAppConte
     });
     let before = scroll.offset().y;
     assert!(before < px(-100.), "fixture must overflow");
+    assert!(scroll.top_mask() > px(0.), "the prompt is pinned");
     let pointer = gpui::point(scroll.bounds().center().x, scroll.bounds().top() + px(10.));
     wheel(cx, pointer, 120.);
     assert!(
@@ -72,12 +71,12 @@ fn selecting_below_a_large_pinned_prompt_keeps_the_scroll_position(cx: &mut Test
 }
 
 fn selection_keeps_position(cx: &mut TestAppContext, name: &str, prompt: &str) {
-    let (core, fake) = cockpit(name, 1);
+    let (mut core, fake) = cockpit(name, 1);
+    let thread = core.threads()[0];
+    core.send(thread, prompt.into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    cx.simulate_input(prompt);
-    cx.simulate_keystrokes("enter");
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: (0..100)

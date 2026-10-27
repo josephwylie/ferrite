@@ -411,6 +411,21 @@ fn tick(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// Move the executor's clock `by` in one step, as a machine waking from
+/// sleep does, then pump: a timer due in between fires once, at the new
+/// time. `advance_clock` would instead run the pump every `PUMP_MS` of
+/// the way, seconds of real time for a 30 s wait that asserts nothing.
+fn leap(cx: &mut gpui::VisualTestContext, by: Duration) {
+    cx.executor()
+        .dispatcher()
+        .as_test()
+        .expect("a test executor")
+        .scheduler()
+        .clock()
+        .advance(by);
+    tick(cx);
+}
+
 /// Pump past the alerts' delay: whatever still stands has rung (ADR
 /// 0017).
 fn ring(cx: &mut gpui::VisualTestContext) {

@@ -92,9 +92,9 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     let (core, fake) = cockpit("retention-cap-identity", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     // Past the 4 MiB of answer the display keeps.
-    for at in 0..520 {
-        turn(&fake, at, 8 * 1024);
-        if at % 100 == 99 {
+    for at in 0..66 {
+        turn(&fake, at, 64 * 1024);
+        if at % 16 == 15 {
             pump(&view, cx);
         }
     }
@@ -111,7 +111,7 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     );
     let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
     let mut namespaces = std::collections::BTreeSet::new();
-    for at in 520..540 {
+    for at in 66..86 {
         turn(&fake, at, 8 * 1024);
         pump(&view, cx);
         namespaces.insert(view.read_with(cx, |view, _| view.panes[0].text_namespace()));
