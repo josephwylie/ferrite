@@ -128,7 +128,7 @@ use ferrite_ui::menu;
 use crate::project_editor;
 pub(crate) use ferrite_pane::pane::NextDecision;
 use ferrite_pane::select::TranscriptText;
-use ferrite_ui::frame::settings as prefs;
+use ferrite_ui::frame::settings;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 
 actions!(
@@ -513,7 +513,7 @@ pub struct CockpitView {
     settings_open: bool,
     /// The Settings page the sidebar has selected; each opening starts on
     /// the first.
-    settings_page: prefs::PageKey,
+    settings_page: settings::PageKey,
     /// The Settings search field, made with the sheet (it needs a window)
     /// and dropped with it, so each opening starts with an empty query.
     settings_search: Option<Entity<gpui::component::input::InputState>>,
@@ -1613,7 +1613,7 @@ impl CockpitView {
             nav_dragging: None,
             prefs,
             settings_open: false,
-            settings_page: prefs::PageKey::default(),
+            settings_page: settings::PageKey::default(),
             settings_search: None,
             settings_copied: None,
             project_editor: None,
@@ -4419,7 +4419,7 @@ impl CockpitView {
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
         if self.settings_open {
-            self.settings_page = prefs::PageKey::default();
+            self.settings_page = settings::PageKey::default();
             self.settings_search = None;
             self.settings_copied = None;
             self.project_editor = None;
@@ -4765,7 +4765,7 @@ impl CockpitView {
         provider: Provider,
         version: SharedString,
         cx: &Context<Self>,
-    ) -> prefs::Row {
+    ) -> settings::Row {
         let (detail, button) = crate::cli_updates::describe(
             provider,
             self.cli_updates.state(provider),
@@ -4777,7 +4777,7 @@ impl CockpitView {
             Provider::Codex => "Codex CLI",
         };
         let view = cx.entity().downgrade();
-        prefs::action(id, title, detail, version, button, move |cx| {
+        settings::action(id, title, detail, version, button, move |cx| {
             view.update(cx, |view, cx| view.update_cli(provider, cx))
                 .ok();
         })
@@ -4792,16 +4792,16 @@ impl CockpitView {
         title: &'static str,
         sound: Sound,
         cx: &Context<Self>,
-    ) -> prefs::Row {
+    ) -> settings::Row {
         let file = self.prefs.settings.sound_file(sound);
         let view = cx.entity().downgrade();
-        let play: prefs::Act = std::rc::Rc::new({
+        let play: settings::Act = std::rc::Rc::new({
             let view = view.clone();
             move |cx| {
                 let _ = view.update(cx, |view, _| view.chime(sound));
             }
         });
-        let choose: prefs::Act = std::rc::Rc::new({
+        let choose: settings::Act = std::rc::Rc::new({
             move |cx| {
                 let _ = view.update(cx, |view, cx| view.choose_sound_file(sound, cx));
             }
@@ -4814,7 +4814,7 @@ impl CockpitView {
                 std::rc::Rc::new(move |cx: &mut gpui::App| reset((), cx)),
             ));
         }
-        prefs::file_choice(
+        settings::file_choice(
             id,
             title,
             if cfg!(windows) { "A WAV file" } else { "" },
@@ -4865,7 +4865,7 @@ impl CockpitView {
             .clone();
         let machines = self.machine_settings(window, cx);
         let settings = &self.prefs.settings;
-        let defaults = vec![prefs::choices(
+        let defaults = vec![settings::choices(
             "settings-provider",
             "Provider",
             "What a new thread starts on",
@@ -4883,10 +4883,10 @@ impl CockpitView {
                 settings.default_provider = provider
             }),
         )];
-        let mut new_thread_groups = vec![prefs::Group::new(None).rows(defaults)];
+        let mut new_thread_groups = vec![settings::Group::new(None).rows(defaults)];
         for provider in [Provider::Claude, Provider::Codex] {
             let chosen = settings.model_for(provider).map(str::to_string);
-            let model = prefs::chooser(
+            let model = settings::chooser(
                 if provider == Provider::Claude {
                     "settings-claude-model"
                 } else {
@@ -4895,7 +4895,7 @@ impl CockpitView {
                 // The group names the provider: `Claude › Model`.
                 "Model",
                 "",
-                prefs::model_options(self.cockpit.model_catalog(provider), chosen.as_deref()),
+                settings::model_options(self.cockpit.model_catalog(provider), chosen.as_deref()),
                 self.setting_change(cx, move |settings, value| {
                     settings.set_model_for(provider, value)
                 }),
@@ -4913,7 +4913,7 @@ impl CockpitView {
                     ladder.push(effort.clone());
                 }
             }
-            let effort = prefs::choices(
+            let effort = settings::choices(
                 if provider == Provider::Claude {
                     "settings-claude-effort"
                 } else {
@@ -4932,7 +4932,7 @@ impl CockpitView {
                         let label = value
                             .as_deref()
                             .map(effort_title)
-                            .unwrap_or_else(|| prefs::CLI_DEFAULT.into());
+                            .unwrap_or_else(|| settings::CLI_DEFAULT.into());
                         (label.into(), effort == value, value)
                     })
                     .collect(),
@@ -4954,13 +4954,13 @@ impl CockpitView {
                 })
                 .collect()
         };
-        let claude_permissions = vec![prefs::choices(
+        let claude_permissions = vec![settings::choices(
             "settings-claude-mode",
             "Permissions",
             "When Claude asks before acting",
             modes(
                 &[
-                    (prefs::CLI_DEFAULT, None),
+                    (settings::CLI_DEFAULT, None),
                     ("Ask", Some("default")),
                     ("Accept edits", Some("acceptEdits")),
                     ("Plan", Some("plan")),
@@ -4971,7 +4971,7 @@ impl CockpitView {
             self.setting_change(cx, |s, v| s.claude_permission_mode = v),
         )];
         let codex_permissions = vec![
-            prefs::choices(
+            settings::choices(
                 "settings-codex-approval",
                 "Approvals",
                 "When Codex asks before acting",
@@ -4987,13 +4987,13 @@ impl CockpitView {
                     s.codex_approval_policy = v.unwrap_or_else(|| "on-request".into())
                 }),
             ),
-            prefs::choices(
+            settings::choices(
                 "settings-codex-sandbox",
                 "Sandbox",
                 "What Codex may touch",
                 modes(
                     &[
-                        (prefs::CLI_DEFAULT, None),
+                        (settings::CLI_DEFAULT, None),
                         ("Read only", Some("read-only")),
                         ("Workspace write", Some("workspace-write")),
                         ("Full access", Some("danger-full-access")),
@@ -5004,28 +5004,28 @@ impl CockpitView {
             ),
         ];
         let behaviour = vec![
-            prefs::toggle(
+            settings::toggle(
                 "settings-auto-title",
                 "Name threads automatically",
                 "Titled from the first prompt until you rename it",
                 settings.auto_title,
                 self.setting_change(cx, |s, v| s.auto_title = v),
             ),
-            prefs::toggle(
+            settings::toggle(
                 "settings-placeholder-suggestions",
                 "Suggest follow-up prompts",
                 "A likely next prompt in an empty composer · tab takes it",
                 settings.placeholder_suggestions,
                 self.setting_change(cx, |s, v| s.placeholder_suggestions = v),
             ),
-            prefs::toggle(
+            settings::toggle(
                 "settings-confirm-delete",
                 "Confirm before deleting a thread",
                 "Ask before removing a thread and its transcript",
                 settings.confirm_delete,
                 self.setting_change(cx, |s, v| s.confirm_delete = v),
             ),
-            prefs::toggle(
+            settings::toggle(
                 "settings-nav-collapsed",
                 "Start with the sidebar collapsed",
                 "cmd-B toggles it any time",
@@ -5034,7 +5034,7 @@ impl CockpitView {
             ),
         ];
         let size = settings.reading_size;
-        let reading = vec![prefs::stepper(
+        let reading = vec![settings::stepper(
             "settings-text-size",
             "Text size",
             "Transcript text in every Pane, from 12 to 24px",
@@ -5049,7 +5049,7 @@ impl CockpitView {
             },
         )];
         let sounds = vec![
-            prefs::toggle(
+            settings::toggle(
                 "settings-sounds",
                 "Play sounds",
                 "A chime when a thread finishes or needs you, unless you are looking at it",
@@ -5069,7 +5069,7 @@ impl CockpitView {
                 Provider::Claude => ("settings-claude-sounds", "Sounds for Claude threads"),
                 Provider::Codex => ("settings-codex-sounds", "Sounds for Codex threads"),
             };
-            prefs::toggle(
+            settings::toggle(
                 id,
                 title,
                 "",
@@ -5077,7 +5077,7 @@ impl CockpitView {
                 self.setting_change(cx, move |s, v| s.set_provider_sounds(provider, v)),
             )
         });
-        let system = vec![prefs::toggle(
+        let system = vec![settings::toggle(
             "settings-system-notifications",
             "System notifications",
             "When Ferrite is in the background · clicking one opens its thread",
@@ -5101,7 +5101,7 @@ impl CockpitView {
         let clis = vec![
             self.cli_update_row("settings-update-claude", Provider::Claude, claude, cx),
             self.cli_update_row("settings-update-codex", Provider::Codex, codex, cx),
-            prefs::toggle(
+            settings::toggle(
                 "settings-auto-update-clis",
                 "Update the CLIs automatically",
                 "Install a newer Claude or Codex CLI once none of its Threads is running. \
@@ -5111,17 +5111,17 @@ impl CockpitView {
             ),
         ];
         let mut about = vec![
-            prefs::fact(
+            settings::fact(
                 "Version",
                 version_label(env!("CARGO_PKG_VERSION"), crate::DEV).into(),
             ),
-            prefs::path_fact(
+            settings::path_fact(
                 "Threads",
                 self.prefs.dir.join("threads").display().to_string(),
                 copied == Some("Threads"),
                 copy("Threads", cx),
             ),
-            prefs::path_fact(
+            settings::path_fact(
                 "Settings file",
                 self.prefs
                     .dir
@@ -5131,7 +5131,7 @@ impl CockpitView {
                 copied == Some("Settings file"),
                 copy("Settings file", cx),
             ),
-            prefs::action(
+            settings::action(
                 "settings-copy-diagnostics",
                 "Diagnostics",
                 "Version, platform, the CLIs, the newest crash report and the end of \
@@ -5158,45 +5158,45 @@ impl CockpitView {
         ];
         about.splice(1..1, self.ferrite_update_rows(window, cx));
         about.insert(1, self.server_status_row(window, cx));
-        let mut about = vec![prefs::Group::new(None).rows(about)];
+        let mut about = vec![settings::Group::new(None).rows(about)];
         let server = self.server_rows(window, cx);
         about.extend(machines);
-        about.push(prefs::Group::new(Some("Provider CLIs")).rows(clis));
+        about.push(settings::Group::new(Some("Provider CLIs")).rows(clis));
         let pages = vec![
-            prefs::page(prefs::PageKey::NewThreads, new_thread_groups),
-            prefs::page(
-                prefs::PageKey::Permissions,
+            settings::page(settings::PageKey::NewThreads, new_thread_groups),
+            settings::page(
+                settings::PageKey::Permissions,
                 vec![
                     provider_group(Provider::Claude).rows(claude_permissions),
                     provider_group(Provider::Codex).rows(codex_permissions),
                 ],
             ),
-            prefs::page(
-                prefs::PageKey::Behaviour,
+            settings::page(
+                settings::PageKey::Behaviour,
                 vec![
-                    prefs::Group::new(Some("Reading")).rows(reading),
-                    prefs::Group::new(Some("Threads and navigation")).rows(behaviour),
+                    settings::Group::new(Some("Reading")).rows(reading),
+                    settings::Group::new(Some("Threads and navigation")).rows(behaviour),
                 ],
             ),
-            prefs::page(
-                prefs::PageKey::Notifications,
+            settings::page(
+                settings::PageKey::Notifications,
                 vec![
-                    prefs::Group::new(Some("Sounds")).rows(sounds),
-                    prefs::Group::new(Some("By provider")).rows(provider_sounds),
-                    prefs::Group::new(Some("System")).rows(system),
+                    settings::Group::new(Some("Sounds")).rows(sounds),
+                    settings::Group::new(Some("By provider")).rows(provider_sounds),
+                    settings::Group::new(Some("System")).rows(system),
                 ],
             ),
-            prefs::page(
-                prefs::PageKey::Server,
-                vec![prefs::Group::new(None).rows(server)],
+            settings::page(
+                settings::PageKey::Server,
+                vec![settings::Group::new(None).rows(server)],
             ),
-            prefs::page(prefs::PageKey::About, about),
+            settings::page(settings::PageKey::About, about),
         ];
 
         let select = {
             let view = cx.entity().downgrade();
             let search = search.clone();
-            move |page: prefs::PageKey, window: &mut Window, cx: &mut gpui::App| {
+            move |page: settings::PageKey, window: &mut Window, cx: &mut gpui::App| {
                 // Choosing a page ends a search: the page shows whole.
                 search.update(cx, |search, cx| search.set_value("", window, cx));
                 let _ = view.update(cx, |view, cx| {
@@ -9811,7 +9811,7 @@ fn provider_title(provider: Provider) -> &'static str {
 
 /// A Settings group for one Provider: its name, led by its logomark in
 /// brand colour.
-fn provider_group(provider: Provider) -> prefs::Group {
+fn provider_group(provider: Provider) -> settings::Group {
     let (mark, ink) = match provider {
         Provider::Claude => (
             ferrite_ui::icons::CLAUDE,
@@ -9819,7 +9819,7 @@ fn provider_group(provider: Provider) -> prefs::Group {
         ),
         Provider::Codex => (ferrite_ui::icons::CODEX, ferrite_ui::theme::PROVIDER_CODEX),
     };
-    prefs::Group::new(Some(provider_title(provider))).mark(mark, ink)
+    settings::Group::new(Some(provider_title(provider))).mark(mark, ink)
 }
 
 /// An effort level as a person says it: `xhigh` is "Extra high", the

@@ -154,7 +154,7 @@ impl CockpitView {
         &self,
         window: &Window,
         cx: &Context<Self>,
-    ) -> Vec<prefs::Row> {
+    ) -> Vec<settings::Row> {
         if !self.prefs.ferrite_updates {
             return Vec::new();
         }
@@ -163,7 +163,7 @@ impl CockpitView {
         let view = cx.entity().downgrade();
         let handle = window.window_handle();
         vec![
-            prefs::action(
+            settings::action(
                 "settings-update-ferrite",
                 "Updates",
                 detail,
@@ -176,7 +176,7 @@ impl CockpitView {
                     });
                 },
             ),
-            prefs::toggle(
+            settings::toggle(
                 "settings-check-for-updates",
                 "Check for updates automatically",
                 "Look for a newer Ferrite every few hours and download it. It installs \

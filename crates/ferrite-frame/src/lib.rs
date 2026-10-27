@@ -39,3 +39,16 @@ impl ferrite_ui::frame::Frame for Frame {
         cx.set_menus((self.menus)());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Rule 10 over the frame's render code (`ferrite_ui::face`).
+    #[test]
+    fn render_code_draws_only_covered_glyphs() {
+        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
+            ("lib.rs", include_str!("lib.rs")),
+            ("titlebar.rs", include_str!("titlebar.rs")),
+            ("settings.rs", include_str!("settings.rs")),
+        ]);
+    }
+}
