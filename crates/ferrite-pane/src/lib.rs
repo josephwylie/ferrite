@@ -1,5 +1,5 @@
 // Ferrite's Pane: the visible cell for one Thread. Its transcript, its
-// Composer and the Draft band, and what they draw with.
+// Composer and the Draft, and what they draw with.
 mod attachments;
 pub mod composer;
 pub mod decision;

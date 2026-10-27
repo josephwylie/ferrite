@@ -59,7 +59,9 @@ use gpui::component::scroll::ScrollableElement;
 use crate::theme;
 use crate::theme::*;
 
-// The Cockpit's ⌘D, which a Group head's needs-you door dispatches.
+// The Cockpit's ⌘D, which a Group head's needs-you door dispatches. It is
+// declared here, below the Cockpit, but keeps the `cockpit` namespace:
+// operators' keymaps bind it as `cockpit::NextDecision` (ADR 0024).
 gpui::actions!(cockpit, [NextDecision]);
 
 /// One Pane's view state: what the window owns per Pane. Everything it

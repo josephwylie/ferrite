@@ -33,7 +33,7 @@ cef = ["ferrite-pane/cef"]
 ferrite-core = { path = "../ferrite-core" }
 # The theme, icons, components, motion and menus the Cockpit and Pane share.
 ferrite-ui = { path = "../ferrite-ui" }
-# The Pane: the transcript, the Composer and the Draft band.
+# The Pane: the transcript, the Composer and the Draft.
 ferrite-pane = { path = "../ferrite-pane" }
 # The Cockpit the window shows: the grid, the nav and the Roster glue.
 ferrite-cockpit = { path = "../ferrite-cockpit" }
