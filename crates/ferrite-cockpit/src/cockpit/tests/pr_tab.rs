@@ -94,15 +94,10 @@ fn forge(
 /// Pump until no read of the Thread's PR is on its way (each answer comes
 /// back on a thread of its own).
 fn settle(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
-    for _ in 0..200 {
-        tick(cx);
-        if !view.read_with(cx, |view, _| view.pr_tab.fetching(thread)) {
-            tick(cx);
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    panic!("the read never landed");
+    until(cx, |cx| {
+        !view.read_with(cx, |view, _| view.pr_tab.fetching(thread))
+    });
+    tick(cx);
 }
 
 fn open_tab(

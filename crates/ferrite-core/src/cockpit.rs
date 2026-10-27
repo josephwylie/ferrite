@@ -988,6 +988,7 @@ fn read_here<T: Send + 'static>(
     let (answer, answered) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = answer.send(read().map_err(io::Error::other));
+        crate::doorbell::ring();
     });
     answered
 }
