@@ -113,9 +113,8 @@ use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
-    Context, Div, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString,
-    Stateful, Window,
+    Context, Div, Entity, EventEmitter, FocusHandle, Focusable, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::facts::Facts;
@@ -126,10 +125,10 @@ use ferrite_pane::decision;
 use ferrite_pane::pane::{self, PaneView};
 use ferrite_ui::menu;
 // Declared with the Pane, whose Group head dispatches it.
-use crate::prefs;
 use crate::project_editor;
 pub(crate) use ferrite_pane::pane::NextDecision;
 use ferrite_pane::select::TranscriptText;
+use ferrite_ui::frame::settings as prefs;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 
 actions!(
@@ -529,7 +528,7 @@ pub struct CockpitView {
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
     /// halves of the titlebar have to agree: a maximized window has no top
-    /// resize edge for the drag regions to leave alone (`titlebar.rs`).
+    /// resize edge for the drag regions to leave alone (the frame's titlebar).
     maximized: bool,
     /// The CLIs' versions as `--version` reports them, probed once when the
     /// panel first opens: (claude, codex).
@@ -2645,7 +2644,7 @@ impl CockpitView {
     /// Settings panel. The titlebar's drag region reads it — a region that
     /// lies under an open overlay would answer Windows' hit test as the
     /// window frame, and the row under the pointer would never see the
-    /// press (`titlebar.rs`).
+    /// press (the frame's titlebar).
     fn overlay_open(&self) -> bool {
         self.settings_open
             || self.project_editor.is_some()
@@ -2801,13 +2800,13 @@ impl CockpitView {
 
     /// The board the cards lay out in, in window coordinates (theme WP-C):
     /// flush right of the nav, from under the head row
-    /// (`titlebar::board_top`) to `BOARD_PAD` short of the bottom bar and
+    /// (`frame::board_top`) to `BOARD_PAD` short of the bottom bar and
     /// `board_right` short of the window's right edge (the panel, or the
     /// gutter).
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         use ferrite_ui::theme::{BOARD_PAD, STATUS_BAR_H};
         let viewport = window.viewport_size();
-        let top = crate::titlebar::board_top();
+        let top = ferrite_ui::frame::board_top();
         let left = self.board_left();
         let bounds = layout::Rect {
             x: left,
@@ -4577,7 +4576,7 @@ impl CockpitView {
         let facts = [
             (
                 "Version",
-                version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV),
+                version_label(env!("CARGO_PKG_VERSION"), crate::DEV),
             ),
             (
                 "Platform",
@@ -5114,7 +5113,7 @@ impl CockpitView {
         let mut about = vec![
             prefs::fact(
                 "Version",
-                version_label(env!("CARGO_PKG_VERSION"), crate::titlebar::DEV).into(),
+                version_label(env!("CARGO_PKG_VERSION"), crate::DEV).into(),
             ),
             prefs::path_fact(
                 "Threads",
@@ -5206,57 +5205,35 @@ impl CockpitView {
                 });
             }
         };
-        let body = prefs::body(pages, self.settings_page, &search, select, window, cx);
-        let card = prefs::settings_sheet()
-            .id("settings-card")
-            .debug_selector(|| "settings-card".into())
-            .track_focus(&self.settings_focus)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-            )
-            // ↑/↓ step the sidebar's pages while the sheet itself holds
-            // focus (a field or a control keeps its own arrows).
-            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
-                let delta = match event.keystroke.key.as_str() {
-                    "up" => -1,
-                    "down" => 1,
-                    _ => return,
-                };
-                if event.keystroke.modifiers.modified() || !view.settings_focus.is_focused(window) {
-                    return;
-                }
-                cx.stop_propagation();
-                view.settings_page = view.settings_page.step(delta);
+        let view = cx.entity().downgrade();
+        let step = {
+            let view = view.clone();
+            move |delta, _: &mut Window, cx: &mut gpui::App| {
+                let _ = view.update(cx, |view, cx| {
+                    view.settings_page = view.settings_page.step(delta);
+                    cx.notify();
+                });
+            }
+        };
+        let close = move |_: &mut Window, cx: &mut gpui::App| {
+            let _ = view.update(cx, |view, cx| {
+                view.settings_open = false;
                 cx.notify();
-            }))
-            .child(prefs::settings_head(
-                prefs::sheet_close("settings-close", "Close settings", cx).on_click(cx.listener(
-                    |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.settings_open = false;
-                        cx.notify();
-                    },
-                )),
-            ))
-            .child(body);
-        Some(
-            deferred(ferrite_ui::motion::veil_in(
-                "settings-veil",
-                prefs::veil()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.settings_open = false;
-                            cx.notify();
-                        }),
-                    )
-                    .child(ferrite_ui::motion::dialog_in("settings-card-in", card)),
-            ))
-            .with_priority(3)
-            .into_any_element(),
-        )
+            });
+        };
+        Some(crate::frame().settings(
+            ferrite_ui::frame::SettingsSheet {
+                pages,
+                selected: self.settings_page,
+                search,
+                focus: self.settings_focus.clone(),
+                select: std::rc::Rc::new(select),
+                step: Box::new(step),
+                close: std::rc::Rc::new(close),
+            },
+            window,
+            cx,
+        ))
     }
 
     /// Open the card on an existing Project, seeded with its name.
@@ -10419,11 +10396,11 @@ impl CockpitView {
             window.focus(&wanted, cx);
         }
 
-        // The cards start under the head row (`titlebar::board_top`), with
+        // The cards start under the head row (`frame::board_top`), with
         // `BOARD_PAD` of frame under them and right of them — none at the
         // right beside the panel, whose column is the frame there
         // (`board_bounds`), riding or at rest.
-        let board_top = crate::titlebar::board_top();
+        let board_top = ferrite_ui::frame::board_top();
         let panel_w = self.panel_column_w();
         let frame_right = self.board_right() - panel_w;
         let frame = || {
@@ -10771,11 +10748,7 @@ impl CockpitView {
             // thing under a menu: an overlay that reached into the band
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
-            .child(crate::titlebar::strip(
-                self.board_left(),
-                !self.overlay_open(),
-                self.maximized,
-            ))
+            .child(crate::frame().titlebar(self.board_left(), !self.overlay_open(), self.maximized))
             .children(self.view_head(cx))
             // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag. Its toggle
@@ -11083,7 +11056,7 @@ impl CockpitView {
     /// on the empty board), each with its roll-up dot — a press on `Solo`
     /// showing Solo (the loose Thread used last, else the empty board) and
     /// on a Group entering it; then the vitals.
-    fn bottom_bar(&self, cx: &mut Context<Self>) -> Div {
+    fn bottom_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let view = self.cockpit.roster().view();
         let empty = self.empty_board_shown();
         let mut tabs = Vec::new();
@@ -11104,71 +11077,56 @@ impl CockpitView {
         // A tab's dot rolls up the Threads its view shows: Solo's one
         // Thread, a Group's members.
         let roll_up = |threads: &mut dyn Iterator<Item = ThreadId>| {
-            crate::titlebar::RollUp::of(
+            ferrite_ui::frame::RollUp::of(
                 threads.map(|thread| self.thread_row(thread).status.attention()),
             )
         };
-        tabs.push(
-            crate::titlebar::bar_tab(
-                "bottom-bar-tab-solo".into(),
-                1,
-                "Solo".into(),
-                !empty && view == View::Solo,
-                roll_up(&mut solo.into_iter()),
-            )
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| match solo {
+        tabs.push(ferrite_ui::frame::BarTab {
+            id: "bottom-bar-tab-solo".into(),
+            ordinal: 1,
+            label: "Solo".into(),
+            current: !empty && view == View::Solo,
+            roll_up: roll_up(&mut solo.into_iter()),
+            press: Box::new(cx.listener(move |view, _: &ClickEvent, _, cx| match solo {
                 Some(thread) => {
                     view.empty_shown = false;
                     view.focus_thread(thread, cx);
                 }
                 None => view.show_empty_board(cx),
-            }))
-            .into_any_element(),
-        );
+            })),
+        });
         for (at, group) in self.cockpit.groups().iter().enumerate() {
             let id = group.id;
-            tabs.push(
-                crate::titlebar::bar_tab(
-                    SharedString::from(format!("bottom-bar-tab-{}", id.get())),
-                    at + 2,
-                    group.display_title().into(),
-                    !empty && view == View::Group(id),
-                    roll_up(&mut group.members.iter().copied()),
-                )
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            tabs.push(ferrite_ui::frame::BarTab {
+                id: SharedString::from(format!("bottom-bar-tab-{}", id.get())),
+                ordinal: at + 2,
+                label: group.display_title().into(),
+                current: !empty && view == View::Group(id),
+                roll_up: roll_up(&mut group.members.iter().copied()),
+                press: Box::new(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     view.enter_group(id, cx);
-                }))
-                .into_any_element(),
-            );
-        }
-        let needs_you =
-            crate::titlebar::bar_needs_you(self.cockpit.needs_you().len()).map(|count| {
-                count
-                    .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        view.toggle_notifications(&ToggleNotifications, window, cx);
-                    }))
-                    .into_any_element()
+                })),
             });
-        let usage = [Provider::Claude, Provider::Codex]
-            .into_iter()
-            .filter_map(|provider| {
-                crate::titlebar::bar_usage(provider, &self.cockpit.account_limits(provider))
-            })
-            .map(IntoElement::into_any_element);
-        let disk = self
-            .free_disk
-            .and_then(crate::titlebar::bar_free_disk)
-            .map(IntoElement::into_any_element);
-        let clock = crate::titlebar::bar_clock(ferrite_core::progress::clock_label().into());
-        let vitals = needs_you
-            .into_iter()
-            .chain(usage)
-            .chain(disk)
-            .chain(Some(clock.into_any_element()))
-            .collect();
-        let vitals = crate::titlebar::vitals(vitals).into_any_element();
-        crate::titlebar::bottom_bar(tabs, vitals)
+        }
+        let needs_you = self.cockpit.needs_you().len();
+        let needs_you = (needs_you > 0).then(|| {
+            let press: ferrite_ui::frame::Press =
+                Box::new(cx.listener(|view, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.toggle_notifications(&ToggleNotifications, window, cx);
+                }));
+            (needs_you, press)
+        });
+        crate::frame().bottom_bar(ferrite_ui::frame::Bar {
+            tabs,
+            needs_you,
+            usage: [Provider::Claude, Provider::Codex]
+                .into_iter()
+                .map(|provider| (provider, self.cockpit.account_limits(provider)))
+                .collect(),
+            free_disk: self.free_disk,
+            clock: ferrite_core::progress::clock_label().into(),
+        })
     }
 
     /// Read free disk for the bar off the UI thread: the least free of the
@@ -11206,7 +11164,7 @@ impl CockpitView {
 
     /// Adopt a free-disk reading; redraw only when the bar's words move.
     fn free_disk_landed(&mut self, free: Option<u64>, cx: &mut Context<Self>) {
-        let words = |free: Option<u64>| free.and_then(crate::titlebar::free_disk_words);
+        let words = |free: Option<u64>| free.and_then(ferrite_ui::frame::free_disk_words);
         let moved = words(free) != words(self.free_disk);
         self.free_disk = free;
         if moved {
@@ -13254,7 +13212,7 @@ impl CockpitView {
         }));
         nav::content()
             .child(nav::head(
-                crate::titlebar::head_drag(!self.overlay_open(), self.maximized),
+                crate::frame().head_drag(!self.overlay_open(), self.maximized),
                 self.nav_toggle(false, cx),
             ))
             .child(self.nav_views(state, cx))

@@ -789,7 +789,7 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
             ferrite_ui::theme::WIN_CHROME_H,
             "the cards start under the head row"
         );
-        if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
+        if ferrite_ui::frame::CUSTOM || cfg!(target_os = "macos") {
             // Open, the nav's head drags the window over the nav; folded,
             // the rail's head row is the traffic lights'.
             if !view.read_with(cx, |view, _| view.nav_railed()) {
@@ -1077,7 +1077,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
             "floating surface",
             ui(ferrite_ui::components::floating_surface()),
         ),
-        ("settings sheet", ui(crate::prefs::sheet(400., 300.))),
+        ("settings sheet", ui(ferrite_ui::sheet::sheet(400., 300.))),
         ("settings label", ui(ferrite_ui::components::text_ui())),
         ("metadata", ui(ferrite_ui::components::text_meta())),
     ] {

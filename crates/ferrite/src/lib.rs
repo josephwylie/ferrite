@@ -1,11 +1,13 @@
-// Ferrite: the window and the pump behind it. The binary (`main.rs`)
-// dispatches the headless commands and calls `launch`; the Cockpit the
-// window shows is `ferrite_cockpit`'s.
-use ferrite_cockpit::{
-    bind_keys, cockpit, cockpit_window, demo, ferrite_update, machines, titlebar, Quit,
-};
+// Ferrite: the window, its frame and the pump behind it. The binary
+// (`main.rs`) dispatches the headless commands and calls `launch`; the
+// Cockpit the window shows is `ferrite_cockpit`'s, in the frame
+// `ferrite_frame` draws (ADR 0035).
+mod menus;
+
+use ferrite_cockpit::{cockpit, cockpit_window, demo, ferrite_update, machines};
 use ferrite_pane::visual;
-use ferrite_ui::{icons, keymap, motion, platform_text, register_fonts, theme};
+use ferrite_ui::keymap::Quit;
+use ferrite_ui::{frame, icons, keymap, motion, platform_text, register_fonts, theme};
 
 use ::gpui as kit;
 use ::gpui::*;
@@ -52,6 +54,10 @@ pub fn launch() {
     if std::env::args().nth(1).as_deref() == Some("--visual-smoke") {
         std::process::exit(visual::smoke::run());
     }
+    // The frame every window of this process wears, captures included.
+    frame::install(ferrite_frame::Frame {
+        menus: menus::app_menus,
+    });
     // A panic must not take accepted history with it: whatever a writer
     // holds goes into its log before the process unwinds (ADR 0009).
     ferrite_core::store::install_panic_rescue();
@@ -186,7 +192,7 @@ pub fn launch() {
 
             // A refused key is said by the window (`cockpit::user_commands`).
             let (keys, keys_refused) = keymap::with_user_keys(keymap::PLATFORM, &settings.keys);
-            bind_keys(keys, cx);
+            frame::active().bind_keys(keys, cx);
 
             let defaults = std::sync::Arc::new(std::sync::Mutex::new(
                 SessionDefaults::from_settings(&settings),
@@ -213,7 +219,7 @@ pub fn launch() {
                 // its first launch, so the agents' Threads resume at login;
                 // a development build starts its own. Each launch rewrites
                 // the LaunchAgent when the app moved.
-                if settings.start_at_login && !titlebar::DEV {
+                if settings.start_at_login && !ferrite_cockpit::DEV {
                     if let Err(e) = std::env::current_exe()
                         .and_then(|exe| ferrite_core::server::agent::start_at_login(&exe, true))
                     {
@@ -302,12 +308,12 @@ pub fn launch() {
                         // traffic lights sit in the nav's top chrome (#22
                         // D24). Windows has no
                         // lights to keep, so hiding its titlebar hides the
-                        // caption buttons too — `titlebar.rs` draws them back
+                        // caption buttons too — the frame draws them back
                         // into the same band, which is the whole point: one
                         // band, not the system's bar above the app's.
                         titlebar: Some(TitlebarOptions {
                             title: Some("ferrite".into()),
-                            appears_transparent: cfg!(target_os = "macos") || titlebar::CUSTOM,
+                            appears_transparent: cfg!(target_os = "macos") || frame::CUSTOM,
                             traffic_light_position: Some(point(
                                 px(theme::TRAFFIC_X),
                                 px(theme::TRAFFIC_Y),
@@ -315,7 +321,7 @@ pub fn launch() {
                         }),
                         // Only the empty top strip moves the window;
                         // Pane heads and transcript text below it keep
-                        // their own drag gestures (`titlebar::strip`).
+                        // their own drag gestures (the frame's titlebar).
                         app_owns_titlebar_drag: cfg!(target_os = "macos"),
                         // Below this the title, the add control and the
                         // caption group collide, and no Pane reaches L2.
@@ -576,9 +582,18 @@ mod tests {
     /// Rule 10 over the app's render code (`ferrite_ui::face`).
     #[test]
     fn render_code_draws_only_covered_glyphs() {
-        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[(
-            "lib.rs",
-            include_str!("lib.rs"),
-        )]);
+        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
+            ("lib.rs", include_str!("lib.rs")),
+            ("menus.rs", include_str!("menus.rs")),
+            // The frame the app installs (`ferrite-frame`).
+            (
+                "ferrite-frame/src/titlebar.rs",
+                include_str!("../../ferrite-frame/src/titlebar.rs"),
+            ),
+            (
+                "ferrite-frame/src/settings.rs",
+                include_str!("../../ferrite-frame/src/settings.rs"),
+            ),
+        ]);
     }
 }

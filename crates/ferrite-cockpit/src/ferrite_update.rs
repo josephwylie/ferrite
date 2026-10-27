@@ -27,7 +27,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// platform and in a place an installer can replace. A development build
 /// never does, so a `cargo run` cannot take the installed app's update.
 pub fn enabled() -> bool {
-    !crate::titlebar::DEV && self_update::supported()
+    !crate::DEV && self_update::supported()
 }
 
 /// Whether this window is the one Ferrite that updates itself: it holds

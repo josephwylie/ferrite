@@ -10,7 +10,9 @@ use crate::progress::{Phase, Progress, ProgressEvent, StepStatus};
 use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
+mod markdown;
 pub use highlight::{language_for_path, tokens as highlight_tokens, Lexer};
+use markdown::{parse_section, OpenSection};
 
 /// A Block's identity, stable for as long as the Block lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -699,9 +701,8 @@ pub struct Transcript {
     last_id: u64,
     /// Monotonic presentation version for cached transcript renderers.
     revision: u64,
-    /// The Block still growing, and the raw markdown it was folded from.
-    open: Option<BlockId>,
-    source: String,
+    /// The answer section still growing, and its Block.
+    section: OpenSection,
     highlighter: Arc<dyn Highlighter>,
     /// How many Blocks a Pane keeps before the oldest fall away.
     capacity: usize,
@@ -1018,8 +1019,7 @@ impl Transcript {
             blocks: Vec::new(),
             last_id: 0,
             revision: 0,
-            open: None,
-            source: String::new(),
+            section: OpenSection::default(),
             highlighter,
             capacity,
             status: Status::default(),
@@ -1376,9 +1376,8 @@ impl Transcript {
             return Update::default();
         }
         let evicted = self.blocks.drain(..end).map(|block| block.id).collect();
-        if self.open.is_some_and(|open| open <= through) {
-            self.open = None;
-            self.source.clear();
+        if self.section.block.is_some_and(|open| open <= through) {
+            self.section.clear();
         }
         if self.latest_reasoning_part.is_some_and(|id| id <= through) {
             self.latest_reasoning_part = None;
@@ -1590,11 +1589,10 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ContentBoundary) => {
-                if let Some(block) = self.open {
+                if let Some(block) = self.section.block {
                     self.ask_to_highlight(block);
                 }
-                self.open = None;
-                self.source.clear();
+                self.section.clear();
                 self.summary_index = None;
                 self.thinking_open = false;
                 Update::default()
@@ -2103,18 +2101,19 @@ impl Transcript {
     /// Text streams into the Block it belongs to, not a Block per delta.
     fn grow(&mut self, text: &str) -> Vec<BlockId> {
         let mut dirty = Vec::new();
-        self.source.push_str(text);
+        if text.is_empty() {
+            return dirty;
+        }
+        self.section.push(text);
 
-        // Fold off every section that can no longer grow, then re-render the
+        // Fold off every section that can no longer grow, then the
         // remainder, which is still streaming.
-        while let Some(used) = complete_section(&self.source) {
-            let section = self.source[..used].to_string();
-            self.source = self.source[used..].to_string();
+        while let Some(section) = self.section.take_complete() {
             if let Some(body) = parse_section(&section) {
                 // A section that settled unchanged is still worth highlighting,
                 // but it is not dirty unless its body or retained Markdown moved.
                 let changed = self.write_open(body, &section);
-                let settled = changed.or(self.open);
+                let settled = changed.or(self.section.block);
                 dirty.extend(changed);
                 if let Some(id) = settled {
                     self.ask_to_highlight(id);
@@ -2127,11 +2126,23 @@ impl Transcript {
                     dirty.push(block.id);
                 }
             }
-            self.open = None;
+            self.section.block = None;
         }
-        if let Some(body) = parse_section(&self.source) {
-            let source = self.source.clone();
+        // The open Block is the tail by construction; only its tail moved.
+        if let Some(block) = self
+            .blocks
+            .last_mut()
+            .filter(|block| Some(block.id) == self.section.block)
+        {
+            if self.section.grow_into(block) {
+                dirty.push(block.id);
+                return dirty;
+            }
+        }
+        if let Some(body) = self.section.body() {
+            let source = self.section.source().to_string();
             dirty.extend(self.write_open(body, &source));
+            self.section.unsettle();
         }
         dirty
     }
@@ -2175,8 +2186,7 @@ impl Transcript {
                 slot => &mut slot.insert((id, Default::default())).1,
             };
             self.progress.thought_heading(scan.read(thought));
-            self.open = None;
-            self.source.clear();
+            self.section.clear();
             return id;
         }
         let id = self.push(Body::Thinking(text.to_string()));
@@ -2191,7 +2201,7 @@ impl Transcript {
     /// Reports changes to either the folded body or the original Markdown,
     /// since whitespace can change rich-text structure without changing plain text.
     fn write_open(&mut self, body: Body, source: &str) -> Option<BlockId> {
-        match self.open {
+        match self.section.block {
             Some(id) => {
                 // The open Block is the tail by construction. Scanning for it
                 // costs the whole transcript on every delta, which is what
@@ -2221,7 +2231,7 @@ impl Transcript {
                     markdown_run: Some(markdown_run),
                     sent_at: None,
                 });
-                self.open = Some(id);
+                self.section.block = Some(id);
                 Some(id)
             }
         }
@@ -2397,8 +2407,7 @@ impl Transcript {
             markdown_run: None,
             sent_at: None,
         });
-        self.open = None;
-        self.source.clear();
+        self.section.clear();
         id
     }
 
@@ -2613,200 +2622,6 @@ fn tool_subject(input: &serde_json::Value) -> String {
     String::new()
 }
 
-/// How many bytes of `source` form a section that can no longer grow — or
-/// None while the leading section is still open to more text.
-fn complete_section(source: &str) -> Option<usize> {
-    let first_end = source.find('\n')?;
-    let first = &source[..first_end];
-    if fence(first).is_some() {
-        // A fenced block runs to its closing fence, blank lines included.
-        let mut pos = first_end + 1;
-        loop {
-            let end = pos + source[pos..].find('\n')?;
-            if fence(&source[pos..end]).is_some() {
-                return Some(end + 1);
-            }
-            pos = end + 1;
-        }
-    }
-    if first.trim().is_empty() || heading(first).is_some() || bullet(first).is_some() {
-        return Some(first_end + 1);
-    }
-    // A paragraph runs until a line that cannot join it.
-    let mut pos = first_end + 1;
-    loop {
-        let end = pos + source[pos..].find('\n')?;
-        let line = &source[pos..end];
-        if line.trim().is_empty()
-            || heading(line).is_some()
-            || bullet(line).is_some()
-            || fence(line).is_some()
-        {
-            return Some(pos);
-        }
-        pos = end + 1;
-    }
-}
-
-/// Fold one section of markdown into a Block body. Blank sections have none.
-fn parse_section(source: &str) -> Option<Body> {
-    if let Some(body) = parse_code(source) {
-        return Some(body);
-    }
-    let source = source.trim();
-    if source.is_empty() {
-        return None;
-    }
-    if let Some((level, rest)) = heading(source) {
-        return Some(Body::Heading {
-            level,
-            spans: spans(rest),
-        });
-    }
-    if let Some(item) = bullet(source) {
-        return Some(Body::Bullet { spans: spans(item) });
-    }
-    Some(Body::Paragraph {
-        spans: spans(source),
-    })
-}
-
-/// A fenced block, complete or still streaming. Its source keeps every inner
-/// line untouched — indentation is code, not decoration.
-fn parse_code(source: &str) -> Option<Body> {
-    let mut lines = source.lines();
-    let info = fence(lines.next()?)?;
-    let mut body = Vec::new();
-    for line in lines {
-        if fence(line).is_some() {
-            break;
-        }
-        body.push(line);
-    }
-    Some(Body::Code {
-        language: (!info.is_empty()).then(|| info.to_string()),
-        source: body.join("\n"),
-        tokens: None,
-    })
-}
-
-/// ```` ```rust ```` -> "rust"; a bare ```` ``` ```` -> "".
-fn fence(line: &str) -> Option<&str> {
-    Some(line.trim_end().strip_prefix("```")?.trim())
-}
-
-/// `- one` or `* one` -> "one".
-fn bullet(line: &str) -> Option<&str> {
-    let rest = line
-        .strip_prefix("- ")
-        .or_else(|| line.strip_prefix("* "))?;
-    Some(rest.trim())
-}
-
-/// `## Plan` -> (2, "Plan").
-fn heading(line: &str) -> Option<(u8, &str)> {
-    let hashes = line.len() - line.trim_start_matches('#').len();
-    if !(1..=6).contains(&hashes) {
-        return None;
-    }
-    let rest = &line[hashes..];
-    let trimmed = rest.strip_prefix(' ')?;
-    Some((hashes as u8, trimmed.trim()))
-}
-
-/// Fold a line into spans. `**bold**` is found first, over the whole line
-/// — a bold run may hold inline code (`**drop the `MARK` lines**`), and
-/// splitting on backticks first left its markers literal. Backticked code
-/// is then cut out of each run, bold or plain; the plain runs split once
-/// more on `[text](url)`. A code span's own `**` never opens bold: the
-/// scan steps over code whole.
-fn spans(text: &str) -> Vec<Span> {
-    let mut spans = Vec::new();
-    let mut plain = 0;
-    let mut at = 0;
-    while at < text.len() {
-        let rest = &text[at..];
-        if let Some(code) = rest.strip_prefix('`') {
-            // Step over a closed code span; an unclosed backtick is text.
-            at += match code.find('`') {
-                Some(end) => end + 2,
-                None => 1,
-            };
-            continue;
-        }
-        if let Some((body, used)) = bold_at(rest) {
-            code_split(&text[plain..at], Style::Plain, &mut spans);
-            code_split(body, Style::Bold, &mut spans);
-            at += used;
-            plain = at;
-            continue;
-        }
-        at += rest.chars().next().map_or(1, char::len_utf8);
-    }
-    code_split(&text[plain..], Style::Plain, &mut spans);
-    spans
-}
-
-/// Cut the backticked code out of one run: the odd pieces are Code, the
-/// even ones wear `style` — and a plain piece still folds its links.
-fn code_split(text: &str, style: Style, spans: &mut Vec<Span>) {
-    for (i, run) in text.split('`').enumerate() {
-        if run.is_empty() {
-            continue;
-        }
-        if i % 2 == 1 {
-            spans.push(Span {
-                text: run.to_string(),
-                style: Style::Code,
-            });
-        } else if style == Style::Plain {
-            styled(run, spans);
-        } else {
-            spans.push(Span {
-                text: run.to_string(),
-                style,
-            });
-        }
-    }
-}
-
-/// Fold one plain run into Plain/Bold/Link spans. An unclosed marker stays
-/// literal text — prose is never eaten on a guess.
-fn styled(text: &str, spans: &mut Vec<Span>) {
-    fn push(spans: &mut Vec<Span>, text: &str, style: Style) {
-        if !text.is_empty() {
-            spans.push(Span {
-                text: text.to_string(),
-                style,
-            });
-        }
-    }
-    let mut plain = 0;
-    let mut at = 0;
-    while at < text.len() {
-        let rest = &text[at..];
-        let styled = bold_at(rest)
-            .map(|(body, used)| (body, used, Style::Bold))
-            .or_else(|| link_at(rest).map(|(body, used)| (body, used, Style::Link)));
-        if let Some((body, used, style)) = styled {
-            push(spans, &text[plain..at], Style::Plain);
-            push(spans, body, style);
-            at += used;
-            plain = at;
-            continue;
-        }
-        at += rest.chars().next().map_or(1, char::len_utf8);
-    }
-    push(spans, &text[plain..], Style::Plain);
-}
-
-/// `**bold** …` → ("bold", bytes consumed).
-fn bold_at(rest: &str) -> Option<(&str, usize)> {
-    let body = rest.strip_prefix("**")?;
-    let end = body.find("**")?;
-    (end > 0).then_some((&body[..end], end + 4))
-}
-
 /// A transcript as plain text, the way the operator would paste it
 /// somewhere else and the API's `agent.read` hands it to an agent: prompts
 /// quoted, prose flat, code fenced, tool rows as their one line plus the
@@ -2853,17 +2668,9 @@ pub fn plain_text(blocks: &[Block]) -> String {
     out
 }
 
-/// `[text](url) …` → ("text", bytes consumed). Only the text survives.
-fn link_at(rest: &str) -> Option<(&str, usize)> {
-    let body = rest.strip_prefix('[')?;
-    let close = body.find("](")?;
-    let target = &body[close + 2..];
-    let end = target.find(')')?;
-    (close > 0).then_some((&body[..close], 1 + close + 2 + end + 1))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::markdown::spans;
     use super::*;
 
     use crate::Decision;
@@ -4201,6 +4008,74 @@ mod tests {
             elapsed < std::time::Duration::from_millis(1500),
             "a 2 MB thought in 16,000 deltas took {elapsed:?}"
         );
+    }
+
+    /// An answer streams the same way: one long paragraph, styled as it
+    /// goes, costs each delta what it adds. It folds to the Block the whole
+    /// text folds to at once.
+    #[test]
+    fn a_long_paragraph_streams_in_time_linear_in_its_length() {
+        let mut transcript = Transcript::default();
+        let delta = format!("{} `c` **b** [l](u) ", "w".repeat(108));
+        let budget = std::time::Duration::from_millis(1500);
+        let started = std::time::Instant::now();
+        for sent in 1..=8_000 {
+            transcript.apply(text(&delta));
+            assert!(
+                started.elapsed() < budget,
+                "{sent} deltas of one paragraph took {:?}",
+                started.elapsed()
+            );
+        }
+        let mut whole = Transcript::default();
+        whole.apply(text(&delta.repeat(8_000)));
+        assert_eq!(transcript.blocks().len(), 1);
+        assert_eq!(transcript.blocks()[0].body, whole.blocks()[0].body);
+        assert_eq!(transcript.blocks()[0].markdown, whole.blocks()[0].markdown);
+    }
+
+    /// However the provider splits an answer, every delta leaves the Blocks
+    /// the text so far folds to in one piece: markers that close late, or
+    /// never; sections that open as one kind and turn out another.
+    #[test]
+    fn an_answer_folds_the_same_however_its_deltas_split() {
+        let answers = [
+            "plain words that run on and on without a mark",
+            "a `code` span, **bold `with code` inside**, and [a link](https://x.y) end",
+            "an unclosed `tick runs on and on, then closes` later",
+            "an unclosed **star runs on and on, then closes** later",
+            "a [bracket runs on and on](then a target) later",
+            "array[i] and [x] then words then ](late) closes it",
+            "a``b and ****, then *one* star, ** spaced ** and `` `` done",
+            "line one\nline two `spans\nlines` **and\nbold** too\n\nnext paragraph",
+            "  leading spaces\n\n# A heading `x`\n- a bullet **b**\n* star bullet\n## \nafter",
+            "```rust\nfn main() {}\n\n```\nprose after code\n```\nopen code",
+            "caf\u{e9} \u{1f600} [\u{e9}](u) **\u{e9}** `\u{e9}` \u{e9}",
+            "trailing spaces   \n  \n\n\n- \n-x\n#x\n``\n```",
+            "crlf\r\nline\r\n\r\npara",
+            "a lone * then *more* and [a] [b](c) `d` **e `f** g` h [i](j k",
+        ];
+        for answer in answers {
+            let chars: Vec<char> = answer.chars().collect();
+            for size in [1, 2, 3, 5, 8, 13] {
+                let mut transcript = Transcript::default();
+                let mut sent = String::new();
+                for chunk in chars.chunks(size) {
+                    let chunk: String = chunk.iter().collect();
+                    sent.push_str(&chunk);
+                    transcript.apply(text(&chunk));
+                    let mut whole = Transcript::default();
+                    whole.apply(text(&sent));
+                    let fold = |t: &Transcript| -> Vec<(Body, Option<String>)> {
+                        t.blocks()
+                            .iter()
+                            .map(|b| (b.body.clone(), b.markdown.clone()))
+                            .collect()
+                    };
+                    assert_eq!(fold(&transcript), fold(&whole), "{sent:?} in {size}s");
+                }
+            }
+        }
     }
 
     /// The working line's clock runs from the prompt to the turn's end,

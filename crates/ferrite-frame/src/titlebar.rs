@@ -28,36 +28,19 @@
 //! (`bottom_bar`, SPEC §5.7): `1 Solo` and a tab per Group, then the
 //! vitals — who needs you, usage, free disk and the clock.
 //!
-//! Drawing only, like `nav.rs`: the cockpit places these and owns the state
-//! they read.
+//! Drawing only: the Cockpit places these (`ferrite_ui::frame`) and owns
+//! the state they read.
 
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
+use ferrite_ui::frame::{Bar, RollUp, CUSTOM};
 use ferrite_ui::theme::paint;
 
 use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
-
-/// Whether this build is an unreleased one. `--release` is not the
-/// question — a locally built release binary is still a dev build, and
-/// wants the `dev` mark. Only the release pipeline ships without it, which it
-/// says by setting `FERRITE_RELEASE` for the compile (`build.rs` tracks
-/// the variable so a cached build cannot keep a stale answer). Settings ›
-/// About reports it; the titlebar carries no badge.
-pub const DEV: bool = option_env!("FERRITE_RELEASE").is_none();
-
-/// Whether this build draws its own titlebar. macOS keeps the host's, and
-/// hiding it there would take the traffic lights with it.
-pub const CUSTOM: bool = cfg!(target_os = "windows");
-
-/// Where the board's cards start: under the head row (SPEC §4), on every
-/// platform — the row is the slot the view head fills.
-pub fn board_top() -> f32 {
-    WIN_CHROME_H
-}
 
 /// The head row's drag strip over the board, as an overlay: the cards
 /// start at `board_top`, so this adds no layout and paints nothing — it
@@ -104,7 +87,7 @@ pub fn head_drag(draggable: bool, maximized: bool) -> Div {
 /// The empty stretch macOS drags the window by: a press starts AppKit's
 /// window drag, a double-click takes the system's titlebar action (zoom or
 /// minimise). The traffic lights are AppKit's own buttons over it.
-pub fn mac_drag_region() -> Div {
+fn mac_drag_region() -> Div {
     div()
         .debug_selector(|| "titlebar-drag".into())
         .flex_1()
@@ -154,6 +137,39 @@ fn drag_region(maximized: bool) -> Div {
 
 // ------------------------------------------------------------- bottom bar
 
+/// The bottom bar as the Cockpit fills it: its view tabs, then the
+/// vitals — who needs you, usage, free disk and the clock.
+pub fn bar(bar: Bar) -> Div {
+    let tabs = bar
+        .tabs
+        .into_iter()
+        .map(|tab| {
+            bar_tab(tab.id, tab.ordinal, tab.label, tab.current, tab.roll_up)
+                .on_click(tab.press)
+                .into_any_element()
+        })
+        .collect();
+    let needs_you = bar.needs_you.and_then(|(count, press)| {
+        bar_needs_you(count).map(|count| count.on_click(press).into_any_element())
+    });
+    let usage = bar
+        .usage
+        .iter()
+        .filter_map(|(provider, limits)| bar_usage(*provider, limits))
+        .map(IntoElement::into_any_element);
+    let disk = bar
+        .free_disk
+        .and_then(bar_free_disk)
+        .map(IntoElement::into_any_element);
+    let items = needs_you
+        .into_iter()
+        .chain(usage)
+        .chain(disk)
+        .chain(Some(bar_clock(bar.clock).into_any_element()))
+        .collect();
+    bottom_bar(tabs, vitals(items).into_any_element())
+}
+
 /// The bottom bar (SPEC §5.7), the window's one bar (ADR 0014, amended by
 /// ADR 0033): full width on `paint::BAR`, closed above by a `BAR_TOP`
 /// hairline, `BAR_PAD_X` in from each end, `BAR_GAP` between its items,
@@ -164,7 +180,7 @@ fn drag_region(maximized: bool) -> Div {
 /// mockups draw it, not inside the bar's 30px: inside, it would leave 29
 /// for the 22px tabs, and the half pixel the snap rounds down would seat
 /// them 4 under the line and 3 over the window's foot.
-pub fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
+fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
     div()
         .debug_selector(|| "bottom-bar".into())
         .relative()
@@ -213,7 +229,7 @@ pub fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
 
 /// The bar's right end, in order: the need-you count, a usage segment per
 /// provider, free disk, the clock — `BAR_GAP` apart, never shrunk.
-pub fn vitals(items: Vec<AnyElement>) -> Div {
+fn vitals(items: Vec<AnyElement>) -> Div {
     div()
         .debug_selector(|| "bottom-bar-vitals".into())
         .flex()
@@ -222,37 +238,6 @@ pub fn vitals(items: Vec<AnyElement>) -> Div {
         .items_center()
         .gap(px(BAR_GAP))
         .children(items)
-}
-
-/// A view's roll-up dot (SPEC §5.7): `ATTENTION` when anything it shows is
-/// blocked, else `RUNNING` when anything is working, else none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RollUp {
-    Working,
-    Blocked,
-}
-
-impl RollUp {
-    /// The roll-up of `attentions`: blocked wins over working.
-    pub fn of(attentions: impl IntoIterator<Item = ferrite_core::Attention>) -> Option<Self> {
-        use ferrite_core::Attention;
-        let mut working = false;
-        for attention in attentions {
-            match attention {
-                Attention::Blocked => return Some(RollUp::Blocked),
-                Attention::Working => working = true,
-                _ => {}
-            }
-        }
-        working.then_some(RollUp::Working)
-    }
-
-    fn ink(self) -> u32 {
-        match self {
-            RollUp::Working => RUNNING,
-            RollUp::Blocked => ATTENTION,
-        }
-    }
 }
 
 /// A round state dot `size` across in `ink`.
@@ -270,7 +255,7 @@ fn bar_dot(size: f32, ink: u32) -> Div {
 /// sits on `paint::SELECTED` with its name `TEXT_STRONG` at the label
 /// weight; the rest take the hover fill under the pointer. The cockpit
 /// wires the press.
-pub fn bar_tab(
+fn bar_tab(
     id: SharedString,
     ordinal: usize,
     label: SharedString,
@@ -316,7 +301,7 @@ pub fn bar_tab(
 /// pointer as the nav's doors do — its words brighten to `TEXT_STRONG`
 /// over the hover blend — rather than with a ground: a ground would need
 /// padding the vitals' even gaps cannot spare.
-pub fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
+fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
     (count > 0).then(|| {
         let blend = SharedString::from("bottom-bar-needs-you");
         let ink =
@@ -341,7 +326,7 @@ pub fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
 /// The window a provider's usage segment reads and its words: the more
 /// used one, `this week` or `of 5h` (the five-hour window on a tie).
 /// `None` when it has reported neither.
-pub fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'static str, f32)> {
+fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'static str, f32)> {
     let five = limits
         .five_hour
         .map(|window| window.used_fraction.clamp(0.0, 1.0));
@@ -359,7 +344,7 @@ pub fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'
 /// One provider's usage segment (SPEC §5.7): its glyph (`✻` Claude, `◉`
 /// Codex) in its ink, then `14% this week` or `41% of 5h`. `None` when the
 /// provider has reported no window.
-pub fn bar_usage(
+fn bar_usage(
     provider: ferrite_core::store::Provider,
     limits: &ferrite_core::transcript::RateLimits,
 ) -> Option<Div> {
@@ -383,37 +368,10 @@ pub fn bar_usage(
     )
 }
 
-/// Free space under which the bar shows it, and under which it asks for
-/// attention (SPEC §5.7), in the bar's decimal bytes.
-const DISK_SHOWN_UNDER: u64 = 20 * GB;
-const DISK_LOW_UNDER: u64 = 5 * GB;
-const GB: u64 = 1_000_000_000;
-
-/// `7.5 GB free` and its ink, for `bytes` free on the Threads' volume:
-/// one decimal under ten gigabytes, whole ones from there. `None` from
-/// 20 GB up: the bar says nothing while space is plentiful.
-pub fn free_disk_words(bytes: u64) -> Option<(String, u32)> {
-    if bytes >= DISK_SHOWN_UNDER {
-        return None;
-    }
-    let gb = bytes as f64 / GB as f64;
-    let words = if gb < 9.95 {
-        format!("{gb:.1} GB free")
-    } else {
-        format!("{gb:.0} GB free")
-    };
-    let ink = if bytes < DISK_LOW_UNDER {
-        ATTENTION
-    } else {
-        CHROME_MUTED
-    };
-    Some((words, ink))
-}
-
 /// The free-disk segment: `free_disk_words`, or `None` when it says
 /// nothing.
-pub fn bar_free_disk(bytes: u64) -> Option<Div> {
-    let (words, ink) = free_disk_words(bytes)?;
+fn bar_free_disk(bytes: u64) -> Option<Div> {
+    let (words, ink) = ferrite_ui::frame::free_disk_words(bytes)?;
     Some(
         components::tabular(
             div()
@@ -426,7 +384,7 @@ pub fn bar_free_disk(bytes: u64) -> Option<Div> {
 }
 
 /// The clock (`progress::clock_label`) in `TEXT_BAR`, tabular figures.
-pub fn bar_clock(clock: SharedString) -> Div {
+fn bar_clock(clock: SharedString) -> Div {
     components::tabular(
         div()
             .debug_selector(|| "bottom-bar-clock".into())
@@ -563,12 +521,6 @@ mod tests {
         });
     }
 
-    /// The cards start under the head row on every platform (SPEC §4).
-    #[test]
-    fn the_board_starts_under_the_head_row() {
-        assert_eq!(board_top(), WIN_CHROME_H);
-    }
-
     /// SPEC §5.7: a usage segment reads the provider's more used window,
     /// the five-hour one on a tie.
     #[test]
@@ -595,45 +547,6 @@ mod tests {
             Some(("of 5h", 0.3))
         );
         assert_eq!(usage_window(&limits(None, None)), None);
-    }
-
-    /// SPEC §5.7: free disk shows only under 20 GB, in `ATTENTION` under
-    /// 5 GB, one decimal under ten.
-    #[test]
-    fn free_disk_speaks_only_when_space_runs_low() {
-        assert_eq!(free_disk_words(20 * GB), None);
-        assert_eq!(
-            free_disk_words(19_600_000_000),
-            Some(("20 GB free".into(), CHROME_MUTED))
-        );
-        assert_eq!(
-            free_disk_words(12_300_000_000),
-            Some(("12 GB free".into(), CHROME_MUTED))
-        );
-        assert_eq!(
-            free_disk_words(7_500_000_000),
-            Some(("7.5 GB free".into(), CHROME_MUTED))
-        );
-        assert_eq!(
-            free_disk_words(4_990_000_000),
-            Some(("5.0 GB free".into(), ATTENTION))
-        );
-    }
-
-    /// SPEC §5.7: a view's dot says blocked over working, and nothing for
-    /// a view at rest.
-    #[test]
-    fn a_tab_rolls_up_blocked_over_working() {
-        use ferrite_core::Attention;
-        assert_eq!(RollUp::of([Attention::Idle, Attention::Done]), None);
-        assert_eq!(
-            RollUp::of([Attention::Done, Attention::Working]),
-            Some(RollUp::Working)
-        );
-        assert_eq!(
-            RollUp::of([Attention::Working, Attention::Blocked, Attention::Idle]),
-            Some(RollUp::Blocked)
-        );
     }
 
     /// A restored window keeps its top resize edge, which is an inset the

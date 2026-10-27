@@ -415,11 +415,10 @@ pub fn capture(output: String) {
         ferrite_pane::pane::init_components(cx);
         ferrite_ui::motion::init(cx);
         ferrite_ui::register_fonts(cx);
-        let bindings = crate::load_bindings(
+        crate::frame().bind_keys(
             ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
             cx,
         );
-        cx.bind_keys(bindings);
     });
     let mut entity = None;
     let prefs = Preferences {
