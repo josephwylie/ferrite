@@ -180,21 +180,6 @@ fn shown(
     })
 }
 
-/// Tick until `done`, giving the links' threads real time.
-fn until(
-    cx: &mut gpui::VisualTestContext,
-    mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,
-) {
-    for _ in 0..300 {
-        tick(cx);
-        if done(cx) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!("never happened");
-}
-
 fn connection(
     view: &Entity<CockpitView>,
     index: usize,
@@ -232,14 +217,11 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
             discovery: Box::new(Fake::default()),
         })
         .unwrap();
-        for _ in 0..500 {
+        ferrite_core::doorbell::until("client did not attach", || {
             core.pump();
-            if matches!(core.server(), Some(ServerState::Attached { .. })) {
-                return core;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        panic!("client did not attach");
+            matches!(core.server(), Some(ServerState::Attached { .. }))
+        });
+        core
     };
     let mut background = attach("background");
     let earlier = background
@@ -535,13 +517,10 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         discovery: Box::new(Fake::default()),
     })
     .unwrap();
-    for _ in 0..500 {
+    ferrite_core::doorbell::until("never attached", || {
         core.pump();
-        if matches!(core.server(), Some(ServerState::Attached { .. })) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
     let named = core
         .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
         .unwrap();

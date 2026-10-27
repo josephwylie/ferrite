@@ -14,6 +14,7 @@ pub mod diagnostics;
 pub mod digest;
 pub mod disk;
 pub mod docview;
+pub mod doorbell;
 pub mod draft;
 pub mod engine;
 pub mod followup;

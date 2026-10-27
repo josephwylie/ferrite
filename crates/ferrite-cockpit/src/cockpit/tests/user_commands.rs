@@ -18,22 +18,6 @@ fn command_rows(
     })
 }
 
-/// Tick until `done`: a command runs on a thread of its own, outside the
-/// test's executor.
-fn tick_until(
-    cx: &mut gpui::VisualTestContext,
-    mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,
-) {
-    for _ in 0..500 {
-        tick(cx);
-        if done(cx) {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("the command never finished");
-}
-
 fn run(view: &Entity<CockpitView>, index: usize, cx: &mut gpui::VisualTestContext) {
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -65,7 +49,7 @@ fn a_user_command_runs_for_the_focused_thread_into_the_reader(cx: &mut TestAppCo
     assert_eq!(name, "where");
     assert_eq!(*act, Act::Command(Command::User(0)));
     run(&view, 0, cx);
-    tick_until(cx, |cx| {
+    until(cx, |cx| {
         view.read_with(cx, |view, _| view.panes[0].preview.document().is_some())
     });
     let (document, cwd) = view.read_with(cx, |view, _| {
@@ -138,7 +122,7 @@ fn a_running_commands_row_stops_it(cx: &mut TestAppContext) {
     };
     assert_eq!(names(cx).last().map(String::as_str), Some("stop watch"));
     run(&view, 0, cx);
-    tick_until(cx, |cx| {
+    until(cx, |cx| {
         view.read_with(cx, |view, _| view.user_commands.running.is_empty())
     });
     assert_eq!(names(cx).last().map(String::as_str), Some("watch"));
