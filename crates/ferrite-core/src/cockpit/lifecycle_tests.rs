@@ -145,12 +145,9 @@ fn workspace() -> WorkspaceChoice {
         checkout: std::env::current_dir().unwrap(),
     }
 }
-fn until(mut predicate: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !predicate() {
-        assert!(Instant::now() < deadline, "startup did not settle");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+/// Look again each time a startup lands (`doorbell`), not on the wall clock.
+fn until(predicate: impl FnMut() -> bool) {
+    crate::doorbell::until("startup did not settle", predicate);
 }
 fn settle(cockpit: &mut Cockpit) -> BootstrapResult {
     let mut result = None;

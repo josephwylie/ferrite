@@ -639,21 +639,12 @@ fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
         (submitted, other)
     });
     first_tx.send(()).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let finished = view.update(cx, |view, cx| {
+    ferrite_core::doorbell::until("startup did not settle", || {
+        view.update(cx, |view, cx| {
             view.pump(cx);
             !view.cockpit.draft_starting(submitted)
-        });
-        if finished {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "startup did not settle"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+        })
+    });
     view.update(cx, |view, cx| {
         assert_eq!(
             view.cockpit.roster().focused(),

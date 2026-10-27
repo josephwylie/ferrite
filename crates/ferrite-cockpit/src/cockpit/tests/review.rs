@@ -84,19 +84,21 @@ fn tidied(core: &mut Cockpit, fake: &Fake, repo: &std::path::Path) {
     core.pump();
 }
 
-/// Pump until `done`: a review reads its checkout off the UI thread.
-fn until(
-    cx: &mut gpui::VisualTestContext,
-    mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,
-) {
-    for _ in 0..500 {
-        tick(cx);
-        if done(cx) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
+/// Pump once, handing the Review core's turn host the turn's news, then
+/// read the checkout until `done` holds there. The turn host snapshots on
+/// threads of its own that say nothing when they finish (and the Review
+/// core is not Ferrite's to change), so the checkout is the only witness;
+/// the window is not pumped meanwhile.
+fn turn_host_wrote(cx: &mut gpui::VisualTestContext, done: impl Fn() -> bool) {
+    tick(cx);
+    let lost = std::time::Instant::now() + ferrite_core::doorbell::LOST_AFTER;
+    while !done() {
+        assert!(
+            std::time::Instant::now() < lost,
+            "the turn host never wrote"
+        );
+        std::thread::sleep(Duration::from_millis(5));
     }
-    panic!("never happened");
 }
 
 fn open_review(view: &Entity<CockpitView>, scope: Scope, cx: &mut gpui::VisualTestContext) {
@@ -457,7 +459,7 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
         view.cockpit.send(thread, "Add notes".into());
     });
     // The turn's write lands once its start is snapshotted, never in it.
-    until(cx, |_| snapshotted());
+    turn_host_wrote(cx, snapshotted);
     std::fs::write(repo.join("notes.md"), "fresh\n").unwrap();
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
@@ -465,7 +467,7 @@ fn the_last_turn_reads_what_changed_since_the_prompt(cx: &mut TestAppContext) {
             cost_usd: None,
         })
         .unwrap();
-    until(cx, |_| baseline() != stale);
+    turn_host_wrote(cx, || baseline() != stale);
     assert_eq!(
         baseline(),
         start,
