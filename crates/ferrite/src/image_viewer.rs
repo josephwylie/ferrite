@@ -61,7 +61,7 @@ gpui::actions!(
 /// The viewer's key context: deeper than the Cockpit's, so ⌘= ⌘- ⌘0 zoom
 /// the image rather than the reading size and esc closes the preview rather
 /// than interrupting the turn.
-pub(crate) const KEY_CONTEXT: &str = "ImageViewer";
+pub(crate) const KEY_CONTEXT: &str = crate::keymap::IMAGE_VIEWER;
 
 /// Whether gpui draws the file as an image: by its extension, as `img`
 /// decides.

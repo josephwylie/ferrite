@@ -1,0 +1,25 @@
+[package]
+name = "ferrite-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's shared UI: theme, icons, components, motion and menus"
+
+[lib]
+doctest = false
+
+[features]
+# The opaque greys on macOS too (`theme::GLASS`): what the headless parity
+# captures render, since a capture cannot show the desktop blur.
+opaque = []
+# The test hooks the app's own tests reach for.
+test-support = []
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+
+[dev-dependencies]
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }

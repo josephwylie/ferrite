@@ -137,7 +137,7 @@ impl BoardView {
     }
 
     fn new(board: Option<Board>, keeps_view: bool, cx: &mut Context<Self>) -> Self {
-        crate::theme::init_components(cx);
+        crate::pane::init_components(cx);
         Self {
             focus: cx.focus_handle(),
             board,

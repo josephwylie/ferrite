@@ -609,7 +609,7 @@ impl ChoiceContent {
                     .or_else(|| self.ladder.as_ref().and_then(|ladder| ladder.chosen)),
             )
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         testing::DRAWN.with(|drawn| {
             drawn.set(testing::Drawn {
                 placed: self.state.read(cx).placed,
@@ -903,12 +903,12 @@ impl RenderOnce for ChoiceMenu {
 
 /// What the open choice menu was last drawn with: the stale-chrome tests
 /// read what is on screen.
-#[cfg(test)]
-pub(crate) mod testing {
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
     use std::cell::Cell;
 
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub(crate) struct Drawn {
+    pub struct Drawn {
         /// Moved onto its measured place (else drawn at zero opacity).
         pub placed: bool,
         pub cursor: Option<usize>,
@@ -919,7 +919,7 @@ pub(crate) mod testing {
     }
 
     /// The open choice menu as last drawn.
-    pub(crate) fn drawn() -> Drawn {
+    pub fn drawn() -> Drawn {
         DRAWN.with(Cell::get)
     }
 }

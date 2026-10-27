@@ -74,7 +74,7 @@ const FONT_FACES: &str = "@font-face{font-family:\"Geist Mono\";src:url(/font/40
 
 /// The bundled face a `/font/…` URL names (see [`FONT_FACES`]).
 pub(super) fn font(path: &str) -> Option<&'static [u8]> {
-    // `crate::FONTS`: regular, italic, medium, semibold, bold.
+    // `ferrite_ui::FONTS`: regular, italic, medium, semibold, bold.
     let index = match path {
         "/font/400.ttf" => 0,
         "/font/italic.ttf" => 1,
@@ -82,7 +82,7 @@ pub(super) fn font(path: &str) -> Option<&'static [u8]> {
         "/font/600.ttf" => 3,
         _ => return None,
     };
-    Some(crate::FONTS[index])
+    Some(ferrite_ui::FONTS[index])
 }
 
 /// The full document for `page`.

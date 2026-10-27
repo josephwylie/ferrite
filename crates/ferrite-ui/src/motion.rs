@@ -1046,7 +1046,7 @@ fn fire(cx: &mut App) {
     clock.timer = None;
     let due = clock.schedule.take_due(now);
     if !due.is_empty() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         testing::PULSE_TICKS.with(|ticks| ticks.set(ticks.get() + 1));
         for view in due {
             cx.notify(view);
@@ -1074,7 +1074,6 @@ thread_local! {
 }
 
 /// Hold every loop at `held` (a capture), or let them run (`None`).
-#[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
 pub fn hold_loops(held: Option<HeldLoops>) {
     HELD_LOOPS.with(|cell| cell.set(held));
 }
@@ -1107,7 +1106,7 @@ pub fn script_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut A
 }
 
 /// The clock is parked: nothing is declared and no timer is armed.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn pulse_parked(cx: &App) -> bool {
     cx.try_global::<PulseClock>()
         .is_none_or(|clock| clock.timer.is_none())
@@ -1396,13 +1395,13 @@ pub fn reduced_motion(cx: &App) -> bool {
 /// selectors (gpui's test window keeps no `debug_bounds` for a cached view
 /// it reuses). Resting, the kit behaves as it does under reduced motion.
 pub(crate) fn live() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     return testing::DRIVE.with(std::cell::Cell::get);
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     true
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing {
     thread_local! {
         pub(super) static DRIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

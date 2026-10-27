@@ -364,13 +364,13 @@ fn add_unfocused_cockpit_window(
     let (root, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| build(window, cx));
         gpui::component::Root::new(
-            cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
             cx,
         )
     });
     let view = root.read_with(cx, |root, cx| {
-        crate::loops_overlay::testing::cockpit(root.view(), cx)
+        crate::cockpit_window::testing::cockpit(root.view(), cx)
     });
     (view, cx)
 }
@@ -705,7 +705,7 @@ fn press(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, count:
 fn bind_production_keys(cx: &mut TestAppContext) {
     cx.update(|cx| {
         // Launch initializes the toolkit before binding Ferrite’s keys.
-        crate::theme::init_components(cx);
+        crate::pane::init_components(cx);
         let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
         let bindings = crate::load_bindings(table, cx);
         cx.bind_keys(bindings);

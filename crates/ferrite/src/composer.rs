@@ -203,7 +203,7 @@ impl EventEmitter<Edited> for Composer {}
 
 impl Composer {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        crate::theme::init_components(cx);
+        crate::pane::init_components(cx);
         Self {
             focus_handle: cx.focus_handle(),
             files_focus: cx.focus_handle(),

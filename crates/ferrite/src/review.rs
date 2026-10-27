@@ -2708,7 +2708,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) -> (Entity<ReviewView>, gpui::VisualTestContext) {
         cx.update(|cx| {
-            crate::theme::init_components(cx);
+            crate::pane::init_components(cx);
             let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
             let bindings = crate::load_bindings(table, cx);
             cx.bind_keys(bindings);

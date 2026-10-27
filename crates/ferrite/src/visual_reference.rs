@@ -548,7 +548,7 @@ fn render(
         gpui::platform::current_headless_renderer,
     );
     cx.update(|cx| {
-        crate::theme::init_components(cx);
+        crate::pane::init_components(cx);
         crate::register_fonts(cx);
         crate::visual::init(cx);
         crate::visual::diagram::init(true, cx);
@@ -561,7 +561,7 @@ fn render(
                 let view = cx.new(|cx| CockpitView::new_with_provider(core, Provider::Claude, cx));
                 entity = Some(view.clone());
                 let content =
-                    cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx));
+                    cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx));
                 cx.new(|cx| gpui::component::Root::new(content, window, cx))
             },
         )
@@ -2282,7 +2282,7 @@ fn loops_frames(
         gpui::platform::current_headless_renderer,
     );
     cx.update(|cx| {
-        crate::theme::init_components(cx);
+        crate::pane::init_components(cx);
         crate::register_fonts(cx);
     });
     let mut entity = None;
@@ -2291,7 +2291,7 @@ fn loops_frames(
             let view = cx.new(|cx| CockpitView::new_with_provider(core, Provider::Claude, cx));
             entity = Some(view.clone());
             let content = cx.new(|cx| {
-                crate::loops_overlay::CockpitWindow::with_overlay(view, overlay, window, cx)
+                crate::cockpit_window::CockpitWindow::with_overlay(view, overlay, window, cx)
             });
             cx.new(|cx| gpui::component::Root::new(content, window, cx))
         })

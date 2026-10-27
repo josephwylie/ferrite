@@ -72,14 +72,14 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
     let (root, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| CockpitView::new(core, cx));
         gpui::component::Root::new(
-            cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
             cx,
         )
         .bordered(false)
     });
     let view = root.read_with(cx, |root, cx| {
-        crate::loops_overlay::testing::cockpit(root.view(), cx)
+        crate::cockpit_window::testing::cockpit(root.view(), cx)
     });
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(700.)));

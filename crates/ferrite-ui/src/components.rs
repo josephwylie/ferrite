@@ -827,7 +827,7 @@ pub fn key_glyph(part: &str) -> Option<char> {
 /// A key table's combination as `key_combo` draws it, in characters:
 /// `cmd-shift-N` → `⌘⇧N`, `cmd shift N` → `⌘ ⇧ N`. What a reader sees and
 /// what a test compares.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn key_glyphs(keys: &str) -> String {
     let glyph = |part: &str| key_glyph(part).map_or_else(|| part.to_string(), String::from);
     keys.split(' ')
