@@ -572,4 +572,12 @@ mod tests {
         // Nothing half-made was left in the store either.
         assert!(store.thread_ids().unwrap().is_empty());
     }
+
+    /// Rule 10 over the app's render code (`ferrite_ui::face`).
+    #[test]
+    fn render_code_draws_only_covered_glyphs() {
+        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
+            ("lib.rs", include_str!("lib.rs")),
+        ]);
+    }
 }

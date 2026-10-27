@@ -299,4 +299,21 @@ mod tests {
                 if name == "Keyboard Shortcuts" && action.partial_eq(&shortcuts::Toggle)
         )));
     }
+
+    /// Rule 10 over the Cockpit's render code (`ferrite_ui::face`).
+    #[test]
+    fn render_code_draws_only_covered_glyphs() {
+        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
+            ("lib.rs", include_str!("lib.rs")),
+            ("cockpit.rs", include_str!("cockpit.rs")),
+            ("cockpit/subagents.rs", include_str!("cockpit/subagents.rs")),
+            ("cockpit/panel/preview.rs", include_str!("cockpit/panel/preview.rs")),
+            ("nav.rs", include_str!("nav.rs")),
+            ("titlebar.rs", include_str!("titlebar.rs")),
+            ("prefs.rs", include_str!("prefs.rs")),
+            ("project_editor.rs", include_str!("project_editor.rs")),
+            ("notifications.rs", include_str!("notifications.rs")),
+            ("background_chips.rs", include_str!("background_chips.rs")),
+        ]);
+    }
 }

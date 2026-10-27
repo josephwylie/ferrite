@@ -50,3 +50,5 @@ winresource = { version = "0.1", default-features = false }
 [dev-dependencies]
 # The launch's tests run in gpui's headless harness.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+# The type rules' render-code check (`ferrite_ui::face`).
+ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
