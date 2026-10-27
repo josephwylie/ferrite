@@ -29,7 +29,7 @@ use crate::components::Tip as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "visual-reference")]
 #[path = "visual_reference.rs"]
-pub(crate) mod visual_reference;
+pub mod visual_reference;
 
 use std::time::Duration;
 
@@ -9286,7 +9286,7 @@ impl CockpitView {
     /// Open a Group (#28): the core lays every member's Pane — a parked
     /// one's as its tile, woken by ⏎ (F-8) — and enters the view; the
     /// mirror follows.
-    pub(crate) fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
+    pub fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
         self.empty_shown = false;
         match self.cockpit.enter_group(group) {
             Ok(()) => {

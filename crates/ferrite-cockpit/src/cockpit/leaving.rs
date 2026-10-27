@@ -8,7 +8,7 @@ use gpui::{App, PromptLevel};
 
 impl CockpitView {
     /// ⌘Q: quit, asking first when work would be interrupted.
-    pub(crate) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let warning = self.leaving_warning();
         if self.confirm_leaving("Quit", warning, window, cx, |_, cx| cx.quit()) {
             cx.quit();
@@ -16,7 +16,7 @@ impl CockpitView {
     }
 
     /// The window's close button: the same question. `true` closes now.
-    pub(crate) fn close_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub fn close_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let warning = self.leaving_warning();
         self.confirm_leaving("Close", warning, window, cx, |window, _| {
             window.remove_window()

@@ -17,7 +17,8 @@ test = false
 
 [features]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
-visual-reference = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/visual-reference"]
+# The captures are the Cockpit's (`cockpit::visual_reference`).
+visual-reference = ["ferrite-cockpit/visual-reference"]
 # The opaque greys on macOS too (`theme::GLASS`, in ferrite-ui).
 opaque = ["ferrite-ui/opaque"]
 # Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013), on macOS and
@@ -34,47 +35,18 @@ ferrite-core = { path = "../ferrite-core" }
 ferrite-ui = { path = "../ferrite-ui" }
 # The Pane: the transcript, the Composer and the Draft band.
 ferrite-pane = { path = "../ferrite-pane" }
-# System notifications: herdr-focus-notify, vendored (its README).
-ferrite-focus-notify = { path = "../ferrite-focus-notify" }
-# herdr-reviewr's review core, vendored: the Review slot's rows and comments
-# (ADR 0021).
-ferrite-reviewr = { path = "../ferrite-reviewr" }
-toml = { workspace = true }
-unicode-segmentation = { workspace = true }
+# The Cockpit the window shows: the grid, the nav and the Roster glue.
+ferrite-cockpit = { path = "../ferrite-cockpit" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
-# Ferrite owns the semantic states for a few high-contrast actions instead of
-# inheriting GPUI Kit's preset hover foregrounds.
-gpui-base = "=0.6.0"
-# The demo script builds real provider events, whose payloads are the vendors'
-# own JSON. Already in the tree via ferrite-core.
-serde_json = { workspace = true }
-# Same platform already used by GPUI Kit; enable its framebuffer test hook only.
-gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
-url = "2"
 # GPUI's default HTTP client refuses every request, so Markdown images with
 # http(s) URLs never load. GPUI Kit already builds this client; Ferrite wires it.
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.3" }
-# The Board runtime's and system notifications' channels. Already in the
-# tree via gpui.
-futures = "0.3"
-
-# Projects 1.0 uses Unix sockets, signals and flock (ADR 0031).
-# Keep its runtime out of Windows builds; the cockpit reports unavailability.
-[target.'cfg(unix)'.dependencies]
-sw-board = { workspace = true }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1", default-features = false }
 
 [dev-dependencies]
-# The smoke render needs a window; gpui's own test harness provides a headless
-# one, so the app's rendering is exercised without a display.
+# The launch's tests run in gpui's headless harness.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
-# The in-process machine the window's tests attach to.
-ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
-ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
-ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }
-# The image viewer's tests draw their images. Already in the tree via gpui.
-image = { version = "0.25.1", default-features = false, features = ["png"] }

@@ -20,7 +20,7 @@ mod feature_scenes;
 
 #[path = "cockpit/visual_reference/live.rs"]
 mod live;
-pub(crate) use live::capture as live_capture;
+pub use live::capture as live_capture;
 
 use super::{CockpitView, DraftTarget, MenuTarget};
 use crate::palette::PaletteScope;

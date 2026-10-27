@@ -3525,33 +3525,42 @@ mod tests {
                 "pane/text.rs",
                 include_str!("../../ferrite-pane/src/pane/text.rs"),
             ),
-            ("cockpit.rs", include_str!("../../ferrite/src/cockpit.rs")),
+            (
+                "cockpit.rs",
+                include_str!("../../ferrite-cockpit/src/cockpit.rs"),
+            ),
             (
                 "cockpit/subagents.rs",
-                include_str!("../../ferrite/src/cockpit/subagents.rs"),
+                include_str!("../../ferrite-cockpit/src/cockpit/subagents.rs"),
             ),
             (
                 "transcript.rs",
                 include_str!("../../ferrite-pane/src/transcript.rs"),
             ),
             ("rich.rs", include_str!("../../ferrite-pane/src/rich.rs")),
-            ("nav.rs", include_str!("../../ferrite/src/nav.rs")),
+            ("nav.rs", include_str!("../../ferrite-cockpit/src/nav.rs")),
             ("mark.rs", include_str!("../../ferrite-pane/src/mark.rs")),
-            ("titlebar.rs", include_str!("../../ferrite/src/titlebar.rs")),
+            (
+                "titlebar.rs",
+                include_str!("../../ferrite-cockpit/src/titlebar.rs"),
+            ),
             ("menu.rs", include_str!("menu.rs")),
             (
                 "composer.rs",
                 include_str!("../../ferrite-pane/src/composer.rs"),
             ),
             ("components.rs", include_str!("components.rs")),
-            ("prefs.rs", include_str!("../../ferrite/src/prefs.rs")),
+            (
+                "prefs.rs",
+                include_str!("../../ferrite-cockpit/src/prefs.rs"),
+            ),
             (
                 "project_editor.rs",
-                include_str!("../../ferrite/src/project_editor.rs"),
+                include_str!("../../ferrite-cockpit/src/project_editor.rs"),
             ),
             (
                 "notifications.rs",
-                include_str!("../../ferrite/src/notifications.rs"),
+                include_str!("../../ferrite-cockpit/src/notifications.rs"),
             ),
             (
                 "attachments.rs",
@@ -3563,7 +3572,7 @@ mod tests {
             ),
             (
                 "background_chips.rs",
-                include_str!("../../ferrite/src/background_chips.rs"),
+                include_str!("../../ferrite-cockpit/src/background_chips.rs"),
             ),
             ("keymap.rs", include_str!("keymap.rs")),
             (
@@ -3576,7 +3585,7 @@ mod tests {
             ),
             (
                 "cockpit/panel/preview.rs",
-                include_str!("../../ferrite/src/cockpit/panel/preview.rs"),
+                include_str!("../../ferrite-cockpit/src/cockpit/panel/preview.rs"),
             ),
             (
                 "prompt_drop.rs",
@@ -3595,7 +3604,8 @@ mod tests {
                 "file_links.rs",
                 include_str!("../../ferrite-pane/src/file_links.rs"),
             ),
-            ("lib.rs", include_str!("../../ferrite/src/lib.rs")),
+            ("lib.rs", include_str!("../../ferrite-cockpit/src/lib.rs")),
+            ("ferrite lib.rs", include_str!("../../ferrite/src/lib.rs")),
             ("ferrite-ui lib.rs", include_str!("lib.rs")),
         ];
         let mut missing = Vec::new();
