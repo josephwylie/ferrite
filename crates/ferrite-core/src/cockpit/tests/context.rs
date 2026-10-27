@@ -264,10 +264,11 @@ fn parking_never_waits_for_the_drive() {
     cockpit.pump();
     cockpit.engine().store.settle_all();
     *crate::store::worker_lock(&cockpit.engine().store.faults().sync_delay) =
-        std::time::Duration::from_millis(400);
+        std::time::Duration::from_secs(3);
     let started = std::time::Instant::now();
     cockpit.park(thread).unwrap();
-    assert!(started.elapsed() < std::time::Duration::from_millis(150));
+    // Well under the drive's delay, with room for a loaded CI runner.
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
     cockpit.revive(thread).unwrap();
     assert_eq!(
         cockpit
