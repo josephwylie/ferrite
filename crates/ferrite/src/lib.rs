@@ -585,15 +585,6 @@ mod tests {
         ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
             ("lib.rs", include_str!("lib.rs")),
             ("menus.rs", include_str!("menus.rs")),
-            // The frame the app installs (`ferrite-frame`).
-            (
-                "ferrite-frame/src/titlebar.rs",
-                include_str!("../../ferrite-frame/src/titlebar.rs"),
-            ),
-            (
-                "ferrite-frame/src/settings.rs",
-                include_str!("../../ferrite-frame/src/settings.rs"),
-            ),
         ]);
     }
 }

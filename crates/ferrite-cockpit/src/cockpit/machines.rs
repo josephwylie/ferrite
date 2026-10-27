@@ -250,7 +250,7 @@ impl CockpitView {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<prefs::Group> {
+    ) -> Option<settings::Group> {
         let machines = self.machines.clone()?;
         let field = self
             .machine_field
@@ -261,7 +261,7 @@ impl CockpitView {
             })
             .clone();
         let view = cx.entity().downgrade();
-        let act = |change: SavedChange| -> prefs::Act {
+        let act = |change: SavedChange| -> settings::Act {
             let view = view.clone();
             Rc::new(move |cx: &mut gpui::App| {
                 let _ = view.update(cx, |view, cx| {
@@ -281,7 +281,7 @@ impl CockpitView {
         let mut shown = Vec::new();
         for (row, machine) in listed {
             let target = machine.target.clone();
-            let mut acts: Vec<(SharedString, prefs::Act)> = Vec::new();
+            let mut acts: Vec<(SharedString, settings::Act)> = Vec::new();
             if row.connection == Connection::Attention {
                 let index = row.index;
                 let view = view.clone();
@@ -327,7 +327,7 @@ impl CockpitView {
                     act(Box::new(move |saved| saved.retain(|m| m.target != removed))),
                 ));
             }
-            shown.push(prefs::named(
+            shown.push(settings::named(
                 "settings-machine",
                 row.index,
                 row.name.clone().into(),
@@ -337,7 +337,7 @@ impl CockpitView {
         }
         let adding = view.clone();
         let typed = field.clone();
-        shown.push(prefs::entry(
+        shown.push(settings::entry(
             "settings-machine-add",
             "Add a machine",
             "Its ssh target. It needs `ferrited` on its PATH; ssh signs in as it \
@@ -363,7 +363,7 @@ impl CockpitView {
                 typed.update(cx, |field, cx| field.set_value("", window, cx));
             },
         ));
-        Some(prefs::Group::new(Some("Machines")).rows(shown))
+        Some(settings::Group::new(Some("Machines")).rows(shown))
     }
 }
 

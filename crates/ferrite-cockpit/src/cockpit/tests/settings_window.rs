@@ -143,21 +143,21 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
     let page = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.settings_page);
-    assert_eq!(page(cx), prefs::PageKey::NewThreads);
+    assert_eq!(page(cx), settings::PageKey::NewThreads);
     cx.simulate_keystrokes("down");
     tick(cx);
-    assert_eq!(page(cx), prefs::PageKey::Permissions);
+    assert_eq!(page(cx), settings::PageKey::Permissions);
     assert!(cx.debug_bounds("settings-codex-sandbox").is_some());
     assert!(cx.debug_bounds("settings-provider-0").is_none());
     cx.simulate_keystrokes("down down down down");
     tick(cx);
-    assert_eq!(page(cx), prefs::PageKey::About, "held at the foot");
+    assert_eq!(page(cx), settings::PageKey::About, "held at the foot");
     cx.simulate_keystrokes("up");
     tick(cx);
-    assert_eq!(page(cx), prefs::PageKey::Server);
+    assert_eq!(page(cx), settings::PageKey::Server);
     cx.simulate_keystrokes("up up");
     tick(cx);
-    assert_eq!(page(cx), prefs::PageKey::Behaviour);
+    assert_eq!(page(cx), settings::PageKey::Behaviour);
     cx.simulate_keystrokes("down down down");
     tick(cx);
 
@@ -182,7 +182,7 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
-    assert_eq!(page(cx), prefs::PageKey::NewThreads);
+    assert_eq!(page(cx), settings::PageKey::NewThreads);
     view.read_with(cx, |view, _| assert_eq!(view.settings_copied, None));
 }
 

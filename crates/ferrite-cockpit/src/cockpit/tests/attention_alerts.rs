@@ -596,7 +596,7 @@ fn the_notifications_page_sets_every_alert_setting(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| {
         view.settings_open = true;
-        view.settings_page = prefs::PageKey::Notifications;
+        view.settings_page = settings::PageKey::Notifications;
         cx.notify();
     });
     tick(cx);

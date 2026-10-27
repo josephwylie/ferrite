@@ -12,7 +12,7 @@ use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 mod highlight;
 mod markdown;
 pub use highlight::{language_for_path, tokens as highlight_tokens, Lexer};
-use markdown::{parse_section, OpenSection};
+use markdown::OpenSection;
 
 /// A Block's identity, stable for as long as the Block lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1376,7 +1376,7 @@ impl Transcript {
             return Update::default();
         }
         let evicted = self.blocks.drain(..end).map(|block| block.id).collect();
-        if self.section.block.is_some_and(|open| open <= through) {
+        if self.section.block().is_some_and(|open| open <= through) {
             self.section.clear();
         }
         if self.latest_reasoning_part.is_some_and(|id| id <= through) {
@@ -1589,7 +1589,7 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ContentBoundary) => {
-                if let Some(block) = self.section.block {
+                if let Some(block) = self.section.block() {
                     self.ask_to_highlight(block);
                 }
                 self.section.clear();
@@ -2100,51 +2100,15 @@ impl Transcript {
 
     /// Text streams into the Block it belongs to, not a Block per delta.
     fn grow(&mut self, text: &str) -> Vec<BlockId> {
-        let mut dirty = Vec::new();
-        if text.is_empty() {
-            return dirty;
+        let last_id = &mut self.last_id;
+        let grown = self
+            .section
+            .grow(text, &mut self.blocks, || next_id(last_id));
+        // A closed section is worth highlighting even if it closed unchanged.
+        for id in grown.closed {
+            self.ask_to_highlight(id);
         }
-        self.section.push(text);
-
-        // Fold off every section that can no longer grow, then the
-        // remainder, which is still streaming.
-        while let Some(section) = self.section.take_complete() {
-            if let Some(body) = parse_section(&section) {
-                // A section that settled unchanged is still worth highlighting,
-                // but it is not dirty unless its body or retained Markdown moved.
-                let changed = self.write_open(body, &section);
-                let settled = changed.or(self.section.block);
-                dirty.extend(changed);
-                if let Some(id) = settled {
-                    self.ask_to_highlight(id);
-                }
-            } else if let Some(block) = self.blocks.last_mut() {
-                // Blank lines carry Markdown structure even though they do
-                // not have a visual block of their own.
-                if let Some(markdown) = &mut block.markdown {
-                    markdown.push_str(&section);
-                    dirty.push(block.id);
-                }
-            }
-            self.section.block = None;
-        }
-        // The open Block is the tail by construction; only its tail moved.
-        if let Some(block) = self
-            .blocks
-            .last_mut()
-            .filter(|block| Some(block.id) == self.section.block)
-        {
-            if self.section.grow_into(block) {
-                dirty.push(block.id);
-                return dirty;
-            }
-        }
-        if let Some(body) = self.section.body() {
-            let source = self.section.source().to_string();
-            dirty.extend(self.write_open(body, &source));
-            self.section.unsettle();
-        }
-        dirty
+        grown.dirty
     }
 
     fn retire_tools(&mut self) -> Vec<BlockId> {
@@ -2195,46 +2159,6 @@ impl Transcript {
         self.thought = Some((id, scan));
         self.thinking_open = true;
         id
-    }
-
-    /// Write a folded body into the open Block, creating it on first content.
-    /// Reports changes to either the folded body or the original Markdown,
-    /// since whitespace can change rich-text structure without changing plain text.
-    fn write_open(&mut self, body: Body, source: &str) -> Option<BlockId> {
-        match self.section.block {
-            Some(id) => {
-                // The open Block is the tail by construction. Scanning for it
-                // costs the whole transcript on every delta, which is what
-                // decays a streaming cockpit from 120fps to 30.
-                let block = match self.blocks.last_mut() {
-                    Some(block) if block.id == id => block,
-                    _ => self.blocks.iter_mut().find(|b| b.id == id)?,
-                };
-                if block.body == body && block.markdown.as_deref() == Some(source) {
-                    return None;
-                }
-                block.body = body;
-                block.markdown = Some(source.to_string());
-                Some(id)
-            }
-            None => {
-                let id = self.mint();
-                let markdown_run = self
-                    .blocks
-                    .last()
-                    .and_then(|block| block.markdown_run)
-                    .unwrap_or(id);
-                self.blocks.push(Block {
-                    id,
-                    body,
-                    markdown: Some(source.to_string()),
-                    markdown_run: Some(markdown_run),
-                    sent_at: None,
-                });
-                self.section.block = Some(id);
-                Some(id)
-            }
-        }
     }
 
     /// Drop the oldest Blocks once the Pane holds more than it keeps.
@@ -2412,13 +2336,17 @@ impl Transcript {
     }
 
     fn mint(&mut self) -> BlockId {
-        self.last_id += 1;
-        BlockId(self.last_id)
+        next_id(&mut self.last_id)
     }
 
     fn advance_revision(&mut self) {
         self.revision = self.revision.saturating_add(1);
     }
+}
+
+fn next_id(last_id: &mut u64) -> BlockId {
+    *last_id += 1;
+    BlockId(*last_id)
 }
 
 /// How much of a tool failure a row carries; the model got all of it.
@@ -4034,6 +3962,119 @@ mod tests {
         assert_eq!(transcript.blocks()[0].markdown, whole.blocks()[0].markdown);
     }
 
+    /// A long fenced block streams the same way: each delta costs what it
+    /// adds, and the block folds to what the whole text folds to, open and
+    /// closed.
+    #[test]
+    fn a_long_code_block_streams_in_time_linear_in_its_length() {
+        let mut transcript = Transcript::default();
+        transcript.apply(text("```rust\n"));
+        let delta = format!(
+            "    let w = {}; // `c` **b**\n{} ",
+            "w".repeat(60),
+            "w".repeat(40)
+        );
+        let budget = std::time::Duration::from_millis(1500);
+        let started = std::time::Instant::now();
+        for sent in 1..=8_000 {
+            transcript.apply(text(&delta));
+            assert!(
+                started.elapsed() < budget,
+                "{sent} deltas of one code block took {:?}",
+                started.elapsed()
+            );
+        }
+        let fold = |t: &Transcript| -> Vec<(Body, Option<String>)> {
+            t.blocks()
+                .iter()
+                .map(|b| (b.body.clone(), b.markdown.clone()))
+                .collect()
+        };
+        let mut whole = Transcript::default();
+        whole.apply(text(&format!("```rust\n{}", delta.repeat(8_000))));
+        assert_eq!(fold(&transcript), fold(&whole));
+        transcript.apply(text("\n```\nafter"));
+        whole.apply(text("\n```\nafter"));
+        assert_eq!(fold(&transcript), fold(&whole));
+    }
+
+    /// A marker that never closes — a lone backtick, `**`, an index's `[` —
+    /// does not hold the rest of its paragraph to be read again on every
+    /// delta.
+    #[test]
+    fn a_marker_that_never_closes_streams_in_time_linear_in_its_length() {
+        for opener in ["a lone ` tick", "a lone ** star", "array[i] reads"] {
+            let mut transcript = Transcript::default();
+            transcript.apply(text(opener));
+            let delta = format!(" {}", "w".repeat(125));
+            let budget = std::time::Duration::from_millis(1500);
+            let started = std::time::Instant::now();
+            for sent in 1..=8_000 {
+                transcript.apply(text(&delta));
+                assert!(
+                    started.elapsed() < budget,
+                    "{sent} deltas after {opener:?} took {:?}",
+                    started.elapsed()
+                );
+            }
+            let mut whole = Transcript::default();
+            whole.apply(text(&format!("{opener}{}", delta.repeat(8_000))));
+            assert_eq!(transcript.blocks()[0].body, whole.blocks()[0].body);
+        }
+    }
+
+    /// Nor do markers back to back, one space between them: the space is
+    /// where the prose before them settles.
+    #[test]
+    fn markers_back_to_back_stream_in_time_linear_in_their_length() {
+        for delta in ["`a` ", "**b** ", "[l](u) "] {
+            let mut transcript = Transcript::default();
+            let budget = std::time::Duration::from_millis(1500);
+            let started = std::time::Instant::now();
+            for sent in 1..=8_000 {
+                transcript.apply(text(delta));
+                assert!(
+                    started.elapsed() < budget,
+                    "{sent} deltas of {delta:?} took {:?}",
+                    started.elapsed()
+                );
+            }
+            let mut whole = Transcript::default();
+            whole.apply(text(&delta.repeat(8_000)));
+            assert_eq!(transcript.blocks()[0].body, whole.blocks()[0].body);
+        }
+    }
+
+    /// A link however long its target — a signed URL, a data URL — is a
+    /// link, and streams like the rest.
+    #[test]
+    fn a_link_with_a_long_url_streams_in_time_linear_in_its_length() {
+        let link = format!("see [the file](https://x.y/{}) and ", "u".repeat(4096));
+        let mut transcript = Transcript::default();
+        let budget = std::time::Duration::from_millis(1500);
+        let started = std::time::Instant::now();
+        for (sent, delta) in link.repeat(100).as_bytes().chunks(32).enumerate() {
+            transcript.apply(text(std::str::from_utf8(delta).unwrap()));
+            assert!(
+                started.elapsed() < budget,
+                "{sent} deltas of long links took {:?}",
+                started.elapsed()
+            );
+        }
+        let mut whole = Transcript::default();
+        whole.apply(text(&link.repeat(100)));
+        assert_eq!(transcript.blocks()[0].body, whole.blocks()[0].body);
+        let Body::Paragraph { spans } = &transcript.blocks()[0].body else {
+            panic!("a paragraph");
+        };
+        let links: Vec<_> = spans
+            .iter()
+            .filter(|span| span.style == Style::Link)
+            .collect();
+        assert_eq!(links.len(), 100);
+        assert!(links.iter().all(|span| span.text == "the file"));
+    }
+
     /// However the provider splits an answer, every delta leaves the Blocks
     /// the text so far folds to in one piece: markers that close late, or
     /// never; sections that open as one kind and turn out another.
@@ -4054,8 +4095,30 @@ mod tests {
             "trailing spaces   \n  \n\n\n- \n-x\n#x\n``\n```",
             "crlf\r\nline\r\n\r\npara",
             "a lone * then *more* and [a] [b](c) `d` **e `f** g` h [i](j k",
+            "```rust\nfn a() {}\r\n    indented\r\n\r\n\nlast\r``\nmore `x`\n``` \nafter",
+            "```\n\n\nx\n\r\n```",
+            "`a` `b` **c** **d** [e](f) [g](h)`i` j `k`l ``m`` *n*`o`",
         ];
-        for answer in answers {
+        // Markers whose closer comes far on, or never, with more markers
+        // waiting between: each closes however far it has to look.
+        let far = "w ".repeat(700);
+        let long = "w".repeat(1500);
+        let edges = [
+            format!("a lone ` tick {far} then `x` y"),
+            format!("a lone ** star {far} then **b** y"),
+            format!("array[i] {far} then [l](u) and ](late) y"),
+            format!("a ` b **c** {far} d"),
+            format!("a ` b {far} **c `d` [e {far} f` g** h"),
+            format!("`{long}` then `x` done"),
+            format!("**{long}** then **b** done"),
+            format!("[l](https://x.y/{long}) then [m](u) done"),
+            format!("[{far}](u) a [](x) [b [c {far} ](d) e) f"),
+        ];
+        for answer in answers
+            .iter()
+            .copied()
+            .chain(edges.iter().map(String::as_str))
+        {
             let chars: Vec<char> = answer.chars().collect();
             for size in [1, 2, 3, 5, 8, 13] {
                 let mut transcript = Transcript::default();

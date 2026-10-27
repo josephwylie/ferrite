@@ -332,10 +332,10 @@ impl CockpitView {
 
     /// Settings › About's Server row: where it stands, as it changes, and
     /// the restart onto this build when it is an older one.
-    pub(super) fn server_status_row(&self, window: &Window, cx: &Context<Self>) -> prefs::Row {
+    pub(super) fn server_status_row(&self, window: &Window, cx: &Context<Self>) -> settings::Row {
         let handle = window.window_handle();
         let view = cx.entity().downgrade();
-        prefs::action(
+        settings::action(
             "settings-about-server",
             "Server",
             self.server_standing(),
@@ -460,11 +460,11 @@ impl CockpitView {
     }
 
     /// Settings › Server, for a window attached to one.
-    pub(super) fn server_rows(&self, window: &Window, cx: &Context<Self>) -> Vec<prefs::Row> {
+    pub(super) fn server_rows(&self, window: &Window, cx: &Context<Self>) -> Vec<settings::Row> {
         let Some(state) = self.cockpit.server() else {
             // A sentence, so the row's words (as About says it), not a
             // fact's machine-text value.
-            return vec![prefs::action(
+            return vec![settings::action(
                 "settings-server-none",
                 "Server",
                 self.server_standing(),
@@ -497,12 +497,12 @@ impl CockpitView {
             }
         };
         let view = cx.entity().downgrade();
-        let mut rows = vec![prefs::fact("Server", status)];
+        let mut rows = vec![settings::fact("Server", status)];
         // A development build never installs the LaunchAgent (main), and
         // must not point the operator's at itself. A machine's Server is
         // not this computer's to start.
         if !crate::DEV && self.cockpit.machine().is_none() {
-            rows.push(prefs::toggle(
+            rows.push(settings::toggle(
                 "settings-start-at-login",
                 "Start at login",
                 "Your agents' server starts when you log in, so their Threads resume \
@@ -525,7 +525,7 @@ impl CockpitView {
             ));
         }
         rows.extend([
-            prefs::action(
+            settings::action(
                 "settings-server-restart",
                 "Restart",
                 "Restart the server and resume every open Thread",
@@ -533,7 +533,7 @@ impl CockpitView {
                 Some("Restart".into()),
                 act(view.clone(), Self::restart_server),
             ),
-            prefs::action(
+            settings::action(
                 "settings-server-stop",
                 "Stop",
                 "Stop the server and its agents; a window starts it again",
