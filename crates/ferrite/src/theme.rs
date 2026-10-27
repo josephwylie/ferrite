@@ -1143,7 +1143,7 @@ pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 /// buttons, menus, the palette, the panel, the bar. The kit's
 /// `font_family` is set from it.
 ///
-/// gpui has no variation-axis support, so `main.rs` registers static
+/// gpui has no variation-axis support, so `lib.rs` registers static
 /// instances (Regular, Italic, Medium, SemiBold, Bold) of both faces. Each
 /// face's instances share their typographic family name (name ID 16), and
 /// CoreText/DirectWrite resolve the instance from `.font_weight(..)`.
@@ -1209,7 +1209,7 @@ pub fn init_components(cx: &mut gpui::App) {
         .with_epsilon(0.1);
     // The kit's ground is the opaque plane: its fields and dialogs sit on
     // a region already painted, never on the bare glass window (the window
-    // Root's own ground is overridden with `paint::WINDOW`, `main.rs`).
+    // Root's own ground is overridden with `paint::WINDOW`, `lib.rs`).
     theme.background = rgb(CARD).into();
     theme.foreground = rgb(TEXT).into();
     theme.border = paint::LINE2.into();
@@ -3565,7 +3565,7 @@ mod tests {
             ("transcript/scroll.rs", include_str!("transcript/scroll.rs")),
             ("scrollbar.rs", include_str!("scrollbar.rs")),
             ("file_links.rs", include_str!("file_links.rs")),
-            ("main.rs", include_str!("main.rs")),
+            ("lib.rs", include_str!("lib.rs")),
         ];
         let mut missing = Vec::new();
         for (file, source) in sources {
