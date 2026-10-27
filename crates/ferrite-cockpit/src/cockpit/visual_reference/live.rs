@@ -362,7 +362,7 @@ fn throwaway(var: &str, default: &str) -> PathBuf {
     canonical
 }
 
-pub(crate) fn capture(output: String) {
+pub fn capture(output: String) {
     let out = PathBuf::from(output);
     std::fs::create_dir_all(&out).expect("create artifact directory");
     let repo = throwaway("FERRITE_LIVE_REPO", "/tmp/ferrite-live/repo");

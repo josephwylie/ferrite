@@ -1,9 +1,4 @@
 fn main() {
-    // The titlebar's DEV badge is absent only from a release-pipeline
-    // build, which sets FERRITE_RELEASE (`titlebar::DEV`). Cargo does not
-    // track an `option_env!` on its own, so say so — otherwise a cached
-    // build would keep whichever answer it compiled first.
-    println!("cargo:rerun-if-env-changed=FERRITE_RELEASE");
     // Visuals on Windows (ADR 0013): libcef.dll is linked through its import
     // library, so without this an exe with no Chromium beside it (a lone
     // `cargo install` copy) would fail to start at all. Delay-loaded, it is

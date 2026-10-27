@@ -2141,6 +2141,19 @@ dependencies = [
 name = "ferrite"
 version = "0.4.0"
 dependencies = [
+ "ferrite-cockpit",
+ "ferrite-core",
+ "ferrite-pane",
+ "ferrite-ui",
+ "gpui-kit",
+ "gpui-pre-reqwest-client",
+ "winresource",
+]
+
+[[package]]
+name = "ferrite-cockpit"
+version = "0.4.0"
+dependencies = [
  "ferrite-core",
  "ferrite-focus-notify",
  "ferrite-pane",
@@ -2150,14 +2163,12 @@ dependencies = [
  "gpui-base",
  "gpui-kit",
  "gpui-pre-platform",
- "gpui-pre-reqwest-client",
  "image",
  "serde_json",
  "sw-board",
  "toml 0.9.12+spec-1.1.0",
  "unicode-segmentation",
  "url",
- "winresource",
 ]
 
 [[package]]
