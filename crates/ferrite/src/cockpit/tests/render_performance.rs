@@ -1812,11 +1812,7 @@ fn a_review_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
     tick(cx);
     settle(cx);
     // The off-board finishes' toasts come and go first.
-    cockpit_renders_over(
-        cx,
-        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
-            + 1_000,
-    );
+    outlast_toasts(cx);
     let prefix = view.read_with(cx, |view, _| {
         format!("markdown-{}-", view.panes[0].text_namespace())
     });
@@ -1919,6 +1915,15 @@ fn cockpit_renders_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
         display_frames(cx);
     }
     renders() - before
+}
+
+/// Finishes' toasts come and go: a leap to each of their timers, and the
+/// frames each one asks for. Nothing between them is counted.
+fn outlast_toasts(cx: &mut gpui::VisualTestContext) {
+    leap(cx, crate::notifications::ALERT_DELAY);
+    settle(cx);
+    leap(cx, crate::notifications::DONE_TOAST);
+    settle(cx);
 }
 
 /// A board at work: four Panes, two of them working, an active window. The
@@ -2032,11 +2037,7 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
         .collect();
     // The transcript's scrollbar, shown by the stream, fades out first,
     // and the off-board finishes' toasts come and go.
-    cockpit_renders_over(
-        cx,
-        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
-            + 1_000,
-    );
+    outlast_toasts(cx);
     reset_native_text_renders(cx);
     let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
     let mut rendered = 0;
@@ -2099,11 +2100,7 @@ fn the_attention_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
     });
     assert_eq!(listed, 2, "the premise: two rows under Done");
     // Their toasts come and go.
-    cockpit_renders_over(
-        cx,
-        (crate::notifications::ALERT_DELAY + crate::notifications::DONE_TOAST).as_millis() as u64
-            + 1_000,
-    );
+    outlast_toasts(cx);
     settle(cx);
     let nav = crate::cockpit::drawn::nav_renders();
     cx.executor().advance_clock(Duration::from_secs(2));
