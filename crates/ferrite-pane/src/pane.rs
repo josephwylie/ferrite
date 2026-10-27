@@ -39,11 +39,7 @@ use gpui::{
     deferred, div, px, relative, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle,
     HighlightStyle, SharedString, Stateful, Styled, StyledText,
 };
-#[cfg(any(test, feature = "test-support"))]
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-#[cfg(any(test, feature = "test-support"))]
-use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::components;
@@ -153,16 +149,7 @@ struct ToolDisclosure {
     expanded: HashSet<DisclosureId>,
     target: Option<DisclosureId>,
     focus: FocusHandle,
-    bounds: DisclosureBounds,
 }
-
-/// Where a Pane's disclosure controls were last laid out, which the tests
-/// aim at. Empty outside them.
-#[derive(Clone, Default)]
-pub struct DisclosureBounds(
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate)  Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
-);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DisclosureState {
@@ -242,7 +229,6 @@ impl PaneView {
                 expanded: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
-                bounds: DisclosureBounds::default(),
             },
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
@@ -294,7 +280,6 @@ impl PaneView {
                 expanded: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
-                bounds: DisclosureBounds::default(),
             },
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
@@ -398,7 +383,6 @@ impl PaneView {
                     expanded: HashSet::new(),
                     target: None,
                     focus: cx.focus_handle(),
-                    bounds: DisclosureBounds::default(),
                 },
             });
         if next.generation != generation {
@@ -550,12 +534,12 @@ impl PaneView {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn tool_bounds(&self, call: impl Into<DisclosureId>) -> Option<gpui::Bounds<gpui::Pixels>> {
-        self.disclosure.bounds.0.borrow().get(&call.into()).copied()
-    }
-
-    pub fn tool_bounds_sink(&self) -> DisclosureBounds {
-        self.disclosure.bounds.clone()
+    pub fn tool_bounds(
+        &self,
+        call: impl Into<DisclosureId>,
+        cx: &gpui::App,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.transcript()?.read(cx).disclosure_bounds(&call.into())
     }
 }
 
@@ -8490,7 +8474,6 @@ mod tests {
                 solo: false,
                 thinking: true,
                 settled_at: Default::default(),
-                disclosure_bounds: Default::default(),
             };
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
@@ -8529,8 +8512,7 @@ mod tests {
                     solo: false,
                     thinking: true,
                     settled_at: Default::default(),
-                    disclosure_bounds: Default::default(),
-                },
+                    },
                 crate::rich::TextCache::default(),
                 selection.clone(),
                 cx,

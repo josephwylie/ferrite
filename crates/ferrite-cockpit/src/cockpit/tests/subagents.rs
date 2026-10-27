@@ -201,9 +201,9 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
             .scroll()
             .bounds()
     });
-    let toggle = view.read_with(cx, |view, _| {
+    let toggle = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds("same-call")
+            .tool_bounds("same-call", cx)
             .expect("tool control")
             .center()
     });

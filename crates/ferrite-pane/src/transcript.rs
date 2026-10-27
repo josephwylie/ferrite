@@ -204,7 +204,6 @@ pub struct TranscriptInput {
     pub thinking: bool,
     /// When each edit settled, seen live: the hover card's age.
     pub settled_at: BTreeMap<String, SystemTime>,
-    pub disclosure_bounds: pane::DisclosureBounds,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
@@ -313,6 +312,10 @@ pub struct TranscriptView {
     /// Each row's laid-out height, as the list last measured it: the
     /// minimap places its ticks and its view band from these.
     heights: Rc<std::cell::RefCell<HashMap<RowId, f32>>>,
+    /// Where each disclosure control was last laid out, which the tests
+    /// aim at.
+    #[cfg(any(test, feature = "test-support"))]
+    disclosure_bounds: Rc<std::cell::RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
     /// What prose path targets resolve against: the checkout and the paths
     /// this window's calls named.
     targets: TargetContext,
@@ -386,7 +389,6 @@ impl TranscriptView {
                 solo: false,
                 thinking: false,
                 settled_at: BTreeMap::new(),
-                disclosure_bounds: Default::default(),
             },
             rich,
             TranscriptText::default(),
@@ -450,6 +452,8 @@ impl TranscriptView {
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
             heights: Default::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            disclosure_bounds: Default::default(),
             targets,
             hover_card: None,
             glide: None,
@@ -1135,6 +1139,12 @@ impl TranscriptView {
         )
     }
 
+    /// Where `call`'s disclosure control was last laid out.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn disclosure_bounds(&self, call: &DisclosureId) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.disclosure_bounds.borrow().get(call).copied()
+    }
+
     /// Every disclosure the rows draw, in order: the keyboard's stops. A
     /// call with details, a long thought, a group — and, while a group is
     /// open, its calls; while shut, the call it shows working.
@@ -1258,7 +1268,7 @@ impl TranscriptView {
                 });
             #[cfg(any(test, feature = "test-support"))]
             let control = {
-                let sink = self.input.disclosure_bounds.0.clone();
+                let sink = self.disclosure_bounds.clone();
                 let measured = call.clone();
                 control.on_children_prepainted(move |bounds, _, _| {
                     if let Some(bounds) = bounds.last() {
@@ -1323,7 +1333,7 @@ impl TranscriptView {
         });
         #[cfg(any(test, feature = "test-support"))]
         let control = {
-            let sink = self.input.disclosure_bounds.0.clone();
+            let sink = self.disclosure_bounds.clone();
             let measured = call.clone();
             control.on_children_prepainted(move |bounds, _, _| {
                 // The hit box is the overlay's last child; a keyboard ring

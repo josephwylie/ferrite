@@ -1018,7 +1018,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     // A settled edit's diff shows once it is disclosed.
     for disclosure in [pane::DisclosureId::Tool("edit".into())] {
         if let Some(control) =
-            view.read_with(cx, |view, _| view.panes[0].tool_bounds(disclosure.clone()))
+            view.read_with(cx, |view, cx| view.panes[0].tool_bounds(disclosure.clone(), cx))
         {
             cx.simulate_click(control.center(), gpui::Modifiers::none());
             tick(cx);

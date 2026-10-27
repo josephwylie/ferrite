@@ -289,8 +289,8 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
         .unwrap();
     tick(cx);
     let group = pane::DisclosureId::Group("clicked-a".into());
-    let at = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds(group.clone()).unwrap().center()
+    let at = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds(group.clone(), cx).unwrap().center()
     });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
@@ -314,8 +314,8 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
     });
     // The transcript sits on its foot (SPEC §5.4): opening the group grew
     // it upward, so the second click finds the row where it now is.
-    let at = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds(group.clone()).unwrap().center()
+    let at = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds(group.clone(), cx).unwrap().center()
     });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);

@@ -13,7 +13,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
         let block = &view
             .cockpit
@@ -22,7 +22,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
             .transcript()
             .blocks()[0];
         assert!(
-            pane.tool_bounds(pane::DisclosureId::Reasoning(block.id))
+            pane.tool_bounds(pane::DisclosureId::Reasoning(block.id), cx)
                 .is_none(),
             "a short summary must not offer an expansion that repeats itself"
         );
@@ -100,9 +100,9 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         cx.simulate_resize(gpui::size(px(width), px(700.)));
         tick(cx);
         let summary = cx.debug_bounds("reasoning-summary").unwrap();
-        let control = view.read_with(cx, |view, _| {
+        let control = view.read_with(cx, |view, cx| {
             view.panes[0]
-                .tool_bounds(pane::DisclosureId::Reasoning(id))
+                .tool_bounds(pane::DisclosureId::Reasoning(id), cx)
                 .unwrap()
         });
         assert!(
@@ -165,7 +165,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let reasoning = view.read_with(cx, |view, _| {
+    let reasoning = view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
         let thread = pane.thread().unwrap();
         assert!(
@@ -186,7 +186,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
             .find(|b| matches!(&b.body, Body::Thinking(_)))
             .unwrap()
             .id;
-        pane.tool_bounds(pane::DisclosureId::Reasoning(id))
+        pane.tool_bounds(pane::DisclosureId::Reasoning(id), cx)
             .unwrap()
             .center()
     });
@@ -428,7 +428,7 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
             height(first) < px(30.),
             "a collapsed script must stay one row tall"
         );
-        view.panes[0].tool_bounds("multiline").unwrap().center()
+        view.panes[0].tool_bounds("multiline", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -452,8 +452,8 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
         assert!(view.panes[0].tool_expanded("multiline"))
     });
 
-    let chevron = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds("multiline").unwrap().center()
+    let chevron = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds("multiline", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -545,9 +545,9 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     assert!(!collapsed
         .iter()
         .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
-    let chevron = view.read_with(cx, |view, _| {
+    let chevron = view.read_with(cx, |view, cx| {
         let bounds = view.panes[0]
-            .tool_bounds("toolu_9")
+            .tool_bounds("toolu_9", cx)
             .expect("the actual rendered chevron bounds");
         // Terminal-native: the hit box is the 2-cell gutter.
         assert!(
@@ -667,8 +667,8 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     });
     cx.run_until_parked();
 
-    let chevron = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds("toolu_9").unwrap().center()
+    let chevron = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds("toolu_9", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -723,8 +723,8 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
         })
         .unwrap();
     tick(cx);
-    let chevron = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds("stream").unwrap().center()
+    let chevron = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds("stream", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();

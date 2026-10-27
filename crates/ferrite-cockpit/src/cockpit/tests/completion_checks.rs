@@ -313,9 +313,9 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         .unwrap();
     tick(cx);
     assert!((cx.debug_bounds("tool-row-anchor-tool").unwrap().top() - held).abs() < px(1.));
-    let group = view.read_with(cx, |view, _| {
+    let group = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds(pane::DisclosureId::Tool("anchor-tool".into()))
+            .tool_bounds(pane::DisclosureId::Tool("anchor-tool".into()), cx)
             .unwrap()
             .center()
     });

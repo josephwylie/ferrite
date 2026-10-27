@@ -1979,7 +1979,6 @@ impl CockpitView {
             solo,
             thinking: self.prefs.settings.show_thinking,
             settled_at: transcript.settled_at().clone(),
-            disclosure_bounds: pane.tool_bounds_sink(),
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));

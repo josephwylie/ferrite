@@ -44,9 +44,9 @@ fn a_sweep_across_long_disclosed_output_copies_prose_output_and_prose(cx: &mut T
         .unwrap();
     drop(stream);
     tick(cx);
-    let control = view.read_with(cx, |view, _| {
+    let control = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds(pane::DisclosureId::Tool("sweep".into()))
+            .tool_bounds(pane::DisclosureId::Tool("sweep".into()), cx)
             .unwrap()
             .center()
     });
