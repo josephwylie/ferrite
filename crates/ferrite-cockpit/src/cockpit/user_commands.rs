@@ -93,13 +93,12 @@ impl CockpitView {
         cx.notify();
         // Its own thread, not an executor worker: a watcher may run all
         // session long. The window looks for its end now and then.
-        let (done, ended) = std::sync::mpsc::channel();
+        let (done, ended) = ferrite_core::doorbell::channel();
         std::thread::spawn({
             let command = command.clone();
             let cwd = cwd.clone();
             move || {
                 let _ = done.send(command.run(&cwd, thread, &stop));
-                ferrite_core::doorbell::ring();
             }
         });
         cx.spawn(async move |this, cx| loop {

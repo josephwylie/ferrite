@@ -174,7 +174,10 @@ pub(crate) struct Remote {
     reviews: BTreeMap<u64, Review>,
     watching: BTreeSet<ThreadId>,
     /// Visuals drawn here, answered from the renderer's threads.
-    rendered: (Sender<ClientMessage>, Receiver<ClientMessage>),
+    rendered: (
+        crate::doorbell::Sender<ClientMessage>,
+        Receiver<ClientMessage>,
+    ),
 }
 
 impl Remote {
@@ -202,7 +205,7 @@ impl Remote {
             answers: BTreeMap::new(),
             reviews: BTreeMap::new(),
             watching: BTreeSet::new(),
-            rendered: mpsc::channel(),
+            rendered: crate::doorbell::channel(),
         }
     }
 
@@ -282,7 +285,7 @@ impl Remote {
             && Instant::now() >= self.retry_at
             && !self.waits_for_operator()
         {
-            let (done, attaching) = mpsc::channel();
+            let (done, attaching) = crate::doorbell::channel();
             let store = self.attach.store.clone();
             let server = self.attach.server.clone();
             let hello = hello(&self.attach);
@@ -290,7 +293,6 @@ impl Remote {
                 .name("ferrite-attach".into())
                 .spawn(move || {
                     let _ = done.send(attach_to(&store, &server, hello));
-                    crate::doorbell::ring();
                 });
             if started.is_ok() {
                 self.attaching = Some(attaching);
@@ -1034,7 +1036,6 @@ impl Remote {
                     },
                 };
                 let _ = answers.send(answer);
-                crate::doorbell::ring();
             });
         if let Err(error) = waiter {
             crate::log!("a visual could not be answered: {error}");

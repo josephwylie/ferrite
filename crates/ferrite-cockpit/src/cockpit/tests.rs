@@ -428,9 +428,8 @@ fn leap(cx: &mut gpui::VisualTestContext, by: Duration) {
 
 /// Pump until `done`, waiting between looks for off-thread work (a git
 /// read, a command, a Server's message) to land (`ferrite_core::doorbell`),
-/// not for wall-clock time. Each look moves the clock past the slowest of
-/// the window's own looks for what landed (`ENDED_POLL`, then
-/// `beside::ANSWER_POLL` and the pump).
+/// not for wall-clock time. Each look leaps the clock by `ENDED_POLL`, the
+/// longest the window waits before it looks for what landed.
 fn until(
     cx: &mut gpui::VisualTestContext,
     mut done: impl FnMut(&mut gpui::VisualTestContext) -> bool,

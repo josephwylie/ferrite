@@ -3,7 +3,7 @@
 //! Dropping the owner cancels adoption; the worker drops any late process.
 
 use std::io;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use crate::providers::Session;
 
@@ -30,12 +30,11 @@ impl SessionLifecycle {
     pub fn background(
         spawn: impl FnOnce() -> io::Result<Box<dyn Session + Send>> + Send + 'static,
     ) -> io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::doorbell::channel();
         std::thread::Builder::new()
             .name("ferrite-spawn".into())
             .spawn(move || {
                 let _ = tx.send(spawn());
-                crate::doorbell::ring();
             })?;
         Ok(Self {
             state: State::Starting(rx),

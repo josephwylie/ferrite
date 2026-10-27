@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crate::activity::{AgentKey, DecisionHandle, Subject};
@@ -985,10 +985,9 @@ impl Cockpit {
 fn read_here<T: Send + 'static>(
     read: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Receiver<io::Result<T>> {
-    let (answer, answered) = mpsc::channel();
+    let (answer, answered) = crate::doorbell::channel();
     std::thread::spawn(move || {
         let _ = answer.send(read().map_err(io::Error::other));
-        crate::doorbell::ring();
     });
     answered
 }
