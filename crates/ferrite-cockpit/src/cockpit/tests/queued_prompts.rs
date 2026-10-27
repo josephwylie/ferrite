@@ -48,9 +48,9 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     cx.update(|cx| {
         cx.bind_keys([
             KeyBinding::new("enter", Submit, None),
-            KeyBinding::new("backspace", crate::composer::Backspace, None),
+            KeyBinding::new("backspace", ferrite_pane::composer::Backspace, None),
             KeyBinding::new("up", HistoryOlder, Some("ComposerHistory")),
-            KeyBinding::new("up", crate::composer::Up, Some("Composer")),
+            KeyBinding::new("up", ferrite_pane::composer::Up, Some("Composer")),
         ]);
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

@@ -54,19 +54,19 @@ use gpui::{
 };
 
 use crate::cockpit::Attention;
-use crate::components;
-use crate::icons::{self, icon};
 use crate::machines::{Connection, MachineRow};
-use crate::motion::{self, MotionSpec};
 use crate::notifications::{Row as NoticeRow, State as NoticeState};
-use crate::theme::*;
 use ferrite_core::cockpit::StatusRow;
 pub use ferrite_pane::mark::{mark, NavTail, RowStatus};
+use ferrite_ui::components;
+use ferrite_ui::icons::{self, icon};
+use ferrite_ui::motion::{self, MotionSpec};
+use ferrite_ui::theme::*;
 
 /// The nav's two widths — 264 open, and the 52px rail folded (cmd-B).
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
 /// of the semantic-zoom input rather than a special case.
-pub use crate::theme::{NAV_FOLDED_W as FOLDED_WIDTH, NAV_WIDTH as WIDTH};
+pub use ferrite_ui::theme::{NAV_FOLDED_W as FOLDED_WIDTH, NAV_WIDTH as WIDTH};
 
 gpui::actions!(nav, [CloseView]);
 
@@ -1061,7 +1061,7 @@ pub fn collapse_button(rail: bool) -> Stateful<Div> {
         ICON_BUTTON,
         R_TAB,
     )
-    .tooltip(crate::menu::action_tooltip(
+    .tooltip(ferrite_ui::menu::action_tooltip(
         "Toggle sidebar",
         "cockpit::ToggleNav",
     ))
@@ -2190,7 +2190,7 @@ pub fn gear_button() -> Stateful<Div> {
         ICON_BUTTON,
         R_TAB,
     )
-    .tooltip(crate::menu::action_tooltip(
+    .tooltip(ferrite_ui::menu::action_tooltip(
         "Settings",
         "cockpit::OpenSettings",
     ))
@@ -2305,15 +2305,15 @@ pub fn drag_row(row: Stateful<Div>) -> Div {
         .rounded(px(R_BLOCK))
         .border_1()
         .border_color(paint::HAIRLINE_STRONG)
-        .shadow(crate::components::float_shadow())
+        .shadow(ferrite_ui::components::float_shadow())
         .child(row)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pane::WallState;
     use ferrite_core::ThreadId;
+    use ferrite_pane::pane::WallState;
 
     fn thread() -> ThreadRow {
         selected_thread(false)
@@ -2752,7 +2752,7 @@ mod tests {
     /// decides it.
     #[test]
     fn the_word_is_one_fact_in_priority_order() {
-        use crate::pane::HeadSlot;
+        use ferrite_pane::pane::HeadSlot;
         let age = || SharedString::from("40m");
         fn of(slot: Option<&HeadSlot>) -> NavTail {
             NavTail::of(RowStatus::Idle, slot, "40m".into())
@@ -2973,7 +2973,7 @@ mod tests {
         for ordinal in 1..=9 {
             let action = crate::cockpit::focus_rail_action(ordinal).expect("one action per digit");
             assert_eq!(
-                crate::components::bound_chord(action),
+                ferrite_ui::components::bound_chord(action),
                 Some(format!(
                     "{}-{ordinal}",
                     if cfg!(target_os = "macos") {

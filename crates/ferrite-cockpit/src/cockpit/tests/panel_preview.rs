@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::cockpit::panel::PanelTab;
-use crate::theme::{LH_UI, MOTION_RESIZE_MS, PANEL_W};
+use ferrite_ui::theme::{LH_UI, MOTION_RESIZE_MS, PANEL_W};
 
 /// A source file of `lines` numbered lines, in its own scratch directory.
 fn source(name: &str, lines: usize) -> std::path::PathBuf {
@@ -159,7 +159,7 @@ fn escape_and_cmd_w_in_the_preview_close_it_not_the_turn_or_the_pane(cx: &mut Te
     let select = |cx: &mut gpui::VisualTestContext| {
         let text = cx
             .update(|_, cx| {
-                crate::rich::testing::bounds(&format!("document-{}", file.display()), 0, cx)
+                ferrite_pane::rich::testing::bounds(&format!("document-{}", file.display()), 0, cx)
             })
             .expect("the document is drawn");
         let y = text.top() + px(12.);

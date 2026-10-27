@@ -22,7 +22,7 @@ use sw_board::shown::ink::{Ink, Inked};
 
 use super::render;
 use super::runtime::{Board, BoardView};
-use crate::theme::{CH, ROW};
+use ferrite_ui::theme::{CH, ROW};
 
 const NOW: i64 = 1_800_000_000_000;
 const MIN: i64 = 60_000;

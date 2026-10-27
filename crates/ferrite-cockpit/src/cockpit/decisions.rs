@@ -6,8 +6,8 @@
 
 use super::subagents::shown_on;
 use super::*;
-use crate::decision::{self, ApprovalChoice, ThreadRule};
 use ferrite_core::activity::{DecisionHandle, PendingDecision, Subject};
+use ferrite_pane::decision::{self, ApprovalChoice, ThreadRule};
 use gpui::App;
 
 /// The cockpit's Decision state: a handle back to the view (what a card
@@ -46,10 +46,10 @@ impl CockpitView {
         &self,
         index: usize,
         _cx: &App,
-    ) -> Option<crate::transcript::TranscriptTail> {
+    ) -> Option<ferrite_pane::transcript::TranscriptTail> {
         let cards = self.decision_cards(index, false, false)?;
         let key = cards.key();
-        Some(crate::transcript::TranscriptTail {
+        Some(ferrite_pane::transcript::TranscriptTail {
             key,
             render: std::rc::Rc::new(move |window: &mut Window, cx: &mut App| -> AnyElement {
                 cards
@@ -559,7 +559,7 @@ impl CockpitView {
         }
         let forms = self.panes[index].request_forms.clone();
         let note = forms.note(&request.handle).unwrap_or_else(|| {
-            let note = cx.new(crate::composer::Composer::new);
+            let note = cx.new(ferrite_pane::composer::Composer::new);
             forms.set_note(&request.handle, Some(note.clone()));
             note
         });

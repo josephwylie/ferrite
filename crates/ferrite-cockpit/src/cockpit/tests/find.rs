@@ -2,7 +2,7 @@
 //! every occurrence, brings the one it is on into view — laid out or not —
 //! steps with ⏎ / ⇧⏎ / ⌘G / ⌘⇧G, and closes on esc without interrupting.
 use super::*;
-use crate::transcript::FindState;
+use ferrite_pane::transcript::FindState;
 
 fn say(fake: &Fake, text: &str) {
     fake.streams.borrow()[0]
@@ -31,7 +31,7 @@ fn read(fake: &Fake, id: &str) {
 fn transcript(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-) -> Entity<crate::transcript::TranscriptView> {
+) -> Entity<ferrite_pane::transcript::TranscriptView> {
     view.read_with(cx, |view, _| view.panes[0].transcript().unwrap())
 }
 
@@ -189,7 +189,7 @@ fn find_reaches_into_a_scrolling_output(cx: &mut TestAppContext) {
             n => format!("line {n} of output that only pads it\n"),
         })
         .collect();
-    assert!(output.len() > crate::theme::OUTPUT_INLINE_BYTES);
+    assert!(output.len() > ferrite_ui::theme::OUTPUT_INLINE_BYTES);
     fake.streams.borrow()[0]
         .send(SessionEvent::ToolStarted {
             id: "big".into(),
@@ -262,8 +262,9 @@ fn read_beside(
 ) {
     cx.update(|window, cx| view.update(cx, |view, cx| view.open_preview(file, None, window, cx)));
     tick(cx);
-    cx.executor()
-        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS + 50));
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_RESIZE_MS + 50,
+    ));
     tick(cx);
     // Under the preview's head: its body.
     let head = cx.debug_bounds("reader-head").expect("the reader is open");
@@ -327,7 +328,7 @@ fn find_in_a_code_reader_centres_its_line(cx: &mut TestAppContext) {
             .y
     });
     assert!(
-        scrolled < px(-100. * crate::theme::LH_UI),
+        scrolled < px(-100. * ferrite_ui::theme::LH_UI),
         "line 150 is brought into view: {scrolled:?}"
     );
     cx.simulate_keystrokes("escape");
@@ -496,10 +497,10 @@ fn find_counts_what_a_markdown_view_marks(cx: &mut TestAppContext) {
 /// brought into view.
 #[gpui::test]
 fn find_counts_a_fence_drawn_as_its_diagram(cx: &mut TestAppContext) {
-    let engine = std::rc::Rc::new(crate::visual::web::fake::FakeEngine::new());
+    let engine = std::rc::Rc::new(ferrite_pane::visual::web::fake::FakeEngine::new());
     cx.update(|cx| {
-        crate::visual::engine::Visuals::install(engine, cx);
-        crate::visual::diagram::init(true, cx);
+        ferrite_pane::visual::engine::Visuals::install(engine, cx);
+        ferrite_pane::visual::diagram::init(true, cx);
     });
     let pad = "A paragraph that only pads the document.\n\n".repeat(60);
     let source = format!("```mermaid\ngraph TD\n  needle --> B\n```\n\n{pad}The last needle.\n");
@@ -578,7 +579,7 @@ fn the_bar_fits_a_narrow_pane(cx: &mut TestAppContext) {
     tick(cx);
     let shown = viewport(&view, cx);
     assert!(
-        shown.size.width < px(crate::theme::FIND_W + crate::theme::TX_INSET_GROUP),
+        shown.size.width < px(ferrite_ui::theme::FIND_W + ferrite_ui::theme::TX_INSET_GROUP),
         "narrower than the bar: {shown:?}"
     );
     open(cx);

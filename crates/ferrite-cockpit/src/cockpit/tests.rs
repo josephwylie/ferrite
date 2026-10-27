@@ -678,7 +678,7 @@ fn caret(
                 text,
             )
         };
-        crate::rich::testing::caret(&id, item, paragraphs, &text, byte, window, cx)
+        ferrite_pane::rich::testing::caret(&id, item, paragraphs, &text, byte, window, cx)
             .expect("a rendered native caret")
     })
 }
@@ -705,8 +705,8 @@ fn press(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, count:
 fn bind_production_keys(cx: &mut TestAppContext) {
     cx.update(|cx| {
         // Launch initializes the toolkit before binding Ferrite’s keys.
-        crate::pane::init_components(cx);
-        let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
+        ferrite_pane::pane::init_components(cx);
+        let table = ferrite_ui::keymap::bindings(ferrite_ui::keymap::Platform::Mac);
         let bindings = crate::load_bindings(table, cx);
         cx.bind_keys(bindings);
     });

@@ -4,7 +4,7 @@
 //! Pane, and zooms between fit and actual size — easing, asking for frames
 //! only while it moves, and never rebuilding the Panes beside it.
 use super::*;
-use crate::preview::Body;
+use ferrite_pane::preview::Body;
 
 /// A solid PNG `width` × `height` at `path`.
 fn png(path: &std::path::Path, width: u32, height: u32) {
@@ -63,7 +63,10 @@ fn step_to(
 fn shown(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-) -> Option<(std::path::PathBuf, Entity<crate::image_viewer::ImageViewer>)> {
+) -> Option<(
+    std::path::PathBuf,
+    Entity<ferrite_pane::image_viewer::ImageViewer>,
+)> {
     view.read_with(cx, |view, _| {
         let document = view.panes[0].preview.document()?;
         match document.body {
@@ -74,7 +77,7 @@ fn shown(
 }
 
 fn picture(
-    viewer: &Entity<crate::image_viewer::ImageViewer>,
+    viewer: &Entity<ferrite_pane::image_viewer::ImageViewer>,
     cx: &mut gpui::VisualTestContext,
 ) -> gpui::Bounds<Pixels> {
     viewer
@@ -111,7 +114,7 @@ fn a_sent_image_opens_in_the_panels_preview(cx: &mut TestAppContext) {
     let (path, viewer) = shown(&view, cx).expect("an image opened");
     assert!(path == wide || path == small, "{path:?}");
     let gallery = view.read_with(cx, |view, _| match view.panes[0].preview.document() {
-        Some(crate::preview::Document {
+        Some(ferrite_pane::preview::Document {
             body: Body::Image { gallery, .. },
             ..
         }) => gallery.len(),
@@ -121,9 +124,12 @@ fn a_sent_image_opens_in_the_panels_preview(cx: &mut TestAppContext) {
     settle(cx);
     let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     let panel = view.read_with(cx, |view, _| view.board_right_rest());
-    assert!(panel > crate::theme::PANEL_W, "the Panel is wide: {panel}");
     assert!(
-        (pane.w - (whole.w - (panel - crate::theme::PANEL_W))).abs() <= 1.,
+        panel > ferrite_ui::theme::PANEL_W,
+        "the Panel is wide: {panel}"
+    );
+    assert!(
+        (pane.w - (whole.w - (panel - ferrite_ui::theme::PANEL_W))).abs() <= 1.,
         "the board gives the width up: {pane:?} from {whole:?}"
     );
     assert!(cx.debug_bounds("panel-tab-Preview").is_some());
@@ -141,7 +147,7 @@ fn a_sent_image_opens_in_the_panels_preview(cx: &mut TestAppContext) {
     cx.run_until_parked();
     tick(cx);
     let rect = picture(&viewer, cx);
-    let inset = px(crate::theme::IMAGE_INSET);
+    let inset = px(ferrite_ui::theme::IMAGE_INSET);
     assert!(
         (rect.size.width - (stage.size.width - inset * 2.)).abs() <= px(1.)
             || (rect.size.height - (stage.size.height - inset * 2.)).abs() <= px(1.),
@@ -210,7 +216,7 @@ fn a_second_image_swaps_in_place_and_arrows_step(cx: &mut TestAppContext) {
 /// more holds, until the newest is all in.
 #[gpui::test]
 fn stepping_on_mid_crossfade_holds_the_picture_that_shows_more(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let dir = scratch("viewer-step-files");
     let images: Vec<_> = ["one.png", "two.png", "three.png", "four.png"]
         .iter()
@@ -231,7 +237,7 @@ fn stepping_on_mid_crossfade_holds_the_picture_that_shows_more(cx: &mut TestAppC
     assert_eq!(leaving(cx), Some((images[0].clone(), 1.0)));
     // Three lands and fades in; past halfway, three holds for four.
     cx.run_until_parked();
-    let fade = Duration::from_millis(crate::theme::MOTION_FADE_QUICK_MS);
+    let fade = Duration::from_millis(ferrite_ui::theme::MOTION_FADE_QUICK_MS);
     cx.executor().advance_clock(fade * 3 / 4);
     display_frames(cx);
     step_to(&view, &images[3], &images, cx);
@@ -350,7 +356,7 @@ fn settle(cx: &mut gpui::VisualTestContext) {
 /// back to fit.
 #[gpui::test]
 fn a_click_eases_the_image_to_actual_size_and_back(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let dir = scratch("viewer-zoom-files");
     let image = dir.join("large.png");
     png(&image, 2000, 1500);
@@ -373,8 +379,9 @@ fn a_click_eases_the_image_to_actual_size_and_back(cx: &mut TestAppContext) {
         mid.size.width > fitted.size.width && mid.size.width < px(2000.),
         "mid-flight: {mid:?}"
     );
-    cx.executor()
-        .advance_clock(Duration::from_millis(crate::theme::MOTION_IMAGE_ZOOM_MS));
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_IMAGE_ZOOM_MS,
+    ));
     display_frames(cx);
     let actual = picture(&viewer, cx);
     assert_eq!(actual.size, gpui::size(px(2000.), px(1500.)), "actual size");
@@ -387,7 +394,7 @@ fn a_click_eases_the_image_to_actual_size_and_back(cx: &mut TestAppContext) {
     cx.simulate_click(stage.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(
-        crate::theme::MOTION_IMAGE_ZOOM_MS + 16,
+        ferrite_ui::theme::MOTION_IMAGE_ZOOM_MS + 16,
     ));
     display_frames(cx);
     assert_eq!(picture(&viewer, cx), fitted, "back to fit");
@@ -395,13 +402,13 @@ fn a_click_eases_the_image_to_actual_size_and_back(cx: &mut TestAppContext) {
     let reading = view.read_with(cx, |view, _| view.prefs.settings.reading_size);
     cx.simulate_keystrokes("cmd-=");
     cx.executor().advance_clock(Duration::from_millis(
-        crate::theme::MOTION_IMAGE_ZOOM_MS + 16,
+        ferrite_ui::theme::MOTION_IMAGE_ZOOM_MS + 16,
     ));
     display_frames(cx);
     assert!(picture(&viewer, cx).size.width > fitted.size.width);
     cx.simulate_keystrokes("cmd-0");
     cx.executor().advance_clock(Duration::from_millis(
-        crate::theme::MOTION_IMAGE_ZOOM_MS + 16,
+        ferrite_ui::theme::MOTION_IMAGE_ZOOM_MS + 16,
     ));
     display_frames(cx);
     assert_eq!(picture(&viewer, cx), fitted);
@@ -416,7 +423,7 @@ fn a_click_eases_the_image_to_actual_size_and_back(cx: &mut TestAppContext) {
 /// frame.
 #[gpui::test]
 fn reduced_motion_snaps_the_zoom(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let dir = scratch("viewer-reduced-files");
     let image = dir.join("large.png");
     png(&image, 2000, 1500);

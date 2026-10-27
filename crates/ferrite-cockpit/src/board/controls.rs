@@ -11,8 +11,8 @@ use sw_board::board::update::{edit, Event};
 use sw_board::json::*;
 
 use super::BoardView;
-use crate::components::{self, Tip};
-use crate::theme::{
+use ferrite_ui::components::{self, Tip};
+use ferrite_ui::theme::{
     paint, CH, CONTROL_H, HAIRLINE_W, ICON_CHEVRON, ON_PRIMARY, SPACE_1, SPACE_3, TEXT, TEXT_DIM,
     TEXT_STRONG, W_STRONG,
 };
@@ -307,8 +307,8 @@ impl BoardView {
                 .h(px(CONTROL_H))
                 .px(px(CH))
                 .child(components::text_ui().child("More"))
-                .child(crate::icons::icon(
-                    crate::icons::CHEVRON_DOWN,
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::CHEVRON_DOWN,
                     ICON_CHEVRON,
                     TEXT_DIM,
                 )),
@@ -407,8 +407,8 @@ impl BoardView {
                         .text_color(rgb(if disabled { TEXT_DIM } else { TEXT }))
                         .child(shown.to_owned()),
                 )
-                .child(crate::icons::icon(
-                    crate::icons::CHEVRON_DOWN,
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::CHEVRON_DOWN,
                     ICON_CHEVRON,
                     TEXT_DIM,
                 )),

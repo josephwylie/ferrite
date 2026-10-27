@@ -35,7 +35,7 @@ use gpui::{
 };
 
 use crate::line::Line;
-use crate::pointer::Pointer;
+use ferrite_ui::pointer::Pointer;
 
 actions!(
     composer,
@@ -91,9 +91,9 @@ pub enum Caret {
 /// an edit): the soft cycle of `MOTION_CARET_BLINK_MS` from its solid
 /// start (`components::caret_blink`).
 pub fn caret_alpha(since: Duration) -> f32 {
-    let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS).as_nanos();
+    let turn = Duration::from_millis(ferrite_ui::theme::MOTION_CARET_BLINK_MS).as_nanos();
     let phase = (since.as_nanos() % turn) as f32 / turn as f32;
-    crate::components::caret_blink(phase)
+    ferrite_ui::components::caret_blink(phase)
 }
 
 /// The most visual rows the box grows to before it scrolls: the prompt
@@ -887,7 +887,7 @@ impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Inside the Cockpit, the blinking caret is drawn by the loops
         // overlay (`loops_overlay`): laid out afresh from here.
-        crate::loops_overlay::begin(window, cx.entity_id());
+        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
         div()
             .flex()
             .flex_1()
@@ -1002,20 +1002,20 @@ fn runs_for(
             .iter()
             .any(|pill| pill.start <= from && to <= pill.end)
         {
-            run.color = rgb(crate::theme::MENTION_INK).into();
+            run.color = rgb(ferrite_ui::theme::MENTION_INK).into();
         }
         if selected
             .as_ref()
             .is_some_and(|selected| selected.start <= from && to <= selected.end)
         {
-            run.color = rgb(crate::theme::TEXT_STRONG).into();
+            run.color = rgb(ferrite_ui::theme::TEXT_STRONG).into();
         }
         if marked
             .as_ref()
             .is_some_and(|marked| marked.start <= from && to <= marked.end)
         {
             run.underline = Some(UnderlineStyle {
-                color: Some(rgb(crate::theme::TEXT_DIM).into()),
+                color: Some(rgb(ferrite_ui::theme::TEXT_DIM).into()),
                 thickness: px(1.),
                 wavy: false,
             });
@@ -1311,18 +1311,20 @@ impl Element for LineElement {
         // draws the block and the text over it (`CaretOverlay`) on every
         // change of the blink, and this line, laid out and taking input as
         // ever, is not redrawn for it.
-        let overlay =
-            focused && selected.is_empty() && blinks && crate::loops_overlay::hosting(window, cx);
+        let overlay = focused
+            && selected.is_empty()
+            && blinks
+            && ferrite_ui::loops_overlay::hosting(window, cx);
         // The soft blink rides the shared pulse clock (theme rule 8), which
         // draws it again through its fades and holds its plateaus; while
         // this line holds the keyboard the phase is the line's own, from its
         // last focus or edit. Still and solid under reduced motion.
         let alpha = (focused && selected.is_empty()).then(|| {
-            if crate::motion::reduced_motion(cx) || !blinks || overlay {
+            if ferrite_ui::motion::reduced_motion(cx) || !blinks || overlay {
                 return 1.0;
             }
             // A capture holds the blink where the prototype's shot caught it.
-            if let Some(held) = crate::motion::held_loops() {
+            if let Some(held) = ferrite_ui::motion::held_loops() {
                 return caret_alpha(held.css);
             }
             caret_blink_now(origin, window, cx)
@@ -1332,7 +1334,7 @@ impl Element for LineElement {
         // pixels wherever it stands. Its x is the cursor's in the shaped
         // text (`Layout::position`), never cell arithmetic.
         let scale = window.scale_factor();
-        let cell = px((crate::theme::CARET_W * scale).ceil() / scale);
+        let cell = px((ferrite_ui::theme::CARET_W * scale).ceil() / scale);
         let composer = self.composer.read(cx);
         let cursor = composer.line.cursor();
         let layout = Layout::shape(
@@ -1369,7 +1371,7 @@ impl Element for LineElement {
                     Vec::new(),
                     Some(fill(
                         block,
-                        Hsla::from(rgb(crate::theme::CARET)).opacity(alpha),
+                        Hsla::from(rgb(ferrite_ui::theme::CARET)).opacity(alpha),
                     )),
                     Some(Caret::Bar(alpha)),
                 ),
@@ -1393,7 +1395,7 @@ impl Element for LineElement {
                         ),
                         // One selection colour everywhere, whoever paints it:
                         // the translucent wash, with `TEXT_STRONG` runs over it.
-                        rgba(crate::theme::COMPOSER_SELECTION),
+                        rgba(ferrite_ui::theme::COMPOSER_SELECTION),
                     )
                 })
                 .collect();
@@ -1409,7 +1411,7 @@ impl Element for LineElement {
                 layout: None,
                 block: None,
             };
-            let slot = crate::loops_overlay::record(window, bounds, move || {
+            let slot = ferrite_ui::loops_overlay::record(window, bounds, move || {
                 caret.fresh().into_any_element()
             });
             (None, Some(slot))
@@ -1482,7 +1484,7 @@ impl Element for LineElement {
         let scroll = prepaint.scroll;
         match prepaint.overlay {
             // The overlay draws the block and the text over it.
-            Some(slot) => crate::loops_overlay::paint_hosted(window, slot),
+            Some(slot) => ferrite_ui::loops_overlay::paint_hosted(window, slot),
             None => paint_text(
                 &layout,
                 bounds,
@@ -1504,14 +1506,14 @@ impl Element for LineElement {
 /// clock through the blink's fades: from the line's own last focus or edit
 /// (`origin`), else on the shared epoch (a lit line blinking under a float).
 fn caret_blink_now(origin: Option<Instant>, window: &mut Window, cx: &mut App) -> f32 {
-    let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS);
-    let fades = crate::components::CARET_FADES;
+    let turn = Duration::from_millis(ferrite_ui::theme::MOTION_CARET_BLINK_MS);
+    let fades = ferrite_ui::components::CARET_FADES;
     let view = window.current_view();
     let phase = match origin {
-        Some(from) => crate::motion::loop_phase_from(from, turn, fades, view, cx),
-        None => crate::motion::loop_phase(turn, fades, view, cx),
+        Some(from) => ferrite_ui::motion::loop_phase_from(from, turn, fades, view, cx),
+        None => ferrite_ui::motion::loop_phase(turn, fades, view, cx),
     };
-    crate::components::caret_blink(phase)
+    ferrite_ui::components::caret_blink(phase)
 }
 
 /// Paint the line's text in `bounds`, its rows from `scroll`, over `quads`
@@ -1645,7 +1647,7 @@ impl Element for CaretOverlay {
         );
         self.block = Some(fill(
             block,
-            Hsla::from(rgb(crate::theme::CARET)).opacity(alpha),
+            Hsla::from(rgb(ferrite_ui::theme::CARET)).opacity(alpha),
         ));
         self.layout = Some(layout);
         #[cfg(any(test, feature = "test-support"))]
@@ -1769,7 +1771,7 @@ mod tests {
     fn runs_split_at_pill_and_marked_boundaries() {
         let base = TextRun {
             len: 0,
-            font: gpui::font(crate::theme::FONT_CODE),
+            font: gpui::font(ferrite_ui::theme::FONT_CODE),
             color: gpui::white(),
             background_color: None,
             underline: None,
@@ -1782,8 +1784,8 @@ mod tests {
         assert_eq!(lens, [5, 2, 1, 3]);
         // A picked mention is a path: the terminal's cyan, on no ground —
         // never `TEXT_STRONG`, never a chip (theme WP-D).
-        assert_eq!(runs[1].color, rgb(crate::theme::MENTION_INK).into());
-        assert_eq!(crate::theme::MENTION_INK, crate::theme::LINK_INK);
+        assert_eq!(runs[1].color, rgb(ferrite_ui::theme::MENTION_INK).into());
+        assert_eq!(ferrite_ui::theme::MENTION_INK, ferrite_ui::theme::LINK_INK);
         assert!(runs[1].background_color.is_none());
         assert!(runs[0].background_color.is_none());
         assert!(runs[3].underline.is_some(), "the mark wears the underline");
@@ -1798,15 +1800,15 @@ mod tests {
     /// and back up — so a fresh focus or edit always shows it solid.
     #[test]
     fn the_block_blinks_softly_from_a_solid_start() {
-        let turn = crate::theme::MOTION_CARET_BLINK_MS;
+        let turn = ferrite_ui::theme::MOTION_CARET_BLINK_MS;
         let at = |ms: u64| caret_alpha(Duration::from_millis(ms));
         assert_eq!(at(0), 1.0, "a restart is solid");
         assert_eq!(at(turn * 4 / 10), 1.0);
-        assert_eq!(at(turn * 7 / 10), crate::theme::CARET_BLINK_MIN);
+        assert_eq!(at(turn * 7 / 10), ferrite_ui::theme::CARET_BLINK_MIN);
         assert_eq!(at(turn), 1.0, "and round again");
         const {
             assert!(
-                crate::theme::CARET_BLINK_MIN > 0.0,
+                ferrite_ui::theme::CARET_BLINK_MIN > 0.0,
                 "soft: it never vanishes"
             )
         };
@@ -1818,8 +1820,8 @@ mod tests {
     fn selected_runs_take_the_strong_ink() {
         let base = TextRun {
             len: 0,
-            font: gpui::font(crate::theme::FONT_CODE),
-            color: rgb(crate::theme::TEXT).into(),
+            font: gpui::font(ferrite_ui::theme::FONT_CODE),
+            color: rgb(ferrite_ui::theme::TEXT).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -1827,7 +1829,7 @@ mod tests {
         let runs = runs_for(&base, 11, None, &[], Some(5..7));
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens, [5, 2, 4]);
-        assert_eq!(runs[1].color, rgb(crate::theme::TEXT_STRONG).into());
+        assert_eq!(runs[1].color, rgb(ferrite_ui::theme::TEXT_STRONG).into());
         assert_eq!(runs[0].color, base.color);
     }
 
@@ -1863,7 +1865,7 @@ mod tests {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .w(self.width)
-                .line_height(px(crate::theme::COMPOSER_ROW_H))
+                .line_height(px(ferrite_ui::theme::COMPOSER_ROW_H))
                 .on_action(cx.listener(Self::submit))
                 .on_action(cx.listener(Self::history_older))
                 .child(self.composer.clone())
@@ -2078,7 +2080,7 @@ mod tests {
     /// yet the clock stays armed across them.
     #[gpui::test]
     fn the_blink_draws_only_its_fades_and_keeps_its_look(cx: &mut TestAppContext) {
-        crate::motion::testing::drive();
+        ferrite_ui::motion::testing::drive();
         let (host, cx) = host(cx);
         let composer = composer(&host, cx);
         cx.update(|window, _| window.activate_window());
@@ -2087,20 +2089,20 @@ mod tests {
             .read_with(cx, |c, _| c.blink_from)
             .expect("focus restarts the blink");
         composer.update(cx, |c, _| c.caret_draws.clear());
-        let turn = crate::theme::MOTION_CARET_BLINK_MS;
+        let turn = ferrite_ui::theme::MOTION_CARET_BLINK_MS;
         let mut armed = true;
         for _ in 0..3 * turn {
             cx.executor().advance_clock(Duration::from_millis(1));
             cx.run_until_parked();
-            armed &= !cx.update(|_, cx| crate::motion::pulse_parked(cx));
+            armed &= !cx.update(|_, cx| ferrite_ui::motion::pulse_parked(cx));
         }
         assert!(armed, "the clock stays armed across the plateaus");
         let end = cx.update(|_, cx| cx.background_executor().now());
         let draws = composer.read_with(cx, |c, _| c.caret_draws.clone());
         let (epoch, tick) = cx
-            .update(|_, cx| crate::motion::testing::grid(cx))
+            .update(|_, cx| ferrite_ui::motion::testing::grid(cx))
             .expect("the blink declared on the clock");
-        let low = crate::theme::CARET_BLINK_MIN;
+        let low = ferrite_ui::theme::CARET_BLINK_MIN;
 
         // Every grid instant shows what the fixed rate drew there.
         let first = draws.first().map(|(at, _)| *at).unwrap_or(end);
@@ -2149,7 +2151,7 @@ mod tests {
     /// Reduced motion: the block is solid and still, and nothing ticks.
     #[gpui::test]
     fn reduced_motion_holds_the_caret_solid_and_ticks_nothing(cx: &mut TestAppContext) {
-        crate::motion::testing::drive();
+        ferrite_ui::motion::testing::drive();
         cx.update(|cx| cx.set_reduce_motion(true));
         let (host, cx) = host(cx);
         let composer = composer(&host, cx);
@@ -2158,13 +2160,13 @@ mod tests {
         composer.update(cx, |c, _| c.caret_draws.clear());
         composer.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
-        let ticks = crate::motion::testing::pulse_ticks();
+        let ticks = ferrite_ui::motion::testing::pulse_ticks();
         for _ in 0..200 {
             cx.executor().advance_clock(Duration::from_millis(16));
             cx.run_until_parked();
         }
-        assert_eq!(crate::motion::testing::pulse_ticks(), ticks, "no tick");
-        assert!(cx.update(|_, cx| crate::motion::pulse_parked(cx)));
+        assert_eq!(ferrite_ui::motion::testing::pulse_ticks(), ticks, "no tick");
+        assert!(cx.update(|_, cx| ferrite_ui::motion::pulse_parked(cx)));
         let draws = composer.read_with(cx, |c, _| c.caret_draws.clone());
         assert!(!draws.is_empty());
         assert!(
@@ -2181,7 +2183,7 @@ mod tests {
         let composer = composer(&host, cx);
         let (bounds, pitch) = geometry(&composer, cx);
         assert_eq!(bounds.size.width, px(BOX_W));
-        assert_eq!(pitch, px(crate::theme::COMPOSER_ROW_H));
+        assert_eq!(pitch, px(ferrite_ui::theme::COMPOSER_ROW_H));
         assert_eq!(bounds.size.height, pitch, "empty: one row");
 
         cx.simulate_input("short");

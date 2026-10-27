@@ -62,14 +62,14 @@ pub fn snapshots(output: String) {
     let platform = gpui::platform::current_platform(true);
     let mut cx = HeadlessAppContext::with_platform(
         platform.text_system(),
-        std::sync::Arc::new(crate::icons::Assets),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
         gpui::platform::current_headless_renderer,
     );
     cx.update(super::init);
     let pages = [
-        ("stats", include_str!("../../assets/visuals/stats.html")),
-        ("mockups", include_str!("../../assets/visuals/mockups.html")),
-        ("treemap", include_str!("../../assets/visuals/treemap.html")),
+        ("stats", super::samples::STATS),
+        ("mockups", super::samples::MOCKUPS),
+        ("treemap", super::samples::TREEMAP),
     ];
     let started = Instant::now();
     let done = std::rc::Rc::new(std::cell::Cell::new(0usize));

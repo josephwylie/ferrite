@@ -111,11 +111,11 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
         .expect("the model chip rides the toolbar");
     let composer = cx.debug_bounds("composer-block").unwrap();
     assert!(
-        (menu.bottom() - (chip.top() - px(crate::theme::MODEL_PICKER_GAP))).abs() <= px(1.),
+        (menu.bottom() - (chip.top() - px(ferrite_ui::theme::MODEL_PICKER_GAP))).abs() <= px(1.),
         "FL-13: the picker's foot 5px over its chip: {menu:?} / {chip:?}"
     );
     assert!(
-        (menu.size.width - px(crate::theme::MODEL_PICKER_W)).abs() <= px(1.),
+        (menu.size.width - px(ferrite_ui::theme::MODEL_PICKER_W)).abs() <= px(1.),
         "66 cells: {menu:?}"
     );
     assert!(menu.right() <= composer.right() + px(1.5));
@@ -123,7 +123,7 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
         .debug_bounds("choice-row-1")
         .expect("a live row under the section");
     // Terminal-native (WP-E): a float row is one grid row.
-    assert_eq!(row.size.height, px(crate::theme::FLOAT_ROW_H));
+    assert_eq!(row.size.height, px(ferrite_ui::theme::FLOAT_ROW_H));
 }
 
 /// A Group Pane's Composer carries no chips (SPEC §5.9): the mode,
@@ -178,7 +178,7 @@ fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
         "the menu stands on its chip: {rows:?} / {chip:?}"
     );
     assert!(
-        rows.bottom() <= chip.top() - px(crate::theme::FLOAT_OFFSET),
+        rows.bottom() <= chip.top() - px(ferrite_ui::theme::FLOAT_OFFSET),
         "it rests above its chip: {rows:?} / {chip:?}"
     );
 }

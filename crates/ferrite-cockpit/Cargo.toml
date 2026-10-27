@@ -18,7 +18,7 @@ visual-reference = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite
 ferrite-core = { path = "../ferrite-core" }
 # The theme, icons, components, motion and menus the Cockpit and Pane share.
 ferrite-ui = { path = "../ferrite-ui" }
-# The Pane: the transcript, the Composer and the Draft band.
+# The Pane: the transcript, the Composer and the Draft.
 ferrite-pane = { path = "../ferrite-pane" }
 # System notifications: herdr-focus-notify, vendored (its README).
 ferrite-focus-notify = { path = "../ferrite-focus-notify" }

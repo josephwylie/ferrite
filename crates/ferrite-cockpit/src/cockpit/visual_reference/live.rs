@@ -30,7 +30,7 @@ use gpui::{
 
 use crate::cockpit::{CockpitView, Preferences};
 use crate::palette::PaletteScope;
-use crate::transcript::ScrollTarget;
+use ferrite_pane::transcript::ScrollTarget;
 
 /// What a step waits on before it acts or shoots.
 type Probe = dyn Fn(&CockpitView) -> bool;
@@ -408,14 +408,17 @@ pub fn capture(output: String) {
     let platform = gpui::platform::current_platform(true);
     let mut cx = HeadlessAppContext::with_platform(
         platform.text_system(),
-        std::sync::Arc::new(crate::icons::Assets),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
         gpui::platform::current_headless_renderer,
     );
     cx.update(|cx| {
-        crate::pane::init_components(cx);
-        crate::motion::init(cx);
-        crate::register_fonts(cx);
-        let bindings = crate::load_bindings(crate::keymap::bindings(crate::keymap::PLATFORM), cx);
+        ferrite_pane::pane::init_components(cx);
+        ferrite_ui::motion::init(cx);
+        ferrite_ui::register_fonts(cx);
+        let bindings = crate::load_bindings(
+            ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
+            cx,
+        );
         cx.bind_keys(bindings);
     });
     let mut entity = None;
@@ -440,7 +443,7 @@ pub fn capture(output: String) {
             cx.new(|cx| {
                 gpui::component::Root::new(content, window, cx)
                     .bordered(false)
-                    .bg(crate::theme::paint::WINDOW)
+                    .bg(ferrite_ui::theme::paint::WINDOW)
             })
         })
         .expect("open the live window");
@@ -582,7 +585,7 @@ fn hover_path(live: &mut Live, thread: ThreadId, path: &str) -> Option<Point<gpu
         let index = view.pane_for(thread)?;
         let transcript = view.panes[index].transcript()?;
         let scope = transcript.read(cx).namespace();
-        crate::file_links::laid_out(&scope, &path, cx)
+        ferrite_pane::file_links::laid_out(&scope, &path, cx)
     });
     let Some(anchor) = anchor else {
         live.note(format!(

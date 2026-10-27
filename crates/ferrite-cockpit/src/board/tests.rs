@@ -17,7 +17,7 @@ use super::fixture::{self, NOW};
 use super::keys::{is_paste, press_of};
 use super::render::{self, Run};
 use super::{BoardEvent, BoardView};
-use crate::theme::{CARD, GREEN, RED, SELECTED, TEXT, TEXT_STRONG, YELLOW};
+use ferrite_ui::theme::{CARD, GREEN, RED, SELECTED, TEXT, TEXT_STRONG, YELLOW};
 
 // ------------------------------------------------------------------ keys
 
@@ -132,7 +132,7 @@ fn command_v_pastes_and_other_command_keys_stay_the_windows() {
         platform: true,
         ..Modifiers::default()
     };
-    if crate::keymap::PLATFORM == crate::keymap::Platform::Mac {
+    if ferrite_ui::keymap::PLATFORM == ferrite_ui::keymap::Platform::Mac {
         assert!(is_paste(&stroke("v", None, command)));
     }
     assert!(press_of(&stroke("v", None, command)).is_none());
@@ -713,7 +713,7 @@ fn a_view_that_fails_whole_says_how_to_close() {
 /// closes it — through the view, as GPUI delivers the keys.
 #[gpui::test]
 fn ctrl_c_twice_closes_the_board(cx: &mut TestAppContext) {
-    cx.update(crate::pane::init_components);
+    cx.update(ferrite_pane::pane::init_components);
     let (view, cx) = cx.add_window_view(|_, cx| BoardView::still(fixture::board(), cx));
     let closed = std::rc::Rc::new(std::cell::Cell::new(false));
     cx.update(|_, cx| {
@@ -750,7 +750,10 @@ fn ctrl_c_twice_closes_the_board(cx: &mut TestAppContext) {
 #[test]
 fn the_popup_takes_the_whole_board_when_it_is_small() {
     let (columns, rows) = super::POPUP_FULL_BELOW;
-    let (wide, tall) = (columns * crate::theme::CH, rows * crate::theme::ROW);
+    let (wide, tall) = (
+        columns * ferrite_ui::theme::CH,
+        rows * ferrite_ui::theme::ROW,
+    );
     assert_eq!(
         super::popup_size(wide * 2.0, tall * 2.0),
         (
@@ -772,9 +775,9 @@ fn the_popup_takes_the_whole_board_when_it_is_small() {
 /// it, as the board writes keys.
 #[test]
 fn the_board_key_is_the_projects_toggle() {
-    let want = match crate::keymap::PLATFORM {
-        crate::keymap::Platform::Mac => "cmd+shift+a",
-        crate::keymap::Platform::Windows => "ctrl+shift+a",
+    let want = match ferrite_ui::keymap::PLATFORM {
+        ferrite_ui::keymap::Platform::Mac => "cmd+shift+a",
+        ferrite_ui::keymap::Platform::Windows => "ctrl+shift+a",
     };
     assert_eq!(super::board_key(), want);
 }

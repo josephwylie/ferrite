@@ -6,11 +6,11 @@ use gpui::component::{button::Button, Disableable};
 use gpui::prelude::*;
 use gpui::{div, px, rgb, App, Div, SharedString};
 
-use crate::pointer::Pointer;
+use ferrite_ui::pointer::Pointer;
 
-use crate::components;
 use crate::prefs;
-use crate::theme::*;
+use ferrite_ui::components;
+use ferrite_ui::theme::*;
 
 const WIDTH: f32 = 600.;
 /// The sheet sizes to its content up to here; past it the body scrolls.

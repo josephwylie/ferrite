@@ -25,12 +25,12 @@ use std::time::Instant;
 
 use super::panel::PanelTab;
 use super::*;
-use crate::icons::{self, icon};
 use ferrite_core::protocol::{
     ReviewPullRequest, WireCheckStatus, WireMerge, WirePr, WirePrComment, WirePrCommentKind,
     WirePrState, WirePrUnread, WireSync,
 };
 use ferrite_core::workspace::{PrState, PullRequest};
+use ferrite_ui::icons::{self, icon};
 use gpui::base::text::{InlineCodeWash, TextView, TextViewState, TextViewStyle};
 use gpui::StyledText;
 
@@ -321,10 +321,10 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let pill = Pill::of(pr.state, pr.draft);
         let review_id = gpui::ElementId::from("pr-review");
-        let review_key = crate::pointer::hover_key(&review_id);
+        let review_key = ferrite_ui::pointer::hover_key(&review_id);
         div()
             .debug_selector(|| "pr-tab".into())
             .flex()
@@ -370,7 +370,7 @@ impl CockpitView {
         fetching: bool,
         cx: &mut Context<Self>,
     ) -> Div {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let refresh = pr_icon_button("pr-refresh", "Refresh PR", "cockpit::RefreshPrStatus")
             .child(if fetching {
                 spinning_refresh()
@@ -487,7 +487,7 @@ impl CockpitView {
     /// The checks (a heading with their count, a 30px row each, worst
     /// first), none without checks.
     fn checks_section(&self, thread: ThreadId, pr: &WirePr, cx: &mut Context<Self>) -> Option<Div> {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         if pr.checks.is_empty() {
             return None;
         }
@@ -566,7 +566,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         if pr.comments.is_empty() && !pr.more_comments() {
             return None;
         }
@@ -627,7 +627,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let key = Unfold::Comment(format!("{}\u{0}{}", comment.author, comment.created_at));
         let unfolded = self.pr_tab.unfolded(thread, &key);
         let now = ferrite_core::clock::system_time();
@@ -760,7 +760,7 @@ impl CockpitView {
     /// The empty state: no pull request for the branch, or — with no `gh`
     /// or no login — how to sign in.
     fn no_pr(&self, thread: ThreadId, absent: Absent) -> AnyElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let (text, highlight) = match absent {
             Absent::NoPr => {
                 let branch = self
@@ -861,7 +861,7 @@ impl Pill {
     }
 
     fn element(self) -> Div {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let (glyph, word, ink) = match self {
             Pill::Open => (icons::GIT_PULL_REQUEST, "Open", RUNNING),
             Pill::Draft => (icons::GIT_PULL_REQUEST, "Draft", TEXT_MUTED),
@@ -892,9 +892,9 @@ impl Pill {
 
 /// A 26px icon button of the head (r6), its tooltip naming its act.
 fn pr_icon_button(id: &'static str, label: &'static str, action: &'static str) -> Stateful<Div> {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let element = gpui::ElementId::from(id);
-    let key = crate::pointer::hover_key(&element);
+    let key = ferrite_ui::pointer::hover_key(&element);
     div()
         .id(element)
         .debug_selector(move || id.into())
@@ -906,13 +906,13 @@ fn pr_icon_button(id: &'static str, label: &'static str, action: &'static str) -
         .rounded(px(R_TAB))
         .hover_control(key)
         .press_control()
-        .tooltip(crate::menu::action_tooltip(label, action))
+        .tooltip(ferrite_ui::menu::action_tooltip(label, action))
 }
 
 /// The `refresh` icon while a read is out: turning, or — under reduced
 /// motion — dimmed.
 fn spinning_refresh() -> AnyElement {
-    crate::loops_overlay::hosted(|| RefreshSpin.into_any_element()).into_any_element()
+    ferrite_ui::loops_overlay::hosted(|| RefreshSpin.into_any_element()).into_any_element()
 }
 
 #[derive(IntoElement, Clone, Copy)]
@@ -920,15 +920,15 @@ struct RefreshSpin;
 
 impl RenderOnce for RefreshSpin {
     fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let glyph = icon(icons::REFRESH, ICON_PR_BUTTON_GLYPH, TEXT_DIM);
-        let glyph = if crate::motion::reduced_motion(cx) {
+        let glyph = if ferrite_ui::motion::reduced_motion(cx) {
             glyph.opacity(0.5)
         } else {
             let turn = std::time::Duration::from_millis(PR_SPIN_MS);
-            let steps = crate::motion::Motion::Frames(PR_SPIN_STEPS);
-            let phase = crate::motion::script_phase(turn, steps, window.current_view(), cx);
-            let step = crate::components::frame_at(phase, PR_SPIN_STEPS);
+            let steps = ferrite_ui::motion::Motion::Frames(PR_SPIN_STEPS);
+            let phase = ferrite_ui::motion::script_phase(turn, steps, window.current_view(), cx);
+            let step = ferrite_ui::components::frame_at(phase, PR_SPIN_STEPS);
             let angle = std::f32::consts::TAU * step as f32 / PR_SPIN_STEPS as f32;
             glyph.with_transformation(gpui::Transformation::rotate(gpui::radians(angle)))
         };
@@ -941,7 +941,7 @@ impl RenderOnce for RefreshSpin {
 /// A section's heading (30): its name in 12/500, its count, if it has
 /// one, at the right.
 fn section_head(selector: &'static str, name: &'static str, count: Option<String>) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     div()
         .debug_selector(move || selector.into())
         .flex()
@@ -960,8 +960,8 @@ fn section_head(selector: &'static str, name: &'static str, count: Option<String
 /// reaches `PR_ROW_BLEED` past the column either side, so the mark or text
 /// keeps its place and the ground still clears it.
 fn flush_row(id: gpui::ElementId, inset: f32) -> Stateful<Div> {
-    use crate::theme::*;
-    let key = crate::pointer::hover_key(&id);
+    use ferrite_ui::theme::*;
+    let key = ferrite_ui::pointer::hover_key(&id);
     div()
         .id(id)
         .flex()
@@ -977,7 +977,7 @@ fn flush_row(id: gpui::ElementId, inset: f32) -> Stateful<Div> {
 
 /// A quiet row (`Show N more`, `More on GitHub`).
 fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     flush_row(id.into(), SPACE_1)
         .debug_selector(move || id.into())
         .text_size(px(FS_LABEL))
@@ -994,7 +994,7 @@ fn fold_row(
     unfolded: bool,
     words: impl Into<SharedString>,
 ) -> Stateful<Div> {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     flush_row(id.into(), SPACE_1)
         .debug_selector(move || id.into())
         .gap(px(SPACE_2))
@@ -1012,7 +1012,7 @@ fn fold_row(
 /// The first read is out and nothing is known yet: a quiet line where the
 /// tab will draw, as the Context tab's before its first reading.
 fn checking() -> AnyElement {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     div()
         .debug_selector(|| "panel-pr-checking".into())
         .pt(px(SPACE_2))
@@ -1040,7 +1040,7 @@ type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut gpui::App)>;
 
 impl RenderOnce for Description {
     fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let body = self.body;
         let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| {
             TextViewState::markdown(&body, cx)
@@ -1063,7 +1063,7 @@ impl RenderOnce for Description {
             window.defer(cx, move |_, cx| {
                 if state.read(cx).is_clamped() != clamped {
                     // The frame draws the panel: it alone draws again.
-                    cx.notify(crate::motion::frames_through(cockpit));
+                    cx.notify(ferrite_ui::motion::frames_through(cockpit));
                 }
             });
         }
@@ -1090,7 +1090,7 @@ impl RenderOnce for Description {
 
 /// A row's mark: a 15px icon, or the braille spinner centred in its box.
 fn mark(glyph: Option<&'static str>, ink: u32) -> AnyElement {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     match glyph {
         Some(glyph) => icon(glyph, PR_MARK, ink).into_any_element(),
         None => div()
@@ -1100,14 +1100,14 @@ fn mark(glyph: Option<&'static str>, ink: u32) -> AnyElement {
             .w(px(PR_MARK))
             .font_family(FONT_CODE)
             .text_size(px(FS_META))
-            .child(crate::components::braille_spinner(ink))
+            .child(ferrite_ui::components::braille_spinner(ink))
             .into_any_element(),
     }
 }
 
 /// A pending or skipped check's hollow ring, in the 15px box.
 fn hollow_ring() -> AnyElement {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     div()
         .flex()
         .flex_shrink_0()
@@ -1137,7 +1137,7 @@ fn check_rank(status: WireCheckStatus) -> u8 {
 
 /// A check row's mark, status word and the word's ink.
 fn check_face(status: WireCheckStatus) -> (AnyElement, &'static str, u32) {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     match status {
         WireCheckStatus::Failure => (mark(Some(icons::X_CIRCLE), BLOCKED), "failed", BLOCKED),
         WireCheckStatus::Running => (mark(None, RUNNING), "running", TEXT_DIM),
@@ -1172,7 +1172,7 @@ fn count(n: usize, one: &str, many: &str) -> String {
 /// something to say: the checks, then the merge state and the sync — or,
 /// merged, the one row that replaces both.
 fn readiness(pr: &WirePr) -> Vec<Ready> {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let mut rows = Vec::new();
     let total = pr.checks.len();
     let tally = |wanted: &[WireCheckStatus]| {
@@ -1291,7 +1291,7 @@ fn readiness(pr: &WirePr) -> Vec<Ready> {
 /// The readiness group (r8, `RAISED`, 40px rows, hairlines between), none
 /// when no row has anything to say.
 fn readiness_group(pr: &WirePr) -> Option<Div> {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let rows = readiness(pr);
     if rows.is_empty() {
         return None;
@@ -1372,7 +1372,7 @@ fn comments_tally(comments: &[WirePrComment]) -> String {
 
 /// The author's initial on an 18px circle.
 fn avatar(author: &str) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let initial: String = author
         .chars()
         .find(|c| c.is_alphanumeric())
@@ -1394,7 +1394,7 @@ fn avatar(author: &str) -> Div {
 
 /// An author's name, 12.5/500 `TEXT_STRONG`.
 fn author(name: &str) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     div()
         .min_w_0()
         .truncate()
@@ -1459,7 +1459,7 @@ fn comment_body(id: String, body: &str, folded: bool, window: &Window) -> TextVi
         window,
     );
     if folded {
-        clamp(view, crate::theme::PR_BODY_LINES)
+        clamp(view, ferrite_ui::theme::PR_BODY_LINES)
     } else {
         view
     }
@@ -1478,7 +1478,7 @@ fn clamp(view: TextView, lines: usize) -> TextView {
 /// 12.5/18 `TEXT`, inline code as chips, and every heading at the body's
 /// size — set apart by weight, not size, in a column this narrow.
 fn small_markdown(view: TextView, window: &Window) -> TextView {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let rem = f32::from(window.rem_size());
     let style = TextViewStyle::default()
         .with_dark(true)
@@ -1507,7 +1507,7 @@ fn small_markdown(view: TextView, window: &Window) -> TextView {
             color: rgb(PR_CODE_CHIP).into(),
             overhang: px(SPACE_1),
             pad: px(0.),
-            ..crate::rich::inline_code_wash()
+            ..ferrite_pane::rich::inline_code_wash()
         }))
         .with_code_background(rgb(PR_CODE_CHIP).into())
         // A heading is a line of the body in its strong weight, with a
@@ -1552,7 +1552,7 @@ fn small_markdown(view: TextView, window: &Window) -> TextView {
 /// A finding's hunk, as the forge quotes it: its last lines in the code
 /// face, the signs in the diff hues.
 fn hunk(snippet: &str) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     const SHOWN: usize = 6;
     let lines: Vec<&str> = snippet
         .lines()

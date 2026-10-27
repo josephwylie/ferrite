@@ -17,7 +17,7 @@ use ferrite_core::ThreadId;
 use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 
 use super::{home_relative, CockpitView};
-use crate::transcript::{BannerFacts, ScrollTarget, TranscriptTail};
+use ferrite_pane::transcript::{BannerFacts, ScrollTarget, TranscriptTail};
 
 impl CockpitView {
     /// What the banner heading `thread`'s transcript says: its checkout on
@@ -99,13 +99,14 @@ impl CockpitView {
             render: std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
                 let owner = owner.clone();
                 let retry = (!closed).then(|| {
-                    crate::pane::retry_button(thread.get(), cx)
+                    ferrite_pane::pane::retry_button(thread.get(), cx)
                         .on_click(move |_, _, cx| {
                             let _ = owner.update(cx, |view, cx| view.retry_failed_turn(thread, cx));
                         })
                         .into_any_element()
                 });
-                crate::pane::failure_strip(thread.get(), words.clone(), retry).into_any_element()
+                ferrite_pane::pane::failure_strip(thread.get(), words.clone(), retry)
+                    .into_any_element()
             }),
         })
     }

@@ -1101,7 +1101,12 @@ fn a_landing_revives_a_parked_thread_and_lapses_unattached(cx: &mut TestAppConte
 /// Thread in that directory on the machine.
 #[gpui::test]
 fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut TestAppContext) {
-    cx.update(|cx| crate::bind_keys(crate::keymap::bindings(crate::keymap::PLATFORM), cx));
+    cx.update(|cx| {
+        crate::bind_keys(
+            ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
+            cx,
+        )
+    });
     let machines = cx.new(|_| machines_through("typed", Some("me@box"), serving));
     let folder = settings_dir("typed").join("src");
     let repo = repo_with_worktree_and_branches(&folder);
@@ -1262,7 +1267,12 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
 /// uncommitted work, then one of the branch's commits picked from the list.
 #[gpui::test]
 fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContext) {
-    cx.update(|cx| crate::bind_keys(crate::keymap::bindings(crate::keymap::PLATFORM), cx));
+    cx.update(|cx| {
+        crate::bind_keys(
+            ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
+            cx,
+        )
+    });
     let machines = cx.new(|_| machines_through("reviewed", Some("me@box"), serving));
     let repo = repo_in(&settings_dir("reviewed").join("src"));
     let git = |args: &[&str]| {

@@ -7,10 +7,10 @@ use ferrite_core::Attention;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, AnyElement, SharedString};
 
-use crate::components;
-use crate::icons::{self, icon};
 use crate::pane::WallState;
-use crate::theme::*;
+use ferrite_ui::components;
+use ferrite_ui::icons::{self, icon};
+use ferrite_ui::theme::*;
 
 /// What a row's state says (C10), in priority order: a pending Decision
 /// names what it waits for (`approval` / `plan` / `question`); red tests
@@ -165,15 +165,15 @@ pub fn mark(status: RowStatus, small: bool) -> AnyElement {
 /// and 13px icons, laid out at the width the mockup's box takes
 /// (`PANE_HEAD_DOT_W`: a dot's halo overflows it), so the title starts
 /// where it is drawn.
-pub fn head_mark(status: RowStatus) -> AnyElement {
-    let face = mark_sized(status, NAV_DOT, crate::theme::PANE_HEAD_ICON);
+pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
+    let face = mark_sized(status, NAV_DOT, ferrite_ui::theme::PANE_HEAD_ICON);
     match status {
         RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background => div()
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .w(px(crate::theme::PANE_HEAD_DOT_W))
+            .w(px(ferrite_ui::theme::PANE_HEAD_DOT_W))
             .child(face)
             .into_any_element(),
         _ => div().flex().flex_shrink_0().child(face).into_any_element(),

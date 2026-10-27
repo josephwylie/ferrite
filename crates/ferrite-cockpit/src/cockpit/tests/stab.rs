@@ -179,7 +179,7 @@ fn files_over_a_pane_edge_its_composer_in_the_accent(cx: &mut TestAppContext) {
 /// context menu's shortcuts both place the one `⌘` glyph on macOS.
 #[gpui::test]
 fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
-    if crate::keymap::PLATFORM != crate::keymap::Platform::Mac {
+    if ferrite_ui::keymap::PLATFORM != ferrite_ui::keymap::Platform::Mac {
         return;
     }
     let (core, _fake) = cockpit("command-glyph", 1);
@@ -246,8 +246,8 @@ fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAp
     let pill = cx.debug_bounds("subject-tab-selected").expect("one pill");
     let main = cx.debug_bounds("subject-main-1").unwrap();
     assert_eq!(pill, main, "Main is active first");
-    assert_eq!(pill.size.height, px(crate::theme::SUBJECT_TAB_H));
-    assert!(strip.size.height <= px(crate::theme::SUBJECT_STRIP_H));
+    assert_eq!(pill.size.height, px(ferrite_ui::theme::SUBJECT_TAB_H));
+    assert!(strip.size.height <= px(ferrite_ui::theme::SUBJECT_STRIP_H));
 
     let atlas: &'static str =
         Box::leak(format!("subject-agent-1-{}", key.as_str()).into_boxed_str());
@@ -284,7 +284,7 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     tick(cx);
     let rows = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().rows.len());
     assert!(
-        rows as f32 * crate::theme::FLOAT_ROW_H > crate::theme::MENU_MAX_H,
+        rows as f32 * ferrite_ui::theme::FLOAT_ROW_H > ferrite_ui::theme::MENU_MAX_H,
         "the premise: {rows} rows overflow the list"
     );
     let visible = |cx: &mut gpui::VisualTestContext| {
@@ -542,7 +542,7 @@ fn a_tile_head_names_no_branch_and_no_state(cx: &mut TestAppContext) {
         .debug_bounds("pane-head-provider-1")
         .expect("the provider's mark");
     assert!(
-        title.size.width >= px(crate::theme::HEAD_TITLE_MIN_W),
+        title.size.width >= px(ferrite_ui::theme::HEAD_TITLE_MIN_W),
         "the title keeps its floor: {title:?}"
     );
     assert!(title.right() <= mark.left(), "{title:?} / {mark:?}");
@@ -575,10 +575,14 @@ fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
     );
     let row = cx.debug_bounds("wall-line").expect("the call's line");
     assert!(
-        row.right() <= px(rect.x + rect.w - crate::theme::WALL_PAD_X) + px(0.5),
+        row.right() <= px(rect.x + rect.w - ferrite_ui::theme::WALL_PAD_X) + px(0.5),
         "the row {row:?} ends inside the tile {rect:?}"
     );
-    assert_eq!(row.size.height, px(crate::theme::LH_UI), "one row: {row:?}");
+    assert_eq!(
+        row.size.height,
+        px(ferrite_ui::theme::LH_UI),
+        "one row: {row:?}"
+    );
 }
 
 /// A draft in a narrow Pane keeps its whole controls row inside the
@@ -668,14 +672,15 @@ fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
         (main_block.left(), main_block.size.width),
         "the footer spans the Composer's box"
     );
-    assert_eq!(footer.size.height, px(crate::theme::CHILD_FOOTER_H));
+    assert_eq!(footer.size.height, px(ferrite_ui::theme::CHILD_FOOTER_H));
     assert!(
-        (px(pane.y + pane.h) - footer.bottom() - px(crate::theme::COMPOSER_INSET)).abs() <= px(1.5),
+        (px(pane.y + pane.h) - footer.bottom() - px(ferrite_ui::theme::COMPOSER_INSET)).abs()
+            <= px(1.5),
         "inset from the card's foot as the box is: {footer:?} / {pane:?}"
     );
     assert_eq!(
         text.left() - footer.left(),
-        px(crate::theme::COMPOSER_INPUT_PAD_X),
+        px(ferrite_ui::theme::COMPOSER_INPUT_PAD_X),
         "the words start where the input's do"
     );
 }
@@ -702,13 +707,13 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
         ))
         .expect("the own-answer field");
     let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
-    assert_eq!(field.size.height, px(crate::theme::QUESTION_OTHER_H));
+    assert_eq!(field.size.height, px(ferrite_ui::theme::QUESTION_OTHER_H));
     // An option reads `1  label` (SPEC §5.9): its padding, the key's
     // one mono cell, the gap, then the label.
     let labels = choice.left()
-        + px(crate::theme::DECISION_OPTION_PAD_X
-            + crate::theme::FS_META * crate::theme::CODE_ADVANCE
-            + crate::theme::DECISION_OPTION_GAP);
+        + px(ferrite_ui::theme::DECISION_OPTION_PAD_X
+            + ferrite_ui::theme::FS_META * ferrite_ui::theme::CODE_ADVANCE
+            + ferrite_ui::theme::DECISION_OPTION_GAP);
     assert!(
         (field.left() - labels).abs() <= px(0.5),
         "the line's text starts on the labels' column: {:?} / {labels:?}",
@@ -781,7 +786,7 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
         let board = view.read_with(cx, |view, _| view.board.get());
         assert_eq!(
             board.y,
-            crate::theme::WIN_CHROME_H,
+            ferrite_ui::theme::WIN_CHROME_H,
             "the cards start under the head row"
         );
         if crate::titlebar::CUSTOM || cfg!(target_os = "macos") {
@@ -792,7 +797,7 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
                     .debug_bounds("nav-head-drag")
                     .expect("the nav head's stretch");
                 assert!(
-                    head.top() == px(0.) && head.right() > px(crate::theme::NAV_HEAD_PAD_L),
+                    head.top() == px(0.) && head.right() > px(ferrite_ui::theme::NAV_HEAD_PAD_L),
                     "the band over the nav drags: {head:?}"
                 );
             }
@@ -843,19 +848,19 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     cx.update(|window, cx| view.update(cx, |view, cx| view.open_checks(window, cx)));
     tick(cx);
     let card = cx.debug_bounds("context-checks-card").expect("the card");
-    assert!(card.size.width >= px(crate::theme::CHECKS_CARD_W));
-    assert!(card.size.width <= px(crate::theme::CHECKS_CARD_MAX_W));
+    assert!(card.size.width >= px(ferrite_ui::theme::CHECKS_CARD_W));
+    assert!(card.size.width <= px(ferrite_ui::theme::CHECKS_CARD_MAX_W));
     let tally = cx.debug_bounds("checks-tally").unwrap();
     let natural = cx.update(|window, _| {
         window
             .text_system()
             .shape_line(
                 text.clone().into(),
-                px(crate::theme::FS_UI),
+                px(ferrite_ui::theme::FS_UI),
                 &[gpui::TextRun {
                     len: text.len(),
-                    font: gpui::font(crate::theme::FONT_UI),
-                    color: gpui::rgb(crate::theme::TEXT).into(),
+                    font: gpui::font(ferrite_ui::theme::FONT_UI),
+                    color: gpui::rgb(ferrite_ui::theme::TEXT).into(),
                     background_color: None,
                     underline: None,
                     strikethrough: None,
@@ -895,7 +900,7 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
 /// face (Geist Mono).
 #[gpui::test]
 fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
-    use crate::theme::{FONT_CODE, FONT_UI};
+    use ferrite_ui::theme::{FONT_CODE, FONT_UI};
     use gpui::Styled as _;
     let (core, fake) = cockpit("font-roles", 1);
     bind_production_keys(cx);
@@ -993,7 +998,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
             .expect("the fixture's block")
     };
     let face = |cx: &mut gpui::VisualTestContext, prefix: String| {
-        cx.update(|_, cx| crate::rich::testing::font_family(&prefix, cx))
+        cx.update(|_, cx| ferrite_pane::rich::testing::font_family(&prefix, cx))
             .unwrap_or_else(|| panic!("{prefix} was drawn"))
     };
     let prompt = id_of(&|body| matches!(body, Body::Prompt(_)));
@@ -1017,9 +1022,9 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     // Code: the diff's lines and the Composer's line.
     // A settled edit's diff shows once it is disclosed.
     for disclosure in [pane::DisclosureId::Tool("edit".into())] {
-        if let Some(control) =
-            view.read_with(cx, |view, _| view.panes[0].tool_bounds(disclosure.clone()))
-        {
+        if let Some(control) = view.read_with(cx, |view, cx| {
+            view.panes[0].tool_bounds(disclosure.clone(), cx)
+        }) {
             cx.simulate_click(control.center(), gpui::Modifiers::none());
             tick(cx);
         }
@@ -1028,11 +1033,11 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         .filter_map(|ordinal| {
             let prefix = format!("literal-{namespace}-{edit:?}-{ordinal}");
             cx.update(|_, cx| {
-                let text = crate::rich::testing::full_text(&prefix, cx)?;
+                let text = ferrite_pane::rich::testing::full_text(&prefix, cx)?;
                 ["alpha", "bravo", "delta"]
                     .iter()
                     .any(|line| text.trim() == *line)
-                    .then(|| crate::rich::testing::font_family(&prefix, cx))
+                    .then(|| ferrite_pane::rich::testing::font_family(&prefix, cx))
                     .flatten()
             })
         })
@@ -1043,13 +1048,13 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         "every diff line is code: {diff_faces:?}"
     );
     assert_eq!(
-        cx.update(|_, cx| crate::composer::testing::face(composer, cx))
+        cx.update(|_, cx| ferrite_pane::composer::testing::face(composer, cx))
             .as_deref(),
-        Some(crate::theme::FONT_UI),
+        Some(ferrite_ui::theme::FONT_UI),
         "the Solo Composer's line is chrome (SPEC §3.5)"
     );
     // Code in prose: fenced blocks and inline spans.
-    let style = crate::rich::style(px(16.));
+    let style = ferrite_pane::rich::style(px(16.));
     assert_eq!(
         style.code_block().text.font_family.as_deref(),
         Some(FONT_CODE)
@@ -1062,30 +1067,33 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
         ("nav", ui(crate::nav::shell(crate::nav::WIDTH))),
         (
             "menu row",
-            ui(crate::components::menu_row_content(
-                &crate::components::MenuItem::new("Rename"),
+            ui(ferrite_ui::components::menu_row_content(
+                &ferrite_ui::components::MenuItem::new("Rename"),
                 false,
                 false,
             )),
         ),
         (
             "floating surface",
-            ui(crate::components::floating_surface()),
+            ui(ferrite_ui::components::floating_surface()),
         ),
         ("settings sheet", ui(crate::prefs::sheet(400., 300.))),
-        ("settings label", ui(crate::components::text_ui())),
-        ("metadata", ui(crate::components::text_meta())),
+        ("settings label", ui(ferrite_ui::components::text_ui())),
+        ("metadata", ui(ferrite_ui::components::text_meta())),
     ] {
         assert_eq!(family.as_deref(), Some(FONT_UI), "{what} is UI text");
     }
     for (what, family) in [
         (
             "keys",
-            ui(crate::components::key_combo("cmd-F", crate::theme::TEXT)),
+            ui(ferrite_ui::components::key_combo(
+                "cmd-F",
+                ferrite_ui::theme::TEXT,
+            )),
         ),
         (
             "command well",
-            ui(crate::decision::well(false, gpui::div())),
+            ui(ferrite_pane::decision::well(false, gpui::div())),
         ),
     ] {
         assert_eq!(family.as_deref(), Some(FONT_CODE), "{what} is code");
@@ -1156,10 +1164,10 @@ fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
     let block = cx.debug_bounds("composer-block").unwrap();
     assert_eq!(
         block.size.height,
-        px(crate::theme::COMPOSER_INPUT_PAD_T
-            + crate::theme::COMPOSER_ROW_H
-            + crate::theme::COMPOSER_INPUT_PAD_B
-            + crate::theme::COMPOSER_TOOLBAR_H),
+        px(ferrite_ui::theme::COMPOSER_INPUT_PAD_T
+            + ferrite_ui::theme::COMPOSER_ROW_H
+            + ferrite_ui::theme::COMPOSER_INPUT_PAD_B
+            + ferrite_ui::theme::COMPOSER_TOOLBAR_H),
         "one row over the toolbar"
     );
     assert!(cx.debug_bounds("composer-meta").is_none(), "no status line");
@@ -1239,19 +1247,23 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
         )
     });
     let size = cx.update(|_, cx| {
-        crate::rich::testing::font_size(&format!("literal-{namespace}-{:?}-0", prompts[1]), cx)
+        ferrite_pane::rich::testing::font_size(
+            &format!("literal-{namespace}-{:?}-0", prompts[1]),
+            cx,
+        )
     });
-    assert_eq!(size, Some(px(crate::theme::FS_PROSE)), "prose size");
+    assert_eq!(size, Some(px(ferrite_ui::theme::FS_PROSE)), "prose size");
     let mut line = |id| {
         cx.update(|_, cx| {
-            crate::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx).unwrap()
+            ferrite_pane::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx)
+                .unwrap()
         })
     };
     // Measured, not just declared: the first turn's stamp to the second
     // prompt is the turn step.
     assert_eq!(
         line(prompts[1]).top() - line(stamps[0]).bottom(),
-        px(crate::theme::LH_PROSE + crate::theme::PROMPT_BAND_PAD_Y),
+        px(ferrite_ui::theme::LH_PROSE + ferrite_ui::theme::PROMPT_BAND_PAD_Y),
         "turns sit a blank line and the band's padding apart"
     );
 }
@@ -1308,19 +1320,19 @@ fn the_head_title_starts_at_c1_on_every_board_cell(cx: &mut TestAppContext) {
             // The edge is an overlay (F-1): the head starts at the Pane's
             // own left edge.
             let inner = px(rect.x);
-            let c1 = dot.right() + px(crate::theme::PANE_HEAD_GAP);
+            let c1 = dot.right() + px(ferrite_ui::theme::PANE_HEAD_GAP);
             // gpui snaps every edge to a device pixel: up to a pixel off
             // the unsnapped split.
             assert!(
                 (title.left() - c1).abs() < px(1.),
                 "{width}: the title {title:?} starts a gap after the mark {c1:?}"
             );
-            let axis = inner + px(crate::theme::PANE_HEAD_PAD_L);
+            let axis = inner + px(ferrite_ui::theme::PANE_HEAD_PAD_L);
             assert!(
                 (dot.left() - axis).abs() < px(1.),
                 "{width}: the mark {dot:?} sits 14 in {axis:?}"
             );
-            assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
+            assert_eq!(head.size.height, px(ferrite_ui::theme::PANE_HEAD_H + 1.));
         }
     }
 }

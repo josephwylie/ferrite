@@ -3,7 +3,7 @@ name = "ferrite-pane"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Ferrite's Pane: the transcript, the Composer and the Draft band"
+description = "Ferrite's Pane: the transcript, the Composer and the Draft"
 
 [lib]
 doctest = false

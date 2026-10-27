@@ -6,7 +6,7 @@
 //! the Panel instead (`panel_preview.rs`).
 
 use super::*;
-use crate::theme::{BOARD_SEAM, MOTION_SLOT_CLOSE_MS, MOTION_SLOT_OPEN_MS};
+use ferrite_ui::theme::{BOARD_SEAM, MOTION_SLOT_CLOSE_MS, MOTION_SLOT_OPEN_MS};
 
 /// The focused Pane's Review, beside it: shown in its slot as the
 /// Changes tab's button opens one, no checkout read.
@@ -79,7 +79,7 @@ fn solo<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let (core, _fake) = cockpit(name, 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -212,7 +212,7 @@ fn a_review_reopened_in_place_does_not_slide(cx: &mut TestAppContext) {
 /// cell the Pane had.
 #[gpui::test]
 fn in_a_group_the_slide_stays_inside_the_pane_cell(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let (mut core, _fake) = cockpit("reader-slide-group", 2);
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
@@ -291,7 +291,7 @@ fn reduced_motion_snaps_the_reader(cx: &mut TestAppContext) {
 /// closed, the Pane fills the board again.
 #[gpui::test]
 fn a_fullscreen_pane_splits_its_cell_with_its_reader(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let (mut core, _fake) = cockpit("reader-fullscreen", 2);
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();

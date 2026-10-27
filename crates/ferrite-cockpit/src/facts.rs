@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::pane::WallCard;
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::docview::FileChange;
@@ -18,6 +17,7 @@ use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{BranchStatus, PullRequest, WorkspaceBinding};
 use ferrite_core::ThreadId;
+use ferrite_pane::pane::WallCard;
 use gpui::SharedString;
 
 /// One Thread's cached facts. `None` on any of them is honest — the row

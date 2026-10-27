@@ -1,8 +1,8 @@
 use super::*;
-use crate::theme;
 use ferrite_core::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
+use ferrite_ui::theme;
 
 fn key(name: &str) -> AgentKey {
     AgentKey::new(Provider::Claude, "ui-fixture", name)
@@ -201,9 +201,9 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
             .scroll()
             .bounds()
     });
-    let toggle = view.read_with(cx, |view, _| {
+    let toggle = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds("same-call")
+            .tool_bounds("same-call", cx)
             .expect("tool control")
             .center()
     });
@@ -237,7 +237,7 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     });
     let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
     let entity = cx.update(|_, cx| {
-        crate::rich::testing::first_entity(&format!("markdown-{namespace}-"), cx).unwrap()
+        ferrite_pane::rich::testing::first_entity(&format!("markdown-{namespace}-"), cx).unwrap()
     });
     click_child(cx, "Cedar");
     assert!(!view.read_with(cx, |view, _| view.panes[0].tool_expanded("same-call")));
@@ -249,7 +249,7 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
         assert!(!transcript.read(cx).is_following_tail());
     });
     assert_eq!(
-        cx.update(|_, cx| crate::rich::testing::first_entity(
+        cx.update(|_, cx| ferrite_pane::rich::testing::first_entity(
             &format!("markdown-{namespace}-"),
             cx
         )

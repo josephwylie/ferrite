@@ -257,7 +257,7 @@ so the board matches 1.0's design exactly. Its first-run setup (herdr's
 config) and its size warning (a pane shared with a remote view) are
 herdr's and are not drawn.
 
-In Ferrite this is `crates/ferrite/src/board` (`runtime`, `keys`,
+In Ferrite this is `crates/ferrite-cockpit/src/board` (`runtime`, `keys`,
 `render`, `mouse`, `links`, `machines`). Its seams:
 
 - **Runtime.** The view owns the `State` from `run/start.rs`'s `view`

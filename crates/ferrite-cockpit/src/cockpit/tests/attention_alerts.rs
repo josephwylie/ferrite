@@ -179,7 +179,7 @@ fn a_finish_is_done_until_it_is_seen(cx: &mut TestAppContext) {
         assert_eq!(finished.tail, nav::NavTail::Done);
         assert_eq!(
             finished.status.ink(),
-            crate::theme::TEXT_DIM,
+            ferrite_ui::theme::TEXT_DIM,
             "a dim check, never ochre"
         );
         assert_eq!(view.thread_row(threads[0]).status, nav::RowStatus::Idle);

@@ -39,16 +39,17 @@ fn a_request_toast_stands_two_cells_in_and_over_the_bottom_bar(cx: &mut TestAppC
     let toast = cx.debug_bounds(selector).expect("the toast is up");
     let window = cx.update(|window, _| window.viewport_size());
     assert!(
-        (toast.size.width - px(crate::theme::TOAST_W)).abs() <= px(1.),
+        (toast.size.width - px(ferrite_ui::theme::TOAST_W)).abs() <= px(1.),
         "TOAST_W wide: {toast:?}"
     );
     assert!(
-        (toast.right() - (window.width - px(crate::theme::TOAST_BOX_RIGHT))).abs() <= px(1.),
+        (toast.right() - (window.width - px(ferrite_ui::theme::TOAST_BOX_RIGHT))).abs() <= px(1.),
         "TOAST_BOX_RIGHT in from the window's edge: {toast:?}"
     );
     assert!(
         (toast.bottom()
-            - (window.height - px(crate::theme::STATUS_BAR_H + crate::theme::TOAST_BOTTOM)))
+            - (window.height
+                - px(ferrite_ui::theme::STATUS_BAR_H + ferrite_ui::theme::TOAST_BOTTOM)))
         .abs()
             <= px(1.),
         "TOAST_BOTTOM over the bottom bar: {toast:?}"

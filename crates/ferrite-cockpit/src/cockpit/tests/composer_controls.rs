@@ -375,7 +375,7 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
             let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
             assert!(
                 editor.top()
-                    >= px(rect.y + rect.h * (1. - crate::theme::COMPOSER_MAX_PANE_FRACTION)),
+                    >= px(rect.y + rect.h * (1. - ferrite_ui::theme::COMPOSER_MAX_PANE_FRACTION)),
                 "typing preserves the majority of the Pane for context: {editor:?} / {rect:?}"
             );
             assert!(editor.bottom() <= px(rect.y + rect.h));
@@ -399,7 +399,7 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
         let expanded = cx.debug_bounds("focused-prompt-editor").unwrap();
         assert_eq!(
             expanded.size.height,
-            px(crate::theme::COMPOSER_ROW_H * crate::composer::MAX_ROWS as f32)
+            px(ferrite_ui::theme::COMPOSER_ROW_H * ferrite_pane::composer::MAX_ROWS as f32)
         );
         view.read_with(cx, |view, cx| {
             assert_eq!(view.panes[0].composer.read(cx).text(), draft)
@@ -493,7 +493,7 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             facts.left() >= px(other_cell.x) && facts.right() <= px(other_cell.x + other_cell.w),
             "{facts:?} rides the unfocused cell {other_cell:?}"
         );
-        assert_eq!(crate::pane::flat_facts_text(0, 8), "8 queued");
+        assert_eq!(ferrite_pane::pane::flat_facts_text(0, 8), "8 queued");
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
         let cell = cx.update(|window, cx| {
             view.read(cx)
@@ -513,7 +513,7 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
                 progress.bottom() <= editor.top(),
                 "the complete live status stays above the box: {progress:?} / {editor:?}"
             );
-            assert!(progress.size.height <= px(crate::theme::COMPOSER_ROW_H));
+            assert!(progress.size.height <= px(ferrite_ui::theme::COMPOSER_ROW_H));
         }
     }
     view.update(cx, |view, cx| {
@@ -643,7 +643,8 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
         let send = cx.debug_bounds("composer-send").expect("the send circle");
         assert!(
             send.left() >= field.left()
-                && send.right() <= field.right() - px(crate::theme::COMPOSER_TOOLBAR_PAD_X - 0.5),
+                && send.right()
+                    <= field.right() - px(ferrite_ui::theme::COMPOSER_TOOLBAR_PAD_X - 0.5),
             "at {width}px send stands inside the box: {send:?} / {field:?}"
         );
         let mode = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");

@@ -18,10 +18,10 @@ use ferrite_core::ThreadId;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, Div, SharedString, Stateful, Window};
 
-use crate::components;
 use crate::machines::MachineKey;
-use crate::pointer::{Pointer, PointerPressed};
-use crate::theme::*;
+use ferrite_ui::components;
+use ferrite_ui::pointer::{Pointer, PointerPressed};
+use ferrite_ui::theme::*;
 
 gpui::actions!(
     notifications,
@@ -220,7 +220,7 @@ pub fn request_detail(
     cwd: Option<&std::path::Path>,
     gated_path: impl FnOnce() -> Option<String>,
 ) -> Detail {
-    if let Some(questions) = crate::pane::questions_of(decision) {
+    if let Some(questions) = ferrite_pane::pane::questions_of(decision) {
         return questions
             .first()
             .map(|question| Detail::Words(question.question.clone().into()))
@@ -233,7 +233,7 @@ pub fn request_detail(
     // them: Codex's `commandExecution` is `Bash`, its login-shell wrapper
     // taken off (`Bash wants to run cargo test`, never `commandExecution
     // wants to run /bin/zsh`).
-    let tool: SharedString = crate::decision::tool_word(&decision.tool_name)
+    let tool: SharedString = ferrite_pane::decision::tool_word(&decision.tool_name)
         .to_string()
         .into();
     if let Some(command) = decision
@@ -243,7 +243,7 @@ pub fn request_detail(
     {
         return Detail::Run {
             tool,
-            command: command_head(&crate::decision::unwrap_shell(command)).into(),
+            command: command_head(&ferrite_pane::decision::unwrap_shell(command)).into(),
         };
     }
     let path = ["file_path", "path", "notebook_path", "url"]
@@ -664,8 +664,8 @@ fn quick_button(
     word: &'static str,
 ) -> Stateful<Div> {
     let id = id.into();
-    let blend = crate::pointer::hover_key(&id);
-    let ink = crate::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
+    let blend = ferrite_ui::pointer::hover_key(&id);
+    let ink = ferrite_ui::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
     quick_pill(key, word, ink)
         .id(id)
         .hover_quick(blend)
@@ -751,7 +751,7 @@ fn toast_card(row: &Row, handle: Option<Handle>) -> Div {
             .into_any_element()
     });
     let card = match handle {
-        Some(_) => crate::menu::float()
+        Some(_) => ferrite_ui::menu::float()
             .debug_selector(move || format!("toast-{thread}"))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         None => components::float_ground()
@@ -848,7 +848,8 @@ impl ToastStage {
         }
         self.standing = standing.cloned();
         let fading = |left: Instant| {
-            !reduced && now.saturating_duration_since(left) < crate::motion::TOAST_OUT.duration()
+            !reduced
+                && now.saturating_duration_since(left) < ferrite_ui::motion::TOAST_OUT.duration()
         };
         if !self.leaving.as_ref().is_some_and(|(_, left)| fading(*left)) {
             self.leaving = None;
@@ -923,7 +924,7 @@ mod tests {
     fn the_toast_stage_lets_a_toast_go_softly_and_keeps_one_that_stays() {
         let t0 = Instant::now();
         let ms = |m: u64| t0 + Duration::from_millis(m);
-        let out = crate::motion::TOAST_OUT.duration();
+        let out = ferrite_ui::motion::TOAST_OUT.duration();
         let done = row(State::Done, Detail::None);
         let mut stage = ToastStage::default();
         assert!(stage.stage(Some(&done), t0, false).is_none(), "it enters");

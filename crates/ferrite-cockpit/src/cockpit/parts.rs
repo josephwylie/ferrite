@@ -47,7 +47,7 @@ pub(crate) struct PartView {
 impl Render for PartView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // This part's loops are laid out afresh for the loops overlay.
-        crate::loops_overlay::begin(window, cx.entity_id());
+        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
         let part = self.part;
         self.cockpit
             .update(cx, |view, cx| view.render_part(part, window, cx))
@@ -81,9 +81,9 @@ impl CockpitView {
     pub(crate) fn set_parts(&mut self, on: bool, cx: &mut Context<Self>) {
         self.parts.borrow_mut().on = on;
         let view = cx.entity_id();
-        crate::motion::draw_frames_through(view, on.then(|| self.frame_tick_id()));
+        ferrite_ui::motion::draw_frames_through(view, on.then(|| self.frame_tick_id()));
         if on {
-            cx.on_release(move |_, _| crate::motion::draw_frames_through(view, None))
+            cx.on_release(move |_, _| ferrite_ui::motion::draw_frames_through(view, None))
                 .detach();
         }
     }

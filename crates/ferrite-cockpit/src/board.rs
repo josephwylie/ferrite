@@ -66,7 +66,7 @@ pub(crate) const POPUP_SHARE: f32 = 0.9;
 /// The popup's size on a board `width` by `height` pixels.
 pub(crate) fn popup_size(width: f32, height: f32) -> (f32, f32) {
     let (columns, rows) = POPUP_FULL_BELOW;
-    if width < columns * crate::theme::CH || height < rows * crate::theme::ROW {
+    if width < columns * ferrite_ui::theme::CH || height < rows * ferrite_ui::theme::ROW {
         (width, height)
     } else {
         (width * POPUP_SHARE, height * POPUP_SHARE)
@@ -76,7 +76,7 @@ pub(crate) fn popup_size(width: f32, height: f32) -> (f32, f32) {
 /// The key that opens the board as the board writes keys (`cmd+shift+a`),
 /// for its "brings you back to the board" lines.
 pub(crate) fn board_key() -> String {
-    crate::keymap::active()
+    ferrite_ui::keymap::active()
         .into_iter()
         .find(|(_, action, context)| *action == "projects::Toggle" && context.is_none())
         .map(|(keys, _, _)| keys.replace('-', "+"))

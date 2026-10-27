@@ -358,7 +358,7 @@ fn the_titlebar_band_says_nothing_and_the_bar_keeps_views_and_vitals(cx: &mut Te
     }
     let toggle = cx.debug_bounds("nav-collapse").expect("the sidebar toggle");
     assert!(
-        toggle.bottom() <= px(crate::theme::WIN_CHROME_H),
+        toggle.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
         "the toggle is the nav head's (§5.1.1): {toggle:?}"
     );
 }
