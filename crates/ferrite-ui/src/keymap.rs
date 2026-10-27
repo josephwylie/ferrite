@@ -552,8 +552,8 @@ const REVIEW: &str = "Review && !Composer";
 /// binds its own keys deeper; this context's esc beats the Cockpit's
 /// interrupt.
 pub const READER: &str = "Reader";
-/// The image viewer's key context.
-const IMAGE_VIEWER: &str = crate::image_viewer::KEY_CONTEXT;
+/// The image viewer's key context (`image_viewer::KEY_CONTEXT`).
+pub const IMAGE_VIEWER: &str = "ImageViewer";
 
 /// The contexts where no text field takes typing (a Decision answers its
 /// own letters), so a plain key may act there.

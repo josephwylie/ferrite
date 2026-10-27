@@ -6,7 +6,7 @@ mod background_chips;
 mod board;
 mod cli_updates;
 mod cockpit;
-mod components;
+mod cockpit_window;
 mod composer;
 mod decision;
 mod demo;
@@ -17,20 +17,13 @@ mod find;
 mod float;
 mod fuzzy;
 mod hover_card;
-mod icons;
 mod image_viewer;
-mod keymap;
 mod line;
-mod loops_overlay;
 mod machines;
-mod menu;
-mod motion;
 mod nav;
 mod notifications;
 mod palette;
 mod pane;
-mod platform_text;
-mod pointer;
 mod pr;
 mod prefs;
 mod preview;
@@ -39,17 +32,21 @@ mod projects;
 mod prompt_drop;
 mod review;
 mod rich;
-mod scrollbar;
 mod select;
 mod shortcuts;
 #[cfg(unix)]
 mod sidebar;
 mod status;
 mod system_notifications;
-mod theme;
 mod titlebar;
 mod transcript;
 mod visual;
+
+// The shared UI, under the names the app has always used for it.
+use ferrite_ui::{
+    components, icons, keymap, loops_overlay, menu, motion, platform_text, pointer, register_fonts,
+    theme,
+};
 
 use ::gpui;
 use ::gpui as kit;
@@ -84,40 +81,6 @@ fn http_client() -> std::sync::Arc<dyn gpui::http_client::HttpClient> {
 /// merely because text changed beneath it.
 fn keep_mouse_cursor_visible(cx: &mut App) {
     cx.set_cursor_hide_mode(CursorHideMode::Never);
-}
-
-/// The bundled faces, compiled in: Geist Mono for the transcript and code,
-/// Geist for the chrome (theme rule 1). gpui has no variation-axis support,
-/// so each weight is its own static file. A face's weights share its
-/// typographic family name (`theme::FONT_CODE` = Geist Mono,
-/// `theme::FONT_UI` = Geist), and CoreText / DirectWrite resolve the right
-/// one from `.font_weight(..)` — never reach a weight by family name.
-/// Geist Mono comes first: the baseline correction is measured on it.
-pub(crate) static FONTS: [&[u8]; 10] = [
-    include_bytes!("../assets/fonts/GeistMono.ttf"),
-    include_bytes!("../assets/fonts/GeistMono-Italic.ttf"),
-    include_bytes!("../assets/fonts/GeistMono-Medium.ttf"),
-    include_bytes!("../assets/fonts/GeistMono-SemiBold.ttf"),
-    include_bytes!("../assets/fonts/GeistMono-Bold.ttf"),
-    include_bytes!("../assets/fonts/Geist.ttf"),
-    include_bytes!("../assets/fonts/Geist-Italic.ttf"),
-    include_bytes!("../assets/fonts/Geist-Medium.ttf"),
-    include_bytes!("../assets/fonts/Geist-SemiBold.ttf"),
-    include_bytes!("../assets/fonts/Geist-Bold.ttf"),
-];
-
-/// Registers the bundled faces. Call it before anything lays out text:
-/// `add_fonts` returns a Result, and a discarded one fails silently — you get
-/// the system font and no explanation.
-pub(crate) fn register_fonts(cx: &App) {
-    cx.text_system()
-        .add_fonts(
-            FONTS
-                .iter()
-                .map(|face| std::borrow::Cow::Owned(platform_text::browser_baseline(face)))
-                .collect(),
-        )
-        .expect("the bundled faces load");
 }
 
 /// The app: a Chromium helper, a capture, or the window. The binary has
@@ -259,7 +222,7 @@ pub fn launch() {
         .with_http_client(http_client())
         .run(move |cx: &mut App| {
             keep_mouse_cursor_visible(cx);
-            theme::init_components(cx);
+            crate::pane::init_components(cx);
             motion::init(cx);
             register_fonts(cx);
             visual::init(cx);
@@ -448,7 +411,7 @@ pub fn launch() {
                         // nothing (`paint::WINDOW`), so the blur reaches the
                         // regions' own fills.
                         let content =
-                            cx.new(|cx| loops_overlay::CockpitWindow::new(view, window, cx));
+                            cx.new(|cx| cockpit_window::CockpitWindow::new(view, window, cx));
                         // The Cockpit the window shows when it is asked:
                         // it is built afresh on another machine.
                         let closing = content.downgrade();
@@ -471,7 +434,7 @@ pub fn launch() {
                 .unwrap();
             // ⌘Q asks first while an agent works or a Decision waits — in
             // this process; a Server's agents keep running.
-            let cockpit_window: WeakEntity<loops_overlay::CockpitWindow> =
+            let cockpit_window: WeakEntity<cockpit_window::CockpitWindow> =
                 cockpit_window.expect("the window built its Cockpit");
             cx.on_action(move |_: &Quit, cx| {
                 let asked = window.update(cx, |_, window, cx| {
@@ -741,7 +704,7 @@ mod tests {
     #[gpui::test]
     fn binding_the_key_table_keeps_the_kits_keys(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init_components(cx);
+            crate::pane::init_components(cx);
             let kit = |cx: &mut gpui::App| {
                 cx.key_bindings()
                     .borrow()

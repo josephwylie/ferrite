@@ -25,180 +25,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    div, prelude::*, AnyElement, AnyView, App, AvailableSpace, Bounds, ContentMask, Context,
-    ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, LayoutId, Pixels,
-    StyleRefinement, TextStyle, TextStyleRefinement, Window, WindowId,
+    div, prelude::*, AnyElement, App, AvailableSpace, Bounds, ContentMask, Context, ElementId,
+    Entity, EntityId, GlobalElementId, InspectorElementId, LayoutId, Pixels, TextStyle,
+    TextStyleRefinement, Window, WindowId,
 };
-
-use crate::cockpit::{CockpitView, GoToMachine};
-
-/// Whether the overlay runs: on unless `FERRITE_LOOPS_OVERLAY=0`.
-fn enabled() -> bool {
-    #[cfg(test)]
-    if let Some(forced) = testing::FORCED.with(std::cell::Cell::get) {
-        return forced;
-    }
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("FERRITE_LOOPS_OVERLAY").map_or(true, |value| value.trim() != "0")
-    })
-}
-
-// ---------------------------------------------------------------- the window
-
-/// How long an alert the window went to another machine for waits for that
-/// machine to answer: more than ssh takes to reach one that is up. Later,
-/// the operator has moved on, and focus is not taken from them.
-const LANDING_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// The kit Root's view: the Cockpit, cached, and the loops over it. It
-/// also brings the window forward for a clicked system notification (ADR
-/// 0017), and puts the window on another machine (ADR 0026) by building
-/// the Cockpit afresh on it.
-pub struct CockpitWindow {
-    cockpit: Entity<CockpitView>,
-    overlay: Option<Entity<LoopsOverlay>>,
-    /// The Cockpit asking to be on another machine.
-    _going: gpui::Subscription,
-}
-
-impl CockpitWindow {
-    pub fn new(cockpit: Entity<CockpitView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_overlay(cockpit, enabled(), window, cx)
-    }
-
-    /// With the overlay, or without it (the Cockpit uncached, every loop
-    /// drawn in it): what `FERRITE_LOOPS_OVERLAY` picks, and what a parity
-    /// capture sets side by side.
-    pub fn with_overlay(
-        cockpit: Entity<CockpitView>,
-        overlay: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        // Over a cached Cockpit, its nav and Panes are cached parts too.
-        cockpit.update(cx, |view, cx| view.set_parts(overlay, cx));
-        let handle = window.window_handle();
-        let clicked = cx.entity().downgrade();
-        crate::system_notifications::on_click(
-            move |tag, cx| {
-                // alerter leaves bringing the app forward to its caller.
-                cx.activate(true);
-                let _ = handle.update(cx, |_, window, _| window.activate_window());
-                let _ = clicked.update(cx, |this, cx| {
-                    this.cockpit
-                        .update(cx, |view, cx| view.open_system_notification(tag, cx))
-                });
-            },
-            cx,
-        );
-        let going = Self::follow(&cockpit, window, cx);
-        let overlay = overlay.then(|| {
-            let overlay = cx.new(|_| LoopsOverlay);
-            let id = window.window_handle().window_id();
-            let view = overlay.entity_id();
-            with_marks(id, |marks| marks.overlay = Some(view));
-            cx.on_release(move |_, _| {
-                WINDOWS.with(|windows| windows.borrow_mut().remove(&id));
-            })
-            .detach();
-            overlay
-        });
-        Self {
-            cockpit,
-            overlay,
-            _going: going,
-        }
-    }
-
-    fn follow(
-        cockpit: &Entity<CockpitView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Subscription {
-        cx.subscribe_in(
-            cockpit,
-            window,
-            |this, _, going: &GoToMachine, window, cx| {
-                this.go_to(going.index, going.open.clone(), window, cx)
-            },
-        )
-    }
-
-    /// Put the window on machine `index`: a Cockpit attached there, with
-    /// the settings the window has now, which opens `open` once attached.
-    /// The one it leaves lets its machine's Threads go; that machine
-    /// streams status from here on.
-    fn go_to(
-        &mut self,
-        index: usize,
-        open: Option<crate::cockpit::Landing>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (machines, prefs, provider) = {
-            let view = self.cockpit.read(cx);
-            let Some(machines) = view.machines() else {
-                return;
-            };
-            (
-                machines,
-                view.successor_preferences(),
-                view.launch_provider(),
-            )
-        };
-        let left = machines.read(cx).selected_key();
-        let core = match machines.update(cx, |machines, _| machines.go_to(index)) {
-            Some(Ok(core)) => core,
-            Some(Err(error)) => {
-                ferrite_core::log!("the window could not go to that machine: {error}");
-                return;
-            }
-            None => return,
-        };
-        let arrived = machines.read(cx).selected_key();
-        let needs_you = self
-            .cockpit
-            .update(cx, |view, _| std::mem::take(&mut view.needs_you))
-            .moved(&left, &arrived);
-        let until = cx.background_executor().now() + LANDING_WAIT;
-        let view = cx.new(|cx| {
-            CockpitView::new_with_settings(core, provider, prefs, cx)
-                .with_machines(machines)
-                .with_needs_you(needs_you)
-                .with_landing(open, until)
-        });
-        view.update(cx, |view, cx| view.set_parts(self.overlay.is_some(), cx));
-        self.cockpit
-            .update(cx, |left, cx| left.take_server_bands(window, cx));
-        self._going = Self::follow(&view, window, cx);
-        self.cockpit = view;
-        cx.notify();
-    }
-
-    /// The Cockpit this window shows now.
-    pub fn cockpit(&self) -> &Entity<CockpitView> {
-        &self.cockpit
-    }
-}
-
-impl Render for CockpitWindow {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let shell = div().relative().size_full();
-        match &self.overlay {
-            // Rebuilt only when it, a view in it, or anything it read was
-            // notified; the overlay's own redraws replay it.
-            Some(overlay) => shell
-                .child(
-                    AnyView::from(self.cockpit.clone())
-                        .cached(StyleRefinement::default().size_full())
-                        .tracking_reads(),
-                )
-                .child(overlay.clone()),
-            None => shell.child(self.cockpit.clone()),
-        }
-    }
-}
 
 // ---------------------------------------------------------------- the marks
 
@@ -264,7 +94,7 @@ pub fn begin(window: &Window, owner: EntityId) {
 /// drawing it hosts its loops, the loop moves, and no drag's indicators
 /// must stay above it. In a float, an overlay layer at the float's priority
 /// draws it, right over the float.
-pub(crate) fn hosting(window: &Window, cx: &App) -> bool {
+pub fn hosting(window: &Window, cx: &App) -> bool {
     if cx.has_active_drag()
         || crate::motion::reduced_motion(cx)
         || crate::motion::held_loops().is_some()
@@ -443,7 +273,7 @@ impl Element for Hosted {
 /// text under it): `build` makes the element the overlay draws in its place,
 /// laid out over `bounds`. Call at prepaint; returns the slot whose opacity
 /// [`paint_hosted`] fills in.
-pub(crate) fn record(
+pub fn record(
     window: &Window,
     bounds: Bounds<Pixels>,
     build: impl Fn() -> AnyElement + 'static,
@@ -463,8 +293,7 @@ pub(crate) fn record(
 
 /// How many loops the overlay draws in `window` now (a parity capture's
 /// premise, the tests').
-#[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
-pub(crate) fn hosted_marks(window: &Window) -> usize {
+pub fn hosted_marks(window: &Window) -> usize {
     WINDOWS.with(|windows| {
         windows
             .borrow()
@@ -481,11 +310,25 @@ pub(crate) fn hosted_marks(window: &Window) -> usize {
 }
 
 /// At paint, the opacity a recorded loop would have been painted under.
-pub(crate) fn paint_hosted(window: &Window, slot: (EntityId, usize)) {
+pub fn paint_hosted(window: &Window, slot: (EntityId, usize)) {
     set_opacity(window, slot, window.element_opacity());
 }
 
 // ---------------------------------------------------------------- overlay
+
+/// The overlay for `window`, which hosts its loops until the view
+/// creating it (the window's root) is released.
+pub fn overlay<T: 'static>(window: &Window, cx: &mut Context<T>) -> Entity<LoopsOverlay> {
+    let overlay = cx.new(|_| LoopsOverlay);
+    let id = window.window_handle().window_id();
+    let view = overlay.entity_id();
+    with_marks(id, |marks| marks.overlay = Some(view));
+    cx.on_release(move |_, _| {
+        WINDOWS.with(|windows| windows.borrow_mut().remove(&id));
+    })
+    .detach();
+    overlay
+}
 
 /// The view that draws the hosted loops, above the Cockpit: those laid out
 /// in its main tree in one layer after it, and those laid out in a float in
@@ -496,7 +339,7 @@ pub struct LoopsOverlay;
 
 impl Render for LoopsOverlay {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         testing::OVERLAY_RENDERS.with(|renders| renders.set(renders.get() + 1));
         div().absolute().child(Layer::new(None)).children(
             LAYERS
@@ -657,37 +500,17 @@ impl Element for Layer {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing {
     use std::cell::Cell;
 
     thread_local! {
-        pub(super) static FORCED: Cell<Option<bool>> = const { Cell::new(None) };
         pub(super) static OVERLAY_RENDERS: Cell<usize> = const { Cell::new(0) };
-    }
-
-    /// This test's windows (its thread's) draw every loop in the Cockpit,
-    /// uncached: the behaviour before the overlay.
-    pub fn disable() {
-        FORCED.with(|forced| forced.set(Some(false)));
     }
 
     /// How many times this thread's overlays have drawn.
     pub fn overlay_renders() -> usize {
         OVERLAY_RENDERS.with(Cell::get)
-    }
-
-    /// The Cockpit under a kit Root's view (a test window's root).
-    pub fn cockpit(
-        view: &gpui::AnyView,
-        cx: &gpui::App,
-    ) -> gpui::Entity<crate::cockpit::CockpitView> {
-        view.clone()
-            .downcast::<super::CockpitWindow>()
-            .expect("the window's content")
-            .read(cx)
-            .cockpit()
-            .clone()
     }
 }
 

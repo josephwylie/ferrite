@@ -555,7 +555,7 @@ mod tests {
     #[gpui::test]
     fn the_strip_is_an_overlay_of_the_band(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init_components(cx);
+            crate::pane::init_components(cx);
             let mut strip = strip(crate::theme::NAV_WIDTH, true, false);
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));

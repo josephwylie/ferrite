@@ -183,7 +183,7 @@ fn an_open_palettes_caret_blinks_in_the_overlay_over_its_float(cx: &mut TestAppC
 /// overlay (the A-1 cadence, at most 37 in 5s).
 #[gpui::test]
 fn turned_off_the_overlay_leaves_every_loop_in_the_cockpit(cx: &mut TestAppContext) {
-    crate::loops_overlay::testing::disable();
+    crate::cockpit_window::testing::disable();
     let (_view, cx) = focused("overlay-off", 2, cx);
     assert_eq!(hosted(cx), 0, "no overlay");
     let before = renders();

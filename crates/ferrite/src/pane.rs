@@ -8139,6 +8139,31 @@ fn code_lines(
     vec![div().child(selection.line(block, source.to_string(), highlights))]
 }
 
+/// `theme::init_components`, with the transcript's code highlighting and
+/// keys: what every window and test window of the app calls.
+pub(crate) fn init_components(cx: &mut gpui::App) {
+    let defaults = gpui::base::text::TextViewDefaults::global(cx);
+    if !defaults.has_code_block_highlighter() {
+        // GPUI caches highlighting by callback identity. Install it once so
+        // unrelated pane renders do not highlight completed code again.
+        defaults
+            .with_code_block_highlighter(|block| {
+                let source = block.code();
+                let language = block.lang();
+                let tokens =
+                    ferrite_core::transcript::highlight_tokens(language.as_deref(), &source);
+                code(&source, Some(&tokens))
+            })
+            .install(cx);
+    }
+    let first = !cx.has_global::<gpui::component::Theme>();
+    crate::theme::init_components(cx);
+    if first {
+        crate::attachments::init(cx);
+        crate::rich::init(cx);
+    }
+}
+
 /// Syntax highlight runs for a code Block, or none while the highlighter is
 /// still thinking.
 pub(crate) fn code(
