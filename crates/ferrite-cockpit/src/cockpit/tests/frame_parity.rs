@@ -46,15 +46,15 @@ fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
             "the head starts at the Pane's corner: {head:?} / {rect:?}"
         );
         // The 38px row and its hairline under it.
-        assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
+        assert_eq!(head.size.height, px(ferrite_ui::theme::PANE_HEAD_H + 1.));
         let mark = bounds(cx, format!("pane-head-dot-{key}"));
         assert!(
-            (mark.left() - px(rect.x + crate::theme::PANE_HEAD_PAD_L)).abs() < px(1.),
+            (mark.left() - px(rect.x + ferrite_ui::theme::PANE_HEAD_PAD_L)).abs() < px(1.),
             "the mark 14px in: {mark:?} / {rect:?}"
         );
         let title = bounds(cx, format!("pane-head-title-{key}"));
         assert!(
-            (title.left() - (mark.right() + px(crate::theme::PANE_HEAD_GAP))).abs() < px(1.),
+            (title.left() - (mark.right() + px(ferrite_ui::theme::PANE_HEAD_GAP))).abs() < px(1.),
             "the title a gap after the mark: {title:?} / {mark:?}"
         );
         let root = bounds(cx, format!("pane-root-{key}"));
@@ -202,18 +202,18 @@ fn a_quick_answer_is_22px_and_as_wide_as_its_words(cx: &mut TestAppContext) {
         (key, rect)
     });
     let allow = bounds(cx, format!("wall-answer-{key}-allow"));
-    assert_eq!(allow.size.height, px(crate::theme::QUICK_ANSWER_H));
-    let width = 7.0 * crate::theme::CH + 2.0 * crate::theme::QUICK_ANSWER_PAD_X;
+    assert_eq!(allow.size.height, px(ferrite_ui::theme::QUICK_ANSWER_H));
+    let width = 7.0 * ferrite_ui::theme::CH + 2.0 * ferrite_ui::theme::QUICK_ANSWER_PAD_X;
     assert!(
         (allow.size.width - px(width)).abs() <= px(1.),
         "`1 allow` is {width}px: {allow:?}"
     );
     assert!(
-        (allow.left() - px(rect.x + crate::theme::WALL_PAD_X)).abs() <= px(0.5),
+        (allow.left() - px(rect.x + ferrite_ui::theme::WALL_PAD_X)).abs() <= px(0.5),
         "the first box two cells in: {allow:?} / {rect:?}"
     );
     assert!(
-        (px(rect.y + rect.h) - allow.bottom() - px(crate::theme::WALL_PAD_Y)).abs() <= px(0.5),
+        (px(rect.y + rect.h) - allow.bottom() - px(ferrite_ui::theme::WALL_PAD_Y)).abs() <= px(0.5),
         "half a row above the foot: {allow:?} / {rect:?}"
     );
 }
@@ -320,7 +320,7 @@ fn a_parked_member_is_its_tile_until_enter_wakes_it(cx: &mut TestAppContext) {
 /// widths change from frame to frame — in Solo and on a 4-up board.
 #[gpui::test]
 fn the_board_rides_the_sidebar_every_frame(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     for count in [1usize, 4] {
         let (mut core, _fake) = cockpit(&format!("frame-ride-{count}"), count);
         if count > 1 {
@@ -370,10 +370,10 @@ fn a_held_ride_sits_on_the_resize_curve(cx: &mut TestAppContext) {
         view.fixture_hold_nav(Some(0.5));
         view.nav_ride_now(cx).unwrap()
     });
-    let expected = crate::motion::lerp(
+    let expected = ferrite_ui::motion::lerp(
         nav::FOLDED_WIDTH,
         nav::WIDTH,
-        crate::motion::RESIZE.progress(0.5),
+        ferrite_ui::motion::RESIZE.progress(0.5),
     );
     assert!((column - expected).abs() < 0.01, "{column} / {expected}");
     view.update(cx, |view, cx| {
@@ -407,8 +407,8 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     step(Box::new(empty_board::Previous), cx);
     view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 4, "it wraps"));
     let recent = view.read_with(cx, |view, _| view.cockpit.threads().len());
-    assert!(recent > crate::theme::EMPTY_RECENT_MAX);
-    assert_eq!(crate::theme::EMPTY_RECENT_MAX, 4);
+    assert!(recent > ferrite_ui::theme::EMPTY_RECENT_MAX);
+    assert_eq!(ferrite_ui::theme::EMPTY_RECENT_MAX, 4);
     // Landing on a Thread leaves the empty board.
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     view.update(cx, |view, cx| view.focus_thread(thread, cx));
@@ -481,8 +481,8 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
     let (view, fake, cx, group) = board_of("frame-bar-vitals", 2, cx);
     let bar = cx.debug_bounds("bottom-bar").unwrap();
     let window = cx.update(|window, _| window.viewport_size());
-    assert_eq!(bar.size.height, px(crate::theme::STATUS_BAR_H));
-    assert_eq!(crate::theme::STATUS_BAR_H, 30.0);
+    assert_eq!(bar.size.height, px(ferrite_ui::theme::STATUS_BAR_H));
+    assert_eq!(ferrite_ui::theme::STATUS_BAR_H, 30.0);
     assert_eq!(
         (bar.left(), bar.right()),
         (px(0.), window.width),
@@ -586,8 +586,9 @@ fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
         })
     });
     tick(cx);
-    cx.executor()
-        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS + 50));
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_RESIZE_MS + 50,
+    ));
     tick(cx);
     let (line, narrowed) = cx.update(|window, cx| {
         let view = view.read(cx);
@@ -600,16 +601,17 @@ fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
     // The Panel widens to read it (SPEC §5.6.3): the board gives up what
     // it gains.
     let wide = view.read_with(cx, |view, _| view.board_right_rest());
-    assert!(wide > crate::theme::PANEL_W);
+    assert!(wide > ferrite_ui::theme::PANEL_W);
     assert!(
-        (narrowed - (whole - (wide - crate::theme::PANEL_W))).abs() <= 1.0,
+        (narrowed - (whole - (wide - ferrite_ui::theme::PANEL_W))).abs() <= 1.0,
         "the board gives way: {narrowed} of {whole}"
     );
     assert!(cx.debug_bounds("panel-preview").is_some());
     view.update(cx, |view, cx| view.close_preview(0, cx));
     tick(cx);
-    cx.executor()
-        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS + 50));
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_RESIZE_MS + 50,
+    ));
     tick(cx);
     let back = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1.w);
     assert!(
@@ -692,7 +694,7 @@ fn dragging_the_vertical_seam_moves_both_rows(cx: &mut TestAppContext) {
 /// the mockups' frame at their 1600×960.
 #[gpui::test]
 fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
-    use crate::theme::{BOARD_PAD, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
+    use ferrite_ui::theme::{BOARD_PAD, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
     let (core, _fake) = cockpit("frame-solo-card", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -725,7 +727,9 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
 /// `SEAM_LINE_W` line, both centred in the 8px gutter.
 #[gpui::test]
 fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
-    use crate::theme::{BOARD_PAD, GRID_GAP, PANEL_W, SEAM_LINE_W, STATUS_BAR_H, WIN_CHROME_H};
+    use ferrite_ui::theme::{
+        BOARD_PAD, GRID_GAP, PANEL_W, SEAM_LINE_W, STATUS_BAR_H, WIN_CHROME_H,
+    };
     let (view, _fake, cx, _group) = board_of("frame-group-cards", 4, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(960.)));
     tick(cx);
@@ -923,7 +927,7 @@ fn a_short_transcript_sits_at_the_bottom(cx: &mut TestAppContext) {
         let body = bounds(cx, format!("pane-body-{key}"));
         let prompt = cx.debug_bounds("transcript-prompt").expect("the prompt");
         let answer = cx.debug_bounds("transcript-answer").expect("the answer");
-        let pad = px(crate::theme::body_pad_b(!grouped));
+        let pad = px(ferrite_ui::theme::body_pad_b(!grouped));
         assert!(
             (body.bottom() - pad - answer.bottom()).abs() <= px(2.),
             "grouped {grouped}: the last row sits on the body's foot: {answer:?} / {body:?}"

@@ -8,8 +8,8 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, Context, SharedString};
 
 use super::BoardView;
-use crate::components;
-use crate::theme::{
+use ferrite_ui::components;
+use ferrite_ui::theme::{
     paint, CH, CONTROL_H, FS_UI, ICON_CHEVRON, LH_UI, ROW, SPACE_3, TEXT, TEXT_DIM,
 };
 
@@ -145,8 +145,8 @@ impl BoardView {
                     .line_height(px(LH_UI))
                     .text_color(rgb(TEXT))
                     .child(div().min_w_0().truncate().child(name))
-                    .child(crate::icons::icon(
-                        crate::icons::CHEVRON_DOWN,
+                    .child(ferrite_ui::icons::icon(
+                        ferrite_ui::icons::CHEVRON_DOWN,
                         ICON_CHEVRON,
                         TEXT_DIM,
                     )),

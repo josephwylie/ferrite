@@ -102,9 +102,9 @@ fn the_answer_mark_centres_on_a_leading_headings_line_box(cx: &mut TestAppContex
             view.panes[0].text_namespace(),
             block.markdown_run.unwrap_or(block.id)
         );
-        crate::rich::testing::bounds(&id, 0, cx).unwrap()
+        ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap()
     });
-    let line = crate::rich::heading_line_height(1, crate::theme::FS_PROSE);
+    let line = ferrite_pane::rich::heading_line_height(1, ferrite_ui::theme::FS_PROSE);
     assert!(
         (mark.top() + mark.size.height / 2. - (answer.top() + px(line / 2.))).abs() <= px(1.),
         "the mark centres on the heading's {line}px line box: {mark:?} / {answer:?}"

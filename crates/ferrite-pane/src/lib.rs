@@ -17,9 +17,6 @@ pub mod select;
 pub mod transcript;
 pub mod visual;
 
-// The shared UI, under the names the Pane has always used for it.
-use ferrite_ui::{components, icons, keymap, loops_overlay, menu, motion, pointer, theme};
-
 #[cfg(test)]
 mod tests {
     /// Rule 10 over the Pane's render code (`ferrite_ui::face`).

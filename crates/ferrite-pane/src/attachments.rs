@@ -80,8 +80,8 @@ impl Attachments {
 /// Enter never sends. A click anywhere else on a chip opens the image
 /// or the file.
 fn chips(attachments: Attachments) -> gpui::AnyElement {
-    use crate::pointer::Pointer as _;
-    use crate::theme;
+    use ferrite_ui::pointer::Pointer as _;
+    use ferrite_ui::theme;
     use gpui::{div, rgb, SharedString};
     let Attachments {
         id,
@@ -109,7 +109,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             let host = preview.clone();
             let open = path.clone();
             let gallery = gallery.clone();
-            crate::components::button(("preview-attachment", index))
+            ferrite_ui::components::button(("preview-attachment", index))
                 .tab_stop(true)
                 .p_0()
                 .size(px(theme::ATTACH_THUMB))
@@ -117,8 +117,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 .key_context("PromptAttachment")
                 .accessibility_label(format!("Preview {name}"))
                 .tooltip("Preview image")
-                .child(crate::icons::icon(
-                    crate::icons::IMAGE,
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::IMAGE,
                     theme::ATTACH_THUMB,
                     theme::LINK_INK,
                 ))
@@ -134,8 +134,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 .items_center()
                 .justify_center()
                 .size(px(theme::ATTACH_THUMB))
-                .child(crate::icons::icon(
-                    crate::icons::FILE,
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::FILE,
                     theme::ATTACH_THUMB,
                     theme::LINK_INK,
                 ))
@@ -174,7 +174,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .when_some(on_remove.clone(), |chip, remove| {
                 let removed = path.clone();
                 chip.child(
-                    crate::components::button(("remove-attachment", index))
+                    ferrite_ui::components::button(("remove-attachment", index))
                         .tab_stop(true)
                         .p_0()
                         .flex_shrink_0()
@@ -216,7 +216,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
 /// The draft's review comments as one `.att` chip: the pencil, `N review
 /// comments` in `LINK_INK`, and a quiet `×` that drops them all.
 fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
-    use crate::theme;
+    use ferrite_ui::theme;
     use gpui::{div, rgb, SharedString};
     let label = format!(
         "{comments} review comment{}",
@@ -238,15 +238,15 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
         .font_weight(theme::W_BODY)
         .text_color(rgb(theme::LINK_INK))
         .whitespace_nowrap()
-        .child(crate::icons::icon(
-            crate::icons::PENCIL,
+        .child(ferrite_ui::icons::icon(
+            ferrite_ui::icons::PENCIL,
             theme::ATTACH_THUMB,
             theme::LINK_INK,
         ))
         .child(SharedString::from(label))
         .when_some(on_drop, |chip, on_drop| {
             chip.child(
-                crate::components::button("drop-review-comments")
+                ferrite_ui::components::button("drop-review-comments")
                     .debug_selector(|| "drop-review-comments".into())
                     .tab_stop(true)
                     .p_0()
@@ -291,7 +291,7 @@ pub fn inline_file(
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
-    use crate::theme;
+    use ferrite_ui::theme;
     use gpui::component::button::ButtonVariants as _;
     use gpui::rgb;
 
@@ -391,8 +391,8 @@ pub fn inline_file(
     // The click and keyboard target lies over the link and draws nothing but
     // the focus ring.
     let clear: gpui::Hsla = gpui::transparent_black();
-    let button = crate::components::button("inline-file-action")
-        .custom(crate::pointer::button_variant(
+    let button = ferrite_ui::components::button("inline-file-action")
+        .custom(ferrite_ui::pointer::button_variant(
             clear,
             rgb(theme::LINK_INK).into(),
             clear,
@@ -433,7 +433,7 @@ fn inline_file_advance(
     size: gpui::Pixels,
     window: &mut Window,
 ) -> gpui::Pixels {
-    use crate::theme;
+    use ferrite_ui::theme;
     let mut face = window.text_style();
     face.font_family = theme::FONT_CODE.into();
     face.font_weight = theme::W_BODY;
@@ -471,7 +471,7 @@ pub(crate) fn inline_file_width(
     size: gpui::Pixels,
     window: &mut Window,
 ) -> gpui::Pixels {
-    use crate::theme;
+    use ferrite_ui::theme;
     let mut face = window.text_style();
     face.font_family = theme::FONT_CODE.into();
     face.font_weight = theme::W_BODY;

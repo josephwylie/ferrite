@@ -5,7 +5,7 @@ use gpui::component::input::{Textarea, TextareaState};
 use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, Focusable, SharedString, Window};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use crate::theme;
+use ferrite_ui::theme;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([gpui::KeyBinding::new(
@@ -575,7 +575,7 @@ impl gpui::Render for CodeActions {
         let shown = if revealed {
             1.
         } else {
-            crate::motion::hover_t(&self.key)
+            ferrite_ui::motion::hover_t(&self.key)
         };
         // The transcript around this overlay is a cached view: while the
         // blend is mid-flight, ask for the next frame's render here (the
@@ -640,7 +640,7 @@ impl gpui::Render for CodeActions {
             gpui::div()
                 .id("copy-code-tip")
                 .flex_shrink_0()
-                .tooltip(crate::menu::action_tooltip(
+                .tooltip(ferrite_ui::menu::action_tooltip(
                     "Copy",
                     "cockpit::CopySelection",
                 ))
@@ -681,7 +681,7 @@ impl gpui::Render for CodeActions {
             .debug_selector(|| "code-overlay".into())
             .relative()
             .size_full()
-            .on_hover(crate::motion::hover_listener(self.key.clone()))
+            .on_hover(ferrite_ui::motion::hover_listener(self.key.clone()))
             .child(actions)
     }
 }
@@ -690,7 +690,7 @@ impl gpui::Render for CodeActions {
 /// ground, the hover overlay under the pointer (the one 150ms blend),
 /// pressed at once, a stable `CODE_ACTION_MIN_W` target one row high.
 fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
-    crate::components::faded_button(
+    ferrite_ui::components::faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
         theme::paint::RAISED.into(),
@@ -806,7 +806,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         // sets on the next whole pixel — its baseline 15px into the cell.
         // The full line, a pixel down inside the cell's own height, puts it
         // there.
-        .with_table_cell(crate::components::tabular(
+        .with_table_cell(ferrite_ui::components::tabular(
             gpui::StyleRefinement::default()
                 .border_r_0()
                 .px(px(cell))
@@ -850,7 +850,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
         }))
         .with_list_markers(
             gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
-            crate::components::tabular(
+            ferrite_ui::components::tabular(
                 gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
             ),
         )

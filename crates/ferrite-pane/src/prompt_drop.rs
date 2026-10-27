@@ -3,7 +3,8 @@
 //! and remembers which Pane the files hover, so the Pane can draw its drop
 //! sheet beneath the Composer that will receive them.
 
-use crate::{composer::Composer, theme};
+use crate::composer::Composer;
+use ferrite_ui::theme;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, Div, Entity, ExternalPaths, Focusable, Window};
 

@@ -257,7 +257,7 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
 /// with their Group.
 #[gpui::test]
 fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
-    use crate::theme::{
+    use ferrite_ui::theme::{
         NAV_GROUP_GUIDE_X, NAV_GUIDE_TAIL, NAV_GUIDE_W, NAV_MEMBER_X, NAV_PROJECT_GUIDE_X,
         NAV_ROW_H, NAV_TITLE_X, NAV_TREE_INDENT,
     };
@@ -393,7 +393,7 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
 /// folds it there as in the tree.
 #[gpui::test]
 fn the_parked_view_groups_by_project_then_group(cx: &mut TestAppContext) {
-    use crate::theme::{NAV_TITLE_X, NAV_TREE_INDENT};
+    use ferrite_ui::theme::{NAV_TITLE_X, NAV_TREE_INDENT};
     let (mut core, _fake) = cockpit("nav-parked-tree", 3);
     let threads = core.threads();
     let group = core
@@ -461,7 +461,7 @@ fn the_parked_view_groups_by_project_then_group(cx: &mut TestAppContext) {
 /// column's edge, and every row ends before it.
 #[gpui::test]
 fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
-    use crate::theme::NAV_SCROLLBAR_GUTTER;
+    use ferrite_ui::theme::NAV_SCROLLBAR_GUTTER;
     let (core, _fake) = cockpit("nav-scrollbar-gutter", 2);
     let threads = sorted_threads(&core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -517,7 +517,7 @@ fn the_board_starts_at_the_nav_edge(cx: &mut TestAppContext) {
 /// Test-clock samples.
 #[gpui::test]
 fn the_content_fades_on_its_own_clock_while_the_width_rides(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let (core, _fake) = cockpit("nav-content-fade", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -525,7 +525,7 @@ fn the_content_fades_on_its_own_clock_while_the_width_rides(cx: &mut TestAppCont
     let sample = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             let now = cx.background_executor().now();
-            let reduced = crate::motion::reduced_motion(cx);
+            let reduced = ferrite_ui::motion::reduced_motion(cx);
             (
                 view.nav_content_opacity(now, reduced),
                 view.nav_ride_now(cx).unwrap_or_else(|| view.nav_width()),
@@ -537,7 +537,7 @@ fn the_content_fades_on_its_own_clock_while_the_width_rides(cx: &mut TestAppCont
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     cx.executor().advance_clock(Duration::from_millis(75));
     let (fade, width) = sample(&view, cx);
-    let eased = crate::motion::EASE.eval(0.5);
+    let eased = ferrite_ui::motion::EASE.eval(0.5);
     assert!(
         (fade - (1.0 - eased)).abs() < 0.02,
         "folding, half-way through its 150ms on CSS ease: {fade}"
@@ -757,7 +757,7 @@ fn the_folded_nav_is_a_keyed_rail(cx: &mut TestAppContext) {
     for thread in &threads {
         let id: &'static str = format!("nav-rail-{}", thread.get()).leak();
         let line = cx.debug_bounds(id).expect("a line per open Thread");
-        assert_eq!(line.size.height, px(crate::theme::NAV_RAIL_CELL));
+        assert_eq!(line.size.height, px(ferrite_ui::theme::NAV_RAIL_CELL));
         assert!(line.top() >= above, "in the tree's order");
         above = line.bottom();
     }

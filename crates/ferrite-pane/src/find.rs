@@ -20,7 +20,7 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, Context, Div, Entity, HighlightStyle, SharedString, Window};
 
 use crate::composer::{Composer, Edited, Role};
-use crate::theme::*;
+use ferrite_ui::theme::*;
 
 // ⌘F opens the bar (or takes the keyboard back to it); the others are its
 // own keys, in the `Find` context.
@@ -275,7 +275,7 @@ impl Find {
     /// text it searches (`relative`). A host narrower than the bar narrows
     /// the query, never the count. It opens like every float (`menu_in`).
     pub fn bar(&self) -> Div {
-        let bar = crate::menu::float()
+        let bar = ferrite_ui::menu::float()
             .debug_selector(|| "find-bar".into())
             .w(px(FIND_W))
             .min_w_0()
@@ -287,8 +287,8 @@ impl Find {
                     .gap(px(SPACE_2))
                     .h(px(FLOAT_ROW_H))
                     .px(px(FLOAT_PAD_X))
-                    .child(crate::icons::icon(
-                        crate::icons::SEARCH,
+                    .child(ferrite_ui::icons::icon(
+                        ferrite_ui::icons::SEARCH,
                         FIND_ICON,
                         TEXT_DIM,
                     ))
@@ -318,10 +318,10 @@ impl Find {
             .right(px(TX_INSET_GROUP))
             .flex()
             .justify_end()
-            .child(crate::motion::menu_in(
+            .child(ferrite_ui::motion::menu_in(
                 "find-bar-in",
                 bar,
-                crate::motion::Opens::Down,
+                ferrite_ui::motion::Opens::Down,
             ))
     }
 

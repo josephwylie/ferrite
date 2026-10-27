@@ -103,7 +103,7 @@ impl RowKind {
 /// body's own top padding instead).
 pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32) -> f32 {
     use RowKind::*;
-    let line = crate::theme::prose_line_height(reading);
+    let line = ferrite_ui::theme::prose_line_height(reading);
     let Some(previous) = previous else {
         return if kind == Prompt { 0. } else { line };
     };
@@ -608,7 +608,7 @@ mod tests {
     };
 
     /// Answers at the Standard reading size.
-    const READING: f32 = crate::theme::FS_PROSE;
+    const READING: f32 = ferrite_ui::theme::FS_PROSE;
 
     fn shape() -> RowShape {
         RowShape {
@@ -834,7 +834,7 @@ mod tests {
         );
         // The old head is now a later turn's prompt: its gap grew from
         // flush to one blank line, so only it is re-measured.
-        assert_eq!(rows.get(2).unwrap().gap(), crate::theme::LH_PROSE);
+        assert_eq!(rows.get(2).unwrap().gap(), ferrite_ui::theme::LH_PROSE);
         assert_eq!(delta.remeasure, vec![2]);
         assert!(Rc::ptr_eq(&old[1], rows.get(3).unwrap()));
     }
@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn the_gap_table_spaces_blocks_a_line_apart_and_runs_flush() {
         use RowKind::*;
-        let line = crate::theme::LH_PROSE;
+        let line = ferrite_ui::theme::LH_PROSE;
         let prose = Answer { commentary: false };
         let commentary = Answer { commentary: true };
         let stamp = TurnEnd { hangs: false };
@@ -1054,8 +1054,8 @@ mod tests {
 
     #[test]
     fn the_blank_line_scales_with_the_reading_size_and_runs_stay_flush() {
-        use crate::theme::answer_text_size;
         use ferrite_core::settings::ReadingSize;
+        use ferrite_ui::theme::answer_text_size;
         use RowKind::*;
         let prose = Answer { commentary: false };
         let call = Activity { diff_shown: false };
@@ -1069,7 +1069,11 @@ mod tests {
             assert_eq!(gap_before(Some(prose), Prompt, reading), line, "{size:?}");
             assert_eq!(gap_before(Some(Prompt), prose, reading), line, "{size:?}");
             assert_eq!(gap_before(Some(call), call, reading), 0.);
-            assert_eq!(line, crate::theme::answer_line_height(size), "{size:?}");
+            assert_eq!(
+                line,
+                ferrite_ui::theme::answer_line_height(size),
+                "{size:?}"
+            );
         }
     }
 
@@ -1082,7 +1086,7 @@ mod tests {
         let mut rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
         let first = rows.get(0).unwrap().clone();
         let large =
-            crate::theme::answer_text_size(ferrite_core::settings::ReadingSize::nearest(18));
+            ferrite_ui::theme::answer_text_size(ferrite_core::settings::ReadingSize::nearest(18));
         let delta = rows.reconcile(transcript.blocks(), &shape(), large);
         assert!(delta.splices.is_empty());
         assert_eq!(delta.remeasure, vec![1, 2]);
@@ -1114,7 +1118,7 @@ mod tests {
             ]
         );
         let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
-        let line = crate::theme::LH_PROSE;
+        let line = ferrite_ui::theme::LH_PROSE;
         assert_eq!(
             gaps,
             vec![0., line, line, 0.],
@@ -1162,10 +1166,10 @@ mod tests {
         let mut transcript = Transcript::default();
         prompt(&mut transcript, "go");
         text(&mut transcript, "answer");
-        let line = crate::theme::LH_PROSE;
+        let line = ferrite_ui::theme::LH_PROSE;
         let solo = RowShape {
             banner: true,
-            banner_pad: crate::theme::BANNER_PAD_T,
+            banner_pad: ferrite_ui::theme::BANNER_PAD_T,
             tail: Some(7),
             ..RowShape::default()
         };
@@ -1173,7 +1177,7 @@ mod tests {
         let ids: Vec<_> = rows.rows().iter().map(|row| row.id().clone()).collect();
         assert_eq!(ids.first(), Some(&RowId::Banner));
         assert_eq!(ids.last(), Some(&RowId::Tail));
-        assert_eq!(rows.get(0).unwrap().gap(), crate::theme::BANNER_PAD_T);
+        assert_eq!(rows.get(0).unwrap().gap(), ferrite_ui::theme::BANNER_PAD_T);
         assert_eq!(
             rows.get(1).unwrap().gap(),
             line,
@@ -1239,7 +1243,7 @@ mod tests {
             .filter(|row| matches!(row.kind(), RowKind::Activity { .. }))
             .map(|row| (row.diff_shown(), row.diff_folds(), row.gap()))
             .collect();
-        let line = crate::theme::LH_PROSE;
+        let line = ferrite_ui::theme::LH_PROSE;
         assert_eq!(
             calls,
             vec![

@@ -72,7 +72,7 @@ fn card_right(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> f
 /// minimum, and the board gives up its column.
 #[gpui::test]
 fn the_panel_never_hides_for_width(cx: &mut TestAppContext) {
-    use crate::theme::{PANEL_W, WINDOW_MIN_H, WINDOW_MIN_W};
+    use ferrite_ui::theme::{PANEL_W, WINDOW_MIN_H, WINDOW_MIN_W};
     let (view, cx) = solo("panel-any-width", 1, 1600., cx);
     for width in [1600., 1150., 900., WINDOW_MIN_W] {
         cx.simulate_resize(gpui::size(px(width), px(900.)));
@@ -118,7 +118,7 @@ fn the_panel_follows_the_focused_group_pane(cx: &mut TestAppContext) {
     assert_eq!(shown(&view, cx), Some(threads[0]), "fullscreen keeps it");
     let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
     let card = rects[0].1;
-    assert_eq!(card.x + card.w, 1600. - crate::theme::PANEL_W);
+    assert_eq!(card.x + card.w, 1600. - ferrite_ui::theme::PANEL_W);
     cx.simulate_keystrokes("cmd-shift-enter");
     tick(cx);
 
@@ -195,7 +195,7 @@ fn toggle_panel_flips_the_saved_setting(cx: &mut TestAppContext) {
     assert!(!saved(&view, cx), "and saves that");
     assert_eq!(
         card_right(&view, cx),
-        1600. - crate::theme::BOARD_PAD,
+        1600. - ferrite_ui::theme::BOARD_PAD,
         "the Pane takes its width"
     );
     cx.simulate_keystrokes("cmd-alt-b");
@@ -223,7 +223,7 @@ fn toggle_sits_in_one_place(
     cx: &mut gpui::VisualTestContext,
     which: &str,
 ) {
-    use crate::theme::PANEL_W;
+    use ferrite_ui::theme::PANEL_W;
     let panel = cx.debug_bounds("panel").expect("shown");
     let shown = cx.debug_bounds("panel-toggle").expect("the panel's toggle");
     assert!(

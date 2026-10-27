@@ -76,9 +76,9 @@ pub(crate) fn press_of(keystroke: &Keystroke) -> Option<Press> {
 
 /// ⌘V (ctrl-V on Windows): the clipboard goes in as one paste.
 pub(crate) fn is_paste(keystroke: &Keystroke) -> bool {
-    let primary = match crate::keymap::PLATFORM {
-        crate::keymap::Platform::Mac => keystroke.modifiers.platform,
-        crate::keymap::Platform::Windows => keystroke.modifiers.control,
+    let primary = match ferrite_ui::keymap::PLATFORM {
+        ferrite_ui::keymap::Platform::Mac => keystroke.modifiers.platform,
+        ferrite_ui::keymap::Platform::Windows => keystroke.modifiers.control,
     };
     primary && keystroke.key == "v"
 }

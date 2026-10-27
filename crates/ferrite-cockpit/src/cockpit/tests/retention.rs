@@ -153,7 +153,7 @@ fn path_scopes_follow_live_transcripts_not_every_history_generation(cx: &mut Tes
     );
     let main = view.read_with(cx, |view, _| view.panes[0].text_namespace());
     assert_eq!(
-        cx.update(|_, cx| crate::file_links::scopes(cx)),
+        cx.update(|_, cx| ferrite_pane::file_links::scopes(cx)),
         (vec![main.clone()], vec![main.clone()]),
         "only the live transcript routes ⌘-click and keeps laid-out targets"
     );
@@ -168,9 +168,15 @@ fn path_scopes_follow_live_transcripts_not_every_history_generation(cx: &mut Tes
         both.sort();
         both
     };
-    assert_eq!(cx.update(|_, cx| crate::file_links::scopes(cx)).0, both);
+    assert_eq!(
+        cx.update(|_, cx| ferrite_pane::file_links::scopes(cx)).0,
+        both
+    );
     select(&view, Subject::Main, cx);
-    assert_eq!(cx.update(|_, cx| crate::file_links::scopes(cx)).0, both);
+    assert_eq!(
+        cx.update(|_, cx| ferrite_pane::file_links::scopes(cx)).0,
+        both
+    );
 
     // ⌘-click on the live transcript's link still opens its reader (the
     // reader opens in the active window).

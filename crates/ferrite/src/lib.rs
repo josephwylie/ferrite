@@ -576,8 +576,9 @@ mod tests {
     /// Rule 10 over the app's render code (`ferrite_ui::face`).
     #[test]
     fn render_code_draws_only_covered_glyphs() {
-        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[
-            ("lib.rs", include_str!("lib.rs")),
-        ]);
+        ferrite_ui::face::assert_render_code_draws_only_covered_glyphs(&[(
+            "lib.rs",
+            include_str!("lib.rs"),
+        )]);
     }
 }

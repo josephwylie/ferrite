@@ -37,11 +37,11 @@ use gpui::{
 };
 
 use crate::cockpit::Attention;
-use crate::components;
-use crate::composer::{Composer, Edited, Role};
 use crate::nav::RowStatus;
-use crate::pointer::{Pointer, PointerPressed};
-use crate::theme::*;
+use ferrite_pane::composer::{Composer, Edited, Role};
+use ferrite_ui::components;
+use ferrite_ui::pointer::{Pointer, PointerPressed};
+use ferrite_ui::theme::*;
 
 gpui::actions!(
     palette,
@@ -95,7 +95,7 @@ impl Section {
 
 /// The status filter's name, at the input row's right while it is on.
 fn filter_word(filter: Attention) -> &'static str {
-    use crate::theme::words;
+    use ferrite_ui::theme::words;
     match filter {
         Attention::Blocked => words::BLOCKED,
         Attention::Working => words::WORKING,
@@ -168,7 +168,7 @@ impl Command {
     /// that says the act (`command-search.png`: `plus`, `branch`, `board`);
     /// the rest hold the column empty.
     fn icon(&self) -> Option<&'static str> {
-        use crate::icons::*;
+        use ferrite_ui::icons::*;
         Some(match self {
             Command::NewThread
             | Command::NewThreadIn(_)
@@ -517,7 +517,7 @@ impl Render for Palette {
         };
         // It comes in as every sheet does (`dialog-in`), over its veil
         // darkening in (`cockpit::palette`); it closes at once.
-        crate::motion::dialog_in_casting(
+        ferrite_ui::motion::dialog_in_casting(
             "palette-in",
             dialog()
                 .debug_selector(|| "palette".into())
@@ -577,8 +577,8 @@ pub(crate) fn input_row(selector: &'static str, input: Entity<Composer>) -> gpui
         .px(px(PALETTE_PAD_X))
         .border_b_1()
         .border_color(gpui::rgba(HAIRLINE))
-        .child(crate::icons::icon(
-            crate::icons::SEARCH,
+        .child(ferrite_ui::icons::icon(
+            ferrite_ui::icons::SEARCH,
             PALETTE_SEARCH_ICON,
             TEXT_DIM,
         ))
@@ -643,9 +643,9 @@ pub(crate) fn footer_row(left: SharedString, right: String) -> gpui::Div {
 fn mark(row: &Row) -> Option<gpui::AnyElement> {
     match (row.status, &row.act) {
         (Some(status), _) => Some(crate::nav::mark(status, false)),
-        (None, Act::Command(command)) => command
-            .icon()
-            .map(|icon| crate::icons::icon(icon, PALETTE_MARK_ICON, TEXT_DIM).into_any_element()),
+        (None, Act::Command(command)) => command.icon().map(|icon| {
+            ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, TEXT_DIM).into_any_element()
+        }),
         _ => None,
     }
 }
@@ -664,7 +664,7 @@ fn row_element(
     cursor: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let id = gpui::ElementId::from(("palette-row", at));
-    let key = crate::pointer::hover_key(&id);
+    let key = ferrite_ui::pointer::hover_key(&id);
     let ink = if cursor { TEXT_STRONG } else { TEXT };
     let name =
         StyledText::new(row.name.clone()).with_highlights(components::match_highlights(lit, false));
@@ -708,8 +708,8 @@ fn row_element(
             element.child(div().flex().flex_shrink_0().w(px(PALETTE_ENTER_ICON)).when(
                 cursor,
                 |cell| {
-                    cell.child(crate::icons::icon(
-                        crate::icons::CORNER_DOWN_LEFT,
+                    cell.child(ferrite_ui::icons::icon(
+                        ferrite_ui::icons::CORNER_DOWN_LEFT,
                         PALETTE_ENTER_ICON,
                         TEXT_DIM,
                     ))
@@ -872,12 +872,12 @@ mod tests {
     fn headings_and_command_icons_follow_the_mockup() {
         assert_eq!(Section::Threads.title(), "Threads");
         assert_eq!(Section::Commands.title(), "Commands");
-        assert_eq!(Command::NewThread.icon(), Some(crate::icons::PLUS));
+        assert_eq!(Command::NewThread.icon(), Some(ferrite_ui::icons::PLUS));
         assert_eq!(
             Command::NewWorktreeThread.icon(),
-            Some(crate::icons::BRANCH)
+            Some(ferrite_ui::icons::BRANCH)
         );
-        assert_eq!(Command::OpenGroup.icon(), Some(crate::icons::BOARD));
+        assert_eq!(Command::OpenGroup.icon(), Some(ferrite_ui::icons::BOARD));
         assert_eq!(Command::SortCreated.icon(), None);
     }
 }

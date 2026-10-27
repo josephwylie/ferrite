@@ -17,8 +17,8 @@ use gpui::{
     div, prelude::*, px, rgb, App, ClickEvent, ElementId, IntoElement, SharedString, Window,
 };
 
-use crate::pointer::Pointer;
-use crate::theme;
+use ferrite_ui::pointer::Pointer;
+use ferrite_ui::theme;
 
 type Stop = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 
@@ -109,10 +109,10 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
         .line_height(px(theme::LH_META))
         .whitespace_nowrap()
         .text_color(rgb(theme::TEXT))
-        .tooltip(crate::menu::tooltip(tooltip))
+        .tooltip(ferrite_ui::menu::tooltip(tooltip))
         // Working is the normal state: a still dot (theme rule 8 — one
         // thing moves, and it is the working line).
-        .child(crate::components::status_dot(theme::RUNNING))
+        .child(ferrite_ui::components::status_dot(theme::RUNNING))
         .child(div().min_w_0().truncate().child(label));
     if let Some(stop) = on_stop {
         let id = task.id.clone();

@@ -190,9 +190,9 @@ fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
         (cx.debug_bounds("nav-column").unwrap().size.width - px(nav::FOLDED_WIDTH)).abs() < px(0.5)
     );
     let toggle = bounds(cx, "nav-rail-collapse".to_string());
-    assert!(toggle.top() >= px(crate::theme::WIN_CHROME_H) - px(0.5));
+    assert!(toggle.top() >= px(ferrite_ui::theme::WIN_CHROME_H) - px(0.5));
     assert!(toggle.right() <= px(nav::FOLDED_WIDTH));
-    assert_eq!(toggle.size.width, px(crate::theme::ICON_BUTTON));
+    assert_eq!(toggle.size.width, px(ferrite_ui::theme::ICON_BUTTON));
     assert!(
         cx.debug_bounds("nav-collapse").is_none(),
         "the bar no longer carries it"

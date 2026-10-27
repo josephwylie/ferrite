@@ -1410,7 +1410,7 @@ mod tests {
     /// permission-waits.
     #[test]
     fn the_demo_seeds_deal_the_wall_census() {
-        use crate::pane::{wall_state, Turn, WallCard, WallState};
+        use ferrite_pane::pane::{wall_state, Turn, WallCard, WallState};
         let mut census = Vec::new();
         for variant in 0..SEEDS {
             let mut transcript = Transcript::default();
@@ -1485,13 +1485,13 @@ mod tests {
     }
 
     // The Pane's own readings of the demo's Decision.
-    use crate::decision;
-    use crate::pane::{approval_input, shell_command, wall_state, Turn, WallState};
+    use ferrite_pane::decision;
+    use ferrite_pane::pane::{approval_input, shell_command, wall_state, Turn, WallState};
     use gpui::prelude::*;
     use gpui::{div, px, size, Context, Render, TestAppContext};
 
     struct ShowsDecisions {
-        cache: crate::rich::TextCache,
+        cache: ferrite_pane::rich::TextCache,
         decisions: Vec<Decision>,
     }
 
@@ -1505,9 +1505,9 @@ mod tests {
                 .flex()
                 .flex_col()
                 .w(px(900.))
-                .font_family(crate::theme::FONT_UI)
-                .text_size(px(crate::theme::FS_UI))
-                .line_height(px(crate::theme::LH_UI))
+                .font_family(ferrite_ui::theme::FONT_UI)
+                .text_size(px(ferrite_ui::theme::FS_UI))
+                .line_height(px(ferrite_ui::theme::LH_UI))
                 .children(self.decisions.iter().enumerate().map(|(at, decision)| {
                     let rows = decision::approval_rows(decision, None, None)
                         .into_iter()

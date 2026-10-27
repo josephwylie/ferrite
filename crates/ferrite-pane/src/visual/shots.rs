@@ -62,7 +62,7 @@ pub fn snapshots(output: String) {
     let platform = gpui::platform::current_platform(true);
     let mut cx = HeadlessAppContext::with_platform(
         platform.text_system(),
-        std::sync::Arc::new(crate::icons::Assets),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
         gpui::platform::current_headless_renderer,
     );
     cx.update(super::init);

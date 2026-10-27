@@ -34,12 +34,12 @@
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
-use crate::theme::paint;
+use ferrite_ui::theme::paint;
 
-use crate::components;
-use crate::icons::{self, icon};
-use crate::pointer::{Pointer, PointerPressed};
-use crate::theme::*;
+use ferrite_ui::components;
+use ferrite_ui::icons::{self, icon};
+use ferrite_ui::pointer::{Pointer, PointerPressed};
+use ferrite_ui::theme::*;
 
 /// Whether this build is an unreleased one. `--release` is not the
 /// question — a locally built release binary is still a dev build, and
@@ -319,7 +319,8 @@ pub fn bar_tab(
 pub fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
     (count > 0).then(|| {
         let blend = SharedString::from("bottom-bar-needs-you");
-        let ink = crate::motion::hover_blend(&blend, rgb(TEXT_BAR).into(), rgb(TEXT_STRONG).into());
+        let ink =
+            ferrite_ui::motion::hover_blend(&blend, rgb(TEXT_BAR).into(), rgb(TEXT_STRONG).into());
         div()
             .id("bottom-bar-needs-you")
             .debug_selector(|| "bottom-bar-needs-you".into())
@@ -328,7 +329,7 @@ pub fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
             .items_center()
             .gap(px(SPACE_1_5))
             .cursor_pointer()
-            .on_hover(crate::motion::hover_listener(blend))
+            .on_hover(ferrite_ui::motion::hover_listener(blend))
             .child(bar_dot(BAR_NEED_DOT, ATTENTION))
             .child(
                 components::tabular(div().text_color(ink))
@@ -555,8 +556,8 @@ mod tests {
     #[gpui::test]
     fn the_strip_is_an_overlay_of_the_band(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::pane::init_components(cx);
-            let mut strip = strip(crate::theme::NAV_WIDTH, true, false);
+            ferrite_pane::pane::init_components(cx);
+            let mut strip = strip(ferrite_ui::theme::NAV_WIDTH, true, false);
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });

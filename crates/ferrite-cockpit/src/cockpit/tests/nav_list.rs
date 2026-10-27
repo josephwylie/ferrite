@@ -18,10 +18,11 @@ fn a_thread_row_is_two_lines_on_one_edge(cx: &mut TestAppContext) {
     let row = cx.debug_bounds(id("nav-thread")).expect("the row");
     let title = cx.debug_bounds(id("nav-title")).expect("line 1");
     let two = cx.debug_bounds(id("nav-line2")).expect("line 2");
-    assert_eq!(row.size.height, px(crate::theme::NAV_ROW2_H));
+    assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_ROW2_H));
     assert!(
         (title.left()
-            - (row.left() + px(crate::theme::NAV_TITLE_X + crate::theme::NAV_TREE_INDENT)))
+            - (row.left()
+                + px(ferrite_ui::theme::NAV_TITLE_X + ferrite_ui::theme::NAV_TREE_INDENT)))
         .abs()
             < px(0.5),
         "the title at 35, a level in: {title:?} in {row:?}"
@@ -68,7 +69,7 @@ fn two_decisions_mark_their_rows_and_their_group_and_no_toast(cx: &mut TestAppCo
             assert_eq!(row.status, nav::RowStatus::NeedsYou);
             assert_eq!(
                 row.tail,
-                nav::NavTail::Waiting(crate::theme::words::APPROVAL),
+                nav::NavTail::Waiting(ferrite_ui::theme::words::APPROVAL),
                 "the word says what it waits for"
             );
         }
@@ -134,7 +135,7 @@ fn the_needs_you_view_lists_the_queue_in_the_trees_place(cx: &mut TestAppContext
     let row = |thread: ThreadId| -> &'static str { format!("nav-thread-{}", thread.get()).leak() };
     let oldest = cx.debug_bounds(row(threads[2])).expect("a two-line row");
     assert!(first.contains(&oldest.center()), "oldest first");
-    assert_eq!(oldest.size.height, px(crate::theme::NAV_ROW2_H));
+    assert_eq!(oldest.size.height, px(ferrite_ui::theme::NAV_ROW2_H));
     // The queue stays flat: no Project heading, no guide, every row at
     // the root, so its order is the queue's.
     assert!(cx.debug_bounds("nav-view-project-0").is_none());
@@ -145,7 +146,7 @@ fn the_needs_you_view_lists_the_queue_in_the_trees_place(cx: &mut TestAppContext
         .debug_bounds(format!("nav-title-{}", threads[2].get()).leak())
         .expect("its title");
     assert!(
-        (title.left() - oldest.left() - px(crate::theme::NAV_TITLE_X)).abs() < px(0.5),
+        (title.left() - oldest.left() - px(ferrite_ui::theme::NAV_TITLE_X)).abs() < px(0.5),
         "at the root"
     );
     assert!(cx
@@ -310,7 +311,11 @@ fn the_attention_list_lists_needs_you_then_done_then_working(cx: &mut TestAppCon
     // One line each, its word at the right; its own row stays below.
     for thread in [threads[4], threads[3], threads[5]] {
         let row = at(cx, format!("nav-list-row-{}", thread.get()));
-        assert_eq!(row.size.height, px(crate::theme::NAV_ROW_H), "one line");
+        assert_eq!(
+            row.size.height,
+            px(ferrite_ui::theme::NAV_ROW_H),
+            "one line"
+        );
         assert!(at(cx, format!("nav-thread-{}", thread.get())).top() >= projects.bottom());
     }
     let word = at(cx, format!("nav-list-word-{}", threads[4].get()));
@@ -579,7 +584,9 @@ fn sort_recent_holds_still_under_the_pointer(cx: &mut TestAppContext) {
 /// plus its hysteresis. cmd-B overrides it.
 #[gpui::test]
 fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
-    use crate::theme::{BOARD_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH};
+    use ferrite_ui::theme::{
+        BOARD_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH,
+    };
     let (core, _fake) = cockpit("nav-auto-rail", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);

@@ -12,13 +12,13 @@ use crate::palette::{
 };
 use crate::projects::{self, Command};
 use crate::sidebar::{self, Sidebar};
-use crate::theme::TEXT_DIM;
+use ferrite_ui::theme::TEXT_DIM;
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::component::Selectable;
 use gpui::component::WindowExt as _;
 use gpui::{FocusHandle, Subscription};
 
-pub(super) const TASKS_HEADER_H: f32 = crate::theme::ROW * 2.;
+pub(super) const TASKS_HEADER_H: f32 = ferrite_ui::theme::ROW * 2.;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum TasksPage {
@@ -384,17 +384,17 @@ impl CockpitView {
 
     /// Shared navigation for the task list and the full conversation.
     fn tasks_header(&self, cx: &mut Context<Self>) -> Div {
-        use crate::theme::{CH, CONTROL_H, FRAME, LINE, TEXT_STRONG, W_STRONG};
+        use ferrite_ui::theme::{CH, CONTROL_H, FRAME, LINE, TEXT_STRONG, W_STRONG};
         let chat = self.projects.coordinator_shown();
         let tab = |id: &'static str, label: &'static str, selected: bool| {
-            crate::components::form_button(id, cx)
+            ferrite_ui::components::form_button(id, cx)
                 .debug_selector(move || id.into())
                 .h(px(CONTROL_H))
                 .px(px(CH))
                 .selected(selected)
                 .accessibility_label(label)
                 .child(
-                    crate::components::text_ui()
+                    ferrite_ui::components::text_ui()
                         .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_DIM }))
                         .font_weight(if selected {
                             W_STRONG
@@ -415,7 +415,7 @@ impl CockpitView {
                 view.show_coordinator(cx);
             }),
         );
-        crate::components::text_ui()
+        ferrite_ui::components::text_ui()
             .debug_selector(|| "tasks-header".into())
             .flex()
             .items_center()
@@ -428,9 +428,13 @@ impl CockpitView {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .border_b_1()
             .border_color(rgb(LINE))
-            .child(crate::icons::icon(crate::icons::BOARD, 16., TEXT_DIM))
+            .child(ferrite_ui::icons::icon(
+                ferrite_ui::icons::BOARD,
+                16.,
+                TEXT_DIM,
+            ))
             .child(
-                crate::components::text_ui()
+                ferrite_ui::components::text_ui()
                     .text_color(rgb(TEXT_STRONG))
                     .font_weight(W_STRONG)
                     .child("Tasks"),
@@ -438,7 +442,7 @@ impl CockpitView {
             .child(
                 div()
                     .w(px(1.))
-                    .h(px(crate::theme::ROW))
+                    .h(px(ferrite_ui::theme::ROW))
                     .mx(px(CH / 2.))
                     .bg(rgb(LINE)),
             )
@@ -471,17 +475,17 @@ impl CockpitView {
                 .cloned()
                 .unwrap_or_else(|| "Opening Coordinator chat…".into());
             page = page.child(
-                crate::components::text_ui()
+                ferrite_ui::components::text_ui()
                     .flex()
                     .flex_col()
                     .items_start()
-                    .gap(px(crate::theme::ROW))
-                    .p(px(crate::theme::ROW))
+                    .gap(px(ferrite_ui::theme::ROW))
+                    .p(px(ferrite_ui::theme::ROW))
                     .text_color(rgb(TEXT_DIM))
                     .child(message)
                     .when(error.is_some(), |body| {
                         body.child(
-                            crate::components::form_button("coordinator-retry", cx)
+                            ferrite_ui::components::form_button("coordinator-retry", cx)
                                 .label("Try again")
                                 .on_click(cx.listener(|view, _, _, cx| view.show_coordinator(cx))),
                         )
@@ -669,7 +673,7 @@ impl CockpitView {
                 status: None,
                 detail: None,
                 keys: (command == Command::Board)
-                    .then(|| crate::components::bound_chord("projects::Toggle"))
+                    .then(|| ferrite_ui::components::bound_chord("projects::Toggle"))
                     .flatten(),
                 act: Act::Command(PaletteCommand::Projects(command)),
             })
@@ -718,7 +722,7 @@ impl CockpitView {
         // shadow: it has none), over its veil darkening in; in a tab it
         // takes the board's place at once, as any view swap does.
         let board_face = if popup {
-            crate::motion::dialog_in_casting("projects-popup-in", board_face, Vec::new)
+            ferrite_ui::motion::dialog_in_casting("projects-popup-in", board_face, Vec::new)
                 .into_any_element()
         } else {
             board_face.into_any_element()
@@ -734,7 +738,7 @@ impl CockpitView {
         if !popup {
             return vec![float];
         }
-        let veil = deferred(crate::motion::veil_in(
+        let veil = deferred(ferrite_ui::motion::veil_in(
             "projects-veil-in",
             div()
                 .debug_selector(|| "projects-veil".into())
@@ -743,7 +747,7 @@ impl CockpitView {
                 .top(px(board.y))
                 .w(px(board.w))
                 .h(px(board.h))
-                .bg(rgba(crate::theme::VEIL))
+                .bg(rgba(ferrite_ui::theme::VEIL))
                 .occlude()
                 .on_mouse_down(
                     MouseButton::Left,

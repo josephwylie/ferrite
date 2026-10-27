@@ -28,18 +28,6 @@ mod status;
 mod system_notifications;
 pub mod titlebar;
 
-// The shared UI, under the names the app has always used for it.
-use ferrite_ui::{components, icons, keymap, loops_overlay, menu, motion, pointer, theme};
-#[cfg(feature = "visual-reference")]
-use ferrite_ui::{platform_text, register_fonts};
-// The Pane, likewise.
-#[cfg(test)]
-use ferrite_pane::hover_card;
-use ferrite_pane::{
-    composer, decision, file_links, find, image_viewer, pane, preview, prompt_drop, rich, select,
-    transcript, visual,
-};
-
 use ::gpui;
 use ::gpui::*;
 
@@ -56,8 +44,8 @@ const KEY_TABLE: KeyBindingMetaIndex = KeyBindingMetaIndex(0);
 /// gpui removes no single binding, so the keymap is rebuilt: everyone
 /// else's bindings stay, in order, and the new table takes the old one's
 /// place (the end, the first time), keeping same-depth precedence.
-pub fn bind_keys(table: Vec<keymap::Binding>, cx: &mut App) {
-    keymap::install(table.clone());
+pub fn bind_keys(table: Vec<ferrite_ui::keymap::Binding>, cx: &mut App) {
+    ferrite_ui::keymap::install(table.clone());
     let mut table = Some(load_bindings(table, cx));
     let keymap = cx.key_bindings();
     let mut rebuilt = Vec::new();
@@ -74,11 +62,11 @@ pub fn bind_keys(table: Vec<keymap::Binding>, cx: &mut App) {
     cx.set_menus(app_menus());
 }
 
-/// A key table (crate::keymap), built into live bindings. The table is
+/// A key table (ferrite_ui::keymap), built into live bindings. The table is
 /// data so both platforms' spellings stay testable; actions are rebuilt
 /// from their registered names here, and the test below keeps a renamed
 /// action from surviving to a launch panic.
-fn load_bindings(table: Vec<keymap::Binding>, cx: &mut App) -> Vec<KeyBinding> {
+fn load_bindings(table: Vec<ferrite_ui::keymap::Binding>, cx: &mut App) -> Vec<KeyBinding> {
     table
         .into_iter()
         .map(|(keystroke, action, context)| {
@@ -144,15 +132,19 @@ fn app_menus() -> Vec<Menu> {
             disabled: false,
             name: "Edit".into(),
             items: vec![
-                MenuItem::os_action("Undo", composer::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", composer::Redo, OsAction::Redo),
+                MenuItem::os_action("Undo", ferrite_pane::composer::Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", ferrite_pane::composer::Redo, OsAction::Redo),
                 MenuItem::separator(),
-                MenuItem::os_action("Cut", composer::Cut, OsAction::Cut),
-                MenuItem::os_action("Copy", composer::Copy, OsAction::Copy),
-                MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),
-                MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
+                MenuItem::os_action("Cut", ferrite_pane::composer::Cut, OsAction::Cut),
+                MenuItem::os_action("Copy", ferrite_pane::composer::Copy, OsAction::Copy),
+                MenuItem::os_action("Paste", ferrite_pane::composer::Paste, OsAction::Paste),
+                MenuItem::os_action(
+                    "Select All",
+                    ferrite_pane::composer::SelectAll,
+                    OsAction::SelectAll,
+                ),
                 MenuItem::separator(),
-                MenuItem::action("Find\u{2026}", find::Open),
+                MenuItem::action("Find\u{2026}", ferrite_pane::find::Open),
             ],
         },
         Menu {
@@ -191,7 +183,9 @@ fn app_menus() -> Vec<Menu> {
 mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
-    use super::{app_menus, bind_keys, find, keymap, load_bindings, shortcuts, KEY_TABLE};
+    use super::{app_menus, bind_keys, load_bindings, shortcuts, KEY_TABLE};
+    use ferrite_pane::find;
+    use ferrite_ui::keymap;
 
     /// The keymap's action names are strings (the ones with no default key
     /// too); startup rebuilds real actions from them. Without this, a renamed action would only fail at launch.
@@ -216,7 +210,7 @@ mod tests {
     #[gpui::test]
     fn binding_the_key_table_keeps_the_kits_keys(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::pane::init_components(cx);
+            ferrite_pane::pane::init_components(cx);
             let kit = |cx: &mut gpui::App| {
                 cx.key_bindings()
                     .borrow()
@@ -307,7 +301,10 @@ mod tests {
             ("lib.rs", include_str!("lib.rs")),
             ("cockpit.rs", include_str!("cockpit.rs")),
             ("cockpit/subagents.rs", include_str!("cockpit/subagents.rs")),
-            ("cockpit/panel/preview.rs", include_str!("cockpit/panel/preview.rs")),
+            (
+                "cockpit/panel/preview.rs",
+                include_str!("cockpit/panel/preview.rs"),
+            ),
             ("nav.rs", include_str!("nav.rs")),
             ("titlebar.rs", include_str!("titlebar.rs")),
             ("prefs.rs", include_str!("prefs.rs")),

@@ -16,7 +16,7 @@
 //! their region out of the strip's `Drag` hit test the same way).
 
 use super::*;
-use crate::{components, icons, theme};
+use ferrite_ui::{components, icons, theme};
 
 impl CockpitView {
     /// The head over the board, when the board shows a view to name: a
@@ -96,7 +96,7 @@ impl CockpitView {
             .font_weight(theme::W_STRONG)
             .text_color(rgb(theme::TEXT_STRONG))
             .child(self.facts.name(thread).clone())
-            .tooltip(crate::menu::tooltip("Rename \u{b7} double-click"))
+            .tooltip(ferrite_ui::menu::tooltip("Rename \u{b7} double-click"))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {

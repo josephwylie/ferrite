@@ -60,7 +60,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let palette = cx.debug_bounds("palette").expect("the palette is up");
     let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
     assert!(
-        (palette.size.width - px(crate::theme::PALETTE_W)).abs() <= px(1.),
+        (palette.size.width - px(ferrite_ui::theme::PALETTE_W)).abs() <= px(1.),
         "640 wide: {palette:?}"
     );
     assert!(
@@ -68,7 +68,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
         "centred on the board: {palette:?} / {board:?}"
     );
     assert!(
-        (palette.top() - px(board.y + crate::theme::PALETTE_TOP)).abs() <= px(1.),
+        (palette.top() - px(board.y + ferrite_ui::theme::PALETTE_TOP)).abs() <= px(1.),
         "56px under the board's top: {palette:?}"
     );
     let veil = cx.debug_bounds("palette-veil").expect("the veil");
@@ -81,29 +81,30 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     );
     let input = cx.debug_bounds("palette-input").expect("the input row");
     assert!(
-        (input.size.height - px(crate::theme::PALETTE_INPUT_H + 1.)).abs() < px(0.5),
+        (input.size.height - px(ferrite_ui::theme::PALETTE_INPUT_H + 1.)).abs() < px(0.5),
         "50 and its hairline: {input:?}"
     );
     let row = cx.debug_bounds("palette-row-0").expect("a row");
     assert!(
-        (row.size.height - px(crate::theme::PALETTE_ROW_H)).abs() < px(0.5),
+        (row.size.height - px(ferrite_ui::theme::PALETTE_ROW_H)).abs() < px(0.5),
         "rows are 36: {row:?}"
     );
     assert!(
-        (row.left() - (palette.left() + px(crate::theme::PALETTE_LIST_PAD))).abs() < px(0.5),
+        (row.left() - (palette.left() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs() < px(0.5),
         "6 in from the dialog: {row:?} / {palette:?}"
     );
     let section = cx.debug_bounds("palette-section-0").expect("a heading");
     assert!(
-        (section.top() - (input.bottom() + px(crate::theme::PALETTE_LIST_PAD))).abs() < px(0.5)
-            && (section.size.height - px(crate::theme::PALETTE_SECTION_H)).abs() < px(0.5),
+        (section.top() - (input.bottom() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs()
+            < px(0.5)
+            && (section.size.height - px(ferrite_ui::theme::PALETTE_SECTION_H)).abs() < px(0.5),
         "the first heading 32 high, 6 under the input: {section:?}"
     );
     let results = cx
         .debug_bounds("palette-results")
         .expect("the result count");
     assert!(
-        (palette.bottom() - results.center().y - px(crate::theme::PALETTE_FOOT_H / 2.)).abs()
+        (palette.bottom() - results.center().y - px(ferrite_ui::theme::PALETTE_FOOT_H / 2.)).abs()
             <= px(1.),
         "the count centred in the 36px footer: {results:?} / {palette:?}"
     );

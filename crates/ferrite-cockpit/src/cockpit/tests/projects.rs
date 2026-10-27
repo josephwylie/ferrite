@@ -522,7 +522,7 @@ fn a_long_tally_never_cuts_the_tasks_label(cx: &mut TestAppContext) {
     let label = cx.debug_bounds("nav-view-tasks-label").expect("its label");
     let words = cx.debug_bounds("nav-view-tasks-words").expect("its tally");
     assert!(
-        label.size.width >= px(4.0 * crate::theme::CH),
+        label.size.width >= px(4.0 * ferrite_ui::theme::CH),
         "`Tasks` keeps its width: {:?}",
         label.size.width
     );

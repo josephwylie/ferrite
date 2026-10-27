@@ -25,7 +25,7 @@ mod view_head;
 type FloatTriggers =
     std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<Pixels>>>>;
 
-use crate::components::Tip as _;
+use ferrite_ui::components::Tip as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "visual-reference")]
 #[path = "visual_reference.rs"]
@@ -118,19 +118,19 @@ use gpui::{
     Stateful, Window,
 };
 
-use crate::composer::{Composer, Edited};
-use crate::decision;
 use crate::facts::Facts;
-use crate::menu;
 use crate::nav;
 use crate::notifications::{Handle, NeedsYou, Row as NoticeRow, RowTarget, Verb};
-use crate::pane::{self, PaneView};
+use ferrite_pane::composer::{Composer, Edited};
+use ferrite_pane::decision;
+use ferrite_pane::pane::{self, PaneView};
+use ferrite_ui::menu;
 // Declared with the Pane, whose Group head dispatches it.
-pub(crate) use crate::pane::NextDecision;
-use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
 use crate::project_editor;
-use crate::select::TranscriptText;
+pub(crate) use ferrite_pane::pane::NextDecision;
+use ferrite_pane::select::TranscriptText;
+use ferrite_ui::pointer::{Pointer, PointerPressed};
 
 actions!(
     cockpit,
@@ -388,11 +388,11 @@ pub struct CockpitView {
     /// None on launch so a restored preference never performs entrance
     /// choreography; once the operator acts, a flip mid-flight retargets
     /// from the width on screen. `nav_collapsed` stays authoritative.
-    nav_tween: Option<crate::motion::Tween>,
+    nav_tween: Option<ferrite_ui::motion::Tween>,
     /// The column's content opacity on its way between 1 and 0
     /// (`nav::CONTENT_FADE`, 150ms CSS ease), on its own clock apart from the
     /// width's ride. None on launch, like `nav_tween`.
-    nav_fade: Option<crate::motion::Tween>,
+    nav_fade: Option<ferrite_ui::motion::Tween>,
     /// What the nav's folds hold shut (N-4): Projects and Groups. In
     /// memory only.
     nav_folds: std::collections::HashSet<NavFold>,
@@ -452,7 +452,7 @@ pub struct CockpitView {
     /// and the one-line Composer standing in for its title. At most one —
     /// the title cell *is* the editor, so two at once would need two rows
     /// to be the row you are looking at.
-    rename: Option<(RenameTarget, Entity<crate::composer::Composer>)>,
+    rename: Option<(RenameTarget, Entity<ferrite_pane::composer::Composer>)>,
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
@@ -788,7 +788,7 @@ impl PaneGhost {
 
 impl Render for PaneGhost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::theme;
+        use ferrite_ui::theme;
         if let Some((_, chip)) = self
             .row_left_of
             .as_ref()
@@ -821,10 +821,10 @@ impl Render for PaneGhost {
             );
         }
         let marker = if self.face.reader {
-            crate::icons::icon(crate::icons::FILE, theme::ROW_ICON, theme::TEXT_DIM)
+            ferrite_ui::icons::icon(ferrite_ui::icons::FILE, theme::ROW_ICON, theme::TEXT_DIM)
                 .into_any_element()
         } else {
-            crate::components::status_dot(theme::TEXT_DIM).into_any_element()
+            ferrite_ui::components::status_dot(theme::TEXT_DIM).into_any_element()
         };
         let head = div()
             .flex()
@@ -867,17 +867,17 @@ impl Render for PaneGhost {
             .border_1()
             .border_color(rgba(theme::FOCUS_RING))
             .bg(theme::paint::FLOAT)
-            .shadow(crate::components::elevation(
-                crate::components::Elevation::Float,
+            .shadow(ferrite_ui::components::elevation(
+                ferrite_ui::components::Elevation::Float,
             ))
             .child(head)
             .child(body);
         // Lifted off the board, the miniature fades up to its see-through
         // ink rather than popping in under the pointer.
-        let card = crate::motion::fade_in(
+        let card = ferrite_ui::motion::fade_in(
             "pane-ghost-in",
             card,
-            crate::motion::FADE_QUICK,
+            ferrite_ui::motion::FADE_QUICK,
             theme::DRAG_GHOST_OPACITY,
         );
         div()
@@ -920,7 +920,7 @@ fn home_relative(path: &std::path::Path) -> String {
 struct ProjectEditor {
     target: Option<ProjectId>,
     /// The name line. Empty means "call it after the main directory".
-    name: Entity<crate::composer::Composer>,
+    name: Entity<ferrite_pane::composer::Composer>,
     staged: Vec<std::path::PathBuf>,
     /// A refusal, shown on the card that caused it.
     error: Option<SharedString>,
@@ -1021,24 +1021,24 @@ fn version_label(version: &str, dev: bool) -> String {
 /// A rename editor with its keys beside it while it edits: `↵ save · esc
 /// cancel` in mono `TEXT_DIM`, the `·` in structure ink. The keys live
 /// here, where they act, rather than on the menu row that opened it.
-fn rename_field(editor: Entity<crate::composer::Composer>) -> Div {
+fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
     let text = "↵ save · esc cancel";
     let at = text.find(" · ").unwrap_or(0);
-    let hint = crate::components::text_meta()
+    let hint = ferrite_ui::components::text_meta()
         .debug_selector(|| "rename-hint".into())
         .flex_shrink_0()
-        .font_family(crate::theme::FONT_CODE)
+        .font_family(ferrite_ui::theme::FONT_CODE)
         .child(gpui::StyledText::new(text).with_highlights(vec![(
             at..at + " · ".len(),
             gpui::HighlightStyle {
-                color: Some(rgb(crate::theme::TEXT_FAINT).into()),
+                color: Some(rgb(ferrite_ui::theme::TEXT_FAINT).into()),
                 ..Default::default()
             },
         )]));
     div()
         .flex()
         .items_center()
-        .gap(px(crate::theme::SPACE_2))
+        .gap(px(ferrite_ui::theme::SPACE_2))
         .min_w_0()
         .flex_1()
         .child(div().min_w_0().flex_1().child(editor))
@@ -1115,9 +1115,9 @@ impl Render for NavDragPreview {
 fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target: DropTarget) -> E {
     element.drag_over::<NavDrag>(move |style, drag, _, _| {
         if matches!(groups.preview_drop(drag.drag, target), Plan::Refused(_)) {
-            style.bg(rgba(crate::theme::BLOCKED_WASH))
+            style.bg(rgba(ferrite_ui::theme::BLOCKED_WASH))
         } else {
-            style.bg(rgba(crate::theme::DROP_WASH))
+            style.bg(rgba(ferrite_ui::theme::DROP_WASH))
         }
     })
 }
@@ -1483,7 +1483,7 @@ impl CockpitView {
         prefs: Preferences,
         cx: &mut Context<Self>,
     ) -> Self {
-        crate::pane::init_components(cx);
+        ferrite_pane::pane::init_components(cx);
         subagents::init(cx);
         cockpit.settings_changed(&prefs.settings);
         // This window says what it draws from its first frame on, so no
@@ -1923,7 +1923,7 @@ impl CockpitView {
                 .map(std::path::Path::to_path_buf);
         let solo = self.cockpit.roster().fullscreen().is_some()
             || matches!(self.cockpit.roster().view(), View::Solo);
-        let key = crate::transcript::TranscriptKey {
+        let key = ferrite_pane::transcript::TranscriptKey {
             namespace: namespace.clone(),
             content_revision: revision,
             display_revision: disclosure_revision,
@@ -1956,7 +1956,7 @@ impl CockpitView {
         let pane = &self.panes[index];
         let preview = pane.preview.clone();
         let disclosure = pane.transcript_disclosure_snapshot();
-        let input = crate::transcript::TranscriptInput {
+        let input = ferrite_pane::transcript::TranscriptInput {
             thread,
             namespace,
             content_revision: revision,
@@ -2025,8 +2025,8 @@ impl CockpitView {
 
     fn transcript_event(
         &mut self,
-        entity: Entity<crate::transcript::TranscriptView>,
-        event: &crate::transcript::TranscriptEvent,
+        entity: Entity<ferrite_pane::transcript::TranscriptView>,
+        event: &ferrite_pane::transcript::TranscriptEvent,
         cx: &mut Context<Self>,
     ) {
         let Some(index) = self.panes.iter().position(|pane| {
@@ -2037,7 +2037,7 @@ impl CockpitView {
             return;
         };
         match event {
-            crate::transcript::TranscriptEvent::ToggleDisclosure(call) => {
+            ferrite_pane::transcript::TranscriptEvent::ToggleDisclosure(call) => {
                 // A click just opens or closes the row; the keyboard ring is
                 // Tab's alone, so a click never leaves one behind.
                 self.focus_pane(index);
@@ -2045,7 +2045,7 @@ impl CockpitView {
                 self.panes[index].toggle_tool(call);
                 cx.notify();
             }
-            crate::transcript::TranscriptEvent::OpenReader { path, line } => {
+            ferrite_pane::transcript::TranscriptEvent::OpenReader { path, line } => {
                 // ⌘-click on a path: the Thread's preview, in the Panel.
                 self.focus_pane(index);
                 self.open_preview_from(index, path.clone(), *line, cx);
@@ -2680,14 +2680,14 @@ impl CockpitView {
                 None if self.nav_railed() => (nav::WIDTH, nav::FOLDED_WIDTH),
                 None => (nav::FOLDED_WIDTH, nav::WIDTH),
             };
-            return Some(crate::motion::lerp(
+            return Some(ferrite_ui::motion::lerp(
                 from,
                 to,
-                crate::motion::RESIZE.progress(progress.clamp(0.0, 1.0)),
+                ferrite_ui::motion::RESIZE.progress(progress.clamp(0.0, 1.0)),
             ));
         }
         let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
         self.nav_tween
             .filter(|tween| tween.running(now, reduced))
             .map(|tween| tween.value(now, reduced))
@@ -2718,8 +2718,8 @@ impl CockpitView {
     /// hidden the nav folds under 832px (the card keeps
     /// 560px, as it did beside the 36ch column).
     fn update_auto_rail(&mut self, window: &Window) {
-        use crate::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
         use ferrite_core::docview::TILE_FLOOR_WIDTH;
+        use ferrite_ui::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
         let held = self.nav_auto_rail.get();
         let slack = if held { NAV_AUTO_RAIL_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
@@ -2793,7 +2793,7 @@ impl CockpitView {
         let level = if plain <= held {
             plain
         } else {
-            held.max(lowest(crate::theme::LEVEL_HYSTERESIS).unwrap_or(held))
+            held.max(lowest(ferrite_ui::theme::LEVEL_HYSTERESIS).unwrap_or(held))
         };
         self.board_level.set(level);
         level
@@ -2805,7 +2805,7 @@ impl CockpitView {
     /// `board_right` short of the window's right edge (the panel, or the
     /// gutter).
     fn board_bounds(&self, window: &Window) -> layout::Rect {
-        use crate::theme::{BOARD_PAD, STATUS_BAR_H};
+        use ferrite_ui::theme::{BOARD_PAD, STATUS_BAR_H};
         let viewport = window.viewport_size();
         let top = crate::titlebar::board_top();
         let left = self.board_left();
@@ -3044,7 +3044,7 @@ impl CockpitView {
                 self.slid_tree(tree, bounds)
             };
             return tree
-                .rects(bounds, crate::theme::BOARD_SEAM)
+                .rects(bounds, ferrite_ui::theme::BOARD_SEAM)
                 .into_iter()
                 .filter_map(|(leaf, rect)| match leaf_slot(leaf) {
                     Slot::Pane(identity) => self.index_of(identity).map(|index| (index, rect)),
@@ -3062,7 +3062,7 @@ impl CockpitView {
         // laid out on the same default grid a Group gets.
         let visible = self.visible_indices();
         let (columns, rows) = layout::grid_shape(visible.len(), self.rest_board());
-        let gap = crate::theme::BOARD_SEAM;
+        let gap = ferrite_ui::theme::BOARD_SEAM;
         let height = (bounds.h - (rows.max(1) - 1) as f32 * gap) / rows.max(1) as f32;
         visible
             .chunks(columns.max(1))
@@ -3155,7 +3155,7 @@ impl CockpitView {
     /// step being worked `TEXT_STRONG` behind the strong `❯`, the rest
     /// `TEXT` behind a faint ring.
     fn plan_card_element(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let thread = self.plan_card?;
         if self.focused_thread() != Some(thread) {
             return None;
@@ -3169,23 +3169,25 @@ impl CockpitView {
             CardFrom::Head(PaneIdentity::Thread(thread)),
             window,
         )?;
-        let mut card = crate::menu::float()
+        let mut card = ferrite_ui::menu::float()
             .min_w(px(CHECKS_CARD_W))
             .max_w(px(CHECKS_CARD_MAX_W))
             .pb(px(FLOAT_PAD))
-            .child(crate::menu::head("Plan").child(SharedString::from(format!(
-                "{}/{}",
-                todos.done, todos.total
-            ))));
+            .child(
+                ferrite_ui::menu::head("Plan").child(SharedString::from(format!(
+                    "{}/{}",
+                    todos.done, todos.total
+                ))),
+            );
         let mut marked = false;
         for (index, step) in transcript.progress().plan.iter().enumerate() {
             let done = step.status == ferrite_core::progress::StepStatus::Completed;
             let working = !done && !marked && current == Some(step.text.as_str());
             marked |= working;
             let mark = if done {
-                crate::components::glyph("\u{2713}", TEXT_DIM).into_any_element()
+                ferrite_ui::components::glyph("\u{2713}", TEXT_DIM).into_any_element()
             } else if working {
-                crate::components::prompt_mark(TEXT_STRONG)
+                ferrite_ui::components::prompt_mark(TEXT_STRONG)
             } else {
                 div()
                     .text_color(rgb(TEXT_FAINT))
@@ -3240,10 +3242,10 @@ impl CockpitView {
                     .anchor(gpui::Anchor::TopRight)
                     .position(at)
                     .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(crate::motion::menu_in(
+                    .child(ferrite_ui::motion::menu_in(
                         "plan-card-in",
                         card,
-                        crate::motion::Opens::Down,
+                        ferrite_ui::motion::Opens::Down,
                     )),
             )
             .with_priority(2)
@@ -3273,7 +3275,7 @@ impl CockpitView {
         pane::draft_discard(
             draft,
             button,
-            crate::components::bound_chord("cockpit::CloseThread"),
+            ferrite_ui::components::bound_chord("cockpit::CloseThread"),
         )
         .into_any_element()
     }
@@ -3324,9 +3326,9 @@ impl CockpitView {
         let Some(title) = title else {
             return;
         };
-        let editor = cx.new(crate::composer::Composer::new);
+        let editor = cx.new(ferrite_pane::composer::Composer::new);
         editor.update(cx, |editor, cx| {
-            editor.set_role(crate::composer::Role::Field(None), cx);
+            editor.set_role(ferrite_pane::composer::Role::Field(None), cx);
             editor.set(title, cx)
         });
         self.rename = Some((target, editor));
@@ -3438,7 +3440,7 @@ impl CockpitView {
     fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
         let fullscreen =
-            crate::components::bound_chord("cockpit::ToggleFullscreen").unwrap_or_default();
+            ferrite_ui::components::bound_chord("cockpit::ToggleFullscreen").unwrap_or_default();
         match target {
             // The nav row: where a Thread lives in the roster — open it,
             // park it, move it between Groups, delete it.
@@ -3475,7 +3477,7 @@ impl CockpitView {
                 rows.push(None);
                 rows.push(Some((
                     menu::Item::new("Refresh PR status").shortcut(
-                        crate::components::bound_chord("cockpit::RefreshPrStatus")
+                        ferrite_ui::components::bound_chord("cockpit::RefreshPrStatus")
                             .unwrap_or_default(),
                     ),
                     MenuVerb::RefreshPr,
@@ -3483,7 +3485,7 @@ impl CockpitView {
                 if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
                     rows.push(Some((
                         menu::Item::new("Open PR in browser").shortcut(
-                            crate::components::bound_chord("cockpit::OpenPrInBrowser")
+                            ferrite_ui::components::bound_chord("cockpit::OpenPrInBrowser")
                                 .unwrap_or_default(),
                         ),
                         MenuVerb::OpenPr,
@@ -3929,11 +3931,11 @@ impl CockpitView {
             deferred(
                 anchored()
                     .position(open.at)
-                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(crate::motion::menu_in(
+                    .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                    .child(ferrite_ui::motion::menu_in(
                         "context-menu-in",
                         shell,
-                        crate::motion::Opens::Down,
+                        ferrite_ui::motion::Opens::Down,
                     )),
             )
             .with_priority(2)
@@ -3965,13 +3967,13 @@ impl CockpitView {
         // neighbours do not (rule 2.3.5).
         let level = self.board_level(window);
         let rest: std::collections::HashMap<ThreadId, layout::Rect> = tree
-            .rects(bounds, crate::theme::BOARD_SEAM)
+            .rects(bounds, ferrite_ui::theme::BOARD_SEAM)
             .into_iter()
             .collect();
         let tree = self.slid_tree(tree, bounds);
         // A slot slid all the way shut takes no room and draws nothing.
         let rects: Vec<(ThreadId, layout::Rect)> = tree
-            .rects(bounds, crate::theme::BOARD_SEAM)
+            .rects(bounds, ferrite_ui::theme::BOARD_SEAM)
             .into_iter()
             .filter(|(_, rect)| rect.w > 0.0 && rect.h > 0.0)
             .collect();
@@ -3980,7 +3982,7 @@ impl CockpitView {
             .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
             .collect();
         // The column's frame, over the cards' corners and under the seams.
-        let frame = crate::components::frame_around(
+        let frame = ferrite_ui::components::frame_around(
             rects.iter().map(|(_, rect)| window_bounds(*rect)).collect(),
         );
         for (leaf, rect) in rects {
@@ -4000,7 +4002,7 @@ impl CockpitView {
                     };
                     // A reader is a card beside the Pane, at rest.
                     cell.relative()
-                        .child(pane::card_ring(rgba(crate::theme::CARD_RING)))
+                        .child(pane::card_ring(rgba(ferrite_ui::theme::CARD_RING)))
                 }
             };
             // The cell lies on its track as laid out; gpui rounds its edges
@@ -4011,7 +4013,7 @@ impl CockpitView {
             // while its ghost travels: the board keeps its shape until the
             // drop changes it.
             let cell = if self.dragging == Some(leaf) {
-                cell.opacity(crate::theme::DRAG_SOURCE_OPACITY)
+                cell.opacity(ferrite_ui::theme::DRAG_SOURCE_OPACITY)
                     .debug_selector(move || format!("pane-drag-source-{}", leaf.get()))
             } else {
                 cell
@@ -4032,13 +4034,13 @@ impl CockpitView {
         // Under the pointer (any band of the set) and while held, the whole
         // line draws `SEAM_LINE_W` of `SEAM_HOVER`, fading in over
         // `motion::SEAM_FADE`.
-        let seams = tree.seams(bounds, crate::theme::BOARD_SEAM, SEAM_GRAB);
+        let seams = tree.seams(bounds, ferrite_ui::theme::BOARD_SEAM, SEAM_GRAB);
         let mut drawn: Vec<SeamId> = Vec::new();
         for seam in &seams {
             if drawn.contains(&seam.id) {
                 continue;
             }
-            let group = tree.linked(&seam.id, bounds, crate::theme::BOARD_SEAM);
+            let group = tree.linked(&seam.id, bounds, ferrite_ui::theme::BOARD_SEAM);
             let members: Vec<&layout::Seam> = seams
                 .iter()
                 .filter(|other| group.contains(&other.id))
@@ -4056,7 +4058,7 @@ impl CockpitView {
                 drag.board == on && members.iter().any(|member| member.id == drag.seam)
             });
             // The line spans the union of the set's bands, along its axis.
-            let line_w = crate::theme::SEAM_LINE_W;
+            let line_w = ferrite_ui::theme::SEAM_LINE_W;
             let line = match seam.axis {
                 layout::Axis::Row => {
                     let top = members
@@ -4093,12 +4095,12 @@ impl CockpitView {
                 }
             };
             let accent = if dragging {
-                rgba(crate::theme::SEAM_HOVER).into()
+                rgba(ferrite_ui::theme::SEAM_HOVER).into()
             } else {
-                crate::motion::hover_blend(
+                ferrite_ui::motion::hover_blend(
                     &key,
-                    rgba(crate::theme::TRANSPARENT).into(),
-                    rgba(crate::theme::SEAM_HOVER).into(),
+                    rgba(ferrite_ui::theme::TRANSPARENT).into(),
+                    rgba(ferrite_ui::theme::SEAM_HOVER).into(),
                 )
             };
             board = board.child(
@@ -4136,9 +4138,9 @@ impl CockpitView {
                         .w(px(band.w))
                         .h(px(band.h))
                         .cursor(cursor)
-                        .on_hover(crate::motion::hover_listener_with(
+                        .on_hover(ferrite_ui::motion::hover_listener_with(
                             key.clone(),
-                            crate::motion::SEAM_FADE,
+                            ferrite_ui::motion::SEAM_FADE,
                         ))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -4152,7 +4154,7 @@ impl CockpitView {
         }
         if let Some((target, zone)) = self.drop_preview {
             if let Some((_, rect)) = tree
-                .rects(bounds, crate::theme::BOARD_SEAM)
+                .rects(bounds, ferrite_ui::theme::BOARD_SEAM)
                 .into_iter()
                 .find(|(leaf, _)| *leaf == target)
             {
@@ -4167,26 +4169,26 @@ impl CockpitView {
                         .top(px(wash.y))
                         .w(px(wash.w))
                         .h(px(wash.h))
-                        .rounded(px(crate::theme::R_PANE))
-                        .bg(rgba(crate::theme::DROP_WASH))
+                        .rounded(px(ferrite_ui::theme::R_PANE))
+                        .bg(rgba(ferrite_ui::theme::DROP_WASH))
                         .border_1()
-                        .border_color(rgba(crate::theme::DROP_EDGE))
+                        .border_color(rgba(ferrite_ui::theme::DROP_EDGE))
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             div()
-                                .px(px(crate::theme::DROP_LABEL_PAD_X))
-                                .py(px(crate::theme::DROP_LABEL_PAD_Y))
-                                .bg(crate::theme::FLOAT_GROUND)
-                                .rounded(px(crate::theme::R_BLOCK))
+                                .px(px(ferrite_ui::theme::DROP_LABEL_PAD_X))
+                                .py(px(ferrite_ui::theme::DROP_LABEL_PAD_Y))
+                                .bg(ferrite_ui::theme::FLOAT_GROUND)
+                                .rounded(px(ferrite_ui::theme::R_BLOCK))
                                 .border_1()
-                                .border_color(crate::theme::FLOAT_EDGE)
-                                .shadow(crate::components::float_shadow())
-                                .font_family(crate::theme::FONT_UI)
-                                .text_size(px(crate::theme::FS_UI))
-                                .line_height(px(crate::theme::LH_UI))
-                                .text_color(rgb(crate::theme::TEXT_STRONG))
+                                .border_color(ferrite_ui::theme::FLOAT_EDGE)
+                                .shadow(ferrite_ui::components::float_shadow())
+                                .font_family(ferrite_ui::theme::FONT_UI)
+                                .text_size(px(ferrite_ui::theme::FS_UI))
+                                .line_height(px(ferrite_ui::theme::LH_UI))
+                                .text_color(rgb(ferrite_ui::theme::TEXT_STRONG))
                                 .child(match zone {
                                     Zone::Swap => "swap",
                                     Zone::Split(Edge::Left) => "split left",
@@ -4231,7 +4233,7 @@ impl CockpitView {
         };
         if drag
             .tree
-            .drag_linked(&drag.seam, bounds, pointer, crate::theme::BOARD_SEAM)
+            .drag_linked(&drag.seam, bounds, pointer, ferrite_ui::theme::BOARD_SEAM)
         {
             cx.notify();
         }
@@ -4723,7 +4725,7 @@ impl CockpitView {
         if let Ok(mut defaults) = self.prefs.defaults.lock() {
             *defaults = ferrite_core::spawner::SessionDefaults::from_settings(&self.prefs.settings);
         }
-        crate::visual::diagram::set_enabled(
+        ferrite_pane::visual::diagram::set_enabled(
             self.prefs.settings.visuals != ferrite_core::visual::Level::Off,
             cx,
         );
@@ -5239,7 +5241,7 @@ impl CockpitView {
             ))
             .child(body);
         Some(
-            deferred(crate::motion::veil_in(
+            deferred(ferrite_ui::motion::veil_in(
                 "settings-veil",
                 prefs::veil()
                     .on_mouse_down(
@@ -5250,7 +5252,7 @@ impl CockpitView {
                             cx.notify();
                         }),
                     )
-                    .child(crate::motion::dialog_in("settings-card-in", card)),
+                    .child(ferrite_ui::motion::dialog_in("settings-card-in", card)),
             ))
             .with_priority(3)
             .into_any_element(),
@@ -5267,9 +5269,9 @@ impl CockpitView {
         else {
             return;
         };
-        let name = cx.new(crate::composer::Composer::new);
+        let name = cx.new(ferrite_pane::composer::Composer::new);
         name.update(cx, |name, cx| {
-            name.set_role(crate::composer::Role::Field(None), cx);
+            name.set_role(ferrite_pane::composer::Role::Field(None), cx);
             name.set(title, cx)
         });
         let remote = self.remote_path(cx);
@@ -5289,9 +5291,9 @@ impl CockpitView {
     /// Open the card on a Project that does not exist yet: an empty name
     /// and no directories. Nothing is registered until Create.
     fn open_project_creator(&mut self, cx: &mut Context<Self>) {
-        let name = cx.new(crate::composer::Composer::new);
+        let name = cx.new(ferrite_pane::composer::Composer::new);
         name.update(cx, |name, cx| {
-            name.set_role(crate::composer::Role::Field(None), cx)
+            name.set_role(ferrite_pane::composer::Role::Field(None), cx)
         });
         let remote = self.remote_path(cx);
         self.show_project_editor(
@@ -5650,14 +5652,14 @@ impl CockpitView {
                     .flex_shrink(1.)
                     .min_h_0()
                     .child(body)
-                    .child(crate::components::scrollbar(
+                    .child(ferrite_ui::components::scrollbar(
                         "project-editor-scrollbar",
                         &editor.scroll,
                     )),
             )
             .child(footer);
         Some(
-            deferred(crate::motion::veil_in(
+            deferred(ferrite_ui::motion::veil_in(
                 "project-editor-veil",
                 project_editor::veil()
                     .on_mouse_down(
@@ -5668,7 +5670,10 @@ impl CockpitView {
                             cx.notify();
                         }),
                     )
-                    .child(crate::motion::dialog_in("project-editor-card-in", card)),
+                    .child(ferrite_ui::motion::dialog_in(
+                        "project-editor-card-in",
+                        card,
+                    )),
             ))
             .with_priority(3)
             .into_any_element(),
@@ -5683,7 +5688,7 @@ impl CockpitView {
         if let Some((RenameTarget::PaneTitle(editing), editor)) = &self.rename {
             if *editing == thread {
                 return rename_field(editor.clone())
-                    .font_weight(crate::theme::W_BODY)
+                    .font_weight(ferrite_ui::theme::W_BODY)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -5696,7 +5701,7 @@ impl CockpitView {
         pane::head_title(self.panes[index].name.clone())
             .id(("pane-title", thread.get() as usize))
             .debug_selector(move || format!("pane-title-{}", thread.get()))
-            .tooltip(crate::menu::tooltip("Rename \u{b7} double-click"))
+            .tooltip(ferrite_ui::menu::tooltip("Rename \u{b7} double-click"))
             // On a board the title is a handle too (the L1 head around it
             // is the other): drag it onto another slot to swap or split. It
             // keeps the default cursor — a name, not a button.
@@ -5909,7 +5914,7 @@ impl CockpitView {
     /// Composer consumes the key first and this never runs.
     fn unqueue_from_backspace(
         &mut self,
-        _: &crate::composer::Backspace,
+        _: &ferrite_pane::composer::Backspace,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -6173,7 +6178,7 @@ impl CockpitView {
         let calls = self.expandable_tools(focused, cx);
         let transcript = self.panes[focused].transcript();
         let tool_focus = self.panes[focused].tool_focus();
-        let in_controls = crate::rich::code_actions_focused(window);
+        let in_controls = ferrite_pane::rich::code_actions_focused(window);
         let cycle_controls = |from_edge, window: &mut Window, cx: &mut gpui::App| {
             transcript.as_ref().is_some_and(|transcript| {
                 transcript.update(cx, |transcript, cx| {
@@ -6384,9 +6389,14 @@ impl CockpitView {
 
     /// ⌘F: find in the focused Pane's transcript — or in its preview, when
     /// the preview took the last press or holds the keyboard
-    /// (`crate::find`).
+    /// (`ferrite_pane::find`).
     /// A wall tile draws no transcript to search.
-    fn open_find(&mut self, _: &crate::find::Open, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_find(
+        &mut self,
+        _: &ferrite_pane::find::Open,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.level_now(window) == Level::Wall {
             return;
         }
@@ -6446,23 +6456,23 @@ impl CockpitView {
             return;
         }
         let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
         let (from, to) = if railed {
             (nav::WIDTH, nav::FOLDED_WIDTH)
         } else {
             (nav::FOLDED_WIDTH, nav::WIDTH)
         };
-        self.nav_tween = Some(crate::motion::Tween::retarget(
+        self.nav_tween = Some(ferrite_ui::motion::Tween::retarget(
             self.nav_tween,
             from,
             to,
-            crate::motion::RESIZE,
+            ferrite_ui::motion::RESIZE,
             now,
             reduced,
         ));
         // Opacity of the content.
         let (from, to) = if railed { (1.0, 0.0) } else { (0.0, 1.0) };
-        self.nav_fade = Some(crate::motion::Tween::retarget(
+        self.nav_fade = Some(ferrite_ui::motion::Tween::retarget(
             self.nav_fade,
             from,
             to,
@@ -8308,8 +8318,11 @@ impl CockpitView {
                         view.open_band_popover(chip, cx);
                     }),
                 );
-                crate::components::on_bounds(chip_element, self.record_trigger(band_trigger(chip)))
-                    .into_any_element()
+                ferrite_ui::components::on_bounds(
+                    chip_element,
+                    self.record_trigger(band_trigger(chip)),
+                )
+                .into_any_element()
             })
             .collect()
     }
@@ -8495,7 +8508,7 @@ impl CockpitView {
     /// over the bar, kept inside the window's margin. The chip has been
     /// drawn before it can be pressed, so its bounds are always recorded.
     fn band_menu_element(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use crate::theme::{FLOAT_OFFSET, GRID_PAD, SLASH_MENU_W};
+        use ferrite_ui::theme::{FLOAT_OFFSET, GRID_PAD, SLASH_MENU_W};
         let open = self.popover.as_ref()?;
         let Kind::Band(chip @ (pane::BandChip::Project | pane::BandChip::Workspace)) = open.kind
         else {
@@ -8561,7 +8574,7 @@ impl CockpitView {
         // Slash commands align their descriptions in one column sized to
         // the longest name shown (clamped, so a long `mcp__…` name cuts).
         let label_w = matches!(open.kind, Kind::Commands).then(|| {
-            crate::components::code_column_w(
+            ferrite_ui::components::code_column_w(
                 open.rows
                     .iter()
                     .map(|row| row.name.chars().count())
@@ -8602,7 +8615,7 @@ impl CockpitView {
                         cx,
                     )
                 }
-                _ if explains => wire(crate::menu::note(row.name.clone()), at, cx),
+                _ if explains => wire(ferrite_ui::menu::note(row.name.clone()), at, cx),
                 Kind::Commands | Kind::Files { .. } => wire(
                     pane::menu_row(("composer-menu-row", at), &row.row, cursor, label_w),
                     at,
@@ -8632,7 +8645,7 @@ impl CockpitView {
             )
             .child(rows)
             .child(pane::popover_footer(open.kind.hints()));
-        crate::motion::menu_in("composer-menu-in", popover, crate::motion::Opens::Up)
+        ferrite_ui::motion::menu_in("composer-menu-in", popover, ferrite_ui::motion::Opens::Up)
             .into_any_element()
     }
 
@@ -9823,8 +9836,11 @@ fn provider_title(provider: Provider) -> &'static str {
 /// brand colour.
 fn provider_group(provider: Provider) -> prefs::Group {
     let (mark, ink) = match provider {
-        Provider::Claude => (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE),
-        Provider::Codex => (crate::icons::CODEX, crate::theme::PROVIDER_CODEX),
+        Provider::Claude => (
+            ferrite_ui::icons::CLAUDE,
+            ferrite_ui::theme::PROVIDER_CLAUDE,
+        ),
+        Provider::Codex => (ferrite_ui::icons::CODEX, ferrite_ui::theme::PROVIDER_CODEX),
     };
     prefs::Group::new(Some(provider_title(provider))).mark(mark, ink)
 }
@@ -9905,7 +9921,7 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        crate::motion::hover_frame_start(cx);
+        ferrite_ui::motion::hover_frame_start(cx);
         self.tend_reader_slides(cx);
         // Seen is on screen while the window has focus: the Cockpit follows
         // the window's activation from its first frame — a window that opens
@@ -9930,7 +9946,7 @@ impl Render for CockpitView {
         // that lands it at rest. A scene's held ride asks for none.
         let column_moving = self.nav_ride.get().is_some() && self.nav_hold.is_none();
         let sliding = self.reader_slides.moving() || self.panel_riding();
-        let fading = crate::motion::hover_fades_active();
+        let fading = ferrite_ui::motion::hover_fades_active();
         if column_moving {
             // The nav's width moves the whole board, and the nav with it:
             // every part redraws.
@@ -9943,8 +9959,8 @@ impl Render for CockpitView {
             // ride redraw the frame, which lays the board and the Panel
             // out: only the parts whose cells move are built again (their
             // cache holds their bounds), the rest — the nav — replay.
-            let mut views = crate::motion::hover_fading_views();
-            let frame = crate::motion::frames_through(cx.entity_id());
+            let mut views = ferrite_ui::motion::hover_fading_views();
+            let frame = ferrite_ui::motion::frames_through(cx.entity_id());
             if sliding && !views.contains(&frame) {
                 views.push(frame);
             }
@@ -9988,7 +10004,7 @@ impl CockpitView {
         // a Thread's everywhere, the clock's and a notice's in the frame.
         self.ages_turn_at = thread_ages.map(|next| wall + next);
         self.frame_turn_at = Some(wall + notices.map_or(minute, |next| next.min(minute)));
-        if crate::motion::reduced_motion(cx) {
+        if ferrite_ui::motion::reduced_motion(cx) {
             return;
         }
         let second = Duration::from_secs(1);
@@ -10022,7 +10038,7 @@ impl CockpitView {
                     .borrow()
                     .view_id(parts::Part::Pane(pane.identity));
                 if let Some(view) = view {
-                    crate::motion::ride(view, now + next, cx);
+                    ferrite_ui::motion::ride(view, now + next, cx);
                 }
             }
         }
@@ -10035,20 +10051,20 @@ impl CockpitView {
         }
         if !parts {
             if let Some(next) = everything {
-                crate::motion::ride(cx.entity_id(), now + next, cx);
+                ferrite_ui::motion::ride(cx.entity_id(), now + next, cx);
             }
             return;
         }
         let nav_view = self.parts.borrow().view_id(parts::Part::Nav);
         if let (Some(view), Some(next)) = (nav_view, nav) {
-            crate::motion::ride(view, now + next, cx);
+            ferrite_ui::motion::ride(view, now + next, cx);
         }
-        crate::motion::ride(self.frame_tick_id(), now + frame, cx);
+        ferrite_ui::motion::ride(self.frame_tick_id(), now + frame, cx);
     }
 
     fn render_cockpit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The loops this render lays out go to the loops overlay afresh.
-        crate::loops_overlay::begin(window, cx.entity_id());
+        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
         // Read, so its notify redraws the frame around the parts alone.
         let _ = self.frame_tick.read(cx);
         self.prune_parts();
@@ -10198,7 +10214,7 @@ impl CockpitView {
                         .map_or(0, |thread| thread.queued_all().len());
                     pane::composer_row_limit(rect.h, self.grid_board(), queued)
                 })
-                .unwrap_or(crate::composer::MAX_ROWS);
+                .unwrap_or(ferrite_pane::composer::MAX_ROWS);
             // Derive this every frame so answering, leaving fullscreen, or
             // changing Subjects restores the full draft viewport automatically.
             let answering_expanded_question = fullscreen == Some(index)
@@ -10325,7 +10341,7 @@ impl CockpitView {
             .panes
             .get(self.focused())
             .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx))
-            && (crate::rich::code_actions_focused(window)
+            && (ferrite_pane::rich::code_actions_focused(window)
                 || gpui::base::TextSelection::has_selection(window, cx)
                 || self.panes.get(self.focused()).is_some_and(|pane| {
                     pane.rich.output_focused(&pane.text_namespace(), window, cx)
@@ -10417,7 +10433,7 @@ impl CockpitView {
                 .min_h_0()
                 .pt(px(board_top))
                 .pr(px(frame_right))
-                .pb(px(crate::theme::BOARD_PAD))
+                .pb(px(ferrite_ui::theme::BOARD_PAD))
         };
         let visible = self.visible_indices();
         // The empty board names the provider CLIs it found: ask once.
@@ -10475,7 +10491,7 @@ impl CockpitView {
                 .map(|(_, rect)| rect)
                 .collect();
             let columns = layout::grid_shape(visible.len(), board).0.max(1);
-            let gap = px(crate::theme::GRID_GAP);
+            let gap = px(ferrite_ui::theme::GRID_GAP);
             let mut grid = frame().flex().flex_col().gap(gap);
             for row in visible.chunks(columns) {
                 let mut line = div().flex().flex_row().flex_1().min_h_0().gap(gap);
@@ -10497,7 +10513,7 @@ impl CockpitView {
                 .flex_1()
                 .min_w_0()
                 .child(grid)
-                .child(crate::components::frame_around(
+                .child(ferrite_ui::components::frame_around(
                     cards.into_iter().map(window_bounds).collect(),
                 ))
         };
@@ -10522,11 +10538,11 @@ impl CockpitView {
             .size_full()
             // The window's root paints nothing on glass (theme rule 4):
             // each region lays its own fill over the blur.
-            .bg(crate::theme::paint::WINDOW)
-            .font_family(crate::theme::FONT_UI)
-            .map(crate::components::tabular)
+            .bg(ferrite_ui::theme::paint::WINDOW)
+            .font_family(ferrite_ui::theme::FONT_UI)
+            .map(ferrite_ui::components::tabular)
             .track_focus(&self.focus)
-            .key_context(crate::keymap::COCKPIT)
+            .key_context(ferrite_ui::keymap::COCKPIT)
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
             // flagged, without the operator focusing it first.
@@ -10818,7 +10834,7 @@ impl CockpitView {
                 }
             });
         };
-        crate::prompt_drop::target(
+        ferrite_pane::prompt_drop::target(
             content,
             composer,
             move |_, cx| {
@@ -11202,7 +11218,7 @@ impl CockpitView {
     /// platform's key table: `cmd-shift-n` → `cmd-shift-N`, which
     /// `components::key_combo` draws tight with glyph modifiers, `⌘⇧N`.
     fn key_label(action: &str) -> Option<SharedString> {
-        crate::components::bound_chord(action).map(SharedString::from)
+        ferrite_ui::components::bound_chord(action).map(SharedString::from)
     }
 
     /// A board slot as a drop target, for a slot dragged from the board
@@ -11711,25 +11727,25 @@ impl CockpitView {
     fn pane_card_corner(&self, identity: PaneIdentity, up: bool) -> Option<Point<Pixels>> {
         let geometry = self.panes[self.index_of(identity)?].geometry.get();
         let card = geometry.card?;
-        let limit_right = f32::from(card.right()) - crate::theme::PANE_PAD_X;
+        let limit_right = f32::from(card.right()) - ferrite_ui::theme::PANE_PAD_X;
         let (floor, trigger) = if up {
             let composer = geometry.composer?;
             (f32::from(composer.top()), composer)
         } else {
             (0., card)
         };
-        Some(crate::components::FloatPlace { floor, limit_right }.card_corner(trigger, up))
+        Some(ferrite_ui::components::FloatPlace { floor, limit_right }.card_corner(trigger, up))
     }
 
     /// The limits a surface summoned from the window's bar rests within
     /// (ADR 0014): its foot over the bar's top, its right edge inside the
     /// window's margin.
-    fn bar_place(&self) -> crate::components::FloatPlace {
-        use crate::theme::{BOARD_PAD, GRID_PAD};
+    fn bar_place(&self) -> ferrite_ui::components::FloatPlace {
+        use ferrite_ui::theme::{BOARD_PAD, GRID_PAD};
         // The board stops `BOARD_PAD` short of the bar and `board_right`
         // short of the window's right edge.
         let board = self.board.get();
-        crate::components::FloatPlace {
+        ferrite_ui::components::FloatPlace {
             floor: board.y + board.h + BOARD_PAD,
             limit_right: board.x + board.w + self.board_right() - GRID_PAD,
         }
@@ -11742,9 +11758,9 @@ impl CockpitView {
         let board = self.board_bounds(window);
         let right = board.x + board.w;
         let bottom = board.y + board.h;
-        let place = crate::components::FloatPlace {
+        let place = ferrite_ui::components::FloatPlace {
             floor: bottom,
-            limit_right: right - crate::theme::PANE_PAD_X,
+            limit_right: right - ferrite_ui::theme::PANE_PAD_X,
         };
         let edge = if up { bottom } else { board.y };
         place.card_corner(
@@ -11809,7 +11825,7 @@ impl CockpitView {
         }
         let choices = modes
             .iter()
-            .map(|choice| crate::components::Choice {
+            .map(|choice| ferrite_ui::components::Choice {
                 label: choice.label.clone().into(),
                 checked: choice.value == mode,
                 ..Default::default()
@@ -11823,7 +11839,7 @@ impl CockpitView {
         let weak = cx.entity().downgrade();
         let picker = weak.clone();
         Some(wrap(
-            crate::menu::ChoiceMenu {
+            ferrite_ui::menu::ChoiceMenu {
                 head: Some(("Permission mode".into(), SharedString::default())),
                 ladder: None,
                 hints: vec![
@@ -11950,55 +11966,55 @@ impl CockpitView {
         // head, then rows — a name at the left, its state and its actions
         // (quiet mono text controls) at the right.
         let text_action = |id: SharedString, verb: &'static str| {
-            crate::components::faded_button(
+            ferrite_ui::components::faded_button(
                 id,
-                gpui::rgba(crate::theme::TRANSPARENT).into(),
-                crate::theme::FLOAT_HOVER.into(),
-                crate::theme::FLOAT_SEL.into(),
-                rgb(crate::theme::TEXT_DIM).into(),
+                gpui::rgba(ferrite_ui::theme::TRANSPARENT).into(),
+                ferrite_ui::theme::FLOAT_HOVER.into(),
+                ferrite_ui::theme::FLOAT_SEL.into(),
+                rgb(ferrite_ui::theme::TEXT_DIM).into(),
                 cx,
             )
-            .h(px(crate::theme::TOKEN_H))
-            .px(px(crate::theme::TOKEN_PAD_X))
-            .rounded(px(crate::theme::R_SMALL))
-            .child(crate::components::text_meta().child(verb))
+            .h(px(ferrite_ui::theme::TOKEN_H))
+            .px(px(ferrite_ui::theme::TOKEN_PAD_X))
+            .rounded(px(ferrite_ui::theme::R_SMALL))
+            .child(ferrite_ui::components::text_meta().child(verb))
         };
         // A card-wide verb is a whole float row: one row, the rows' inset,
         // `TEXT`, `FLOAT_HOVER` under the pointer.
         let action_row = |id: SharedString, verb: &'static str| {
-            crate::components::form_button(id, cx)
-                .h(px(crate::theme::FLOAT_ROW_H))
-                .mx(px(crate::theme::FLOAT_PAD))
-                .px(px(crate::theme::MENU_ROW_PAD_X))
-                .rounded(px(crate::theme::R_MENU_ROW))
+            ferrite_ui::components::form_button(id, cx)
+                .h(px(ferrite_ui::theme::FLOAT_ROW_H))
+                .mx(px(ferrite_ui::theme::FLOAT_PAD))
+                .px(px(ferrite_ui::theme::MENU_ROW_PAD_X))
+                .rounded(px(ferrite_ui::theme::R_MENU_ROW))
                 .child(
                     div()
                         .flex()
                         .w_full()
-                        .text_size(px(crate::theme::FS_UI))
-                        .line_height(px(crate::theme::LH_UI))
-                        .text_color(rgb(crate::theme::TEXT))
+                        .text_size(px(ferrite_ui::theme::FS_UI))
+                        .line_height(px(ferrite_ui::theme::LH_UI))
+                        .text_color(rgb(ferrite_ui::theme::TEXT))
                         .child(verb),
                 )
         };
         // A section head is the float's section heading (theme WP-E): it
         // carries its own air.
-        let head = |title: &'static str, _after: bool| crate::menu::section(title, None, None);
+        let head = |title: &'static str, _after: bool| ferrite_ui::menu::section(title, None, None);
         let row = || {
             div()
                 .flex()
                 .items_center()
-                .gap(px(crate::theme::SPACE_2))
-                .min_h(px(crate::theme::FLOAT_ROW_H))
-                .px(px(crate::theme::FLOAT_PAD_X))
+                .gap(px(ferrite_ui::theme::SPACE_2))
+                .min_h(px(ferrite_ui::theme::FLOAT_ROW_H))
+                .px(px(ferrite_ui::theme::FLOAT_PAD_X))
                 .min_w_0()
         };
-        let mut card = crate::menu::float()
-            .pb(px(crate::theme::FLOAT_PAD))
+        let mut card = ferrite_ui::menu::float()
+            .pb(px(ferrite_ui::theme::FLOAT_PAD))
             .id("session-controls-card")
             .debug_selector(|| "session-controls-card".into())
-            .w(px(crate::theme::SESSION_CARD_W))
-            .max_h(px(crate::theme::MENU_MAX_H))
+            .w(px(ferrite_ui::theme::SESSION_CARD_W))
+            .max_h(px(ferrite_ui::theme::MENU_MAX_H))
             .overflow_y_scroll();
         let error = self
             .session_control_error
@@ -12020,58 +12036,63 @@ impl CockpitView {
             let checked = current.as_deref() == Some(mode.value.as_str());
             let value = mode.value;
             card = card.child(
-                crate::components::button(SharedString::from(format!("permission-mode-{index}")))
-                    .debug_selector(move || format!("permission-mode-{index}"))
-                    .tab_stop(true)
-                    .h(px(crate::theme::FLOAT_ROW_H))
-                    .mx(px(crate::theme::FLOAT_PAD))
-                    .px(px(crate::theme::MENU_ROW_PAD_X))
-                    .rounded(px(crate::theme::R_MENU_ROW))
-                    .accessibility_label(mode.label.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .w_full()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    // The shared button is kit-xsmall; a menu
-                                    // row reads at the UI size like every menu.
-                                    .text_size(px(crate::theme::FS_UI))
-                                    .line_height(px(crate::theme::LH_UI))
-                                    .text_color(rgb(if checked {
-                                        crate::theme::TEXT_STRONG
-                                    } else {
-                                        crate::theme::TEXT
-                                    }))
-                                    .child(mode.label),
+                ferrite_ui::components::button(SharedString::from(format!(
+                    "permission-mode-{index}"
+                )))
+                .debug_selector(move || format!("permission-mode-{index}"))
+                .tab_stop(true)
+                .h(px(ferrite_ui::theme::FLOAT_ROW_H))
+                .mx(px(ferrite_ui::theme::FLOAT_PAD))
+                .px(px(ferrite_ui::theme::MENU_ROW_PAD_X))
+                .rounded(px(ferrite_ui::theme::R_MENU_ROW))
+                .accessibility_label(mode.label.clone())
+                .child(
+                    div()
+                        .flex()
+                        .w_full()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                // The shared button is kit-xsmall; a menu
+                                // row reads at the UI size like every menu.
+                                .text_size(px(ferrite_ui::theme::FS_UI))
+                                .line_height(px(ferrite_ui::theme::LH_UI))
+                                .text_color(rgb(if checked {
+                                    ferrite_ui::theme::TEXT_STRONG
+                                } else {
+                                    ferrite_ui::theme::TEXT
+                                }))
+                                .child(mode.label),
+                        )
+                        .children(checked.then(|| {
+                            ferrite_ui::components::glyph(
+                                "\u{2713}",
+                                ferrite_ui::theme::TEXT_STRONG,
                             )
-                            .children(checked.then(|| {
-                                crate::components::glyph("\u{2713}", crate::theme::TEXT_STRONG)
-                            })),
-                    )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.run_session_control(
-                            thread,
-                            generation,
-                            ferrite_core::SessionControl::SetPermissionMode {
-                                mode: value.clone(),
-                            },
-                        );
-                        cx.notify();
-                    })),
+                        })),
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    view.run_session_control(
+                        thread,
+                        generation,
+                        ferrite_core::SessionControl::SetPermissionMode {
+                            mode: value.clone(),
+                        },
+                    );
+                    cx.notify();
+                })),
             );
         }
         // With no servers the note alone says so; a `MCP servers` head over
         // `No MCP servers reported` would say it twice.
         if transcript.mcp_servers().is_empty() {
             card = card.child(
-                crate::menu::note("No MCP servers reported")
+                ferrite_ui::menu::note("No MCP servers reported")
                     .when(errored || !modes_empty, |note| {
-                        note.mt(px(crate::theme::FLOAT_SECTION_GAP))
+                        note.mt(px(ferrite_ui::theme::FLOAT_SECTION_GAP))
                     }),
             );
         } else {
@@ -12083,36 +12104,36 @@ impl CockpitView {
             // work in progress, not a stop: only a sign-in waits on you.
             let (status, word, dot) = match server.status {
                 ferrite_core::McpStatus::Connected => {
-                    ("connected", "connected", crate::theme::RUNNING)
+                    ("connected", "connected", ferrite_ui::theme::RUNNING)
                 }
                 ferrite_core::McpStatus::Connecting => {
-                    ("connecting", "connecting", crate::theme::RUNNING)
+                    ("connecting", "connecting", ferrite_ui::theme::RUNNING)
                 }
                 ferrite_core::McpStatus::NeedsAuth => {
-                    ("needs-auth", "needs sign-in", crate::theme::ATTENTION)
+                    ("needs-auth", "needs sign-in", ferrite_ui::theme::ATTENTION)
                 }
-                ferrite_core::McpStatus::Failed => ("failed", "failed", crate::theme::BLOCKED),
+                ferrite_core::McpStatus::Failed => ("failed", "failed", ferrite_ui::theme::BLOCKED),
                 ferrite_core::McpStatus::Disabled => {
-                    ("disabled", "disabled", crate::theme::TEXT_FAINT)
+                    ("disabled", "disabled", ferrite_ui::theme::TEXT_FAINT)
                 }
                 ferrite_core::McpStatus::Unknown => {
-                    ("unknown", "unknown", crate::theme::TEXT_FAINT)
+                    ("unknown", "unknown", ferrite_ui::theme::TEXT_FAINT)
                 }
             };
             let connected = server.status == ferrite_core::McpStatus::Connected;
             let mut line = row()
                 .group(SharedString::from(format!("mcp-row-{index}")))
-                .child(crate::components::status_dot(dot))
+                .child(ferrite_ui::components::status_dot(dot))
                 .child(
                     div()
                         .id(("mcp-server-name", index))
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(crate::theme::TEXT))
+                        .text_color(rgb(ferrite_ui::theme::TEXT))
                         // A long server name gives way to its state and
                         // actions; the whole of it is one hover away.
-                        .tooltip(crate::menu::tooltip(server.name.clone()))
+                        .tooltip(ferrite_ui::menu::tooltip(server.name.clone()))
                         .child(server.name.clone()),
                 )
                 // A connected server's green dot says so; the word appears
@@ -12122,11 +12143,11 @@ impl CockpitView {
                         div()
                             .debug_selector(move || format!("mcp-status-{index}-{status}"))
                             .flex_shrink_0()
-                            .text_size(px(crate::theme::FS_UI))
+                            .text_size(px(ferrite_ui::theme::FS_UI))
                             .text_color(rgb(if server.status == ferrite_core::McpStatus::Failed {
-                                crate::theme::BLOCKED
+                                ferrite_ui::theme::BLOCKED
                             } else {
-                                crate::theme::TEXT_DIM
+                                ferrite_ui::theme::TEXT_DIM
                             }))
                             .child(word),
                     )
@@ -12219,12 +12240,12 @@ impl CockpitView {
             if let Some(error) = server.error.as_ref() {
                 card = card.child(
                     div()
-                        .pl(px(crate::theme::FLOAT_PAD_X
-                            + crate::theme::STATUS_DOT
-                            + crate::theme::CH))
-                        .pr(px(crate::theme::FLOAT_PAD_X))
-                        .text_size(px(crate::theme::FS_UI))
-                        .text_color(rgb(crate::theme::TEXT_DIM))
+                        .pl(px(ferrite_ui::theme::FLOAT_PAD_X
+                            + ferrite_ui::theme::STATUS_DOT
+                            + ferrite_ui::theme::CH))
+                        .pr(px(ferrite_ui::theme::FLOAT_PAD_X))
+                        .text_size(px(ferrite_ui::theme::FS_UI))
+                        .text_color(rgb(ferrite_ui::theme::TEXT_DIM))
                         .whitespace_normal()
                         .child(error.clone()),
                 );
@@ -12251,17 +12272,17 @@ impl CockpitView {
         for (index, task) in tasks.iter().enumerate() {
             let working = task.status == ferrite_core::progress::TaskStatus::Working;
             let mut line = row()
-                .child(crate::components::status_dot(if working {
-                    crate::theme::RUNNING
+                .child(ferrite_ui::components::status_dot(if working {
+                    ferrite_ui::theme::RUNNING
                 } else {
-                    crate::theme::TEXT_FAINT
+                    ferrite_ui::theme::TEXT_FAINT
                 }))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(crate::theme::TEXT))
+                        .text_color(rgb(ferrite_ui::theme::TEXT))
                         .child(task.label.clone()),
                 );
             if working && open.supports_control(ferrite_core::ControlKind::StopTask) {
@@ -12327,11 +12348,11 @@ impl CockpitView {
                 anchored()
                     .anchor(gpui::Anchor::BottomRight)
                     .position(at)
-                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(crate::motion::menu_in(
+                    .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                    .child(ferrite_ui::motion::menu_in(
                         "session-controls-in",
                         card,
-                        crate::motion::Opens::Up,
+                        ferrite_ui::motion::Opens::Up,
                     ))
                     .into_any_element(),
             )
@@ -12399,11 +12420,11 @@ impl CockpitView {
                 anchored()
                     .anchor(gpui::Anchor::TopRight)
                     .position(at)
-                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(crate::motion::menu_in(
+                    .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
+                    .child(ferrite_ui::motion::menu_in(
                         "context-checks-in",
                         card,
-                        crate::motion::Opens::Down,
+                        ferrite_ui::motion::Opens::Down,
                     )),
             )
             .with_priority(2)
@@ -12485,14 +12506,14 @@ impl CockpitView {
     /// chip's top — the toolbar's chips stand centred in the box's foot
     /// row — and inside the box's right edge. Until the box has been laid
     /// out once, over the bar.
-    fn composer_place(&self, index: usize) -> crate::components::FloatPlace {
-        use crate::theme::{COMPOSER_TOOLBAR_H, TOOL_CHIP_H};
+    fn composer_place(&self, index: usize) -> ferrite_ui::components::FloatPlace {
+        use ferrite_ui::theme::{COMPOSER_TOOLBAR_H, TOOL_CHIP_H};
         match self
             .panes
             .get(index)
             .and_then(|pane| pane.geometry.get().composer)
         {
-            Some(field) => crate::components::FloatPlace {
+            Some(field) => ferrite_ui::components::FloatPlace {
                 floor: f32::from(field.bottom()) - (COMPOSER_TOOLBAR_H + TOOL_CHIP_H) / 2.,
                 limit_right: f32::from(field.right()),
             },
@@ -12506,7 +12527,7 @@ impl CockpitView {
         kind: Kind,
         trigger: gpui::component::button::Button,
         cx: &mut Context<Self>,
-    ) -> crate::menu::ChoiceMenu {
+    ) -> ferrite_ui::menu::ChoiceMenu {
         let identity = self.panes[index].identity;
         let slot = kind.picker_slot().expect("native choice menu");
         let (effort, band) = slot;
@@ -12519,7 +12540,7 @@ impl CockpitView {
             .and_then(|thread| {
                 let (steps, labels, chosen) = self.effort_ladder(thread)?;
                 let view = cx.entity().downgrade();
-                Some(crate::menu::Ladder {
+                Some(ferrite_ui::menu::Ladder {
                     label: "Effort".into(),
                     steps: labels,
                     chosen,
@@ -12559,7 +12580,7 @@ impl CockpitView {
                         if section {
                             provider = provider_of_title(&row.name);
                         }
-                        crate::components::Choice {
+                        ferrite_ui::components::Choice {
                             label: row.name.clone(),
                             checked: row.active,
                             disabled: row.inert,
@@ -12573,11 +12594,12 @@ impl CockpitView {
                                 .filter(|_| row.inert && !section)
                                 .map(SharedString::from),
                             icon: provider.map(|provider| match provider {
-                                Provider::Claude => {
-                                    (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE)
-                                }
+                                Provider::Claude => (
+                                    ferrite_ui::icons::CLAUDE,
+                                    ferrite_ui::theme::PROVIDER_CLAUDE,
+                                ),
                                 Provider::Codex => {
-                                    (crate::icons::CODEX, crate::theme::PROVIDER_CODEX)
+                                    (ferrite_ui::icons::CODEX, ferrite_ui::theme::PROVIDER_CODEX)
                                 }
                             }),
                         }
@@ -12592,16 +12614,16 @@ impl CockpitView {
                 .thread(thread)
                 .and_then(|thread| tuning_hold(&thread))
         });
-        crate::menu::ChoiceMenu {
+        ferrite_ui::menu::ChoiceMenu {
             head: Some((head.0.into(), head.1.into())),
             ladder,
             hints,
             // The model picker is the prototype's 66 cells; the rest hug
             // their rows.
-            width: (!effort).then_some(crate::theme::MODEL_PICKER_W),
+            width: (!effort).then_some(ferrite_ui::theme::MODEL_PICKER_W),
             // Its section logo 8px left of the status logo (FL-13).
             lead: if !effort && !band {
-                crate::theme::MODEL_PICKER_NUDGE
+                ferrite_ui::theme::MODEL_PICKER_NUDGE
             } else {
                 0.
             },
@@ -12847,9 +12869,11 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         let choice = match answer {
-            crate::notifications::QuickAnswer::Allow => crate::decision::ApprovalChoice::Allow,
+            crate::notifications::QuickAnswer::Allow => {
+                ferrite_pane::decision::ApprovalChoice::Allow
+            }
             crate::notifications::QuickAnswer::Deny => {
-                crate::decision::ApprovalChoice::DenyAndSteer
+                ferrite_pane::decision::ApprovalChoice::DenyAndSteer
             }
         };
         self.needs_you
@@ -13141,7 +13165,7 @@ impl CockpitView {
                             match &block.body {
                                 ferrite_core::transcript::Body::Tool(call)
                                     if !decision.tool_use_id.is_empty()
-                                        && crate::transcript::gated(
+                                        && ferrite_pane::transcript::gated(
                                             &call.call,
                                             &decision.tool_use_id,
                                         ) =>
@@ -13264,7 +13288,7 @@ impl CockpitView {
     /// tally). A press shows the view in the tree's place, or the tree
     /// again from the active one.
     fn nav_views(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
-        use crate::icons;
+        use ferrite_ui::icons;
         use nav::{NavView, Trailing};
         let shown = self.nav_view;
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -13274,7 +13298,7 @@ impl CockpitView {
                 key,
                 nav::view_icon(icons::SEARCH, key, false, false),
                 "Search",
-                crate::components::bound_chord("palette::Toggle")
+                ferrite_ui::components::bound_chord("palette::Toggle")
                     .map_or(Trailing::None, Trailing::Chord),
                 false,
                 false,
@@ -13578,12 +13602,12 @@ impl CockpitView {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .h(px(crate::theme::NAV_HEADING_BUTTON))
-                .px(px(crate::theme::SPACE_1))
-                .rounded(px(crate::theme::R_SMALL))
+                .h(px(ferrite_ui::theme::NAV_HEADING_BUTTON))
+                .px(px(ferrite_ui::theme::SPACE_1))
+                .rounded(px(ferrite_ui::theme::R_SMALL))
                 .hover_row("notifications-mark-read")
                 .press_row()
-                .font_weight(crate::theme::W_BODY)
+                .font_weight(ferrite_ui::theme::W_BODY)
                 .child("Mark all read")
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
@@ -13602,7 +13626,7 @@ impl CockpitView {
     fn nav(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.nav_railed();
         let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
         // The width the board reads this frame (F-12): the ride's, or a
         // scene's held one.
         let ride = self.nav_ride_now(cx);
@@ -13690,7 +13714,7 @@ impl CockpitView {
         // A scene holding the ride (`fixture_hold_nav`) holds the fade where
         // its own clock would be that far into the ride.
         if let Some(progress) = self.nav_hold {
-            let elapsed = crate::motion::RESIZE
+            let elapsed = ferrite_ui::motion::RESIZE
                 .duration()
                 .mul_f32(progress.clamp(0.0, 1.0));
             let faded = nav::CONTENT_FADE.progress(
@@ -13871,8 +13895,8 @@ impl CockpitView {
     /// The `Projects` heading (§5.1.3), its `+` a new Project.
     fn projects_heading(&self, cx: &mut Context<Self>) -> Div {
         nav::heading("nav-projects-heading", "Projects").child(
-            nav::heading_button("nav-new-project", crate::icons::PLUS)
-                .tooltip(crate::menu::tooltip("New project"))
+            nav::heading_button("nav-new-project", ferrite_ui::icons::PLUS)
+                .tooltip(ferrite_ui::menu::tooltip("New project"))
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_project_creator(cx);
@@ -13991,7 +14015,7 @@ impl CockpitView {
         let lifted = self.nav_dragging == Some(Drag::Group(id));
         let mut block = nav::group_block(id)
             .when(lifted, |block| {
-                block.opacity(crate::theme::DRAG_SOURCE_OPACITY)
+                block.opacity(ferrite_ui::theme::DRAG_SOURCE_OPACITY)
             })
             .child(
                 drop_feedback(
@@ -14163,7 +14187,9 @@ impl CockpitView {
         drop_feedback(head, self.cockpit.groups().clone(), target)
             // The row being dragged stays in the tree, dimmed, while its
             // copy rides the pointer.
-            .when(lifted, |row| row.opacity(crate::theme::DRAG_SOURCE_OPACITY))
+            .when(lifted, |row| {
+                row.opacity(ferrite_ui::theme::DRAG_SOURCE_OPACITY)
+            })
             .on_drag(
                 NavDrag {
                     drag: Drag::Thread { thread, group },
@@ -14239,7 +14265,7 @@ type SectionCheckout = (Option<(SharedString, bool)>, Option<(u32, u32)>);
 const READER_LEAF: u64 = 1 << 62;
 
 /// A Review's share of its Pane's slot when it first opens beside it.
-const READER_SHARE: f32 = crate::theme::READER_SHARE;
+const READER_SHARE: f32 = ferrite_ui::theme::READER_SHARE;
 
 /// The approval a wall tile's digit gives (R9): `1` allow, `2` allow for
 /// this thread, `3` deny and steer.

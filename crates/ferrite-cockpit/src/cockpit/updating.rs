@@ -199,12 +199,12 @@ impl CockpitView {
                 staged.notes
             };
             window.open_dialog(cx, move |dialog, window, _| {
-                crate::rich::reading_dialog(
+                ferrite_pane::rich::reading_dialog(
                     dialog,
                     "whats-new",
                     title.clone(),
                     gpui::base::text::TextView::markdown("whats-new-text", notes.clone())
-                        .style(crate::rich::style(window.rem_size())),
+                        .style(ferrite_pane::rich::style(window.rem_size())),
                 )
             });
         }

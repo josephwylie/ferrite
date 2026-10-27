@@ -29,11 +29,17 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
 #[test]
 fn standard_reads_at_13_on_a_21px_line() {
     use ferrite_core::settings::ReadingSize;
-    assert_eq!(crate::theme::answer_text_size(ReadingSize::STANDARD), 13.);
-    assert_eq!(crate::theme::answer_line_height(ReadingSize::STANDARD), 21.);
+    assert_eq!(
+        ferrite_ui::theme::answer_text_size(ReadingSize::STANDARD),
+        13.
+    );
+    assert_eq!(
+        ferrite_ui::theme::answer_line_height(ReadingSize::STANDARD),
+        21.
+    );
     let grid = pane::Grid::of(ReadingSize::STANDARD);
     assert!((grid.cell() - 7.8).abs() < 1e-4);
-    assert!((crate::theme::IMAGE_CELLS * grid.cell() - 374.4).abs() < 1e-3);
+    assert!((ferrite_ui::theme::IMAGE_CELLS * grid.cell() - 374.4).abs() < 1e-3);
     assert_eq!(pane::Grid::pane(ReadingSize::STANDARD, true), grid);
     let group = pane::Grid::pane(ReadingSize::STANDARD, false);
     assert_eq!((group.size, group.line), (12.5, 20.));
@@ -135,7 +141,7 @@ fn a_test_run_reads_its_verdict_on_its_elbow() {
         "test median_even ... FAILED\n\ntest result: FAILED. 341 passed; 1 failed; 0 ignored",
     );
     let elbow = pane::test_elbow(&piped).expect("a test run");
-    assert_eq!(elbow.lead, crate::theme::words::FAILED);
+    assert_eq!(elbow.lead, ferrite_ui::theme::words::FAILED);
     assert_eq!(elbow.line(), "failed \u{b7} 341 passed; 1 failed");
 }
 
@@ -195,17 +201,17 @@ fn the_hover_card_hangs_under_its_path_and_flips_above_near_the_foot() {
     let viewport = size(px(1440.), px(900.));
     let anchor = Bounds::new(point(px(200.), px(300.)), size(px(120.), px(20.)));
     assert_eq!(
-        crate::hover_card::hang_origin(anchor, card, viewport),
-        point(px(200.), px(320. + crate::theme::HOVER_CARD_GAP))
+        ferrite_pane::hover_card::hang_origin(anchor, card, viewport),
+        point(px(200.), px(320. + ferrite_ui::theme::HOVER_CARD_GAP))
     );
     let low = Bounds::new(point(px(200.), px(800.)), size(px(120.), px(20.)));
     assert_eq!(
-        crate::hover_card::hang_origin(low, card, viewport).y,
-        px(800. - crate::theme::HOVER_CARD_GAP - 166.)
+        ferrite_pane::hover_card::hang_origin(low, card, viewport).y,
+        px(800. - ferrite_ui::theme::HOVER_CARD_GAP - 166.)
     );
     let right = Bounds::new(point(px(1400.), px(300.)), size(px(30.), px(20.)));
     assert_eq!(
-        crate::hover_card::hang_origin(right, card, viewport).x,
+        ferrite_pane::hover_card::hang_origin(right, card, viewport).x,
         px(1440. - 16. - 780.)
     );
 }
@@ -214,13 +220,13 @@ fn the_hover_card_hangs_under_its_path_and_flips_above_near_the_foot() {
 /// of numbers, and frame their images like a prompt's.
 #[test]
 fn answers_underline_links_on_hover_align_numbers_and_frame_images() {
-    let style = crate::rich::style(px(crate::theme::FS_UI));
+    let style = ferrite_pane::rich::style(px(ferrite_ui::theme::FS_UI));
     assert!(style.link_underline_on_hover());
     assert!(style.numeric_columns_right());
-    let cell = crate::theme::tx_cell(crate::theme::FS_PROSE);
+    let cell = ferrite_ui::theme::tx_cell(ferrite_ui::theme::FS_PROSE);
     assert_eq!(
         style.image().size.width,
-        Some(px(crate::theme::IMAGE_CELLS * cell).into())
+        Some(px(ferrite_ui::theme::IMAGE_CELLS * cell).into())
     );
 }
 
@@ -322,7 +328,7 @@ fn a_running_test_suite_shows_its_bar_and_count(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("tool-test-progress").is_some());
     let bar = cx.debug_bounds("test-bar").expect("the bar");
-    assert_eq!(bar.size.height, px(crate::theme::TEST_BAR_H));
+    assert_eq!(bar.size.height, px(ferrite_ui::theme::TEST_BAR_H));
 }
 
 /// A long Edit's diff in a wide transcript draws side by side in its box,
@@ -389,7 +395,7 @@ fn a_long_edit_diff_splits_caps_and_folds(cx: &mut TestAppContext) {
     assert!(
         !shown("old 20"),
         "past HUNK_MAX_ROWS ({}) nothing draws",
-        crate::theme::HUNK_MAX_ROWS
+        ferrite_ui::theme::HUNK_MAX_ROWS
     );
     assert!(!shown("later"), "a later edit to the file folds its diff");
     view.update(cx, |view, cx| {

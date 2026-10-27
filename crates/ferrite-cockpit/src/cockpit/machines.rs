@@ -24,7 +24,7 @@ type SavedChange = Box<dyn Fn(&mut Vec<Machine>)>;
 pub(super) fn held(element: Div, id: &'static str) -> Div {
     element
         .relative()
-        .opacity(crate::theme::MACHINE_LOST_OPACITY)
+        .opacity(ferrite_ui::theme::MACHINE_LOST_OPACITY)
         .child(
             div()
                 .id(id)
@@ -308,7 +308,7 @@ impl CockpitView {
                 ));
             } else {
                 let (flip, word) = if machine.enabled {
-                    (false, crate::theme::words::OFF)
+                    (false, ferrite_ui::theme::words::OFF)
                 } else {
                     (true, "on")
                 };
@@ -476,7 +476,7 @@ impl CockpitView {
         }
         let field = cx.new(Composer::new);
         field.update(cx, |field, cx| {
-            field.set_role(crate::composer::Role::Field(None), cx);
+            field.set_role(ferrite_pane::composer::Role::Field(None), cx);
             field.set(REMOTE_HOME.into(), cx);
         });
         cx.subscribe(&field, |view, _, _: &Edited, cx| view.list_remote_path(cx))
@@ -677,9 +677,9 @@ impl CockpitView {
 fn connection_hint(target: &str, connection: Connection) -> String {
     let state = match connection {
         Connection::Online => "connected",
-        Connection::Connecting => crate::theme::words::CONNECTING,
-        Connection::Attention => crate::theme::words::NEEDS_YOU,
-        Connection::Disabled => crate::theme::words::OFF,
+        Connection::Connecting => ferrite_ui::theme::words::CONNECTING,
+        Connection::Attention => ferrite_ui::theme::words::NEEDS_YOU,
+        Connection::Disabled => ferrite_ui::theme::words::OFF,
     };
     format!("{target} · {state}")
 }

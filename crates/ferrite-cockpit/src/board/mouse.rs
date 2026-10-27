@@ -36,8 +36,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::links::{self, Link};
 use super::BoardView;
-use crate::pointer::Pointer as _;
-use crate::theme::{CH, ROW};
+use ferrite_ui::pointer::Pointer as _;
+use ferrite_ui::theme::{CH, ROW};
 
 /// A cell of the screen: its column and its line.
 pub type Cell = (usize, usize);

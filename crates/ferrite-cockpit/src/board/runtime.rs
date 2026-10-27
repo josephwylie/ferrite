@@ -32,8 +32,8 @@ use sw_board::board::view::screen;
 use sw_board::shown::ink::{Ink, Inked};
 
 use super::{aim, controls, keys, machines, mouse, render};
-use crate::components;
-use crate::theme::{CARD, CH, ROW, SPACE_1};
+use ferrite_ui::components;
+use ferrite_ui::theme::{CARD, CH, ROW, SPACE_1};
 
 /// How often the board ticks and the loader looks again.
 const BEAT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -137,7 +137,7 @@ impl BoardView {
     }
 
     fn new(board: Option<Board>, keeps_view: bool, cx: &mut Context<Self>) -> Self {
-        crate::pane::init_components(cx);
+        ferrite_pane::pane::init_components(cx);
         Self {
             focus: cx.focus_handle(),
             board,
@@ -447,7 +447,7 @@ impl Render for BoardView {
             .map(|theme| render::lines(&lines, theme))
             .unwrap_or_default();
         let surface = if self.popup() {
-            crate::menu::float()
+            ferrite_ui::menu::float()
         } else {
             div()
         };

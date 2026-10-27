@@ -53,10 +53,10 @@ use gpui::{
     Point, ScrollHandle, SharedString, StyledText, Window,
 };
 
-use crate::composer::{Composer, Edited, Role};
-use crate::pane::{DiffKind, Grid};
-use crate::pointer::Pointer as _;
-use crate::theme::*;
+use ferrite_pane::composer::{Composer, Edited, Role};
+use ferrite_pane::pane::{DiffKind, Grid};
+use ferrite_ui::pointer::Pointer as _;
+use ferrite_ui::theme::*;
 
 gpui::actions!(
     review,
@@ -423,9 +423,9 @@ pub(crate) struct ReviewView {
     /// The base picker, over the slot.
     bases: Option<BasePanel>,
     /// Find in the rows shown (⌘F).
-    find: Option<crate::find::Find>,
+    find: Option<ferrite_pane::find::Find>,
     /// Native text for the Markdown view.
-    rich: crate::rich::TextCache,
+    rich: ferrite_pane::rich::TextCache,
 }
 
 impl EventEmitter<ScopePicked> for ReviewView {}
@@ -474,7 +474,7 @@ impl ReviewView {
             tree: None,
             bases: None,
             find: None,
-            rich: crate::rich::TextCache::default(),
+            rich: ferrite_pane::rich::TextCache::default(),
         }
     }
 
@@ -900,7 +900,7 @@ impl ReviewView {
         self.children = children;
         self.child_of = child_of;
         self.highlights = highlights;
-        self.number_cells = crate::pane::diff_number_cells(max_number as usize);
+        self.number_cells = ferrite_pane::pane::diff_number_cells(max_number as usize);
         self.selection = self
             .selection
             .filter(|picked| picked.last() < self.lines.len());
@@ -1327,7 +1327,7 @@ impl ReviewView {
     /// ⌘F: the find bar over the rows (or the keyboard back to it).
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.find.is_none() {
-            self.find = Some(crate::find::Find::new(cx, |view: &mut Self, cx| {
+            self.find = Some(ferrite_pane::find::Find::new(cx, |view: &mut Self, cx| {
                 view.refind(cx)
             }));
         }
@@ -1390,7 +1390,7 @@ impl ReviewView {
                 (range, if strong { FIND_ACTIVE_WASH } else { FIND_WASH })
             })
             .collect();
-        crate::find::washed(runs, &washes)
+        ferrite_pane::find::washed(runs, &washes)
     }
 
     /// The hover blend's key for one of this Review's rows: unique in the
@@ -1428,9 +1428,9 @@ impl ReviewView {
             .when(
                 self.file.is_none() && (file.additions, file.deletions) != (0, 0),
                 |head| {
-                    head.child(crate::components::tabular(
+                    head.child(ferrite_ui::components::tabular(
                         div().flex_shrink_0().pl(px(2. * self.grid.cell())).child(
-                            crate::pane::trail_diff_stat(
+                            ferrite_pane::pane::trail_diff_stat(
                                 file.additions as usize,
                                 file.deletions as usize,
                             ),
@@ -1491,7 +1491,7 @@ impl ReviewView {
             ink.number_color
         };
         let number = |number: Option<u32>| {
-            crate::components::tabular(
+            ferrite_ui::components::tabular(
                 div()
                     .flex_shrink_0()
                     .w(px(number_w))
@@ -1629,7 +1629,7 @@ impl ReviewView {
                     .bg(paint::RAISED)
                     // The field holding the keyboard wears the focus ring,
                     // so it never reads as a comment already made.
-                    .map(|field| crate::components::focused(field, self.editor_focused))
+                    .map(|field| ferrite_ui::components::focused(field, self.editor_focused))
                     .child(div().min_w_0().flex_1().child(editor.clone()))
                     .child(
                         verb("review-comment-save", "\u{21b5} add").on_click(cx.listener(
@@ -1731,7 +1731,7 @@ impl ReviewView {
                     .font_family(FONT_UI)
                     .text_size(px(FS_PROSE))
                     .line_height(px(LH_PROSE))
-                    .child(crate::rich::Markdown::new(
+                    .child(ferrite_pane::rich::Markdown::new(
                         format!("review-markdown-{}", file.diff.path),
                         file.new.clone().unwrap_or_default(),
                         self.rich.clone(),
@@ -1814,14 +1814,14 @@ impl ReviewView {
     /// The pull request: its head, its checks and its conversation.
     fn pr_body(&self) -> AnyElement {
         let Some(pr) = &self.pr else {
-            return crate::menu::note("Reading\u{2026}").into_any_element();
+            return ferrite_ui::menu::note("Reading\u{2026}").into_any_element();
         };
         let pr = match &pr.pr {
             Ok(pr) => pr,
             Err(note) => {
                 return div()
                     .debug_selector(|| "review-pr-note".into())
-                    .child(crate::menu::note(note.clone()))
+                    .child(ferrite_ui::menu::note(note.clone()))
                     .into_any_element()
             }
         };
@@ -1952,12 +1952,12 @@ impl ReviewView {
     fn search_body(&self, search: &SearchPanel, cx: &mut Context<Self>) -> AnyElement {
         let cell = self.grid.cell();
         let results: AnyElement = match &search.results {
-            None => crate::menu::note("Searching\u{2026}").into_any_element(),
-            Some(Err(error)) => crate::menu::note(error.clone()).into_any_element(),
+            None => ferrite_ui::menu::note("Searching\u{2026}").into_any_element(),
+            Some(Err(error)) => ferrite_ui::menu::note(error.clone()).into_any_element(),
             Some(Ok(_)) => {
                 let rows = search.rows();
                 if rows.is_empty() {
-                    crate::menu::note("Nothing found").into_any_element()
+                    ferrite_ui::menu::note("Nothing found").into_any_element()
                 } else {
                     div()
                         .id("review-found")
@@ -2004,7 +2004,7 @@ impl ReviewView {
                                             };
                                             let marks = match found.text {
                                                 Some(_) => Vec::new(),
-                                                None => crate::components::match_highlights(
+                                                None => ferrite_ui::components::match_highlights(
                                                     &found.matched,
                                                     false,
                                                 ),
@@ -2016,8 +2016,10 @@ impl ReviewView {
                                 // The matched words in the face every
                                 // filtering float marks its matches in.
                                 .children(found.text.map(|text| {
-                                    let marks =
-                                        crate::components::match_highlights(&found.matched, false);
+                                    let marks = ferrite_ui::components::match_highlights(
+                                        &found.matched,
+                                        false,
+                                    );
                                     div()
                                         .flex_1()
                                         .min_w_0()
@@ -2049,7 +2051,7 @@ impl ReviewView {
                     .h(px(FLOAT_ROW_H))
                     .px(px(CH))
                     .gap(px(CH))
-                    .child(crate::components::prompt_mark(TEXT_STRONG))
+                    .child(ferrite_ui::components::prompt_mark(TEXT_STRONG))
                     .child(div().flex_1().min_w_0().child(search.field.clone())),
             )
             .child(results)
@@ -2061,16 +2063,18 @@ impl ReviewView {
     /// quiet.
     fn tree_body(&self, tree: &TreePanel, cx: &mut Context<Self>) -> AnyElement {
         let entries = match &tree.entries {
-            None => return crate::menu::note("Reading\u{2026}").into_any_element(),
+            None => return ferrite_ui::menu::note("Reading\u{2026}").into_any_element(),
             Some(Err(error)) => {
-                return crate::menu::note(format!("Can\u{2019}t list the files \u{b7} {error}"))
-                    .into_any_element()
+                return ferrite_ui::menu::note(format!(
+                    "Can\u{2019}t list the files \u{b7} {error}"
+                ))
+                .into_any_element()
             }
             Some(Ok(entries)) => entries,
         };
         let rows = tree.rows();
         if rows.is_empty() {
-            return crate::menu::note("No files").into_any_element();
+            return ferrite_ui::menu::note("No files").into_any_element();
         }
         let cell = self.grid.cell();
         div()
@@ -2139,8 +2143,8 @@ impl ReviewView {
     fn bases_body(&self, panel: &BasePanel, cx: &mut Context<Self>) -> AnyElement {
         let cell = self.grid.cell();
         let list: AnyElement = match &panel.bases {
-            None => crate::menu::note("Reading\u{2026}").into_any_element(),
-            Some(Err(error)) => crate::menu::note(error.clone()).into_any_element(),
+            None => ferrite_ui::menu::note("Reading\u{2026}").into_any_element(),
+            Some(Err(error)) => ferrite_ui::menu::note(error.clone()).into_any_element(),
             Some(Ok(bases)) => {
                 let visible = panel.visible(cx);
                 if visible.is_empty() {
@@ -2149,7 +2153,7 @@ impl ReviewView {
                         true => "No branches".to_string(),
                         false => format!("\u{23ce} reads the branch over {typed}"),
                     };
-                    crate::menu::note(note).into_any_element()
+                    ferrite_ui::menu::note(note).into_any_element()
                 } else {
                     div()
                         .id("review-bases")
@@ -2230,7 +2234,7 @@ impl ReviewView {
                     .h(px(FLOAT_ROW_H))
                     .px(px(CH))
                     .gap(px(CH))
-                    .child(crate::components::prompt_mark(TEXT_STRONG))
+                    .child(ferrite_ui::components::prompt_mark(TEXT_STRONG))
                     .child(div().flex_1().min_w_0().child(panel.field.clone())),
             )
             .child(list)
@@ -2249,22 +2253,22 @@ impl ReviewView {
             return self.tree_body(tree, cx);
         }
         if let Some(error) = &self.error {
-            return crate::menu::note(self.error_note(error)).into_any_element();
+            return ferrite_ui::menu::note(self.error_note(error)).into_any_element();
         }
         if self.pr_open {
             return self.pr_body();
         }
         if let Some(file) = &self.file {
             return match &file.file {
-                None => crate::menu::note("Reading\u{2026}").into_any_element(),
+                None => ferrite_ui::menu::note("Reading\u{2026}").into_any_element(),
                 Some(_) => self.rows_list(cx),
             };
         }
         if self.listing_commits() {
             return match &self.commits {
-                None => crate::menu::note("Reading\u{2026}").into_any_element(),
+                None => ferrite_ui::menu::note("Reading\u{2026}").into_any_element(),
                 Some(commits) if commits.is_empty() => {
-                    crate::menu::note("No commits on this branch").into_any_element()
+                    ferrite_ui::menu::note("No commits on this branch").into_any_element()
                 }
                 Some(commits) => div()
                     .id("review-commits")
@@ -2288,9 +2292,9 @@ impl ReviewView {
             };
         }
         match &self.diff {
-            None => crate::menu::note("Reading\u{2026}").into_any_element(),
+            None => ferrite_ui::menu::note("Reading\u{2026}").into_any_element(),
             Some(files) if files.is_empty() => {
-                crate::menu::note(self.empty_note()).into_any_element()
+                ferrite_ui::menu::note(self.empty_note()).into_any_element()
             }
             Some(_) => self.rows_list(cx),
         }
@@ -2351,7 +2355,7 @@ impl ReviewView {
         for _ in 0..4 {
             let this = scope;
             bar = bar.child(
-                crate::menu::token(
+                ferrite_ui::menu::token(
                     SharedString::from(format!("review-scope-{}", this.name())),
                     this.label(),
                     this == self.scope && self.showing_diff(),
@@ -2365,7 +2369,7 @@ impl ReviewView {
             scope = scope.cycle();
         }
         bar = bar.child(
-            crate::menu::token("review-pr-token", "PR", self.pr_open)
+            ferrite_ui::menu::token("review-pr-token", "PR", self.pr_open)
                 .debug_selector(|| "review-pr-token".into())
                 .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
                     window.focus(&view.focus, cx);
@@ -2423,11 +2427,11 @@ fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
                 .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(count)),
         )
-        .child(crate::components::tabular(
+        .child(ferrite_ui::components::tabular(
             div()
                 .debug_selector(|| "review-stat-lines".into())
                 .flex_shrink_0()
-                .child(crate::pane::trail_diff_stat(
+                .child(ferrite_pane::pane::trail_diff_stat(
                     added as usize,
                     removed as usize,
                 )),
@@ -2446,7 +2450,7 @@ fn sentence(words: &str) -> String {
 /// A row a click picks: the row's hover face under the pointer, or, on
 /// the pick, the selection stepping up under it (`hover_carried`), so the
 /// row the arrows hold and the row the pointer is on read apart.
-fn pickable<E: crate::pointer::Pointer>(row: E, key: SharedString, picked: bool) -> E {
+fn pickable<E: ferrite_ui::pointer::Pointer>(row: E, key: SharedString, picked: bool) -> E {
     if picked {
         row.hover_carried(key)
     } else {
@@ -2503,7 +2507,7 @@ fn row_highlights(
     }
     let text = row.text();
     let tokens = ferrite_core::transcript::highlight_tokens(language, &text);
-    let runs = crate::pane::code(&text, Some(tokens.as_slice()));
+    let runs = ferrite_pane::pane::code(&text, Some(tokens.as_slice()));
     let word = match row {
         Row::Insertion { .. } => DIFF_ADDED_WORD,
         Row::Deletion { .. } => DIFF_REMOVED_WORD,
@@ -2520,7 +2524,7 @@ fn row_highlights(
         .iter()
         .map(|&(start, end)| (byte(start)..byte(end), word))
         .collect();
-    crate::find::washed(runs, &washes)
+    ferrite_pane::find::washed(runs, &washes)
 }
 
 /// What a reference scene stages without the cockpit's readers: the slot's
@@ -2660,18 +2664,26 @@ impl Render for ReviewView {
                 cx.listener(|view, _: &CloseSearch, window, cx| view.close_search(window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &crate::find::Open, window, cx| view.open_find(window, cx)),
-            )
-            .on_action(cx.listener(|view, _: &crate::find::Next, _, cx| view.step_find(true, cx)))
-            .on_action(
-                cx.listener(|view, _: &crate::find::Previous, _, cx| view.step_find(false, cx)),
+                cx.listener(|view, _: &ferrite_pane::find::Open, window, cx| {
+                    view.open_find(window, cx)
+                }),
             )
             .on_action(
-                cx.listener(|view, _: &crate::find::Close, window, cx| view.close_find(window, cx)),
+                cx.listener(|view, _: &ferrite_pane::find::Next, _, cx| view.step_find(true, cx)),
+            )
+            .on_action(
+                cx.listener(|view, _: &ferrite_pane::find::Previous, _, cx| {
+                    view.step_find(false, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &ferrite_pane::find::Close, window, cx| {
+                    view.close_find(window, cx)
+                }),
             )
             .child(self.bar(cx))
             .child(body)
-            .child(crate::menu::footer(footer))
+            .child(ferrite_ui::menu::footer(footer))
     }
 }
 
@@ -2708,8 +2720,8 @@ mod tests {
         cx: &mut TestAppContext,
     ) -> (Entity<ReviewView>, gpui::VisualTestContext) {
         cx.update(|cx| {
-            crate::pane::init_components(cx);
-            let table = crate::keymap::bindings(crate::keymap::Platform::Mac);
+            ferrite_pane::pane::init_components(cx);
+            let table = ferrite_ui::keymap::bindings(ferrite_ui::keymap::Platform::Mac);
             let bindings = crate::load_bindings(table, cx);
             cx.bind_keys(bindings);
         });
@@ -3114,7 +3126,7 @@ mod tests {
         });
         assert_eq!(
             cells(cx),
-            crate::pane::diff_number_cells(1204),
+            ferrite_pane::pane::diff_number_cells(1204),
             "four digits and the pad"
         );
         assert!(cells(cx) > DIFF_NUMBER_CELLS);

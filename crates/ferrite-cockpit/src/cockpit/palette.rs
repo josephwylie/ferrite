@@ -39,7 +39,7 @@ impl Floats {
 /// word for every state that has one — a waiting Thread's what it waits
 /// for, as its nav row says — a parked Thread's age, nothing for idle.
 fn state_word(row: &nav::ThreadRow, age: SharedString) -> SharedString {
-    use crate::theme::words;
+    use ferrite_ui::theme::words;
     match row.status {
         nav::RowStatus::Working => words::WORKING.into(),
         nav::RowStatus::Background => words::BACKGROUND.into(),
@@ -581,7 +581,7 @@ impl CockpitView {
                 let keys = on_board
                     .filter(|at| *at < 9)
                     .and_then(|at| focus_rail_action(at + 1))
-                    .and_then(crate::components::bound_chord);
+                    .and_then(ferrite_ui::components::bound_chord);
                 rows.push(PaletteRow {
                     section: PaletteSection::Threads,
                     name,
@@ -696,7 +696,7 @@ impl CockpitView {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Vec<PaletteRow> {
-        use crate::components::{bound_chord, bound_chord_in};
+        use ferrite_ui::components::{bound_chord, bound_chord_in};
         let focused = self.focused_thread();
         let open = focused.and_then(|thread| self.cockpit.thread(thread));
         let draft = self
@@ -746,10 +746,10 @@ impl CockpitView {
             };
         // The last spelling of a new Thread (⌘T, after ⌘N), or the
         // operator's one key for it.
-        let new_thread_in_group = crate::keymap::active()
+        let new_thread_in_group = ferrite_ui::keymap::active()
             .into_iter()
             .rfind(|(_, action, context)| *action == "cockpit::NewThread" && context.is_none())
-            .map(|(keys, _, _)| crate::components::spell_chord(&keys));
+            .map(|(keys, _, _)| ferrite_ui::components::spell_chord(&keys));
         add(
             focused.is_some(),
             "Park thread".into(),
@@ -1391,7 +1391,7 @@ impl CockpitView {
         let board = self.board_bounds(window);
         // The veil darkens in under the sheet's own entrance, as Settings'
         // does; a press on it takes effect from its first frame.
-        let veil = deferred(crate::motion::veil_in(
+        let veil = deferred(ferrite_ui::motion::veil_in(
             "palette-veil-in",
             div()
                 .debug_selector(|| "palette-veil".into())
@@ -1400,7 +1400,7 @@ impl CockpitView {
                 .top(px(board.y))
                 .w(px(board.w))
                 .h(px(board.h))
-                .bg(rgba(crate::theme::VEIL))
+                .bg(rgba(ferrite_ui::theme::VEIL))
                 .occlude()
                 .on_mouse_down(
                     MouseButton::Left,
@@ -1421,8 +1421,8 @@ impl CockpitView {
             view,
             anchor,
             FloatPlace::BoardTop {
-                top: crate::theme::PALETTE_TOP,
-                width: crate::theme::PALETTE_W,
+                top: ferrite_ui::theme::PALETTE_TOP,
+                width: ferrite_ui::theme::PALETTE_W,
             },
             window,
             cx,
@@ -1446,28 +1446,30 @@ impl CockpitView {
         let leaving = self.toast_stage.borrow_mut().stage(
             standing.as_ref(),
             cx.background_executor().now(),
-            crate::motion::reduced_motion(cx),
+            ferrite_ui::motion::reduced_motion(cx),
         );
         let viewport = window.viewport_size();
         let anchor = gpui::Bounds::new(
             gpui::point(
-                viewport.width - px(crate::theme::TOAST_BOX_RIGHT + crate::theme::TOAST_W),
-                viewport.height - px(crate::theme::STATUS_BAR_H + crate::theme::TOAST_BOTTOM),
+                viewport.width
+                    - px(ferrite_ui::theme::TOAST_BOX_RIGHT + ferrite_ui::theme::TOAST_W),
+                viewport.height
+                    - px(ferrite_ui::theme::STATUS_BAR_H + ferrite_ui::theme::TOAST_BOTTOM),
             ),
-            gpui::size(px(crate::theme::TOAST_W), px(0.)),
+            gpui::size(px(ferrite_ui::theme::TOAST_W), px(0.)),
         );
         let hang =
             |toast: AnyElement| float::hang_element(toast, anchor, FloatPlace::Above { gap: 0. });
         let leaving = leaving.map(|(row, left)| {
             hang(
-                crate::motion::toast_out(left, crate::notifications::toast_face(&row))
+                ferrite_ui::motion::toast_out(left, crate::notifications::toast_face(&row))
                     .into_any_element(),
             )
         });
         let standing = standing.map(|row| {
             let toast = crate::notifications::toast(&row, self.notice_handle(cx));
             hang(
-                crate::motion::toast_in(crate::notifications::toast_key(&row), toast)
+                ferrite_ui::motion::toast_in(crate::notifications::toast_key(&row), toast)
                     .into_any_element(),
             )
         });

@@ -257,9 +257,8 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
         // which wrap in a half-width Pane; the last chip line stands
         // taller, as the inline chip makes it.
         let lines = (band.size.height
-            - px(
-                crate::theme::PROMPT_CHIP_LINE_EXTRA + 2. * crate::theme::prompt_band_pad_y(false)
-            ))
+            - px(ferrite_ui::theme::PROMPT_CHIP_LINE_EXTRA
+                + 2. * ferrite_ui::theme::prompt_band_pad_y(false)))
             / chip.size.height;
         assert!(
             lines >= 1. && lines.fract() == 0.,
@@ -321,7 +320,7 @@ fn the_group_board_resizes_by_its_seam_and_reorders_by_drop(cx: &mut TestAppCont
     );
 
     // Grab the seam (the gap between the two rects) and drag it right.
-    let seam_x = rects[0].x + rects[0].w + crate::theme::BOARD_SEAM / 2.0;
+    let seam_x = rects[0].x + rects[0].w + ferrite_ui::theme::BOARD_SEAM / 2.0;
     let seam_y = rects[0].y + rects[0].h / 2.0;
     cx.simulate_mouse_down(
         gpui::point(px(seam_x), px(seam_y)),
@@ -420,7 +419,7 @@ fn every_slot_of_a_group_board_paints_a_card(cx: &mut TestAppContext) {
         });
         assert_eq!(rects.len(), cards, "one card per slot");
         let area: f32 = rects.iter().map(|(_, rect)| rect.w * rect.h).sum();
-        let seams = (cards - 1) as f32 * crate::theme::BOARD_SEAM;
+        let seams = (cards - 1) as f32 * ferrite_ui::theme::BOARD_SEAM;
         assert!(
             area >= (bounds.w.min(bounds.h) - seams) * bounds.w.max(bounds.h) - 1.0,
             "the cards fill the board, nothing left unpainted: {area} of {bounds:?}"
@@ -491,7 +490,7 @@ fn exercise_board(cx: &mut TestAppContext, count: usize, width: f32, height: f32
 
     let bounds = cx.update(|window, cx| view.read(cx).board_bounds(window));
     let tree = view.read_with(cx, |view, _| view.group_layout(group).unwrap());
-    let seams = tree.seams(bounds, crate::theme::BOARD_SEAM, SEAM_GRAB);
+    let seams = tree.seams(bounds, ferrite_ui::theme::BOARD_SEAM, SEAM_GRAB);
     assert_eq!(seams.len(), count - 1, "{label}: n leaves make n-1 seams");
     for seam in &seams {
         let at = gpui::point(
@@ -526,8 +525,8 @@ fn exercise_board(cx: &mut TestAppContext, count: usize, width: f32, height: f32
             };
             // F-18: a seam drags the whole line it is part of — its
             // linked seams move with it, every other holds.
-            let linked = tree.linked(&seam.id, bounds, crate::theme::BOARD_SEAM);
-            for after in now.seams(bounds, crate::theme::BOARD_SEAM, SEAM_GRAB) {
+            let linked = tree.linked(&seam.id, bounds, ferrite_ui::theme::BOARD_SEAM);
+            for after in now.seams(bounds, ferrite_ui::theme::BOARD_SEAM, SEAM_GRAB) {
                 let before = seams.iter().find(|s| s.id == after.id).unwrap();
                 let (was, is) = (along(before), along(&after));
                 if after.id == seam.id || linked.contains(&after.id) {

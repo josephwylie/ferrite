@@ -42,18 +42,18 @@ use gpui::{
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::components;
-use crate::components::Tip as _;
 use crate::composer::Composer;
 use crate::decision;
-use crate::icons::{self, icon};
-use crate::pointer::{Pointer, PointerPressed};
 use crate::select::TextRuns;
+use ferrite_ui::components;
+use ferrite_ui::components::Tip as _;
+use ferrite_ui::icons::{self, icon};
+use ferrite_ui::pointer::{Pointer, PointerPressed};
 use gpui::component::scroll::ScrollableElement;
-// Every color and metric here is a Soft token (crate::theme) — no literal
+// Every color and metric here is a Soft token (ferrite_ui::theme) — no literal
 // survives in render code, which is #22's grep-able law.
-use crate::theme;
-use crate::theme::*;
+use ferrite_ui::theme;
+use ferrite_ui::theme::*;
 
 // The Cockpit's ⌘D, which a Group head's needs-you door dispatches. It is
 // declared here, below the Cockpit, but keeps the `cockpit` namespace:
@@ -1490,7 +1490,7 @@ pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -
     div()
         .id(("discard-draft-tip", draft.get() as usize))
         .flex_shrink_0()
-        .tooltip(crate::menu::tooltip_with_key("Discard draft", keys))
+        .tooltip(ferrite_ui::menu::tooltip_with_key("Discard draft", keys))
         .child(button)
 }
 
@@ -1601,7 +1601,7 @@ fn wall_cell(tile: WallTile<'_>) -> Div {
         match detail {
             Some(detail) => div()
                 .id(("wall-word", key as usize))
-                .tooltip(crate::menu::tooltip(detail))
+                .tooltip(ferrite_ui::menu::tooltip(detail))
                 .child(face)
                 .into_any_element(),
             None => face.into_any_element(),
@@ -1743,12 +1743,12 @@ pub fn quick_answers(buttons: Vec<AnyElement>) -> Div {
 /// the one 150ms hover blend, the digit staying dim.
 pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) -> Stateful<Div> {
     let hover = id.clone();
-    let ground = crate::motion::hover_blend(
+    let ground = ferrite_ui::motion::hover_blend(
         &hover,
         theme::paint::RAISED.hsla(),
         theme::paint::SELECTED.hsla(),
     );
-    let word = crate::motion::hover_blend(&hover, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
+    let word = ferrite_ui::motion::hover_blend(&hover, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
     let selector = id.clone();
     // Its two runs and a cell of padding each side.
     let key = format!("{key} ");
@@ -1768,7 +1768,7 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
         .bg(ground)
         .cursor_pointer()
         .whitespace_nowrap()
-        .on_hover(crate::motion::hover_listener(hover))
+        .on_hover(ferrite_ui::motion::hover_listener(hover))
         .child(components::cells(key).text_color(rgb(TEXT_DIM)))
         .child(components::cells(label).text_color(word))
 }
@@ -2108,7 +2108,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
 /// from the keymap.
 pub fn fill_button(key: u64) -> Stateful<Div> {
     let blend = SharedString::from(format!("pane-fill-{key}"));
-    let t = crate::motion::hover_t(&blend);
+    let t = ferrite_ui::motion::hover_t(&blend);
     div()
         .id(gpui::ElementId::Name(blend.clone()))
         .debug_selector(move || format!("pane-fill-{key}"))
@@ -2120,14 +2120,14 @@ pub fn fill_button(key: u64) -> Stateful<Div> {
         .rounded(px(theme::R_TAB))
         .cursor_pointer()
         .when(t > 0.0, |door| {
-            door.bg(crate::motion::mix(
+            door.bg(ferrite_ui::motion::mix(
                 rgba(TRANSPARENT).into(),
                 theme::paint::RAISED.into(),
                 t,
             ))
         })
-        .on_hover(crate::motion::hover_listener(blend))
-        .tooltip(crate::menu::action_tooltip(
+        .on_hover(ferrite_ui::motion::hover_listener(blend))
+        .tooltip(ferrite_ui::menu::action_tooltip(
             "Fill the board",
             "cockpit::ToggleFullscreen",
         ))
@@ -2211,7 +2211,7 @@ pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div
         .child(face)
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(|_, window, cx| window.dispatch_action(Box::new(NextDecision), cx));
-    door.tooltip(crate::menu::action_tooltip(
+    door.tooltip(ferrite_ui::menu::action_tooltip(
         "Next needs you",
         "cockpit::NextDecision",
     ))
@@ -2452,7 +2452,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
         .rounded(px(theme::R_CHIP))
         // A matrix job's name can outrun the card; the whole of it is one
         // hover away.
-        .tooltip(crate::menu::tooltip(SharedString::from(format!(
+        .tooltip(ferrite_ui::menu::tooltip(SharedString::from(format!(
             "{name} \u{b7} {}",
             run.detail
         ))))
@@ -2580,7 +2580,7 @@ fn tasks_strip(key: u64, todos: Todos, current: Option<&str>, streaming: bool) -
     meter(done, todos.total, streaming && current.is_some())
         .id(("tasks-meter", key as usize))
         .debug_selector(move || format!("tasks-meter-{key}"))
-        .tooltip(crate::menu::tooltip(tip))
+        .tooltip(ferrite_ui::menu::tooltip(tip))
 }
 
 /// The name a model shows under, from any spelling the wire uses:
@@ -3503,7 +3503,9 @@ pub struct MenuRow {
 /// `SLASH_MENU_W`), capped at `MENU_MAX_H` (its row list scrolls past
 /// that).
 pub fn menu_popover() -> Div {
-    crate::menu::float().w_full().max_h(px(theme::MENU_MAX_H))
+    ferrite_ui::menu::float()
+        .w_full()
+        .max_h(px(theme::MENU_MAX_H))
 }
 
 /// A `/` or `@` row in the float grammar: the cursor row's fill, the name with
@@ -3519,9 +3521,9 @@ pub fn menu_row(
     // A description or a path cut at the popover's width keeps its whole
     // text one hover away.
     let detail = (!row.detail.is_empty()).then(|| row.detail.clone());
-    crate::menu::item_row(id, &menu_item(row, cursor, label_w), cursor, false)
+    ferrite_ui::menu::item_row(id, &menu_item(row, cursor, label_w), cursor, false)
         .when_some(detail, |row, detail| {
-            row.tooltip(crate::menu::tooltip(detail))
+            row.tooltip(ferrite_ui::menu::tooltip(detail))
         })
 }
 
@@ -4065,10 +4067,10 @@ pub fn context_usage(
             // One chevron that turns a quarter as the legend opens, over
             // `motion::CHEVRON` — the disclosures' turn.
             .when(expandable, |reading| {
-                reading.child(crate::motion::settled(
+                reading.child(ferrite_ui::motion::settled(
                     "context-legend-turn",
                     expanded,
-                    crate::motion::CHEVRON,
+                    ferrite_ui::motion::CHEVRON,
                     |turn| {
                         icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_DIM)
                             .with_transformation(gpui::Transformation::rotate(gpui::radians(
@@ -4081,7 +4083,7 @@ pub fn context_usage(
     );
     let context_heading = if expandable {
         let id = gpui::ElementId::from("context-window-toggle");
-        let key = crate::pointer::hover_key(&id);
+        let key = ferrite_ui::pointer::hover_key(&id);
         div()
             .id(id)
             .debug_selector(|| "context-window-toggle".into())
@@ -4184,10 +4186,10 @@ pub fn context_usage(
         }
         // The legend's rows fade in as it opens (`ROW_IN`, opacity only);
         // closing is instant, like every exit.
-        context = context.child(crate::motion::fade_in(
+        context = context.child(ferrite_ui::motion::fade_in(
             "context-legend-in",
             rows,
-            crate::motion::ROW_IN,
+            ferrite_ui::motion::ROW_IN,
             1.0,
         ));
     }
@@ -4203,7 +4205,7 @@ pub fn context_usage(
         .child(context);
     if limits.five_hour.is_none() && limits.weekly.is_none() {
         card = card.child(
-            crate::menu::note("limits not reported by this provider")
+            ferrite_ui::menu::note("limits not reported by this provider")
                 .id("context-usage-limits-unknown")
                 .debug_selector(|| "context-usage-limits-unknown".into()),
         );
@@ -4255,7 +4257,7 @@ pub fn context_usage(
             .flex_shrink_0()
             .gap(px(theme::SPACE_0_5))
             .child(
-                crate::menu::section(scope.1, None, None)
+                ferrite_ui::menu::section(scope.1, None, None)
                     .debug_selector(move || format!("usage-scope-{}", scope.0)),
             );
         for (key, label, count) in [
@@ -4384,7 +4386,7 @@ pub fn picker_row(
     if !detail.is_empty() {
         item = item.detail(detail);
     }
-    crate::menu::item_row(id, &item, cursor, false)
+    ferrite_ui::menu::item_row(id, &item, cursor, false)
 }
 
 /// A picker's section row: the Provider's logomark in its brand colour (the
@@ -4396,12 +4398,12 @@ pub fn picker_section(provider: Provider, note: SharedString) -> Div {
         Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX, "codex"),
         Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE, "claude"),
     };
-    crate::menu::section(title, Some((mark, ink)), (!note.is_empty()).then_some(note))
+    ferrite_ui::menu::section(title, Some((mark, ink)), (!note.is_empty()).then_some(note))
 }
 
 /// The popover's key-hint footer, each menu supplying its own verbs.
 pub fn popover_footer(hints: &[(&str, &str)]) -> Div {
-    crate::menu::footer(hints)
+    ferrite_ui::menu::footer(hints)
 }
 
 // ----------------------------------------------------------- Block render
@@ -4803,7 +4805,7 @@ pub(crate) fn render_block(
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .tooltip(crate::menu::tooltip(text.clone()))
+                            .tooltip(ferrite_ui::menu::tooltip(text.clone()))
                             .child(selection.line(block.id, text, highlights)),
                     ),
             )
@@ -5923,9 +5925,9 @@ fn eased_fold(
     line: f32,
     content: Option<AnyElement>,
 ) -> AnyElement {
-    let spec = crate::motion::MotionSpec::new(theme::FOLD_EASE_MS, crate::motion::EASE);
+    let spec = ferrite_ui::motion::MotionSpec::new(theme::FOLD_EASE_MS, ferrite_ui::motion::EASE);
     match (open, content) {
-        (true, Some(content)) => crate::motion::settled(id, true, spec, move |t| {
+        (true, Some(content)) => ferrite_ui::motion::settled(id, true, spec, move |t| {
             let full = lines as f32 * line;
             div()
                 .w_full()
@@ -5936,7 +5938,7 @@ fn eased_fold(
         })
         .reveal_only()
         .into_any_element(),
-        _ => crate::motion::settled(id, false, spec, |_| div())
+        _ => ferrite_ui::motion::settled(id, false, spec, |_| div())
             .reveal_only()
             .into_any_element(),
     }
@@ -6059,17 +6061,18 @@ struct TestBar {
 
 impl gpui::RenderOnce for TestBar {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
-        let spec = crate::motion::MotionSpec::new(theme::TEST_BAR_EASE_MS, crate::motion::EASE);
+        let spec =
+            ferrite_ui::motion::MotionSpec::new(theme::TEST_BAR_EASE_MS, ferrite_ui::motion::EASE);
         let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
         let target = self.fraction;
         let (shown, running) = window.with_global_id(self.id.clone().into(), |id, window| {
-            window.with_element_state(id, |state: Option<(f32, crate::motion::Tween)>, _| {
+            window.with_element_state(id, |state: Option<(f32, ferrite_ui::motion::Tween)>, _| {
                 let (at, tween) = match state {
                     Some((at, tween)) if at == target => (at, tween),
                     Some((_, tween)) => (
                         target,
-                        crate::motion::Tween::retarget(
+                        ferrite_ui::motion::Tween::retarget(
                             Some(tween),
                             target,
                             target,
@@ -6078,7 +6081,10 @@ impl gpui::RenderOnce for TestBar {
                             reduced,
                         ),
                     ),
-                    None => (target, crate::motion::Tween::new(target, target, spec, now)),
+                    None => (
+                        target,
+                        ferrite_ui::motion::Tween::new(target, target, spec, now),
+                    ),
                 };
                 let value = tween.value(now, reduced);
                 ((value, tween.running(now, reduced)), (at, tween))
@@ -6659,10 +6665,10 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
     };
     let drawn = draw_members();
     let open_id = SharedString::from(format!("tool-group-open-{leader_call}"));
-    let spec = crate::motion::MotionSpec::new(theme::FOLD_EASE_MS, crate::motion::EASE);
+    let spec = ferrite_ui::motion::MotionSpec::new(theme::FOLD_EASE_MS, ferrite_ui::motion::EASE);
     let body = if expanded {
         let members = rail(drawn);
-        crate::motion::settled(open_id, true, spec, move |t| {
+        ferrite_ui::motion::settled(open_id, true, spec, move |t| {
             div()
                 .w_full()
                 .min_w_0()
@@ -6673,7 +6679,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         .into_any_element()
     } else {
         // Mounted shut too, so the next opening eases.
-        let shut = crate::motion::settled(open_id, false, spec, |_| div())
+        let shut = ferrite_ui::motion::settled(open_id, false, spec, |_| div())
             .reveal_only()
             .into_any_element();
         if drawn.is_empty() {
@@ -7097,8 +7103,13 @@ pub fn disclosure_chevron(expanded: bool, targeted: bool, eased: bool) -> AnyEle
             )))
     };
     let mark = if eased {
-        crate::motion::settled("disclosure-turn", expanded, crate::motion::CHEVRON, chevron)
-            .into_any_element()
+        ferrite_ui::motion::settled(
+            "disclosure-turn",
+            expanded,
+            ferrite_ui::motion::CHEVRON,
+            chevron,
+        )
+        .into_any_element()
     } else {
         chevron(if expanded { 1. } else { 0. }).into_any_element()
     };
@@ -7896,7 +7907,7 @@ impl gpui::Element for CellCut {
             (self.wash_cells(kept), self.words.as_ref())
         {
             let (top, height) = inline_content_box(window);
-            let edge = |x: f32| px(crate::components::css_px(x));
+            let edge = |x: f32| px(ferrite_ui::components::css_px(x));
             let x0 = edge(left + self.x_at(from));
             let x1 = match (runs_on, cut) {
                 (true, _) => edge(f32::from(bounds.right())),
@@ -8129,7 +8140,7 @@ pub fn init_components(cx: &mut gpui::App) {
             .install(cx);
     }
     let first = !cx.has_global::<gpui::component::Theme>();
-    crate::theme::init_components(cx);
+    ferrite_ui::theme::init_components(cx);
     if first {
         crate::attachments::init(cx);
         crate::rich::init(cx);
@@ -8512,7 +8523,7 @@ mod tests {
                     solo: false,
                     thinking: true,
                     settled_at: Default::default(),
-                    },
+                },
                 crate::rich::TextCache::default(),
                 selection.clone(),
                 cx,

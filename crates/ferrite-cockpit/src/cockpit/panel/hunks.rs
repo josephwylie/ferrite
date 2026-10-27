@@ -207,16 +207,13 @@ impl CockpitView {
             .flatten()
             .map(|shown| hunks_element(index, shown));
         let id = SharedString::from(format!("panel-hunks-in-{}-{path}", thread.get()));
-        crate::motion::settled(
-            id,
-            area.is_some(),
-            crate::motion::ROW_IN,
-            move |t| match area {
+        ferrite_ui::motion::settled(id, area.is_some(), ferrite_ui::motion::ROW_IN, move |t| {
+            match area {
                 Some(area) if t < 1.0 => area.opacity(t),
                 Some(area) => area,
                 None => div(),
-            },
-        )
+            }
+        })
         .reveal_only()
     }
 }
@@ -309,7 +306,7 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
 /// column inset 1ch, changed lines on their wash in body ink, context in
 /// `TEXT_DIM`; a hairline between hunks.
 fn hunks_element(index: usize, shown: &Shown) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let cell = FS_PANEL_DIFF * CODE_ADVANCE;
     let row = || {
         div()

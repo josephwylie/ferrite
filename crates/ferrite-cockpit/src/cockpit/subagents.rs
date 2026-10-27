@@ -1,9 +1,10 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
-use crate::{components, decision, theme};
 use ferrite_core::activity::{
     AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
+use ferrite_pane::decision;
+use ferrite_ui::{components, theme};
 use gpui::component::{
     checkbox::Checkbox,
     input::{Input, InputState},
@@ -29,7 +30,7 @@ pub(crate) struct RequestForms(
 #[derive(Default)]
 pub(crate) struct DecisionCursor {
     pub(super) index: Option<usize>,
-    pub(super) note: Option<Entity<crate::composer::Composer>>,
+    pub(super) note: Option<Entity<ferrite_pane::composer::Composer>>,
 }
 
 impl RequestForms {
@@ -46,7 +47,7 @@ impl RequestForms {
     pub(super) fn note(
         &self,
         handle: &DecisionHandle,
-    ) -> Option<Entity<crate::composer::Composer>> {
+    ) -> Option<Entity<ferrite_pane::composer::Composer>> {
         self.1
             .borrow()
             .get(handle)
@@ -56,7 +57,7 @@ impl RequestForms {
     pub(super) fn set_note(
         &self,
         handle: &DecisionHandle,
-        note: Option<Entity<crate::composer::Composer>>,
+        note: Option<Entity<ferrite_pane::composer::Composer>>,
     ) {
         self.1.borrow_mut().entry(handle.clone()).or_default().note = note;
     }
@@ -521,12 +522,12 @@ fn subject_tab_face(
                 )
         })
         .when(!selected, |tab| {
-            tab.text_color(crate::motion::hover_blend(
+            tab.text_color(ferrite_ui::motion::hover_blend(
                 &key,
                 rgb(theme::TEXT_MUTED).into(),
                 rgb(theme::TEXT).into(),
             ))
-            .on_hover(crate::motion::hover_listener(key.clone()))
+            .on_hover(ferrite_ui::motion::hover_listener(key.clone()))
         })
 }
 
@@ -735,15 +736,15 @@ impl CockpitView {
             format!("subject-tab-{}-main", thread.get()).into(),
         )
         .accessibility_label("Main transcript")
-        .tooltip(crate::menu::tooltip("Main transcript"))
+        .tooltip(ferrite_ui::menu::tooltip("Main transcript"))
         .debug_selector(move || format!("subject-main-{}", thread.get()))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(theme::SUBJECT_TAB_INNER_GAP))
-                .child(crate::icons::icon(
-                    crate::icons::TERMINAL,
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::TERMINAL,
                     theme::SUBJECT_TAB_ICON,
                     if main_selected {
                         theme::TEXT_STRONG
@@ -801,7 +802,7 @@ impl CockpitView {
             .accessibility_label(tooltip.clone())
             .debug_selector(move || selector.clone())
             .child(content)
-            .tooltip(crate::menu::tooltip(tooltip));
+            .tooltip(ferrite_ui::menu::tooltip(tooltip));
             tabs = tabs.child(self.subject_tab(
                 tab,
                 thread,
@@ -942,14 +943,14 @@ impl CockpitView {
                         .text_size(px(theme::FS_LABEL))
                         .line_height(px(theme::LH_UI))
                         .text_color(rgb(theme::TEXT_DIM))
-                        .child(crate::icons::icon(
-                            crate::icons::CHECK_CIRCLE,
+                        .child(ferrite_ui::icons::icon(
+                            ferrite_ui::icons::CHECK_CIRCLE,
                             theme::SUBJECT_TAB_ICON,
                             theme::TEXT_DIM,
                         ))
                         .child(components::tabular(div().child(label)))
-                        .child(crate::icons::icon(
-                            crate::icons::CHEVRON_DOWN,
+                        .child(ferrite_ui::icons::icon(
+                            ferrite_ui::icons::CHEVRON_DOWN,
                             theme::SUBJECT_MENU_CHEVRON,
                             theme::TEXT_DIM,
                         )),
@@ -999,8 +1000,8 @@ impl CockpitView {
                 .rounded(px(theme::R_TAB))
                 .accessibility_label("Split right")
                 .tooltip("Open a thread beside")
-                .child(crate::icons::icon(
-                    crate::icons::SPLIT_RIGHT,
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::SPLIT_RIGHT,
                     theme::ICON_BUTTON_GLYPH,
                     theme::TEXT_DIM,
                 ))
@@ -1392,7 +1393,7 @@ impl CockpitView {
                     .rev()
                     .find_map(|block| match &block.body {
                         ferrite_core::transcript::Body::Tool(tool)
-                            if crate::transcript::gated(&tool.call, id) =>
+                            if ferrite_pane::transcript::gated(&tool.call, id) =>
                         {
                             tool.diffs.first().map(|diff| (id.clone(), diff.clone()))
                         }
@@ -1766,7 +1767,7 @@ pub(super) struct Cards {
     pub(super) workspace: Option<std::path::PathBuf>,
     /// The transcript's reading size: an edit approval's diff is drawn at it.
     pub(super) reading: ferrite_core::settings::ReadingSize,
-    pub(super) rich: crate::rich::TextCache,
+    pub(super) rich: ferrite_pane::rich::TextCache,
     pub(super) forms: RequestForms,
     pub(super) request_error: Option<(DecisionHandle, String)>,
     /// The overlay's Pane is short: a question body keeps two rows.
@@ -2113,7 +2114,7 @@ impl Cards {
     fn note_field(
         &self,
         handle: &DecisionHandle,
-        note: Entity<crate::composer::Composer>,
+        note: Entity<ferrite_pane::composer::Composer>,
     ) -> AnyElement {
         let thread = self.thread;
         let (send, confirm, close, dismiss) = (
