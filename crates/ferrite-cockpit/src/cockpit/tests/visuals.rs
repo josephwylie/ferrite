@@ -2,8 +2,8 @@
 //! through the engine seam (the fake engine here), its words in copy, and
 //! the fallbacks when there is no engine.
 use super::*;
-use crate::visual::web::fake::{Call, FakeEngine};
-use crate::visual::web::Engine;
+use ferrite_pane::visual::web::fake::{Call, FakeEngine};
+use ferrite_pane::visual::web::Engine;
 
 const TOOL: &str = "mcp__ferrite__show_visual";
 
@@ -44,7 +44,7 @@ fn shown(id: &str) -> SessionEvent {
 fn install_fake(cx: &mut TestAppContext) -> Rc<FakeEngine> {
     let engine = Rc::new(FakeEngine::new());
     let dyn_engine: Rc<dyn Engine> = engine.clone();
-    cx.update(|cx| crate::visual::engine::Visuals::install(dyn_engine, cx));
+    cx.update(|cx| ferrite_pane::visual::engine::Visuals::install(dyn_engine, cx));
     engine
 }
 

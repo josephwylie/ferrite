@@ -108,8 +108,8 @@ fn reset_keys_forgets_the_operators_keys(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| assert!(view.prefs.settings.keys.is_empty()));
     assert!(!command_rows(&view, cx).iter().any(|(_, act)| *act == reset));
     assert_eq!(
-        crate::keymap::active(),
-        crate::keymap::bindings(crate::keymap::PLATFORM)
+        ferrite_ui::keymap::active(),
+        ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM)
     );
 }
 

@@ -20,12 +20,12 @@ use gpui::component::input::{Input, InputState};
 use gpui::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui::component::{Disableable, Selectable, Sizable};
 
-use crate::pointer::Pointer;
+use ferrite_ui::pointer::Pointer;
 use std::rc::Rc;
 
-use crate::components::{self, MenuItem};
-use crate::icons::{self, icon};
-use crate::theme::*;
+use ferrite_ui::components::{self, MenuItem};
+use ferrite_ui::icons::{self, icon};
+use ferrite_ui::theme::*;
 
 // ------------------------------------------------------------ the sheet
 
@@ -106,7 +106,10 @@ fn head_row(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
             div()
                 .id("sheet-close-tip")
                 .flex_shrink_0()
-                .tooltip(crate::menu::action_tooltip("Close", "cockpit::Interrupt"))
+                .tooltip(ferrite_ui::menu::action_tooltip(
+                    "Close",
+                    "cockpit::Interrupt",
+                ))
                 .child(close),
         )
 }
@@ -477,8 +480,8 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
             .px(px(FLOAT_PAD_X))
             .border_b_1()
             .border_color(paint::HAIRLINE)
-            .child(crate::icons::icon(
-                crate::icons::SEARCH,
+            .child(ferrite_ui::icons::icon(
+                ferrite_ui::icons::SEARCH,
                 FIND_ICON,
                 TEXT_DIM,
             ))
@@ -742,7 +745,7 @@ pub fn chooser<T: Clone + 'static>(
                         }
                         menu.item(
                             PopupMenuItem::element(move |_, _| {
-                                components::kit_row(crate::menu::row_face(&item, false, false))
+                                components::kit_row(ferrite_ui::menu::row_face(&item, false, false))
                             })
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
@@ -1064,7 +1067,7 @@ pub fn path_fact(
         let path = path.clone();
         let on_copy = on_copy.clone();
         let id = gpui::ElementId::from(SharedString::from(format!("settings-copy-{title}")));
-        let key = crate::pointer::hover_key(&id);
+        let key = ferrite_ui::pointer::hover_key(&id);
         div()
             .id(id)
             .flex()
@@ -1075,7 +1078,7 @@ pub fn path_fact(
             .mr(px(-CH))
             .group(COPY_GROUP)
             .hover_raised(key)
-            .tooltip(crate::menu::tooltip(if copied {
+            .tooltip(ferrite_ui::menu::tooltip(if copied {
                 "Copied"
             } else {
                 "Copy path"
@@ -1284,7 +1287,7 @@ mod tests {
     #[gpui::test]
     fn a_chosen_token_is_inverse_and_the_rest_lie_flat(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::pane::init_components(cx);
+            ferrite_pane::pane::init_components(cx);
             let mut on = chip(("c", 0), "Claude".into(), true, cx);
             let mut off = chip(("c", 1), "Codex".into(), false, cx);
             assert_eq!(on.style().background, Some(rgb(PRIMARY).into()));

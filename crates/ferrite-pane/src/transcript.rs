@@ -33,12 +33,11 @@ use crate::{
     file_links::{PathTarget, TargetContext},
     hover_card::{CardStat, HoverCard},
     pane::{self, DisclosureId, DisclosureState, Grid},
-    pointer::Pointer,
     preview::Preview,
     rich::TextCache,
     select::{RunText, TextRuns, TranscriptText},
-    theme,
 };
+use ferrite_ui::{pointer::Pointer, theme};
 use std::{cell::Cell, rc::Rc};
 
 /// The answer's gutter mark: the typed `●` in the strongest ink, the
@@ -204,7 +203,6 @@ pub struct TranscriptInput {
     pub thinking: bool,
     /// When each edit settled, seen live: the hover card's age.
     pub settled_at: BTreeMap<String, SystemTime>,
-    pub disclosure_bounds: pane::DisclosureBounds,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
@@ -313,6 +311,10 @@ pub struct TranscriptView {
     /// Each row's laid-out height, as the list last measured it: the
     /// minimap places its ticks and its view band from these.
     heights: Rc<std::cell::RefCell<HashMap<RowId, f32>>>,
+    /// Where each disclosure control was last laid out, which the tests
+    /// aim at.
+    #[cfg(any(test, feature = "test-support"))]
+    disclosure_bounds: Rc<std::cell::RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
     /// What prose path targets resolve against: the checkout and the paths
     /// this window's calls named.
     targets: TargetContext,
@@ -386,7 +388,6 @@ impl TranscriptView {
                 solo: false,
                 thinking: false,
                 settled_at: BTreeMap::new(),
-                disclosure_bounds: Default::default(),
             },
             rich,
             TranscriptText::default(),
@@ -450,6 +451,8 @@ impl TranscriptView {
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
             heights: Default::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            disclosure_bounds: Default::default(),
             targets,
             hover_card: None,
             glide: None,
@@ -571,7 +574,7 @@ impl TranscriptView {
     /// Stamp the rows that now follow what was the tail: appended live.
     fn note_arrivals(&mut self, tail: Option<RowId>, cx: &App) {
         let now = cx.background_executor().now();
-        let spell = crate::motion::FADE_IN.duration();
+        let spell = ferrite_ui::motion::FADE_IN.duration();
         self.arrivals
             .retain(|_, at| now.saturating_duration_since(*at) < spell);
         let Some(tail) = tail else {
@@ -599,7 +602,7 @@ impl TranscriptView {
 
     /// How far a live-appended row is into its entrance, while it is.
     fn arrival(&self, row: &RowId, cx: &App) -> Option<f32> {
-        if crate::motion::reduced_motion(cx) {
+        if ferrite_ui::motion::reduced_motion(cx) {
             return None;
         }
         let at = self.arrivals.get(row)?;
@@ -607,8 +610,8 @@ impl TranscriptView {
             .background_executor()
             .now()
             .saturating_duration_since(*at);
-        (elapsed < crate::motion::FADE_IN.duration())
-            .then(|| crate::motion::FADE_IN.progress_at(elapsed))
+        (elapsed < ferrite_ui::motion::FADE_IN.duration())
+            .then(|| ferrite_ui::motion::FADE_IN.progress_at(elapsed))
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1135,6 +1138,15 @@ impl TranscriptView {
         )
     }
 
+    /// Where `call`'s disclosure control was last laid out.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn disclosure_bounds(
+        &self,
+        call: &DisclosureId,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.disclosure_bounds.borrow().get(call).copied()
+    }
+
     /// Every disclosure the rows draw, in order: the keyboard's stops. A
     /// call with details, a long thought, a group — and, while a group is
     /// open, its calls; while shut, the call it shows working.
@@ -1258,7 +1270,7 @@ impl TranscriptView {
                 });
             #[cfg(any(test, feature = "test-support"))]
             let control = {
-                let sink = self.input.disclosure_bounds.0.clone();
+                let sink = self.disclosure_bounds.clone();
                 let measured = call.clone();
                 control.on_children_prepainted(move |bounds, _, _| {
                     if let Some(bounds) = bounds.last() {
@@ -1323,7 +1335,7 @@ impl TranscriptView {
         });
         #[cfg(any(test, feature = "test-support"))]
         let control = {
-            let sink = self.input.disclosure_bounds.0.clone();
+            let sink = self.disclosure_bounds.clone();
             let measured = call.clone();
             control.on_children_prepainted(move |bounds, _, _| {
                 // The hit box is the overlay's last child; a keyboard ring
@@ -1365,7 +1377,7 @@ impl TranscriptView {
             return;
         };
         let at = cx.background_executor().now() + next;
-        crate::motion::wake_at(cx.entity_id(), at, cx);
+        ferrite_ui::motion::wake_at(cx.entity_id(), at, cx);
     }
 
     /// The hover card this transcript hosts now, hung under its path.
@@ -1619,7 +1631,7 @@ impl TranscriptView {
     fn glide_to(&mut self, goal: f32, cx: &mut Context<Self>) {
         let (tops, total) = self.estimated_tops();
         let goal = goal.clamp(0., total);
-        if crate::motion::reduced_motion(cx) {
+        if ferrite_ui::motion::reduced_motion(cx) {
             self.glide = None;
             self.jump_to(goal, &tops);
         } else {
@@ -1637,7 +1649,8 @@ impl TranscriptView {
         let Some(glide) = self.glide else {
             return;
         };
-        let spec = crate::motion::MotionSpec::new(theme::MINIMAP_SCROLL_MS, crate::motion::EASE);
+        let spec =
+            ferrite_ui::motion::MotionSpec::new(theme::MINIMAP_SCROLL_MS, ferrite_ui::motion::EASE);
         let elapsed = cx
             .background_executor()
             .now()
@@ -1648,7 +1661,7 @@ impl TranscriptView {
             self.jump_to(glide.to, &tops);
             return;
         }
-        let at = crate::motion::lerp(glide.from, glide.to, spec.progress_at(elapsed));
+        let at = ferrite_ui::motion::lerp(glide.from, glide.to, spec.progress_at(elapsed));
         self.jump_to(at, &tops);
         window.request_animation_frame();
     }
@@ -1713,8 +1726,8 @@ impl TranscriptView {
             .collect();
         let rail = SharedString::from(format!("transcript-minimap-{}", self.input.namespace));
         let band_key = SharedString::from(format!("{rail}-band"));
-        let band_t = crate::motion::hover_t(&band_key);
-        let band_ink = crate::motion::mix(
+        let band_t = ferrite_ui::motion::hover_t(&band_key);
+        let band_ink = ferrite_ui::motion::mix(
             gpui::rgba(theme::MINIMAP_BAND).into(),
             gpui::rgba(theme::MINIMAP_BAND_HOVER).into(),
             band_t,
@@ -1722,7 +1735,7 @@ impl TranscriptView {
         if band_t > 0. && band_t < 1. {
             crate::file_links::mark_fading();
         }
-        let blend = crate::motion::hover_listener(band_key);
+        let blend = ferrite_ui::motion::hover_listener(band_key);
         let hover_entity = entity.clone();
         let jump_entity = entity;
         Some(
@@ -1887,7 +1900,7 @@ impl Render for TranscriptView {
                 let wrapper = match arrival {
                     Some(t) => {
                         window.request_animation_frame();
-                        crate::motion::fade_in_at(wrapper, t)
+                        ferrite_ui::motion::fade_in_at(wrapper, t)
                     }
                     None => wrapper,
                 };

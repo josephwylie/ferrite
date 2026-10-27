@@ -27,7 +27,7 @@ use sw_board::board::theme::{self, greys, picks, Pal, Seen, Theme, C};
 use sw_board::shown::ink::{Ink, Inked, Piece};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::theme::{
+use ferrite_ui::theme::{
     BLUE, CARD, CH, CYAN, FIELD, FRAME, GREEN, LINE, LINE2, MAGENTA, ORANGE, RED, ROW, SELECTED,
     TEXT, TEXT_DIM, TEXT_STRONG, W_STRONG, YELLOW,
 };

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::nav::task_lines;
-use crate::theme;
+use ferrite_ui::theme;
 use sw_board::flow::sidebar_entry::{task_name, CAP};
 use sw_board::shown::ink::Inked;
 

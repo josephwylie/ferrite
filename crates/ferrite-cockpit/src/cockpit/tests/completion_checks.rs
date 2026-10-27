@@ -15,7 +15,7 @@ fn streamed_markdown_keeps_its_native_document_and_selected_prose(cx: &mut TestA
     tick(cx);
     let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
     let entity = cx.update(|_, cx| {
-        crate::rich::testing::first_entity(&format!("markdown-{namespace}-"), cx).unwrap()
+        ferrite_pane::rich::testing::first_entity(&format!("markdown-{namespace}-"), cx).unwrap()
     });
     let from = caret(&view, cx, 0, 0);
     let to = caret(&view, cx, 0, 5);
@@ -35,7 +35,7 @@ fn streamed_markdown_keeps_its_native_document_and_selected_prose(cx: &mut TestA
             .unwrap();
         tick(cx);
         assert_eq!(
-            cx.update(|_, cx| crate::rich::testing::first_entity(
+            cx.update(|_, cx| ferrite_pane::rich::testing::first_entity(
                 &format!("markdown-{namespace}-"),
                 cx
             )
@@ -57,7 +57,7 @@ fn streamed_markdown_keeps_its_native_document_and_selected_prose(cx: &mut TestA
         .unwrap();
     tick(cx);
     assert_eq!(
-        cx.update(|_, cx| crate::rich::testing::first_entity(
+        cx.update(|_, cx| ferrite_pane::rich::testing::first_entity(
             &format!("markdown-{namespace}-"),
             cx
         )
@@ -313,9 +313,9 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         .unwrap();
     tick(cx);
     assert!((cx.debug_bounds("tool-row-anchor-tool").unwrap().top() - held).abs() < px(1.));
-    let group = view.read_with(cx, |view, _| {
+    let group = view.read_with(cx, |view, cx| {
         view.panes[0]
-            .tool_bounds(pane::DisclosureId::Tool("anchor-tool".into()))
+            .tool_bounds(pane::DisclosureId::Tool("anchor-tool".into()), cx)
             .unwrap()
             .center()
     });
@@ -499,7 +499,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         cx.notify();
     });
     tick(cx);
-    cx.update(|_, cx| crate::rich::testing::select_all(cx));
+    cx.update(|_, cx| ferrite_pane::rich::testing::select_all(cx));
     cx.simulate_keystrokes("cmd-c");
     let copied = clipboard(cx).unwrap();
     // The fold holds the non-blank lines, as the elbow names them (CT-26).
@@ -612,7 +612,7 @@ fn pending_approval_exposes_exact_selectable_command_before_answering(cx: &mut T
             .expect("the command must be inspectable before an approval is sent");
         assert!(input.size.height > px(30.));
         assert!(input.right() <= px(740.));
-        cx.update(|_, cx| crate::rich::testing::select_all(cx));
+        cx.update(|_, cx| ferrite_pane::rich::testing::select_all(cx));
         cx.simulate_keystrokes("cmd-c");
         assert!(
             clipboard(cx).unwrap().contains(command),
@@ -694,7 +694,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
         let title = bounds(cx, format!("request-title-{}-{serial}", thread.get()));
         assert!(
-            title.size.height >= px(crate::theme::LH_UI * 3.),
+            title.size.height >= px(ferrite_ui::theme::LH_UI * 3.),
             "the repro must retain a title spanning at least three lines: {title:?}"
         );
         assert!(
@@ -723,7 +723,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             gap >= px(0.) && gap <= px(16.),
             "the command-to-Allow gap must stay near the well's design gap: {gap:?}"
         );
-        let row_h = crate::theme::DECISION_OPTION_H;
+        let row_h = ferrite_ui::theme::DECISION_OPTION_H;
         assert!(
             allow.size.height <= px(row_h + 1.),
             "an approval row is one line: {allow:?}"

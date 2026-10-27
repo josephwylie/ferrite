@@ -25,7 +25,7 @@ use gpui::{
 };
 
 use crate::file_links::PathTarget;
-use crate::theme;
+use ferrite_ui::theme;
 
 /// The path the pointer is on, and where.
 #[derive(Clone, Debug, PartialEq)]
@@ -273,11 +273,13 @@ impl gpui::Render for HoverCard {
                     .items_center()
                     .pl(px(2.0 * cell))
                     .text_color(rgb(theme::TEXT_DIM))
-                    .child(crate::components::key_combo("cmd", theme::TEXT_DIM))
+                    .child(ferrite_ui::components::key_combo("cmd", theme::TEXT_DIM))
                     // Exactly its cells: the hint is right-aligned, and a
                     // measured run rounds up a pixel and would stand it
                     // that much left.
-                    .child(crate::components::cells("-click opens in a reader pane")),
+                    .child(ferrite_ui::components::cells(
+                        "-click opens in a reader pane",
+                    )),
             );
         let rows = self.lines.iter().map(|(number, code)| {
             let on = *number == self.line;
@@ -294,7 +296,7 @@ impl gpui::Render for HoverCard {
                 .pl(px(inset_l))
                 .pr(px(inset_r))
                 .when(on, |row| row.bg(theme::paint::SELECTED))
-                .child(crate::components::tabular(
+                .child(ferrite_ui::components::tabular(
                     div()
                         .flex_shrink_0()
                         .w(px(theme::HOVER_CARD_NUMBER_CELLS * cell))
@@ -344,7 +346,7 @@ impl gpui::Render for HoverCard {
             .overflow_hidden()
             .border_1()
             .border_color(theme::FLOAT_EDGE)
-            .shadow(crate::components::float_shadow())
+            .shadow(ferrite_ui::components::float_shadow())
             .font_family(theme::FONT_CODE)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))

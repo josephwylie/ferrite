@@ -4,7 +4,7 @@
 use gpui::{div, prelude::*, AnyView, Context, Entity, StyleRefinement, Window};
 
 use crate::cockpit::{CockpitView, GoToMachine};
-use crate::loops_overlay::{self, LoopsOverlay};
+use ferrite_ui::loops_overlay::{self, LoopsOverlay};
 
 /// Whether the overlay runs: on unless `FERRITE_LOOPS_OVERLAY=0`.
 fn enabled() -> bool {

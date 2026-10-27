@@ -1,5 +1,5 @@
 //! The Panel's Preview tab (SPEC §5.6.3): a Pane's preview
-//! (`crate::preview`) read in the right Panel — a file at a line (numbered
+//! (`ferrite_pane::preview`) read in the right Panel — a file at a line (numbered
 //! lines, the target marked and centred, in syntax colour), rendered
 //! Markdown, a command's output, an image in the image viewer (fit and
 //! actual size, zoom, pinch, pan, ← → through the images it was opened
@@ -30,7 +30,9 @@
 //! Preview tab, no other), and its first send keeps it as it was.
 
 use super::*;
-use crate::preview::{head_door, head_suffix, head_title, reading_head, Body, Text, Unshown};
+use ferrite_pane::preview::{
+    head_door, head_suffix, head_title, reading_head, Body, Text, Unshown,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -52,7 +54,7 @@ pub(crate) struct PreviewTab {
     /// A rendered Markdown document's own scroll.
     pub(crate) markdown_scroll: ScrollHandle,
     /// The Markdown document's native text.
-    rich: crate::rich::TextCache,
+    rich: ferrite_pane::rich::TextCache,
     /// The find bar, while it is open.
     pub(crate) find: Option<PreviewFind>,
 }
@@ -65,17 +67,17 @@ impl Default for PreviewTab {
             fade: None,
             scroll: gpui::UniformListScrollHandle::new(),
             markdown_scroll: ScrollHandle::new(),
-            rich: crate::rich::TextCache::default(),
+            rich: ferrite_pane::rich::TextCache::default(),
             find: None,
         }
     }
 }
 
 /// Find in the preview (⌘F when the preview took the last press or holds
-/// the keyboard; the bar is the transcript's, `crate::find`): a file's
+/// the keyboard; the bar is the transcript's, `ferrite_pane::find`): a file's
 /// lines, or a rendered Markdown document's text.
 pub(crate) struct PreviewFind {
-    bar: crate::find::Find,
+    bar: ferrite_pane::find::Find,
     /// The document it searches: the bar closes with it, and another one
     /// opening closes it too (`tend_previews`).
     path: PathBuf,
@@ -225,9 +227,9 @@ impl CockpitView {
         active: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let id = gpui::ElementId::from("panel-tab-Preview");
-        let key = crate::pointer::hover_key(&id);
+        let key = ferrite_ui::pointer::hover_key(&id);
         div()
             .id(id)
             .debug_selector(|| "panel-tab-Preview".into())
@@ -277,7 +279,7 @@ impl CockpitView {
         owner: PaneIdentity,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let Some(index) = self.index_of(owner) else {
             return div().into_any_element();
         };
@@ -302,7 +304,7 @@ impl CockpitView {
                     .pt(px(BODY_PAD_T))
                     .pb(px(HALF_ROW))
                     .child(
-                        crate::rich::Markdown::new(
+                        ferrite_pane::rich::Markdown::new(
                             format!("document-{}", document.path.display()),
                             text.source.clone(),
                             tab.rich.clone(),
@@ -332,7 +334,7 @@ impl CockpitView {
             .children(find.map(|find| find.bar.bar()));
         let body = match tab.fade {
             Some(key) => {
-                crate::motion::swap_in(SharedString::from(format!("preview-swap-{key}")), body)
+                ferrite_ui::motion::swap_in(SharedString::from(format!("preview-swap-{key}")), body)
                     .into_any_element()
             }
             None => body.into_any_element(),
@@ -361,7 +363,7 @@ impl CockpitView {
                 head_door(
                     "open-original-image",
                     "preview-original".into(),
-                    crate::icons::EXTERNAL,
+                    ferrite_ui::icons::EXTERNAL,
                 )
                 .tooltip(|window, cx| {
                     gpui::component::tooltip::Tooltip::new("Open the original in the default app")
@@ -369,32 +371,34 @@ impl CockpitView {
                 })
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    crate::preview::open_original(&original, window, cx);
+                    ferrite_pane::preview::open_original(&original, window, cx);
                 })
                 .into_any_element()
             })
             .into_iter()
-            .chain([
-                head_door("preview-close", "preview-close".into(), crate::icons::CLOSE)
-                    .tooltip(crate::menu::tooltip_with_key(
-                        "Close the preview",
-                        crate::components::bound_chord_in(
-                            "reader::Close",
-                            Some(crate::keymap::READER),
-                        ),
-                    ))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        if let Some(index) = view.index_of(owner) {
-                            view.close_preview(index, cx);
-                        }
-                    }))
-                    .into_any_element(),
-            ]);
+            .chain([head_door(
+                "preview-close",
+                "preview-close".into(),
+                ferrite_ui::icons::CLOSE,
+            )
+            .tooltip(ferrite_ui::menu::tooltip_with_key(
+                "Close the preview",
+                ferrite_ui::components::bound_chord_in(
+                    "reader::Close",
+                    Some(ferrite_ui::keymap::READER),
+                ),
+            ))
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                if let Some(index) = view.index_of(owner) {
+                    view.close_preview(index, cx);
+                }
+            }))
+            .into_any_element()]);
         div()
             .debug_selector(|| "panel-preview".into())
             .track_focus(pane.preview.focus_handle())
-            .key_context(crate::keymap::READER)
+            .key_context(ferrite_ui::keymap::READER)
             .relative()
             .flex()
             .flex_col()
@@ -414,27 +418,31 @@ impl CockpitView {
                     view.close_preview(index, cx);
                 }
             }))
-            .on_action(cx.listener(move |view, _: &crate::find::Next, _, cx| {
-                view.step_preview_find(owner, true, cx)
-            }))
-            .on_action(cx.listener(move |view, _: &crate::find::Previous, _, cx| {
-                view.step_preview_find(owner, false, cx)
-            }))
             .on_action(
-                cx.listener(move |view, _: &crate::find::Close, window, cx| {
+                cx.listener(move |view, _: &ferrite_pane::find::Next, _, cx| {
+                    view.step_preview_find(owner, true, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(move |view, _: &ferrite_pane::find::Previous, _, cx| {
+                    view.step_preview_find(owner, false, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(move |view, _: &ferrite_pane::find::Close, window, cx| {
                     view.close_preview_find(owner, window, cx)
                 }),
             )
             .on_action(
-                cx.listener(move |view, _: &crate::image_viewer::Next, _, cx| {
+                cx.listener(move |view, _: &ferrite_pane::image_viewer::Next, _, cx| {
                     view.step_image(owner, 1, cx)
                 }),
             )
-            .on_action(
-                cx.listener(move |view, _: &crate::image_viewer::Previous, _, cx| {
+            .on_action(cx.listener(
+                move |view, _: &ferrite_pane::image_viewer::Previous, _, cx| {
                     view.step_image(owner, -1, cx)
-                }),
-            )
+                },
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -450,7 +458,7 @@ impl CockpitView {
 
     /// What the head reads for `document`: a command's name, an image's,
     /// else the path from the Thread's workspace, else from `~`.
-    fn preview_title(&self, pane: &PaneView, document: &crate::preview::Document) -> String {
+    fn preview_title(&self, pane: &PaneView, document: &ferrite_pane::preview::Document) -> String {
         if let Some(name) = &document.name {
             return name.clone();
         }
@@ -510,7 +518,7 @@ impl CockpitView {
             .is_none_or(|find| find.path != document.path)
         {
             tab.find = Some(PreviewFind {
-                bar: crate::find::Find::new(cx, move |view: &mut Self, cx| {
+                bar: ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
                     view.refind_preview(owner, cx)
                 }),
                 path: document.path,
@@ -546,7 +554,7 @@ impl CockpitView {
             find.bar.search([source.as_str()], 0, cx)
         } else {
             let top = -tab.scroll.0.borrow().base_handle.offset().y;
-            let from = (f32::from(top) / crate::theme::LH_UI) as usize;
+            let from = (f32::from(top) / ferrite_ui::theme::LH_UI) as usize;
             find.bar.search(text.lines(), from, cx)
         };
         if changed {
@@ -607,9 +615,9 @@ fn numbered_lines(
     text: Arc<Text>,
     target: Option<u32>,
     scroll: gpui::UniformListScrollHandle,
-    find: Option<&crate::find::Find>,
+    find: Option<&ferrite_pane::find::Find>,
 ) -> AnyElement {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let language = ferrite_core::transcript::language_for_path(path);
     let count = text.line_count();
     // A find's occurrences: its query, and the line and ordinal it is on.
@@ -642,7 +650,7 @@ fn numbered_lines(
                 }
                 let (line, highlights) = cut_head(
                     line.to_string(),
-                    crate::find::washed(highlights, &washes),
+                    ferrite_pane::find::washed(highlights, &washes),
                     from,
                 );
                 let number = at + 1;
@@ -689,7 +697,7 @@ fn numbered_lines(
 /// A file the preview cannot show: why, quietly, centred on the card, and
 /// its original a click away — the image viewer's own note's twin.
 fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElement {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let (note, detail) = match why {
         Unshown::Binary => ("This is not a text file", None),
         Unshown::Unreadable(error) => ("Could not read this file", Some(error.clone())),
@@ -715,14 +723,17 @@ fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElem
                 .child(detail)
         }))
         .child(
-            crate::components::form_button("preview-open-original", cx)
+            ferrite_ui::components::form_button("preview-open-original", cx)
                 .debug_selector(|| "preview-open-original".into())
                 .h(px(ROW))
                 .px(px(CH))
-                .child(crate::components::form_label("open original", TEXT_DIM))
+                .child(ferrite_ui::components::form_label(
+                    "open original",
+                    TEXT_DIM,
+                ))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    crate::preview::open_original(&original, window, cx);
+                    ferrite_pane::preview::open_original(&original, window, cx);
                 }),
         )
         .into_any_element()
@@ -774,7 +785,7 @@ fn reveal_found(tab: &mut PreviewTab, markdown: bool, start_in_view: bool) {
         let report = find.bar.report();
         report.revealed.set(None);
         report.ahead.set(None);
-        find.reveal = crate::find::REVEAL_FRAMES;
+        find.reveal = ferrite_pane::find::REVEAL_FRAMES;
         find.start_in_view = start_in_view;
     } else {
         tab.scroll
@@ -807,7 +818,7 @@ fn settle_markdown_found(find: &mut PreviewFind, scroll: &ScrollHandle, window: 
     {
         find.bar.go_to(ahead);
         report.revealed.set(None);
-        find.reveal = crate::find::REVEAL_FRAMES;
+        find.reveal = ferrite_pane::find::REVEAL_FRAMES;
         window.request_animation_frame();
         return;
     }

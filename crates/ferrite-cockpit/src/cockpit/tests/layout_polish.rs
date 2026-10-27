@@ -36,7 +36,7 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
         let island = cx.debug_bounds("question-island").unwrap();
         let composer = cx.debug_bounds("focused-prompt-editor").unwrap();
         assert!(
-            island.top() >= px(pane.y + crate::theme::PANE_HEAD_H),
+            island.top() >= px(pane.y + ferrite_ui::theme::PANE_HEAD_H),
             "Question must leave its Thread identity visible: {island:?} / {pane:?}"
         );
         assert!(island.left() >= px(pane.x) && island.right() <= px(pane.x + pane.w));
@@ -59,13 +59,13 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
         });
         let content = cx.debug_bounds("question-scroll-content").unwrap();
         assert!(
-            content.size.height >= px(crate::theme::LH_UI),
+            content.size.height >= px(ferrite_ui::theme::LH_UI),
             "the question has a real scroll viewport: {content:?}"
         );
         assert!(content.top() >= island.top());
         let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
         assert!(
-            send.top() - content.top() >= px(crate::theme::LH_UI),
+            send.top() - content.top() >= px(ferrite_ui::theme::LH_UI),
             "content keeps a usable viewport above the fixed actions"
         );
         assert!(
@@ -289,8 +289,11 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
         .unwrap();
     tick(cx);
     let group = pane::DisclosureId::Group("clicked-a".into());
-    let at = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds(group.clone()).unwrap().center()
+    let at = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .tool_bounds(group.clone(), cx)
+            .unwrap()
+            .center()
     });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);
@@ -314,8 +317,11 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
     });
     // The transcript sits on its foot (SPEC §5.4): opening the group grew
     // it upward, so the second click finds the row where it now is.
-    let at = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds(group.clone()).unwrap().center()
+    let at = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .tool_bounds(group.clone(), cx)
+            .unwrap()
+            .center()
     });
     cx.simulate_click(at, gpui::Modifiers::none());
     tick(cx);

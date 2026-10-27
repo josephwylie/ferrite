@@ -22,7 +22,7 @@
 
 use ferrite_core::settings::ReadingSize;
 
-use crate::theme;
+use ferrite_ui::theme;
 
 /// The token names and meanings: core's, beside the tool description that
 /// lists them to the agent.

@@ -27,7 +27,7 @@ struct Board<'a> {
 
 /// Four Threads in one Group on the board, `working` of them mid-turn.
 fn board<'a>(name: &str, working: &[usize], cx: &'a mut TestAppContext) -> Board<'a> {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit(name, 4);
     let group = group_all(&mut core);
     let threads = core.threads().to_vec();
@@ -277,7 +277,7 @@ fn a_nav_rows_hover_fades_in_and_out(cx: &mut TestAppContext) {
     b.cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     frames(b.cx, 200);
     let key =
-        b.cx.update(|_, _| crate::motion::testing::hover_values())
+        b.cx.update(|_, _| ferrite_ui::motion::testing::hover_values())
             .into_iter()
             .find(|(key, value)| key.starts_with("nav-thread-") && *value == 1.0)
             .map(|(key, _)| key)
@@ -349,8 +349,8 @@ fn the_reading_size_reaches_every_pane(cx: &mut TestAppContext) {
     frames(b.cx, 100);
     for prefix in &prefixes {
         assert_eq!(
-            b.cx.update(|_, cx| crate::rich::testing::font_size(prefix, cx)),
-            Some(px(18. - crate::theme::TX_GROUP_STEP)),
+            b.cx.update(|_, cx| ferrite_pane::rich::testing::font_size(prefix, cx)),
+            Some(px(18. - ferrite_ui::theme::TX_GROUP_STEP)),
             "{prefix} reads at the new size (a Group Pane's half step under it)"
         );
     }
@@ -389,7 +389,7 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
     b.view
         .update(b.cx, |view, cx| view.open_provider_picker(thread, cx));
     frames(b.cx, 300);
-    let drawn = crate::menu::testing::drawn();
+    let drawn = ferrite_ui::menu::testing::drawn();
     assert!(drawn.placed, "drawn placed, not left at zero opacity");
     let menu =
         b.cx.debug_bounds("choice-menu")
@@ -403,7 +403,7 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
     );
     b.cx.simulate_keystrokes("down");
     frames(b.cx, 50);
-    let moved = crate::menu::testing::drawn().cursor;
+    let moved = ferrite_ui::menu::testing::drawn().cursor;
     assert!(
         moved.is_some() && moved != drawn.cursor,
         "↓ moves the drawn cursor: {:?} → {moved:?}",
@@ -412,7 +412,7 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
     b.cx.simulate_keystrokes("up");
     frames(b.cx, 50);
     assert_eq!(
-        crate::menu::testing::drawn().cursor,
+        ferrite_ui::menu::testing::drawn().cursor,
         drawn.cursor,
         "and ↑ back"
     );

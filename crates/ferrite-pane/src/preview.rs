@@ -16,7 +16,7 @@
 //! reader slot (`cockpit/beside.rs`, ADR 0021). This module also holds the
 //! head both reading surfaces share ([`reading_head`]).
 
-use crate::pointer::Pointer as _;
+use ferrite_ui::pointer::Pointer as _;
 use std::{
     ops::Range,
     path::{Path, PathBuf},
@@ -374,7 +374,7 @@ impl Document {
 /// of the Pane beside it. `label` at the left, `doors` (`head_door`s) at
 /// the right.
 pub fn reading_head(label: Div, doors: impl IntoIterator<Item = gpui::AnyElement>) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     div()
         .debug_selector(|| "reader-head".into())
         .flex()
@@ -395,7 +395,7 @@ pub fn reading_head(label: Div, doors: impl IntoIterator<Item = gpui::AnyElement
 /// A head's title: a path in `LINK_INK`, cut from its start before its
 /// suffix (`head_suffix`) is, so a narrow head keeps the file's name.
 pub fn head_title(title: impl Into<SharedString>) -> Div {
-    use crate::theme::LINK_INK;
+    use ferrite_ui::theme::LINK_INK;
     div().flex().min_w_0().overflow_hidden().child(
         div()
             .min_w_0()
@@ -411,7 +411,7 @@ pub fn head_title(title: impl Into<SharedString>) -> Div {
 pub fn head_suffix(text: String) -> Div {
     div()
         .flex_shrink_0()
-        .text_color(rgb(crate::theme::TEXT_DIM))
+        .text_color(rgb(ferrite_ui::theme::TEXT_DIM))
         .child(text)
 }
 
@@ -420,7 +420,7 @@ pub fn head_suffix(text: String) -> Div {
 /// the pointer is on it (`hover`, its blend's key). A press here acts; it
 /// must not also pick the slot up as a drag.
 pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::Stateful<Div> {
-    use crate::theme::{ICON_BUTTON, ICON_BUTTON_GLYPH, R_TAB, TEXT_DIM};
+    use ferrite_ui::theme::{ICON_BUTTON, ICON_BUTTON_GLYPH, R_TAB, TEXT_DIM};
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -432,7 +432,7 @@ pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::
         .rounded(px(R_TAB))
         .hover_control(hover)
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(crate::icons::icon(glyph, ICON_BUTTON_GLYPH, TEXT_DIM))
+        .child(ferrite_ui::icons::icon(glyph, ICON_BUTTON_GLYPH, TEXT_DIM))
 }
 
 /// The OS opens the original file in its own viewer, where it can be

@@ -262,15 +262,15 @@ impl Drop for Home {
 struct HeldLoops;
 
 impl HeldLoops {
-    fn hold(at: crate::motion::HeldLoops) -> Self {
-        crate::motion::hold_loops(Some(at));
+    fn hold(at: ferrite_ui::motion::HeldLoops) -> Self {
+        ferrite_ui::motion::hold_loops(Some(at));
         HeldLoops
     }
 }
 
 impl Drop for HeldLoops {
     fn drop(&mut self) {
-        crate::motion::hold_loops(None);
+        ferrite_ui::motion::hold_loops(None);
     }
 }
 
@@ -544,14 +544,14 @@ fn render(
 
     let mut cx = HeadlessAppContext::with_platform(
         platform.text_system(),
-        std::sync::Arc::new(crate::icons::Assets),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
         gpui::platform::current_headless_renderer,
     );
     cx.update(|cx| {
-        crate::pane::init_components(cx);
-        crate::register_fonts(cx);
-        crate::visual::init(cx);
-        crate::visual::diagram::init(true, cx);
+        ferrite_pane::pane::init_components(cx);
+        ferrite_ui::register_fonts(cx);
+        ferrite_pane::visual::init(cx);
+        ferrite_pane::visual::diagram::init(true, cx);
     });
     let mut entity = None;
     let window = cx
@@ -592,7 +592,7 @@ fn render(
     }
     // Visuals' pages render in Chromium's own processes, on the wall clock:
     // pump it until they have drawn (nothing without an engine).
-    crate::visual::shots::settle(&mut cx, window.into());
+    ferrite_pane::visual::shots::settle(&mut cx, window.into());
     // gpui's `with_animation` runs on the wall clock, not the executor's:
     // a toast's entrance fade is only settled once real time has passed.
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -606,8 +606,8 @@ fn render(
         let _ = window.draw(cx);
         if label == "wide" && state == "edges" {
             let measurements: Vec<_> = ["\tb", "a\tb", "aaaa\tb", "        b"].into_iter().map(|text| {
-                let line = window.text_system().shape_line(text.to_owned().into(), gpui::px(crate::theme::FS_UI), &[gpui::TextRun {
-                    len:text.len(),font:gpui::font(crate::theme::FONT_CODE),color:gpui::rgb(crate::theme::TEXT).into(),background_color:None,underline:None,strikethrough:None,
+                let line = window.text_system().shape_line(text.to_owned().into(), gpui::px(ferrite_ui::theme::FS_UI), &[gpui::TextRun {
+                    len:text.len(),font:gpui::font(ferrite_ui::theme::FONT_CODE),color:gpui::rgb(ferrite_ui::theme::TEXT).into(),background_color:None,underline:None,strikethrough:None,
                 }],None);
                 serde_json::json!({"source":text,"b_x_logical_px":f32::from(line.x_for_index(text.len()-1))})
             }).collect();
@@ -668,12 +668,12 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "toolgroups-open" => {
             let scene = tool_groups(label);
             let setup: Setup = Box::new(|view, _, cx| {
-                use crate::pane::DisclosureId;
+                use ferrite_pane::pane::DisclosureId;
                 view.panes[0].toggle_tool(&DisclosureId::Group("probe-1".into()));
                 view.panes[0].toggle_tool(&DisclosureId::Tool("probe-3".into()));
                 if let Some(transcript) = view.panes[0].transcript() {
                     transcript.update(cx, |transcript, cx| {
-                        transcript.scroll_to(crate::transcript::ScrollTarget::Top, cx)
+                        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
                     });
                 }
             });
@@ -687,7 +687,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, _, cx| {
                 if let Some(transcript) = view.panes[0].transcript() {
                     transcript.update(cx, |transcript, cx| {
-                        transcript.scroll_to(crate::transcript::ScrollTarget::Top, cx)
+                        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
                     });
                 }
             });
@@ -703,7 +703,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "diff" => {
             let scene = conversation(label);
             let setup: Setup = Box::new(|view, _, _| {
-                use crate::pane::DisclosureId;
+                use ferrite_pane::pane::DisclosureId;
                 // Edits never fold into a group: each Edit shows its hunks
                 // once disclosed.
                 view.panes[0].toggle_tool(&DisclosureId::Tool("edit-1".into()));
@@ -966,7 +966,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 let prompt = view.panes[0].composer.read(cx).prompt();
                 let images: Vec<PathBuf> = ferrite_core::prompt_files::paths(&prompt, None)
                     .into_iter()
-                    .filter(|path| crate::image_viewer::is_image(path))
+                    .filter(|path| ferrite_pane::image_viewer::is_image(path))
                     .collect();
                 if let Some(shot) = images.first() {
                     view.panes[0]
@@ -1152,7 +1152,7 @@ fn legacy(state: &str) -> (Scene, Setup) {
     let setup: Setup = if state == "expanded" {
         Box::new(|view, _, _| {
             for id in ["read", "ok"] {
-                view.panes[0].toggle_tool(&crate::pane::DisclosureId::Tool(id.into()));
+                view.panes[0].toggle_tool(&ferrite_pane::pane::DisclosureId::Tool(id.into()));
             }
         })
     } else {
@@ -1557,9 +1557,9 @@ fn visual_input(title: &str, caption: &str, html: &str) -> serde_json::Value {
     serde_json::json!({ "title": title, "caption": caption, "html": html })
 }
 
-const STATS_PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/stats.html");
-const MOCKUPS_PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/mockups.html");
-const TREEMAP_PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/treemap.html");
+use ferrite_pane::visual::samples::{
+    MOCKUPS as MOCKUPS_PAGE, STATS as STATS_PAGE, TREEMAP as TREEMAP_PAGE,
+};
 const VISUAL: &str = ferrite_core::visual::CLAUDE_NAME;
 
 /// A conversation with visuals in every state: one shown (a dashboard),
@@ -2278,12 +2278,12 @@ fn loops_frames(
     } = scene;
     let mut cx = HeadlessAppContext::with_platform(
         platform.text_system(),
-        std::sync::Arc::new(crate::icons::Assets),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
         gpui::platform::current_headless_renderer,
     );
     cx.update(|cx| {
-        crate::pane::init_components(cx);
-        crate::register_fonts(cx);
+        ferrite_pane::pane::init_components(cx);
+        ferrite_ui::register_fonts(cx);
     });
     let mut entity = None;
     let window = cx
@@ -2333,7 +2333,7 @@ fn loops_frames(
     std::thread::sleep(std::time::Duration::from_millis(600));
     // The caret one character back from the end: it stands on a glyph.
     cx.update_window(window.into(), |_, window, cx| {
-        window.dispatch_action(Box::new(crate::composer::Left), cx);
+        window.dispatch_action(Box::new(ferrite_pane::composer::Left), cx);
         let _ = window.draw(cx);
     })
     .unwrap();
@@ -2345,7 +2345,7 @@ fn loops_frames(
         cx.run_until_parked();
         cx.update_window(window.into(), |_, window, cx| {
             let _ = window.draw(cx);
-            hosted.push(crate::loops_overlay::hosted_marks(window));
+            hosted.push(ferrite_ui::loops_overlay::hosted_marks(window));
         })
         .unwrap();
         shot(&mut cx, window.into());

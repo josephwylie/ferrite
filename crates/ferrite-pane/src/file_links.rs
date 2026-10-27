@@ -13,7 +13,7 @@ use std::{
 
 use gpui::{div, prelude::*, px, AnyElement, App, Bounds, Pixels, SharedString, Window};
 
-use crate::theme;
+use ferrite_ui::theme;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileLink {
@@ -325,7 +325,7 @@ fn underline_top(size: f32, line: f32) -> f32 {
 /// in by the pointer over `PATH_UNDERLINE_FADE_MS` (the hover blend), never
 /// laid out.
 fn underline(key: &str, ink: u32, size: f32, line: f32) -> gpui::Div {
-    let shown = crate::motion::hover_t(key);
+    let shown = ferrite_ui::motion::hover_t(key);
     if shown > 0. && shown < 1. {
         PATH_FADING.with(|fading| fading.set(true));
     }
@@ -351,8 +351,8 @@ fn wire_target(
     let recorded = target.clone();
     let hovered = target.clone();
     let clicked = target;
-    let fade = crate::motion::hover_listener(fade);
-    crate::components::on_bounds(element, move |laid, _, cx| {
+    let fade = ferrite_ui::motion::hover_listener(fade);
+    ferrite_ui::components::on_bounds(element, move |laid, _, cx| {
         measured.set(Some(laid));
         if let Some(scope) = recorded.scope.clone() {
             cx.default_global::<PathScopes>()

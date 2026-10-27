@@ -18,7 +18,7 @@ fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
             .or_else(|| cx.debug_bounds("prompt-editor"))
             .unwrap();
         let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-        let inset = crate::theme::COMPOSER_INSET;
+        let inset = ferrite_ui::theme::COMPOSER_INSET;
         assert!(
             (block.left() - px(pane.x + inset)).abs() <= px(1.)
                 && (block.right() - px(pane.x + pane.w - inset)).abs() <= px(1.),
@@ -29,7 +29,7 @@ fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
             "{block:?} / {pane:?}"
         );
         assert!(
-            (editor.left() - block.left() - px(crate::theme::COMPOSER_INPUT_PAD_X)).abs()
+            (editor.left() - block.left() - px(ferrite_ui::theme::COMPOSER_INPUT_PAD_X)).abs()
                 <= px(0.5),
             "{editor:?} / {block:?}"
         );

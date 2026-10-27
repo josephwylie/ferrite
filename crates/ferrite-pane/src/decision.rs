@@ -21,9 +21,9 @@ use ferrite_core::{Decision, DecisionKind, ThreadId};
 use gpui::prelude::*;
 use gpui::{actions, div, px, rgb, rgba, AnyElement, App, Div, ElementId, SharedString, Stateful};
 
-use crate::components;
-use crate::pointer::{Pointer, PointerPressed};
-use crate::theme;
+use ferrite_ui::components;
+use ferrite_ui::pointer::{Pointer, PointerPressed};
+use ferrite_ui::theme;
 
 actions!(
     decision,
@@ -773,8 +773,8 @@ fn head_line(
 ) -> Div {
     let question = mark == Mark::Question;
     let glyph = match mark {
-        Mark::Shield => crate::icons::icon(
-            crate::icons::SHIELD,
+        Mark::Shield => ferrite_ui::icons::icon(
+            ferrite_ui::icons::SHIELD,
             theme::DECISION_HEAD_ICON,
             theme::ATTENTION,
         )
@@ -951,7 +951,7 @@ pub struct Row {
 /// list's number does, when a description (or a wrap) adds lines under it.
 pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     let id = id.into();
-    let hover = crate::pointer::hover_key(&id);
+    let hover = ferrite_ui::pointer::hover_key(&id);
     let ink = match (row.enabled, row.cursor) {
         (false, _) => theme::TEXT_DIM,
         (true, true) => theme::TEXT_STRONG,

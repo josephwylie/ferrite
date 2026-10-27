@@ -45,8 +45,8 @@ use gpui::{
     Window,
 };
 
-use crate::motion::{self, Tween};
-use crate::theme;
+use ferrite_ui::motion::{self, Tween};
+use ferrite_ui::theme;
 
 gpui::actions!(
     image_viewer,
@@ -61,7 +61,7 @@ gpui::actions!(
 /// The viewer's key context: deeper than the Cockpit's, so ⌘= ⌘- ⌘0 zoom
 /// the image rather than the reading size and esc closes the preview rather
 /// than interrupting the turn.
-pub(crate) const KEY_CONTEXT: &str = crate::keymap::IMAGE_VIEWER;
+pub(crate) const KEY_CONTEXT: &str = ferrite_ui::keymap::IMAGE_VIEWER;
 
 /// Whether gpui draws the file as an image: by its extension, as `img`
 /// decides.
@@ -465,11 +465,11 @@ impl Render for ImageViewer {
                         .child("Could not read this image"),
                 )
                 .child(
-                    crate::components::form_button("image-viewer-open-original", cx)
+                    ferrite_ui::components::form_button("image-viewer-open-original", cx)
                         .debug_selector(|| "image-viewer-open-original".into())
                         .h(px(theme::ROW))
                         .px(px(theme::CH))
-                        .child(crate::components::form_label(
+                        .child(ferrite_ui::components::form_label(
                             "open original",
                             theme::TEXT_DIM,
                         ))

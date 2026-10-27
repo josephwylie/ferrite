@@ -202,6 +202,9 @@ impl CockpitView {
     /// `reset keys`: forget the operator's keys and bind the defaults.
     pub(super) fn reset_keys(&mut self, cx: &mut Context<Self>) {
         self.change_settings(|settings| settings.keys.clear(), cx);
-        crate::bind_keys(crate::keymap::bindings(crate::keymap::PLATFORM), cx);
+        crate::bind_keys(
+            ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
+            cx,
+        );
     }
 }

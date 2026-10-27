@@ -20,10 +20,10 @@ use gpui::{
     Window,
 };
 
-use crate::components;
-use crate::composer::{Composer, Edited, Role};
-use crate::keymap::Binding;
-use crate::theme::*;
+use ferrite_pane::composer::{Composer, Edited, Role};
+use ferrite_ui::components;
+use ferrite_ui::keymap::Binding;
+use ferrite_ui::theme::*;
 
 gpui::actions!(shortcuts, [Toggle, ScrollUp, ScrollDown, Dismiss]);
 
@@ -289,7 +289,7 @@ impl Shortcuts {
             cx.notify();
         });
         Self {
-            rows: rows(&crate::keymap::active()),
+            rows: rows(&ferrite_ui::keymap::active()),
             input,
             scroll: ScrollHandle::new(),
             _edited: edited,
@@ -381,7 +381,7 @@ impl Render for Shortcuts {
             );
         }
         // In on the palette's entrance, over the same veil.
-        crate::motion::dialog_in_casting(
+        ferrite_ui::motion::dialog_in_casting(
             "shortcuts-sheet-in",
             crate::palette::dialog()
                 .debug_selector(|| "shortcuts-sheet".into())
@@ -389,7 +389,7 @@ impl Render for Shortcuts {
                 .child(input)
                 .child(list)
                 .child(crate::palette::footer_row(FOOTER.into(), String::new())),
-            crate::components::dialog_shadow,
+            ferrite_ui::components::dialog_shadow,
         )
     }
 }
@@ -397,7 +397,7 @@ impl Render for Shortcuts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::{self, Platform};
+    use ferrite_ui::keymap::{self, Platform};
 
     /// Every key the table binds has a label (or is named hidden), on both
     /// platforms: a new binding without one fails here.

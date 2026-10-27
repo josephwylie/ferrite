@@ -18,7 +18,7 @@ use crate::demo::mockup::{self, Look, Pr, World, CAPTURE};
 use crate::demo::world::{self, Clock, Fixture};
 use crate::nav::NavFold;
 use crate::palette::PaletteScope;
-use crate::platform_text::disable_font_smoothing;
+use ferrite_ui::platform_text::disable_font_smoothing;
 
 /// One refresh capture: the mockup it reproduces (saved as
 /// `<state>-refresh.png`).
@@ -117,7 +117,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     // The mockups are the browser's grayscale-antialiased shots.
     disable_font_smoothing();
     // Spinners and the caret held at one frame, so captures compare.
-    let held_loops = HeldLoops::hold(crate::motion::HeldLoops {
+    let held_loops = HeldLoops::hold(ferrite_ui::motion::HeldLoops {
         css: std::time::Duration::from_millis(550),
         script: std::time::Duration::from_millis(575),
     });

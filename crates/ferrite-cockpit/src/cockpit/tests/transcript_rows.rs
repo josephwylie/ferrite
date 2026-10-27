@@ -13,7 +13,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
         let block = &view
             .cockpit
@@ -22,7 +22,7 @@ fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
             .transcript()
             .blocks()[0];
         assert!(
-            pane.tool_bounds(pane::DisclosureId::Reasoning(block.id))
+            pane.tool_bounds(pane::DisclosureId::Reasoning(block.id), cx)
                 .is_none(),
             "a short summary must not offer an expansion that repeats itself"
         );
@@ -100,9 +100,9 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         cx.simulate_resize(gpui::size(px(width), px(700.)));
         tick(cx);
         let summary = cx.debug_bounds("reasoning-summary").unwrap();
-        let control = view.read_with(cx, |view, _| {
+        let control = view.read_with(cx, |view, cx| {
             view.panes[0]
-                .tool_bounds(pane::DisclosureId::Reasoning(id))
+                .tool_bounds(pane::DisclosureId::Reasoning(id), cx)
                 .unwrap()
         });
         assert!(
@@ -111,7 +111,7 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         );
         // Terminal-native: the hit box is the 2-cell gutter at the
         // reading size, the summary on the content column after it.
-        let gutter = px(crate::theme::tx_gutter(crate::theme::FS_PROSE));
+        let gutter = px(ferrite_ui::theme::tx_gutter(ferrite_ui::theme::FS_PROSE));
         assert!(
             control.right() <= summary.left() + px(0.5)
                 && (control.size.width - gutter).abs() <= px(1.)
@@ -165,7 +165,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let reasoning = view.read_with(cx, |view, _| {
+    let reasoning = view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
         let thread = pane.thread().unwrap();
         assert!(
@@ -186,7 +186,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
             .find(|b| matches!(&b.body, Body::Thinking(_)))
             .unwrap()
             .id;
-        pane.tool_bounds(pane::DisclosureId::Reasoning(id))
+        pane.tool_bounds(pane::DisclosureId::Reasoning(id), cx)
             .unwrap()
             .center()
     });
@@ -221,7 +221,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
                     _ => continue,
                 };
                 for id in ids {
-                    let bounds = crate::rich::testing::bounds(&id, 0, cx).unwrap();
+                    let bounds = ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap();
                     assert!(
                         bounds.right() <= viewport.right(),
                         "text exceeds pane: {bounds:?} / {viewport:?}"
@@ -268,10 +268,10 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
         });
         tick(cx);
         let prompt = cx.debug_bounds("transcript-prompt").unwrap();
-        let line = crate::theme::answer_line_height(size);
+        let line = ferrite_ui::theme::answer_line_height(size);
         assert_eq!(
             prompt.size.height,
-            px(line + 2. * crate::theme::PROMPT_BAND_PAD_Y),
+            px(line + 2. * ferrite_ui::theme::PROMPT_BAND_PAD_Y),
             "{size:?}: the echo sits on the answer's line in its band"
         );
         let echo = view.read_with(cx, |view, cx| {
@@ -286,7 +286,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
                 .find(|block| matches!(block.body, Body::Prompt(_)))
                 .unwrap()
                 .id;
-            crate::rich::testing::font_size(
+            ferrite_pane::rich::testing::font_size(
                 &format!("literal-{}-{block:?}", pane.text_namespace()),
                 cx,
             )
@@ -294,7 +294,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
         });
         assert_eq!(
             echo,
-            px(crate::theme::answer_text_size(size)),
+            px(ferrite_ui::theme::answer_text_size(size)),
             "{size:?}: the echo is set at the answer's size"
         );
     }
@@ -343,7 +343,7 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         let stamp = cx.debug_bounds("turn-stamp").unwrap();
         // Terminal-native: blocks sit one blank line apart under the
         // prompt's band; consecutive calls fold into one summary line.
-        let line = px(crate::theme::LH_PROSE);
+        let line = px(ferrite_ui::theme::LH_PROSE);
         assert_eq!(tools.top() - prompt.bottom(), line);
         assert!(
             cx.debug_bounds("tool-row-spacing-1").is_none(),
@@ -365,7 +365,7 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         assert!(
             (prompt_start
                 - tools.left()
-                - px(crate::theme::tx_gutter(crate::theme::FS_PROSE) + 0.5))
+                - px(ferrite_ui::theme::tx_gutter(ferrite_ui::theme::FS_PROSE) + 0.5))
             .abs()
                 <= px(1.0),
             "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset: {prompt_start:?} {tools:?}"
@@ -415,7 +415,7 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
             .unwrap()
             .0;
         let height = |block| {
-            crate::rich::testing::bounds(
+            ferrite_pane::rich::testing::bounds(
                 &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
                 0,
                 cx,
@@ -428,7 +428,7 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
             height(first) < px(30.),
             "a collapsed script must stay one row tall"
         );
-        view.panes[0].tool_bounds("multiline").unwrap().center()
+        view.panes[0].tool_bounds("multiline", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -452,8 +452,8 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
         assert!(view.panes[0].tool_expanded("multiline"))
     });
 
-    let chevron = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds("multiline").unwrap().center()
+    let chevron = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds("multiline", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -521,7 +521,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
                 .unwrap()
         };
         let x = |block| {
-            crate::rich::testing::bounds(
+            ferrite_pane::rich::testing::bounds(
                 &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
                 0,
                 cx,
@@ -545,13 +545,14 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     assert!(!collapsed
         .iter()
         .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
-    let chevron = view.read_with(cx, |view, _| {
+    let chevron = view.read_with(cx, |view, cx| {
         let bounds = view.panes[0]
-            .tool_bounds("toolu_9")
+            .tool_bounds("toolu_9", cx)
             .expect("the actual rendered chevron bounds");
         // Terminal-native: the hit box is the 2-cell gutter.
         assert!(
-            (bounds.size.width - px(crate::theme::tx_gutter(crate::theme::FS_PROSE))).abs()
+            (bounds.size.width - px(ferrite_ui::theme::tx_gutter(ferrite_ui::theme::FS_PROSE)))
+                .abs()
                 <= px(1.)
         );
         bounds.center()
@@ -609,7 +610,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
             block.id
         );
         (
-            crate::rich::testing::output(&id, cx).unwrap(),
+            ferrite_pane::rich::testing::output(&id, cx).unwrap(),
             tool.output.as_ref().unwrap().text.clone(),
         )
     });
@@ -667,8 +668,8 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     });
     cx.run_until_parked();
 
-    let chevron = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds("toolu_9").unwrap().center()
+    let chevron = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds("toolu_9", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -723,8 +724,8 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
         })
         .unwrap();
     tick(cx);
-    let chevron = view.read_with(cx, |view, _| {
-        view.panes[0].tool_bounds("stream").unwrap().center()
+    let chevron = view.read_with(cx, |view, cx| {
+        view.panes[0].tool_bounds("stream", cx).unwrap().center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -740,8 +741,8 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
             .unwrap();
         let prefix = format!("output-{}-{:?}", view.panes[0].text_namespace(), block.id);
         (
-            crate::rich::testing::output(&format!("{prefix}-command"), cx).unwrap(),
-            crate::rich::testing::output(&format!("{prefix}-result"), cx).unwrap(),
+            ferrite_pane::rich::testing::output(&format!("{prefix}-command"), cx).unwrap(),
+            ferrite_pane::rich::testing::output(&format!("{prefix}-result"), cx).unwrap(),
         )
     });
     assert_ne!(command_state.entity_id(), result_state.entity_id());

@@ -33,7 +33,7 @@ cef = ["ferrite-pane/cef"]
 ferrite-core = { path = "../ferrite-core" }
 # The theme, icons, components, motion and menus the Cockpit and Pane share.
 ferrite-ui = { path = "../ferrite-ui" }
-# The Pane: the transcript, the Composer and the Draft band.
+# The Pane: the transcript, the Composer and the Draft.
 ferrite-pane = { path = "../ferrite-pane" }
 # The Cockpit the window shows: the grid, the nav and the Roster glue.
 ferrite-cockpit = { path = "../ferrite-cockpit" }
@@ -50,3 +50,5 @@ winresource = { version = "0.1", default-features = false }
 [dev-dependencies]
 # The launch's tests run in gpui's headless harness.
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+# The type rules' render-code check (`ferrite_ui::face`).
+ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }

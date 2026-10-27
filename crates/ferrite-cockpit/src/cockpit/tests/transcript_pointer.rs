@@ -322,7 +322,7 @@ fn a_plain_transcript_click_does_not_move_the_viewport(cx: &mut TestAppContext) 
             .offset()
     });
 
-    let titlebar = gpui::point(px(500.), px(crate::theme::WIN_CHROME_H / 2.));
+    let titlebar = gpui::point(px(500.), px(ferrite_ui::theme::WIN_CHROME_H / 2.));
     cx.simulate_mouse_down(titlebar, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(titlebar, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_click(clicked, gpui::Modifiers::none());

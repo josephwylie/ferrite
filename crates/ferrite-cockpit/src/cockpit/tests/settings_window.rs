@@ -9,9 +9,9 @@ fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("menu-shortcuts", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let bound: Vec<String> = crate::keymap::bindings(crate::keymap::PLATFORM)
+    let bound: Vec<String> = ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM)
         .into_iter()
-        .map(|(keys, _, _)| crate::components::spell_chord(&keys))
+        .map(|(keys, _, _)| ferrite_ui::components::spell_chord(&keys))
         .collect();
     view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
@@ -287,11 +287,14 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
         .debug_bounds("settings-page-about")
         .expect("About is a sidebar row");
     assert!(
-        about_row.top() > behaviour.bottom() + px(crate::theme::SETTINGS_NAV_ROW_H),
+        about_row.top() > behaviour.bottom() + px(ferrite_ui::theme::SETTINGS_NAV_ROW_H),
         "About is pinned to the sidebar's foot, apart from the settings"
     );
     assert!(about_row.bottom() <= card.bottom());
-    assert_eq!(behaviour.size.height, px(crate::theme::SETTINGS_NAV_ROW_H));
+    assert_eq!(
+        behaviour.size.height,
+        px(ferrite_ui::theme::SETTINGS_NAV_ROW_H)
+    );
     cx.simulate_click(about_row.center(), gpui::Modifiers::none());
     tick(cx);
     let about = cx

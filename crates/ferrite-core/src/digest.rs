@@ -291,13 +291,21 @@ impl Finish {
 /// A paragraph that is one row of words, trimmed: a toast words only that
 /// (#173). `None` for a longer one, read no further than a row.
 fn one_row(spans: &[Span]) -> Option<String> {
-    let mut chars = spans
-        .iter()
-        .flat_map(|span| span.text.chars())
-        .skip_while(|c| c.is_whitespace());
-    let row: String = chars.by_ref().take(ROW_CHARS).collect();
-    let row = row.trim_end();
-    (!row.contains('\n') && chars.all(char::is_whitespace)).then(|| row.to_string())
+    let mut chars = spans.iter().flat_map(|span| span.text.chars());
+    let row = row(&mut chars, ROW_CHARS);
+    (!row.contains('\n') && chars.all(char::is_whitespace)).then_some(row)
+}
+
+/// The first `max` characters of `chars` after its leading whitespace,
+/// trimmed: as much of the text as a row shows.
+fn row(chars: &mut impl Iterator<Item = char>, max: usize) -> String {
+    let mut row: String = chars
+        .by_ref()
+        .skip_while(|c| c.is_whitespace())
+        .take(max)
+        .collect();
+    row.truncate(row.trim_end().len());
+    row
 }
 
 /// A test run's summary from its output (`357 passed; 2 failed`): the last
@@ -565,23 +573,14 @@ fn wall_lines(
 /// itself in every digest than a row can show (#173). `None` at its end.
 fn source_line(source: &mut impl Iterator<Item = char>, max: usize) -> Option<String> {
     loop {
-        let (mut line, mut count, mut read) = (String::new(), 0, false);
-        for c in source.by_ref() {
-            read = true;
-            if c == '\n' {
-                break;
-            }
-            if count < max && !(count == 0 && c.is_whitespace()) {
-                line.push(c);
-                count += 1;
-            }
-        }
-        line.truncate(line.trim_end().len());
-        if !line.is_empty() {
-            return Some(line);
-        }
-        if !read {
-            return None;
+        let first = source.next()?;
+        let mut line = std::iter::once(first)
+            .chain(source.by_ref())
+            .take_while(|c| *c != '\n');
+        let text = row(&mut line, max);
+        line.for_each(drop);
+        if !text.is_empty() {
+            return Some(text);
         }
     }
 }

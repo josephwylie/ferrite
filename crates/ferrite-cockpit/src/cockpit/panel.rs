@@ -46,8 +46,8 @@ pub(crate) mod hunks;
 pub(crate) mod preview;
 
 use super::*;
-use crate::icons::{self, icon};
 use ferrite_core::docview::FileChange;
+use ferrite_ui::icons::{self, icon};
 use gpui::relative;
 
 /// A panel tab. A Thread the panel has not shown yet opens on `Changes`;
@@ -82,7 +82,7 @@ pub(crate) struct Panel {
     /// The Changes tab's unfolded files and their hunks.
     hunks: hunks::Hunks,
     /// The column on its way between two widths (see the module doc).
-    ride: crate::motion::ColumnRide,
+    ride: ferrite_ui::motion::ColumnRide,
     /// Where the column rested at the last frame; `None` before the first,
     /// so a panel shown at launch arrives in place.
     rest: Option<Rest>,
@@ -105,7 +105,7 @@ pub(crate) struct Panel {
 /// How wide the Panel is while its Preview tab shows, in a window `width`
 /// wide (the theme's `PANEL_PREVIEW_*`).
 fn preview_w(width: f32) -> f32 {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     (width * PANEL_PREVIEW_SHARE)
         .clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
         .min(width - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN)
@@ -158,13 +158,13 @@ impl CockpitView {
     /// How wide the panel is at rest in this window while its Preview tab
     /// shows.
     fn wide_w(&self) -> f32 {
-        self.panel.wide.max(crate::theme::PANEL_W)
+        self.panel.wide.max(ferrite_ui::theme::PANEL_W)
     }
 
     fn rest_w(&self, rest: Rest) -> f32 {
         match rest {
-            Rest::Hidden => crate::theme::BOARD_PAD,
-            Rest::Shown => crate::theme::PANEL_W,
+            Rest::Hidden => ferrite_ui::theme::BOARD_PAD,
+            Rest::Shown => ferrite_ui::theme::PANEL_W,
             Rest::Wide => self.wide_w(),
         }
     }
@@ -192,7 +192,7 @@ impl CockpitView {
     /// held while the column rides out drawing it, and let go after.
     pub(super) fn ride_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
         self.tend_previews(window);
         self.panel.wide = preview_w(f32::from(window.viewport_size().width));
         let (rest, shown) = self.panel_rest();
@@ -214,10 +214,10 @@ impl CockpitView {
             }
         }
         self.panel.riding = match self.panel.hold.filter(|_| rest == Rest::Wide) {
-            Some(progress) => Some(crate::motion::lerp(
-                crate::theme::PANEL_W,
+            Some(progress) => Some(ferrite_ui::motion::lerp(
+                ferrite_ui::theme::PANEL_W,
                 self.wide_w(),
-                crate::motion::RESIZE.progress(progress.clamp(0.0, 1.0)),
+                ferrite_ui::motion::RESIZE.progress(progress.clamp(0.0, 1.0)),
             )),
             None => self
                 .panel
@@ -297,7 +297,7 @@ impl CockpitView {
     /// rides it follows the board's edge, but never over the toggle's room,
     /// so its own controls ride with the board to where they come to rest.
     pub(super) fn view_head_end(&self) -> (f32, bool) {
-        use crate::theme::{ICON_BUTTON, VIEW_HEAD_GAP};
+        use ferrite_ui::theme::{ICON_BUTTON, VIEW_HEAD_GAP};
         let toggle = self.panel_candidate().is_some();
         let inset = panel_toggle_inset();
         if let Some(right) = self.panel.riding {
@@ -378,7 +378,7 @@ impl CockpitView {
                 .absolute()
                 .top_0()
                 .right(px(panel_toggle_inset()))
-                .h(px(crate::theme::WIN_CHROME_H))
+                .h(px(ferrite_ui::theme::WIN_CHROME_H))
                 .flex()
                 .items_center()
                 .child(self.panel_toggle(cx))
@@ -390,7 +390,7 @@ impl CockpitView {
     /// (`nav::icon_button`), the `panel-right` glyph, its tooltip and chord
     /// read from the keymap.
     fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
-        use crate::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_TAB};
+        use ferrite_ui::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_TAB};
         crate::nav::icon_button(
             "panel-toggle",
             icons::PANEL_RIGHT,
@@ -399,7 +399,7 @@ impl CockpitView {
             R_TAB,
         )
         .occlude()
-        .tooltip(crate::menu::action_tooltip(
+        .tooltip(ferrite_ui::menu::action_tooltip(
             "Toggle panel",
             "cockpit::TogglePanel",
         ))
@@ -450,11 +450,11 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let (owner, tab, width) = self.panel_drawn()?;
         let opacity = self.panel.ride.opacity(
             cx.background_executor().now(),
-            crate::motion::reduced_motion(cx),
+            ferrite_ui::motion::reduced_motion(cx),
         );
         let content_w = if tab == PanelTab::Preview {
             self.wide_w()
@@ -520,7 +520,7 @@ impl CockpitView {
     /// (`panel_toggle_element` lays the toggle over it). On Windows it
     /// stops short of the caption buttons, which keep the row's right end.
     fn panel_head(&self, owner: PaneIdentity, shown: PanelTab, cx: &mut Context<Self>) -> Div {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let tabs = div()
             .flex()
             .flex_1()
@@ -560,13 +560,13 @@ impl CockpitView {
         shown: PanelTab,
         cx: &mut Context<Self>,
     ) -> [gpui::Stateful<Div>; 3] {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let facts = self.facts.get(thread);
         let changed = facts.map_or(0, |facts| facts.changed_files.len());
         let pr = self.facts.pr(thread).map(|pr| pr.number);
         let tab = |tab: PanelTab, label: &'static str, count: Option<AnyElement>| {
             let id = gpui::ElementId::from(SharedString::from(format!("panel-tab-{tab:?}")));
-            let key = crate::pointer::hover_key(&id);
+            let key = ferrite_ui::pointer::hover_key(&id);
             let active = tab == shown;
             div()
                 .id(id)
@@ -630,7 +630,7 @@ impl CockpitView {
     /// with their rolled-up `+N −N`), not a git diff against the base
     /// (SPEC §8).
     fn panel_changes(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let Some(facts) = self.facts.get(thread) else {
             return div().into_any_element();
         };
@@ -688,7 +688,7 @@ impl CockpitView {
             body = body.child(self.panel_file_block(thread, index, file, cwd.as_deref(), cx));
         }
         let review_id = gpui::ElementId::from("panel-review-changes");
-        let review_key = crate::pointer::hover_key(&review_id);
+        let review_key = ferrite_ui::pointer::hover_key(&review_id);
         body.child(
             div()
                 .id(review_id)
@@ -722,7 +722,7 @@ impl CockpitView {
     /// and the checkout's drift and dirt at the right when git has said
     /// (`↑2 ↓1 · 3 dirty`).
     fn panel_branch_row(&self, branch: SharedString, facts: &crate::facts::ThreadFacts) -> Div {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let base = facts.default_branch.clone();
         let drift = facts.status.as_ref().and_then(|status| {
             let mut words = Vec::new();
@@ -784,7 +784,7 @@ impl CockpitView {
         cwd: Option<&std::path::Path>,
         cx: &mut Context<Self>,
     ) -> Div {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let raw = std::path::PathBuf::from(&file.path);
         let path = match cwd {
             Some(cwd) if !raw.is_absolute() => cwd.join(&raw),
@@ -890,7 +890,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let Some(open) = self.cockpit.thread(thread) else {
             return div().into_any_element();
         };
@@ -937,7 +937,7 @@ impl CockpitView {
     /// `84k / 200k`, and the context meter. None until the Session reports
     /// its usage: no reading is invented.
     fn panel_foot(&self, thread: ThreadId) -> Option<Div> {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let open = self.cockpit.thread(thread)?;
         let usage = open.transcript().usage()?;
         let window = usage.context_window.filter(|window| *window > 0);
@@ -989,7 +989,7 @@ impl CockpitView {
 /// sits, shown or hidden: the panel's own padding, or on Windows just left
 /// of the caption buttons.
 pub(super) fn panel_toggle_inset() -> f32 {
-    use crate::theme::{CAPTION_W, PANEL_PAD_R};
+    use ferrite_ui::theme::{CAPTION_W, PANEL_PAD_R};
     if crate::titlebar::CUSTOM {
         3. * CAPTION_W
     } else {
@@ -1003,20 +1003,22 @@ pub(super) fn panel_toggle_inset() -> f32 {
 /// preview's width beyond that is pinned to the board's edge instead, so
 /// it slides in and out with it.
 fn overhang(content_w: f32, width: f32) -> f32 {
-    (content_w - width).clamp(0., content_w - crate::theme::PANEL_W)
+    (content_w - width).clamp(0., content_w - ferrite_ui::theme::PANEL_W)
 }
 
 /// The toggle's room at the end of whichever head the toggle lies over
 /// (`panel_toggle_element`): the toggle's own box, kept clear.
 pub(super) fn toggle_room() -> Div {
-    div().flex_shrink_0().size(px(crate::theme::ICON_BUTTON))
+    div()
+        .flex_shrink_0()
+        .size(px(ferrite_ui::theme::ICON_BUTTON))
 }
 
 /// The tab's body, scrolling between the head and the foot on the Thread's
 /// tab's own `scroll`, its overlay thumb in the column's right padding
 /// (`PANEL_SCROLLBAR_INSET`) beside the rows rather than over them.
 fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
-    use crate::theme::{PANEL_PAD_R, PANEL_SCROLLBAR_INSET};
+    use ferrite_ui::theme::{PANEL_PAD_R, PANEL_SCROLLBAR_INSET};
     div()
         .relative()
         .flex()
@@ -1036,10 +1038,10 @@ fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
                 .child(body),
         )
         .child(
-            crate::components::scrollbar_layer()
+            ferrite_ui::components::scrollbar_layer()
                 .right(px(-PANEL_PAD_R))
                 .child(
-                    crate::components::scrollbar_bar("panel-scrollbar", scroll)
+                    ferrite_ui::components::scrollbar_bar("panel-scrollbar", scroll)
                         .gutter(px(PANEL_PAD_R), px(PANEL_SCROLLBAR_INSET)),
                 ),
         )
@@ -1055,22 +1057,27 @@ pub(super) fn fold_chevron(
     size: f32,
     ink: u32,
 ) -> impl IntoElement {
-    crate::motion::settled(key.into(), unfolded, crate::motion::CHEVRON, move |turn| {
-        icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
-            gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
-        ))
-    })
+    ferrite_ui::motion::settled(
+        key.into(),
+        unfolded,
+        ferrite_ui::motion::CHEVRON,
+        move |turn| {
+            icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
+                gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
+            ))
+        },
+    )
 }
 
 /// A two-line panel row (48): its icon at the row's left, its two lines
 /// (the caller's children) on the text column, centred down the row.
 fn panel_row(glyph: &'static str, ink: u32) -> Div {
-    panel_row_with(icon(glyph, crate::theme::PANEL_ROW_ICON, ink))
+    panel_row_with(icon(glyph, ferrite_ui::theme::PANEL_ROW_ICON, ink))
 }
 
 /// A two-line panel row whose icon slot holds `slot`.
 fn panel_row_with(slot: impl IntoElement) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     div()
         .relative()
         .flex()
@@ -1093,7 +1100,7 @@ fn panel_row_with(slot: impl IntoElement) -> Div {
 /// A file count's `+N −N` in the chrome's code face, the signs in the diff
 /// hues (`pane::trail_diff_stat`).
 fn diffstat(added: usize, removed: usize) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     div()
         .flex_shrink_0()
         .font_family(FONT_CODE)
@@ -1106,7 +1113,7 @@ fn diffstat(added: usize, removed: usize) -> Div {
 /// track. A Session that names no categories gives one segment. Past the
 /// warn fraction every segment turns `ATTENTION`, past full `BLOCKED`.
 fn context_meter(total: u64, window: u64, details: Option<&ferrite_core::ContextDetails>) -> Div {
-    use crate::theme::*;
+    use ferrite_ui::theme::*;
     let fraction = total as f32 / window as f32;
     let state = (fraction >= CTX_METER_WARN).then(|| pane::ctx_meter_ink(fraction));
     let mut segments: Vec<(u32, f32)> = details

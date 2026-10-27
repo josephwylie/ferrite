@@ -43,7 +43,7 @@ use super::engine::{Availability, Visuals};
 use super::renderer::{self, Settled};
 use super::tokens::{self, Scheme};
 use super::web::{Engine, Frame, Page, Viewport};
-use crate::theme;
+use ferrite_ui::theme;
 
 /// The fence language drawn as a diagram.
 pub(crate) const LANGUAGE: &str = "mermaid";

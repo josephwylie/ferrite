@@ -1,5 +1,7 @@
 // Ferrite's shared UI: what the Cockpit and the Pane both draw with.
 pub mod components;
+#[cfg(any(test, feature = "test-support"))]
+pub mod face;
 pub mod icons;
 pub mod keymap;
 pub mod loops_overlay;

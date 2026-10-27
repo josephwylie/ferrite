@@ -26,10 +26,10 @@ use gpui::{div, px, rgb, AnyElement, App, Div, Entity, SharedString, Window};
 
 use super::element::{WebView, PLACEHOLDER_HEIGHT};
 use super::{Visual, VisualStatus};
-use crate::components;
 use crate::pane::{self, Grid};
 use crate::select::TextRuns;
-use crate::theme::{self, BLOCKED, RUNNING, TEXT, TEXT_DIM, TEXT_FAINT, TEXT_STRONG};
+use ferrite_ui::components;
+use ferrite_ui::theme::{self, BLOCKED, RUNNING, TEXT, TEXT_DIM, TEXT_FAINT, TEXT_STRONG};
 
 /// The call line's name for every visual.
 pub(crate) const NAME: &str = "Visual";

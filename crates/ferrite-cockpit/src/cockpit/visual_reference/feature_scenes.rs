@@ -749,7 +749,7 @@ fn reader(held: Option<f32>) -> (Scene, Setup) {
 /// about.
 const NAV_RS: &str = "\
 use crate::facts::Facts;
-use crate::theme::{ROW_H, ROW_LINE_H};
+use ferrite_ui::theme::{ROW_H, ROW_LINE_H};
 
 /// One Thread's row in the nav: its mark, its title and, while the Thread
 /// is open, the status line under it.
@@ -784,7 +784,7 @@ impl NavState {
 fn find() -> (Scene, Setup) {
     let scene = conversation("find");
     let setup: Setup = Box::new(|view, window, cx| {
-        view.open_find(&crate::find::Open, window, cx);
+        view.open_find(&ferrite_pane::find::Open, window, cx);
         if let Some(transcript) = view.panes[view.focused()].transcript() {
             transcript.update(cx, |transcript, cx| transcript.type_find("nav", cx));
         }

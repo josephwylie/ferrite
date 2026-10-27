@@ -3,18 +3,18 @@
 //! Cockpit never shows stale UI — for each way it reads what changes.
 
 use super::*;
-use crate::composer::{caret_alpha, Caret};
+use ferrite_pane::composer::{caret_alpha, Caret};
 
 fn renders() -> usize {
     crate::cockpit::RENDERS.with(std::cell::Cell::get)
 }
 
 fn overlay_renders() -> usize {
-    crate::loops_overlay::testing::overlay_renders()
+    ferrite_ui::loops_overlay::testing::overlay_renders()
 }
 
 fn hosted(cx: &mut gpui::VisualTestContext) -> usize {
-    cx.update(|window, _| crate::loops_overlay::hosted_marks(window))
+    cx.update(|window, _| ferrite_ui::loops_overlay::hosted_marks(window))
 }
 
 /// Let `ms` pass a display frame at a time, delivering each frame asked for.
@@ -34,7 +34,7 @@ fn focused<'a>(
     threads: usize,
     cx: &'a mut TestAppContext,
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let (core, _fake) = cockpit(name, threads);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -75,7 +75,7 @@ fn the_caret_blinks_in_the_overlay_and_keeps_its_look(cx: &mut TestAppContext) {
     composer.update(cx, |composer, _| composer.clear_caret_log());
     assert_eq!(hosted(cx), 1, "the premise: the overlay draws the caret");
     let (cockpit, overlay) = (renders(), overlay_renders());
-    let turn = crate::theme::MOTION_CARET_BLINK_MS;
+    let turn = ferrite_ui::theme::MOTION_CARET_BLINK_MS;
     for _ in 0..3 * turn {
         cx.executor().advance_clock(Duration::from_millis(1));
         cx.run_until_parked();
@@ -95,7 +95,7 @@ fn the_caret_blinks_in_the_overlay_and_keeps_its_look(cx: &mut TestAppContext) {
         draws.len()
     );
     let (epoch, tick) = cx
-        .update(|_, cx| crate::motion::testing::grid(cx))
+        .update(|_, cx| ferrite_ui::motion::testing::grid(cx))
         .expect("the overlay declared the blink");
     let first = draws.first().map(|(at, _)| *at).unwrap_or(end);
     let mut at = epoch;
@@ -243,7 +243,7 @@ fn deactivating_the_window_stills_the_overlays_caret(cx: &mut TestAppContext) {
         "the overlay is not woken for a still caret: {} draws",
         overlay_renders() - overlay
     );
-    assert!(cx.update(|_, cx| crate::motion::pulse_parked(cx)));
+    assert!(cx.update(|_, cx| ferrite_ui::motion::pulse_parked(cx)));
 }
 
 /// A frame the Cockpit did not ask for (its parent's, the overlay's)

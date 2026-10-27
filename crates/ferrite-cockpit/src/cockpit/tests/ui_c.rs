@@ -40,7 +40,7 @@ fn the_solo_thread_is_named_by_the_view_head_and_meters_its_plan(cx: &mut TestAp
         .debug_bounds("view-title")
         .expect("the view head names it");
     assert!(
-        head.bottom() <= px(crate::theme::WIN_CHROME_H),
+        head.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
         "in the head row"
     );
     let meter = cx.debug_bounds("tasks-meter-1").expect("the plan's meter");
@@ -79,12 +79,12 @@ fn the_empty_cockpit_says_how_to_start(cx: &mut TestAppContext) {
 /// as glyphs: `⌘N`, `⌘⇧N`, `⌘O`, `⌘G`, `⌘K` (rule 2.11.4, F-13).
 #[test]
 fn the_empty_board_spells_keys_from_the_key_table() {
-    let (primary, glyph) = match crate::keymap::PLATFORM {
-        crate::keymap::Platform::Mac => ("cmd", "\u{2318}"),
-        crate::keymap::Platform::Windows => ("ctrl", "\u{2303}"),
+    let (primary, glyph) = match ferrite_ui::keymap::PLATFORM {
+        ferrite_ui::keymap::Platform::Mac => ("cmd", "\u{2318}"),
+        ferrite_ui::keymap::Platform::Windows => ("ctrl", "\u{2303}"),
     };
     let spelled = |action: &str| {
-        CockpitView::key_label(action).map(|keys| crate::components::key_glyphs(&keys))
+        CockpitView::key_label(action).map(|keys| ferrite_ui::components::key_glyphs(&keys))
     };
     assert_eq!(
         CockpitView::key_label("cockpit::NewThread").as_deref(),
@@ -358,7 +358,7 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     let key = thread.get();
     let head = bounds(cx, format!("pane-head-{key}"));
     let body = bounds(cx, format!("pane-body-{key}"));
-    assert_eq!(head.size.height, px(crate::theme::PANE_HEAD_H + 1.));
+    assert_eq!(head.size.height, px(ferrite_ui::theme::PANE_HEAD_H + 1.));
     assert!(body.top() >= head.bottom(), "{body:?} under {head:?}");
     for row in ["transcript-prompt", "transcript-answer"] {
         let row = cx.debug_bounds(row).expect("the row paints");
@@ -388,11 +388,11 @@ fn the_prompt_mark_keeps_the_transcript_column(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    let column = px(rect.x + crate::theme::TX_INSET_SOLO);
+    let column = px(rect.x + ferrite_ui::theme::TX_INSET_SOLO);
     let mark = cx.debug_bounds("prompt-mark").unwrap();
     let band = cx.debug_bounds("transcript-prompt").unwrap();
     assert!(
-        (band.left() - (column - px(crate::theme::PROMPT_BAND_PAD_X))).abs() <= px(1.),
+        (band.left() - (column - px(ferrite_ui::theme::PROMPT_BAND_PAD_X))).abs() <= px(1.),
         "the band reaches past the column: {band:?} / {rect:?}"
     );
     assert!(
@@ -447,7 +447,7 @@ fn the_expand_and_approve_keys_still_work_without_head_chips(cx: &mut TestAppCon
 /// the unread breath; the assertion on the breathing dot now inverts.)
 #[gpui::test]
 fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext) {
-    crate::motion::testing::drive();
+    ferrite_ui::motion::testing::drive();
     let (view, fake, cx, _group) = board("board-unread", 3, cx);
     // On the board, a finish is unread only while the window is away.
     cx.update(|window, _| window.activate_window());
@@ -505,11 +505,11 @@ fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext
     cx.update(|_, cx| cx.set_reduce_motion(true));
     tick(cx);
     cx.executor().advance_clock(Duration::from_millis(
-        crate::theme::MOTION_WORKING_FRAME_MS + 2 * crate::theme::MOTION_PULSE_TICK_MS,
+        ferrite_ui::theme::MOTION_WORKING_FRAME_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
     ));
     cx.run_until_parked();
     assert!(
-        cx.update(|_, cx| crate::motion::pulse_parked(cx)),
+        cx.update(|_, cx| ferrite_ui::motion::pulse_parked(cx)),
         "reduced motion holds every loop still and leases nothing"
     );
     assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
@@ -592,7 +592,7 @@ fn a_group_cell_decision_never_clips_its_deny_row(cx: &mut TestAppContext) {
         "{deny:?} inside {island:?}"
     );
     // Terminal-native: an option is one grid row.
-    assert!(deny.size.height >= px(crate::theme::LH_UI));
+    assert!(deny.size.height >= px(ferrite_ui::theme::LH_UI));
 }
 
 /// Rule 2.8.6: the digit one past a question's options arms its one answer
@@ -661,7 +661,7 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
 /// can never squeeze the title.
 #[gpui::test]
 fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
-    use crate::theme::{
+    use ferrite_ui::theme::{
         FS_META, NAV_COL_PAD, NAV_MEMBER_X, NAV_ROW_H, NAV_ROW_PAD_X, NAV_WORD_GAP, W_BODY,
     };
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
@@ -727,7 +727,7 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
             })
         });
         // The shown Group hangs one level into its Project's tree.
-        let member_x = NAV_MEMBER_X + crate::theme::NAV_TREE_INDENT;
+        let member_x = NAV_MEMBER_X + ferrite_ui::theme::NAV_TREE_INDENT;
         let expected = crate::nav::WIDTH - 2.0 * NAV_COL_PAD - member_x - NAV_ROW_PAD_X - word_w;
         assert!(
             (title.size.width - px(expected)).abs() < px(0.5),
@@ -780,7 +780,7 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
         assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
         assert_eq!(
             row.status.ink(),
-            crate::theme::BLOCKED,
+            ferrite_ui::theme::BLOCKED,
             "and the nav and rail mark say it too"
         );
         assert_eq!(
@@ -798,8 +798,8 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
 #[gpui::test]
 fn every_waiting_cell_wears_one_attention_edge_and_solo_none(cx: &mut TestAppContext) {
     assert_eq!(
-        crate::theme::WAIT_RING,
-        (crate::theme::ATTENTION << 8) | 0x59,
+        ferrite_ui::theme::WAIT_RING,
+        (ferrite_ui::theme::ATTENTION << 8) | 0x59,
         "the waiting edge is ATTENTION itself, at 35%"
     );
     let (view, fake, cx, _group) = board("edge-answer-target", 4, cx);

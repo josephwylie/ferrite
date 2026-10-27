@@ -105,7 +105,7 @@ impl CockpitView {
 
     /// The board with no Pane on it (see the module doc).
     pub(super) fn empty_board(&self, cx: &mut Context<Self>) -> Div {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let version = self.shown_version.clone();
         let cli = |found: &SharedString| -> Option<SharedString> {
             (!found.starts_with("not found"))
@@ -153,8 +153,8 @@ impl CockpitView {
             .text_color(rgb(TEXT_DIM));
         for (provider, version) in &clis {
             let (glyph, ink, name) = match provider {
-                Provider::Claude => (crate::icons::CLAUDE, PROVIDER_CLAUDE, "claude"),
-                Provider::Codex => (crate::icons::CODEX, PROVIDER_CODEX, "codex"),
+                Provider::Claude => (ferrite_ui::icons::CLAUDE, PROVIDER_CLAUDE, "claude"),
+                Provider::Codex => (ferrite_ui::icons::CODEX, PROVIDER_CODEX, "codex"),
             };
             facts = facts
                 .child(
@@ -166,8 +166,8 @@ impl CockpitView {
                         // Inline in the line, `vertical-align: -1px`, as the
                         // status line's logos sit (`STATUS_LOGO_FOOT`).
                         .child(
-                            crate::icons::icon(glyph, BAR_MARK, ink)
-                                .mt(px(-crate::theme::STATUS_LOGO_FOOT)),
+                            ferrite_ui::icons::icon(glyph, BAR_MARK, ink)
+                                .mt(px(-ferrite_ui::theme::STATUS_LOGO_FOOT)),
                         )
                         .child(words(format!("{name} {version}"))),
                 )
@@ -192,16 +192,16 @@ impl CockpitView {
                 let shown = SharedString::from(home_relative(&root));
                 // A path as every path reads (`file_links::path_text`): the
                 // link ink, its underline under the pointer; a press opens it.
-                let target = crate::file_links::PathTarget::new(root.clone());
+                let target = ferrite_pane::file_links::PathTarget::new(root.clone());
                 div()
                     .id("empty-board-path")
                     .debug_selector(|| "empty-board-path".into())
                     .flex_shrink_0()
                     .cursor_pointer()
                     .text_color(rgb(LINK_INK))
-                    .child(crate::file_links::path_text(shown, target))
+                    .child(ferrite_pane::file_links::path_text(shown, target))
                     .on_click(move |_, window, cx| {
-                        crate::file_links::FileLink {
+                        ferrite_pane::file_links::FileLink {
                             path: root.clone(),
                             location: None,
                         }
@@ -216,7 +216,7 @@ impl CockpitView {
             .child(
                 div()
                     .debug_selector(|| "empty-board-mark".into())
-                    .child(crate::components::steel_mark(EMPTY_MARK_H)),
+                    .child(ferrite_ui::components::steel_mark(EMPTY_MARK_H)),
             )
             .child(
                 div()
@@ -274,7 +274,7 @@ impl CockpitView {
                             .items_center()
                             .w(px(GLYPH_GUTTER))
                             .children(
-                                selected.then(|| crate::components::prompt_mark(TEXT_STRONG)),
+                                selected.then(|| ferrite_ui::components::prompt_mark(TEXT_STRONG)),
                             ),
                     )
                     .child(
@@ -291,7 +291,7 @@ impl CockpitView {
                             .justify_end()
                             .w(px(EMPTY_KEY_W))
                             .children(
-                                keys.map(|keys| crate::components::key_combo(&keys, TEXT_DIM)),
+                                keys.map(|keys| ferrite_ui::components::key_combo(&keys, TEXT_DIM)),
                             ),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {

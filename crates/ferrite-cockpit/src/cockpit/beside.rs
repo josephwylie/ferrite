@@ -42,14 +42,14 @@
 //! a member.
 
 use super::*;
-use crate::motion::{Reveal, SLOT_CLOSE, SLOT_OPEN};
-use crate::preview::{head_door, reading_head};
 use crate::review::{
     BasePicked, BasesAsked, CommitPicked, FileOpened, FilesAsked, MenuAsked, PrAsked, ReviewView,
     ScopePicked, Searched,
 };
+use ferrite_pane::preview::{head_door, reading_head};
 use ferrite_reviewr::ferrite::Read;
 use ferrite_reviewr::model::{CommitPick, Scope};
+use ferrite_ui::motion::{Reveal, SLOT_CLOSE, SLOT_OPEN};
 use std::collections::HashMap;
 
 /// A Pane's Review on the board (ADR 0021): open in its reader slot, or
@@ -603,7 +603,7 @@ impl CockpitView {
     /// each.
     pub(super) fn tend_reader_slides(&mut self, cx: &gpui::App) {
         let now = cx.background_executor().now();
-        let reduced = crate::motion::reduced_motion(cx);
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
         let panes = &mut self.panes;
         let slides = &mut self.reader_slides;
         let first = !std::mem::replace(&mut slides.tended, true);
@@ -680,7 +680,7 @@ impl CockpitView {
             .map(|(owner, slide)| (reader_leaf(*owner), slide.drawn))
             .collect();
         if !reveals.is_empty() {
-            tree.reveal(&reveals, bounds, crate::theme::BOARD_SEAM);
+            tree.reveal(&reveals, bounds, ferrite_ui::theme::BOARD_SEAM);
         }
         tree
     }
@@ -715,7 +715,7 @@ impl CockpitView {
         pin: Option<layout::Rect>,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
-        use crate::theme::*;
+        use ferrite_ui::theme::*;
         let index = self.pane_for(owner)?;
         let slot = &self.panes[index].review;
         let shown = slot.shown()?;
@@ -733,11 +733,14 @@ impl CockpitView {
         let close = head_door(
             "close-review",
             format!("review-close-{}", owner.get()),
-            crate::icons::CLOSE,
+            ferrite_ui::icons::CLOSE,
         )
-        .tooltip(crate::menu::tooltip_with_key(
+        .tooltip(ferrite_ui::menu::tooltip_with_key(
             "Close the review",
-            crate::components::bound_chord_in("reader::Close", Some(crate::keymap::READER)),
+            ferrite_ui::components::bound_chord_in(
+                "reader::Close",
+                Some(ferrite_ui::keymap::READER),
+            ),
         ))
         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
@@ -749,7 +752,7 @@ impl CockpitView {
         let slot = div()
             .debug_selector(|| "review-slot".into())
             .track_focus(&slot.focus)
-            .key_context(crate::keymap::READER)
+            .key_context(ferrite_ui::keymap::READER)
             .relative()
             .flex()
             .flex_col()

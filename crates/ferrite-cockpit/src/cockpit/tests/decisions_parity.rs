@@ -82,9 +82,9 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     let always = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
     let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
     let hints = cx.debug_bounds("decision-hints").expect("the hint");
-    let line = px(crate::theme::LH_UI);
-    let gap = px(crate::theme::DECISION_GAP);
-    let pad = px(crate::theme::DECISION_PAD);
+    let line = px(ferrite_ui::theme::LH_UI);
+    let gap = px(ferrite_ui::theme::DECISION_GAP);
+    let pad = px(ferrite_ui::theme::DECISION_PAD);
     assert!(near(head.top() - card.top(), pad), "{card:?} / {head:?}");
     assert!(near(head.left() - card.left(), pad), "{card:?} / {head:?}");
     assert!(
@@ -96,7 +96,7 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     assert!(
         near(
             well.size.height,
-            line + px(2. * crate::theme::DECISION_WELL_PAD_Y)
+            line + px(2. * ferrite_ui::theme::DECISION_WELL_PAD_Y)
         ),
         "the well is a row and 6px above and below: {well:?}"
     );
@@ -106,7 +106,7 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     );
     for row in [allow, always, deny] {
         assert!(
-            near(row.size.height, px(crate::theme::DECISION_OPTION_H)),
+            near(row.size.height, px(ferrite_ui::theme::DECISION_OPTION_H)),
             "an option is 30px: {row:?}"
         );
     }
@@ -118,7 +118,7 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     assert!(
         near(
             hints.top() - card.bottom(),
-            px(crate::theme::DECISION_HINT_GAP)
+            px(ferrite_ui::theme::DECISION_HINT_GAP)
         ),
         "the hint sits under the box: {card:?} / {hints:?}"
     );
@@ -184,7 +184,7 @@ fn option_two_without_a_standing_answer_keeps_a_thread_rule(cx: &mut TestAppCont
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.decisions.rules(),
-            [crate::decision::ThreadRule {
+            [ferrite_pane::decision::ThreadRule {
                 thread,
                 tool: "Bash".into(),
                 pattern: "gh issue *".into(),
@@ -217,7 +217,7 @@ fn option_three_denies_and_lands_in_the_composer(cx: &mut TestAppContext) {
     assert!(
         matches!(answered(&fake).as_slice(),
             [(id, DecisionAnswer::Deny { message })]
-                if id == "steer" && message == crate::decision::DENY_AND_STEER),
+                if id == "steer" && message == ferrite_pane::decision::DENY_AND_STEER),
         "{:?}",
         answered(&fake)
     );
@@ -237,8 +237,8 @@ fn option_three_denies_and_lands_in_the_composer(cx: &mut TestAppContext) {
 fn the_cursor_moves_and_confirm_answers_its_option(cx: &mut TestAppContext) {
     let (view, fake, cx) = waiting("parity-cursor", cx, bash("cursor", "cargo test"));
     assert_eq!(cursor(&view, cx), None, "the first option is pre-selected");
-    cx.dispatch_action(crate::decision::SelectNext);
-    cx.dispatch_action(crate::decision::SelectNext);
+    cx.dispatch_action(ferrite_pane::decision::SelectNext);
+    cx.dispatch_action(ferrite_pane::decision::SelectNext);
     tick(cx);
     assert_eq!(cursor(&view, cx), Some(2));
     let (thread, serial) = view.read_with(cx, |view, _| {
@@ -251,11 +251,11 @@ fn the_cursor_moves_and_confirm_answers_its_option(cx: &mut TestAppContext) {
         deny.contains(&mark.center()),
         "the cursor row follows the cursor"
     );
-    cx.dispatch_action(crate::decision::SelectNext);
+    cx.dispatch_action(ferrite_pane::decision::SelectNext);
     tick(cx);
     assert_eq!(cursor(&view, cx), Some(0), "it wraps");
-    cx.dispatch_action(crate::decision::SelectPrevious);
-    cx.dispatch_action(crate::decision::Confirm);
+    cx.dispatch_action(ferrite_pane::decision::SelectPrevious);
+    cx.dispatch_action(ferrite_pane::decision::Confirm);
     tick(cx);
     assert!(
         matches!(answered(&fake).as_slice(), [(id, DecisionAnswer::Deny { .. })] if id == "cursor"),
@@ -268,12 +268,12 @@ fn the_cursor_moves_and_confirm_answers_its_option(cx: &mut TestAppContext) {
 #[gpui::test]
 fn dismiss_denies(cx: &mut TestAppContext) {
     let (_view, fake, cx) = waiting("parity-dismiss", cx, bash("dismiss", "make deploy"));
-    cx.dispatch_action(crate::decision::Dismiss);
+    cx.dispatch_action(ferrite_pane::decision::Dismiss);
     tick(cx);
     assert!(
         matches!(answered(&fake).as_slice(),
             [(id, DecisionAnswer::Deny { message })]
-                if id == "dismiss" && message == crate::decision::DENY_AND_STEER),
+                if id == "dismiss" && message == ferrite_pane::decision::DENY_AND_STEER),
         "{:?}",
         answered(&fake)
     );
@@ -284,8 +284,8 @@ fn dismiss_denies(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_amend_note_rides_a_denial(cx: &mut TestAppContext) {
     let (view, fake, cx) = waiting("parity-amend-deny", cx, bash("amend", "rm -rf build"));
-    cx.dispatch_action(crate::decision::SelectPrevious);
-    cx.dispatch_action(crate::decision::Amend);
+    cx.dispatch_action(ferrite_pane::decision::SelectPrevious);
+    cx.dispatch_action(ferrite_pane::decision::Amend);
     tick(cx);
     assert!(cx.debug_bounds("decision-note").is_some(), "the note opens");
     let focused = view.update_in(cx, |view, window, cx| {
@@ -315,7 +315,7 @@ fn the_amend_note_rides_a_denial(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_amend_note_follows_an_allow_as_the_next_prompt(cx: &mut TestAppContext) {
     let (view, fake, cx) = waiting("parity-amend-allow", cx, bash("amend-allow", "cargo test"));
-    cx.dispatch_action(crate::decision::Amend);
+    cx.dispatch_action(ferrite_pane::decision::Amend);
     tick(cx);
     cx.simulate_input("then run clippy");
     cx.simulate_keystrokes("enter");
@@ -343,7 +343,7 @@ fn the_amend_note_follows_an_allow_as_the_next_prompt(cx: &mut TestAppContext) {
 #[gpui::test]
 fn esc_closes_the_note_then_denies(cx: &mut TestAppContext) {
     let (view, fake, cx) = waiting("parity-amend-esc", cx, bash("amend-esc", "cargo test"));
-    cx.dispatch_action(crate::decision::Amend);
+    cx.dispatch_action(ferrite_pane::decision::Amend);
     tick(cx);
     cx.simulate_keystrokes("escape");
     tick(cx);
@@ -360,7 +360,7 @@ fn esc_closes_the_note_then_denies(cx: &mut TestAppContext) {
             .is_focused(window)
     });
     assert!(focused, "the keyboard is back in the Composer");
-    cx.dispatch_action(crate::decision::Dismiss);
+    cx.dispatch_action(ferrite_pane::decision::Dismiss);
     tick(cx);
     assert!(
         matches!(
@@ -427,10 +427,10 @@ fn a_question_answers_from_its_cursor(cx: &mut TestAppContext) {
     fake.streams.borrow()[0].send(question("keys")).unwrap();
     tick(cx);
     assert!(cx.debug_bounds("decision-hints").is_some());
-    cx.dispatch_action(crate::decision::SelectNext);
+    cx.dispatch_action(ferrite_pane::decision::SelectNext);
     tick(cx);
     assert_eq!(cursor(&view, cx), Some(1));
-    cx.dispatch_action(crate::decision::Confirm);
+    cx.dispatch_action(ferrite_pane::decision::Confirm);
     tick(cx);
     assert!(
         matches!(answered(&fake).as_slice(),
@@ -448,12 +448,12 @@ fn dismiss_skips_a_question(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     fake.streams.borrow()[0].send(question("skip")).unwrap();
     tick(cx);
-    cx.dispatch_action(crate::decision::Dismiss);
+    cx.dispatch_action(ferrite_pane::decision::Dismiss);
     tick(cx);
     assert!(
         matches!(answered(&fake).as_slice(),
             [(id, DecisionAnswer::Deny { message })]
-                if id == "skip" && message == crate::decision::QUESTION_SKIPPED),
+                if id == "skip" && message == ferrite_pane::decision::QUESTION_SKIPPED),
         "{:?}",
         answered(&fake)
     );
@@ -470,7 +470,7 @@ fn the_tail_key_follows_the_cursor(cx: &mut TestAppContext) {
         })
     };
     let before = key(&view, cx).expect("a waiting Decision is a tail");
-    cx.dispatch_action(crate::decision::SelectNext);
+    cx.dispatch_action(ferrite_pane::decision::SelectNext);
     tick(cx);
     let after = key(&view, cx).expect("still waiting");
     assert_ne!(before, after, "the cursor is part of what the tail draws");
