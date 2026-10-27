@@ -5,6 +5,16 @@ edition.workspace = true
 license.workspace = true
 description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 
+# The app is the library; the binary only dispatches and launches it, so the
+# tests compile the app once and the binary has none of its own.
+[lib]
+doctest = false
+
+[[bin]]
+name = "ferrite"
+path = "src/main.rs"
+test = false
+
 [features]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 visual-reference = ["gpui/test-support", "dep:gpui-reference-platform"]

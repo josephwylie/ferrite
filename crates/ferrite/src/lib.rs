@@ -1,8 +1,5 @@
-// Ferrite: the cockpit window and the pump behind it.
-// A GUI app, not a console one: without this Windows hands ferrite.exe its
-// own console window at launch. Left on in debug builds so `cargo run`
-// still prints.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Ferrite: the cockpit window and the pump behind it. The binary
+// (`main.rs`) dispatches the headless commands and calls `launch`.
 mod attachments;
 mod background_chips;
 #[cfg(unix)]
@@ -123,27 +120,9 @@ pub(crate) fn register_fonts(cx: &App) {
         .expect("the bundled faces load");
 }
 
-fn main() {
-    // `ferrite server` is the headless Server the window attaches to (ADR
-    // 0025): it never starts a window, Chromium or the self-update.
-    if std::env::args().nth(1).as_deref() == Some("server") {
-        std::process::exit(ferrite_core::server::run(ferrite_core::server::Options {
-            store: store_dir(),
-            settings_dir: settings_dir(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            after: flag(&std::env::args().collect::<Vec<_>>(), "--after")
-                .and_then(|pid| pid.parse().ok()),
-        }));
-    }
-    // `ferrite thread list`, `ferrite agent prompt …`, `ferrite --skill`:
-    // the automation API's CLI (ADR 0027), which never starts a window.
-    if let Some(code) = ferrite_core::api::cli::run(
-        &std::env::args().collect::<Vec<_>>(),
-        &store_dir(),
-        &settings_dir(),
-    ) {
-        std::process::exit(code);
-    }
+/// The app: a Chromium helper, a capture, or the window. The binary has
+/// already dispatched the commands that never start one.
+pub fn launch() {
     // A Chromium helper process is this same binary, started
     // by Chromium with `--type=…`; it runs the helper and exits here, before
     // any shell, store or window. In the app this only readies Chromium
