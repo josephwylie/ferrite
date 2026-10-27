@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// How many of a command's last lines its toast says.
 const TOAST_LINES: usize = 4;
 /// How often the window looks for a running command's end.
-const ENDED_POLL: Duration = Duration::from_millis(100);
+pub(super) const ENDED_POLL: Duration = Duration::from_millis(100);
 
 /// The operator's commands still running, and what the window has still
 /// to say about them and the keys: toasts wait for render, the one place
@@ -97,7 +97,10 @@ impl CockpitView {
         std::thread::spawn({
             let command = command.clone();
             let cwd = cwd.clone();
-            move || done.send(command.run(&cwd, thread, &stop))
+            move || {
+                let _ = done.send(command.run(&cwd, thread, &stop));
+                ferrite_core::doorbell::ring();
+            }
         });
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(ENDED_POLL).await;

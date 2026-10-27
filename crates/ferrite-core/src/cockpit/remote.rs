@@ -290,6 +290,7 @@ impl Remote {
                 .name("ferrite-attach".into())
                 .spawn(move || {
                     let _ = done.send(attach_to(&store, &server, hello));
+                    crate::doorbell::ring();
                 });
             if started.is_ok() {
                 self.attaching = Some(attaching);
@@ -1033,6 +1034,7 @@ impl Remote {
                     },
                 };
                 let _ = answers.send(answer);
+                crate::doorbell::ring();
             });
         if let Err(error) = waiter {
             crate::log!("a visual could not be answered: {error}");

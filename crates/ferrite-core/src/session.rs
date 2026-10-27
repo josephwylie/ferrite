@@ -35,6 +35,7 @@ impl SessionLifecycle {
             .name("ferrite-spawn".into())
             .spawn(move || {
                 let _ = tx.send(spawn());
+                crate::doorbell::ring();
             })?;
         Ok(Self {
             state: State::Starting(rx),
