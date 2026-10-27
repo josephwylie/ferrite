@@ -966,3 +966,61 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
         .debug_bounds("progress-caption-Retrying · Server busy")
         .is_none());
 }
+
+/// Escape stops what the Pane shows: a Subagent's tab stops that
+/// Subagent alone, Main's tab interrupts Main's turn alone.
+#[gpui::test]
+fn escape_on_a_subagent_tab_stops_only_that_subagent(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+    let (mut core, fake) = cockpit("escape-subagent", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "keep working".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let running = AgentKey::new(Provider::Claude, "native", "running");
+    let finished = AgentKey::new(Provider::Claude, "native", "finished");
+    for (key, state) in [
+        (&running, AgentStatus::Working),
+        (&finished, AgentStatus::Idle),
+    ] {
+        let mut info = AgentInfo::new(key.clone());
+        info.parent = Some(Subject::Main);
+        let stream = &fake.streams.borrow()[0];
+        stream
+            .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+            .unwrap();
+        stream
+            .send(SessionEvent::Activity(ActivityEvent::Status {
+                key: key.clone(),
+                state,
+            }))
+            .unwrap();
+    }
+    tick(cx);
+    let escape_on = |subject: Subject, cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.select_subject(thread, subject, window, cx)
+            })
+        });
+        tick(cx);
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+    };
+
+    escape_on(Subject::Subagent(running.clone()), cx);
+    assert_eq!(*fake.stopped.borrow(), std::slice::from_ref(&running));
+    assert_eq!(*fake.interrupts.borrow(), 0, "Main's turn runs on");
+
+    escape_on(Subject::Subagent(finished), cx);
+    assert_eq!(
+        *fake.stopped.borrow(),
+        std::slice::from_ref(&running),
+        "nothing to stop"
+    );
+    assert_eq!(*fake.interrupts.borrow(), 0, "nor does it reach Main");
+
+    escape_on(Subject::Main, cx);
+    assert_eq!(*fake.interrupts.borrow(), 1);
+    assert_eq!(*fake.stopped.borrow(), [running], "no Subagent is stopped");
+}
