@@ -1,0 +1,22 @@
+[package]
+name = "ferrite-frame"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's window frame: the titlebar, the bottom bar, Settings and the key table"
+
+[lib]
+doctest = false
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# The theme, components and the frame's seam (`ferrite_ui::frame`).
+ferrite-ui = { path = "../ferrite-ui" }
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+
+[dev-dependencies]
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+# The kit's components, initialised as the window does.
+ferrite-pane = { path = "../ferrite-pane" }

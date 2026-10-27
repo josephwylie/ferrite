@@ -501,7 +501,7 @@ impl CockpitView {
         // A development build never installs the LaunchAgent (main), and
         // must not point the operator's at itself. A machine's Server is
         // not this computer's to start.
-        if !crate::titlebar::DEV && self.cockpit.machine().is_none() {
+        if !crate::DEV && self.cockpit.machine().is_none() {
             rows.push(prefs::toggle(
                 "settings-start-at-login",
                 "Start at login",

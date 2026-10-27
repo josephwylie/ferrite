@@ -1102,7 +1102,7 @@ fn a_landing_revives_a_parked_thread_and_lapses_unattached(cx: &mut TestAppConte
 #[gpui::test]
 fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        crate::bind_keys(
+        crate::frame().bind_keys(
             ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
             cx,
         )
@@ -1268,7 +1268,7 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
 #[gpui::test]
 fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        crate::bind_keys(
+        crate::frame().bind_keys(
             ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
             cx,
         )

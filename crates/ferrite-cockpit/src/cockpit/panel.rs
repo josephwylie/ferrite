@@ -303,7 +303,7 @@ impl CockpitView {
         if let Some(right) = self.panel.riding {
             let floor = if toggle {
                 inset + ICON_BUTTON + VIEW_HEAD_GAP
-            } else if crate::titlebar::CUSTOM {
+            } else if ferrite_ui::frame::CUSTOM {
                 inset
             } else {
                 0.
@@ -316,7 +316,7 @@ impl CockpitView {
             (self.board_right(), false)
         } else if toggle {
             (inset, true)
-        } else if crate::titlebar::CUSTOM {
+        } else if ferrite_ui::frame::CUSTOM {
             (inset, false)
         } else {
             (self.board_right(), false)
@@ -990,7 +990,7 @@ impl CockpitView {
 /// of the caption buttons.
 pub(super) fn panel_toggle_inset() -> f32 {
     use ferrite_ui::theme::{CAPTION_W, PANEL_PAD_R};
-    if crate::titlebar::CUSTOM {
+    if ferrite_ui::frame::CUSTOM {
         3. * CAPTION_W
     } else {
         PANEL_PAD_R

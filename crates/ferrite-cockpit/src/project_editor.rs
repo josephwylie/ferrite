@@ -1,4 +1,4 @@
-//! Explicit Project editing modal, on the sheet recipe (`prefs::sheet`), in
+//! Explicit Project editing modal, on the sheet recipe (`ferrite_ui::sheet`), in
 //! the float grammar (theme WP-E): one face on the grid, section labels in
 //! `TEXT_DIM`, a field as a 1px box, words for buttons.
 
@@ -8,8 +8,8 @@ use gpui::{div, px, rgb, App, Div, SharedString};
 
 use ferrite_ui::pointer::Pointer;
 
-use crate::prefs;
 use ferrite_ui::components;
+use ferrite_ui::sheet;
 use ferrite_ui::theme::*;
 
 const WIDTH: f32 = 600.;
@@ -17,22 +17,22 @@ const WIDTH: f32 = 600.;
 const MAX_HEIGHT: f32 = 520.;
 
 pub fn veil() -> Div {
-    prefs::veil()
+    sheet::veil()
 }
 
 /// The sheet, as tall as its content up to `MAX_HEIGHT` (and the viewport
 /// share every sheet keeps, of a window `viewport_h` tall), past which the
 /// body scrolls between the fixed head and footer.
 pub fn card(viewport_h: f32) -> Div {
-    prefs::sheet_fit(WIDTH, MAX_HEIGHT.min(viewport_h * MODAL_VIEWPORT_FRACTION))
+    sheet::sheet_fit(WIDTH, MAX_HEIGHT.min(viewport_h * MODAL_VIEWPORT_FRACTION))
 }
 
 pub fn head(title: SharedString, close: impl IntoElement) -> Div {
-    prefs::sheet_head(title, close)
+    sheet::sheet_head(title, close)
 }
 
 pub fn close_button(cx: &App) -> Button {
-    prefs::sheet_close("project-editor-close", "Close project editor", cx)
+    sheet::sheet_close("project-editor-close", "Close project editor", cx)
 }
 
 /// The card's form fields scroll between its fixed head and action footer.
@@ -307,5 +307,5 @@ pub fn destructive_button(
 
 /// Completion actions remain visible while the directory list scrolls.
 pub fn footer(left: impl IntoElement, right: impl IntoElement) -> Div {
-    prefs::sheet_footer(left, right)
+    sheet::sheet_footer(left, right)
 }
