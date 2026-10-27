@@ -231,11 +231,9 @@ fn a_newer_snapshot_flips_the_readiness_row_on_the_next_tick(cx: &mut TestAppCon
         snapshot(PrState::Open, Merge::Clean, Sync::InSync, &[Failure]),
         cx,
     );
-    cx.executor().advance_clock(crate::pr::AUTO_EVERY / 2);
-    tick(cx);
+    leap(cx, crate::pr::AUTO_EVERY / 2);
     assert!(shows(cx, "pr-ready-unpushed"), "not due yet");
-    cx.executor().advance_clock(crate::pr::AUTO_EVERY / 2);
-    tick(cx);
+    leap(cx, crate::pr::AUTO_EVERY / 2);
     settle(&view, thread, cx);
     assert!(shows(cx, "pr-ready-in-sync"), "pushed: in sync");
     assert!(!shows(cx, "pr-ready-unpushed"));
@@ -258,15 +256,13 @@ fn a_hidden_tab_makes_no_forge_reads(cx: &mut TestAppContext) {
     open_tab(&view, thread, PanelTab::Pr, cx);
     settle(&view, thread, cx);
     assert_eq!(reads(&view, cx), 1, "read on opening");
-    cx.executor().advance_clock(crate::pr::AUTO_EVERY);
-    tick(cx);
+    leap(cx, crate::pr::AUTO_EVERY);
     settle(&view, thread, cx);
     assert_eq!(reads(&view, cx), 1, "and on the cadence");
 
     open_tab(&view, thread, PanelTab::Changes, cx);
     for _ in 0..3 {
-        cx.executor().advance_clock(crate::pr::AUTO_EVERY);
-        tick(cx);
+        leap(cx, crate::pr::AUTO_EVERY);
     }
     assert_eq!(reads(&view, cx), 0, "another tab: never");
 
@@ -275,8 +271,7 @@ fn a_hidden_tab_makes_no_forge_reads(cx: &mut TestAppContext) {
     assert_eq!(reads(&view, cx), 1, "back: read at once");
     cx.simulate_keystrokes("cmd-alt-b");
     for _ in 0..3 {
-        cx.executor().advance_clock(crate::pr::AUTO_EVERY);
-        tick(cx);
+        leap(cx, crate::pr::AUTO_EVERY);
     }
     assert_eq!(reads(&view, cx), 0, "the panel hidden: never");
 }

@@ -81,7 +81,7 @@ fn focusing_a_thread_asks_at_most_every_thirty_seconds(cx: &mut TestAppContext) 
     focus(threads[1], cx);
     assert!(asked(&view, cx).is_empty(), "both were asked just now");
 
-    cx.executor().advance_clock(crate::pr::AUTO_EVERY);
+    leap(cx, crate::pr::AUTO_EVERY);
     focus(threads[0], cx);
     assert_eq!(asked(&view, cx), [(threads[0], false)]);
 }
