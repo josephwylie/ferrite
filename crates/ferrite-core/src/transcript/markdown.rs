@@ -6,14 +6,22 @@
 use super::{Block, BlockId, Body, Span, Style};
 
 /// The answer section still streaming: its raw Markdown, the Block it folds
-/// into, and how far both have been read.
+/// into, and how far both have been read. The one writer of that Block.
 #[derive(Default)]
 pub(super) struct OpenSection {
-    pub(super) block: Option<BlockId>,
+    block: Option<BlockId>,
     source: String,
     scan: Scan,
     /// The prose already folded for good, while `block` keeps it.
     settled: Option<Settled>,
+}
+
+/// What a delta did to the Blocks: those it changed, and those whose section
+/// it closed, which no longer change.
+#[derive(Default)]
+pub(super) struct Grown {
+    pub(super) dirty: Vec<BlockId>,
+    pub(super) closed: Vec<BlockId>,
 }
 
 /// How far the look for the open section's end has got: the start of its
@@ -41,21 +49,68 @@ struct Settled {
 }
 
 impl OpenSection {
-    pub(super) fn push(&mut self, text: &str) {
-        self.source.push_str(text);
-    }
-
-    pub(super) fn source(&self) -> &str {
-        &self.source
+    /// The open section's Block, once it has content.
+    pub(super) fn block(&self) -> Option<BlockId> {
+        self.block
     }
 
     pub(super) fn clear(&mut self) {
         *self = Self::default();
     }
 
+    /// Fold `text` into `blocks`: first every section a line has closed,
+    /// then the one still open, which `mint` gives a Block on its first
+    /// content. A section that closed unchanged is in `closed` but not
+    /// `dirty`, unless its body or retained Markdown moved.
+    pub(super) fn grow(
+        &mut self,
+        text: &str,
+        blocks: &mut Vec<Block>,
+        mut mint: impl FnMut() -> BlockId,
+    ) -> Grown {
+        let mut grown = Grown::default();
+        if text.is_empty() {
+            return grown;
+        }
+        self.source.push_str(text);
+        while let Some(section) = self.take_complete() {
+            if let Some(body) = parse_section(&section) {
+                let changed = write(&mut self.block, blocks, body, &section, &mut mint);
+                grown.dirty.extend(changed);
+                grown.closed.extend(changed.or(self.block));
+            } else if let Some(block) = blocks.last_mut() {
+                // Blank lines carry Markdown structure even though they do
+                // not have a visual block of their own.
+                if let Some(markdown) = &mut block.markdown {
+                    markdown.push_str(&section);
+                    grown.dirty.push(block.id);
+                }
+            }
+            self.block = None;
+        }
+        if let Some(block) = open(self.block, blocks) {
+            let id = block.id;
+            if self.grow_into(block) {
+                grown.dirty.push(id);
+                return grown;
+            }
+        }
+        if let Some(body) = parse_section(&self.source) {
+            grown.dirty.extend(write(
+                &mut self.block,
+                blocks,
+                body,
+                &self.source,
+                &mut mint,
+            ));
+            self.unsettle();
+        }
+        grown
+    }
+
     /// Take the leading section once a line closes it. Its Block, if it has
-    /// one yet, stays `block` for the caller to settle.
-    pub(super) fn take_complete(&mut self) -> Option<String> {
+    /// one yet, stays `block` until the caller settles it.
+    fn take_complete(&mut self) -> Option<String> {
         let used = complete_section(&self.source, &mut self.scan)?;
         let section = self.source[..used].to_string();
         self.source.replace_range(..used, "");
@@ -64,14 +119,9 @@ impl OpenSection {
         Some(section)
     }
 
-    /// The open section folded whole.
-    pub(super) fn body(&self) -> Option<Body> {
-        parse_section(&self.source)
-    }
-
     /// Settle none of the open section's prose, after it was folded whole:
     /// the next `grow_into` reads it from its start.
-    pub(super) fn unsettle(&mut self) {
+    fn unsettle(&mut self) {
         self.settled = prose(&self.source).map(|(shape, text)| Settled {
             shape,
             start: offset(&self.source, text),
@@ -85,7 +135,7 @@ impl OpenSection {
     /// re-reading only the prose a new delta can still restyle. False, with
     /// `block` untouched, when the section has to fold whole: it is code,
     /// or its shape moved under it (`-` became a bullet).
-    pub(super) fn grow_into(&mut self, block: &mut Block) -> bool {
+    fn grow_into(&mut self, block: &mut Block) -> bool {
         let Some(settled) = &mut self.settled else {
             return false;
         };
@@ -138,6 +188,48 @@ impl OpenSection {
         }
         true
     }
+}
+
+/// The open Block: the transcript's tail, since anything pushed after it
+/// closes the section. None once it has fallen away.
+fn open(id: Option<BlockId>, blocks: &mut [Block]) -> Option<&mut Block> {
+    blocks.last_mut().filter(|block| Some(block.id) == id)
+}
+
+/// Write a folded body into the open Block, creating it on first content.
+/// Reports changes to either the folded body or the original Markdown,
+/// since whitespace can change rich-text structure without changing plain
+/// text.
+fn write(
+    open_id: &mut Option<BlockId>,
+    blocks: &mut Vec<Block>,
+    body: Body,
+    source: &str,
+    mint: &mut impl FnMut() -> BlockId,
+) -> Option<BlockId> {
+    if open_id.is_some() {
+        let block = open(*open_id, blocks)?;
+        if block.body == body && block.markdown.as_deref() == Some(source) {
+            return None;
+        }
+        block.body = body;
+        block.markdown = Some(source.to_string());
+        return Some(block.id);
+    }
+    let id = mint();
+    let markdown_run = blocks
+        .last()
+        .and_then(|block| block.markdown_run)
+        .unwrap_or(id);
+    blocks.push(Block {
+        id,
+        body,
+        markdown: Some(source.to_string()),
+        markdown_run: Some(markdown_run),
+        sent_at: None,
+    });
+    *open_id = Some(id);
+    Some(id)
 }
 
 /// What a prose section folds into, once its spans are read.
@@ -204,7 +296,7 @@ fn complete_section(source: &str, scan: &mut Scan) -> Option<usize> {
 }
 
 /// Fold one section of markdown into a Block body. Blank sections have none.
-pub(super) fn parse_section(source: &str) -> Option<Body> {
+fn parse_section(source: &str) -> Option<Body> {
     if let Some(body) = parse_code(source) {
         return Some(body);
     }

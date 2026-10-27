@@ -12,7 +12,7 @@ use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 mod highlight;
 mod markdown;
 pub use highlight::{language_for_path, tokens as highlight_tokens, Lexer};
-use markdown::{parse_section, OpenSection};
+use markdown::OpenSection;
 
 /// A Block's identity, stable for as long as the Block lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1376,7 +1376,7 @@ impl Transcript {
             return Update::default();
         }
         let evicted = self.blocks.drain(..end).map(|block| block.id).collect();
-        if self.section.block.is_some_and(|open| open <= through) {
+        if self.section.block().is_some_and(|open| open <= through) {
             self.section.clear();
         }
         if self.latest_reasoning_part.is_some_and(|id| id <= through) {
@@ -1589,7 +1589,7 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ContentBoundary) => {
-                if let Some(block) = self.section.block {
+                if let Some(block) = self.section.block() {
                     self.ask_to_highlight(block);
                 }
                 self.section.clear();
@@ -2100,51 +2100,15 @@ impl Transcript {
 
     /// Text streams into the Block it belongs to, not a Block per delta.
     fn grow(&mut self, text: &str) -> Vec<BlockId> {
-        let mut dirty = Vec::new();
-        if text.is_empty() {
-            return dirty;
+        let last_id = &mut self.last_id;
+        let grown = self
+            .section
+            .grow(text, &mut self.blocks, || next_id(last_id));
+        // A closed section is worth highlighting even if it closed unchanged.
+        for id in grown.closed {
+            self.ask_to_highlight(id);
         }
-        self.section.push(text);
-
-        // Fold off every section that can no longer grow, then the
-        // remainder, which is still streaming.
-        while let Some(section) = self.section.take_complete() {
-            if let Some(body) = parse_section(&section) {
-                // A section that settled unchanged is still worth highlighting,
-                // but it is not dirty unless its body or retained Markdown moved.
-                let changed = self.write_open(body, &section);
-                let settled = changed.or(self.section.block);
-                dirty.extend(changed);
-                if let Some(id) = settled {
-                    self.ask_to_highlight(id);
-                }
-            } else if let Some(block) = self.blocks.last_mut() {
-                // Blank lines carry Markdown structure even though they do
-                // not have a visual block of their own.
-                if let Some(markdown) = &mut block.markdown {
-                    markdown.push_str(&section);
-                    dirty.push(block.id);
-                }
-            }
-            self.section.block = None;
-        }
-        // The open Block is the tail by construction; only its tail moved.
-        if let Some(block) = self
-            .blocks
-            .last_mut()
-            .filter(|block| Some(block.id) == self.section.block)
-        {
-            if self.section.grow_into(block) {
-                dirty.push(block.id);
-                return dirty;
-            }
-        }
-        if let Some(body) = self.section.body() {
-            let source = self.section.source().to_string();
-            dirty.extend(self.write_open(body, &source));
-            self.section.unsettle();
-        }
-        dirty
+        grown.dirty
     }
 
     fn retire_tools(&mut self) -> Vec<BlockId> {
@@ -2195,46 +2159,6 @@ impl Transcript {
         self.thought = Some((id, scan));
         self.thinking_open = true;
         id
-    }
-
-    /// Write a folded body into the open Block, creating it on first content.
-    /// Reports changes to either the folded body or the original Markdown,
-    /// since whitespace can change rich-text structure without changing plain text.
-    fn write_open(&mut self, body: Body, source: &str) -> Option<BlockId> {
-        match self.section.block {
-            Some(id) => {
-                // The open Block is the tail by construction. Scanning for it
-                // costs the whole transcript on every delta, which is what
-                // decays a streaming cockpit from 120fps to 30.
-                let block = match self.blocks.last_mut() {
-                    Some(block) if block.id == id => block,
-                    _ => self.blocks.iter_mut().find(|b| b.id == id)?,
-                };
-                if block.body == body && block.markdown.as_deref() == Some(source) {
-                    return None;
-                }
-                block.body = body;
-                block.markdown = Some(source.to_string());
-                Some(id)
-            }
-            None => {
-                let id = self.mint();
-                let markdown_run = self
-                    .blocks
-                    .last()
-                    .and_then(|block| block.markdown_run)
-                    .unwrap_or(id);
-                self.blocks.push(Block {
-                    id,
-                    body,
-                    markdown: Some(source.to_string()),
-                    markdown_run: Some(markdown_run),
-                    sent_at: None,
-                });
-                self.section.block = Some(id);
-                Some(id)
-            }
-        }
     }
 
     /// Drop the oldest Blocks once the Pane holds more than it keeps.
@@ -2412,13 +2336,17 @@ impl Transcript {
     }
 
     fn mint(&mut self) -> BlockId {
-        self.last_id += 1;
-        BlockId(self.last_id)
+        next_id(&mut self.last_id)
     }
 
     fn advance_revision(&mut self) {
         self.revision = self.revision.saturating_add(1);
     }
+}
+
+fn next_id(last_id: &mut u64) -> BlockId {
+    *last_id += 1;
+    BlockId(*last_id)
 }
 
 /// How much of a tool failure a row carries; the model got all of it.
