@@ -129,13 +129,13 @@ fn settings_arrows_step_pages_and_about_paths_copy(cx: &mut TestAppContext) {
     let (root, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| CockpitView::new(core, cx));
         gpui::component::Root::new(
-            cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
             cx,
         )
     });
     let view = root.read_with(cx, |root, cx| {
-        crate::loops_overlay::testing::cockpit(root.view(), cx)
+        crate::cockpit_window::testing::cockpit(root.view(), cx)
     });
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
@@ -200,13 +200,13 @@ fn cmd_plus_and_minus_step_the_reading_size_and_save_it(cx: &mut TestAppContext)
     let (root, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| CockpitView::new(core, cx));
         gpui::component::Root::new(
-            cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
             cx,
         )
     });
     let view = root.read_with(cx, |root, cx| {
-        crate::loops_overlay::testing::cockpit(root.view(), cx)
+        crate::cockpit_window::testing::cockpit(root.view(), cx)
     });
     tick(cx);
     let size = |cx: &mut gpui::VisualTestContext| {
@@ -239,13 +239,13 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
     let (root, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| CockpitView::new(core, cx));
         gpui::component::Root::new(
-            cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
             cx,
         )
     });
     let view = root.read_with(cx, |root, cx| {
-        crate::loops_overlay::testing::cockpit(root.view(), cx)
+        crate::cockpit_window::testing::cockpit(root.view(), cx)
     });
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);

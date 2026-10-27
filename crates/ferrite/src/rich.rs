@@ -1335,7 +1335,7 @@ mod file_link_tests {
         cx: &'a mut TestAppContext,
         source: &str,
     ) -> (Entity<LinkFixture>, &'a mut VisualTestContext) {
-        cx.update(crate::theme::init_components);
+        cx.update(crate::pane::init_components);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let preview = crate::preview::Preview::new(cx);
             let view = cx.new(|_| LinkFixture {
@@ -1991,7 +1991,7 @@ let count = 2;
                     )
             }
         }
-        cx.update(crate::theme::init_components);
+        cx.update(crate::pane::init_components);
         let (view, cx) = cx.add_window_view(|_, cx| CustomLinkRoot {
             state: cx.new(|cx| TextViewState::markdown("Before [report](report.md) after.", cx)),
         });
@@ -2772,7 +2772,7 @@ mod cache_cost_tests {
     /// 2 KB; what it holds is now bounded by what its texts really hold.
     #[gpui::test]
     fn a_panes_text_cache_holds_a_bounded_amount_of_native_text(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::theme::init_components);
+        cx.update(crate::pane::init_components);
         let cx = cx.add_empty_window();
         let cache = TextCache::default();
         let source = "words ".repeat(2048 / 6);
@@ -2794,7 +2794,7 @@ mod cache_cost_tests {
     /// all on every frame.
     #[gpui::test]
     fn texts_drawn_together_stay_cached_past_the_budget(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::theme::init_components);
+        cx.update(crate::pane::init_components);
         let cx = cx.add_empty_window();
         let cache = TextCache::default();
         let source = "words ".repeat(50_000 / 6);

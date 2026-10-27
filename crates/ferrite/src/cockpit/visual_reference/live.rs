@@ -412,7 +412,7 @@ pub(crate) fn capture(output: String) {
         gpui::platform::current_headless_renderer,
     );
     cx.update(|cx| {
-        crate::theme::init_components(cx);
+        crate::pane::init_components(cx);
         crate::motion::init(cx);
         crate::register_fonts(cx);
         let bindings = crate::load_bindings(crate::keymap::bindings(crate::keymap::PLATFORM), cx);
@@ -436,7 +436,7 @@ pub(crate) fn capture(output: String) {
             let view =
                 cx.new(|cx| CockpitView::new_with_settings(core, Provider::Claude, prefs, cx));
             entity = Some(view.clone());
-            let content = cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx));
+            let content = cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx));
             cx.new(|cx| {
                 gpui::component::Root::new(content, window, cx)
                     .bordered(false)

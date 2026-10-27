@@ -713,7 +713,7 @@ fn a_view_that_fails_whole_says_how_to_close() {
 /// closes it — through the view, as GPUI delivers the keys.
 #[gpui::test]
 fn ctrl_c_twice_closes_the_board(cx: &mut TestAppContext) {
-    cx.update(crate::theme::init_components);
+    cx.update(crate::pane::init_components);
     let (view, cx) = cx.add_window_view(|_, cx| BoardView::still(fixture::board(), cx));
     let closed = std::rc::Rc::new(std::cell::Cell::new(false));
     cx.update(|_, cx| {

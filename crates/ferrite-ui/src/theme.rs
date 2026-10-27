@@ -1172,27 +1172,11 @@ pub fn init_components(cx: &mut gpui::App) {
     use gpui::component::{Theme, ThemeMode};
     use gpui::{px, rgb, rgba};
 
-    let defaults = gpui::base::text::TextViewDefaults::global(cx);
-    if !defaults.has_code_block_highlighter() {
-        // GPUI caches highlighting by callback identity. Install it once so
-        // unrelated pane renders do not highlight completed code again.
-        defaults
-            .with_code_block_highlighter(|block| {
-                let source = block.code();
-                let language = block.lang();
-                let tokens =
-                    ferrite_core::transcript::highlight_tokens(language.as_deref(), &source);
-                crate::pane::code(&source, Some(&tokens))
-            })
-            .install(cx);
-    }
     if cx.has_global::<Theme>() {
         return;
     }
     gpui::component::init(cx);
     Theme::change(ThemeMode::Dark, None, cx);
-    crate::attachments::init(cx);
-    crate::rich::init(cx);
     let theme = Theme::global_mut(cx);
     // Two faces (rule 1): Geist for the chrome, Geist Mono for code.
     theme.font_family = FONT_UI.into();
@@ -1399,7 +1383,7 @@ pub fn init_components(cx: &mut gpui::App) {
 /// A prose-relative vertical step at answer size `size`: em-proportional to
 /// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
 /// Markdown gaps go through it; UI-row steps do not.
-#[cfg(test)] // the previous grammar, now read only by tests
+#[cfg(any(test, feature = "test-support"))] // the previous grammar, now read only by tests
 pub fn reading_step(step: f32, size: f32) -> f32 {
     (step * size / FS_PROSE).round()
 }
@@ -1618,7 +1602,7 @@ pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
 /// sizes scale them with `reading_step`.
-#[cfg(test)] // the previous grammar, now read only by tests
+#[cfg(any(test, feature = "test-support"))] // the previous grammar, now read only by tests
 pub const PROSE_GAP: f32 = SPACE_3;
 /// Inline code's ink: `TEXT_STRONG` on its chip (cyan is retired, ADR
 /// 0033). The Markdown path paints both; the plain-text fallback carries
@@ -3536,36 +3520,73 @@ mod tests {
     #[test]
     fn render_code_draws_only_covered_glyphs() {
         let sources: &[(&str, &str)] = &[
-            ("pane.rs", include_str!("pane.rs")),
-            ("pane/text.rs", include_str!("pane/text.rs")),
-            ("cockpit.rs", include_str!("cockpit.rs")),
-            ("cockpit/subagents.rs", include_str!("cockpit/subagents.rs")),
-            ("transcript.rs", include_str!("transcript.rs")),
-            ("rich.rs", include_str!("rich.rs")),
-            ("nav.rs", include_str!("nav.rs")),
-            ("titlebar.rs", include_str!("titlebar.rs")),
+            ("pane.rs", include_str!("../../ferrite/src/pane.rs")),
+            (
+                "pane/text.rs",
+                include_str!("../../ferrite/src/pane/text.rs"),
+            ),
+            ("cockpit.rs", include_str!("../../ferrite/src/cockpit.rs")),
+            (
+                "cockpit/subagents.rs",
+                include_str!("../../ferrite/src/cockpit/subagents.rs"),
+            ),
+            (
+                "transcript.rs",
+                include_str!("../../ferrite/src/transcript.rs"),
+            ),
+            ("rich.rs", include_str!("../../ferrite/src/rich.rs")),
+            ("nav.rs", include_str!("../../ferrite/src/nav.rs")),
+            ("titlebar.rs", include_str!("../../ferrite/src/titlebar.rs")),
             ("menu.rs", include_str!("menu.rs")),
-            ("composer.rs", include_str!("composer.rs")),
+            ("composer.rs", include_str!("../../ferrite/src/composer.rs")),
             ("components.rs", include_str!("components.rs")),
-            ("prefs.rs", include_str!("prefs.rs")),
-            ("project_editor.rs", include_str!("project_editor.rs")),
-            ("notifications.rs", include_str!("notifications.rs")),
-            ("attachments.rs", include_str!("attachments.rs")),
-            ("image_viewer.rs", include_str!("image_viewer.rs")),
-            ("background_chips.rs", include_str!("background_chips.rs")),
+            ("prefs.rs", include_str!("../../ferrite/src/prefs.rs")),
+            (
+                "project_editor.rs",
+                include_str!("../../ferrite/src/project_editor.rs"),
+            ),
+            (
+                "notifications.rs",
+                include_str!("../../ferrite/src/notifications.rs"),
+            ),
+            (
+                "attachments.rs",
+                include_str!("../../ferrite/src/attachments.rs"),
+            ),
+            (
+                "image_viewer.rs",
+                include_str!("../../ferrite/src/image_viewer.rs"),
+            ),
+            (
+                "background_chips.rs",
+                include_str!("../../ferrite/src/background_chips.rs"),
+            ),
             ("keymap.rs", include_str!("keymap.rs")),
-            ("decision.rs", include_str!("decision.rs")),
-            ("preview.rs", include_str!("preview.rs")),
+            ("decision.rs", include_str!("../../ferrite/src/decision.rs")),
+            ("preview.rs", include_str!("../../ferrite/src/preview.rs")),
             (
                 "cockpit/panel/preview.rs",
-                include_str!("cockpit/panel/preview.rs"),
+                include_str!("../../ferrite/src/cockpit/panel/preview.rs"),
             ),
-            ("prompt_drop.rs", include_str!("prompt_drop.rs")),
-            ("transcript/rows.rs", include_str!("transcript/rows.rs")),
-            ("transcript/scroll.rs", include_str!("transcript/scroll.rs")),
+            (
+                "prompt_drop.rs",
+                include_str!("../../ferrite/src/prompt_drop.rs"),
+            ),
+            (
+                "transcript/rows.rs",
+                include_str!("../../ferrite/src/transcript/rows.rs"),
+            ),
+            (
+                "transcript/scroll.rs",
+                include_str!("../../ferrite/src/transcript/scroll.rs"),
+            ),
             ("scrollbar.rs", include_str!("scrollbar.rs")),
-            ("file_links.rs", include_str!("file_links.rs")),
-            ("lib.rs", include_str!("lib.rs")),
+            (
+                "file_links.rs",
+                include_str!("../../ferrite/src/file_links.rs"),
+            ),
+            ("lib.rs", include_str!("../../ferrite/src/lib.rs")),
+            ("ferrite-ui lib.rs", include_str!("lib.rs")),
         ];
         let mut missing = Vec::new();
         for (file, source) in sources {

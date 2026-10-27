@@ -18,9 +18,8 @@ test = false
 [features]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 visual-reference = ["gpui/test-support", "dep:gpui-reference-platform"]
-# The opaque greys on macOS too (`theme::GLASS`): what the headless parity
-# captures render, since a capture cannot show the desktop blur.
-opaque = []
+# The opaque greys on macOS too (`theme::GLASS`, in ferrite-ui).
+opaque = ["ferrite-ui/opaque"]
 # Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013), on macOS and
 # Windows. The release packaging (`scripts/install-app.sh`,
 # `scripts/package-windows.ps1`) turns it on. Off by default so a plain
@@ -31,6 +30,8 @@ cef = ["dep:cef"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+# The theme, icons, components, motion and menus the Cockpit and Pane share.
+ferrite-ui = { path = "../ferrite-ui" }
 # System notifications: herdr-focus-notify, vendored (its README).
 ferrite-focus-notify = { path = "../ferrite-focus-notify" }
 # herdr-reviewr's review core, vendored: the Review slot's rows, comments and
@@ -88,3 +89,4 @@ winresource = { version = "0.1", default-features = false }
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 # The in-process machine the window's tests attach to.
 ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }

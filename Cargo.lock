@@ -2145,6 +2145,7 @@ dependencies = [
  "ferrite-core",
  "ferrite-focus-notify",
  "ferrite-reviewr",
+ "ferrite-ui",
  "futures",
  "gpui-base",
  "gpui-kit",
@@ -2204,6 +2205,14 @@ dependencies = [
  "time",
  "two-face",
  "which",
+]
+
+[[package]]
+name = "ferrite-ui"
+version = "0.4.0"
+dependencies = [
+ "ferrite-core",
+ "gpui-kit",
 ]
 
 [[package]]

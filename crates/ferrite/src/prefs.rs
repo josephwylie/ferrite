@@ -1284,7 +1284,7 @@ mod tests {
     #[gpui::test]
     fn a_chosen_token_is_inverse_and_the_rest_lie_flat(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init_components(cx);
+            crate::pane::init_components(cx);
             let mut on = chip(("c", 0), "Claude".into(), true, cx);
             let mut off = chip(("c", 1), "Codex".into(), false, cx);
             assert_eq!(on.style().background, Some(rgb(PRIMARY).into()));

@@ -163,7 +163,7 @@ fn machine_window(
     cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| CockpitView::new(core, cx).with_machines(machines));
         gpui::component::Root::new(
-            cx.new(|cx| crate::loops_overlay::CockpitWindow::new(view, window, cx)),
+            cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx)),
             window,
             cx,
         )
@@ -176,7 +176,7 @@ fn shown(
     cx: &mut gpui::VisualTestContext,
 ) -> Entity<CockpitView> {
     root.read_with(cx, |root, cx| {
-        crate::loops_overlay::testing::cockpit(root.view(), cx)
+        crate::cockpit_window::testing::cockpit(root.view(), cx)
     })
 }
 

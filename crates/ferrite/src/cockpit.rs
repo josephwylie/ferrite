@@ -1443,7 +1443,7 @@ impl CockpitView {
         prefs: Preferences,
         cx: &mut Context<Self>,
     ) -> Self {
-        crate::theme::init_components(cx);
+        crate::pane::init_components(cx);
         subagents::init(cx);
         cockpit.settings_changed(&prefs.settings);
         // This window says what it draws from its first frame on, so no
