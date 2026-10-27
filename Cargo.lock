@@ -2141,25 +2141,34 @@ dependencies = [
 name = "ferrite"
 version = "0.4.0"
 dependencies = [
- "cef",
+ "ferrite-cockpit",
+ "ferrite-core",
+ "ferrite-pane",
+ "ferrite-ui",
+ "gpui-kit",
+ "gpui-pre-reqwest-client",
+ "winresource",
+]
+
+[[package]]
+name = "ferrite-cockpit"
+version = "0.4.0"
+dependencies = [
  "ferrite-core",
  "ferrite-focus-notify",
+ "ferrite-pane",
  "ferrite-reviewr",
  "ferrite-ui",
  "futures",
  "gpui-base",
  "gpui-kit",
  "gpui-pre-platform",
- "gpui-pre-reqwest-client",
  "image",
- "percent-encoding",
  "serde_json",
  "sw-board",
  "toml 0.9.12+spec-1.1.0",
  "unicode-segmentation",
  "url",
- "windows-sys 0.61.2",
- "winresource",
 ]
 
 [[package]]
@@ -2186,6 +2195,24 @@ version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ferrite-pane"
+version = "0.4.0"
+dependencies = [
+ "cef",
+ "ferrite-core",
+ "ferrite-reviewr",
+ "ferrite-ui",
+ "futures",
+ "gpui-base",
+ "gpui-kit",
+ "image",
+ "percent-encoding",
+ "serde_json",
+ "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

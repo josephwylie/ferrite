@@ -1,0 +1,59 @@
+[package]
+name = "ferrite-pane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's Pane: the transcript, the Composer and the Draft band"
+
+[lib]
+doctest = false
+
+[features]
+# Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013). The app's
+# own `cef` feature turns this on; see its Cargo.toml.
+cef = ["dep:cef"]
+# The hooks the app's reference captures drive, and the visuals' own
+# snapshots (`visual::shots`).
+visual-reference = ["gpui/test-support"]
+# The test hooks the app's own tests reach for.
+test-support = []
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+ferrite-ui = { path = "../ferrite-ui" }
+# herdr-reviewr's review core, vendored: a Composer's review comments and
+# their prompt text (ADR 0021).
+ferrite-reviewr = { path = "../ferrite-reviewr" }
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+# Ferrite owns the semantic states for a few high-contrast actions instead of
+# inheriting GPUI Kit's preset hover foregrounds.
+gpui-base = "=0.6.0"
+serde_json = { workspace = true }
+url = "2"
+percent-encoding = "2"
+# Visuals: a rendered frame becomes a gpui RenderImage (which holds
+# image::Frames), and the agent's screenshot is a PNG. Already in the tree
+# via gpui.
+image = { version = "0.25.1", default-features = false, features = ["png"] }
+# The visual engine's wake -> cx.notify bridge (a channel a foreground task
+# drains). Already in the tree via gpui.
+futures = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Chromium Embedded Framework bindings (tauri-apps/cef-rs), the `cef`
+# feature's engine. Only the sandbox feature: the bundling helpers
+# (`build-util`) pull in clap/cargo_metadata, and install-app.sh does that job.
+cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# The same engine on Windows, without `sandbox`: CEF's Windows sandbox only
+# runs inside its bootstrap launcher (ADR 0013), which Ferrite doesn't use.
+cef = { version = "=154.5.0", default-features = false, optional = true }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
+
+[dev-dependencies]
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
+ferrite-core = { path = "../ferrite-core", features = ["test-support"] }
+ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
