@@ -59,7 +59,7 @@ fn two_decisions_mark_their_rows_and_their_group_and_no_toast(cx: &mut TestAppCo
         let state = view.nav_state();
         let block = &state.groups[0];
         assert_eq!(
-            nav::RowStatus::roll_up(&block.members),
+            nav::roll_up(&block.members),
             Some(nav::RowStatus::NeedsYou),
             "the Group rolls up"
         );

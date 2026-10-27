@@ -1,7 +1,7 @@
 //! The transcript's small scroll facade over GPUI's lazy variable-height list.
 
 use gpui::{px, FollowMode, ListAlignment, ListState, Pixels};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use gpui::{Bounds, Point};
 use std::{cell::Cell, rc::Rc};
 
@@ -12,7 +12,7 @@ const OVERDRAW: Pixels = px(200.);
 
 /// One transcript viewport's native scroll state.
 #[derive(Clone, Debug)]
-pub(crate) struct TranscriptScroll {
+pub struct TranscriptScroll {
     list: ListState,
     // A fully visible row's inset, sampled from native layout for width reflow.
     resize_anchor: Rc<Cell<Option<(Pixels, usize, Pixels)>>>,
@@ -36,24 +36,24 @@ impl TranscriptScroll {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn offset(&self) -> Point<Pixels> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn offset(&self) -> Point<Pixels> {
         self.list.scroll_px_offset_for_scrollbar()
     }
 
     /// Sets a list-native pixel offset, used by scrollbar gestures and tests.
-    #[cfg(test)]
-    pub(crate) fn set_offset(&self, offset: Point<Pixels>) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_offset(&self, offset: Point<Pixels>) {
         self.list.set_offset_from_scrollbar(offset);
     }
 
-    #[cfg(test)]
-    pub(crate) fn max_offset(&self) -> Point<Pixels> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn max_offset(&self) -> Point<Pixels> {
         self.list.max_offset_for_scrollbar()
     }
 
-    #[cfg(test)]
-    pub(crate) fn bounds(&self) -> Bounds<Pixels> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn bounds(&self) -> Bounds<Pixels> {
         self.list.viewport_bounds()
     }
 
@@ -73,11 +73,11 @@ impl TranscriptScroll {
         });
     }
 
-    pub(crate) fn is_following_tail(&self) -> bool {
+    pub fn is_following_tail(&self) -> bool {
         self.list.is_following_tail()
     }
 
-    pub(crate) fn item_is_visible(&self, index: usize) -> bool {
+    pub fn item_is_visible(&self, index: usize) -> bool {
         let viewport = self.list.viewport_bounds();
         self.list.bounds_for_item(index).is_some_and(|bounds| {
             bounds.bottom() > viewport.top() && bounds.top() < viewport.bottom()
@@ -166,18 +166,18 @@ impl TranscriptScroll {
     }
 
     /// The mask over the viewport's top (`settle_top`).
-    pub(crate) fn top_mask(&self) -> Pixels {
+    pub fn top_mask(&self) -> Pixels {
         self.top_mask.get()
     }
 
     /// Freeze tail following while retaining its automatic re-engagement rule.
-    #[cfg(test)]
-    pub(crate) fn pause_following_tail(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pause_following_tail(&self) {
         self.list.pause_following_tail();
     }
 
     /// The native state passed to `gpui::list` and the existing scrollbar.
-    pub(crate) fn list_state(&self) -> &ListState {
+    pub fn list_state(&self) -> &ListState {
         &self.list
     }
 

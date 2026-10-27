@@ -125,6 +125,8 @@ use crate::menu;
 use crate::nav;
 use crate::notifications::{Handle, NeedsYou, Row as NoticeRow, RowTarget, Verb};
 use crate::pane::{self, PaneView};
+// Declared with the Pane, whose Group head dispatches it.
+pub(crate) use crate::pane::NextDecision;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
 use crate::project_editor;
@@ -140,7 +142,6 @@ actions!(
         Always,
         NextPane,
         PreviousPane,
-        NextDecision,
         NewThread,
         NewWorktreeThread,
         NewGroup,
@@ -255,13 +256,52 @@ fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
     }
 }
 
+/// One Pane as the Cockpit holds it: its view, and what the Cockpit keeps
+/// beside it. Kept with the Pane, so a draft's first send — which makes the
+/// Pane a Thread's — keeps it as it was.
+pub(crate) struct CockpitPane {
+    view: PaneView,
+    pub(crate) tab_interaction: subagents::TabInteraction,
+    pub(crate) request_forms: subagents::RequestForms,
+    /// What the Panel keeps of this Pane's preview (`panel/preview.rs`): its
+    /// scroll, its find bar, whether its tab is the one shown.
+    pub(crate) preview_tab: panel::preview::PreviewTab,
+    /// The Review beside this Pane on the board (`beside.rs`).
+    pub(crate) review: beside::ReviewSlot,
+}
+
+impl CockpitPane {
+    fn new(view: PaneView, cx: &mut gpui::App) -> Self {
+        Self {
+            view,
+            tab_interaction: Default::default(),
+            request_forms: Default::default(),
+            preview_tab: Default::default(),
+            review: beside::ReviewSlot::new(cx),
+        }
+    }
+}
+
+impl std::ops::Deref for CockpitPane {
+    type Target = PaneView;
+    fn deref(&self) -> &PaneView {
+        &self.view
+    }
+}
+
+impl std::ops::DerefMut for CockpitPane {
+    fn deref_mut(&mut self) -> &mut PaneView {
+        &mut self.view
+    }
+}
+
 pub struct CockpitView {
     cockpit: Cockpit,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
     /// `sync_panes` is the one door: after every act on the roster the
     /// mirror is reconciled, never edited by hand.
-    panes: Vec<PaneView>,
+    panes: Vec<CockpitPane>,
     /// The cockpit's own place in the focus tree. Key dispatch walks from the
     /// focused node up to the root, so with nothing focused inside the window
     /// the cockpit's own actions are never reached — at wall range, where no
@@ -1716,7 +1756,7 @@ impl CockpitView {
             let PaneIdentity::Thread(thread) = *identity else {
                 continue;
             };
-            let pane = PaneView::new(thread, cx);
+            let pane = CockpitPane::new(PaneView::new(thread, cx), cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             self.panes.push(pane);
             self.thread_opened(thread, cx);
@@ -1867,7 +1907,7 @@ impl CockpitView {
         };
         let transcript = subject_view.transcript();
         let revision = subject_view.presentation_revision();
-        let status = subagents::transcript_status(subject_view.status(), subject_view.fresh());
+        let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
         // One reading size for every transcript, on every board.
         let reading_size = self.prefs.settings.reading_size;
         let banner = self.banner_facts(thread, transcript);
@@ -1939,7 +1979,6 @@ impl CockpitView {
             solo,
             thinking: self.prefs.settings.show_thinking,
             settled_at: transcript.settled_at().clone(),
-            #[cfg(test)]
             disclosure_bounds: pane.tool_bounds_sink(),
         };
         let selection = self.selection.clone();
@@ -2038,7 +2077,7 @@ impl CockpitView {
             .panes
             .iter_mut()
             .find(|pane| pane.composer == composer)
-            .and_then(PaneView::draft_mut)
+            .and_then(|pane| pane.draft_mut())
         {
             draft.error = None;
         }
@@ -2053,7 +2092,7 @@ impl CockpitView {
             .panes
             .iter()
             .find(|pane| pane.composer == composer)
-            .and_then(PaneView::thread)
+            .and_then(|pane| pane.thread())
         {
             self.cockpit.set_composing(thread, unsent);
         }
@@ -2423,7 +2462,7 @@ impl CockpitView {
         let drafted: Vec<ProjectId> = self
             .panes
             .iter()
-            .filter_map(PaneView::draft)
+            .filter_map(|pane| pane.draft())
             .map(|draft| draft.binding.project())
             .collect();
         self.look_up_checkouts(drafted, cx);
@@ -5743,7 +5782,9 @@ impl CockpitView {
     /// The focused Pane's draft, to change — None on a Thread.
     fn focused_draft_mut(&mut self) -> Option<&mut pane::DraftBinding> {
         let focused = self.focused();
-        self.panes.get_mut(focused).and_then(PaneView::draft_mut)
+        self.panes
+            .get_mut(focused)
+            .and_then(|pane| pane.draft_mut())
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
@@ -5768,7 +5809,7 @@ impl CockpitView {
         if let Some(band_focus) = self
             .panes
             .get(self.focused())
-            .and_then(PaneView::draft)
+            .and_then(|pane| pane.draft())
             .map(|draft| draft.band_focus)
         {
             match band_focus {
@@ -6359,7 +6400,7 @@ impl CockpitView {
         if reading && self.preview_shown(index) && self.open_preview_find(index, window, cx) {
             return;
         }
-        if let Some(transcript) = self.panes.get(index).and_then(PaneView::transcript) {
+        if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.transcript()) {
             transcript.update(cx, |view, cx| view.open_find(window, cx));
         }
     }
@@ -6822,7 +6863,7 @@ impl CockpitView {
         if level != Level::Transcript || index != self.focused() {
             return false;
         }
-        let Some(thread) = self.panes.get(index).and_then(PaneView::thread) else {
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return false;
         };
         let Some(open) = self.cockpit.thread(thread) else {
@@ -7594,7 +7635,7 @@ impl CockpitView {
             DraftPlacement::Loose => self.cockpit.open_draft(),
             DraftPlacement::NewGroupWith(thread) => self.cockpit.open_draft_for_new_group(thread),
         };
-        let pane = PaneView::new_draft(draft, binding, cx);
+        let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         self.panes.push(pane);
         self.sync_panes(cx);
@@ -7689,7 +7730,7 @@ impl CockpitView {
             .panes
             .iter()
             .find(|pane| pane.identity == open.pane)
-            .and_then(PaneView::draft)
+            .and_then(|pane| pane.draft())
         else {
             return;
         };
@@ -7991,7 +8032,7 @@ impl CockpitView {
         if !open {
             return;
         }
-        let Some(draft) = self.panes.get(self.focused()).and_then(PaneView::draft) else {
+        let Some(draft) = self.panes.get(self.focused()).and_then(|pane| pane.draft()) else {
             return;
         };
         let rows = self.band_rows(draft, pane::BandChip::Project, cx);
@@ -8637,7 +8678,7 @@ impl CockpitView {
         let mut threads: Vec<ThreadId> = self
             .panes
             .iter()
-            .filter_map(PaneView::thread)
+            .filter_map(|pane| pane.thread())
             .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
             .collect();
         threads.sort();
@@ -9442,7 +9483,7 @@ impl CockpitView {
         // The answer order (`Cockpit::needs_you`): ⌘D walks the answer
         // queue top to bottom, so its first press lands on the answer target.
         let queue = self.cockpit.needs_you();
-        let mut panes: Vec<&PaneView> = self.panes.iter().collect();
+        let mut panes: Vec<&CockpitPane> = self.panes.iter().collect();
         panes.sort_by_key(|pane| {
             pane.thread()
                 .and_then(|thread| queue.iter().position(|queued| *queued == thread))
@@ -10833,7 +10874,7 @@ impl CockpitView {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    let Some(thread) = view.panes.get(index).and_then(PaneView::thread) else {
+                    let Some(thread) = view.panes.get(index).and_then(|pane| pane.thread()) else {
                         return;
                     };
                     cx.stop_propagation();
@@ -11041,7 +11082,7 @@ impl CockpitView {
             .or_else(|| {
                 self.panes
                     .iter()
-                    .filter_map(PaneView::thread)
+                    .filter_map(|pane| pane.thread())
                     .filter(|thread| self.cockpit.groups().of(*thread).is_none())
                     .max_by_key(|thread| self.last_used(*thread))
             });

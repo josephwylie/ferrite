@@ -417,7 +417,7 @@ impl CockpitView {
             let known = self.checked_out.borrow();
             self.panes
                 .iter()
-                .filter_map(PaneView::draft)
+                .filter_map(|pane| pane.draft())
                 .map(|draft| draft.binding.project())
                 .find(|project| !known.contains_key(project))
         };

@@ -325,7 +325,7 @@ impl RowDelta {
 
 /// Whether `call` is the call a pending Decision gates: the same id, or the
 /// provider's item id inside an attributed key (`["turn","item"]`).
-pub(crate) fn gated(call: &str, pending: &str) -> bool {
+pub fn gated(call: &str, pending: &str) -> bool {
     call == pending || call.ends_with(&format!("\"{pending}\"]"))
 }
 

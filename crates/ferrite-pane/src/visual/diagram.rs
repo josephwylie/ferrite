@@ -157,7 +157,7 @@ impl Drawn {
 
 /// Install the global and start the task that draws: `enabled` is whether
 /// visuals are on (Settings).
-pub(crate) fn init(enabled: bool, cx: &mut App) {
+pub fn init(enabled: bool, cx: &mut App) {
     let (queue, mut jobs) = mpsc::unbounded::<Job>();
     cx.spawn(async move |cx| {
         while let Some(Job {
@@ -203,7 +203,7 @@ impl Diagrams {
 }
 
 /// Turn diagrams on or off (Settings changed); fences drawn again follow.
-pub(crate) fn set_enabled(enabled: bool, cx: &mut App) {
+pub fn set_enabled(enabled: bool, cx: &mut App) {
     if cx
         .try_global::<Diagrams>()
         .is_some_and(|diagrams| diagrams.enabled != enabled)

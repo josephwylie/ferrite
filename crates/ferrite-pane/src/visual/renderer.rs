@@ -223,7 +223,7 @@ pub(crate) struct Request {
 
 /// The `Send` end of the render queue (see the module docs). Clone freely.
 #[derive(Clone)]
-pub(crate) struct RenderQueue {
+pub struct RenderQueue {
     requests: mpsc::UnboundedSender<Request>,
 }
 
@@ -263,7 +263,7 @@ impl ferrite_core::visual::Renderer for RenderQueue {
 }
 
 /// Start the queue's foreground task. One per app.
-pub(crate) fn start(cx: &mut App) -> RenderQueue {
+pub fn start(cx: &mut App) -> RenderQueue {
     let (requests, mut incoming) = mpsc::unbounded::<Request>();
     cx.spawn(async move |cx| {
         while let Some(request) = incoming.next().await {

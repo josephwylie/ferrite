@@ -82,7 +82,7 @@ actions!(
 /// is lit), or not at all (it is not). `None` while a selection stands in
 /// its place.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Caret {
+pub enum Caret {
     Bar(f32),
     Hidden,
 }
@@ -90,7 +90,7 @@ pub(crate) enum Caret {
 /// The block caret's opacity `since` its blink last restarted (a focus or
 /// an edit): the soft cycle of `MOTION_CARET_BLINK_MS` from its solid
 /// start (`components::caret_blink`).
-pub(crate) fn caret_alpha(since: Duration) -> f32 {
+pub fn caret_alpha(since: Duration) -> f32 {
     let turn = Duration::from_millis(crate::theme::MOTION_CARET_BLINK_MS).as_nanos();
     let phase = (since.as_nanos() % turn) as f32 / turn as f32;
     crate::components::caret_blink(phase)
@@ -107,7 +107,7 @@ pub const MAX_ROWS: usize = 8;
 /// carries its float's own context (`Palette`) on the focused node, where
 /// its keys win their tie against the bare enter and escape.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum Role {
+pub enum Role {
     #[default]
     Prompt,
     Field(Option<&'static str>),
@@ -192,10 +192,10 @@ pub struct Composer {
     /// A Pane's prompt or a float's one-line field (`Role`).
     role: Role,
     /// How the caret was last drawn, for the tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     last_caret: Option<Caret>,
     /// Every caret drawn, and when, for the tests of its cadence.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     caret_draws: Vec<(Instant, Option<Caret>)>,
 }
 
@@ -224,28 +224,28 @@ impl Composer {
             caret_lit: false,
             caret_under_float: false,
             role: Role::Prompt,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             last_caret: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             caret_draws: Vec::new(),
         }
     }
 
     /// Every caret drawn and when, and when its blink last restarted: the
     /// cockpit's tests of the blink drawn by the loops overlay.
-    #[cfg(test)]
-    pub(crate) fn caret_log(&self) -> (Option<Instant>, Vec<(Instant, Option<Caret>)>) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn caret_log(&self) -> (Option<Instant>, Vec<(Instant, Option<Caret>)>) {
         (self.blink_from, self.caret_draws.clone())
     }
 
     /// Forget the carets drawn so far.
-    #[cfg(test)]
-    pub(crate) fn clear_caret_log(&mut self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn clear_caret_log(&mut self) {
         self.caret_draws.clear();
     }
 
     /// What this line is for (`Role`): a Pane's prompt, or a field.
-    pub(crate) fn set_role(&mut self, role: Role, cx: &mut Context<Self>) {
+    pub fn set_role(&mut self, role: Role, cx: &mut Context<Self>) {
         if self.role != role {
             self.role = role;
             cx.notify();
@@ -446,7 +446,7 @@ impl Composer {
     /// bytes with no file behind it. Spilling those bytes to a scratch file
     /// gives the attachment the path every provider wire needs, so pasting a
     /// screenshot and pasting its file attach the same way.
-    pub(crate) fn paste_item(&mut self, item: ClipboardItem, cx: &mut Context<Self>) {
+    pub fn paste_item(&mut self, item: ClipboardItem, cx: &mut Context<Self>) {
         let mut paths: Vec<PathBuf> = item
             .entries()
             .iter()
@@ -1254,7 +1254,7 @@ impl Element for LineElement {
         let text_style = window.text_style();
         let line_height = window.line_height();
         let composer = self.composer.clone();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         testing::record_face(composer.entity_id(), text_style.font_family.clone(), _cx);
         let layout_id =
             window.request_measured_layout(style, move |known, available, window, cx| {
@@ -1414,12 +1414,12 @@ impl Element for LineElement {
             });
             (None, Some(slot))
         } else {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             self.composer.update(cx, |composer, _| {
                 composer.last_caret = caret;
                 composer.caret_draws.push((now, caret));
             });
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let _ = caret;
             (cursor, None)
         };
@@ -1648,7 +1648,7 @@ impl Element for CaretOverlay {
             Hsla::from(rgb(crate::theme::CARET)).opacity(alpha),
         ));
         self.layout = Some(layout);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             let now = cx.background_executor().now();
             self.composer.update(cx, |composer, _| {
@@ -1709,7 +1709,7 @@ fn spill_pasted_image(image: &gpui::Image) -> Option<PathBuf> {
 
 /// The face each Composer's line was last laid out in, for the font-role
 /// tests: the line is code text (theme rule 6).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing {
     use gpui::{App, EntityId, Global, SharedString};
     use std::collections::HashMap;
@@ -1835,6 +1835,9 @@ mod tests {
 
     use gpui::{KeyBinding, Modifiers, TestAppContext, VisualTestContext};
 
+    // The cockpit's own, which the Host answers in its place.
+    gpui::actions!(cockpit, [Submit, HistoryOlder]);
+
     /// A stand-in for the Pane: a fixed-width column holding one focused
     /// Composer, answering Submit and HistoryOlder the way the cockpit
     /// does — by taking the draft, and by counting the recall.
@@ -1846,17 +1849,12 @@ mod tests {
     }
 
     impl Host {
-        fn submit(&mut self, _: &crate::cockpit::Submit, _: &mut Window, cx: &mut Context<Self>) {
+        fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
             let text = self.composer.update(cx, |composer, cx| composer.take(cx));
             self.sent.push(text);
         }
 
-        fn history_older(
-            &mut self,
-            _: &crate::cockpit::HistoryOlder,
-            _: &mut Window,
-            _cx: &mut Context<Self>,
-        ) {
+        fn history_older(&mut self, _: &HistoryOlder, _: &mut Window, _cx: &mut Context<Self>) {
             self.recalls += 1;
         }
     }
@@ -1879,13 +1877,13 @@ mod tests {
     fn host(cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
         cx.update(|cx| {
             cx.bind_keys([
-                KeyBinding::new("enter", crate::cockpit::Submit, None),
+                KeyBinding::new("enter", Submit, None),
                 KeyBinding::new("shift-enter", Newline, Some("Composer")),
                 KeyBinding::new("left", Left, None),
                 KeyBinding::new("home", Home, None),
                 // The production order: history first in the table, the
                 // row walk after it, so the walk is tried first.
-                KeyBinding::new("up", crate::cockpit::HistoryOlder, Some("ComposerHistory")),
+                KeyBinding::new("up", HistoryOlder, Some("ComposerHistory")),
                 KeyBinding::new("up", Up, Some("Composer")),
                 KeyBinding::new("down", Down, Some("Composer")),
             ]);

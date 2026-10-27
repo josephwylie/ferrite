@@ -41,7 +41,7 @@ const SCALE: u32 = 2;
 const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Run the smoke; the process's exit code.
-pub(crate) fn run() -> i32 {
+pub fn run() -> i32 {
     match smoke() {
         Ok(elapsed) => {
             println!("PASS in {elapsed:?}");

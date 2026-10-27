@@ -39,7 +39,7 @@ enum State {
 }
 
 /// The process's web engine (a GPUI global).
-pub(crate) struct Visuals {
+pub struct Visuals {
     state: State,
 }
 
@@ -66,7 +66,7 @@ const CHROMIUM_MISSING: &str = if cfg!(windows) {
 
 /// Call first thing in `main`, before anything else runs. A Chromium helper
 /// process (this same binary, started by Chromium) runs and exits here.
-pub(crate) fn boot() {
+pub fn boot() {
     let state = boot_state();
     BOOTED.with(|booted| *booted.borrow_mut() = Some(state));
 }
@@ -92,7 +92,7 @@ fn boot_state() -> State {
 }
 
 /// Install the global from what [`boot`] found (nothing found: unavailable).
-pub(crate) fn init(cx: &mut App) {
+pub fn init(cx: &mut App) {
     if let Some(engine) = STARTED.with(|started| started.borrow().clone()) {
         Visuals::install(engine, cx);
         return;
@@ -118,7 +118,7 @@ impl Visuals {
     /// Use `engine` for every visual (tests, captures): ready at once, its
     /// pump started.
     #[allow(dead_code)]
-    pub(crate) fn install(engine: Rc<dyn Engine>, cx: &mut App) {
+    pub fn install(engine: Rc<dyn Engine>, cx: &mut App) {
         super::element::pump(engine.clone(), cx);
         cx.set_global(Visuals {
             state: State::Ready(engine),

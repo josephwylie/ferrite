@@ -54,7 +54,7 @@ pub const QUESTION_SKIPPED: &str = "The operator skipped this question.";
 
 /// The three answers every approval offers, in their order on the row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ApprovalChoice {
+pub enum ApprovalChoice {
     /// `1. Allow`: run this call.
     Allow,
     /// `2. Allow <pattern> for this thread`: the provider's standing answer
@@ -69,11 +69,11 @@ impl ApprovalChoice {
     pub(crate) const ALL: [Self; 3] = [Self::Allow, Self::AllowForThread, Self::DenyAndSteer];
 
     /// The choice row `at` (0-based) offers.
-    pub(crate) fn from_index(at: usize) -> Option<Self> {
+    pub fn from_index(at: usize) -> Option<Self> {
         Self::ALL.get(at).copied()
     }
 
-    pub(crate) fn index(self) -> usize {
+    pub fn index(self) -> usize {
         match self {
             Self::Allow => 0,
             Self::AllowForThread => 1,
@@ -541,7 +541,7 @@ pub fn option_two_pattern(decision: &Decision, workspace: Option<&Path>) -> Stri
 /// A Ferrite thread rule (option 2 with no standing answer): later
 /// approvals in `thread` that `pattern` covers are allowed without asking.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ThreadRule {
+pub struct ThreadRule {
     pub thread: ThreadId,
     /// The tool as the transcript names it (`Bash` for both providers).
     pub tool: String,
@@ -549,7 +549,7 @@ pub(crate) struct ThreadRule {
 }
 
 impl ThreadRule {
-    pub(crate) fn new(thread: ThreadId, decision: &Decision, workspace: Option<&Path>) -> Self {
+    pub fn new(thread: ThreadId, decision: &Decision, workspace: Option<&Path>) -> Self {
         Self {
             thread,
             tool: tool_word(&decision.tool_name).to_string(),
@@ -561,12 +561,7 @@ impl ThreadRule {
     /// approval, and — for a shell pattern — a plain command starting with
     /// the pattern's words; for a directory pattern, a file under it; a
     /// tool-wide pattern covers the tool.
-    pub(crate) fn covers(
-        &self,
-        thread: ThreadId,
-        decision: &Decision,
-        workspace: Option<&Path>,
-    ) -> bool {
+    pub fn covers(&self, thread: ThreadId, decision: &Decision, workspace: Option<&Path>) -> bool {
         if thread != self.thread
             || self.pattern.is_empty()
             || !matches!(decision.kind, DecisionKind::Approval)
@@ -610,7 +605,7 @@ impl ThreadRule {
 /// picking it can do anything.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ApprovalRow {
-    pub(crate) choice: ApprovalChoice,
+    pub choice: ApprovalChoice,
     pub key: SharedString,
     pub label: SharedString,
     pub code: Option<Range<usize>>,
@@ -1232,7 +1227,7 @@ pub fn skip_button(
 /// the verb in `TEXT`; under the pointer the hover face and `TEXT_STRONG`.
 /// A narrow cell drops the verb and keeps the key (`verb` false): pairs go
 /// whole, never cut. No keycaps.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn key_action(
     id: &'static str,
     key: &'static str,

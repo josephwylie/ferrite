@@ -8,13 +8,13 @@ use gpui::base::{TextSelectionDocument, TextSelectionDocumentMember};
 use gpui::{HighlightStyle, SharedString};
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 type Registry =
     std::rc::Rc<RefCell<std::collections::HashMap<ThreadId, Vec<(BlockId, u32, bool, String)>>>>;
 
 #[derive(Clone, Default)]
 pub struct TranscriptText {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     registry: Registry,
 }
 impl TranscriptText {
@@ -26,7 +26,7 @@ impl TranscriptText {
         cache: crate::rich::TextCache,
     ) -> TextRuns {
         TextRuns {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             thread: _thread,
             namespace,
             cache,
@@ -35,11 +35,11 @@ impl TranscriptText {
             document: None,
             find: None,
             members: RefCell::new(None),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             registry: self.registry.clone(),
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn registered(&self, thread: ThreadId) -> Vec<(BlockId, u32, bool, String)> {
         self.registry
             .borrow()
@@ -92,7 +92,7 @@ pub struct FindMarks {
 }
 
 pub struct TextRuns {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     thread: ThreadId,
     namespace: SharedString,
     cache: crate::rich::TextCache,
@@ -101,7 +101,7 @@ pub struct TextRuns {
     document: Option<TextSelectionDocument>,
     find: Option<FindMarks>,
     members: RefCell<Option<(Vec<TextSelectionDocumentMember>, Vec<RunText>)>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     registry: Registry,
 }
 impl TextRuns {
@@ -127,7 +127,7 @@ impl TextRuns {
             self.members.borrow().is_none(),
             "nested transcript text capture"
         );
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.registry.borrow_mut().insert(self.thread, Vec::new());
         *self.members.borrow_mut() = Some(Default::default());
         build();
@@ -181,7 +181,7 @@ impl TextRuns {
     }
 
     pub fn answer(&self, first: BlockId, source: String) -> crate::rich::Markdown {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.members.borrow().is_some() {
             self.registry
                 .borrow_mut()
@@ -198,7 +198,7 @@ impl TextRuns {
     }
 
     pub fn output(&self, block: BlockId, part: &str, text: &str) -> crate::rich::Output {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.members.borrow().is_some() {
             self.registry
                 .borrow_mut()
@@ -219,7 +219,7 @@ impl TextRuns {
     }
 
     pub fn markdown(&self, block: BlockId, source: String) -> crate::rich::Markdown {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.members.borrow().is_some() {
             self.registry
                 .borrow_mut()
@@ -249,7 +249,7 @@ impl TextRuns {
         }
         let ordinal = *self.next_ordinal.borrow();
         *self.next_ordinal.borrow_mut() += 1;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.members.borrow().is_some() {
             self.registry
                 .borrow_mut()

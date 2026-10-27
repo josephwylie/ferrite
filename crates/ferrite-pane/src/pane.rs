@@ -19,7 +19,7 @@ mod compact_composer;
 mod text;
 pub(crate) use text::{collect_block_text, collect_group_text, group_live};
 
-use ferrite_core::activity::Subject;
+use ferrite_core::activity::{AgentStatus, Subject};
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 pub(crate) use ferrite_core::digest::BULLET;
 use ferrite_core::digest::ELBOW;
@@ -39,10 +39,10 @@ use gpui::{
     deferred, div, px, relative, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle,
     HighlightStyle, SharedString, Stateful, Styled, StyledText,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -58,6 +58,9 @@ use gpui::component::scroll::ScrollableElement;
 // survives in render code, which is #22's grep-able law.
 use crate::theme;
 use crate::theme::*;
+
+// The Cockpit's ⌘D, which a Group head's needs-you door dispatches.
+gpui::actions!(cockpit, [NextDecision]);
 
 /// One Pane's view state: what the window owns per Pane. Everything it
 /// shows lives in core; this is the keyboard, the scrollback position, and
@@ -81,9 +84,7 @@ pub struct PaneView {
     pub rich: crate::rich::TextCache,
     pub agent_menu_open: bool,
     pub subject_strip_width: f32,
-    pub tab_interaction: crate::cockpit::subagents::TabInteraction,
     pub history_error: Option<String>,
-    pub request_forms: crate::cockpit::subagents::RequestForms,
     pub request_error: Option<(ferrite_core::activity::DecisionHandle, String)>,
     /// Retained, virtualized transcript entities keyed by Subject. The pane
     /// still owns chrome and cross-pane coordination; each Subject owns its
@@ -103,13 +104,6 @@ pub struct PaneView {
     /// What the working line reads besides its transcript, as of this
     /// Pane's last render (`working_line`).
     pub(crate) working: std::cell::Cell<WorkingFacts>,
-    /// What the Panel keeps of this Pane's preview (`cockpit/panel/
-    /// preview.rs`): its scroll, its find bar, whether its tab is the one
-    /// shown. Kept on the Pane, so a draft's first send — which makes the
-    /// Pane a Thread's — keeps it as it was.
-    pub preview_tab: crate::cockpit::panel::preview::PreviewTab,
-    /// The Review beside this Pane on the board (`cockpit/beside.rs`).
-    pub review: crate::cockpit::beside::ReviewSlot,
 }
 
 /// A Pane's last laid-out card and Composer bounds, recorded in prepaint.
@@ -131,7 +125,7 @@ struct TranscriptViewport {
 /// edit's folded diff (`+ show diff`), and a group of calls, named by its
 /// first call.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum DisclosureId {
+pub enum DisclosureId {
     Tool(String),
     Reasoning(BlockId),
     Diff(String),
@@ -157,9 +151,16 @@ struct ToolDisclosure {
     expanded: HashSet<DisclosureId>,
     target: Option<DisclosureId>,
     focus: FocusHandle,
-    #[cfg(test)]
-    bounds: Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
+    bounds: DisclosureBounds,
 }
+
+/// Where a Pane's disclosure controls were last laid out, which the tests
+/// aim at. Empty outside them.
+#[derive(Clone, Default)]
+pub struct DisclosureBounds(
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate)  Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
+);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DisclosureState {
@@ -228,9 +229,7 @@ impl PaneView {
             rich,
             agent_menu_open: false,
             subject_strip_width: 0.,
-            tab_interaction: Default::default(),
             history_error: None,
-            request_forms: Default::default(),
             request_error: None,
             transcripts: HashMap::from([(Subject::Main, transcript)]),
             subject_views: HashMap::new(),
@@ -241,14 +240,11 @@ impl PaneView {
                 expanded: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
-                #[cfg(test)]
-                bounds: Rc::new(RefCell::new(HashMap::new())),
+                bounds: DisclosureBounds::default(),
             },
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
-            preview_tab: Default::default(),
-            review: crate::cockpit::beside::ReviewSlot::new(cx),
         }
     }
 
@@ -285,9 +281,7 @@ impl PaneView {
             rich,
             agent_menu_open: false,
             subject_strip_width: 0.,
-            tab_interaction: Default::default(),
             history_error: None,
-            request_forms: Default::default(),
             request_error: None,
             transcripts: HashMap::from([(Subject::Main, transcript)]),
             subject_views: HashMap::new(),
@@ -298,14 +292,11 @@ impl PaneView {
                 expanded: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
-                #[cfg(test)]
-                bounds: Rc::new(RefCell::new(HashMap::new())),
+                bounds: DisclosureBounds::default(),
             },
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
             working: std::cell::Cell::default(),
-            preview_tab: Default::default(),
-            review: crate::cockpit::beside::ReviewSlot::new(cx),
         }
     }
 
@@ -405,8 +396,7 @@ impl PaneView {
                     expanded: HashSet::new(),
                     target: None,
                     focus: cx.focus_handle(),
-                    #[cfg(test)]
-                    bounds: Rc::new(RefCell::new(HashMap::new())),
+                    bounds: DisclosureBounds::default(),
                 },
             });
         if next.generation != generation {
@@ -445,7 +435,7 @@ impl PaneView {
         }
     }
 
-    pub(crate) fn toggle_tool(&mut self, call: &DisclosureId) {
+    pub fn toggle_tool(&mut self, call: &DisclosureId) {
         if !self.disclosure.expanded.remove(call) {
             self.disclosure.expanded.insert(call.clone());
         }
@@ -454,7 +444,7 @@ impl PaneView {
         self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
         if self.disclosure.expanded.contains(&call.into()) {
             DisclosureState::Expanded
@@ -463,28 +453,24 @@ impl PaneView {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn tool_targeted(&self, call: impl Into<DisclosureId>) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn tool_targeted(&self, call: impl Into<DisclosureId>) -> bool {
         self.disclosure.target.as_ref() == Some(&call.into())
     }
 
-    pub(crate) fn has_tool_target(&self) -> bool {
+    pub fn has_tool_target(&self) -> bool {
         self.disclosure.target.is_some()
     }
 
-    pub(crate) fn targeted_tool(&self) -> Option<&DisclosureId> {
+    pub fn targeted_tool(&self) -> Option<&DisclosureId> {
         self.disclosure.target.as_ref()
     }
 
-    pub(crate) fn tool_focus(&self) -> FocusHandle {
+    pub fn tool_focus(&self) -> FocusHandle {
         self.disclosure.focus.clone()
     }
 
-    pub(crate) fn cycle_tools(
-        &mut self,
-        calls: &[DisclosureId],
-        reverse: bool,
-    ) -> Option<&DisclosureId> {
+    pub fn cycle_tools(&mut self, calls: &[DisclosureId], reverse: bool) -> Option<&DisclosureId> {
         let next = if calls.is_empty() {
             None
         } else if reverse {
@@ -517,7 +503,7 @@ impl PaneView {
         self.disclosure.target.as_ref()
     }
 
-    pub(crate) fn prune_tools(&mut self, calls: &HashSet<DisclosureId>) {
+    pub fn prune_tools(&mut self, calls: &HashSet<DisclosureId>) {
         let expanded = self.disclosure.expanded.clone();
         let target = self.disclosure.target.clone();
         self.disclosure.expanded.retain(|call| calls.contains(call));
@@ -534,13 +520,13 @@ impl PaneView {
         }
     }
 
-    pub(crate) fn clear_tool_target(&mut self) {
+    pub fn clear_tool_target(&mut self) {
         if self.disclosure.target.take().is_some() {
             self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
         }
     }
 
-    pub(crate) fn transcript_disclosure_snapshot(
+    pub fn transcript_disclosure_snapshot(
         &self,
     ) -> (HashSet<DisclosureId>, Option<DisclosureId>, FocusHandle) {
         // The retained renderer receives a snapshot; its display revision
@@ -552,27 +538,21 @@ impl PaneView {
         )
     }
 
-    pub(crate) fn disclosure_revision(&self) -> u64 {
+    pub fn disclosure_revision(&self) -> u64 {
         self.disclosure_revision
     }
 
-    #[cfg(test)]
-    pub(crate) fn tool_expanded(&self, call: impl Into<DisclosureId>) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn tool_expanded(&self, call: impl Into<DisclosureId>) -> bool {
         self.tool_state(call) == DisclosureState::Expanded
     }
 
-    #[cfg(test)]
-    pub(crate) fn tool_bounds(
-        &self,
-        call: impl Into<DisclosureId>,
-    ) -> Option<gpui::Bounds<gpui::Pixels>> {
-        self.disclosure.bounds.borrow().get(&call.into()).copied()
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn tool_bounds(&self, call: impl Into<DisclosureId>) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.disclosure.bounds.0.borrow().get(&call.into()).copied()
     }
 
-    #[cfg(test)]
-    pub(crate) fn tool_bounds_sink(
-        &self,
-    ) -> Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>> {
+    pub fn tool_bounds_sink(&self) -> DisclosureBounds {
         self.disclosure.bounds.clone()
     }
 }
@@ -693,6 +673,18 @@ pub enum WallState {
     Idle,
     /// No transcript in memory at all — the cockpit could not open it.
     Parked,
+}
+
+pub fn transcript_status(status: AgentStatus, fresh: bool) -> Status {
+    if !fresh {
+        return Status::Idle;
+    }
+    match status {
+        AgentStatus::Working => Status::Streaming,
+        AgentStatus::Waiting => Status::Blocked,
+        AgentStatus::Failed | AgentStatus::Shutdown | AgentStatus::NotFound => Status::Closed,
+        _ => Status::Idle,
+    }
 }
 
 /// glance.md's matrix, one row per state. Transcript owns the turn's meaning;
@@ -830,7 +822,7 @@ pub(crate) struct PaneCtx<'a> {
 /// The group name every Pane root carries (`.group(PANE_GROUP)`): what a
 /// child styles itself by while the pointer is anywhere over its Pane (the
 /// minimap's `group_hover`, the prototype's `.pane:hover .mm`).
-pub(crate) const PANE_GROUP: &str = "pane";
+pub const PANE_GROUP: &str = "pane";
 
 pub fn render_pane(
     view: &PaneView,
@@ -887,9 +879,9 @@ pub fn render_pane(
         None
     };
     let workspace = thread.and_then(|thread| thread.workspace());
-    let status = subject.as_ref().map(|subject| {
-        crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
-    });
+    let status = subject
+        .as_ref()
+        .map(|subject| transcript_status(subject.status(), subject.fresh()));
     let turn = thread.and_then(|thread| thread.subject_turn(&view.selected));
     let state = wall_state(
         turn.as_ref(),
@@ -934,8 +926,8 @@ pub fn render_pane(
                 thread.is_some_and(|thread| thread.background_work()),
                 status,
             );
-            let word =
-                crate::nav::NavTail::of(mark, slot.as_ref(), SharedString::default()).member_word();
+            let word = crate::mark::NavTail::of(mark, slot.as_ref(), SharedString::default())
+                .member_word();
             let head = group_head(GroupHead {
                 key,
                 name: view.name.clone(),
@@ -1350,7 +1342,7 @@ fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
 /// the card (`components::frame_around`). The band is frame, so the ring lays
 /// `paint::FRAME` under its ink there: the hairline reads over the frame,
 /// as drawn. The cockpit rings a reader's card with it.
-pub(crate) fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
+pub fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
     div()
         .absolute()
         .inset_0()
@@ -1746,7 +1738,7 @@ fn wall_line(row: SharedString) -> Div {
 /// the lines, the first `WALL_PAD_X` in from the tile's edge and the row
 /// `WALL_PAD_Y` above its foot — each the cockpit's wired button
 /// (`quick_answer`).
-pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
+pub fn quick_answers(buttons: Vec<AnyElement>) -> Div {
     div()
         .debug_selector(|| "wall-quick-answers".into())
         .flex()
@@ -1763,11 +1755,7 @@ pub(crate) fn quick_answers(buttons: Vec<AnyElement>) -> Div {
 /// is `TEXT_DIM` on every waiting tile, the word `TEXT`; under the pointer
 /// the face blends to `paint::SELECTED` and the word to `TEXT_STRONG` over
 /// the one 150ms hover blend, the digit staying dim.
-pub(crate) fn quick_answer(
-    id: SharedString,
-    key: SharedString,
-    label: SharedString,
-) -> Stateful<Div> {
+pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) -> Stateful<Div> {
     let hover = id.clone();
     let ground = crate::motion::hover_blend(
         &hover,
@@ -1800,7 +1788,7 @@ pub(crate) fn quick_answer(
 }
 
 /// The Pane head's mark: the main Thread's is its nav row's
-/// (`nav::RowStatus`) — the done check while its finish is `unread`, the
+/// (`mark::RowStatus`) — the done check while its finish is `unread`, the
 /// green ring while `background` work runs behind its idle Main. A
 /// subagent tab's is that agent's own transcript state.
 fn head_mark(
@@ -1809,9 +1797,9 @@ fn head_mark(
     unread: bool,
     background: bool,
     subject: Option<Status>,
-) -> crate::nav::RowStatus {
+) -> crate::mark::RowStatus {
     if main {
-        return crate::nav::RowStatus::of(state, unread, background);
+        return crate::mark::RowStatus::of(state, unread, background);
     }
     let state = match subject {
         Some(Status::Streaming) => WallState::Working,
@@ -1819,7 +1807,7 @@ fn head_mark(
         Some(Status::Closed) => WallState::Blocked,
         _ => WallState::Idle,
     };
-    crate::nav::RowStatus::of(state, false, false)
+    crate::mark::RowStatus::of(state, false, false)
 }
 
 /// What a pending request asks of the operator, as the lexicon names it:
@@ -1839,7 +1827,7 @@ fn request_kind(decision: &Decision) -> &'static str {
 /// is one state; `text` is what it reads, `ink` the one ink it wears
 /// where colour is allowed.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum HeadSlot {
+pub enum HeadSlot {
     /// `needs you · approval` / `needs you · question` — `ATTENTION` on
     /// `needs you` only.
     NeedsYou(&'static str),
@@ -1883,7 +1871,7 @@ impl HeadSlot {
 /// `needs you` > `failing` > `failed` > `working` > `done` >
 /// `interrupted` > `parked`; idle is nothing. A finish is `done` only while
 /// `unread` (not yet seen), as the nav row's mark is
-/// (`nav::RowStatus::of`); seen, it is idle.
+/// (`mark::RowStatus::of`); seen, it is idle.
 fn state_word(
     state: WallState,
     kind: Option<&'static str>,
@@ -1922,7 +1910,7 @@ fn state_word(
 /// a `failing` word is always a `BLOCKED` dot. Every surface that draws a
 /// Thread's dot — the nav, the rail, the Group head — reads
 /// it through here.
-pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState {
+pub fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState {
     match word {
         Some(HeadSlot::Failed) if state != WallState::Blocked => WallState::Blocked,
         Some(HeadSlot::Failing(_)) => WallState::Failing,
@@ -1932,7 +1920,7 @@ pub(crate) fn dot_state(state: WallState, word: Option<&HeadSlot>) -> WallState 
 
 /// A Thread's state word away from its Pane, read exactly as the Pane
 /// reads it.
-pub(crate) fn thread_word(
+pub fn thread_word(
     open: ThreadView<'_>,
     card: Option<&WallCard>,
     unread: bool,
@@ -2029,7 +2017,7 @@ fn question_door(key: u64) -> AnyElement {
 /// The one Group head (SPEC §5.9), for a transcript Pane and a wall tile
 /// alike: one `PANE_HEAD_H` row (38px) closed by a `HAIRLINE`, padded
 /// `PANE_HEAD_PAD_L` / `PANE_HEAD_PAD_R`, its items `PANE_HEAD_GAP` apart.
-/// In order: the state mark (`nav::head_mark`), the title in 12.5 at
+/// In order: the state mark (`mark::head_mark`), the title in 12.5 at
 /// `W_LABEL` — `TEXT_STRONG` on the focused Pane, `TEXT` elsewhere — kept
 /// to its `title_floor`, the state word in 12 and its ink, a spacer, the
 /// provider's 13px logo and the trailing control: the fill button, or a
@@ -2038,8 +2026,8 @@ pub(crate) struct GroupHead {
     pub key: u64,
     pub name: SharedString,
     /// The Thread's mark; a draft has none.
-    pub mark: Option<crate::nav::RowStatus>,
-    /// The state word and its ink (`nav::NavTail::member_word`).
+    pub mark: Option<crate::mark::RowStatus>,
+    /// The state word and its ink (`mark::NavTail::member_word`).
     pub word: Option<(SharedString, u32)>,
     /// The Pane holds the keyboard on a board: a strong title.
     pub focused: bool,
@@ -2089,7 +2077,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
                 .flex_shrink_0()
                 .items_center()
                 .h(px(theme::LH_UI))
-                .child(crate::nav::head_mark(mark))
+                .child(crate::mark::head_mark(mark))
         }))
         .child(
             div()
@@ -2132,7 +2120,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
 /// under the pointer, whose press the cockpit wires to fill the board with
 /// this Pane (`ToggleFullscreen`), its tooltip `Fill the board ⌘⇧⏎` read
 /// from the keymap.
-pub(crate) fn fill_button(key: u64) -> Stateful<Div> {
+pub fn fill_button(key: u64) -> Stateful<Div> {
     let blend = SharedString::from(format!("pane-fill-{key}"));
     let t = crate::motion::hover_t(&blend);
     div()
@@ -2165,7 +2153,7 @@ pub(crate) fn fill_button(key: u64) -> Stateful<Div> {
 /// `FAILURE_STRIP_H` at `R_BLOCK` on `FAILURE_WASH`, an `x-circle` in
 /// `BLOCKED`, `Stopped 3m ago` in `TEXT`, and at the right the wired
 /// `Retry` (`retry_button`), which a closed Session goes without.
-pub(crate) fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -> Div {
+pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -> Div {
     div()
         .debug_selector(move || format!("failure-strip-{key}"))
         .flex()
@@ -2198,7 +2186,7 @@ pub(crate) fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElem
 /// The strip's `Retry`: `RETRY_H` at `R_TAB` on `SELECTED`, padded
 /// `RETRY_PAD_X`, its label at `W_LABEL` in `TEXT_STRONG`. The caller wires
 /// the press.
-pub(crate) fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button {
+pub fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button {
     components::faded_button(
         ("failure-retry", key as usize),
         theme::paint::SELECTED.into(),
@@ -2236,9 +2224,7 @@ pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div
         .cursor_pointer()
         .child(face)
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_click(|_, window, cx| {
-            window.dispatch_action(Box::new(crate::cockpit::NextDecision), cx)
-        });
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(NextDecision), cx));
     door.tooltip(crate::menu::action_tooltip(
         "Next needs you",
         "cockpit::NextDecision",
@@ -2616,7 +2602,7 @@ fn tasks_strip(key: u64, todos: Todos, current: Option<&str>, streaming: bool) -
 /// Public because every chip and row must spell a model exactly one way —
 /// one grooming, never two; the catalog's own display names win where a
 /// Session announced them (see `providers::models::label`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
@@ -3422,7 +3408,7 @@ fn placeholder(
 }
 
 /// `flat_facts`' words: empty when there is nothing to say.
-pub(crate) fn flat_facts_text(files: usize, queued: usize) -> String {
+pub fn flat_facts_text(files: usize, queued: usize) -> String {
     let mut facts = Vec::new();
     if files > 0 {
         facts.push(format!(
@@ -3619,7 +3605,7 @@ fn composer_fixed_height(grid: bool) -> f32 {
 /// Leave the majority of a Pane available for its Thread context. Only the
 /// viewport changes: the Composer keeps every character and scrolls to its
 /// caret, then reveals more rows again when the Pane grows.
-pub(crate) fn composer_row_limit(height: f32, grid: bool, queued: usize) -> usize {
+pub fn composer_row_limit(height: f32, grid: bool, queued: usize) -> usize {
     let fixed = composer_fixed_height(grid);
     let queue = composer_queue_height(height, grid, queued);
     ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue) / theme::COMPOSER_ROW_H)
@@ -3638,7 +3624,7 @@ fn queued_preview(held: &str) -> String {
 /// The text of an approval's command well: a command's source, else the
 /// input as a string, else its pretty JSON. `None` for a question or an
 /// input-less request.
-pub(crate) fn approval_source(decision: &Decision) -> Option<String> {
+pub fn approval_source(decision: &Decision) -> Option<String> {
     if questions_of(decision).is_some() {
         return None;
     }
@@ -3660,7 +3646,7 @@ pub(crate) fn approval_source(decision: &Decision) -> Option<String> {
 /// unified, under the head, in the rows' own red and green — the edit the
 /// operator is asked about rather than its JSON. `None` for anything that
 /// is not an edit with its text.
-pub(crate) fn approval_diff(
+pub fn approval_diff(
     decision: &Decision,
     asked: Option<&Diff>,
     workspace: Option<&std::path::Path>,
@@ -3713,7 +3699,7 @@ pub(crate) fn approval_diff(
 
 /// Whether an approval's well holds a shell command, which reads after a
 /// `$ ` prompt: Claude's `Bash` and Codex's `commandExecution` alike.
-pub(crate) fn shell_command(decision: &Decision) -> bool {
+pub fn shell_command(decision: &Decision) -> bool {
     decision::shell_source(decision).is_some()
 }
 
@@ -3721,7 +3707,7 @@ pub(crate) fn shell_command(decision: &Decision) -> bool {
 /// the operator would type it — Codex's login-shell wrapper (`/bin/zsh -lc
 /// "…"`) taken off, so both providers read `gh issue close 212`; other
 /// provider input remains inspectable as its JSON value.
-pub(crate) fn approval_input(
+pub fn approval_input(
     decision: &Decision,
     cache: &crate::rich::TextCache,
     id: SharedString,
@@ -3835,7 +3821,7 @@ pub fn card_error(message: impl Into<SharedString>) -> Div {
 
 /// A token count as the card reads it (rule 2.11.6): only as precise as it
 /// needs to be — `640`, `1.5k`, `64k`, `1.2M`.
-pub(crate) fn compact_count(count: u64) -> String {
+pub fn compact_count(count: u64) -> String {
     fn trimmed(value: f64) -> String {
         let text = format!("{value:.1}");
         text.strip_suffix(".0").unwrap_or(&text).to_owned()
@@ -3895,7 +3881,7 @@ fn category_in_window(name: &str) -> bool {
 
 /// What a context bar draws: each category in the window that holds
 /// tokens, its ink and its share of `denominator`, in the provider's order.
-pub(crate) fn context_segments(
+pub fn context_segments(
     categories: &[ferrite_core::ContextCategory],
     denominator: u64,
 ) -> Vec<(u32, f32)> {
@@ -4325,7 +4311,7 @@ pub fn context_usage(
 /// A name in sentence case — a provider's category, a chip label (SPEC
 /// §5.5, amending rule 11 for chip labels only) — keeping known acronyms'
 /// capitals ("mcp tools" → "MCP tools", not "Mcp tools").
-pub(crate) fn sentence_case(name: &str) -> String {
+pub fn sentence_case(name: &str) -> String {
     let lower = name.to_lowercase();
     let words: Vec<String> = lower
         .split(' ')
@@ -4452,7 +4438,7 @@ fn skip_words(text: &str, n: usize) -> &str {
 /// first line was cut to fit, the details open on the rest of that line and
 /// run into the paragraphs under it, so expanding reads as a continuation
 /// rather than the same sentence twice.
-pub(crate) fn reasoning_text(thought: &str) -> (String, Option<String>) {
+pub fn reasoning_text(thought: &str) -> (String, Option<String>) {
     let thought = thought.trim();
     let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
     let first = first.trim();
@@ -4499,7 +4485,7 @@ pub(crate) fn reasoning_has_details(thought: &str) -> bool {
 /// the size and the line once; rows read the numbers for their gutters,
 /// elbows and folds.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Grid {
+pub struct Grid {
     pub size: f32,
     pub line: f32,
 }
@@ -4507,13 +4493,13 @@ pub(crate) struct Grid {
 impl Grid {
     /// A Solo transcript's grid (and a reader's, a review's): the reading
     /// size on its line.
-    pub(crate) fn of(reading: ferrite_core::settings::ReadingSize) -> Self {
+    pub fn of(reading: ferrite_core::settings::ReadingSize) -> Self {
         Self::sized(theme::answer_text_size(reading))
     }
 
     /// The grid of a Solo (`solo`) or a Group Pane's transcript
     /// (`theme::tx_size`).
-    pub(crate) fn pane(reading: ferrite_core::settings::ReadingSize, solo: bool) -> Self {
+    pub fn pane(reading: ferrite_core::settings::ReadingSize, solo: bool) -> Self {
         Self::sized(theme::tx_size(reading, solo))
     }
 
@@ -4526,12 +4512,12 @@ impl Grid {
 
     /// The grid a diff or a code fence inside this one is set on:
     /// `TX_BLOCK_STEP` smaller.
-    pub(crate) fn block(self) -> Self {
+    pub fn block(self) -> Self {
         Self::sized(self.size - theme::TX_BLOCK_STEP)
     }
 
     /// One cell of the grid.
-    pub(crate) fn cell(self) -> f32 {
+    pub fn cell(self) -> f32 {
         theme::tx_cell(self.size)
     }
 
@@ -4546,7 +4532,7 @@ impl Grid {
     }
 
     /// Half a line, whole pixels.
-    pub(crate) fn half(self) -> f32 {
+    pub fn half(self) -> f32 {
         theme::tx_half(self.line)
     }
 }
@@ -4900,14 +4886,14 @@ pub(crate) fn render_block(
 /// What a prompt's band text is: its words as one literal run, or — with
 /// attachments — Markdown whose links are the inline chips, so a chip flows
 /// right after the words and wraps only when it does not fit.
-pub(crate) enum PromptText {
+pub enum PromptText {
     Literal(String),
     Markdown(String),
 }
 
 /// A prompt line as its band draws (and copies) it, and the files it
 /// carries.
-pub(crate) fn prompt_text(line: &str) -> (PromptText, Vec<std::path::PathBuf>) {
+pub fn prompt_text(line: &str) -> (PromptText, Vec<std::path::PathBuf>) {
     let (text, files) = ferrite_core::prompt_files::split(String::from(line));
     if files.is_empty() {
         return (PromptText::Literal(text), files);
@@ -5577,7 +5563,7 @@ fn trail_duration(
 
 /// A change's size in a call's trail: `+7 −3`, the whole `+7` in `RUNNING`
 /// and the whole `−3` (U+2212) in `BLOCKED`.
-pub(crate) fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
+pub fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
     let added = format!("+{added}");
     let text = format!("{added} \u{2212}{removed}");
     let removed_at = added.len() + 1;
@@ -5708,7 +5694,7 @@ pub(super) fn output_fold(tool: &ToolBlock) -> Option<(String, usize)> {
 
 /// What a test run's elbow says, and the lines it previews (CT-14).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct TestElbow {
+pub struct TestElbow {
     /// `ok` or `failed`: the lead word, in its state ink.
     pub lead: &'static str,
     /// The words after the lead's seam: `38 passed`, `running 38 tests`,
@@ -5722,7 +5708,7 @@ pub(super) struct TestElbow {
 
 impl TestElbow {
     /// The elbow's one line: `ok · 38 passed`.
-    pub(super) fn line(&self) -> String {
+    pub fn line(&self) -> String {
         if self.rest.is_empty() {
             self.lead.to_string()
         } else {
@@ -5742,7 +5728,7 @@ impl TestElbow {
 ///
 /// then `+ <N> lines` for the rest of its non-blank output. `None` for a
 /// call that is not a settled test run.
-pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
+pub fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
     if !is_test_run(tool) {
         return None;
     }
@@ -5887,7 +5873,7 @@ pub(super) fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
 /// `└ 7 issues · + 7 lines` — its first non-blank line, and the non-blank
 /// lines after it. `None` when it printed one line or none, or is a test
 /// run (which reads its own elbow) or not a command.
-pub(super) fn command_fold(tool: &ToolBlock) -> Option<(String, Vec<String>)> {
+pub fn command_fold(tool: &ToolBlock) -> Option<(String, Vec<String>)> {
     if tool.state != ToolState::Ok
         || !ferrite_core::docview::is_command_run(&tool.name)
         || is_test_run(tool)
@@ -8013,14 +7999,14 @@ fn diff_max_number(diff: &Diff, cap: usize) -> usize {
 
 /// The number column in cells: `DIFF_NUMBER_CELLS` (three digits and the
 /// `DIFF_NUMBER_PAD_CELLS` after them), wider only for a longer number.
-pub(crate) fn diff_number_cells(max: usize) -> f32 {
+pub fn diff_number_cells(max: usize) -> f32 {
     let digits = max.max(1).ilog10() as f32 + 1.;
     theme::DIFF_NUMBER_CELLS.max(digits + theme::DIFF_NUMBER_PAD_CELLS)
 }
 
 /// What a unified-diff line is, read from its first byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DiffKind {
+pub enum DiffKind {
     Added,
     Removed,
     Context,
@@ -8028,7 +8014,7 @@ pub(crate) enum DiffKind {
 
 /// A diff row's colours: the sign column, the code, and the row's wash.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct DiffPaint {
+pub struct DiffPaint {
     pub sign: &'static str,
     pub sign_color: u32,
     /// The line number's ink: the sign's hue dimmed, structure on a
@@ -8039,7 +8025,7 @@ pub(crate) struct DiffPaint {
 }
 
 impl DiffKind {
-    pub(crate) fn of(line: &str) -> Self {
+    pub fn of(line: &str) -> Self {
         match line.chars().next() {
             Some('+') => Self::Added,
             Some('-') => Self::Removed,
@@ -8051,7 +8037,7 @@ impl DiffKind {
     /// hue (`DIFF_*_SIGN`); the code keeps body ink under its syntax
     /// colours on the row's wash; a context line is the same code with no
     /// wash.
-    pub(crate) fn paint(self) -> DiffPaint {
+    pub fn paint(self) -> DiffPaint {
         match self {
             Self::Added => DiffPaint {
                 sign: "+",
@@ -8141,7 +8127,7 @@ fn code_lines(
 
 /// `theme::init_components`, with the transcript's code highlighting and
 /// keys: what every window and test window of the app calls.
-pub(crate) fn init_components(cx: &mut gpui::App) {
+pub fn init_components(cx: &mut gpui::App) {
     let defaults = gpui::base::text::TextViewDefaults::global(cx);
     if !defaults.has_code_block_highlighter() {
         // GPUI caches highlighting by callback identity. Install it once so
@@ -8166,7 +8152,7 @@ pub(crate) fn init_components(cx: &mut gpui::App) {
 
 /// Syntax highlight runs for a code Block, or none while the highlighter is
 /// still thinking.
-pub(crate) fn code(
+pub fn code(
     source: &str,
     tokens: Option<&[Token]>,
 ) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
@@ -8502,8 +8488,7 @@ mod tests {
                 solo: false,
                 thinking: true,
                 settled_at: Default::default(),
-                #[cfg(test)]
-                disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
+                disclosure_bounds: Default::default(),
             };
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
@@ -8542,8 +8527,7 @@ mod tests {
                     solo: false,
                     thinking: true,
                     settled_at: Default::default(),
-                    #[cfg(test)]
-                    disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
+                    disclosure_bounds: Default::default(),
                 },
                 crate::rich::TextCache::default(),
                 selection.clone(),
@@ -8559,69 +8543,6 @@ mod tests {
             reasoning_expanded: false,
             transcript,
             display_revision: 0,
-        }
-    }
-
-    struct ShowsDecisions {
-        cache: crate::rich::TextCache,
-        decisions: Vec<Decision>,
-    }
-
-    impl Render for ShowsDecisions {
-        fn render(
-            &mut self,
-            _window: &mut gpui::Window,
-            _cx: &mut Context<Self>,
-        ) -> impl IntoElement {
-            div()
-                .flex()
-                .flex_col()
-                .w(px(900.))
-                .font_family(crate::theme::FONT_UI)
-                .text_size(px(crate::theme::FS_UI))
-                .line_height(px(crate::theme::LH_UI))
-                .children(self.decisions.iter().enumerate().map(|(at, decision)| {
-                    let rows = decision::approval_rows(decision, None, None)
-                        .into_iter()
-                        .enumerate()
-                        .map(|(row_at, row)| {
-                            decision::option_row(
-                                ("decision-row", at * 16 + row_at),
-                                decision::Row {
-                                    key: Some(row.key),
-                                    label: row.label,
-                                    code: row.code,
-                                    cursor: row_at == 0,
-                                    enabled: row.enabled,
-                                    ..Default::default()
-                                },
-                            )
-                            .into_any_element()
-                        });
-                    decision::card(
-                        at as u64,
-                        [
-                            decision::head(
-                                decision::kind_word(decision),
-                                Some(decision.tool_name.clone().into()),
-                                None,
-                            )
-                            .into_any_element(),
-                            decision::prose(ferrite_core::digest::decision_subject(decision))
-                                .into_any_element(),
-                        ]
-                        .into_iter()
-                        .chain(
-                            approval_input(decision, &self.cache, "decision-reference".into()).map(
-                                |input| {
-                                    decision::well(shell_command(decision), input)
-                                        .into_any_element()
-                                },
-                            ),
-                        )
-                        .chain(rows),
-                    )
-                }))
         }
     }
 
@@ -9157,35 +9078,6 @@ mod tests {
         runs.iter().filter(|(_, _, _, run)| run == text).count()
     }
 
-    #[gpui::test]
-    fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
-        cx.update(gpui::component::init);
-        let event = crate::demo::script()
-            .into_iter()
-            .map(|step| step.event)
-            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
-            .expect("the demo stops on a Decision");
-        let SessionEvent::DecisionRequested { decision } = event else {
-            unreachable!()
-        };
-        assert_eq!(decision.tool_name, "Write");
-
-        // A request Ferrite could not read is still a card, or the operator
-        // has nothing to deny and the turn hangs.
-        let unreadable = Decision {
-            tool_name: String::new(),
-            description: String::new(),
-            ..decision.clone()
-        };
-
-        let (_, cx) = cx.add_window_view(|_, _| ShowsDecisions {
-            cache: Default::default(),
-            decisions: vec![decision, unreadable],
-        });
-        cx.simulate_resize(size(px(900.), px(300.)));
-        cx.run_until_parked();
-    }
-
     #[test]
     fn the_wall_reads_turn_completion_without_a_cost() {
         let mut transcript = Transcript::default();
@@ -9198,69 +9090,6 @@ mod tests {
             wall_state(Some(&Turn::of(&transcript)), false, false),
             WallState::Done
         );
-    }
-
-    /// glance.md §4's wall matrix, one assertion per row — the selection
-    /// logic the wall cell renders from.
-    #[test]
-    fn the_wall_state_matrix_reads_exactly_as_the_glance_spec() {
-        use WallState::*;
-        let mut transcript = Transcript::default();
-        assert_eq!(wall_state(Some(&Turn::of(&transcript)), false, false), Idle);
-        transcript.apply(Input::Prompt("go".into()));
-        // Working, focused or not, is the streaming Thread.
-        assert_eq!(
-            wall_state(Some(&Turn::of(&transcript)), false, false),
-            Working
-        );
-        // Failing tests stay a working Thread — red text, not a ring.
-        assert_eq!(
-            wall_state(Some(&Turn::of(&transcript)), true, false),
-            Decision
-        );
-        assert_eq!(
-            wall_state(Some(&Turn::of(&transcript)), false, true),
-            Failing
-        );
-        // A Decision waits: pending flag or Blocked status, either way.
-        let decision = crate::demo::script()
-            .into_iter()
-            .map(|step| step.event)
-            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
-            .unwrap();
-        transcript.apply(Input::Event(decision));
-        assert_eq!(
-            wall_state(Some(&Turn::of(&transcript)), false, false),
-            Decision
-        );
-        // Only successful outcomes read Done, regardless of cost.
-        for cost_usd in [None, Some(0.038)] {
-            for (outcome, expected) in [
-                (ferrite_core::TurnOutcome::Completed, Done),
-                (ferrite_core::TurnOutcome::Interrupted, Idle),
-                (ferrite_core::TurnOutcome::Error("failed".into()), Idle),
-            ] {
-                transcript.apply(Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }));
-                assert_eq!(
-                    wall_state(Some(&Turn::of(&transcript)), false, false),
-                    expected
-                );
-            }
-        }
-        // A closed Session is the red hard-blocker.
-        transcript.apply(Input::Event(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        }));
-        transcript.apply(Input::Event(SessionEvent::Closed {
-            reason: "Session exited".into(),
-        }));
-        assert_eq!(
-            wall_state(Some(&Turn::of(&transcript)), false, false),
-            Blocked
-        );
-        // No transcript at all — the cockpit could not open the Thread.
-        assert_eq!(wall_state(None, false, false), Parked);
     }
 
     /// F-6: prose wraps once to a continuation at col 2 — at its own line

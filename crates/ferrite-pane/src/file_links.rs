@@ -133,7 +133,7 @@ pub(crate) fn location_line(location: &str) -> Option<u32> {
 /// line it points at, how the hover card's head names it, and the
 /// transcript (its namespace) that hosts the card and hears ⌘-click.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PathTarget {
+pub struct PathTarget {
     pub path: PathBuf,
     pub line: Option<u32>,
     pub shown: Option<SharedString>,
@@ -141,7 +141,7 @@ pub(crate) struct PathTarget {
 }
 
 impl PathTarget {
-    pub(crate) fn new(path: impl Into<PathBuf>) -> Self {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
             line: None,
@@ -259,8 +259,8 @@ pub(crate) fn begin_layout(scope: &str, cx: &mut App) {
 }
 
 /// The scopes holding a ⌘-click route, and those holding laid-out targets.
-#[cfg(test)]
-pub(crate) fn scopes(cx: &App) -> (Vec<SharedString>, Vec<SharedString>) {
+#[cfg(any(test, feature = "test-support"))]
+pub fn scopes(cx: &App) -> (Vec<SharedString>, Vec<SharedString>) {
     let Some(scopes) = cx.try_global::<PathScopes>() else {
         return Default::default();
     };
@@ -278,7 +278,7 @@ pub(crate) fn scopes(cx: &App) -> (Vec<SharedString>, Vec<SharedString>) {
 /// Where a target naming `path` in `scope` last laid out: the exact path,
 /// else one that names the same file by a path suffix.
 #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-pub(crate) fn laid_out(scope: &str, path: &Path, cx: &App) -> Option<Bounds<Pixels>> {
+pub fn laid_out(scope: &str, path: &Path, cx: &App) -> Option<Bounds<Pixels>> {
     let targets = cx.try_global::<PathScopes>()?.laid_out.get(scope)?;
     targets.get(path).copied().or_else(|| {
         targets
@@ -385,7 +385,7 @@ fn wire_target(
 /// empty board share): the label in `LINK_INK`, underlined under the
 /// pointer, the hover card, ⌘-click to a reader. It inherits the face and
 /// size it sits in.
-pub(crate) fn path_text(label: SharedString, target: PathTarget) -> AnyElement {
+pub fn path_text(label: SharedString, target: PathTarget) -> AnyElement {
     let key = target.key("text");
     let fade = key.clone();
     PathText {

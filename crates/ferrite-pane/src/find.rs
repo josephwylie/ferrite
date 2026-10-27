@@ -33,13 +33,13 @@ pub(crate) const KEY_CONTEXT: &str = "Find";
 /// Frames a host waits for the active occurrence to paint (and report
 /// where) before it gives up bringing it into view: a hit in text that is
 /// not drawn.
-pub(crate) const REVEAL_FRAMES: u8 = 4;
+pub const REVEAL_FRAMES: u8 = 4;
 
 /// What the line asks for: its first line (the text a find counts in puts
 /// every run on a line of its own, so a query must not cross one). Smart
 /// case: a capital letter anywhere makes the whole query match case.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Query {
+pub struct Query {
     pub needle: SharedString,
     pub case_sensitive: bool,
 }
@@ -54,7 +54,7 @@ impl Query {
     }
 
     /// Every occurrence in `text`, as byte ranges of it.
-    pub(crate) fn matches(&self, text: &str) -> Vec<Range<usize>> {
+    pub fn matches(&self, text: &str) -> Vec<Range<usize>> {
         gpui::base::text::find_matches(text, &self.needle, self.case_sensitive)
     }
 }
@@ -83,7 +83,7 @@ pub(crate) fn marks(
 /// `runs` (ordered, non-overlapping highlights of one line) with each of
 /// `washes` laid under its range as a background: a run a wash crosses is
 /// split at its edges. Unhighlighted text a wash covers gets the wash alone.
-pub(crate) fn washed(
+pub fn washed(
     runs: Vec<(Range<usize>, HighlightStyle)>,
     washes: &[(Range<usize>, u32)],
 ) -> Vec<(Range<usize>, HighlightStyle)> {
@@ -120,14 +120,14 @@ pub(crate) fn washed(
 /// One occurrence: the host's unit it lies in, and its ordinal among that
 /// unit's occurrences.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Hit {
+pub struct Hit {
     pub unit: usize,
     pub ordinal: usize,
 }
 
 /// The bar: its line, the query last searched, what it found, the hit it
 /// is on, and what the text it marks reports back.
-pub(crate) struct Find {
+pub struct Find {
     field: Entity<Composer>,
     query: Query,
     hits: Vec<Hit>,
@@ -138,7 +138,7 @@ pub(crate) struct Find {
 
 impl Find {
     /// A bar whose line calls `edited` on its host at every keystroke.
-    pub(crate) fn new<T: 'static>(
+    pub fn new<T: 'static>(
         cx: &mut Context<T>,
         edited: impl Fn(&mut T, &mut Context<T>) + 'static,
     ) -> Self {
@@ -160,7 +160,7 @@ impl Find {
     }
 
     /// Take the keyboard, the query selected so typing replaces it.
-    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
         let focus = self.field.read(cx).focus_target(window, cx);
         window.focus(&focus, cx);
         self.field.update(cx, |line, cx| {
@@ -169,27 +169,27 @@ impl Find {
     }
 
     /// Whether the line holds the keyboard.
-    pub(crate) fn holds_focus(&self, window: &Window, cx: &App) -> bool {
+    pub fn holds_focus(&self, window: &Window, cx: &App) -> bool {
         self.field
             .read(cx)
             .focus_target(window, cx)
             .contains_focused(window, cx)
     }
 
-    pub(crate) fn query(&self) -> &Query {
+    pub fn query(&self) -> &Query {
         &self.query
     }
 
-    pub(crate) fn active(&self) -> Option<&Hit> {
+    pub fn active(&self) -> Option<&Hit> {
         self.hits.get(self.active?)
     }
 
-    pub(crate) fn report(&self) -> &Rc<FindReport> {
+    pub fn report(&self) -> &Rc<FindReport> {
         &self.report
     }
 
     /// Put the bar on hit `at`, when there is one.
-    pub(crate) fn go_to(&mut self, at: usize) {
+    pub fn go_to(&mut self, at: usize) {
         if at < self.hits.len() {
             self.active = Some(at);
         }
@@ -200,7 +200,7 @@ impl Find {
     /// view), wrapping to the first; the same query keeps its index as the
     /// text changes under it (a host that can say which hit that was puts
     /// the bar back on it, `keep`). Whether the query changed.
-    pub(crate) fn search<'a>(
+    pub fn search<'a>(
         &mut self,
         units: impl IntoIterator<Item = &'a str>,
         from: usize,
@@ -240,7 +240,7 @@ impl Find {
     }
 
     /// Step to the next hit (or the previous), wrapping.
-    pub(crate) fn step(&mut self, forward: bool) -> Option<&Hit> {
+    pub fn step(&mut self, forward: bool) -> Option<&Hit> {
         let count = self.hits.len();
         let at = self.active?;
         self.active = Some(if forward {
@@ -252,14 +252,14 @@ impl Find {
     }
 
     /// The marks the native text holding `unit`'s text paints.
-    pub(crate) fn marks(&self, unit: usize) -> Option<TextFind> {
+    pub fn marks(&self, unit: usize) -> Option<TextFind> {
         let active = self.active().filter(|hit| hit.unit == unit);
         marks(&self.query, active.map(|hit| hit.ordinal), &self.report)
     }
 
     /// What the count reads: `3/17`, `no matches`, or nothing before a
     /// query.
-    pub(crate) fn count(&self) -> Option<SharedString> {
+    pub fn count(&self) -> Option<SharedString> {
         if self.query.needle.is_empty() {
             return None;
         }
@@ -274,7 +274,7 @@ impl Find {
     /// muted at the right — hung `FLOAT_OFFSET` under the top right of its host, the
     /// text it searches (`relative`). A host narrower than the bar narrows
     /// the query, never the count. It opens like every float (`menu_in`).
-    pub(crate) fn bar(&self) -> Div {
+    pub fn bar(&self) -> Div {
         let bar = crate::menu::float()
             .debug_selector(|| "find-bar".into())
             .w(px(FIND_W))

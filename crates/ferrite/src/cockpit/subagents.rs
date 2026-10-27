@@ -4,7 +4,6 @@ use crate::{components, decision, theme};
 use ferrite_core::activity::{
     AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
-use ferrite_core::transcript::Status;
 use gpui::component::{
     checkbox::Checkbox,
     input::{Input, InputState},
@@ -280,18 +279,6 @@ fn pick_option(picks: &mut Vec<usize>, option: usize, multi: bool) {
         picks.retain(|at| *at != option);
     } else {
         picks.push(option);
-    }
-}
-
-pub(crate) fn transcript_status(status: AgentStatus, fresh: bool) -> Status {
-    if !fresh {
-        return Status::Idle;
-    }
-    match status {
-        AgentStatus::Working => Status::Streaming,
-        AgentStatus::Waiting => Status::Blocked,
-        AgentStatus::Failed | AgentStatus::Shutdown | AgentStatus::NotFound => Status::Closed,
-        _ => Status::Idle,
     }
 }
 

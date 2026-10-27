@@ -609,7 +609,7 @@ impl CockpitView {
             .filter_map(|project| {
                 let rows = self.project_rows(project.id);
                 let count = rows.len();
-                let status = nav::RowStatus::roll_up(&rows)?;
+                let status = nav::roll_up(&rows)?;
                 let noun = if count == 1 { "thread" } else { "threads" };
                 Some(PaletteRow {
                     section: PaletteSection::Projects,
@@ -680,7 +680,7 @@ impl CockpitView {
                     section: PaletteSection::Groups,
                     name: group.display_title().into(),
                     context: format!("{scope} \u{b7} {count} {noun}").into(),
-                    status: nav::RowStatus::roll_up(&members),
+                    status: nav::roll_up(&members),
                     detail: None,
                     keys: None,
                     act: Act::Group(group.id),
