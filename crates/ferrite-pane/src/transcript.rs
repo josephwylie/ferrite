@@ -4,14 +4,12 @@
 //! per-Subject row snapshot, native text, selection document and viewport.
 
 mod find;
-#[cfg(test)]
-pub(crate) use find::FindState;
+#[cfg(any(test, feature = "test-support"))]
+pub use find::FindState;
 mod rows;
-pub(crate) use rows::gated;
+pub use rows::gated;
 mod scroll;
 
-#[cfg(test)]
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
@@ -105,7 +103,7 @@ pub(crate) type TailRender = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 type PinnedBand = Option<(usize, gpui::Pixels)>;
 
 #[derive(Clone)]
-pub(crate) struct TranscriptTail {
+pub struct TranscriptTail {
     pub key: u64,
     pub render: TailRender,
 }
@@ -122,7 +120,7 @@ impl std::fmt::Debug for TranscriptTail {
 /// `~/ferrite on dev · started 7:18 pm`. The title, provider and model are
 /// the nav row's, the head's and the status line's to say.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct BannerFacts {
+pub struct BannerFacts {
     /// The checkout, `~`-abbreviated.
     pub workspace: SharedString,
     pub workspace_path: PathBuf,
@@ -134,7 +132,7 @@ pub(crate) struct BannerFacts {
 /// Where a scene (or a command) asks a transcript to scroll.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-pub(crate) enum ScrollTarget {
+pub enum ScrollTarget {
     /// The banner at the top.
     Top,
     /// `offset` pixels below the top of turn `turn`'s prompt band (0 is the
@@ -173,7 +171,7 @@ fn relative_paths(input: &mut TranscriptInput) {
 
 /// Owned input for one selected Subject. Cockpit clones only its retained L1
 /// render window when this revision changes; rendering never borrows core.
-pub(crate) struct TranscriptInput {
+pub struct TranscriptInput {
     pub thread: ThreadId,
     pub namespace: SharedString,
     pub content_revision: (u64, u64),
@@ -206,14 +204,13 @@ pub(crate) struct TranscriptInput {
     pub thinking: bool,
     /// When each edit settled, seen live: the hover card's age.
     pub settled_at: BTreeMap<String, SystemTime>,
-    #[cfg(test)]
-    pub disclosure_bounds: Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
+    pub disclosure_bounds: pane::DisclosureBounds,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
 /// disclosures, compared every root render before any block is cloned.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TranscriptKey {
+pub struct TranscriptKey {
     pub namespace: SharedString,
     pub content_revision: (u64, u64),
     pub display_revision: u64,
@@ -267,7 +264,7 @@ impl TranscriptInput {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum TranscriptEvent {
+pub enum TranscriptEvent {
     ToggleDisclosure(DisclosureId),
     /// ⌘-click on a path target: open it in a reader pane beside the
     /// Thread (`CockpitView::open_beside`).
@@ -286,7 +283,7 @@ struct Glide {
 }
 
 /// A stable GPUI entity for one Pane Subject's heavy transcript subtree.
-pub(crate) struct TranscriptView {
+pub struct TranscriptView {
     input: TranscriptInput,
     rows: TranscriptRows,
     /// Rows appended at the tail while the operator watched, and when: they
@@ -389,8 +386,7 @@ impl TranscriptView {
                 solo: false,
                 thinking: false,
                 settled_at: BTreeMap::new(),
-                #[cfg(test)]
-                disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
+                disclosure_bounds: Default::default(),
             },
             rich,
             TranscriptText::default(),
@@ -501,13 +497,13 @@ impl TranscriptView {
 
     /// Whether this view already shows `key` (the cockpit compares it every
     /// root render before cloning a block).
-    pub(crate) fn matches(&self, key: &TranscriptKey) -> bool {
+    pub fn matches(&self, key: &TranscriptKey) -> bool {
         &self.input.key() == key
     }
 
     /// Reconcile only when Cockpit's revision key changes. Ordinary Cockpit
     /// redraws compare that key without cloning rows or notifying this entity.
-    pub(crate) fn sync(
+    pub fn sync(
         &mut self,
         mut input: TranscriptInput,
         selection_source: TranscriptText,
@@ -590,14 +586,14 @@ impl TranscriptView {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn arrivals(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn arrivals(&self) -> usize {
         self.arrivals.len()
     }
 
     /// A minimap glide is in flight.
-    #[cfg(test)]
-    pub(crate) fn gliding(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn gliding(&self) -> bool {
         self.glide.is_some()
     }
 
@@ -615,11 +611,11 @@ impl TranscriptView {
             .then(|| crate::motion::FADE_IN.progress_at(elapsed))
     }
 
-    #[cfg(test)]
-    pub(crate) fn scroll(&self) -> &TranscriptScroll {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn scroll(&self) -> &TranscriptScroll {
         &self.scroll
     }
-    pub(crate) fn selection_document(&self) -> gpui::base::TextSelectionDocument {
+    pub fn selection_document(&self) -> gpui::base::TextSelectionDocument {
         self.document.clone()
     }
     pub(crate) fn transcript_focus(&self) -> FocusHandle {
@@ -627,7 +623,7 @@ impl TranscriptView {
     }
     /// Enter or advance the mounted native controls using GPUI's rendered tab
     /// order. The non-tab-stop boundaries keep this walk inside one Subject.
-    pub(crate) fn cycle_controls(
+    pub fn cycle_controls(
         &self,
         reverse: bool,
         from_edge: bool,
@@ -681,15 +677,15 @@ impl TranscriptView {
     fn clear_output_selection(&self, cx: &mut App) {
         self.rich.clear_output_selection(&self.input.namespace, cx)
     }
-    #[cfg(test)]
-    pub(crate) fn is_following_tail(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn is_following_tail(&self) -> bool {
         self.scroll.is_following_tail()
     }
 
     /// Whether the received reasoning caption's own row is mounted in the
     /// viewport. Cockpit uses this to keep the pinned live caption from
     /// duplicating historical prose.
-    pub(crate) fn received_reasoning_is_visible(&self, caption: &str) -> bool {
+    pub fn received_reasoning_is_visible(&self, caption: &str) -> bool {
         self.rows.rows().iter().enumerate().any(|(index, row)| {
             // Parent Pane rendering asks before the list's first child has
             // measured. At the followed tail the final row is nevertheless
@@ -703,7 +699,7 @@ impl TranscriptView {
         })
     }
 
-    pub(crate) fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+    pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
         self.glide = None;
         self.scroll.scroll_to_bottom();
         cx.notify();
@@ -712,7 +708,7 @@ impl TranscriptView {
     /// Scroll to `target` (a scene's Solo views): the banner,
     /// the live tail, or a turn's band with its output scrolled under it.
     #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
-    pub(crate) fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
+    pub fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
         self.glide = None;
         match target {
             ScrollTarget::Top => {
@@ -753,7 +749,7 @@ impl TranscriptView {
     /// The prompt the operator is reading: the pinned band's turn, else the
     /// last prompt in the window. What `copy prompt` and `resend prompt`
     /// act on.
-    pub(crate) fn reading_prompt(&self) -> Option<String> {
+    pub fn reading_prompt(&self) -> Option<String> {
         let pinned = self
             .pinned_prompt()
             .and_then(|(index, _)| self.rows.get(index))
@@ -777,7 +773,7 @@ impl TranscriptView {
     /// `file_links::laid_out` finds them by): a headless driver points the
     /// mouse at one.
     #[cfg(feature = "visual-reference")]
-    pub(crate) fn namespace(&self) -> SharedString {
+    pub fn namespace(&self) -> SharedString {
         self.input.namespace.clone()
     }
 
@@ -1142,7 +1138,7 @@ impl TranscriptView {
     /// Every disclosure the rows draw, in order: the keyboard's stops. A
     /// call with details, a long thought, a group — and, while a group is
     /// open, its calls; while shut, the call it shows working.
-    pub(crate) fn disclosures(&self) -> Vec<DisclosureId> {
+    pub fn disclosures(&self) -> Vec<DisclosureId> {
         let mut stops = Vec::new();
         let call = |stops: &mut Vec<DisclosureId>, block: &ferrite_core::transcript::Block| {
             if let Body::Tool(tool) = &block.body {
@@ -1260,9 +1256,9 @@ impl TranscriptView {
                     cx.stop_propagation();
                     clicked(window, cx);
                 });
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let control = {
-                let sink = self.input.disclosure_bounds.clone();
+                let sink = self.input.disclosure_bounds.0.clone();
                 let measured = call.clone();
                 control.on_children_prepainted(move |bounds, _, _| {
                     if let Some(bounds) = bounds.last() {
@@ -1325,9 +1321,9 @@ impl TranscriptView {
                 cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
             });
         });
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let control = {
-            let sink = self.input.disclosure_bounds.clone();
+            let sink = self.input.disclosure_bounds.0.clone();
             let measured = call.clone();
             control.on_children_prepainted(move |bounds, _, _| {
                 // The hit box is the overlay's last child; a keyboard ring

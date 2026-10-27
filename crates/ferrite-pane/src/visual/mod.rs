@@ -24,20 +24,20 @@
 //! lifecycle ([`engine`]) and the row's look ([`card`]).
 
 mod card;
-pub(crate) mod diagram;
+pub mod diagram;
 pub(crate) mod element;
-pub(crate) mod engine;
-pub(crate) mod renderer;
+pub mod engine;
+pub mod renderer;
 mod shelf;
 #[cfg(feature = "visual-reference")]
-pub(crate) mod shots;
+pub mod shots;
 #[cfg(feature = "cef")]
-pub(crate) mod smoke;
+pub mod smoke;
 pub(crate) mod tokens;
-pub(crate) mod web;
+pub mod web;
 
 pub(crate) use card::collect_text;
-pub(crate) use engine::{boot, init};
+pub use engine::{boot, init};
 pub(crate) use ferrite_core::visual::{Status as VisualStatus, Visual};
 pub(crate) use shelf::Shelf;
 

@@ -16,7 +16,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// Code controls form a native keyboard island inside the transcript.
-pub(crate) fn code_actions_focused(window: &Window) -> bool {
+pub fn code_actions_focused(window: &Window) -> bool {
     window
         .context_stack()
         .iter()
@@ -108,14 +108,14 @@ pub struct TextCache(
 );
 
 impl TextCache {
-    #[cfg(test)]
-    pub(crate) fn retained_handles(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn retained_handles(&self) -> usize {
         Rc::strong_count(&self.0)
     }
 
     /// Every native text this cache holds, by id.
-    #[cfg(test)]
-    pub(crate) fn cached_ids(&self) -> Vec<SharedString> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn cached_ids(&self) -> Vec<SharedString> {
         self.0.borrow().1.keys().cloned().collect()
     }
 
@@ -363,7 +363,7 @@ impl gpui::RenderOnce for Markdown {
         // Prose sets its own face (the transcript's, Geist Mono); the
         // inherited style is the Pane's.
         let face: SharedString = theme::FONT_CODE.into();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         testing::record(
             self.id.clone(),
             state.clone(),
@@ -869,7 +869,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
 /// The inline-code chip's wash (SPEC §5.4's `padding: 1px 5px`): its
 /// horizontal padding laid out as room either side of the run, so the
 /// text after it moves along, and the ground painted over that room.
-pub(crate) fn inline_code_wash() -> gpui::base::text::InlineCodeWash {
+pub fn inline_code_wash() -> gpui::base::text::InlineCodeWash {
     gpui::base::text::InlineCodeWash {
         color: theme::paint::RAISED.hsla(),
         radius: px(theme::R_INLINE),
@@ -968,7 +968,7 @@ impl gpui::RenderOnce for Literal {
                     .line_height(inherited.line_height_in_pixels(window.rem_size())),
             );
         let state = self.cache.state(self.id.clone(), &source, window, cx);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         testing::record(self.id.clone(), state.clone(), inherited.clone(), cx);
         TextView::new(&state)
             .when_some(self.document, |view, document| {
@@ -1016,7 +1016,7 @@ impl gpui::RenderOnce for Output {
             unreachable!("output has its own namespace")
         };
         state.update(cx, |state, cx| state.set_find(self.find, cx));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         testing::record_output(self.id, state.clone(), cx);
         Textarea::new(&state)
             .readonly(true)
@@ -1069,7 +1069,7 @@ pub fn reading_dialog(
         )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing {
     use super::*;
     use std::collections::HashMap;

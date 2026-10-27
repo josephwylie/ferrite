@@ -65,7 +65,7 @@ pub(crate) const KEY_CONTEXT: &str = crate::keymap::IMAGE_VIEWER;
 
 /// Whether gpui draws the file as an image: by its extension, as `img`
 /// decides.
-pub(crate) fn is_image(path: &Path) -> bool {
+pub fn is_image(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
@@ -73,7 +73,7 @@ pub(crate) fn is_image(path: &Path) -> bool {
         })
 }
 
-pub(crate) struct ImageViewer {
+pub struct ImageViewer {
     focus: FocusHandle,
     /// The image shown.
     path: PathBuf,
@@ -206,7 +206,7 @@ impl ImageViewer {
 
     /// The keyboard focus it holds, kept from its first frame: the focus
     /// snap leaves it here while it does.
-    pub(crate) fn held_focus(&self, window: &Window) -> Option<FocusHandle> {
+    pub fn held_focus(&self, window: &Window) -> Option<FocusHandle> {
         self.focus.is_focused(window).then(|| self.focus.clone())
     }
 
@@ -349,15 +349,15 @@ impl ImageViewer {
     }
 
     /// Where the picture lay in the last frame drawn.
-    #[cfg(test)]
-    pub(crate) fn picture(&self) -> Option<Bounds<Pixels>> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn picture(&self) -> Option<Bounds<Pixels>> {
         self.laid.get().picture
     }
 
     /// The picture held while the one shown comes in, at the opacity it
     /// fades out from.
-    #[cfg(test)]
-    pub(crate) fn leaving(&self) -> Option<(PathBuf, f32)> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn leaving(&self) -> Option<(PathBuf, f32)> {
         self.leaving
             .as_ref()
             .map(|(path, _, from)| (path.clone(), *from))

@@ -438,7 +438,7 @@ pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::
 /// The OS opens the original file in its own viewer, where it can be
 /// inspected at full resolution. Canonicalize before URL encoding so relative
 /// paths, symlinks and Windows drive paths all use the same file-link route.
-pub(crate) fn open_original(path: &Path, window: &mut Window, cx: &mut App) {
+pub fn open_original(path: &Path, window: &mut Window, cx: &mut App) {
     use gpui::component::{notification::Notification, WindowExt};
     match std::fs::canonicalize(path) {
         Ok(path) => crate::file_links::FileLink {

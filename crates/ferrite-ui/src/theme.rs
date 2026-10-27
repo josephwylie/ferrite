@@ -3520,10 +3520,10 @@ mod tests {
     #[test]
     fn render_code_draws_only_covered_glyphs() {
         let sources: &[(&str, &str)] = &[
-            ("pane.rs", include_str!("../../ferrite/src/pane.rs")),
+            ("pane.rs", include_str!("../../ferrite-pane/src/pane.rs")),
             (
                 "pane/text.rs",
-                include_str!("../../ferrite/src/pane/text.rs"),
+                include_str!("../../ferrite-pane/src/pane/text.rs"),
             ),
             ("cockpit.rs", include_str!("../../ferrite/src/cockpit.rs")),
             (
@@ -3532,13 +3532,17 @@ mod tests {
             ),
             (
                 "transcript.rs",
-                include_str!("../../ferrite/src/transcript.rs"),
+                include_str!("../../ferrite-pane/src/transcript.rs"),
             ),
-            ("rich.rs", include_str!("../../ferrite/src/rich.rs")),
+            ("rich.rs", include_str!("../../ferrite-pane/src/rich.rs")),
             ("nav.rs", include_str!("../../ferrite/src/nav.rs")),
+            ("mark.rs", include_str!("../../ferrite-pane/src/mark.rs")),
             ("titlebar.rs", include_str!("../../ferrite/src/titlebar.rs")),
             ("menu.rs", include_str!("menu.rs")),
-            ("composer.rs", include_str!("../../ferrite/src/composer.rs")),
+            (
+                "composer.rs",
+                include_str!("../../ferrite-pane/src/composer.rs"),
+            ),
             ("components.rs", include_str!("components.rs")),
             ("prefs.rs", include_str!("../../ferrite/src/prefs.rs")),
             (
@@ -3551,39 +3555,45 @@ mod tests {
             ),
             (
                 "attachments.rs",
-                include_str!("../../ferrite/src/attachments.rs"),
+                include_str!("../../ferrite-pane/src/attachments.rs"),
             ),
             (
                 "image_viewer.rs",
-                include_str!("../../ferrite/src/image_viewer.rs"),
+                include_str!("../../ferrite-pane/src/image_viewer.rs"),
             ),
             (
                 "background_chips.rs",
                 include_str!("../../ferrite/src/background_chips.rs"),
             ),
             ("keymap.rs", include_str!("keymap.rs")),
-            ("decision.rs", include_str!("../../ferrite/src/decision.rs")),
-            ("preview.rs", include_str!("../../ferrite/src/preview.rs")),
+            (
+                "decision.rs",
+                include_str!("../../ferrite-pane/src/decision.rs"),
+            ),
+            (
+                "preview.rs",
+                include_str!("../../ferrite-pane/src/preview.rs"),
+            ),
             (
                 "cockpit/panel/preview.rs",
                 include_str!("../../ferrite/src/cockpit/panel/preview.rs"),
             ),
             (
                 "prompt_drop.rs",
-                include_str!("../../ferrite/src/prompt_drop.rs"),
+                include_str!("../../ferrite-pane/src/prompt_drop.rs"),
             ),
             (
                 "transcript/rows.rs",
-                include_str!("../../ferrite/src/transcript/rows.rs"),
+                include_str!("../../ferrite-pane/src/transcript/rows.rs"),
             ),
             (
                 "transcript/scroll.rs",
-                include_str!("../../ferrite/src/transcript/scroll.rs"),
+                include_str!("../../ferrite-pane/src/transcript/scroll.rs"),
             ),
             ("scrollbar.rs", include_str!("scrollbar.rs")),
             (
                 "file_links.rs",
-                include_str!("../../ferrite/src/file_links.rs"),
+                include_str!("../../ferrite-pane/src/file_links.rs"),
             ),
             ("lib.rs", include_str!("../../ferrite/src/lib.rs")),
             ("ferrite-ui lib.rs", include_str!("lib.rs")),

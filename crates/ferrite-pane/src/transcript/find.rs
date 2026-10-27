@@ -16,9 +16,9 @@ use super::{Runway, TranscriptView};
 use crate::select::FindMarks;
 
 /// The bar's count, its hit's row, and where that occurrence last painted.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
-pub(crate) struct FindState {
+pub struct FindState {
     pub count: Option<SharedString>,
     pub row: Option<usize>,
     pub painted: Option<gpui::Bounds<gpui::Pixels>>,
@@ -37,7 +37,7 @@ pub(super) struct TranscriptFind {
 
 impl TranscriptView {
     /// Open the bar (or take the keyboard back to it).
-    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.find.is_none() {
             self.find = Some(TranscriptFind {
                 bar: crate::find::Find::new(cx, |view: &mut Self, cx| view.refind(cx)),
@@ -53,7 +53,7 @@ impl TranscriptView {
 
     /// Put `text` on the open bar's line, as typed (a reference scene).
     #[cfg(feature = "visual-reference")]
-    pub(crate) fn type_find(&self, text: &str, cx: &mut gpui::App) {
+    pub fn type_find(&self, text: &str, cx: &mut gpui::App) {
         if let Some(find) = &self.find {
             find.bar.type_query(text, cx);
         }
@@ -66,7 +66,7 @@ impl TranscriptView {
     }
 
     /// Whether the bar's line holds the keyboard.
-    pub(crate) fn find_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+    pub fn find_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.find
             .as_ref()
             .is_some_and(|find| find.bar.holds_focus(window, cx))
@@ -191,8 +191,8 @@ impl TranscriptView {
     }
 
     /// What the bar reads and where its hit is — what the tests read.
-    #[cfg(test)]
-    pub(crate) fn find_state(&self) -> Option<FindState> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn find_state(&self) -> Option<FindState> {
         let find = self.find.as_ref()?;
         Some(FindState {
             count: find.bar.count(),

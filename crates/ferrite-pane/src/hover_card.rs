@@ -367,7 +367,7 @@ fn card_height(lines: usize, foot: bool) -> f32 {
 /// `HOVER_CARD_GAP` above it when it would cross the window's bottom
 /// `HOVER_CARD_EDGE`; its left edge on the path's, held inside the window's
 /// edges.
-pub(crate) fn hang_origin(
+pub fn hang_origin(
     anchor: Bounds<Pixels>,
     size: gpui::Size<Pixels>,
     viewport: gpui::Size<Pixels>,

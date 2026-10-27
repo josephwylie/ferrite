@@ -1,51 +1,43 @@
 // Ferrite: the cockpit window and the pump behind it. The binary
 // (`main.rs`) dispatches the headless commands and calls `launch`.
-mod attachments;
 mod background_chips;
 #[cfg(unix)]
 mod board;
 mod cli_updates;
 mod cockpit;
 mod cockpit_window;
-mod composer;
-mod decision;
 mod demo;
 mod facts;
 mod ferrite_update;
-mod file_links;
-mod find;
 mod float;
 mod fuzzy;
-mod hover_card;
-mod image_viewer;
-mod line;
 mod machines;
 mod nav;
 mod notifications;
 mod palette;
-mod pane;
 mod pr;
 mod prefs;
-mod preview;
 mod project_editor;
 mod projects;
-mod prompt_drop;
 mod review;
-mod rich;
-mod select;
 mod shortcuts;
 #[cfg(unix)]
 mod sidebar;
 mod status;
 mod system_notifications;
 mod titlebar;
-mod transcript;
-mod visual;
 
 // The shared UI, under the names the app has always used for it.
 use ferrite_ui::{
     components, icons, keymap, loops_overlay, menu, motion, platform_text, pointer, register_fonts,
     theme,
+};
+// The Pane, likewise.
+#[cfg(test)]
+use ferrite_pane::hover_card;
+use ferrite_pane::{
+    composer, decision, file_links, find, image_viewer, pane, preview, prompt_drop, rich, select,
+    transcript, visual,
 };
 
 use ::gpui;

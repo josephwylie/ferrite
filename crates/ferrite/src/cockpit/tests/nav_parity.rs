@@ -704,7 +704,7 @@ fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) 
         let block = state.groups.iter().find(|block| block.id == group).unwrap();
         assert!(block.folded);
         assert_eq!(
-            nav::RowStatus::roll_up(&block.members),
+            nav::roll_up(&block.members),
             Some(nav::RowStatus::Done),
             "a member finished unseen"
         );
@@ -716,7 +716,7 @@ fn a_folded_group_and_project_still_say_what_needs_you(cx: &mut TestAppContext) 
         let state = view.nav_state();
         let block = state.groups.iter().find(|block| block.id == group).unwrap();
         assert_eq!(
-            nav::RowStatus::roll_up(&block.members),
+            nav::roll_up(&block.members),
             Some(nav::RowStatus::NeedsYou),
             "blocked outranks done"
         );

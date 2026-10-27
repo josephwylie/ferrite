@@ -15,7 +15,7 @@ const DEADLINE: Duration = Duration::from_secs(12);
 const QUIET: Duration = Duration::from_millis(1500);
 
 /// Pump the engine and draw `window` until its visuals have settled.
-pub(crate) fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle) {
+pub fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle) {
     let started = Instant::now();
     let mut last_change = Instant::now();
     let mut seen = 0u64;
@@ -54,7 +54,7 @@ pub(crate) fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle) {
 /// `--visual-snapshots <dir>`: the agent's screenshots (`renderer::snapshot`)
 /// of the capture pages, in both schemes, as `<page>-<scheme>.png`. Proves
 /// the render path the providers' `show_visual` answers go through.
-pub(crate) fn snapshots(output: String) {
+pub fn snapshots(output: String) {
     use super::renderer;
     use super::tokens::Scheme;
     let output = std::path::PathBuf::from(output);
@@ -67,18 +67,9 @@ pub(crate) fn snapshots(output: String) {
     );
     cx.update(super::init);
     let pages = [
-        (
-            "stats",
-            include_str!("../cockpit/visual_reference/visuals/stats.html"),
-        ),
-        (
-            "mockups",
-            include_str!("../cockpit/visual_reference/visuals/mockups.html"),
-        ),
-        (
-            "treemap",
-            include_str!("../cockpit/visual_reference/visuals/treemap.html"),
-        ),
+        ("stats", include_str!("../../assets/visuals/stats.html")),
+        ("mockups", include_str!("../../assets/visuals/mockups.html")),
+        ("treemap", include_str!("../../assets/visuals/treemap.html")),
     ];
     let started = Instant::now();
     let done = std::rc::Rc::new(std::cell::Cell::new(0usize));

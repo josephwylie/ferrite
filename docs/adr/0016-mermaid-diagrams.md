@@ -14,7 +14,7 @@ diagrams (a terminal can't draw them), and agents already write Mermaid.
 
 1. **The same engine, nothing new to ship.** A fence is drawn by the
    visual engine (`visual/diagram.rs`) from a page holding the vendored
-   `mermaid.js` (12.2.0, MIT, `crates/ferrite/assets/mermaid/` with its
+   `mermaid.js` (12.2.0, MIT, `crates/ferrite-pane/assets/mermaid/` with its
    license), inlined: the page fetches nothing and stays as sealed as an
    agent's (ADR 0013 §5). `securityLevel: strict`, no click handlers.
 2. **A picture, not a live page.** The page draws once, its frame is cropped

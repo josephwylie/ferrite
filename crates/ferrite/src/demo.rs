@@ -999,7 +999,7 @@ fn asks_for_a_visual(prompt: &str) -> bool {
 /// whose HTML streams in (the page builds up while it is drawn), the
 /// screenshot's answer, and a closing line.
 fn visual_reply() -> Vec<Step> {
-    const PAGE: &str = include_str!("cockpit/visual_reference/visuals/stats.html");
+    const PAGE: &str = include_str!("../../ferrite-pane/assets/visuals/stats.html");
     const ID: &str = "demo_visual";
     let name = ferrite_core::visual::CLAUDE_NAME;
     let input = |html: &str| {
@@ -1482,5 +1482,166 @@ mod tests {
             steps.last().unwrap().event,
             SessionEvent::DecisionRequested { .. }
         ));
+    }
+
+    // The Pane's own readings of the demo's Decision.
+    use crate::decision;
+    use crate::pane::{approval_input, shell_command, wall_state, Turn, WallState};
+    use gpui::prelude::*;
+    use gpui::{div, px, size, Context, Render, TestAppContext};
+
+    struct ShowsDecisions {
+        cache: crate::rich::TextCache,
+        decisions: Vec<Decision>,
+    }
+
+    impl Render for ShowsDecisions {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .flex()
+                .flex_col()
+                .w(px(900.))
+                .font_family(crate::theme::FONT_UI)
+                .text_size(px(crate::theme::FS_UI))
+                .line_height(px(crate::theme::LH_UI))
+                .children(self.decisions.iter().enumerate().map(|(at, decision)| {
+                    let rows = decision::approval_rows(decision, None, None)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(row_at, row)| {
+                            decision::option_row(
+                                ("decision-row", at * 16 + row_at),
+                                decision::Row {
+                                    key: Some(row.key),
+                                    label: row.label,
+                                    code: row.code,
+                                    cursor: row_at == 0,
+                                    enabled: row.enabled,
+                                    ..Default::default()
+                                },
+                            )
+                            .into_any_element()
+                        });
+                    decision::card(
+                        at as u64,
+                        [
+                            decision::head(
+                                decision::kind_word(decision),
+                                Some(decision.tool_name.clone().into()),
+                                None,
+                            )
+                            .into_any_element(),
+                            decision::prose(ferrite_core::digest::decision_subject(decision))
+                                .into_any_element(),
+                        ]
+                        .into_iter()
+                        .chain(
+                            approval_input(decision, &self.cache, "decision-reference".into()).map(
+                                |input| {
+                                    decision::well(shell_command(decision), input)
+                                        .into_any_element()
+                                },
+                            ),
+                        )
+                        .chain(rows),
+                    )
+                }))
+        }
+    }
+
+    #[gpui::test]
+    fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        let event = script()
+            .into_iter()
+            .map(|step| step.event)
+            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
+            .expect("the demo stops on a Decision");
+        let SessionEvent::DecisionRequested { decision } = event else {
+            unreachable!()
+        };
+        assert_eq!(decision.tool_name, "Write");
+
+        // A request Ferrite could not read is still a card, or the operator
+        // has nothing to deny and the turn hangs.
+        let unreadable = Decision {
+            tool_name: String::new(),
+            description: String::new(),
+            ..decision.clone()
+        };
+
+        let (_, cx) = cx.add_window_view(|_, _| ShowsDecisions {
+            cache: Default::default(),
+            decisions: vec![decision, unreadable],
+        });
+        cx.simulate_resize(size(px(900.), px(300.)));
+        cx.run_until_parked();
+    }
+
+    /// glance.md §4's wall matrix, one assertion per row — the selection
+    /// logic the wall cell renders from.
+    #[test]
+    fn the_wall_state_matrix_reads_exactly_as_the_glance_spec() {
+        use WallState::*;
+        let mut transcript = Transcript::default();
+        assert_eq!(wall_state(Some(&Turn::of(&transcript)), false, false), Idle);
+        transcript.apply(Input::Prompt("go".into()));
+        // Working, focused or not, is the streaming Thread.
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Working
+        );
+        // Failing tests stay a working Thread — red text, not a ring.
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), true, false),
+            Decision
+        );
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, true),
+            Failing
+        );
+        // A Decision waits: pending flag or Blocked status, either way.
+        let decision = script()
+            .into_iter()
+            .map(|step| step.event)
+            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
+            .unwrap();
+        transcript.apply(Input::Event(decision));
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Decision
+        );
+        // Only successful outcomes read Done, regardless of cost.
+        for cost_usd in [None, Some(0.038)] {
+            for (outcome, expected) in [
+                (ferrite_core::TurnOutcome::Completed, Done),
+                (ferrite_core::TurnOutcome::Interrupted, Idle),
+                (ferrite_core::TurnOutcome::Error("failed".into()), Idle),
+            ] {
+                transcript.apply(Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }));
+                assert_eq!(
+                    wall_state(Some(&Turn::of(&transcript)), false, false),
+                    expected
+                );
+            }
+        }
+        // A closed Session is the red hard-blocker.
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        transcript.apply(Input::Event(SessionEvent::Closed {
+            reason: "Session exited".into(),
+        }));
+        assert_eq!(
+            wall_state(Some(&Turn::of(&transcript)), false, false),
+            Blocked
+        );
+        // No transcript at all — the cockpit could not open the Thread.
+        assert_eq!(wall_state(None, false, false), Parked);
     }
 }
