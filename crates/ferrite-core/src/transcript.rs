@@ -3962,6 +3962,89 @@ mod tests {
         assert_eq!(transcript.blocks()[0].markdown, whole.blocks()[0].markdown);
     }
 
+    /// A long fenced block streams the same way: each delta costs what it
+    /// adds, and the block folds to what the whole text folds to, open and
+    /// closed.
+    #[test]
+    fn a_long_code_block_streams_in_time_linear_in_its_length() {
+        let mut transcript = Transcript::default();
+        transcript.apply(text("```rust\n"));
+        let delta = format!(
+            "    let w = {}; // `c` **b**\n{} ",
+            "w".repeat(60),
+            "w".repeat(40)
+        );
+        let budget = std::time::Duration::from_millis(1500);
+        let started = std::time::Instant::now();
+        for sent in 1..=8_000 {
+            transcript.apply(text(&delta));
+            assert!(
+                started.elapsed() < budget,
+                "{sent} deltas of one code block took {:?}",
+                started.elapsed()
+            );
+        }
+        let fold = |t: &Transcript| -> Vec<(Body, Option<String>)> {
+            t.blocks()
+                .iter()
+                .map(|b| (b.body.clone(), b.markdown.clone()))
+                .collect()
+        };
+        let mut whole = Transcript::default();
+        whole.apply(text(&format!("```rust\n{}", delta.repeat(8_000))));
+        assert_eq!(fold(&transcript), fold(&whole));
+        transcript.apply(text("\n```\nafter"));
+        whole.apply(text("\n```\nafter"));
+        assert_eq!(fold(&transcript), fold(&whole));
+    }
+
+    /// A marker that never closes — a lone backtick, `**`, an index's `[` —
+    /// does not hold the rest of its paragraph to be read again on every
+    /// delta.
+    #[test]
+    fn a_marker_that_never_closes_streams_in_time_linear_in_its_length() {
+        for opener in ["a lone ` tick", "a lone ** star", "array[i] reads"] {
+            let mut transcript = Transcript::default();
+            transcript.apply(text(opener));
+            let delta = format!(" {}", "w".repeat(125));
+            let budget = std::time::Duration::from_millis(1500);
+            let started = std::time::Instant::now();
+            for sent in 1..=8_000 {
+                transcript.apply(text(&delta));
+                assert!(
+                    started.elapsed() < budget,
+                    "{sent} deltas after {opener:?} took {:?}",
+                    started.elapsed()
+                );
+            }
+            let mut whole = Transcript::default();
+            whole.apply(text(&format!("{opener}{}", delta.repeat(8_000))));
+            assert_eq!(transcript.blocks()[0].body, whole.blocks()[0].body);
+        }
+    }
+
+    /// Nor do markers back to back, one space between them: the space is
+    /// where the prose before them settles.
+    #[test]
+    fn markers_back_to_back_stream_in_time_linear_in_their_length() {
+        for delta in ["`a` ", "**b** ", "[l](u) "] {
+            let mut transcript = Transcript::default();
+            let budget = std::time::Duration::from_millis(1500);
+            let started = std::time::Instant::now();
+            for sent in 1..=8_000 {
+                transcript.apply(text(delta));
+                assert!(
+                    started.elapsed() < budget,
+                    "{sent} deltas of {delta:?} took {:?}",
+                    started.elapsed()
+                );
+            }
+            let mut whole = Transcript::default();
+            whole.apply(text(&delta.repeat(8_000)));
+            assert_eq!(transcript.blocks()[0].body, whole.blocks()[0].body);
+        }
+    }
+
     /// However the provider splits an answer, every delta leaves the Blocks
     /// the text so far folds to in one piece: markers that close late, or
     /// never; sections that open as one kind and turn out another.
@@ -3982,8 +4065,37 @@ mod tests {
             "trailing spaces   \n  \n\n\n- \n-x\n#x\n``\n```",
             "crlf\r\nline\r\n\r\npara",
             "a lone * then *more* and [a] [b](c) `d` **e `f** g` h [i](j k",
+            "```rust\nfn a() {}\r\n    indented\r\n\r\n\nlast\r``\nmore `x`\n``` \nafter",
+            "```\n\n\nx\n\r\n```",
+            "`a` `b` **c** **d** [e](f) [g](h)`i` j `k`l ``m`` *n*`o`",
         ];
-        for answer in answers {
+        // Markers whose closer comes just inside, at, or past the reach a
+        // marker looks for one in, or never.
+        let reach = markdown::REACH;
+        let far = "w ".repeat(reach / 2);
+        let edges: Vec<String> = [reach - 3, reach - 2, reach - 1, reach]
+            .into_iter()
+            .flat_map(|n| {
+                let w = "w".repeat(n);
+                [
+                    format!("`{w}` then `x` done"),
+                    format!("**{w}** then **b** done"),
+                    format!("[{w}](u) then [l](u) done"),
+                    format!("[l]({w}) then done"),
+                ]
+            })
+            .chain([
+                format!("a lone ` tick {far} then `x` y"),
+                format!("a lone ** star {far} then **b** y"),
+                format!("array[i] {far} then [l](u) and ](late) y"),
+                format!("a ` b **c** {far} d"),
+            ])
+            .collect();
+        for answer in answers
+            .iter()
+            .copied()
+            .chain(edges.iter().map(String::as_str))
+        {
             let chars: Vec<char> = answer.chars().collect();
             for size in [1, 2, 3, 5, 8, 13] {
                 let mut transcript = Transcript::default();
