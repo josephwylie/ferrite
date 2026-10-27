@@ -36,7 +36,8 @@ need the Cockpit's state (views, vitals, every setting) made public.
   a control as data and the closure that changes the setting. Values and
   persistence stay the Cockpit's (`change_settings`).
 - **`ferrite-frame`** draws them and binds the keys; it sits beside the
-  Cockpit, on `ferrite-ui` alone. The app (`ferrite`) installs it with
+  Cockpit, on `ferrite-ui` and the `ferrite-core` types the bar's data
+  names (`Provider`, `RateLimits`), never on the Cockpit. The app (`ferrite`) installs it with
   its menu bar. The Cockpit's own tests install it too, as a
   dev-dependency, so they keep drawing the real frame.
 - The sheet recipe (`ferrite_ui::sheet`) is shared by Settings and the
