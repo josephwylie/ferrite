@@ -509,7 +509,7 @@ impl CockpitView {
                 .bottom(px(STATUS_BAR_H))
                 .w(px(width))
                 .overflow_hidden()
-                .bg(paint::FRAME)
+                .bg(paint::PANEL)
                 .child(content)
                 .into_any_element(),
         )

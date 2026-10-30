@@ -54,9 +54,10 @@
 //! 4. **Glass on the frame, terminal in the card** (macOS: `GLASS`). The
 //!    window opens blurred (`window_background`) and its root paints nothing
 //!    (`paint::WINDOW`); each region paints its own fill once, from
-//!    `paint::*`, translucent on macOS: the frame and the bar at 88%, the
-//!    card at 94% (a hint of the desktop, never a busy picture under text),
-//!    fields, raised and selected fills as white overlays. gpui blurs no
+//!    `paint::*`: the shell (the frame and the bars) as black glass
+//!    (`SHELL_GLASS`) that darkens the desktop showing through; what is
+//!    read (the card, the right panel) opaque, never a busy picture under
+//!    text; fields, raised and selected fills as white overlays. gpui blurs no
 //!    single element, so a float paints opaque (`paint::FLOAT`), and a
 //!    surface that must occlude what scrolls under it (the sticky prompt, a
 //!    Decision docked over the tail) stacks over its card, never over the
@@ -229,13 +230,21 @@ impl From<Paint> for gpui::Fill {
 pub const SUNKEN: u32 = 0x161616;
 /// Sunk as glass: a black overlay on the card.
 pub const SUNKEN_GLASS: u32 = 0x00000014;
-/// `#181818` — the card: a Pane's body, the transcript's surface.
+/// `#181818` — the card: a Pane's body, the transcript's surface. Opaque
+/// on glass too: the reading never sits on the desktop.
 pub const CARD: u32 = 0x181818;
-/// The card as glass: 94%, a terminal's background opacity.
-pub const CARD_GLASS: u32 = 0x181818f0;
 /// `#1e1e1e` — the bottom bar; diff and code-fence blocks.
 pub const BAR: u32 = 0x1e1e1e;
-pub const BAR_GLASS: u32 = 0x1e1e1ee0;
+/// The shell as glass — the nav, the heads, a Group's gutter, the bars:
+/// black at 76% over the window's blur, which is untinted (the vendored
+/// `HeaderView` material, its tint layer hidden). A grey fill can only
+/// darken by covering, so `#222` had to stand at 88% and let 12% of the
+/// desktop through; black darkens what shows through instead. At 76% the
+/// shell over pure white lands on `#3c`, as dark as 88% `#222` did (its
+/// ink keeps the contrast it had), over a mid-grey desktop on `#1e`, and
+/// a quarter of the desktop shows.
+pub const SHELL_GLASS: u32 = 0x000000c3;
+pub const BAR_GLASS: u32 = SHELL_GLASS;
 /// `#1f1f1f` — the Decision box.
 pub const DECISION: u32 = 0x1f1f1f;
 /// The Decision box as glass: a white overlay on the card.
@@ -247,11 +256,10 @@ pub const FIELD_COMPACT_GLASS: u32 = 0xffffff09;
 /// `#222222` — the frame behind the cards: the nav, the heads, the right
 /// panel, a Group's gutter.
 pub const FRAME: u32 = 0x222222;
-/// The frame as glass, 88%. The window's blur shows whatever sits behind
-/// Ferrite — other windows included — so a bright window behind turned a
-/// 72% sidebar light grey and its dim ink fell to 2.8:1. At 88% the frame
-/// stays dark over pure white and still takes a tint of what is behind.
-pub const FRAME_GLASS: u32 = 0x222222e0;
+/// The frame as glass: the shell's (`SHELL_GLASS`). The right panel is
+/// read like the card, so it paints the frame's grey opaque
+/// (`paint::PANEL`).
+pub const FRAME_GLASS: u32 = SHELL_GLASS;
 /// `#222222` — a field on the card: the Solo Composer's box, the prompt
 /// band. The frame's value, a step over the card.
 pub const FIELD: u32 = 0x222222;
@@ -359,8 +367,9 @@ pub mod paint {
     /// The window's own root: nothing on glass, so each region's fill shows
     /// the blur behind the window; the card elsewhere.
     pub const WINDOW: Paint = Paint::pick(TRANSPARENT, solid(super::CARD));
-    pub const CARD: Paint = Paint::pick(super::CARD_GLASS, solid(super::CARD));
+    pub const CARD: Paint = Paint(solid(super::CARD));
     pub const FRAME: Paint = Paint::pick(super::FRAME_GLASS, solid(super::FRAME));
+    pub const PANEL: Paint = Paint(solid(super::FRAME));
     pub const BAR: Paint = Paint::pick(super::BAR_GLASS, solid(super::BAR));
     pub const FIELD: Paint = Paint::pick(super::FIELD_GLASS, solid(super::FIELD));
     pub const RAISED: Paint = Paint::pick(super::RAISED_GLASS, solid(super::RAISED));
@@ -3172,18 +3181,22 @@ mod tests {
         assert_eq!(IDLE, TEXT_DIM, "done and idle wear no hue");
     }
 
-    /// Rule 4: glass on macOS — the window paints nothing, the frame and
-    /// the card are translucent at their stated opacities, overlays are
-    /// white, a float stays opaque — and the opaque greys everywhere else.
+    /// Rule 4: glass on macOS — the window paints nothing, the shell is
+    /// black glass, what is read is opaque, overlays are white, a float
+    /// stays opaque — and the opaque greys everywhere else.
     #[test]
     fn the_paints_are_glass_on_macos_and_grey_elsewhere() {
         let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
         let near = |a: f32, b: f32| (a - b).abs() < 0.01;
-        assert!(near(alpha(CARD_GLASS), 0.94));
-        assert!(
-            near(alpha(FRAME_GLASS), 0.88),
-            "dark enough over a white window behind"
-        );
+        assert_eq!(SHELL_GLASS >> 8, 0, "the shell darkens what shows through");
+        assert!(near(alpha(SHELL_GLASS), 0.76));
+        assert_eq!((FRAME_GLASS, BAR_GLASS), (SHELL_GLASS, SHELL_GLASS));
+        // Over a white window behind, the shell is no lighter than the
+        // 88% `#222` it replaced, and its ink keeps its contrast.
+        let white = over(SHELL_GLASS, 0xffffff);
+        assert!(white <= over(0x222222e0, 0xffffff), "{white:06x}");
+        assert!(contrast(TEXT, white) >= 4.5);
+        assert!(paint::CARD.is_opaque() && paint::PANEL.is_opaque());
         assert_eq!(alpha(FLOAT_GLASS), 1.0, "a float hides what it covers");
         for (overlay, opacity) in [
             (FIELD_GLASS, 0.05),
@@ -3203,7 +3216,6 @@ mod tests {
             assert!(SELECTED_GLASS & 0xff < SELECTION_HOVER_GLASS & 0xff);
         }
         let paints = [
-            (paint::CARD, CARD_GLASS, CARD),
             (paint::FRAME, FRAME_GLASS, FRAME),
             (paint::BAR, BAR_GLASS, BAR),
             (paint::FIELD, FIELD_GLASS, FIELD),
