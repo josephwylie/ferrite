@@ -148,8 +148,10 @@ pub(crate) fn render(
     // The title in the line's brighter ink, after the name.
     let text = call_text(visual);
     let title = NAME.len().min(text.len())..text.len();
-    let words = div().child(
-        div().min_w_0().truncate().child(selection.line(
+    let words = div().child(div().flex_shrink(1.).min_w_0().child(pane::edge_cut(
+        grid.line,
+        TEXT_DIM,
+        selection.line(
             block,
             text,
             vec![(
@@ -159,8 +161,8 @@ pub(crate) fn render(
                     ..Default::default()
                 },
             )],
-        )),
-    );
+        ),
+    )));
     let trail = status_word(&visual.status).map(|word| {
         div()
             .text_color(rgb(theme::word_ink(word)))

@@ -291,6 +291,8 @@ pub struct Markdown {
     muted: bool,
     /// Body ink in place of `TEXT` (a prompt's `TEXT_STRONG`).
     ink: Option<u32>,
+    /// One line, never wrapped (an activity line): no measure, one line box.
+    single_line: bool,
     /// `ferrite-chip:` links draw as a prompt's inline file chips, opening
     /// in this Pane's preview among the prompt's images (`pane::prompt_chip`).
     chips: Option<(
@@ -328,6 +330,13 @@ impl Markdown {
         self
     }
 
+    /// Lay the run out as one line at its own width, never wrapped: its
+    /// box cuts it (an activity line, `pane::EdgeCut`).
+    pub fn single_line(mut self) -> Self {
+        self.single_line = true;
+        self
+    }
+
     /// Draw `ferrite-chip:` links as a prompt's inline chips (a prompt's
     /// band: its words, then its files), opening in `preview` — an image
     /// among the prompt's `images`.
@@ -351,6 +360,7 @@ impl Markdown {
             cache,
             muted: false,
             ink: None,
+            single_line: false,
             chips: None,
             document: None,
             find: None,
@@ -396,7 +406,7 @@ impl gpui::RenderOnce for Markdown {
         };
         // A prompt's band runs its words the band's whole width (the
         // prototype's `.prompt .txt` has no measure).
-        let text_style = if self.chips.is_some() {
+        let text_style = if self.chips.is_some() || self.single_line {
             text_style.with_prose_max_width(None)
         } else {
             text_style
@@ -454,7 +464,7 @@ impl gpui::RenderOnce for Markdown {
             .mr(px(-hang))
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
-            .max_lines(usize::MAX)
+            .max_lines(if self.single_line { 1 } else { usize::MAX })
             .style(text_style)
             .on_link_click(move |url, event, window, cx| {
                 let activate = match event {

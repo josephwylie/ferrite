@@ -4751,10 +4751,14 @@ pub(crate) fn render_block(
                         let id = block.id;
                         move || format!("notice-{id:?}")
                     })
+                    .flex_shrink(1.)
                     .min_w_0()
-                    .truncate()
                     .tooltip(ferrite_ui::menu::tooltip(text.clone()))
-                    .child(selection.line(block.id, text, highlights)),
+                    .child(edge_cut(
+                        grid.line,
+                        TEXT_DIM,
+                        selection.line(block.id, text, highlights),
+                    )),
             );
             row.child(activity_line(
                 grid,
@@ -6066,6 +6070,145 @@ pub(crate) fn activity_line(
         .children(trail.map(|trail| div().flex_shrink_0().pl(px(theme::SPACE_3)).child(trail)))
 }
 
+/// One line of words cut at its box's edge as CSS's `text-overflow:
+/// ellipsis` cuts it: `content` lays out at its own width on a `line`-tall
+/// box; wider than the box, it is clipped and `…` (in `ink`) stands at the
+/// edge. What the content holds — what a selection copies — is never cut.
+pub(crate) fn edge_cut(line: f32, ink: u32, content: impl IntoElement) -> EdgeCut {
+    let natural: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>> =
+        std::rc::Rc::default();
+    let measured = natural.clone();
+    let content = components::on_bounds(
+        div().relative().flex_shrink_0().child(content),
+        move |bounds, _, _| measured.set(Some(bounds)),
+    );
+    EdgeCut {
+        child: Some(
+            div()
+                .flex()
+                .items_center()
+                .w_full()
+                .min_w_0()
+                .h(px(line))
+                .overflow_hidden()
+                .child(content)
+                .into_any_element(),
+        ),
+        natural,
+        ink: rgb(ink).into(),
+    }
+}
+
+/// See [`edge_cut`].
+pub(crate) struct EdgeCut {
+    child: Option<AnyElement>,
+    natural: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+    ink: gpui::Hsla,
+}
+
+impl IntoElement for EdgeCut {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for EdgeCut {
+    type RequestLayoutState = gpui::LayoutId;
+    type PrepaintState = gpui::Bounds<gpui::Pixels>;
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, gpui::LayoutId) {
+        let child = self.child.get_or_insert_with(|| div().into_any_element());
+        let layout_id = child.request_layout(window, cx);
+        (layout_id, layout_id)
+    }
+
+    /// The box's unrounded bounds: the content's are measured unrounded too.
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        layout_id: &mut gpui::LayoutId,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        let bounds = window.unsnapped_layout_bounds(*layout_id);
+        if let Some(child) = self.child.as_mut() {
+            child.prepaint(window, cx);
+        }
+        bounds
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut gpui::LayoutId,
+        bounds: &mut gpui::Bounds<gpui::Pixels>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        let bounds = *bounds;
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let wider = self
+            .natural
+            .get()
+            .is_some_and(|natural| natural.size.width > bounds.size.width + px(0.5));
+        if !wider {
+            child.paint(window, cx);
+            return;
+        }
+        let style = window.text_style();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let line_height = style.line_height_in_pixels(window.rem_size());
+        let ellipsis = "\u{2026}";
+        let run = gpui::TextRun {
+            len: ellipsis.len(),
+            font: style.font(),
+            color: self.ink,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = window
+            .text_system()
+            .shape_line(ellipsis.into(), size, &[run], None);
+        let cut = bounds.right() - line.width;
+        let shown = gpui::Bounds::from_corners(bounds.origin, gpui::point(cut, bounds.bottom()));
+        window.with_content_mask(Some(gpui::ContentMask { bounds: shown }), |window| {
+            child.paint(window, cx)
+        });
+        let top = bounds.top() + (bounds.size.height - line_height) / 2.;
+        let _ = line.paint(
+            gpui::point(cut, top),
+            line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+}
+
 /// An activity row's icon: `glyph` in `ink`, the gutter's mark size.
 pub(crate) fn activity_icon(grid: Grid, glyph: &'static str, ink: u32) -> impl IntoElement {
     icon(glyph, grid.mark(), ink)
@@ -6163,25 +6306,25 @@ pub(crate) fn render_tool(
         }
     };
     let command_rest = command_fold(tool).map(|(_, rest)| rest);
-    // One run at its own width, cut at the row's edge (never wrapped): it
-    // selects and copies as one line. The run hangs a cell past its box
-    // (`rich::Markdown`); the box makes room for it.
+    // One run on one line at its own width, cut with `…` at the row's edge:
+    // it selects and copies as one line, and never spills onto the rows
+    // under it. The run hangs a cell past its box (`rich::Markdown`); the
+    // box makes room for it.
     let mut words = div().child(
         div()
             .debug_selector(|| "tool-call".into())
-            .flex()
-            .items_center()
             .flex_shrink(1.)
             .min_w_0()
-            .h(px(grid.line))
-            .overflow_hidden()
-            .child(
-                div().flex_shrink_0().pr(px(small.cell())).child(
+            .child(edge_cut(
+                grid.line,
+                TEXT_DIM,
+                div().pr(px(small.cell())).child(
                     selection
                         .markdown(block, text::call_markdown(tool))
-                        .ink(TEXT_DIM),
+                        .ink(TEXT_DIM)
+                        .single_line(),
                 ),
-            ),
+            )),
     );
     // A command's folded output and a later edit's folded diff open from
     // the call line itself.
@@ -6476,14 +6619,16 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         .child(
             div()
                 .debug_selector(|| "tool-group-summary".into())
+                .flex_shrink(1.)
                 .min_w_0()
-                .truncate()
                 .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT)))
-                .child(
+                .child(edge_cut(
+                    grid.line,
+                    TEXT_DIM,
                     row_cx
                         .selection
                         .line(leader.id, summary.text.clone(), highlights),
-                ),
+                )),
         )
         .children(chevron);
     let row_selector = format!("tool-group-{leader_call}");
@@ -8490,6 +8635,95 @@ mod tests {
             panic!("expected tool")
         };
         assert_eq!(diff_stat(&tool.diffs), (2, 2));
+    }
+
+    /// A call line is one line, however long or many-lined its command:
+    /// the argument is the command's first line, cut with `…` at the row's
+    /// edge, and the row under it starts where it ends (the overlap bug).
+    #[gpui::test]
+    fn a_long_or_multi_line_command_keeps_its_call_line_one_line_tall(
+        cx: &mut TestAppContext,
+    ) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("check".into()));
+        let heredoc = format!(
+            "python3 - <<'EOF'\nimport sys\n{}\nEOF",
+            "print('a long line of the script')\n".repeat(20)
+        );
+        let long = format!("grep -rn {} crates/", "\"paint::FRAME\\|paint::BAR\" ".repeat(12));
+        for (id, command) in [("multi", heredoc.as_str()), ("long", long.as_str())] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": command }),
+            }));
+            transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: id.into(),
+                output: "ok".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            }));
+            transcript.apply(Input::Event(SessionEvent::TextDelta {
+                text: format!("after {id}\n\n"),
+            }));
+        }
+        let blocks: Vec<Block> = transcript.blocks().to_vec();
+        let id_of = |pick: &dyn Fn(&Body) -> bool| {
+            blocks
+                .iter()
+                .find(|block| pick(&block.body))
+                .map(|block| block.markdown_run.unwrap_or(block.id))
+                .unwrap()
+        };
+        let after = |id: &'static str| {
+            move |body: &Body| {
+                matches!(body, Body::Paragraph { spans }
+                    if spans.iter().any(|span| span.text.contains(id)))
+            }
+        };
+        let calls = [
+            id_of(&|body| matches!(body, Body::Tool(tool) if tool.call == "multi")),
+            id_of(&|body| matches!(body, Body::Tool(tool) if tool.call == "long")),
+        ];
+        let answers = [id_of(&after("after multi")), id_of(&after("after long"))];
+        let (_view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            shows_blocks(blocks.clone(), cx)
+        });
+        cx.simulate_resize(size(px(520.), px(900.)));
+        cx.run_until_parked();
+        let line = px(Grid::pane(Default::default(), false).line);
+        let rows = [
+            cx.debug_bounds("tool-row-multi")
+                .expect("the heredoc's call line"),
+            cx.debug_bounds("tool-row-long")
+                .expect("the long command's call line"),
+        ];
+        cx.update(|_, cx| {
+            for ((row, call), answer) in rows.iter().zip(calls).zip(answers) {
+                assert!(
+                    (row.size.height - line).abs() <= px(0.5),
+                    "one line tall: {row:?} / {line:?}"
+                );
+                let words = crate::rich::testing::bounds(
+                    &format!("thinking-pane-block-test-{call:?}"),
+                    0,
+                    cx,
+                )
+                .expect("the call line's run");
+                assert!(
+                    words.size.height <= line + px(0.5),
+                    "the run is one line, never wrapped: {words:?}"
+                );
+                let next = crate::rich::testing::bounds(
+                    &format!("markdown-pane-block-test-{answer:?}"),
+                    0,
+                    cx,
+                )
+                .expect("the prose under it");
+                assert!(next.top() >= row.bottom(), "no overlap: {row:?} / {next:?}");
+            }
+        });
     }
 
     /// AC2's copy half, relocated from `block_text` (#27): every Block kind
