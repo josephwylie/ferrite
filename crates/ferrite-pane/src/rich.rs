@@ -321,7 +321,8 @@ impl Markdown {
         self
     }
 
-    /// Set the body in `ink` (headings keep theirs).
+    /// Set the body in `ink`, its native links too — they lift only by
+    /// their underline under the pointer (headings keep their ink).
     pub fn ink(mut self, ink: u32) -> Self {
         self.ink = Some(ink);
         self
@@ -388,7 +389,9 @@ impl gpui::RenderOnce for Markdown {
             text_style
         };
         let text_style = match self.ink {
-            Some(ink) => text_style.with_foreground(rgb(ink).into()),
+            Some(ink) => text_style
+                .with_foreground(rgb(ink).into())
+                .with_link(rgb(ink).into()),
             None => text_style,
         };
         // A prompt's band runs its words the band's whole width (the

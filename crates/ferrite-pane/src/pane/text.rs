@@ -484,11 +484,7 @@ pub(crate) fn collect_block_text(
             let _ = selection.line(block.id, text.clone(), Vec::new());
         }
         Body::TurnEnd(end) => {
-            let (head, tail) = turn_end_runs(end);
-            let _ = selection.line(block.id, head, Vec::new());
-            if let Some(tail) = tail {
-                let _ = selection.line(block.id, tail, Vec::new());
-            }
+            let _ = selection.line(block.id, end.text(), Vec::new());
         }
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());

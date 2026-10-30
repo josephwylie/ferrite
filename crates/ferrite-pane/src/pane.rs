@@ -21,8 +21,6 @@ pub(crate) use text::{collect_block_text, collect_group_text, escape_words, grou
 
 use ferrite_core::activity::{AgentStatus, Subject};
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
-pub(crate) use ferrite_core::digest::BULLET;
-use ferrite_core::digest::ELBOW;
 pub use ferrite_core::digest::{Turn, WallCard, WallLine};
 use ferrite_core::docview::{is_test_run, passed_count, Level};
 use ferrite_core::followup::{self, Followup};
@@ -1117,7 +1115,7 @@ pub(crate) fn working_line(
 /// The working line's shape while a Session starts: nothing the provider
 /// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
 /// the focused Pane, assembled and still elsewhere and under reduced motion
-/// — and `Starting` in `TEXT_DIM`, on the working line's own grid (Solo's
+/// — and `Starting` in `TEXT_DIM`, on the working line's own line (Solo's
 /// or a Group Pane's), so the line never shifts when the turn's words
 /// replace it. Its element id is a constant: the timeline has to survive
 /// every re-render of the line.
@@ -1144,8 +1142,8 @@ fn starting_line(still: bool, solo: bool) -> Div {
         .w_full()
         .min_w_0()
         .h(px(grid.line))
-        .font_family(theme::FONT_CODE)
-        .text_size(px(grid.size))
+        .font_family(theme::FONT_UI)
+        .text_size(px(grid.activity().size))
         .line_height(px(grid.line))
         .text_color(rgb(TEXT_DIM))
         .child(
@@ -2831,8 +2829,9 @@ fn working_row(
     )
 }
 
-/// The working line (SPEC §5.4): one row on a Solo (`solo`) or a Group
-/// Pane's transcript grid, the star spinner in the gutter, the provider's
+/// The working line (SPEC §5.4): one activity row in the app's face, a
+/// step under the prose on a Solo (`solo`) or a Group Pane's transcript
+/// line, the star spinner in the gutter, the provider's
 /// live caption in its colour — the turn's spinner verb (`Reticulating…`,
 /// `progress::spinner_verb`, held for the whole turn) unless the provider
 /// has something better to say (R16) — then `1m04s · ↑ 4.1k tokens` in
@@ -2907,14 +2906,11 @@ fn working_line_for(
         .w_full()
         .min_w_0()
         .h(px(grid.line))
-        .font_family(theme::FONT_CODE)
-        .text_size(px(grid.size))
+        .font_family(theme::FONT_UI)
+        .text_size(px(grid.activity().size))
         .line_height(px(grid.line));
     if let Some((selector, caption)) = caption {
         let caption = SharedString::from(caption);
-        // The caption and the facts hold their runs' widths, the facts'
-        // leading space inside their run.
-        let caption_w = components::run_width(&caption);
         let text = if live {
             components::shimmer(caption, ink)
         } else {
@@ -2927,7 +2923,6 @@ fn working_line_for(
         };
         let metadata = SharedString::from(format!(" {}", facts.join(" \u{b7} ")));
         let highlights = separators(&metadata);
-        let metadata_w = components::run_width(&metadata);
         row = row
             .debug_selector(move || selector.clone())
             .child(
@@ -2944,7 +2939,6 @@ fn working_line_for(
                     .debug_selector(|| "progress-reasoning".into())
                     .flex()
                     .min_w_0()
-                    .w(px(caption_w))
                     .flex_shrink(1.)
                     .child(text),
             )
@@ -2953,7 +2947,6 @@ fn working_line_for(
                     div()
                         .debug_selector(|| "progress-metadata".into())
                         .flex_shrink_0()
-                        .w(px(metadata_w))
                         .whitespace_nowrap()
                         .text_color(rgb(TEXT_DIM))
                         .child(StyledText::new(metadata).with_highlights(highlights)),
@@ -2961,7 +2954,7 @@ fn working_line_for(
             })
             // Every working line names the key, focused or not (it acts
             // where the keyboard is), at the right end of the line.
-            .child(div().flex_1().min_w(px(2.0 * grid.cell())))
+            .child(div().flex_1().min_w(px(theme::SPACE_6)))
             .child(
                 div()
                     .debug_selector(|| "progress-interrupt".into())
@@ -4545,21 +4538,6 @@ pub(crate) fn provider_ink(provider: Option<Provider>) -> u32 {
     }
 }
 
-/// A typed gutter glyph (`●`, `○`) in `ink`: the face's own, in the
-/// gutter's first cell on the row's first line. Plain text, so it is never
-/// part of a selection.
-pub(crate) fn glyph_gutter(grid: Grid, glyph: &'static str, ink: u32) -> Div {
-    div()
-        .flex_shrink_0()
-        .w(px(grid.gutter()))
-        .h(px(grid.line))
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .font_weight(theme::W_BODY)
-        .text_color(rgb(ink))
-        .child(glyph)
-}
-
 /// A gutter mark (`❯ ✻ ◆`, typed; `∴`, drawn): centred on the row's first
 /// line, at the gutter's left edge.
 pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
@@ -4572,7 +4550,7 @@ pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
         .child(mark)
 }
 
-/// Something literal laid out on the grid's cells (an elbow line, a call's
+/// Something literal laid out on the grid's cells (a call's failure, its
 /// output box, a diff): Geist Mono whatever face the transcript reads in.
 pub(crate) fn on_cells(row: Div) -> Div {
     row.font_family(theme::FONT_CODE)
@@ -4592,21 +4570,6 @@ fn content_row(grid: Grid) -> Div {
         .w_full()
         .min_w_0()
         .pl(px(grid.gutter()))
-}
-
-/// A row that hangs under the one above it: the typed `└` (`TEXT_FAINT`)
-/// in the content column's first two cells, the caller's text after it in
-/// `ink`, on cells as the call it hangs under is.
-pub(crate) fn elbow_line(grid: Grid, ink: u32) -> Div {
-    on_cells(content_row(grid)).text_color(rgb(ink)).child(
-        div()
-            .debug_selector(|| "transcript-elbow".into())
-            .flex_shrink_0()
-            .w(px(2.0 * grid.cell()))
-            .whitespace_nowrap()
-            .text_color(rgb(TEXT_FAINT))
-            .child(ELBOW),
-    )
 }
 
 /// Everything one transcript row reads besides its block: the selection its
@@ -4775,44 +4738,46 @@ pub(crate) fn render_block(
             }
             row.text_color(rgb(TEXT_DIM)).child(body).into_any_element()
         }
-        // A notice: a faint dot and one line in `TEXT_DIM`, cut by width at
+        // A notice: an activity line under a faint bell, its words cut at
         // the column's edge with the whole of it one hover away. A Decision
         // never leaves one (it is its own row, at the tail).
         Body::Notice(text) => {
             let highlights = separators(text);
             let text = SharedString::from(text.clone());
-            row.child(
-                grid_row(glyph_gutter(grid, BULLET, TEXT_FAINT))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("notice-{:?}", block.id)))
-                            .debug_selector({
-                                let id = block.id;
-                                move || format!("notice-{id:?}")
-                            })
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .tooltip(ferrite_ui::menu::tooltip(text.clone()))
-                            .child(selection.line(block.id, text, highlights)),
-                    ),
-            )
+            let words = div().child(
+                div()
+                    .id(SharedString::from(format!("notice-{:?}", block.id)))
+                    .debug_selector({
+                        let id = block.id;
+                        move || format!("notice-{id:?}")
+                    })
+                    .min_w_0()
+                    .truncate()
+                    .tooltip(ferrite_ui::menu::tooltip(text.clone()))
+                    .child(selection.line(block.id, text, highlights)),
+            );
+            row.child(activity_line(
+                grid,
+                activity_icon(grid, icons::BELL, TEXT_FAINT),
+                "notice-mark",
+                words,
+                None,
+            ))
             .into_any_element()
         }
-        // A decision record (`allowed Write`) or a revival note hangs under
-        // the row it answers.
+        // A decision record (`allowed Write`) or a revival note, under the
+        // row it answers.
         Body::Meta(text) => row
-            .child(elbow_line(grid, TEXT_DIM).child(
-                div().flex_1().min_w_0().child(selection.line(
+            .child(
+                activity_note(grid).child(div().flex_1().min_w_0().child(selection.line(
                     block.id,
                     text.clone(),
                     separators(text),
-                )),
-            ))
+                ))),
+            )
             .into_any_element(),
         Body::TurnEnd(end) => row
-            .child(turn_end(block.id, end, selection, row_cx.provider, grid))
+            .child(turn_end(block.id, end, row_cx))
             .into_any_element(),
         // Code keeps literal indentation and highlighting on a 1px rule,
         // with no ground.
@@ -5378,10 +5343,6 @@ fn image_size(head: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// The `group` a completed turn's stamp names, so its time and tokens show
-/// under the pointer anywhere on the line.
-const TURN_STAMP: &str = "turn-stamp";
-
 /// The `group` every disclosable row names, so its trailing chevron shows
 /// under the pointer anywhere on the row.
 pub(crate) const DISCLOSURE_ROW: &str = "disclosure-row";
@@ -5398,75 +5359,120 @@ pub(crate) fn omitted_line(bytes: usize) -> Div {
         )))
 }
 
-/// How a turn ended. A completed turn is `✻ Worked for 41s · 7:32 pm · ↑
-/// 3.2k ↓ 1.1k`: the typed `✻` in the provider's colour in the gutter, the
-/// words and their `·` seams `TEXT_DIM`, everything after `Worked for 41s`
-/// shown only under the pointer (it still copies). An interrupted or failed
-/// one stays whole on the content column (`failure_line`): `failed · 0.1s ·
-/// API Error: 529 overloaded`, its lead word the only coloured one — `interrupted` in `TEXT` (the operator did
-/// it; nothing failed), `failed` in `BLOCKED`.
+/// How a turn ended, as an activity line (`activity_line`), one selectable
+/// run that copies back as it reads. A completed turn is `✻ Worked for 41s
+/// · 7:32 pm · ↑ 3.2k ↓ 1.1k`: the typed `✻` in the provider's colour in
+/// the gutter, the words and their `·` seams `TEXT_DIM`, the run cut after
+/// `Worked for 41s` (`stamp_head`) until the pointer is over the line
+/// (`StampWords`). An interrupted or failed one stays whole under its icon:
+/// `failed · 0.1s · API Error: 529 overloaded`, its lead word the only
+/// coloured one — `interrupted` in `TEXT` (the operator did it; nothing
+/// failed), `failed` in `BLOCKED`.
 fn turn_end(
     block: BlockId,
     end: &ferrite_core::transcript::TurnEnd,
-    selection: &TextRuns,
-    provider: Option<Provider>,
-    grid: Grid,
-) -> Div {
+    row_cx: &RowCx,
+) -> AnyElement {
     use ferrite_core::TurnOutcome;
-    let (head, tail) = turn_end_runs(end);
-    let (lead, ink) = match &end.outcome {
-        TurnOutcome::Completed => {
-            return components::tabular(
-                grid_row(mark_gutter(
-                    grid,
-                    components::glyph(components::WORKED.to_string(), provider_ink(provider))
-                        .debug_selector(|| "turn-stamp-mark".into()),
-                ))
-                .debug_selector(|| "turn-stamp".into())
-                .group(TURN_STAMP)
-                .text_color(rgb(TEXT_DIM))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .whitespace_nowrap()
-                        .child(selection.line(block, head, Vec::new())),
-                )
-                .when_some(tail, |line, tail| {
-                    line.child(
-                        div()
-                            .debug_selector(|| "turn-stamp-rest".into())
-                            .flex_1()
-                            .min_w_0()
-                            .invisible()
-                            .group_hover(TURN_STAMP, |style| style.visible())
-                            .child(selection.line(block, tail.clone(), separators(&tail))),
-                    )
-                }),
-            );
-        }
-        TurnOutcome::Interrupted => (theme::words::INTERRUPTED, TEXT),
-        TurnOutcome::Error(_) => (theme::words::FAILED, BLOCKED),
+    let grid = row_cx.grid();
+    let text = end.text();
+    let lead = |ink: u32, len: usize| {
+        let mut highlights = separators(&text);
+        highlights.insert(
+            0,
+            (
+                0..len,
+                HighlightStyle {
+                    color: Some(rgb(ink).into()),
+                    ..Default::default()
+                },
+            ),
+        );
+        highlights
     };
-    failure_line(block, head, lead.len(), ink, tail, selection, grid)
-        .debug_selector(|| "turn-stamp".into())
+    let (mark, words) = match &end.outcome {
+        TurnOutcome::Completed => (
+            components::glyph(components::WORKED.to_string(), provider_ink(row_cx.provider))
+                .into_any_element(),
+            StampWords {
+                head: SharedString::from(stamp_head(&text).to_owned()),
+                line: grid.line,
+                run: row_cx.selection.line(block, text.clone(), separators(&text)),
+            }
+            .into_any_element(),
+        ),
+        TurnOutcome::Interrupted => (
+            activity_icon(grid, icons::STOP, TEXT).into_any_element(),
+            row_cx
+                .selection
+                .line(block, text.clone(), lead(TEXT, theme::words::INTERRUPTED.len()))
+                .into_any_element(),
+        ),
+        TurnOutcome::Error(_) => (
+            activity_icon(grid, icons::X_CIRCLE, BLOCKED).into_any_element(),
+            row_cx
+                .selection
+                .line(block, text.clone(), lead(BLOCKED, theme::words::FAILED.len()))
+                .into_any_element(),
+        ),
+    };
+    components::tabular(activity_line(
+        grid,
+        mark,
+        "turn-stamp-mark",
+        div().child(div().min_w_0().child(words)),
+        None,
+    ))
+    .debug_selector(|| "turn-stamp".into())
+    .group(TURN_STAMP)
+    .into_any_element()
 }
 
-/// A turn end's two selectable runs, which copy back as its line: the head
-/// and what follows it — a completed turn's `Worked for 41s` and its time
-/// and tokens (shown under the pointer), a failed turn's head (its seam
-/// included) and the provider's message.
-pub(super) fn turn_end_runs(end: &ferrite_core::transcript::TurnEnd) -> (String, Option<String>) {
-    use ferrite_core::TurnOutcome;
-    let mut text = end.text();
-    let split = match &end.outcome {
-        TurnOutcome::Completed => text.find(" \u{b7} "),
-        TurnOutcome::Error(message) if !message.is_empty() => {
-            text.strip_suffix(message.as_str()).map(str::len)
-        }
-        _ => None,
-    };
-    let tail = split.map(|at| text.split_off(at));
-    (text, tail)
+/// The `group` a completed turn's stamp names, so its time and tokens show
+/// under the pointer anywhere on the line.
+const TURN_STAMP: &str = "turn-stamp";
+
+/// Where a completed turn's stamp is cut until the pointer is over it: after
+/// `Worked for 41s`, before its first seam.
+fn stamp_head(text: &str) -> &str {
+    &text[..text.find(" \u{b7} ").unwrap_or(text.len())]
+}
+
+/// A completed turn's stamp words: its one run at its own width, shown up
+/// to its head (`stamp_head`, measured in the face it is drawn in) and whole
+/// under the pointer — the run itself, what a copy takes, is never cut.
+#[derive(IntoElement)]
+struct StampWords {
+    head: SharedString,
+    line: f32,
+    run: crate::rich::Literal,
+}
+
+impl gpui::RenderOnce for StampWords {
+    fn render(self, window: &mut gpui::Window, _: &mut gpui::App) -> impl IntoElement {
+        let style = window.text_style();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let run = gpui::TextRun {
+            len: self.head.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let head = window
+            .text_system()
+            .shape_line(self.head, size, &[run], None)
+            .width;
+        div()
+            .debug_selector(|| "turn-stamp-words".into())
+            .flex()
+            .h(px(self.line))
+            .max_w(head.ceil() + px(1.))
+            .overflow_hidden()
+            .group_hover(TURN_STAMP, |style| style.max_w(px(100_000.)))
+            .child(div().flex_shrink_0().child(self.run))
+    }
 }
 
 /// The `·` seams in a transcript line: `TEXT_DIM`, at body weight
@@ -5567,54 +5573,6 @@ pub fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
         ink(removed_at..text.len(), BLOCKED),
     ];
     StyledText::new(SharedString::from(text)).with_highlights(highlights)
-}
-
-/// A failed or interrupted turn's line, on the content column as the stamp
-/// it stands in for: `failed · 0.1s · API Error: 529 overloaded`. The head —
-/// the lead word in its state ink (`BLOCKED` failed, `TEXT` interrupted),
-/// the rest and its seams `TEXT_DIM` — is one selectable run with its
-/// trailing seam; the excerpt the machine printed is its own run,
-/// `TEXT_DIM`, soft-wrapping and never cut.
-fn failure_line(
-    block: BlockId,
-    head: String,
-    lead: usize,
-    lead_ink: u32,
-    excerpt: Option<String>,
-    selection: &TextRuns,
-    grid: Grid,
-) -> Div {
-    let mut highlights = separators(&head);
-    highlights.insert(
-        0,
-        (
-            0..lead,
-            HighlightStyle {
-                color: Some(rgb(lead_ink).into()),
-                ..Default::default()
-            },
-        ),
-    );
-    content_row(grid).text_color(rgb(TEXT_DIM)).child(
-        div()
-            .flex()
-            .items_start()
-            .flex_1()
-            .min_w_0()
-            .child(components::tabular(
-                div()
-                    .flex_shrink_0()
-                    .whitespace_nowrap()
-                    .child(selection.line(block, head, highlights)),
-            ))
-            .when_some(excerpt, |line, excerpt| {
-                line.child(div().flex_1().min_w_0().child(selection.line(
-                    block,
-                    excerpt,
-                    Vec::new(),
-                )))
-            }),
-    )
 }
 
 /// A failed call's excerpt: the first non-blank line of its error, unless
@@ -6086,36 +6044,51 @@ impl gpui::RenderOnce for TestBar {
     }
 }
 
-/// An activity row's line (a call, a group's summary; the mockup's
-/// `.tool`): the work's icon in the gutter in its state's ink, the caller's
-/// words a step under the prose (`Grid::activity`) on the row's own line,
-/// and its time hard right — laid out by the words' own widths, the time's
-/// cell never reserved.
-fn activity_line(
+/// An activity row's line (a call, a group's summary, a visual, a notice;
+/// the mockup's `.tool`): its mark in the gutter (the work's icon in its
+/// state's ink, or a spinner), the caller's words a step under the prose
+/// (`Grid::activity`) on the row's own line, and its trail (a time, a
+/// state word) hard right — laid out by the words' own widths.
+pub(crate) fn activity_line(
     grid: Grid,
-    glyph: &'static str,
-    ink: u32,
-    mark: &'static str,
+    mark: impl IntoElement,
+    selector: &'static str,
     words: Div,
-    time: Option<(&'static str, String)>,
+    trail: Option<AnyElement>,
 ) -> Div {
     let small = grid.activity();
-    grid_row(mark_gutter(grid, icon(glyph, grid.mark(), ink)).debug_selector(move || mark.into()))
+    grid_row(mark_gutter(grid, mark).debug_selector(move || selector.into()))
         .relative()
         .text_size(px(small.size))
         .text_color(rgb(TEXT_DIM))
         .child(words.flex().items_center().min_w_0())
         .child(div().flex_1())
-        .children(time.map(|(selector, time)| {
-            components::tabular(
-                div()
-                    .debug_selector(move || selector.into())
-                    .flex_shrink_0()
-                    .pl(px(theme::SPACE_3))
-                    .whitespace_nowrap()
-                    .child(SharedString::from(time)),
-            )
-        }))
+        .children(trail.map(|trail| div().flex_shrink_0().pl(px(theme::SPACE_3)).child(trail)))
+}
+
+/// An activity row's icon: `glyph` in `ink`, the gutter's mark size.
+pub(crate) fn activity_icon(grid: Grid, glyph: &'static str, ink: u32) -> impl IntoElement {
+    icon(glyph, grid.mark(), ink)
+}
+
+/// An activity row's time in its trail, tabular so it never shifts.
+fn activity_time(selector: &'static str, time: String) -> AnyElement {
+    components::tabular(
+        div()
+            .debug_selector(move || selector.into())
+            .whitespace_nowrap()
+            .child(SharedString::from(time)),
+    )
+    .into_any_element()
+}
+
+/// A line under an activity row, on its content column, in its words (a
+/// visual's caption, a decision record, why a page is missing): a step
+/// under the prose in `TEXT_DIM`.
+pub(crate) fn activity_note(grid: Grid) -> Div {
+    content_row(grid)
+        .text_size(px(grid.activity().size))
+        .text_color(rgb(TEXT_DIM))
 }
 
 /// Literal output under a call (the mockup's `.out`): one block box
@@ -6252,12 +6225,11 @@ pub(crate) fn render_tool(
     let row_selector = format!("tool-row-{}", tool.call);
     let mut line = activity_line(
         grid,
-        text::call_icon(tool),
-        tool_ink(tool),
+        activity_icon(grid, text::call_icon(tool), tool_ink(tool)),
         "tool-dot",
         words,
         trail_duration(tool, row_cx.timings, row_cx.focused)
-            .map(|time| ("tool-trail-duration", time)),
+            .map(|time| activity_time("tool-trail-duration", time)),
     )
     .id(SharedString::from(row_selector.clone()))
     .debug_selector(move || row_selector.clone())
@@ -6499,7 +6471,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
     let time = (!live)
         .then(|| group_duration(members, row_cx.timings, row_cx.focused))
         .flatten()
-        .map(|time| ("tool-group-duration", time));
+        .map(|time| activity_time("tool-group-duration", time));
     let words = div()
         .child(
             div()
@@ -6517,8 +6489,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
     let row_selector = format!("tool-group-{leader_call}");
     let mut header = activity_line(
         grid,
-        text::group_icon(members),
-        group_ink(members),
+        activity_icon(grid, text::group_icon(members), group_ink(members)),
         "tool-group-dot",
         words,
         time,
@@ -9300,10 +9271,10 @@ mod tests {
         assert_eq!(text::byte_size(3 * 1024 * 1024), "3.0 MB");
     }
 
-    /// A turn's end leads with the lexicon's own lowercase words, and its
-    /// two runs copy back as the line.
+    /// A turn's end leads with the lexicon's own lowercase words, and only
+    /// a finished turn's facts wait for the pointer.
     #[test]
-    fn turn_ends_speak_the_lexicon_and_copy_back_whole() {
+    fn turn_ends_speak_the_lexicon_and_show_their_head() {
         use ferrite_core::transcript::TurnEnd;
         assert_eq!(TurnEnd::INTERRUPTED, theme::words::INTERRUPTED);
         assert_eq!(TurnEnd::FAILED, theme::words::FAILED);
@@ -9321,7 +9292,7 @@ mod tests {
             (
                 ferrite_core::TurnOutcome::Error("API Error: 529 overloaded".into()),
                 "failed \u{b7} 0.1s \u{b7} API Error: 529 overloaded",
-                "failed \u{b7} 0.1s \u{b7} ",
+                "failed \u{b7} 0.1s \u{b7} API Error: 529 overloaded",
             ),
         ] {
             let end = TurnEnd {
@@ -9332,13 +9303,11 @@ mod tests {
                 output_tokens: None,
             };
             assert_eq!(end.text(), text);
-            let (head, tail) = turn_end_runs(&end);
-            assert_eq!(head, lead, "the head is what always shows");
-            assert_eq!(
-                format!("{head}{}", tail.unwrap_or_default()),
-                text,
-                "the two runs copy back as the line"
-            );
+            let shown = match end.outcome {
+                ferrite_core::TurnOutcome::Completed => stamp_head(text),
+                _ => text,
+            };
+            assert_eq!(shown, lead, "what shows until the pointer is over it");
         }
     }
 

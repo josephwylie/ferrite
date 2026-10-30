@@ -1,10 +1,10 @@
-//! A Visual row's look, in the transcript's terminal grammar (`theme.rs`
-//! WP-A, `pane::render_tool`): a call line, what hangs under it on the `└`
-//! elbow, then the page itself on the content column.
+//! A Visual row's look, an activity row as a tool call's is
+//! (`pane::activity_line`): a call line, its caption and any failure under
+//! it on the content column, then the page itself.
 //!
 //! ```text
-//! ●  Visual  Token usage, last 30 days                      drawing
-//!    └ Daily cost with a 7-day average, by model
+//! ▣  Visual Token usage, last 30 days                         drawing
+//!    Daily cost with a 7-day average, by model
 //!    ┌──────────────────────────────────────────────────────────┐
 //!    │  the live page                                           │
 //!    └──────────────────────────────────────────────────────────┘
@@ -12,11 +12,11 @@
 //! ```
 //!
 //! The gutter mark says where the visual is: the braille spinner while the
-//! agent draws it and Ferrite checks it, a muted `●` once shown, a red one if
-//! it failed (with `└ failed · why`). The page sits in a 1px `LINE` frame, the
-//! only edge a terminal row gets (theme rule 2: square, flat, no card). The
-//! title and caption are text, selectable and copied like any row's
-//! ([`collect_text`] registers exactly what [`render`] draws).
+//! agent draws it and Ferrite checks it, a muted image icon once shown, a
+//! red one if it failed (with `failed · why` under it). The page sits in a
+//! 1px `LINE` frame. The title and caption are text, selectable and copied
+//! like any row's ([`collect_text`] registers exactly what [`render`]
+//! draws).
 
 use std::rc::Rc;
 
@@ -29,7 +29,8 @@ use super::{Visual, VisualStatus};
 use crate::pane::{self, Grid};
 use crate::select::TextRuns;
 use ferrite_ui::components;
-use ferrite_ui::theme::{self, BLOCKED, RUNNING, TEXT, TEXT_DIM, TEXT_FAINT, TEXT_STRONG};
+use ferrite_ui::icons;
+use ferrite_ui::theme::{self, BLOCKED, RUNNING, TEXT, TEXT_DIM, TEXT_FAINT};
 
 /// The call line's name for every visual.
 pub(crate) const NAME: &str = "Visual";
@@ -56,7 +57,7 @@ pub(crate) enum Stage {
     Unavailable(SharedString),
     /// A later visual replaced this one (the agent fixed it): folded away.
     Replaced,
-    /// Nothing under the words (a failed call: its elbow says why).
+    /// Nothing under the words (a failed call: the line under it says why).
     Hidden,
 }
 
@@ -75,18 +76,18 @@ fn status_word(status: &VisualStatus) -> Option<&'static str> {
         VisualStatus::Drawing => Some(DRAWING),
         VisualStatus::Checking => Some(CHECKING),
         VisualStatus::Shown => None,
-        // The elbow under it says `failed · why`: one place per fact.
+        // The line under it says `failed · why`: one place per fact.
         VisualStatus::Failed(_) => None,
     }
 }
 
-/// The call line's text: `Visual  <title>`.
+/// The call line's text: `Visual <title>`.
 fn call_text(visual: &Visual) -> String {
     let title = visual.title.trim();
     if title.is_empty() {
         NAME.to_string()
     } else {
-        format!("{NAME}  {title}")
+        format!("{NAME} {title}")
     }
 }
 
@@ -132,54 +133,41 @@ pub(crate) fn render(
     grid: Grid,
     selection: &TextRuns,
 ) -> AnyElement {
-    let gutter = match &visual.status {
+    let mark = match &visual.status {
         VisualStatus::Drawing | VisualStatus::Checking => div()
-            .flex_shrink_0()
-            .w(px(grid.gutter()))
-            .h(px(grid.line))
             .flex()
             .items_center()
             .child(components::braille_spinner(RUNNING))
-            .debug_selector(|| "visual-spinner".into()),
-        VisualStatus::Shown => pane::glyph_gutter(grid, pane::BULLET, TEXT_DIM),
-        VisualStatus::Failed(_) => pane::glyph_gutter(grid, pane::BULLET, BLOCKED),
+            .debug_selector(|| "visual-spinner".into())
+            .into_any_element(),
+        VisualStatus::Shown => pane::activity_icon(grid, icons::IMAGE, TEXT_DIM).into_any_element(),
+        VisualStatus::Failed(_) => {
+            pane::activity_icon(grid, icons::IMAGE, BLOCKED).into_any_element()
+        }
     };
-    let name_len = NAME.len();
-    let call = div()
-        .min_w_0()
-        .flex_1()
-        .truncate()
-        .text_color(rgb(TEXT))
-        .child(selection.line(
+    // The title in the line's brighter ink, after the name.
+    let text = call_text(visual);
+    let title = NAME.len().min(text.len())..text.len();
+    let words = div().child(
+        div().min_w_0().truncate().child(selection.line(
             block,
-            call_text(visual),
+            text,
             vec![(
-                0..name_len,
+                title,
                 gpui::HighlightStyle {
-                    color: Some(rgb(TEXT_STRONG).into()),
-                    font_weight: Some(theme::W_LABEL),
+                    color: Some(rgb(TEXT).into()),
                     ..Default::default()
                 },
             )],
-        ));
+        )),
+    );
     let trail = status_word(&visual.status).map(|word| {
         div()
-            .flex_shrink_0()
-            .pl(px(2.0 * grid.cell()))
-            .whitespace_nowrap()
             .text_color(rgb(theme::word_ink(word)))
             .debug_selector(|| "visual-status".into())
             .child(word)
+            .into_any_element()
     });
-    let line = div()
-        .flex()
-        .items_start()
-        .w_full()
-        .min_w_0()
-        .child(gutter)
-        .child(call)
-        .children(trail);
-
     let mut row = div()
         .id(SharedString::from(format!("visual-row-{}", visual.id)))
         .debug_selector(|| "visual-row".into())
@@ -187,10 +175,10 @@ pub(crate) fn render(
         .flex_col()
         .w_full()
         .min_w_0()
-        .child(line);
+        .child(pane::activity_line(grid, mark, "visual-mark", words, trail));
     if let Some(caption) = caption(visual) {
         row = row.child(
-            pane::elbow_line(grid, TEXT_DIM).child(
+            pane::activity_note(grid).child(
                 div()
                     .flex_1()
                     .min_w_0()
@@ -201,8 +189,8 @@ pub(crate) fn render(
     }
     if let Some(failure) = failure(visual) {
         let lead = theme::words::FAILED.len();
-        row = row.child(
-            pane::elbow_line(grid, TEXT_DIM).child(div().flex_1().min_w_0().child(selection.line(
+        row = row.child(pane::activity_note(grid).child(
+            div().flex_1().min_w_0().child(selection.line(
                 block,
                 failure,
                 vec![(
@@ -212,8 +200,8 @@ pub(crate) fn render(
                         ..Default::default()
                     },
                 )],
-            ))),
-        );
+            )),
+        ));
     }
     let replaced = matches!(stage, Stage::Replaced);
     let body = match stage {
@@ -253,7 +241,7 @@ fn frame(grid: Grid) -> Div {
 /// A line where the page would be, saying why it isn't (muted, on the
 /// content column).
 fn note(grid: Grid, words: impl Into<SharedString>) -> AnyElement {
-    pane::elbow_line(grid, TEXT_DIM)
+    pane::activity_note(grid)
         .debug_selector(|| "visual-note".into())
         .child(div().flex_1().min_w_0().child(words.into()))
         .into_any_element()
@@ -287,7 +275,8 @@ fn action_line(id: &str, actions: Actions, grid: Grid) -> Div {
         .min_w_0()
         .pl(px(grid.gutter()))
         .pt(px(grid.half()))
-        .gap(px(grid.cell()))
+        .gap(px(theme::SPACE_2))
+        .text_size(px(grid.activity().size))
         .child(action("open", "open in browser", actions.open_in_browser))
         .child(div().text_color(rgb(TEXT_FAINT)).child("\u{b7}"))
         .child(action("copy", "copy html", actions.copy_html))
@@ -317,14 +306,14 @@ mod tests {
         assert_eq!(
             status_word(&VisualStatus::Failed("x".into())),
             None,
-            "its elbow says it"
+            "the line under it says it"
         );
     }
 
     #[test]
     fn the_words_are_the_call_line_caption_and_failure() {
         let v = visual(VisualStatus::Failed("render timed out".into()));
-        assert_eq!(call_text(&v), "Visual  Token usage");
+        assert_eq!(call_text(&v), "Visual Token usage");
         assert_eq!(caption(&v).as_deref(), Some("Daily cost, last 30 days"));
         assert_eq!(
             failure(&v).as_deref(),
