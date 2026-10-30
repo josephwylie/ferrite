@@ -322,7 +322,7 @@ fn hunks_element(index: usize, shown: &Shown) -> Div {
         .flex_col()
         .pt(px(PANEL_HUNK_PAD_T))
         .pb(px(PANEL_HUNK_PAD_B))
-        .bg(paint::BAR)
+        .bg(paint::BLOCK)
         .font_family(FONT_CODE)
         .text_size(px(FS_PANEL_DIFF))
         .line_height(px(LH_PANEL_DIFF))

@@ -778,7 +778,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 // A fence holds to the measure too (`max-width: 108ch`): its
                 // language word sits at that edge.
                 .max_w(px(theme::MEASURE_CH * cell))
-                .bg(theme::paint::BAR)
+                .bg(theme::paint::BLOCK)
                 .border_1()
                 .border_color(theme::paint::HAIRLINE)
                 .rounded(px(theme::R_CONTROL))

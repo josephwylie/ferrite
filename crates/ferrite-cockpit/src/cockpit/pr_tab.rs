@@ -1565,7 +1565,7 @@ fn hunk(snippet: &str) -> Div {
         .py(px(SPACE_1_5))
         .px(px(SPACE_2))
         .rounded(px(R_TAB))
-        .bg(paint::BAR)
+        .bg(paint::BLOCK)
         .overflow_hidden()
         .font_family(FONT_CODE)
         .text_size(px(FS_PANEL_DIFF))

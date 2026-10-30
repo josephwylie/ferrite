@@ -54,10 +54,10 @@
 //! 4. **Glass on the frame, terminal in the card** (macOS: `GLASS`). The
 //!    window opens blurred (`window_background`) and its root paints nothing
 //!    (`paint::WINDOW`); each region paints its own fill once, from
-//!    `paint::*`: the shell (the frame and the bars) as black glass
-//!    (`SHELL_GLASS`) that darkens the desktop showing through; what is
-//!    read (the card, the right panel) opaque, never a busy picture under
-//!    text; fields, raised and selected fills as white overlays. gpui blurs no
+//!    `paint::*`: the shell (the frame and the bars) as glass
+//!    (`SHELL_GLASS`) the desktop reads through, blurred and dimmed; what
+//!    is read (the card, the right panel, a code block) opaque, never a
+//!    busy picture under text; fields, raised and selected fills as white overlays. gpui blurs no
 //!    single element, so a float paints opaque (`paint::FLOAT`), and a
 //!    surface that must occlude what scrolls under it (the sticky prompt, a
 //!    Decision docked over the tail) stacks over its card, never over the
@@ -236,14 +236,12 @@ pub const CARD: u32 = 0x181818;
 /// `#1e1e1e` — the bottom bar; diff and code-fence blocks.
 pub const BAR: u32 = 0x1e1e1e;
 /// The shell as glass — the nav, the heads, a Group's gutter, the bars:
-/// black at 76% over the window's blur, which is untinted (the vendored
-/// `HeaderView` material, its tint layer hidden). A grey fill can only
-/// darken by covering, so `#222` had to stand at 88% and let 12% of the
-/// desktop through; black darkens what shows through instead. At 76% the
-/// shell over pure white lands on `#3c`, as dark as 88% `#222` did (its
-/// ink keeps the contrast it had), over a mid-grey desktop on `#1e`, and
-/// a quarter of the desktop shows.
-pub const SHELL_GLASS: u32 = 0x000000c3;
+/// `#1c1c1c` at 60% over the window's blur, which is untinted (the
+/// vendored `HeaderView` material, its tint layer hidden). The desktop
+/// reads through it, blurred and dimmed; black at 76% read as solid black
+/// over any dark window behind. Over a bright window the shell turns a mid
+/// grey: the operator chose the glass over a fixed shell contrast.
+pub const SHELL_GLASS: u32 = 0x1c1c1c99;
 pub const BAR_GLASS: u32 = SHELL_GLASS;
 /// `#1f1f1f` — the Decision box.
 pub const DECISION: u32 = 0x1f1f1f;
@@ -367,6 +365,10 @@ pub mod paint {
     pub const FRAME: Paint = Paint::pick(super::FRAME_GLASS, solid(super::FRAME));
     pub const PANEL: Paint = Paint(solid(super::FRAME));
     pub const BAR: Paint = Paint::pick(super::BAR_GLASS, solid(super::BAR));
+    /// A diff's or a code fence's box: the bar's grey, opaque on glass too,
+    /// since it sits on a reading surface (the card, the panel), never the
+    /// shell.
+    pub const BLOCK: Paint = Paint(solid(super::BAR));
     pub const FIELD: Paint = Paint::pick(super::FIELD_GLASS, solid(super::FIELD));
     pub const RAISED: Paint = Paint::pick(super::RAISED_GLASS, solid(super::RAISED));
     pub const SELECTED: Paint = Paint::pick(super::SELECTED_GLASS, solid(super::SELECTED));
@@ -3178,15 +3180,9 @@ mod tests {
     fn the_paints_are_glass_on_macos_and_grey_elsewhere() {
         let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
         let near = |a: f32, b: f32| (a - b).abs() < 0.01;
-        assert_eq!(SHELL_GLASS >> 8, 0, "the shell darkens what shows through");
-        assert!(near(alpha(SHELL_GLASS), 0.76));
+        assert!(near(alpha(SHELL_GLASS), 0.60), "the desktop reads through the shell");
         assert_eq!((FRAME_GLASS, BAR_GLASS), (SHELL_GLASS, SHELL_GLASS));
-        // Over a white window behind, the shell is no lighter than the
-        // 88% `#222` it replaced, and its ink keeps its contrast.
-        let white = over(SHELL_GLASS, 0xffffff);
-        assert!(white <= over(0x222222e0, 0xffffff), "{white:06x}");
-        assert!(contrast(TEXT, white) >= 4.5);
-        assert!(paint::CARD.is_opaque() && paint::PANEL.is_opaque());
+        assert!(paint::CARD.is_opaque() && paint::PANEL.is_opaque() && paint::BLOCK.is_opaque());
         assert_eq!(alpha(FLOAT_GLASS), 1.0, "a float hides what it covers");
         for (overlay, opacity) in [
             (FIELD_GLASS, 0.05),

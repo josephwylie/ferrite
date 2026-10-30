@@ -7400,7 +7400,7 @@ fn render_diff(
     )
 }
 
-/// The box a diff or a code fence sits in (SPEC §5.4): `paint::BAR`,
+/// The box a diff or a code fence sits in (SPEC §5.4): `paint::BLOCK`,
 /// `R_CONTROL` corners, `BLOCK_PAD_Y` above and below its lines, and an
 /// inset 1px `HAIRLINE` laid over it (so it moves nothing), set at the
 /// block's grid (`Grid::block`).
@@ -7411,7 +7411,7 @@ pub(crate) fn block_box(grid: Grid) -> Div {
         .min_w_0()
         .py(px(theme::BLOCK_PAD_Y))
         .rounded(px(theme::R_CONTROL))
-        .bg(theme::paint::BAR)
+        .bg(theme::paint::BLOCK)
         .text_size(px(grid.size))
         .line_height(px(grid.line))
         .child(
