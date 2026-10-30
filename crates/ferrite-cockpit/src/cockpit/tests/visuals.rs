@@ -63,8 +63,8 @@ fn a_visual_draws_its_call_line_caption_and_live_page(cx: &mut TestAppContext) {
     assert!(frame.top() > row.top(), "the page hangs under its words");
     assert!(cx.debug_bounds("visual-caption").is_some());
     assert!(
-        cx.debug_bounds("visual-spinner").is_some(),
-        "checking: the working spinner"
+        cx.debug_bounds("visual-status").is_some(),
+        "checking: it says so after its title"
     );
     let opened = engine
         .journal()
@@ -76,10 +76,6 @@ fn a_visual_draws_its_call_line_caption_and_live_page(cx: &mut TestAppContext) {
 
     fake.streams.borrow()[0].send(shown("v1")).unwrap();
     tick(cx);
-    assert!(
-        cx.debug_bounds("visual-spinner").is_none(),
-        "shown: the spinner stops"
-    );
     assert!(
         cx.debug_bounds("visual-status").is_none(),
         "shown says nothing more"

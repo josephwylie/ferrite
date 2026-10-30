@@ -1250,7 +1250,11 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
             cx,
         )
     });
-    assert_eq!(size, Some(px(ferrite_ui::theme::FS_PROSE)), "prose size");
+    assert_eq!(
+        size,
+        Some(px(ferrite_ui::theme::tx_size(Default::default(), true))),
+        "prose size"
+    );
     let mut line = |id| {
         cx.update(|_, cx| {
             ferrite_pane::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx)
@@ -1259,10 +1263,11 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     };
     // Measured, not just declared: the first turn's stamp to the second
     // prompt is the turn step.
+    let block = (ferrite_pane::pane::Grid::pane(Default::default(), true).line * 1.5).round();
     assert_eq!(
         line(prompts[1]).top() - line(stamps[0]).bottom(),
-        px(ferrite_ui::theme::LH_PROSE + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
-        "turns sit a blank line and the bubble's padding apart"
+        px(block + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
+        "turns sit a block and the bubble's padding apart"
     );
 }
 

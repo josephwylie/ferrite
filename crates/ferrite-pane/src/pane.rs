@@ -20,7 +20,7 @@ mod text;
 pub(crate) use text::{collect_block_text, collect_group_text, escape_words, group_live, path_link};
 
 use ferrite_core::activity::{AgentStatus, Subject};
-use ferrite_core::cockpit::{ThreadView, ToolTiming};
+use ferrite_core::cockpit::ThreadView;
 pub use ferrite_core::digest::{Turn, WallCard, WallLine};
 use ferrite_core::docview::{is_test_run, passed_count, Level};
 use ferrite_core::followup::{self, Followup};
@@ -117,14 +117,12 @@ struct TranscriptViewport {
 }
 
 /// Disclosure identities preserve choices while content streams or Subjects
-/// switch: a call's details (or its output fold), a long thought, a later
-/// edit's folded diff (`+ show diff`), and a group of calls, named by its
-/// first call.
+/// switch: a call's details (its output fold, its diffs), a long thought,
+/// and a group of calls, named by its first call.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DisclosureId {
     Tool(String),
     Reasoning(BlockId),
-    Diff(String),
     Group(String),
 }
 impl From<&str> for DisclosureId {
@@ -4538,15 +4536,15 @@ pub(crate) fn provider_ink(provider: Option<Provider>) -> u32 {
     }
 }
 
-/// A gutter mark (`❯ ✻ ◆`, typed; `∴`, drawn): centred on the row's first
-/// line, at the gutter's left edge.
+/// A row's leading mark (`❯ ✻`, typed; `∴`, drawn): centred on the row's
+/// first line, its words a small gap after it.
 pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .w(px(grid.gutter()))
         .h(px(grid.line))
+        .mr(px(theme::SPACE_2))
         .child(mark)
 }
 
@@ -4556,38 +4554,32 @@ pub(crate) fn on_cells(row: Div) -> Div {
     row.font_family(theme::FONT_CODE)
 }
 
-/// A transcript row: its gutter, then the content column (the caller's next
-/// child, `flex_1 min_w_0`); wrapped lines hang under the content column.
-fn grid_row(gutter: Div) -> Div {
-    div().flex().items_start().w_full().min_w_0().child(gutter)
+/// A transcript row led by its mark, then its words (the caller's next
+/// child, `flex_1 min_w_0`); wrapped lines hang under the words.
+fn grid_row(mark: Div) -> Div {
+    div().flex().items_start().w_full().min_w_0().child(mark)
 }
 
-/// A row whose gutter is empty: its content starts on the content column.
-fn content_row(grid: Grid) -> Div {
-    div()
-        .flex()
-        .items_start()
-        .w_full()
-        .min_w_0()
-        .pl(px(grid.gutter()))
+/// A row on the column's edge, as every row's words are.
+fn content_row(_grid: Grid) -> Div {
+    div().flex().items_start().w_full().min_w_0()
 }
 
 /// Everything one transcript row reads besides its block: the selection its
 /// runs register with, the text cache a pinned copy draws from, the calls'
-/// clocks, the provider, the preview host, the grid, whether the Pane
-/// holds the keyboard (a live counter coarsens when it does not), and the
-/// transcript's scope.
+/// provider, the preview host, the grid, and the transcript's scope.
 pub(crate) struct RowCx<'a> {
     pub selection: &'a TextRuns,
     pub rich: &'a crate::rich::TextCache,
-    pub timings: Option<&'a HashMap<String, ToolTiming>>,
     pub provider: Option<Provider>,
     pub preview: &'a crate::preview::Preview,
     pub grid: Grid,
     /// The Pane stands alone (Solo), not on a Group's board.
     pub solo: bool,
-    pub focused: bool,
     pub scope: &'a SharedString,
+    /// The row is narration (`RowKind::Answer { narration }`): fallback
+    /// prose reads with the work, muted.
+    pub narration: bool,
 }
 
 impl RowCx<'_> {
@@ -4597,22 +4589,11 @@ impl RowCx<'_> {
 
 }
 
-/// A tool row's disclosure state: whether its details (or its output fold)
-/// are open, the keyboard's target and toggle, and its diff's fold.
+/// A tool row's disclosure state: whether its details (its output fold,
+/// its diffs) are open, and the keyboard's target and toggle.
 pub(crate) struct ToolCx {
     pub expanded: bool,
     pub disclosure: Option<Disclosure>,
-    pub diff: DiffFold,
-}
-
-/// A tool row's diff: whether it folds behind `+ show diff` (a later edit
-/// to a file already diffed in its turn), whether it is drawn, and the
-/// toggle its fold line calls.
-#[derive(Clone, Default)]
-pub(crate) struct DiffFold {
-    pub folds: bool,
-    pub shown: bool,
-    pub toggle: Option<DisclosureToggle>,
 }
 
 /// One Block as a transcript row, in the terminal grammar of `theme.rs`'s
@@ -4631,7 +4612,12 @@ pub(crate) fn render_block(
 ) -> AnyElement {
     let grid = row_cx.grid();
     let selection = row_cx.selection;
-    let row = div().w_full().min_w_0().flex_shrink_0();
+    let prose_ink = if row_cx.narration { TEXT_DIM } else { TEXT };
+    let row = div()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .when(row_cx.narration, |row| row.text_size(px(grid.activity().size)));
     match &block.body {
         // A visual's row owns a live page, so the transcript's `Shelf`
         // draws it (`TranscriptView::render_row`); it never reaches here.
@@ -4641,11 +4627,11 @@ pub(crate) fn render_block(
         // answer does, on the content column.
         Body::Paragraph { spans } => row
             .child(
-                content_row(grid).text_color(rgb(TEXT)).child(
+                content_row(grid).text_color(rgb(prose_ink)).child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(prose(block.id, spans, selection)),
+                        .child(prose(block.id, spans, selection, row_cx.narration)),
                 ),
             )
             .into_any_element(),
@@ -4653,12 +4639,12 @@ pub(crate) fn render_block(
             .child(
                 content_row(grid)
                     .font_weight(theme::W_STRONG)
-                    .text_color(rgb(TEXT_STRONG))
+                    .text_color(rgb(if row_cx.narration { TEXT_DIM } else { TEXT_STRONG }))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(prose(block.id, spans, selection)),
+                            .child(prose(block.id, spans, selection, row_cx.narration)),
                     ),
             )
             .into_any_element(),
@@ -4667,7 +4653,7 @@ pub(crate) fn render_block(
         Body::Bullet { spans } => row
             .child(
                 content_row(grid)
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(prose_ink))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -4679,7 +4665,7 @@ pub(crate) fn render_block(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(prose(block.id, spans, selection)),
+                            .child(prose(block.id, spans, selection, row_cx.narration)),
                     ),
             )
             .into_any_element(),
@@ -4738,8 +4724,8 @@ pub(crate) fn render_block(
             }
             row.text_color(rgb(TEXT_DIM)).child(body).into_any_element()
         }
-        // A notice: an activity line under a faint bell, its words cut at
-        // the column's edge with the whole of it one hover away. A Decision
+        // A notice: an activity line, its words cut at the column's edge
+        // with the whole of it one hover away. A Decision
         // never leaves one (it is its own row, at the tail).
         Body::Notice(text) => {
             let highlights = separators(text);
@@ -4760,13 +4746,7 @@ pub(crate) fn render_block(
                         selection.line(block.id, text, highlights),
                     )),
             );
-            row.child(activity_line(
-                grid,
-                activity_icon(grid, icons::BELL, TEXT_FAINT),
-                "notice-mark",
-                words,
-                None,
-            ))
+            row.child(activity_line(grid, None, words))
             .into_any_element()
         }
         // A decision record (`allowed Write`) or a revival note, under the
@@ -4819,11 +4799,6 @@ pub(crate) fn render_block(
             ToolCx {
                 expanded,
                 disclosure,
-                diff: DiffFold {
-                    folds: false,
-                    shown: true,
-                    toggle: None,
-                },
             },
         ),
     }
@@ -4946,18 +4921,12 @@ fn prompt_gallery(files: &[std::path::PathBuf]) -> std::sync::Arc<[std::path::Pa
         .collect()
 }
 
-/// The group a prompt row's parts style themselves by while the pointer is
-/// over the row (its send time showing).
-const PROMPT_GROUP: &str = "transcript-prompt-row";
-
 /// The prompt echo (the prototype's `.me`): right-aligned, the operator's
 /// words in a `paint::RAISED` bubble at `R_BUBBLE` that shrinks to them
 /// (never wider than `PROMPT_BUBBLE_MAX_W` of the column), Geist
 /// `TEXT_STRONG` at body weight with its non-image files' chips flowing
-/// inline after them; its images as thumbnails in a wrapping row under it;
-/// its send time (`7:31 pm`, `TEXT_FAINT`) hanging under those in the gap
-/// before the next row, shown only while the pointer is over the row, so
-/// the row keeps every row's rhythm.
+/// inline after them; its images as thumbnails in a wrapping row under it.
+/// No time: no row carries one.
 pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElement {
     let (text, files) = prompt_text(line);
     let gallery = prompt_gallery(&files);
@@ -4980,10 +4949,8 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElemen
         .enumerate()
         .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview))
         .collect();
-    let time = block.sent_at.clone();
     div()
         .id(SharedString::from(format!("prompt-{:?}", block.id)))
-        .group(PROMPT_GROUP)
         .relative()
         .flex()
         .flex_col()
@@ -5003,19 +4970,6 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElemen
                     .children(images),
             )
         })
-        .children(time.map(|time| {
-            div()
-                .debug_selector(|| "prompt-time".into())
-                .absolute()
-                .top(relative(1.))
-                .right_0()
-                .pt(px(theme::PROMPT_BUBBLE_GAP))
-                .whitespace_nowrap()
-                .text_color(rgb(TEXT_FAINT))
-                .opacity(0.)
-                .group_hover(PROMPT_GROUP, |style| style.opacity(1.))
-                .child(SharedString::from(time))
-        }))
         .into_any_element()
 }
 
@@ -5025,10 +4979,8 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElemen
 /// column) and `prompt_band_pad_y` above and below; the `❯` in the gutter
 /// in `W_STRONG` `TEXT_STRONG`, the operator's words in `TEXT_STRONG` at
 /// body weight, clamped to `lines`, with all its files' chips (its images'
-/// too) flowing inline after them, and its send time (`7:31 pm`,
-/// `TEXT_DIM`) in its own right-aligned column on the first line — so a
-/// wrapping prompt keeps the time beside its first line. Not part of the
-/// selection; nothing on it answers the pointer.
+/// too) flowing inline after them. Not part of the selection; nothing on
+/// it answers the pointer.
 pub(crate) fn pinned_prompt(
     block: &Block,
     line: &str,
@@ -5046,7 +4998,6 @@ pub(crate) fn pinned_prompt(
         theme::PROMPT_CHIP_LINE_EXTRA
     };
     let words = prompt_words(block, text, &gallery, row_cx, Some(lines));
-    let time = block.sent_at.clone();
     div()
         .debug_selector(|| "transcript-pinned-prompt".into())
         .id(SharedString::from(format!("pinned-prompt-{:?}", block.id)))
@@ -5078,15 +5029,6 @@ pub(crate) fn pinned_prompt(
                 .overflow_hidden()
                 .children(words),
         )
-        .children(time.map(|time| {
-            div()
-                .debug_selector(|| "pinned-prompt-time".into())
-                .flex_shrink_0()
-                .pl(px(theme::PROMPT_TIME_PAD_CELLS * grid.cell()))
-                .whitespace_nowrap()
-                .text_color(rgb(TEXT_DIM))
-                .child(SharedString::from(time))
-        }))
         .into_any_element()
 }
 
@@ -5364,24 +5306,25 @@ pub(crate) fn omitted_line(bytes: usize) -> Div {
 }
 
 /// How a turn ended, as an activity line (`activity_line`), one selectable
-/// run that copies back as it reads. A completed turn is `✻ Worked for 41s
-/// · 7:32 pm · ↑ 3.2k ↓ 1.1k`: the typed `✻` in the provider's colour in
-/// the gutter, the words and their `·` seams `TEXT_DIM`, the run cut after
-/// `Worked for 41s` (`stamp_head`) until the pointer is over the line
-/// (`StampWords`). An interrupted or failed one stays whole under its icon:
-/// `failed · 0.1s · API Error: 529 overloaded`, its lead word the only
-/// coloured one — `interrupted` in `TEXT` (the operator did it; nothing
-/// failed), `failed` in `BLOCKED`.
+/// run that copies back as it reads. A completed turn is the provider's `✻`
+/// and `41s · 2.9k tokens`; an interrupted or failed one is `failed · 0.1s ·
+/// API Error: 529 overloaded`, its lead word the only coloured one —
+/// `interrupted` in `TEXT` (the operator did it; nothing failed), `failed`
+/// in `BLOCKED`.
 fn turn_end(
     block: BlockId,
     end: &ferrite_core::transcript::TurnEnd,
     row_cx: &RowCx,
 ) -> AnyElement {
     use ferrite_core::TurnOutcome;
-    let grid = row_cx.grid();
     let text = end.text();
-    let lead = |ink: u32, len: usize| {
-        let mut highlights = separators(&text);
+    let mut highlights = separators(&text);
+    let lead = match &end.outcome {
+        TurnOutcome::Completed => None,
+        TurnOutcome::Interrupted => Some((TEXT, theme::words::INTERRUPTED.len())),
+        TurnOutcome::Error(_) => Some((BLOCKED, theme::words::FAILED.len())),
+    };
+    if let Some((ink, len)) = lead {
         highlights.insert(
             0,
             (
@@ -5392,91 +5335,20 @@ fn turn_end(
                 },
             ),
         );
-        highlights
-    };
-    let (mark, words) = match &end.outcome {
-        TurnOutcome::Completed => (
-            components::glyph(components::WORKED.to_string(), provider_ink(row_cx.provider))
-                .into_any_element(),
-            StampWords {
-                head: SharedString::from(stamp_head(&text).to_owned()),
-                line: grid.line,
-                run: row_cx.selection.line(block, text.clone(), separators(&text)),
-            }
-            .into_any_element(),
-        ),
-        TurnOutcome::Interrupted => (
-            activity_icon(grid, icons::STOP, TEXT).into_any_element(),
-            row_cx
-                .selection
-                .line(block, text.clone(), lead(TEXT, theme::words::INTERRUPTED.len()))
-                .into_any_element(),
-        ),
-        TurnOutcome::Error(_) => (
-            activity_icon(grid, icons::X_CIRCLE, BLOCKED).into_any_element(),
-            row_cx
-                .selection
-                .line(block, text.clone(), lead(BLOCKED, theme::words::FAILED.len()))
-                .into_any_element(),
-        ),
-    };
-    components::tabular(activity_line(
-        grid,
-        mark,
-        "turn-stamp-mark",
-        div().child(div().min_w_0().child(words)),
-        None,
-    ))
-    .debug_selector(|| "turn-stamp".into())
-    .group(TURN_STAMP)
-    .into_any_element()
-}
-
-/// The `group` a completed turn's stamp names, so its time and tokens show
-/// under the pointer anywhere on the line.
-const TURN_STAMP: &str = "turn-stamp";
-
-/// Where a completed turn's stamp is cut until the pointer is over it: after
-/// `Worked for 41s`, before its first seam.
-fn stamp_head(text: &str) -> &str {
-    &text[..text.find(" \u{b7} ").unwrap_or(text.len())]
-}
-
-/// A completed turn's stamp words: its one run at its own width, shown up
-/// to its head (`stamp_head`, measured in the face it is drawn in) and whole
-/// under the pointer — the run itself, what a copy takes, is never cut.
-#[derive(IntoElement)]
-struct StampWords {
-    head: SharedString,
-    line: f32,
-    run: crate::rich::Literal,
-}
-
-impl gpui::RenderOnce for StampWords {
-    fn render(self, window: &mut gpui::Window, _: &mut gpui::App) -> impl IntoElement {
-        let style = window.text_style();
-        let size = style.font_size.to_pixels(window.rem_size());
-        let run = gpui::TextRun {
-            len: self.head.len(),
-            font: style.font(),
-            color: style.color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let head = window
-            .text_system()
-            .shape_line(self.head, size, &[run], None)
-            .width;
-        div()
-            .debug_selector(|| "turn-stamp-words".into())
-            .flex()
-            .h(px(self.line))
-            .max_w(head.ceil() + px(1.))
-            .overflow_hidden()
-            .group_hover(TURN_STAMP, |style| style.max_w(px(100_000.)))
-            .child(div().flex_shrink_0().child(self.run))
     }
+    let mark = end.completed().then(|| {
+        components::glyph(components::WORKED.to_string(), provider_ink(row_cx.provider))
+            .debug_selector(|| "turn-stamp-mark".into())
+            .into_any_element()
+    });
+    let words = div().child(
+        div()
+            .min_w_0()
+            .child(row_cx.selection.line(block, text, highlights)),
+    );
+    components::tabular(activity_line(row_cx.grid(), mark, words))
+        .debug_selector(|| "turn-stamp".into())
+        .into_any_element()
 }
 
 /// The `·` seams in a transcript line: `TEXT_DIM`, at body weight
@@ -5498,20 +5370,6 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
         .collect()
 }
 
-/// A call's state, in its icon's ink: settled work `TEXT_DIM`, live work a
-/// still `RUNNING` green (no pulse: the working line is the one live
-/// thing), a failure `BLOCKED` — its own test report's too, whatever the
-/// pipe exited with — a call whose result never came `TEXT_FAINT`. Green
-/// never means finished.
-fn tool_ink(tool: &ToolBlock) -> u32 {
-    match tool.state {
-        ToolState::Running => RUNNING,
-        ToolState::Unavailable => TEXT_FAINT,
-        _ if text::call_failed(tool) => BLOCKED,
-        _ => TEXT_DIM,
-    }
-}
-
 /// Whether a call's argument is a file path (`Read crates/x.rs`): a path
 /// target.
 pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
@@ -5529,32 +5387,6 @@ pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
         && !tool.summary.contains(char::is_whitespace)
         && !ferrite_core::docview::is_command_run(&tool.name)
         && (PATH_TOOLS.contains(&tool.name.as_str()) || !tool.diffs.is_empty())
-}
-
-/// A call's time in its trail: a live call ticks whole seconds from `1s`
-/// (`progress::live_seconds`, repainted at 1Hz by the transcript's second
-/// clock) — coarsened to whole minutes from a minute up on a Pane that does
-/// not hold the keyboard (`1m`); a settled one freezes at its whole seconds
-/// (`18s`, `1m01s`), shown only from one second up (`DURATION_MIN_MS`).
-fn trail_duration(
-    tool: &ToolBlock,
-    timings: Option<&HashMap<String, ToolTiming>>,
-    focused: bool,
-) -> Option<String> {
-    match timings.and_then(|map| map.get(&tool.call))? {
-        ToolTiming::Running(started) => {
-            let elapsed = ferrite_core::clock::instant().saturating_duration_since(*started);
-            (elapsed.as_secs() >= 1).then(|| {
-                if focused {
-                    ferrite_core::progress::live_seconds(elapsed)
-                } else {
-                    ferrite_core::progress::coarse_seconds(elapsed)
-                }
-            })
-        }
-        ToolTiming::Done(total) => (total.as_millis() >= theme::DURATION_MIN_MS)
-            .then(|| ferrite_core::progress::live_seconds(*total)),
-    }
 }
 
 /// A change's size in a call's trail: `+7 −3`, the whole `+7` in `RUNNING`
@@ -5830,7 +5662,7 @@ pub fn command_fold(tool: &ToolBlock) -> Option<(String, Vec<String>)> {
     (!rest.is_empty()).then_some((first, rest))
 }
 
-/// The clickable words of a fold (`+ 7 lines`, `− fold`, `+ show diff`):
+/// The clickable words of a fold (`+ 7 lines`, `− fold`):
 /// dim, lifting to `TEXT` under the pointer; a click flips the call's
 /// disclosure.
 fn fold_label(id: SharedString, label: String, toggle: Option<DisclosureToggle>) -> Stateful<Div> {
@@ -6048,26 +5880,24 @@ impl gpui::RenderOnce for TestBar {
     }
 }
 
-/// An activity row's line (a call, a group's summary, a visual, a notice;
-/// the mockup's `.tool`): its mark in the gutter (the work's icon in its
-/// state's ink, or a spinner), the caller's words a step under the prose
-/// (`Grid::activity`) on the row's own line, and its trail (a time, a
-/// state word) hard right — laid out by the words' own widths.
-pub(crate) fn activity_line(
-    grid: Grid,
-    mark: impl IntoElement,
-    selector: &'static str,
-    words: Div,
-    trail: Option<AnyElement>,
-) -> Div {
+/// An activity row's line (a call, a group's summary, a visual, a notice,
+/// the stamp; the reference's `Edited 3 files ›`): plain words a step under
+/// the prose (`Grid::activity`) in `TEXT_DIM` on the row's own line, from
+/// the column's edge — no icon, no time — after a `mark` where the row has
+/// one (the stamp's `✻`).
+pub(crate) fn activity_line(grid: Grid, mark: Option<AnyElement>, words: Div) -> Div {
     let small = grid.activity();
-    grid_row(mark_gutter(grid, mark).debug_selector(move || selector.into()))
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .h(px(grid.line))
         .relative()
         .text_size(px(small.size))
         .text_color(rgb(TEXT_DIM))
+        .children(mark.map(|mark| mark_gutter(grid, mark)))
         .child(words.flex().items_center().min_w_0())
-        .child(div().flex_1())
-        .children(trail.map(|trail| div().flex_shrink_0().pl(px(theme::SPACE_3)).child(trail)))
 }
 
 /// One line of words cut at its box's edge as CSS's `text-overflow:
@@ -6209,25 +6039,9 @@ impl gpui::Element for EdgeCut {
     }
 }
 
-/// An activity row's icon: `glyph` in `ink`, the gutter's mark size.
-pub(crate) fn activity_icon(grid: Grid, glyph: &'static str, ink: u32) -> impl IntoElement {
-    icon(glyph, grid.mark(), ink)
-}
-
-/// An activity row's time in its trail, tabular so it never shifts.
-fn activity_time(selector: &'static str, time: String) -> AnyElement {
-    components::tabular(
-        div()
-            .debug_selector(move || selector.into())
-            .whitespace_nowrap()
-            .child(SharedString::from(time)),
-    )
-    .into_any_element()
-}
-
-/// A line under an activity row, on its content column, in its words (a
-/// visual's caption, a decision record, why a page is missing): a step
-/// under the prose in `TEXT_DIM`.
+/// A line under an activity row, in its words (a visual's caption, a
+/// decision record, why a page is missing): a step under the prose in
+/// `TEXT_DIM`.
 pub(crate) fn activity_note(grid: Grid) -> Div {
     content_row(grid)
         .text_size(px(grid.activity().size))
@@ -6249,18 +6063,16 @@ fn output_box(grid: Grid, lines: Vec<AnyElement>) -> Div {
     )
 }
 
-/// A tool call (the mockup's `.tool`): its kind's icon in its state's ink
-/// (`tool_ink`), then one line in the app's words (`text::call_line`) — the
-/// verb, the argument in Geist Mono (a path target when it is a path), what
-/// came of it after a `·` (`954 passed`, a command's first line, `failed`)
-/// — and its time hard right. A command whose output folds says `+ 7 lines`
-/// on that line; a later edit's folded diff says `+ show diff`, with its
-/// size. Under it: a failure's own words (`text::call_failure`) in
-/// `BLOCKED`, a running suite's bar, and anything literal — a failure's
-/// output preview and its fold, an open command's output, disclosed details
-/// — in one output box (`output_box`), then its diffs. Under the pointer the
-/// row changes nothing but a path argument's underline: no ground, no
-/// chevron; the keyboard's disclosure target alone wears `paint::RAISED`.
+/// A tool call (the reference's `Built AcmeField ›`): one muted line in the
+/// app's words (`text::call_line`) — the verb, the argument (a literal one
+/// a step brighter on no chip, a path a link), what came of it after a `·`
+/// (`954 passed`, a command's first line) — and its `›` when it opens; a
+/// failed call's line in `BLOCKED`. No icon, no time. Under it: a
+/// failure's own words (`text::call_failure`), a running suite's bar, and,
+/// once open, anything literal — a failure's output preview and its fold,
+/// an open command's output, disclosed details — in one output box
+/// (`output_box`), then its diffs. The whole line is the pointer's toggle;
+/// the keyboard's disclosure target wears `paint::RAISED`.
 ///
 /// Expanded from the keyboard, a call that is not a command shows the input
 /// where the call line could not show it whole, its output, and any
@@ -6278,17 +6090,16 @@ pub(crate) fn render_tool(
     let ToolCx {
         expanded,
         disclosure,
-        diff,
     } = state;
-    let (targeted, toggle, focus, bullet) = match disclosure {
+    let (overlay, chevron, targeted, toggle) = match disclosure {
         Some(Disclosure {
+            overlay,
+            chevron,
             targeted,
             toggle,
-            focus,
-            overlay,
             ..
-        }) => (targeted, toggle, focus, overlay),
-        None => (false, None, None, None),
+        }) => (overlay, chevron, targeted, toggle),
+        None => (None, None, false, None),
     };
     let fold_id = SharedString::from(format!("tool-fold-{}", tool.call));
     let label_id = |open: bool| {
@@ -6309,88 +6120,33 @@ pub(crate) fn render_tool(
     // One run on one line at its own width, cut with `…` at the row's edge:
     // it selects and copies as one line, and never spills onto the rows
     // under it. The run hangs a cell past its box (`rich::Markdown`); the
-    // box makes room for it.
-    let mut words = div().child(
-        div()
-            .debug_selector(|| "tool-call".into())
-            .flex_shrink(1.)
-            .min_w_0()
-            .child(edge_cut(
-                grid.line,
-                TEXT_DIM,
-                div().pr(px(small.cell())).child(
-                    selection
-                        .markdown(block, text::call_markdown(tool))
-                        .ink(TEXT_DIM)
-                        .single_line(),
-                ),
-            )),
-    );
-    // A command's folded output and a later edit's folded diff open from
-    // the call line itself.
-    let inline_fold = |words: Div, id: SharedString, label: String, toggle| {
-        words.child(div().flex_shrink_0().pl(px(theme::SPACE_2)).child(fold_label(id, label, toggle)))
-    };
-    if let Some(rest) = &command_rest {
-        words = inline_fold(
-            words,
-            label_id(expanded),
-            fold_words(expanded, rest.len()),
-            toggle.clone(),
-        );
-    }
-    if !tool.diffs.is_empty() && !diff.shown {
-        let (added, removed) = diff_stat(&tool.diffs);
-        words = words.child(
+    // box makes room for it. A failed call reads in the failure ink.
+    let ink = if text::call_failed(tool) { BLOCKED } else { TEXT_DIM };
+    let words = div()
+        .child(
             div()
-                .debug_selector(|| "tool-trail-diff".into())
-                .flex_shrink_0()
-                .pl(px(theme::SPACE_2))
-                .child(trail_diff_stat(added, removed)),
-        );
-    }
-    if diff.folds {
-        words = inline_fold(
-            words,
-            SharedString::from(format!(
-                "tool-diff-fold-{}-{}",
-                tool.call,
-                if diff.shown { "open" } else { "shut" }
-            )),
-            if diff.shown {
-                "\u{2212} fold".into()
-            } else {
-                "+ show diff".into()
-            },
-            diff.toggle.clone(),
-        );
-    }
+                .debug_selector(|| "tool-call".into())
+                .flex_shrink(1.)
+                .min_w_0()
+                .child(edge_cut(
+                    grid.line,
+                    ink,
+                    div().pr(px(small.cell())).child(
+                        selection
+                            .markdown(block, text::call_markdown(tool))
+                            .ink(ink)
+                            .activity(),
+                    ),
+                )),
+        )
+        .children(chevron);
     let row_selector = format!("tool-row-{}", tool.call);
-    let mut line = activity_line(
-        grid,
-        activity_icon(grid, text::call_icon(tool), tool_ink(tool)),
-        "tool-dot",
-        words,
-        trail_duration(tool, row_cx.timings, row_cx.focused)
-            .map(|time| activity_time("tool-trail-duration", time)),
-    )
-    .id(SharedString::from(row_selector.clone()))
-    .debug_selector(move || row_selector.clone())
-    // The icon's cell toggles the call's details; nothing shows it.
-    .children(bullet);
-    if targeted {
-        // The ground is the row's; the target's selector rides a layer over
-        // it, so the row keeps its own.
-        line = line.bg(theme::paint::RAISED).child(
-            div()
-                .debug_selector(|| "tool-disclosure-keyboard-target".into())
-                .absolute()
-                .inset_0(),
-        );
-        if let Some(focus) = &focus {
-            line = line.track_focus(focus).key_context("ToolDisclosure");
-        }
-    }
+    let line = activity_line(grid, None, words)
+        .id(SharedString::from(row_selector.clone()))
+        .debug_selector(move || row_selector.clone())
+        .group(DISCLOSURE_ROW)
+        .children(overlay);
+    let line = target_ground(targeted, line);
     let mut card = div().flex().flex_col().w_full().min_w_0().child(line);
     if let Some(failure) = text::call_failure(tool) {
         card = card.child(
@@ -6475,7 +6231,7 @@ pub(crate) fn render_tool(
         card = card.child(output_box(grid, out));
     }
     card = card.children(shut_fold);
-    if diff.shown {
+    if expanded {
         for each in &tool.diffs {
             card = card.child(render_diff(Some((selection, block)), each, grid));
         }
@@ -6486,14 +6242,6 @@ pub(crate) fn render_tool(
         .flex_shrink_0()
         .child(card)
         .into_any_element()
-}
-
-/// A change's size across a call's diffs: lines added, lines removed.
-fn diff_stat(diffs: &[Diff]) -> (usize, usize) {
-    (
-        diffs.iter().map(|diff| diff.added).sum(),
-        diffs.iter().map(|diff| diff.removed).sum(),
-    )
 }
 
 /// A group's disclosure state: whether it is open, the keyboard's target
@@ -6507,70 +6255,17 @@ pub(crate) struct GroupCx<'a> {
     pub members: Box<dyn FnOnce() -> Vec<AnyElement> + 'a>,
 }
 
-/// A group's icon ink, read as a call's is (`tool_ink`): green while any
-/// call works, the failure ink once any failed, faint when none answered,
-/// else settled.
-fn group_ink(members: &[Block]) -> u32 {
-    let tools: Vec<&ToolBlock> = text::group_tools(members).collect();
-    if tools.iter().any(|tool| tool.state == ToolState::Running) {
-        RUNNING
-    } else if tools.iter().any(|tool| text::call_failed(tool)) {
-        BLOCKED
-    } else if tools
-        .iter()
-        .all(|tool| tool.state == ToolState::Unavailable)
-    {
-        TEXT_FAINT
-    } else {
-        TEXT_DIM
-    }
-}
-
-/// A group's time in its trail: its calls' times summed — ticking while
-/// one works, coarsened as a live call's is on a Pane without the keyboard
-/// — shown from one second up.
-fn group_duration(
-    members: &[Block],
-    timings: Option<&HashMap<String, ToolTiming>>,
-    focused: bool,
-) -> Option<String> {
-    let timings = timings?;
-    let now = ferrite_core::clock::instant();
-    let mut total = Duration::ZERO;
-    let mut live = false;
-    for tool in text::group_tools(members) {
-        match timings.get(&tool.call) {
-            Some(ToolTiming::Running(started)) => {
-                total += now.saturating_duration_since(*started);
-                live = true;
-            }
-            Some(ToolTiming::Done(spent)) => total += *spent,
-            None => {}
-        }
-    }
-    if total.as_millis() < theme::DURATION_MIN_MS {
-        return None;
-    }
-    Some(if live && !focused {
-        ferrite_core::progress::coarse_seconds(total)
-    } else {
-        ferrite_core::progress::live_seconds(total)
-    })
-}
-
-/// A run of routine calls under one summary (`text::group_summary`), an
-/// activity line as a call's is (`activity_line`): `Ran 12 commands, read 1
-/// file · 2 failed ›` after its first call's icon in the group's ink
-/// (`group_ink`), the calls' summed time hard right (shut over a working
-/// call, that call's clock alone). The summary reads in `TEXT_DIM`, its
-/// failure count in `BLOCKED`. The whole line is the pointer's toggle — it
-/// lifts to `TEXT` under the pointer, its chevron always shown, a quarter
-/// turned when open — and the keyboard's (`ToolDisclosure`), wearing
-/// `paint::RAISED` when targeted.
+/// A run of calls under one summary (`text::group_summary`), an activity
+/// line as a call's is (`activity_line`): `Edited 3 files, ran 2 commands ·
+/// 1 failed ›`. The summary reads in `TEXT_DIM`, its failure count in
+/// `BLOCKED`. The whole line is the pointer's toggle — it lifts to `TEXT`
+/// under the pointer, its chevron always shown, a quarter turned when open
+/// — and the keyboard's (`ToolDisclosure`), wearing `paint::RAISED` when
+/// targeted.
 ///
 /// Open, the calls hang under the summary one gutter in, each the row it
 /// would be on its own (its folds and details its own), on a 1px
-/// `paint::LINE2` rail under the icon, easing in; shut, a working call
+/// `paint::LINE2` rail, easing in; shut, a working call
 /// hangs there alone so a live suite's bar and a command's live line stay
 /// in view.
 pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupCx) -> AnyElement {
@@ -6608,13 +6303,6 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
             },
         ));
     }
-    // Shut with its working call under it, the call's own clock is the
-    // group's: one ticking time, never two.
-    let live = !expanded && text::group_live(members).is_some();
-    let time = (!live)
-        .then(|| group_duration(members, row_cx.timings, row_cx.focused))
-        .flatten()
-        .map(|time| activity_time("tool-group-duration", time));
     let words = div()
         .child(
             div()
@@ -6632,13 +6320,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         )
         .children(chevron);
     let row_selector = format!("tool-group-{leader_call}");
-    let mut header = activity_line(
-        grid,
-        activity_icon(grid, text::group_icon(members), group_ink(members)),
-        "tool-group-dot",
-        words,
-        time,
-    )
+    let mut header = activity_line(grid, None, words)
     .id(SharedString::from(row_selector.clone()))
     .debug_selector(move || row_selector.clone())
     .group(DISCLOSURE_ROW)
@@ -6906,6 +6588,19 @@ pub struct Disclosure {
     pub focus: Option<FocusHandle>,
 }
 
+/// An activity row under the keyboard's disclosure target: `paint::RAISED`,
+/// the target's selector on a layer over it so the row keeps its own.
+fn target_ground(targeted: bool, row: Stateful<Div>) -> Stateful<Div> {
+    row.when(targeted, |row| {
+        row.bg(theme::paint::RAISED).child(
+            div()
+                .debug_selector(|| "tool-disclosure-keyboard-target".into())
+                .absolute()
+                .inset_0(),
+        )
+    })
+}
+
 impl Disclosure {
     /// The row's keyboard-target ground, and its selector.
     fn ground(targeted: bool, row: Stateful<Div>) -> Stateful<Div> {
@@ -6945,8 +6640,6 @@ pub fn tool_disclosure_control(
     let tooltip = match (call, expanded) {
         (DisclosureId::Reasoning(_), false) => "Show reasoning",
         (DisclosureId::Reasoning(_), true) => "Hide reasoning",
-        (DisclosureId::Diff(_), false) => "Show diff",
-        (DisclosureId::Diff(_), true) => "Hide diff",
         (DisclosureId::Group(_), false) => "Show tool calls",
         (DisclosureId::Group(_), true) => "Hide tool calls",
         (_, false) => "Show tool details",
@@ -7948,10 +7641,28 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
 }
 
 /// A prose Block's text: one wrapping run, so a sentence breaks where the
-/// terminal's does.
-fn prose(block: BlockId, spans: &[Span], selection: &TextRuns) -> AnyElement {
-    let (text, highlights) = inline(spans);
+/// terminal's does. Narration (`quiet`) takes its row's ink: its bold and
+/// links keep their weight, its code a step brighter.
+fn prose(block: BlockId, spans: &[Span], selection: &TextRuns, quiet: bool) -> AnyElement {
+    let (text, mut highlights) = inline(spans);
+    if quiet {
+        for (range, style) in &mut highlights {
+            let code = spans_style_at(spans, range.start) == Some(Style::Code);
+            style.color = code.then(|| rgb(TEXT).into());
+        }
+    }
     selection.line(block, text, highlights).into_any_element()
+}
+
+/// The style of the span holding byte `at` of `inline(spans)`'s text.
+fn spans_style_at(spans: &[Span], at: usize) -> Option<Style> {
+    let mut start = 0;
+    spans.iter().find_map(|span| {
+        let end = start + span.text.len();
+        let hit = (start..end).contains(&at).then_some(span.style);
+        start = end;
+        hit
+    })
 }
 
 /// A fenced block's rows: the whole block as one literal run, so a copy
@@ -8143,7 +7854,7 @@ mod tests {
             assert!(metadata.left() >= reasoning.right());
             assert_eq!(
                 footer.size.height,
-                px(theme::LH_PROSE),
+                px(Grid::pane(Default::default(), true).line),
                 "one line, and no command detail below it"
             );
             assert!(metadata.right() <= px(width), "the caption truncates first");
@@ -8314,7 +8025,6 @@ mod tests {
                 blocks: self.blocks.clone(),
                 signal_status: Some(Status::Idle),
                 provider: None,
-                timings: HashMap::new(),
                 focused: true,
                 reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
@@ -8352,8 +8062,7 @@ mod tests {
                     blocks: blocks.clone(),
                     signal_status: Some(Status::Idle),
                     provider: None,
-                    timings: HashMap::new(),
-                    focused: true,
+                        focused: true,
                     reading_size: Default::default(),
                     selection_scope: gpui::base::TextSelectionScopeId::new(),
                     preview: crate::preview::Preview::new(cx),
@@ -8517,7 +8226,10 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(diff_stat(&failed_edit.diffs), (1, 1));
+        assert_eq!(
+            (failed_edit.diffs[0].added, failed_edit.diffs[0].removed),
+            (1, 1)
+        );
         assert!(text::call_failed(failed_edit));
         let blocks: Vec<Block> = transcript.blocks().to_vec();
 
@@ -8634,7 +8346,13 @@ mod tests {
         let Body::Tool(tool) = &transcript.blocks()[0].body else {
             panic!("expected tool")
         };
-        assert_eq!(diff_stat(&tool.diffs), (2, 2));
+        assert_eq!(
+            tool.diffs.iter().map(|diff| (diff.added, diff.removed)).fold(
+                (0, 0),
+                |(a, r), (added, removed)| (a + added, r + removed)
+            ),
+            (2, 2)
+        );
     }
 
     /// A call line is one line, however long or many-lined its command:
@@ -8918,8 +8636,11 @@ mod tests {
                 .all(|(block, _, _, _)| !reasoning.contains(block)),
             "hidden reasoning must not join copied text"
         );
+        // The calls fold into one group (`Ran 1 command, edited 1 file, read
+        // 1 file`): open it, so each call registers as its row does.
         view.update(cx, |view, cx| {
             view.reasoning_expanded = true;
+            view.groups.insert("toolu_1".into());
             cx.notify();
         });
         cx.run_until_parked();
@@ -8950,12 +8671,11 @@ mod tests {
             all.contains("Ran `cargo test`"),
             "tool pieces compose the call: {all}"
         );
-        // Every call is its own row: the edit's diff hangs under it at
-        // once, each changed line registering exactly once.
+        // An edit's diff shows only once its call is opened.
         assert_eq!(
             collapsed_and_expanded_count(&runs, "delta"),
-            1,
-            "the edit's diff shows under its call: {all}"
+            0,
+            "the edit's diff waits for its call to open: {all}"
         );
         // A failure's line registers where it renders (Edit's); the test
         // run says `· 42 passed` after its call line. No `└` elbow joins
@@ -9278,7 +8998,7 @@ mod tests {
     }
 
     #[test]
-    fn a_call_line_reads_in_the_apps_words_and_its_icon_carries_its_state() {
+    fn a_call_line_reads_in_the_apps_words() {
         let tool = |name: &str, summary: &str, state: ToolState| ToolBlock {
             call: "c".into(),
             name: name.into(),
@@ -9291,27 +9011,19 @@ mod tests {
             output: None,
             progress: None,
         };
-        // Settled work is dim; live work a still green (only the working
-        // line moves); a failure the blocked ink; a lost result faint.
-        // Green never means finished.
         let failed = ToolState::Failed("boom".into());
-        assert_eq!(tool_ink(&tool("Bash", "x", ToolState::Ok)), TEXT_DIM);
-        assert_eq!(tool_ink(&tool("Bash", "x", ToolState::Running)), RUNNING);
-        assert_eq!(tool_ink(&tool("Bash", "x", failed.clone())), BLOCKED);
-        assert_eq!(tool_ink(&tool("Bash", "x", ToolState::Unavailable)), TEXT_FAINT);
         // The verb in the app's words, the argument as written, the result
-        // after its seam; each kind its own icon.
-        for (name, verb, glyph) in [
-            ("Bash", "Ran ", icons::TERMINAL),
-            ("Read", "Read ", icons::FILE),
-            ("Edit", "Edited ", icons::PENCIL),
-            ("Write", "Wrote ", icons::PENCIL),
-            ("Grep", "Searched for ", icons::SEARCH),
-            ("Task", "Agent ", icons::SUBAGENTS),
+        // after its seam.
+        for (name, verb) in [
+            ("Bash", "Ran "),
+            ("Read", "Read "),
+            ("Edit", "Edited "),
+            ("Write", "Wrote "),
+            ("Grep", "Searched for "),
+            ("Task", "Agent "),
         ] {
             let call = tool(name, "cargo-test", ToolState::Ok);
             assert_eq!(text::call_line(&call).verb, verb, "{name}");
-            assert_eq!(text::call_icon(&call), glyph, "{name}");
         }
         let running = tool("Bash", "cargo test", ToolState::Running);
         assert_eq!(
@@ -9505,27 +9217,21 @@ mod tests {
         assert_eq!(text::byte_size(3 * 1024 * 1024), "3.0 MB");
     }
 
-    /// A turn's end leads with the lexicon's own lowercase words, and only
-    /// a finished turn's facts wait for the pointer.
+    /// A turn's end leads with the lexicon's own lowercase words; a
+    /// finished one says its time and tokens and nothing else.
     #[test]
-    fn turn_ends_speak_the_lexicon_and_show_their_head() {
+    fn turn_ends_speak_the_lexicon() {
         use ferrite_core::transcript::TurnEnd;
         assert_eq!(TurnEnd::INTERRUPTED, theme::words::INTERRUPTED);
         assert_eq!(TurnEnd::FAILED, theme::words::FAILED);
-        for (outcome, text, lead) in [
-            (
-                ferrite_core::TurnOutcome::Completed,
-                "Worked for <1s \u{b7} 7:10 pm",
-                "Worked for <1s",
-            ),
+        for (outcome, text) in [
+            (ferrite_core::TurnOutcome::Completed, "<1s \u{b7} 3.7k tokens"),
             (
                 ferrite_core::TurnOutcome::Interrupted,
-                "interrupted \u{b7} 0.1s",
                 "interrupted \u{b7} 0.1s",
             ),
             (
                 ferrite_core::TurnOutcome::Error("API Error: 529 overloaded".into()),
-                "failed \u{b7} 0.1s \u{b7} API Error: 529 overloaded",
                 "failed \u{b7} 0.1s \u{b7} API Error: 529 overloaded",
             ),
         ] {
@@ -9533,15 +9239,10 @@ mod tests {
                 outcome,
                 elapsed_ms: Some(100),
                 completed_at: Some("7:10 pm".into()),
-                input_tokens: None,
-                output_tokens: None,
+                input_tokens: Some(1_260_000),
+                output_tokens: Some(3_700),
             };
             assert_eq!(end.text(), text);
-            let shown = match end.outcome {
-                ferrite_core::TurnOutcome::Completed => stamp_head(text),
-                _ => text,
-            };
-            assert_eq!(shown, lead, "what shows until the pointer is over it");
         }
     }
 

@@ -7,8 +7,8 @@ use super::*;
 /// What a call whose result never came says after its call line.
 pub(super) const NO_RESULT: &str = "no result";
 
-/// What kind of work a call did, for its call line's icon and verb and its
-/// group's summary. Classified by the tool alone: a command is a command
+/// What kind of work a call did, for its call line's verb and its group's
+/// summary. Classified by the tool alone: a command is a command
 /// whatever it ran — `cat` is not read as a read without knowing what the
 /// shell made of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,30 +109,6 @@ impl WorkKind {
             Self::WebSearch | Self::Agent | Self::Mcp(_) | Self::Other(_)
         )
     }
-
-    /// The icon a call of this kind wears in its gutter.
-    fn icon(&self) -> &'static str {
-        match self {
-            Self::Command => icons::TERMINAL,
-            Self::Read => icons::FILE,
-            Self::Edit | Self::Write => icons::PENCIL,
-            Self::Search | Self::WebSearch => icons::SEARCH,
-            Self::List => icons::FOLDER,
-            Self::Fetch => icons::EXTERNAL,
-            Self::Agent => icons::SUBAGENTS,
-            Self::Mcp(_) | Self::Other(_) => icons::GEAR,
-        }
-    }
-}
-
-/// The icon a call wears in its gutter, by the kind of work it did.
-pub(crate) fn call_icon(tool: &ToolBlock) -> &'static str {
-    WorkKind::of(tool).icon()
-}
-
-/// A group's icon: its first call's.
-pub(crate) fn group_icon(members: &[Block]) -> &'static str {
-    group_tools(members).next().map_or(icons::GEAR, call_icon)
 }
 
 /// A call line as it reads and copies, in three runs: the verb in the app's
@@ -443,14 +419,7 @@ pub(crate) fn collect_output_text(block: BlockId, part: &str, text: &str, select
 }
 
 /// One Block's copy fragments, in the order `render_block` registers them.
-/// `diff_shown` is whether a call's diff is drawn (a later edit's folds
-/// behind `+ show diff`).
-pub(crate) fn collect_block_text(
-    block: &Block,
-    expanded: bool,
-    diff_shown: bool,
-    selection: &TextRuns,
-) {
+pub(crate) fn collect_block_text(block: &Block, expanded: bool, selection: &TextRuns) {
     match &block.body {
         Body::Visual(visual) => crate::visual::collect_text(block.id, visual, selection),
         Body::Prompt(line) => match prompt_text(line).0 {
@@ -490,7 +459,7 @@ pub(crate) fn collect_block_text(
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }
         Body::Tool(tool) => {
-            collect_tool_text(block.id, tool, expanded, diff_shown, selection)
+            collect_tool_text(block.id, tool, expanded, selection)
         }
     }
 }
@@ -515,13 +484,7 @@ pub(crate) fn collect_group_text(
     };
     for block in drawn {
         if let Body::Tool(tool) = &block.body {
-            collect_tool_text(
-                block.id,
-                tool,
-                member_expanded(tool),
-                false,
-                selection,
-            );
+            collect_tool_text(block.id, tool, member_expanded(tool), selection);
         }
     }
 }
@@ -529,12 +492,11 @@ pub(crate) fn collect_group_text(
 /// A call's copy fragments, in the order `render_tool` registers them: its
 /// call line; a failure's own words; its output box (a failure's
 /// preview and open fold, an open command's output, its disclosed
-/// details); its diffs while they are drawn.
+/// details); its diffs while it is open.
 fn collect_tool_text(
     block: BlockId,
     tool: &ToolBlock,
     expanded: bool,
-    diff_shown: bool,
     selection: &TextRuns,
 ) {
     let line = |text: String| {
@@ -578,7 +540,7 @@ fn collect_tool_text(
             collect_output_text(block, "details", &output.text, selection);
         }
     }
-    if diff_shown {
+    if expanded {
         for diff in &tool.diffs {
             collect_diff_text(block, diff, selection);
         }

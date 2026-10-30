@@ -739,14 +739,17 @@ pub fn answer_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
 /// size: one half-pixel step (SPEC §3.5's 12.5/20 at Standard), so four
 /// Panes hold more of their Threads.
 pub const TX_GROUP_STEP: f32 = 0.5;
+/// How much larger a Solo transcript is set than the reading size: two
+/// pixels (15/24 at Standard), the Claude app's reading prose.
+pub const TX_SOLO_STEP: f32 = 2.0;
 /// How much smaller a diff or a code fence is set than the transcript
 /// around it (SPEC §3.5: 12.5/20 in a Solo transcript at Standard).
 pub const TX_BLOCK_STEP: f32 = 0.5;
 
-/// A transcript's text size: the reading size in Solo, `TX_GROUP_STEP`
-/// under it in a Group Pane.
+/// A transcript's text size: `TX_SOLO_STEP` over the reading size in
+/// Solo, `TX_GROUP_STEP` under it in a Group Pane.
 pub fn tx_size(size: ferrite_core::settings::ReadingSize, solo: bool) -> f32 {
-    answer_text_size(size) - if solo { 0. } else { TX_GROUP_STEP }
+    answer_text_size(size) + if solo { TX_SOLO_STEP } else { -TX_GROUP_STEP }
 }
 
 /// Headings are the body size (rule 1): they stand apart by weight and ink.
@@ -1360,26 +1363,20 @@ pub fn init_components(cx: &mut gpui::App) {
 //   `paint::RAISED` chips at `R_INLINE`), and its send time (`7:31 pm`,
 //   `TEXT_DIM`) in its own right-aligned column on the first line, pushed
 //   up by the next turn's prompt. Nothing on the band answers the pointer.
-// - **Tool rows.** `● Name(args)`, one row per call (never folded into a
-//   summary): the name `TEXT_STRONG` at `W_STRONG` (`Update`, `Bash`, the
-//   way Claude Code names them), the parens and arguments `TEXT_DIM` (a
-//   path argument `TEXT_DIM`, a hover target), one line that truncates; the
-//   trail hard right (`+N −M` in `RUNNING`/`BLOCKED`, then the duration
-//   `TEXT_DIM`, tabular). What it produced hangs under a typed `└ ` elbow
-//   (`TEXT_FAINT`) on the content column, in `TEXT_DIM`; further output
-//   lines align after the elbow. Long output folds to
-//   `OUTPUT_PREVIEW_LINES` and a `+ N lines` line that toggles it. A tool
-//   row changes nothing under the pointer but a path's underline.
-// - **Rhythm in rows.** Blocks are one blank line apart (a turn's prompt
-//   band, prose, a run of tool calls, the stamp); the calls of one run and
-//   the rows that hang on an elbow under the row they answer sit flush,
-//   except that a call after a shown diff sits a line below it. The space
-//   above a row is chosen at reconcile from the row before it
+// - **Activity.** A call or a run of calls is one muted line in the app's
+//   words (`Edited 3 files ›`, `Ran cargo test · 954 passed ›`), a literal
+//   a step brighter on no chip; no icon, no time, its `›` when it opens.
+//   Opened, what it produced sits in one output box under it. The agent's
+//   narration between calls reads in the same muted ink; only a turn's last
+//   prose reads bright.
+// - **Rhythm in rows.** A turn's work reads as one list, its rows half a
+//   line apart; every other block (a prompt, an answer, the stamp) stands
+//   a line and a half off; a row that answers the one above it sits flush.
+//   The space above a row is chosen at reconcile from the row before it
 //   (`rows::gap_before`) and is part of the row's identity.
-// - **The turn's end.** `✻ Worked for 41s · 7:32 pm · ↑ 3.2k ↓ 1.1k`,
-//   `TEXT_DIM`, every `·` too. A failed or interrupted turn hangs under
-//   the last row: `└ failed · 0.1s · <message>`, the lead word in its state
-//   ink.
+// - **The turn's end.** `✻ 41s · 2.9k tokens`, `TEXT_DIM`; a failed or
+//   interrupted turn says `failed · 0.1s · <message>`, the lead word in its
+//   state ink.
 // - **Diffs** sit in the block box (`BLOCK_*`: `paint::BAR`, `R_CONTROL`,
 //   an inset `HAIRLINE`), `BLOCK_MARGIN_T` under their call: a `TEXT_DIM`
 //   hunk header naming its section (none when it has none), line numbers
@@ -1388,8 +1385,7 @@ pub fn init_components(cx: &mut gpui::App) {
 //   the hue, red and green row washes (`DIFF_*_WASH`) with the changed
 //   tokens washed deeper (`DIFF_*_WORD`), code in full syntax colour and
 //   one line per row, cut with `…`, always unified under a header naming
-//   the file and its size. A later edit to a file already diffed in the
-//   turn shows `+ show diff` instead.
+//   the file and its size, shown once its call is opened.
 // - **No transcript row has a hover ground** but the keyboard's disclosure
 //   target (`paint::RAISED`).
 
@@ -1463,6 +1459,17 @@ pub fn tx_half(line: f32) -> f32 {
 pub const TX_INSET_SOLO: f32 = 28.0;
 pub const TX_INSET_GROUP: f32 = 18.0;
 const _: () = assert!(TX_INSET_GROUP - PROMPT_BAND_PAD_X > 0.0);
+
+/// The reading column's widest: the transcript centres in the card with
+/// this at most between its edges (the Claude app's ~720px column), the
+/// insets the least room either side.
+pub const TX_COLUMN_MAX_W: f32 = 720.0;
+
+/// The reading column's width in a transcript `width` wide: the width less
+/// the insets, at most `TX_COLUMN_MAX_W`.
+pub fn tx_column(width: f32, solo: bool) -> f32 {
+    (width - 2. * tx_inset(solo)).min(TX_COLUMN_MAX_W)
+}
 
 /// The transcript column's inset for a Solo (`solo`) or a Group Pane.
 pub fn tx_inset(solo: bool) -> f32 {
@@ -1561,10 +1568,6 @@ pub const MINIMAP_SCROLL_MS: u64 = 300;
 /// `BANNER_PAD_T` above it (board Panes none, `.tx{padding-top:0}`), and the
 /// first band sits a line below it.
 pub const BANNER_PAD_T: f32 = LH_UI;
-/// The pinned prompt band's send time: its own right-aligned column, this
-/// many cells of padding on its left (the prototype's
-/// `.when{padding-left:2ch}`).
-pub const PROMPT_TIME_PAD_CELLS: f32 = 2.0;
 /// What a prompt band's chip line adds below it: the prototype's chip is an
 /// `inline-flex` box seated on its icon's synthesized baseline, which lifts
 /// it above the line's strut and grows that line box by two pixels. The

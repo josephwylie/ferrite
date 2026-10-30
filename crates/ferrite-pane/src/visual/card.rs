@@ -28,9 +28,7 @@ use super::element::{WebView, PLACEHOLDER_HEIGHT};
 use super::{Visual, VisualStatus};
 use crate::pane::{self, Grid};
 use crate::select::TextRuns;
-use ferrite_ui::components;
-use ferrite_ui::icons;
-use ferrite_ui::theme::{self, BLOCKED, RUNNING, TEXT, TEXT_DIM, TEXT_FAINT};
+use ferrite_ui::theme::{self, BLOCKED, TEXT, TEXT_DIM, TEXT_FAINT};
 
 /// The call line's name for every visual.
 pub(crate) const NAME: &str = "Visual";
@@ -133,18 +131,6 @@ pub(crate) fn render(
     grid: Grid,
     selection: &TextRuns,
 ) -> AnyElement {
-    let mark = match &visual.status {
-        VisualStatus::Drawing | VisualStatus::Checking => div()
-            .flex()
-            .items_center()
-            .child(components::braille_spinner(RUNNING))
-            .debug_selector(|| "visual-spinner".into())
-            .into_any_element(),
-        VisualStatus::Shown => pane::activity_icon(grid, icons::IMAGE, TEXT_DIM).into_any_element(),
-        VisualStatus::Failed(_) => {
-            pane::activity_icon(grid, icons::IMAGE, BLOCKED).into_any_element()
-        }
-    };
     // The title in the line's brighter ink, after the name.
     let text = call_text(visual);
     let title = NAME.len().min(text.len())..text.len();
@@ -163,13 +149,15 @@ pub(crate) fn render(
             )],
         ),
     )));
-    let trail = status_word(&visual.status).map(|word| {
+    // A visual in progress says so after its title, in its state's ink.
+    let words = words.children(status_word(&visual.status).map(|word| {
         div()
+            .flex_shrink_0()
+            .pl(px(theme::SPACE_2))
             .text_color(rgb(theme::word_ink(word)))
             .debug_selector(|| "visual-status".into())
             .child(word)
-            .into_any_element()
-    });
+    }));
     let mut row = div()
         .id(SharedString::from(format!("visual-row-{}", visual.id)))
         .debug_selector(|| "visual-row".into())
@@ -177,7 +165,7 @@ pub(crate) fn render(
         .flex_col()
         .w_full()
         .min_w_0()
-        .child(pane::activity_line(grid, mark, "visual-mark", words, trail));
+        .child(pane::activity_line(grid, None, words));
     if let Some(caption) = caption(visual) {
         row = row.child(
             pane::activity_note(grid).child(
@@ -230,7 +218,6 @@ pub(crate) fn render(
 fn frame(grid: Grid) -> Div {
     div()
         .debug_selector(|| "visual-frame".into())
-        .ml(px(grid.gutter()))
         .mt(px(grid.half()))
         .flex()
         .flex_col()
@@ -275,7 +262,6 @@ fn action_line(id: &str, actions: Actions, grid: Grid) -> Div {
         .items_center()
         .w_full()
         .min_w_0()
-        .pl(px(grid.gutter()))
         .pt(px(grid.half()))
         .gap(px(theme::SPACE_2))
         .text_size(px(grid.activity().size))

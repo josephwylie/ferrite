@@ -1967,14 +1967,9 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
     };
     let first = completion(&cockpit);
     let fields: Vec<_> = first.split(" · ").collect();
-    assert_eq!(
-        fields.len(),
-        2,
-        "the observed elapsed and the local completion time"
-    );
+    assert_eq!(fields.len(), 1, "the observed elapsed, and no clock time");
     let elapsed = fields[0]
-        .strip_prefix("Worked for ")
-        .and_then(|elapsed| elapsed.strip_suffix('s'))
+        .strip_suffix('s')
         .expect("the stamp says how long the turn worked, not process runtime");
     // Whole seconds, floored, or `<1` under one second.
     let seconds: f64 = match elapsed.strip_prefix('<') {
@@ -1986,7 +1981,6 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
         None => elapsed.parse().unwrap(),
     };
     assert!(seconds + 1. > before.as_secs_f64());
-    assert!(fields[1].contains(':'), "human-readable completion time");
     assert!(
         !first.contains('$') && !first.contains("0.038"),
         "provider cost stays private"

@@ -1962,7 +1962,6 @@ impl CockpitView {
             display_revision: disclosure_revision,
             blocks: pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec(),
             signal_status: Some(status),
-            timings: subject_view.timings().clone(),
             provider: Some(open.provider()),
             focused,
             reading_size,
@@ -2611,7 +2610,6 @@ impl CockpitView {
                 match &block.body {
                     ferrite_core::transcript::Body::Tool(tool) => {
                         valid.insert(pane::DisclosureId::Tool(tool.call.clone()));
-                        valid.insert(pane::DisclosureId::Diff(tool.call.clone()));
                         valid.insert(pane::DisclosureId::Group(tool.call.clone()));
                     }
                     ferrite_core::transcript::Body::Thinking(_) => {

@@ -12,10 +12,9 @@ mod scroll;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Instant, SystemTime};
 
 use ferrite_core::{
-    cockpit::ToolTiming,
     store::Provider,
     transcript::{Block, BlockId, Body, Status, ToolState},
     ThreadId,
@@ -125,7 +124,6 @@ pub struct TranscriptInput {
     pub display_revision: u64,
     pub blocks: Vec<Block>,
     pub signal_status: Option<Status>,
-    pub timings: HashMap<String, ToolTiming>,
     /// The Thread's provider: its `✻` at a turn's end wears its colour.
     pub provider: Option<Provider>,
     pub focused: bool,
@@ -197,14 +195,6 @@ impl TranscriptInput {
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
             thinking: self.thinking,
-            opened_diffs: self
-                .expanded
-                .iter()
-                .filter_map(|id| match id {
-                    DisclosureId::Diff(call) => Some(call.clone()),
-                    _ => None,
-                })
-                .collect(),
         }
     }
 }
@@ -317,7 +307,6 @@ impl TranscriptView {
                 display_revision: 0,
                 blocks: Vec::new(),
                 signal_status: None,
-                timings: HashMap::new(),
                 provider: None,
                 focused: false,
                 reading_size: Default::default(),
@@ -794,12 +783,7 @@ impl TranscriptView {
                 Body::Thinking(_) => self.tool_state(DisclosureId::Reasoning(block.id)),
                 _ => DisclosureState::Collapsed,
             } == DisclosureState::Expanded;
-            pane::collect_block_text(
-                block,
-                expanded,
-                row.diff_shown(),
-                selection,
-            );
+            pane::collect_block_text(block, expanded, selection);
         }
     }
 
@@ -834,13 +818,12 @@ impl TranscriptView {
         pane::RowCx {
             selection,
             rich: &self.rich,
-            timings: Some(&self.input.timings),
             provider: self.input.provider,
             preview: &self.input.preview,
             grid: self.grid(),
             solo: self.input.solo,
-            focused: self.input.focused,
             scope: &self.input.namespace,
+            narration: false,
         }
     }
 
@@ -881,9 +864,10 @@ impl TranscriptView {
                 .markdown_run
                 .unwrap_or(blocks[0].id);
             let grid = self.grid();
-            // The prototype's `.r` with `.g-prose`: an empty gutter, the
-            // answer on the content column, every wrapped line hanging under
-            // it.
+            // Prose on the column's edge. Narration — more work follows it
+            // in its turn — reads with the work, a step down and muted; the
+            // turn's answer reads bright.
+            let narration = row.kind() == RowKind::Answer { narration: true };
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -895,12 +879,15 @@ impl TranscriptView {
                 .min_w_0()
                 .w_full()
                 .flex_shrink_0()
-                .child(div().flex_shrink_0().w(px(grid.gutter())))
+                .when(narration, |row| {
+                    row.text_size(px(grid.activity().size))
+                })
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(selection.answer(first, self.linked(source))),
+                    div().flex_1().min_w_0().child(
+                        selection
+                            .answer(first, self.linked(source))
+                            .when(narration, |answer| answer.quiet()),
+                    ),
                 )
                 .into_any_element();
         }
@@ -920,22 +907,15 @@ impl TranscriptView {
                 cx,
             );
         }
-        let row_cx = self.row_cx(selection);
+        let row_cx = pane::RowCx {
+            narration: row.kind() == RowKind::Answer { narration: true },
+            ..self.row_cx(selection)
+        };
         if row.kind() == RowKind::Group {
             return self.render_group(row, &row_cx, view);
         }
         match &block.body {
-            Body::Tool(tool) => self.render_call(
-                block.id,
-                tool,
-                &row_cx,
-                view.as_ref(),
-                pane::DiffFold {
-                    folds: row.diff_folds(),
-                    shown: row.diff_shown(),
-                    toggle: None,
-                },
-            ),
+            Body::Tool(tool) => self.render_call(block.id, tool, &row_cx, view.as_ref()),
             _ => {
                 let call = match &block.body {
                     Body::Thinking(text) if pane::reasoning_has_details(text) => {
@@ -960,7 +940,7 @@ impl TranscriptView {
     /// A row's width (the list's, less the row insets), once laid out.
     fn content_width(&self) -> Option<f32> {
         let width = self.list_w.get();
-        (width > 0.).then_some(width - 2. * theme::tx_inset(self.input.solo))
+        (width > 0.).then_some(theme::tx_column(width, self.input.solo))
     }
 
     /// The transcript's grid: the reading size in Solo, a half step under
@@ -985,22 +965,20 @@ impl TranscriptView {
     }
 
     /// One call as its row draws it, alone or in a group: its disclosure
-    /// (the bullet's toggle, the keyboard's target, its folds) and, when
-    /// its diff is drawn, the diff's fold.
+    /// (the whole line the pointer's toggle, its `›`, the keyboard's
+    /// target, its folds) when it has details to open.
     fn render_call(
         &self,
         block: BlockId,
         tool: &ferrite_core::transcript::ToolBlock,
         row_cx: &pane::RowCx,
         view: Option<&Entity<Self>>,
-        diff: pane::DiffFold,
     ) -> AnyElement {
         let call = DisclosureId::Tool(tool.call.clone());
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
-        let disclosure =
-            view.map(|view| self.tool_control(&call, pane::tool_has_details(tool), view.clone()));
-        let toggle =
-            view.map(|view| self.toggle(DisclosureId::Diff(tool.call.clone()), view.clone()));
+        let disclosure = view
+            .filter(|_| pane::tool_has_details(tool))
+            .map(|view| self.disclosure_control(&call, true, view.clone()));
         pane::render_tool(
             block,
             tool,
@@ -1008,7 +986,6 @@ impl TranscriptView {
             pane::ToolCx {
                 expanded,
                 disclosure,
-                diff: pane::DiffFold { toggle, ..diff },
             },
         )
     }
@@ -1050,13 +1027,9 @@ impl TranscriptView {
             drawn
                 .into_iter()
                 .filter_map(|block| match &block.body {
-                    Body::Tool(tool) => Some(self.render_call(
-                        block.id,
-                        tool,
-                        row_cx,
-                        view.as_ref(),
-                        pane::DiffFold::default(),
-                    )),
+                    Body::Tool(tool) => {
+                        Some(self.render_call(block.id, tool, row_cx, view.as_ref()))
+                    }
                     _ => None,
                 })
                 .collect()
@@ -1147,7 +1120,7 @@ impl TranscriptView {
     }
 
     /// A toggle that flips `call`'s disclosure from inside its row (a
-    /// fold's `+ N lines`, a diff's `+ show diff`).
+    /// fold's `+ N lines`).
     fn toggle(&self, call: DisclosureId, view: Entity<Self>) -> pane::DisclosureToggle {
         let weak = view.downgrade();
         Rc::new(move |window, cx| {
@@ -1158,57 +1131,6 @@ impl TranscriptView {
                 cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
             });
         })
-    }
-
-    /// A tool row's disclosure: no chevron, no ground and no cursor change
-    /// (the row changes nothing under the pointer); its bullet's cell is the
-    /// pointer's toggle when the call has details to disclose; the keyboard
-    /// target's ground and focus, and the toggle its fold lines call.
-    fn tool_control(
-        &self,
-        call: &DisclosureId,
-        details: bool,
-        view: Entity<Self>,
-    ) -> pane::Disclosure {
-        let targeted = self.tool_targeted(call);
-        let toggle = self.toggle(call.clone(), view);
-        let overlay = details.then(|| {
-            let grid = self.grid();
-            let clicked = toggle.clone();
-            let control = div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(px(grid.gutter()))
-                .h(px(grid.line))
-                .child(
-                    div()
-                        .id(SharedString::from(format!("tool-button-{call}")))
-                        .size_full(),
-                )
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    cx.stop_propagation();
-                    clicked(window, cx);
-                });
-            #[cfg(any(test, feature = "test-support"))]
-            let control = {
-                let sink = self.disclosure_bounds.clone();
-                let measured = call.clone();
-                control.on_children_prepainted(move |bounds, _, _| {
-                    if let Some(bounds) = bounds.last() {
-                        sink.borrow_mut().insert(measured.clone(), *bounds);
-                    }
-                })
-            };
-            control.into_any_element()
-        });
-        pane::Disclosure {
-            overlay,
-            chevron: None,
-            targeted,
-            toggle: Some(toggle),
-            focus: targeted.then(|| self.input.disclosure_focus.clone()),
-        }
     }
 
     /// A reasoning row's disclosure: its header toggles under the pointer,
@@ -1275,31 +1197,6 @@ impl TranscriptView {
             toggle: Some(toggle),
             focus: None,
         }
-    }
-
-    /// While a call runs, ask the pulse clock (`motion::wake_at`) for one
-    /// draw at the next whole second of the youngest-rounding live count,
-    /// so a trail reading `3s` turns to `4s` on time, on the clock's grid,
-    /// and no faster. Idle, nothing is asked.
-    fn arm_second_tick(&mut self, cx: &mut Context<Self>) {
-        let now = ferrite_core::clock::instant();
-        let next = self
-            .input
-            .timings
-            .values()
-            .filter_map(|timing| match timing {
-                ToolTiming::Running(started) => {
-                    let elapsed = now.saturating_duration_since(*started);
-                    Some(Duration::from_secs(elapsed.as_secs() + 1) - elapsed)
-                }
-                ToolTiming::Done(_) => None,
-            })
-            .min();
-        let Some(next) = next else {
-            return;
-        };
-        let at = cx.background_executor().now() + next;
-        ferrite_ui::motion::wake_at(cx.entity_id(), at, cx);
     }
 
     /// The hover card this transcript hosts now, hung under its path.
@@ -1494,14 +1391,21 @@ impl TranscriptView {
                         )))
                         .block_mouse_except_scroll()
                         .cursor_default()
+                        .flex()
+                        .justify_center()
                         .w_full()
                         // Pulled out by the band's padding, so its text
-                        // keeps the transcript's column.
+                        // keeps the transcript's centred column.
                         .px(px(theme::tx_inset(self.input.solo) - theme::PROMPT_BAND_PAD_X))
                         // The band over an opaque plane: together they hide
                         // the rows scrolling under it, glass or not.
                         .bg(gpui::rgb(theme::CARD))
-                        .child(band),
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(theme::TX_COLUMN_MAX_W + 2. * theme::PROMPT_BAND_PAD_X))
+                                .child(band),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -1748,7 +1652,6 @@ fn pinned_of(
 
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.arm_second_tick(cx);
         self.document.begin_viewport_update(cx);
         crate::file_links::begin_layout(&self.input.namespace, cx);
         // The answers' file links are this transcript's path targets.
@@ -1786,8 +1689,9 @@ impl Render for TranscriptView {
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
                 // resolve against and shrinks to its text. The wrapper holds
-                // the transcript column's inset (`tx_inset`) and the row's
-                // own gap above it (the first row's is the body's top
+                // the transcript column's inset (`tx_inset`), centres the
+                // reading column (`TX_COLUMN_MAX_W` at most), and holds the
+                // row's own gap above it (the first row's is the body's top
                 // padding: the list's own top padding flickers mid-scroll).
                 let gap = row.gap();
                 let wrapper = div()
@@ -1803,7 +1707,15 @@ impl Render for TranscriptView {
                     }
                     None => wrapper,
                 };
-                wrapper.child(element).into_any_element()
+                wrapper
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(theme::TX_COLUMN_MAX_W))
+                            .mx_auto()
+                            .child(element),
+                    )
+                    .into_any_element()
             },
         )
         // The bottom padding is the list's own: it counts in the scroll

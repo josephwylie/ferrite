@@ -5809,10 +5809,7 @@ mod tests {
                 _ => None,
             })
             .expect("the turn's stamp");
-        assert_eq!(
-            stamp,
-            "Worked for 41s \u{b7} 7:32 pm \u{b7} \u{2191} 3.2k \u{2193} 1.1k"
-        );
+        assert_eq!(stamp, "41s \u{b7} 1.1k tokens");
     }
 
     /// Codex's own concepts survive the round trip: reasoning summaries keep
