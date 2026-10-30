@@ -291,7 +291,9 @@ pub struct Markdown {
     muted: bool,
     /// Body ink in place of `TEXT` (a prompt's `TEXT_STRONG`).
     ink: Option<u32>,
-    /// One line, never wrapped (an activity line): no measure, one line box.
+    /// The work's tier (`quiet`): muted, its code plain.
+    quiet: bool,
+    /// One line, never wrapped (`activity`).
     single_line: bool,
     /// `ferrite-chip:` links draw as a prompt's inline file chips, opening
     /// in this Pane's preview among the prompt's images (`pane::prompt_chip`).
@@ -323,18 +325,26 @@ impl Markdown {
         self
     }
 
-    /// Set the body in `ink`, its native links too — they lift only by
-    /// their underline under the pointer (headings keep their ink).
+    /// Set the body in `ink`, its bold and native links too — a link lifts
+    /// only by its underline under the pointer (headings keep their ink).
     pub fn ink(mut self, ink: u32) -> Self {
         self.ink = Some(ink);
         self
     }
 
-    /// Lay the run out as one line at its own width, never wrapped: its
-    /// box cuts it (an activity line, `pane::EdgeCut`).
-    pub fn single_line(mut self) -> Self {
-        self.single_line = true;
+    /// Set the run in the work's tier (narration, activity): `TEXT_DIM`
+    /// unless inked otherwise, its code (a command, a bundle id) a step
+    /// brighter on no chip.
+    pub fn quiet(mut self) -> Self {
+        self.quiet = true;
         self
+    }
+
+    /// Set the run as an activity line: quiet, one line at its own width,
+    /// never wrapped (its box cuts it, `pane::EdgeCut`).
+    pub fn activity(mut self) -> Self {
+        self.single_line = true;
+        self.quiet()
     }
 
     /// Draw `ferrite-chip:` links as a prompt's inline chips (a prompt's
@@ -360,6 +370,7 @@ impl Markdown {
             cache,
             muted: false,
             ink: None,
+            quiet: false,
             single_line: false,
             chips: None,
             document: None,
@@ -370,7 +381,15 @@ impl Markdown {
 
 impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = self.cache.state(self.id.clone(), &self.source, window, cx);
+        // A parsed document keeps parts of the style it was first laid out
+        // in (a list's items): prose that turns to narration once more work
+        // follows it is laid out afresh in the quiet style.
+        let key = if self.quiet {
+            SharedString::from(format!("{}~quiet", self.id))
+        } else {
+            self.id.clone()
+        };
+        let state = self.cache.state(key, &self.source, window, cx);
         // Prose sets its own face (the transcript's, Geist); the inherited
         // style is the Pane's.
         let face: SharedString = theme::FONT_UI.into();
@@ -398,15 +417,34 @@ impl gpui::RenderOnce for Markdown {
         } else {
             text_style
         };
-        let text_style = match self.ink {
-            Some(ink) => text_style
-                .with_foreground(rgb(ink).into())
-                .with_link(rgb(ink).into()),
+        let ink = self.ink.or(self.quiet.then_some(theme::TEXT_DIM));
+        let text_style = match ink {
+            Some(ink) => {
+                let strong = gpui::HighlightStyle {
+                    color: Some(rgb(ink).into()),
+                    ..text_style.strong()
+                };
+                text_style
+                    .with_foreground(rgb(ink).into())
+                    .with_link(rgb(ink).into())
+                    .with_strong(strong)
+            }
             None => text_style,
         };
         // A prompt's band runs its words the band's whole width (the
         // prototype's `.prompt .txt` has no measure).
-        let text_style = if self.chips.is_some() || self.single_line {
+        let text_style = if self.quiet {
+            text_style
+                .with_inline_code(gpui::HighlightStyle {
+                    color: Some(rgb(theme::TEXT).into()),
+                    font_weight: Some(theme::W_BODY),
+                    ..Default::default()
+                })
+                .with_inline_code_wash(None)
+        } else {
+            text_style
+        };
+        let text_style = if self.single_line || self.chips.is_some() {
             text_style.with_prose_max_width(None)
         } else {
             text_style
@@ -465,6 +503,8 @@ impl gpui::RenderOnce for Markdown {
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
             .max_lines(if self.single_line { 1 } else { usize::MAX })
+            // A list's items take the inherited ink, not the style's.
+            .when_some(ink, |view, ink| view.text_color(rgb(ink)))
             .style(text_style)
             .on_link_click(move |url, event, window, cx| {
                 let activate = match event {

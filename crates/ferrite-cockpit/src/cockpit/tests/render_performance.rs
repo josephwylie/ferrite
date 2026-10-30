@@ -825,7 +825,7 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
     let (identity, selected) = cx.update(|_, cx| {
         assert_eq!(
             ferrite_pane::rich::testing::font_size(&prefix, cx),
-            Some(px(13.))
+            Some(px(theme::tx_size(Default::default(), true)))
         );
         (
             ferrite_pane::rich::testing::first_entity(&prefix, cx).unwrap(),
@@ -840,7 +840,7 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
     cx.update(|_, cx| {
         assert_eq!(
             ferrite_pane::rich::testing::font_size(&prefix, cx),
-            Some(px(18.))
+            Some(px(theme::tx_size(ReadingSize::nearest(18), true)))
         );
         assert_eq!(
             ferrite_pane::rich::testing::first_entity(&prefix, cx),
@@ -873,7 +873,7 @@ fn reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppCont
     cx.update(|_, cx| {
         assert_eq!(
             ferrite_pane::rich::testing::font_size(&prefix, cx),
-            Some(px(18.))
+            Some(px(theme::tx_size(ReadingSize::nearest(18), true)))
         );
         assert_eq!(
             ferrite_pane::rich::testing::first_entity(&prefix, cx),
@@ -1044,17 +1044,16 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             );
             ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap()
         });
-        let gutter = px(theme::tx_gutter(theme::FS_PROSE));
+        let size = theme::tx_size(Default::default(), true);
         for delta in [
-            // Terminal-native: prose starts on the content column, one
-            // 2-cell gutter in.
-            text.left() - answer.left() - gutter,
+            // Prose starts on the row's left edge.
+            text.left() - answer.left(),
             // The row owns no padding: the list's gap table spaces rows.
             text.top() - answer.top(),
             answer.bottom() - text.bottom(),
             // The text runs one cell past the row: a trailing space hangs
             // there (`rich::Markdown`).
-            answer.right() + px(theme::tx_cell(theme::FS_PROSE)) - text.right(),
+            answer.right() + px(theme::tx_cell(size)) - text.right(),
         ] {
             assert!(
                 delta.abs() <= px(1.),

@@ -98,9 +98,9 @@ pub struct TurnEnd {
 }
 
 impl TurnEnd {
-    /// What the row says, and what copy and search see: `Worked for 41s ·
-    /// 7:32 pm · ↑ 3.2k ↓ 1.1k` (whole seconds, `<1s` under one, `3m 12s`
-    /// past a minute), `interrupted · 4.1s`, `failed · 4.1s · <the
+    /// What the row says, and what copy and search see: `41s · 1.1k
+    /// tokens` (whole seconds, `<1s` under one, `3m 12s` past a minute; the
+    /// tokens the turn wrote), `interrupted · 4.1s`, `failed · 4.1s · <the
     /// provider's message>`. State words are always lowercase, even leading
     /// a row (`INTERRUPTED`/`FAILED`: the app's lexicon, `theme::words`,
     /// asserts they agree). A time or a count that was never observed (an
@@ -110,20 +110,12 @@ impl TurnEnd {
         let mut parts: Vec<String> = Vec::new();
         match &self.outcome {
             TurnOutcome::Completed => {
-                parts.push(match elapsed {
-                    Some(elapsed) => format!(
-                        "Worked for {}",
-                        crate::progress::settled_duration_label(elapsed)
-                    ),
-                    None => "Worked".into(),
-                });
-                parts.extend(self.completed_at.clone().filter(|at| !at.is_empty()));
-                if let (Some(input), Some(output)) = (self.input_tokens, self.output_tokens) {
-                    parts.push(format!(
-                        "\u{2191} {} \u{2193} {}",
-                        crate::progress::token_label(input),
-                        crate::progress::token_label(output)
-                    ));
+                parts.extend(elapsed.map(crate::progress::settled_duration_label));
+                parts.extend(self.output_tokens.map(|output| {
+                    format!("{} tokens", crate::progress::token_label(output))
+                }));
+                if parts.is_empty() {
+                    parts.push("Done".into());
                 }
             }
             TurnOutcome::Interrupted => {
@@ -2862,8 +2854,8 @@ mod tests {
         );
     }
 
-    /// CT-24: the turn's stamp carries its tokens; a settled span past a
-    /// minute reads `3m 12s`.
+    /// CT-24: the turn's stamp is its time and the tokens it wrote, never a
+    /// clock time; a settled span past a minute reads `3m 12s`.
     #[test]
     fn the_turn_stamp_reads_its_time_and_tokens() {
         let end = TurnEnd {
@@ -2873,7 +2865,7 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
         };
-        assert_eq!(end.text(), "Worked for 3m 12s \u{b7} 7:33 pm");
+        assert_eq!(end.text(), "3m 12s");
         let end = TurnEnd {
             elapsed_ms: Some(41_000),
             completed_at: Some("7:32 pm".into()),
@@ -2881,10 +2873,7 @@ mod tests {
             output_tokens: Some(1_100),
             ..end
         };
-        assert_eq!(
-            end.text(),
-            "Worked for 41s \u{b7} 7:32 pm \u{b7} \u{2191} 3.2k \u{2193} 1.1k"
-        );
+        assert_eq!(end.text(), "41s \u{b7} 1.1k tokens");
         let end = TurnEnd {
             elapsed_ms: Some(12_000),
             completed_at: Some("7:19 pm".into()),
@@ -2892,10 +2881,7 @@ mod tests {
             output_tokens: Some(620),
             ..end
         };
-        assert_eq!(
-            end.text(),
-            "Worked for 12s \u{b7} 7:19 pm \u{b7} \u{2191} 1.8k \u{2193} 620"
-        );
+        assert_eq!(end.text(), "12s \u{b7} 620 tokens");
     }
 
     /// CT-3: a prompt's send time rides the observation recorded after it;
@@ -4544,7 +4530,7 @@ mod tests {
                 crate::TurnOutcome::Error("model overloaded".into()),
                 "failed · 4.1s · model overloaded",
             ),
-            (crate::TurnOutcome::Completed, "Worked for 4s · 8:53 pm"),
+            (crate::TurnOutcome::Completed, "4s"),
         ] {
             let mut transcript = Transcript::default();
             transcript.apply(Input::Prompt("go".into()));
@@ -4580,13 +4566,13 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
         };
-        assert_eq!(end.text(), "Worked for <1s \u{b7} 8:53 pm");
+        assert_eq!(end.text(), "<1s");
         let end = TurnEnd {
             elapsed_ms: Some(18_900),
             completed_at: None,
             ..end
         };
-        assert_eq!(end.text(), "Worked for 18s");
+        assert_eq!(end.text(), "18s");
     }
 
     #[test]

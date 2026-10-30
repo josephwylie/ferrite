@@ -109,15 +109,10 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
             summary.size.width < px(160.),
             "a short summary must size to its text: {summary:?}"
         );
-        // Terminal-native: the hit box is the 2-cell gutter at the
-        // reading size, the summary on the content column after it.
-        let gutter = px(ferrite_ui::theme::tx_gutter(ferrite_ui::theme::FS_PROSE));
+        // The toggle leads the header, its summary after it.
         assert!(
-            control.right() <= summary.left() + px(0.5)
-                && (control.size.width - gutter).abs() <= px(1.)
-                // gpui snaps both edges to the pixel.
-                && (summary.left() - control.left() - gutter).abs() <= px(1.),
-            "the disclosure mark leads in the gutter, the text on the content column: {summary:?} / {control:?}"
+            control.left() <= summary.left() + px(0.5),
+            "the header's toggle leads its summary: {summary:?} / {control:?}"
         );
     }
 
@@ -197,8 +192,10 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         cx.notify();
     });
     tick(cx);
+    // Tall enough that every row stays in view (a row scrolled out keeps
+    // its last layout).
     for width in [1000., 740.] {
-        cx.simulate_resize(gpui::size(px(width), px(1000.)));
+        cx.simulate_resize(gpui::size(px(width), px(1600.)));
         tick(cx);
         view.read_with(cx, |view, cx| {
             let pane = &view.panes[0];
@@ -226,7 +223,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
                     let bounds = ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap();
                     assert!(
                         bounds.right() <= viewport.right(),
-                        "text exceeds pane: {bounds:?} / {viewport:?}"
+                        "text exceeds pane: {id} {bounds:?} / {viewport:?}"
                     );
                     assert!(
                         bounds.size.height > px(30.),
@@ -270,7 +267,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
         });
         tick(cx);
         let prompt = cx.debug_bounds("transcript-prompt").unwrap();
-        let line = ferrite_ui::theme::answer_line_height(size);
+        let line = ferrite_ui::theme::prose_line_height(ferrite_ui::theme::tx_size(size, true));
         assert_eq!(
             prompt.size.height,
             px(line + 2. * ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
@@ -296,7 +293,7 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
         });
         assert_eq!(
             echo,
-            px(ferrite_ui::theme::answer_text_size(size)),
+            px(ferrite_ui::theme::tx_size(size, true)),
             "{size:?}: the echo is set at the answer's size"
         );
     }
@@ -343,18 +340,18 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
         let answer = cx.debug_bounds("transcript-answer").unwrap();
         let stamp = cx.debug_bounds("turn-stamp").unwrap();
-        // Blocks sit one blank line apart under the prompt's bubble (its
-        // send time hangs in that line); consecutive calls fold into one
-        // summary line.
-        let line = px(ferrite_ui::theme::LH_PROSE);
-        assert_eq!(tools.top() - prompt.bottom(), line);
+        // Blocks stand a line and a half apart; consecutive calls fold
+        // into one summary line.
+        let line = pane::Grid::pane(Default::default(), true).line;
+        let block = px((line * 1.5).round());
+        assert_eq!(tools.top() - prompt.bottom(), block);
         assert!(
             cx.debug_bounds("tool-row-spacing-1").is_none(),
             "a shut group draws no call rows"
         );
-        assert_eq!(answer.top() - tools.bottom(), line);
-        // The stamp is one blank line under the turn's last block.
-        assert_eq!(stamp.top() - answer.bottom(), line);
+        // The turn's last prose is its answer, a block under the work.
+        assert_eq!(answer.top() - tools.bottom(), block);
+        assert_eq!(stamp.top() - answer.bottom(), block);
         // One content edge: the group's summary and the answer's prose
         // start on the content column (the prompt's bubble keeps to the
         // right).
@@ -365,12 +362,8 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         // fraction (the browser's model, vendor/gpui-pre "Pixel
         // snapping"): the two agree to within a pixel.
         assert!(
-            (tools_start
-                - tools.left()
-                - px(ferrite_ui::theme::tx_gutter(ferrite_ui::theme::FS_PROSE) + 0.5))
-            .abs()
-                <= px(1.0),
-            "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset: {tools_start:?} {tools:?}"
+            (tools_start - tools.left() - px(0.5)).abs() <= px(1.0),
+            "the words on the row's left edge, plus the caret helper's half-pixel inset: {tools_start:?} {tools:?}"
         );
     }
 }
@@ -547,16 +540,11 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         .iter()
         .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
     let chevron = view.read_with(cx, |view, cx| {
-        let bounds = view.panes[0]
+        // The whole call line is the toggle.
+        view.panes[0]
             .tool_bounds("toolu_9", cx)
-            .expect("the actual rendered chevron bounds");
-        // Terminal-native: the hit box is the 2-cell gutter.
-        assert!(
-            (bounds.size.width - px(ferrite_ui::theme::tx_gutter(ferrite_ui::theme::FS_PROSE)))
-                .abs()
-                <= px(1.)
-        );
-        bounds.center()
+            .expect("the actual rendered toggle bounds")
+            .center()
     });
     cx.simulate_click(chevron, gpui::Modifiers::none());
     cx.run_until_parked();

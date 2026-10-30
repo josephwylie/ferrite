@@ -33,6 +33,7 @@ use super::tokens::{self, Scheme};
 use super::web::Page;
 use super::{Visual, VisualStatus};
 use crate::pane::Grid;
+use ferrite_ui::theme;
 use crate::select::TextRuns;
 
 /// Keep views live within this many viewport heights of the screen: they open
@@ -140,7 +141,7 @@ impl Shelf {
         cx: &mut App,
     ) -> AnyElement {
         let grid = Grid::of(reading);
-        let narrow = content_width.is_some_and(|w| page_width(w, grid) < MIN_LIVE_WIDTH);
+        let narrow = content_width.is_some_and(|w| page_width(w) < MIN_LIVE_WIDTH);
         let stage = match Visuals::engine(cx) {
             _ if !shows_page(visual) => {
                 self.inner.borrow_mut().slots.remove(&visual.id);
@@ -205,9 +206,9 @@ impl Shelf {
         if span <= 0. || rows.is_empty() {
             return;
         }
-        let grid = Grid::of(reading);
-        let content = f32::from(viewport.size.width) - 2.0 * inset;
-        let width = page_width(content, grid);
+        let content =
+            (f32::from(viewport.size.width) - 2.0 * inset).min(theme::TX_COLUMN_MAX_W);
+        let width = page_width(content);
         let live_width = width >= MIN_LIVE_WIDTH;
         if live_width {
             super::renderer::note_page_width(width);
@@ -266,10 +267,9 @@ fn shows_page(visual: &Visual) -> bool {
     !visual.replaced && !matches!(visual.status, VisualStatus::Failed(_))
 }
 
-/// The page's width in a row `content` px wide: the content column less its
-/// frame.
-pub(crate) fn page_width(content: f32, grid: Grid) -> f32 {
-    (content - grid.gutter() - 2.0).floor().max(0.)
+/// The page's width in a row `content` px wide: the column less its frame.
+pub(crate) fn page_width(content: f32) -> f32 {
+    (content - 2.0).floor().max(0.)
 }
 
 /// Px between row `index` and the screen (0 when any of it is on screen),
@@ -366,8 +366,7 @@ mod tests {
 
     #[test]
     fn the_page_is_the_content_column_less_its_frame() {
-        let grid = Grid::of(ReadingSize::STANDARD);
-        assert_eq!(page_width(600., grid), (600. - grid.gutter() - 2.).floor());
-        assert_eq!(page_width(5., grid), 0.);
+        assert_eq!(page_width(600.), 598.);
+        assert_eq!(page_width(1.), 0.);
     }
 }

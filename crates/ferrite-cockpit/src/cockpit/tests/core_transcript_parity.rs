@@ -40,15 +40,17 @@ fn standard_reads_at_13_on_a_21px_line() {
     let grid = pane::Grid::of(ReadingSize::STANDARD);
     assert!((grid.cell() - 7.8).abs() < 1e-4);
     assert!((ferrite_ui::theme::IMAGE_CELLS * grid.cell() - 374.4).abs() < 1e-3);
-    assert_eq!(pane::Grid::pane(ReadingSize::STANDARD, true), grid);
+    // Solo reads two pixels over the reading size (the Claude app's 15).
+    let solo = pane::Grid::pane(ReadingSize::STANDARD, true);
+    assert_eq!((solo.size, solo.line), (15., 24.));
     let group = pane::Grid::pane(ReadingSize::STANDARD, false);
     assert_eq!((group.size, group.line), (12.5, 20.));
     assert_eq!((grid.block().size, grid.block().line), (12.5, 20.));
 }
 
-/// `✻ Worked for 41s · 7:32 pm · ↑ 3.2k ↓ 1.1k`.
+/// `✻ 41s · 1.1k tokens`: no clock time.
 #[test]
-fn a_turn_ends_with_its_time_its_clock_and_its_tokens() {
+fn a_turn_ends_with_its_time_and_its_tokens() {
     let end = TurnEnd {
         outcome: ferrite_core::TurnOutcome::Completed,
         elapsed_ms: Some(41_000),
@@ -56,17 +58,14 @@ fn a_turn_ends_with_its_time_its_clock_and_its_tokens() {
         input_tokens: Some(3_200),
         output_tokens: Some(1_100),
     };
-    assert_eq!(
-        end.text(),
-        "Worked for 41s \u{b7} 7:32 pm \u{b7} \u{2191} 3.2k \u{2193} 1.1k"
-    );
+    assert_eq!(end.text(), "41s \u{b7} 1.1k tokens");
     let older = TurnEnd {
         input_tokens: None,
         output_tokens: None,
         elapsed_ms: Some(192_000),
         ..end
     };
-    assert_eq!(older.text(), "Worked for 3m 12s \u{b7} 7:32 pm");
+    assert_eq!(older.text(), "3m 12s");
 }
 
 /// A test run's elbow: `ok · 38 passed`; an early failure prints its first
@@ -239,11 +238,10 @@ fn answers_underline_links_on_hover_align_numbers_and_frame_images() {
     );
 }
 
-/// The banner heads the transcript; every edit is its own row; a later edit
-/// to a file already diffed in its turn folds its diff behind `+ show diff`
-/// until it is opened.
+/// The banner heads the transcript; edits fold into one group (`Edited 2
+/// files`); an edit's diff shows once its call is opened.
 #[gpui::test]
-fn the_banner_heads_the_rows_and_a_later_edit_folds_its_diff(cx: &mut TestAppContext) {
+fn the_banner_heads_the_rows_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-banner-rows", 1);
     let thread = core.threads()[0];
     core.send(thread, "Fix the nav".into());
@@ -287,8 +285,7 @@ fn the_banner_heads_the_rows_and_a_later_edit_folds_its_diff(cx: &mut TestAppCon
         .unwrap();
     tick(cx);
     assert!(cx.debug_bounds("transcript-banner").is_some(), "the banner");
-    assert!(cx.debug_bounds("tool-row-edit-1").is_some());
-    assert!(cx.debug_bounds("tool-row-edit-2").is_some(), "its own row");
+    assert!(cx.debug_bounds("tool-group-edit-1").is_some(), "one group");
     let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
     assert!(
         runs.iter()
@@ -296,22 +293,23 @@ fn the_banner_heads_the_rows_and_a_later_edit_folds_its_diff(cx: &mut TestAppCon
         "the banner's facts select like any row: {runs:?}"
     );
     assert!(
-        runs.iter().any(|(_, _, _, text)| text == "new one"),
-        "the first edit's diff shows"
-    );
-    assert!(
-        !runs.iter().any(|(_, _, _, text)| text == "new two"),
-        "a later edit to the same file folds its diff"
+        !runs.iter().any(|(_, _, _, text)| text == "new one" || text == "new two"),
+        "no diff shows until its call is opened"
     );
     view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Diff("edit-2".into()));
+        view.panes[0].toggle_tool(&pane::DisclosureId::Group("edit-1".into()));
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("edit-2".into()));
         cx.notify();
     });
     tick(cx);
     let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
     assert!(
         runs.iter().any(|(_, _, _, text)| text == "new two"),
-        "`+ show diff` opens it"
+        "the opened edit shows its diff"
+    );
+    assert!(
+        !runs.iter().any(|(_, _, _, text)| text == "new one"),
+        "the other stays shut"
     );
 }
 
@@ -340,9 +338,9 @@ fn a_running_test_suite_shows_its_bar_and_count(cx: &mut TestAppContext) {
     assert_eq!(bar.size.height, px(ferrite_ui::theme::TEST_BAR_H));
 }
 
-/// A long Edit's diff draws unified in its card under a header naming the
-/// file, stops at `HUNK_MAX_ROWS` with `… +N lines`, and a later edit to
-/// the same file still folds behind `+ show diff` until it is opened.
+/// A long Edit's diff, opened, draws unified in its card under a header
+/// naming the file and stops at `HUNK_MAX_ROWS` with `… +N lines`; the
+/// other edit's stays shut.
 #[gpui::test]
 fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-long-diff", 1);
@@ -386,6 +384,13 @@ fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
+    assert!(cx.debug_bounds("diff-box").is_none(), "shut, no diff");
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Group("long-1".into()));
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("long-1".into()));
+        cx.notify();
+    });
+    tick(cx);
     assert!(
         cx.debug_bounds("diff-box").is_some(),
         "the diff sits in its box"
@@ -406,21 +411,11 @@ fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
         "past HUNK_MAX_ROWS ({}) nothing draws",
         ferrite_ui::theme::HUNK_MAX_ROWS
     );
-    assert!(!shown("later"), "a later edit to the file folds its diff");
-    view.update(cx, |view, cx| {
-        view.panes[0].toggle_tool(&pane::DisclosureId::Diff("long-2".into()));
-        cx.notify();
-    });
-    tick(cx);
-    let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
-    assert!(
-        runs.iter().any(|(_, _, _, run)| run == "later"),
-        "`+ show diff` opens it"
-    );
+    assert!(!shown("later"), "the other edit's diff stays shut");
 }
 
 /// A folded command's call line gives way in a narrow Pane: cut at the
-/// row's edge, and `+ N lines` stays in the row after it.
+/// row's edge, and its `›` stays in the row after it.
 #[gpui::test]
 fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-fold-head", 1);
@@ -447,12 +442,12 @@ fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
         cx.simulate_resize(gpui::size(px(width), px(900.)));
         tick(cx);
         let row = cx.debug_bounds("tool-row-summary").expect("the call's row");
-        let fold = cx.debug_bounds("tool-fold").expect("`+ 1 line`");
+        let chevron = cx.debug_bounds("disclosure-chevron").expect("its `›`");
         assert!(
-            fold.right() <= row.right() + px(0.5),
-            "at {width}px the fold stays in the row: {fold:?} / {row:?}"
+            chevron.right() <= row.right() + px(0.5),
+            "at {width}px the `›` stays in the row: {chevron:?} / {row:?}"
         );
         let head = cx.debug_bounds("tool-call").expect("the call line");
-        assert!(head.right() <= fold.left(), "{head:?} before {fold:?}");
+        assert!(head.right() <= chevron.left(), "{head:?} before {chevron:?}");
     }
 }
