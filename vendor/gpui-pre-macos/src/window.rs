@@ -3448,53 +3448,6 @@ extern "C" fn blurred_view_update_layer(this: &Object, _: Sel) {
         let layer: id = msg_send![this, layer];
         if !layer.is_null() {
             remove_layer_background(layer);
-            add_tone_layers(layer);
-        }
-    }
-}
-
-/// Ferrite patch: tone the bare blur, which `remove_layer_background` leaves
-/// untinted. No material's own tint darkens a white window behind it (the
-/// dark sidebar lands on #656565 over white on macOS 27), and a plain grey
-/// overlay dims the whole desktop alike, so a shell dark enough over white
-/// hides the wallpaper everywhere else. Instead, two blend layers over the
-/// blur: a light desaturation, then a soft knee (darken toward #383838 at
-/// 82%) that pulls bright windows down hard and leaves dark ones almost
-/// as they are. White comes out at #5c5c5c; the app's shell glass goes on
-/// top. Re-applied on every `updateLayer`, which the stripping above
-/// would otherwise clear.
-unsafe fn add_tone_layers(layer: id) {
-    const TONES: [(&str, &str, f64, f32); 2] = [
-        ("ferrite.desaturate", "saturationBlendMode", 0.5, 0.3),
-        ("ferrite.knee", "darkenBlendMode", 0x38 as f64 / 255., 0.82),
-    ];
-    unsafe {
-        let bounds: NSRect = msg_send![layer, bounds];
-        for (name, filter, grey, opacity) in TONES {
-            let sublayers: id = msg_send![layer, sublayers];
-            let count = if sublayers.is_null() { 0 } else { NSArray::count(sublayers) };
-            for i in (0..count).rev() {
-                let sublayer = sublayers.objectAtIndex(i);
-                let sublayer_name: id = msg_send![sublayer, name];
-                if !sublayer_name.is_null() && sublayer_name.isEqualToString(name) {
-                    let _: () = msg_send![sublayer, removeFromSuperlayer];
-                }
-            }
-            // Appended, so it stays above the material's own layers.
-            let tone: id = msg_send![class!(CALayer), layer];
-            let color: id = msg_send![
-                class!(NSColor),
-                colorWithSRGBRed: grey green: grey blue: grey alpha: 1f64
-            ];
-            let cg_color: id = msg_send![color, CGColor];
-            let _: () = msg_send![tone, setName: ns_string(name)];
-            let _: () = msg_send![tone, setFrame: bounds];
-            // kCALayerWidthSizable | kCALayerHeightSizable
-            let _: () = msg_send![tone, setAutoresizingMask: 2u32 | 16u32];
-            let _: () = msg_send![tone, setBackgroundColor: cg_color];
-            let _: () = msg_send![tone, setOpacity: opacity];
-            let _: () = msg_send![tone, setCompositingFilter: ns_string(filter)];
-            let _: () = msg_send![layer, addSublayer: tone];
         }
     }
 }
