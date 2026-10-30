@@ -370,8 +370,8 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
 }
 
 /// The transcript column sits `tx_inset` in from the Pane's edges (Solo's
-/// 28px): the answer's `●` on its left edge, the prompt's bubble ending on
-/// its right.
+/// 28px): the answer's row starting on its left edge, the prompt's bubble
+/// ending on its right.
 #[gpui::test]
 fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
@@ -394,10 +394,10 @@ fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
         (bubble.right() - column_end).abs() <= px(1.),
         "the bubble {bubble:?} ends on the column {column_end:?}"
     );
-    let answer = cx.debug_bounds("answer-mark").unwrap();
+    let answer = cx.debug_bounds("transcript-answer").unwrap();
     assert!(
         (answer.left() - column).abs() <= px(1.),
-        "the answer's ● {answer:?} is on the column {column:?}"
+        "the answer {answer:?} starts on the column {column:?}"
     );
 }
 

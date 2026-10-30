@@ -360,9 +360,9 @@ impl Markdown {
 impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
-        // Prose sets its own face (the transcript's, Geist Mono); the
-        // inherited style is the Pane's.
-        let face: SharedString = theme::FONT_CODE.into();
+        // Prose sets its own face (the transcript's, Geist); the inherited
+        // style is the Pane's.
+        let face: SharedString = theme::FONT_UI.into();
         #[cfg(any(test, feature = "test-support"))]
         testing::record(
             self.id.clone(),
@@ -915,13 +915,6 @@ pub(crate) fn syntax_style(class: ferrite_core::transcript::Class) -> gpui::High
         font_style: (class == Class::Comment).then_some(gpui::FontStyle::Italic),
         ..Default::default()
     }
-}
-
-/// The pixel line box of a heading of `level` in prose set at `size`: what a
-/// leading heading's first line occupies (the answer mark centres on it).
-#[allow(dead_code)]
-pub fn heading_line_height(level: u8, size: f32) -> f32 {
-    theme::prose_line_height(heading_size(level, size))
 }
 
 /// Literal provider output shares Markdown's selection engine and keeps
@@ -2583,7 +2576,6 @@ mod style_tests {
             assert_eq!(h1.text.font_weight, Some(theme::W_STRONG));
             assert_eq!(h1.text.color, Some(solid(theme::TEXT_STRONG)));
             assert_eq!(h1.text.line_height, Some(px(h1_line).into()));
-            assert_eq!(heading_line_height(1, base), h1_line);
             let h4 = style.heading(4);
             assert_eq!(h4.text.font_weight, Some(theme::W_STRONG));
             assert_eq!(h4.text.color, Some(solid(theme::TEXT_STRONG)));

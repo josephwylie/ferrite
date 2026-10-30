@@ -40,58 +40,6 @@ use crate::{
 use ferrite_ui::{pointer::Pointer, theme};
 use std::{cell::Cell, rc::Rc};
 
-/// The answer's gutter mark: the typed `●` in the strongest ink, the
-/// prototype's `.g-prose` (the agent spoke).
-pub(crate) const ANSWER_MARK_INK: u32 = theme::TEXT_STRONG;
-
-/// Who a transcript row speaks for, as the answer mark counts speakers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Speaker {
-    /// Agent prose: an answer's paragraphs, lists, headings and fences.
-    Agent,
-    /// The operator's prompt, or a machine action (a tool row).
-    Other,
-}
-
-impl Speaker {
-    /// A block's speaker; `None` for the rows that neither speak nor hand
-    /// the floor back (reasoning, notices, records, the stamp).
-    pub(crate) fn of(body: &Body) -> Option<Self> {
-        match body {
-            Body::Paragraph { .. }
-            | Body::Bullet { .. }
-            | Body::Heading { .. }
-            | Body::Code { .. } => Some(Self::Agent),
-            Body::Prompt(_) | Body::Tool(_) | Body::Visual(_) => Some(Self::Other),
-            Body::Thinking(_) | Body::Notice(_) | Body::Meta(_) | Body::TurnEnd(_) => None,
-        }
-    }
-}
-
-/// The answer mark's rule, one for every tier (the operator's ruling, Q2):
-/// the Ferrite mark is drawn once per speaker change to the agent — on the
-/// first prose after a prompt or after a tool row. Consecutive prose wears
-/// none; its gutter stays empty and its text keeps the C1 edge. Rows with no
-/// speaker are transparent to it.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct AnswerMarks {
-    agent_has_floor: bool,
-}
-
-impl AnswerMarks {
-    /// Feed the next row's speaker, oldest first: whether it wears the mark.
-    pub(crate) fn next(&mut self, speaker: Option<Speaker>) -> bool {
-        match speaker {
-            Some(Speaker::Agent) => !std::mem::replace(&mut self.agent_has_floor, true),
-            Some(Speaker::Other) => {
-                self.agent_has_floor = false;
-                false
-            }
-            None => false,
-        }
-    }
-}
-
 /// A row another package appends after the transcript's last (the pending
 /// Decision, built by `CockpitView::decision_tail`): `key` names its content
 /// (a change re-renders it), `render` builds it.
@@ -941,10 +889,9 @@ impl TranscriptView {
                 .markdown_run
                 .unwrap_or(blocks[0].id);
             let grid = self.grid();
-            let marked = row.answer_mark();
-            // The prototype's `.r` with `.g-prose`: the bright `●` in the
-            // gutter on the first prose after a speaker change, the answer on
-            // the content column, every wrapped line hanging under it.
+            // The prototype's `.r` with `.g-prose`: an empty gutter, the
+            // answer on the content column, every wrapped line hanging under
+            // it.
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -956,12 +903,7 @@ impl TranscriptView {
                 .min_w_0()
                 .w_full()
                 .flex_shrink_0()
-                .child(if marked {
-                    pane::glyph_gutter(grid, pane::BULLET, ANSWER_MARK_INK)
-                        .debug_selector(|| "answer-mark".into())
-                } else {
-                    div().flex_shrink_0().w(px(grid.gutter()))
-                })
+                .child(div().flex_shrink_0().w(px(grid.gutter())))
                 .child(
                     div()
                         .flex_1()
@@ -1211,7 +1153,7 @@ impl TranscriptView {
                 grid.line,
             )
         });
-        div()
+        pane::on_cells(div())
             .debug_selector(|| "transcript-banner".into())
             .relative()
             .w_full()
@@ -2124,9 +2066,10 @@ impl Render for TranscriptView {
             .min_w_0()
             .w_full()
             .min_h_0()
-            // One grid for the whole transcript (theme rule 1): Geist Mono
-            // at the reading size on its 1.5x line, every row inheriting it.
-            .font_family(theme::FONT_CODE)
+            // One grid for the whole transcript (theme rule 1): Geist at
+            // the reading size on its 1.5x line, every row inheriting it;
+            // a row laid out on cells sets Geist Mono (`pane::on_cells`).
+            .font_family(theme::FONT_UI)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .text_color(gpui::rgb(theme::TEXT))
@@ -2157,7 +2100,7 @@ impl Render for TranscriptView {
             .min_w_0()
             .size_full()
             .min_h_0()
-            .font_family(theme::FONT_CODE)
+            .font_family(theme::FONT_UI)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .child(list)
