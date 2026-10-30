@@ -1044,7 +1044,6 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             );
             ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap()
         });
-        let mark = debug_bounds(cx, "answer-mark".into()).unwrap();
         let gutter = px(theme::tx_gutter(theme::FS_PROSE));
         for delta in [
             // Terminal-native: prose starts on the content column, one
@@ -1056,11 +1055,6 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             // The text runs one cell past the row: a trailing space hangs
             // there (`rich::Markdown`).
             answer.right() + px(theme::tx_cell(theme::FS_PROSE)) - text.right(),
-            // The `●` hangs in the gutter at the row's left edge, on the
-            // first prose line box.
-            mark.left() - answer.left(),
-            mark.size.width - gutter,
-            (mark.top() + mark.size.height / 2.) - (text.top() + px(theme::LH_PROSE / 2.)),
         ] {
             assert!(
                 delta.abs() <= px(1.),

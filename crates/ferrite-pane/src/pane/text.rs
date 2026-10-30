@@ -293,15 +293,10 @@ pub(crate) fn collect_block_text(
             let _ = selection.line(block.id, text.clone(), Vec::new());
         }
         Body::TurnEnd(end) => {
-            let text = end.text();
-            if end.completed() {
-                let _ = selection.line(block.id, text, Vec::new());
-            } else {
-                let (head, message) = turn_end_runs(&text, turn_end_message(end));
-                let _ = selection.line(block.id, head, Vec::new());
-                if let Some(message) = message {
-                    let _ = selection.line(block.id, message, Vec::new());
-                }
+            let (head, tail) = turn_end_runs(end);
+            let _ = selection.line(block.id, head, Vec::new());
+            if let Some(tail) = tail {
+                let _ = selection.line(block.id, tail, Vec::new());
             }
         }
         Body::Code { source, .. } => {

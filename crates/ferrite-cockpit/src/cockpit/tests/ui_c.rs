@@ -399,11 +399,6 @@ fn the_prompt_mark_keeps_the_transcript_column(cx: &mut TestAppContext) {
         (mark.left() - column).abs() <= px(1.),
         "the band's ❯ {mark:?} is on the column {column:?}"
     );
-    let answer = cx.debug_bounds("answer-mark").unwrap();
-    assert!(
-        (answer.left() - mark.left()).abs() <= px(1.),
-        "the answer's ● {answer:?} and the ❯ {mark:?} share an axis"
-    );
 }
 
 /// The expand and approve keys still reach a board cell once the head's

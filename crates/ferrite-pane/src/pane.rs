@@ -4504,6 +4504,16 @@ impl Grid {
         Self::sized(self.size - theme::TX_BLOCK_STEP)
     }
 
+    /// The grid activity's words are set on (a call line, a group's
+    /// summary, their trails): the block size on this grid's line, so the
+    /// agent's work recedes beside its prose and keeps the rows' rhythm.
+    pub(crate) fn activity(self) -> Self {
+        Self {
+            size: self.block().size,
+            line: self.line,
+        }
+    }
+
     /// One cell of the grid.
     pub fn cell(self) -> f32 {
         theme::tx_cell(self.size)
@@ -4565,6 +4575,13 @@ pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
         .child(mark)
 }
 
+/// A row laid out on the grid's cells (a call, a group, an elbow line, the
+/// banner): Geist Mono whatever face the transcript reads in, its elbows,
+/// folds and path targets counting on it.
+pub(crate) fn on_cells(row: Div) -> Div {
+    row.font_family(theme::FONT_CODE)
+}
+
 /// A transcript row: its gutter, then the content column (the caller's next
 /// child, `flex_1 min_w_0`); wrapped lines hang under the content column.
 fn grid_row(gutter: Div) -> Div {
@@ -4583,9 +4600,9 @@ fn content_row(grid: Grid) -> Div {
 
 /// A row that hangs under the one above it: the typed `└` (`TEXT_FAINT`)
 /// in the content column's first two cells, the caller's text after it in
-/// `ink`.
+/// `ink`, on cells as the call it hangs under is.
 pub(crate) fn elbow_line(grid: Grid, ink: u32) -> Div {
-    content_row(grid).text_color(rgb(ink)).child(
+    on_cells(content_row(grid)).text_color(rgb(ink)).child(
         div()
             .debug_selector(|| "transcript-elbow".into())
             .flex_shrink_0()
@@ -5354,6 +5371,10 @@ fn image_size(head: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// The `group` a completed turn's stamp names, so its time and tokens show
+/// under the pointer anywhere on the line.
+const TURN_STAMP: &str = "turn-stamp";
+
 /// The `group` every disclosable row names, so its trailing chevron shows
 /// under the pointer anywhere on the row.
 pub(crate) const DISCLOSURE_ROW: &str = "disclosure-row";
@@ -5370,7 +5391,8 @@ pub(crate) fn omitted_line(bytes: usize, grid: Grid) -> Div {
 
 /// How a turn ended. A completed turn is `✻ Worked for 41s · 7:32 pm · ↑
 /// 3.2k ↓ 1.1k`: the typed `✻` in the provider's colour in the gutter, the
-/// words and their `·` seams `TEXT_DIM`. An interrupted or failed one
+/// words and their `·` seams `TEXT_DIM`, everything after `Worked for 41s`
+/// shown only under the pointer (it still copies). An interrupted or failed one
 /// hangs under the turn's last row in the failure-line grammar
 /// (`failure_line`): `└ failed · 0.1s · API Error: 529 overloaded`, its lead
 /// word the only coloured one — `interrupted` in `TEXT` (the operator did
@@ -5383,8 +5405,8 @@ fn turn_end(
     grid: Grid,
 ) -> Div {
     use ferrite_core::TurnOutcome;
-    let text = end.text();
-    let (lead, ink, message) = match &end.outcome {
+    let (head, tail) = turn_end_runs(end);
+    let (lead, ink) = match &end.outcome {
         TurnOutcome::Completed => {
             return components::tabular(
                 grid_row(mark_gutter(
@@ -5393,37 +5415,50 @@ fn turn_end(
                         .debug_selector(|| "turn-stamp-mark".into()),
                 ))
                 .debug_selector(|| "turn-stamp".into())
+                .group(TURN_STAMP)
                 .text_color(rgb(TEXT_DIM))
-                .child(div().flex_1().min_w_0().child(selection.line(
-                    block,
-                    text.clone(),
-                    separators(&text),
-                ))),
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .child(selection.line(block, head, Vec::new())),
+                )
+                .when_some(tail, |line, tail| {
+                    line.child(
+                        div()
+                            .debug_selector(|| "turn-stamp-rest".into())
+                            .flex_1()
+                            .min_w_0()
+                            .invisible()
+                            .group_hover(TURN_STAMP, |style| style.visible())
+                            .child(selection.line(block, tail.clone(), separators(&tail))),
+                    )
+                }),
             );
         }
-        TurnOutcome::Interrupted => (theme::words::INTERRUPTED, TEXT, None),
-        TurnOutcome::Error(_) => (theme::words::FAILED, BLOCKED, turn_end_message(end)),
+        TurnOutcome::Interrupted => (theme::words::INTERRUPTED, TEXT),
+        TurnOutcome::Error(_) => (theme::words::FAILED, BLOCKED),
     };
-    let (head, excerpt) = turn_end_runs(&text, message);
-    failure_line(block, head, lead.len(), ink, excerpt, selection, grid)
+    failure_line(block, head, lead.len(), ink, tail, selection, grid)
         .debug_selector(|| "turn-stamp".into())
 }
 
-/// A failed or interrupted turn's two selectable runs: the head (everything
-/// before the provider's message, its seam included) and the message.
-pub(super) fn turn_end_runs(text: &str, message: Option<&str>) -> (String, Option<String>) {
-    match message.and_then(|message| Some((text.strip_suffix(message)?, message))) {
-        Some((head, message)) => (head.to_owned(), Some(message.to_owned())),
-        None => (text.to_owned(), None),
-    }
-}
-
-/// The message a turn end prints after its head, if any.
-pub(super) fn turn_end_message(end: &ferrite_core::transcript::TurnEnd) -> Option<&str> {
-    match &end.outcome {
-        ferrite_core::TurnOutcome::Error(message) if !message.is_empty() => Some(message),
+/// A turn end's two selectable runs, which copy back as its line: the head
+/// and what follows it — a completed turn's `Worked for 41s` and its time
+/// and tokens (shown under the pointer), a failed turn's head (its seam
+/// included) and the provider's message.
+pub(super) fn turn_end_runs(end: &ferrite_core::transcript::TurnEnd) -> (String, Option<String>) {
+    use ferrite_core::TurnOutcome;
+    let mut text = end.text();
+    let split = match &end.outcome {
+        TurnOutcome::Completed => text.find(" \u{b7} "),
+        TurnOutcome::Error(message) if !message.is_empty() => {
+            text.strip_suffix(message.as_str()).map(str::len)
+        }
         _ => None,
-    }
+    };
+    let tail = split.map(|at| text.split_off(at));
+    (text, tail)
 }
 
 /// The `·` seams in a transcript line: `TEXT_DIM`, at body weight
@@ -5494,7 +5529,7 @@ pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
 
 /// A call line `Name(args)`, one CLI token on the grid (the prototype's
 /// `.name` and `.args`): the name — as Claude Code prints it (`Update`,
-/// `Bash`) — in `TEXT_STRONG` at `W_STRONG`, the parens and arguments in the
+/// `Bash`) — in `TEXT` at `W_STRONG`, the parens and arguments in the
 /// line's `TEXT_DIM`, a path argument too (a hover target, never cyan:
 /// ADR 0033); one selectable line
 /// that copies back exactly as it reads.
@@ -5506,7 +5541,7 @@ fn call_highlights(tool: &ToolBlock) -> Vec<(std::ops::Range<usize>, HighlightSt
     let mut highlights = vec![(
         0..name,
         HighlightStyle {
-            color: Some(rgb(TEXT_STRONG).into()),
+            color: Some(rgb(TEXT).into()),
             font_weight: Some(theme::W_STRONG),
             ..Default::default()
         },
@@ -6154,6 +6189,7 @@ pub(crate) fn render_tool(
         None => (false, None, None, None),
     };
     let label = tool.label();
+    let small = grid.activity();
     let call = div()
         .relative()
         .min_w_0()
@@ -6165,8 +6201,8 @@ pub(crate) fn render_tool(
                 row_cx.path_target(&tool.summary),
                 start,
                 len,
-                grid.size,
-                grid.line,
+                small.size,
+                small.line,
             )
         }));
     let mut trail = components::tabular(
@@ -6174,7 +6210,7 @@ pub(crate) fn render_tool(
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(grid.cell()))
+            .gap(px(small.cell()))
             .whitespace_nowrap()
             .text_color(rgb(TEXT_DIM)),
     );
@@ -6187,7 +6223,7 @@ pub(crate) fn render_tool(
             div()
                 .debug_selector(|| "tool-trail-diff".into())
                 .flex_shrink_0()
-                .w(px(cells * grid.cell()))
+                .w(px(cells * small.cell()))
                 .child(trail_diff_stat(added, removed)),
         );
         trailing = true;
@@ -6201,7 +6237,7 @@ pub(crate) fn render_tool(
             div()
                 .debug_selector(|| "tool-trail-duration".into())
                 .flex_shrink_0()
-                .w(px(cells * grid.cell()))
+                .w(px(cells * small.cell()))
                 .child(SharedString::from(duration)),
         );
         trailing = true;
@@ -6222,9 +6258,11 @@ pub(crate) fn render_tool(
             .debug_selector(move || row_selector.clone())
             .relative()
             .text_color(rgb(TEXT_DIM))
-            .child(call)
+            .child(call.text_size(px(small.size)))
             .child(div().flex_1())
-            .when(trailing, |line| line.child(trail.pl(px(2.0 * grid.cell()))))
+            .when(trailing, |line| {
+                line.child(trail.text_size(px(small.size)).pl(px(2.0 * small.cell())))
+            })
             // The bullet's cell toggles the call's details; nothing shows it.
             .children(bullet);
     if targeted {
@@ -6467,7 +6505,7 @@ pub(crate) fn render_tool(
             }
         }
     }
-    div()
+    on_cells(div())
         .w_full()
         .min_w_0()
         .flex_shrink_0()
@@ -6585,6 +6623,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         ));
     }
     let (ink, shape) = group_dot_ink(members);
+    let small = grid.activity();
     // Shut with its working call under it, the call's own clock is the
     // group's: one ticking time, never two.
     let live = !expanded && text::group_live(members).is_some();
@@ -6598,7 +6637,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                 div()
                     .debug_selector(|| "tool-group-duration".into())
                     .flex_shrink_0()
-                    .w(px(cells * grid.cell()))
+                    .w(px(cells * small.cell()))
                     .whitespace_nowrap()
                     .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(duration)),
@@ -6617,8 +6656,8 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                     .debug_selector(|| "tool-group-summary".into())
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT))
-                    .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT_STRONG)))
+                    .text_size(px(small.size))
+                    .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT)))
                     .child(
                         row_cx
                             .selection
@@ -6628,7 +6667,13 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
             .children(chevron)
             .child(div().flex_1())
             .when_some(trail, |header, trail| {
-                header.child(div().flex_shrink_0().pl(px(2.0 * grid.cell())).child(trail))
+                header.child(
+                    div()
+                        .flex_shrink_0()
+                        .pl(px(2.0 * small.cell()))
+                        .text_size(px(small.size))
+                        .child(trail),
+                )
             })
             .children(overlay);
     if targeted {
@@ -6693,7 +6738,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                 .into_any_element()
         }
     };
-    div()
+    on_cells(div())
         .flex()
         .flex_col()
         .w_full()
@@ -9388,11 +9433,11 @@ mod tests {
             assert_eq!(
                 highlights[0].1,
                 HighlightStyle {
-                    color: Some(rgb(TEXT_STRONG).into()),
+                    color: Some(rgb(TEXT).into()),
                     font_weight: Some(theme::W_STRONG),
                     ..Default::default()
                 },
-                "the name is strong ink at 600 (SPEC §5.4), whatever happened"
+                "the name is one ink up at 600, whatever happened"
             );
         }
         // A path argument reads `TEXT_DIM`, like the rest of the arguments.
@@ -9584,39 +9629,46 @@ mod tests {
         assert_eq!(text::byte_size(3 * 1024 * 1024), "3.0 MB");
     }
 
-    /// A turn's end leads with the lexicon's own lowercase words, and the
-    /// answer's mark is structure ink.
+    /// A turn's end leads with the lexicon's own lowercase words, and its
+    /// two runs copy back as the line.
     #[test]
-    fn turn_ends_speak_the_lexicon_and_the_answer_bullet_is_bright() {
+    fn turn_ends_speak_the_lexicon_and_copy_back_whole() {
         use ferrite_core::transcript::TurnEnd;
         assert_eq!(TurnEnd::INTERRUPTED, theme::words::INTERRUPTED);
         assert_eq!(TurnEnd::FAILED, theme::words::FAILED);
-        for (outcome, text) in [
+        for (outcome, text, lead) in [
+            (
+                ferrite_core::TurnOutcome::Completed,
+                "Worked for <1s \u{b7} 7:10 pm",
+                "Worked for <1s",
+            ),
             (
                 ferrite_core::TurnOutcome::Interrupted,
+                "interrupted \u{b7} 0.1s",
                 "interrupted \u{b7} 0.1s",
             ),
             (
                 ferrite_core::TurnOutcome::Error("API Error: 529 overloaded".into()),
                 "failed \u{b7} 0.1s \u{b7} API Error: 529 overloaded",
+                "failed \u{b7} 0.1s \u{b7} ",
             ),
         ] {
             let end = TurnEnd {
                 outcome,
                 elapsed_ms: Some(100),
-                completed_at: None,
+                completed_at: Some("7:10 pm".into()),
                 input_tokens: None,
                 output_tokens: None,
             };
             assert_eq!(end.text(), text);
-            let (head, message) = turn_end_runs(&end.text(), turn_end_message(&end));
+            let (head, tail) = turn_end_runs(&end);
+            assert_eq!(head, lead, "the head is what always shows");
             assert_eq!(
-                format!("{head}{}", message.unwrap_or_default()),
+                format!("{head}{}", tail.unwrap_or_default()),
                 text,
                 "the two runs copy back as the line"
             );
         }
-        assert_eq!(crate::transcript::ANSWER_MARK_INK, TEXT_STRONG);
     }
 
     #[test]

@@ -144,9 +144,6 @@ pub(crate) struct TranscriptRow {
     source: Option<Rc<str>>,
     kind: RowKind,
     gap: f32,
-    /// The answer wears the Ferrite mark (`AnswerMarks`): it is the first
-    /// prose since a prompt or a tool row.
-    answer_mark: bool,
     /// A later edit to a file already diffed in its turn: its diff starts
     /// folded behind `+ show diff`.
     diff_folds: bool,
@@ -178,11 +175,6 @@ impl TranscriptRow {
     /// The space above this row (`gap_before`).
     pub(crate) fn gap(&self) -> f32 {
         self.gap
-    }
-
-    /// This answer wears the Ferrite mark (`AnswerMarks`).
-    pub(crate) fn answer_mark(&self) -> bool {
-        self.answer_mark
     }
 
     /// The call's diff folds behind `+ show diff` (a later edit to a file
@@ -410,7 +402,6 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         source,
         kind,
         gap: 0.,
-        answer_mark: false,
         diff_folds: false,
         tail_key: None,
     };
@@ -513,35 +504,15 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         rows.push(tail);
     }
     let mut previous = None;
-    let mut marks = crate::transcript::AnswerMarks::default();
     for row in rows.iter_mut() {
         row.gap = if row.kind == RowKind::Banner {
             shape.banner_pad
         } else {
             gap_before(previous, row.kind, reading)
         };
-        row.answer_mark = marks.next(row.speaker());
         previous = Some(row.kind);
     }
     rows.into_iter().map(Rc::new).collect()
-}
-
-impl TranscriptRow {
-    /// Who the row speaks for: an answer is the agent, a tool row or group
-    /// a machine; a lone block its own body's speaker. The banner and the
-    /// tail speak for no one.
-    fn speaker(&self) -> Option<crate::transcript::Speaker> {
-        use crate::transcript::Speaker;
-        match self.kind {
-            RowKind::Answer { .. } => Some(Speaker::Agent),
-            RowKind::Activity { .. } | RowKind::Group => Some(Speaker::Other),
-            RowKind::Banner | RowKind::Tail => None,
-            _ => self
-                .blocks
-                .first()
-                .and_then(|block| Speaker::of(&block.body)),
-        }
-    }
 }
 
 fn common_prefix<T: Eq>(left: &[T], right: &[T]) -> usize {
@@ -1123,38 +1094,6 @@ mod tests {
             gaps,
             vec![0., line, line, 0.],
             "a call sits flush under a group"
-        );
-    }
-
-    /// Q2: the mark goes on the first prose after a prompt or a tool row;
-    /// prose after reasoning (no speaker) is the same answer and wears none.
-    #[test]
-    fn the_answer_mark_is_drawn_once_per_speaker_change_to_the_agent() {
-        let mut transcript = Transcript::default();
-        prompt(&mut transcript, "go");
-        text(&mut transcript, "first");
-        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
-            text: "weighing it".into(),
-        }));
-        text(&mut transcript, "still the agent");
-        tool(&mut transcript, "t1");
-        text(&mut transcript, "after the tool");
-        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
-        let marks: Vec<_> = rows
-            .rows()
-            .iter()
-            .map(|row| (row.kind(), row.answer_mark()))
-            .collect();
-        assert_eq!(
-            marks,
-            vec![
-                (RowKind::Prompt, false),
-                (RowKind::Answer { commentary: true }, true),
-                (RowKind::Reasoning, false),
-                (RowKind::Answer { commentary: true }, false),
-                (RowKind::Activity { diff_shown: false }, false),
-                (RowKind::Answer { commentary: true }, true),
-            ]
         );
     }
 

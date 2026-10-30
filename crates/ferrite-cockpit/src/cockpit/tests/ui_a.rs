@@ -78,11 +78,11 @@ fn a_sweep_across_long_disclosed_output_copies_prose_output_and_prose(cx: &mut T
     );
 }
 
-/// UI-14 in the new grammar: an answer that opens with a heading centres
-/// its Ferrite mark on the heading's own line box, not the prose line's.
+/// UI-14 in the new grammar: an answer that opens with a heading starts
+/// on the row's top edge, with no margin above it.
 #[gpui::test]
-fn the_answer_mark_centres_on_a_leading_headings_line_box(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("answer-mark-heading", 1);
+fn a_leading_heading_starts_on_the_answer_rows_top(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("answer-heading-top", 1);
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "# Heading one\n\nBody text under it.\n\n".into(),
@@ -92,7 +92,6 @@ fn the_answer_mark_centres_on_a_leading_headings_line_box(cx: &mut TestAppContex
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
     tick(cx);
-    let mark = debug_bounds(cx, "answer-mark".into()).unwrap();
     let answer = debug_bounds(cx, "transcript-answer".into()).unwrap();
     let heading = view.read_with(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
@@ -104,13 +103,8 @@ fn the_answer_mark_centres_on_a_leading_headings_line_box(cx: &mut TestAppContex
         );
         ferrite_pane::rich::testing::bounds(&id, 0, cx).unwrap()
     });
-    let line = ferrite_pane::rich::heading_line_height(1, ferrite_ui::theme::FS_PROSE);
-    assert!(
-        (mark.top() + mark.size.height / 2. - (answer.top() + px(line / 2.))).abs() <= px(1.),
-        "the mark centres on the heading's {line}px line box: {mark:?} / {answer:?}"
-    );
     assert!(
         (heading.top() - answer.top()).abs() <= px(1.),
-        "the leading heading carries no top margin to throw the mark off: {heading:?}"
+        "the leading heading carries no top margin: {heading:?} / {answer:?}"
     );
 }
