@@ -57,11 +57,13 @@ use crate::cockpit::Attention;
 use crate::machines::{Connection, MachineRow};
 use crate::notifications::{Row as NoticeRow, State as NoticeState};
 use ferrite_core::cockpit::StatusRow;
-pub use ferrite_pane::mark::{mark, NavTail, RowStatus};
+pub use ferrite_pane::mark::{chrome_mark, mark, NavTail, RowStatus};
 use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::motion::{self, MotionSpec};
 use ferrite_ui::theme::*;
+// The shell's inks over the transcript's: the nav is on the shell.
+use ferrite_ui::theme::chrome::{self, TEXT, TEXT_DIM, TEXT_FAINT, TEXT_MUTED};
 
 /// The nav's two widths — 264 open, and the 52px rail folded (cmd-B).
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
@@ -810,7 +812,7 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
         .absolute()
         .left(px(x + left - halo))
         .top(px(top - halo))
-        .child(mark(status, small))
+        .child(chrome_mark(status, small))
 }
 
 /// A diffstat as the terminal world types it, Geist Mono 11.5: `+N` in
@@ -1669,7 +1671,7 @@ pub fn thread_row_with_title(
                     .flex_1()
                     .justify_end()
                     .debug_selector(move || format!("nav-since-{}", thread.get()))
-                    .child(trailing(text, FS_META, ink))
+                    .child(trailing(text, FS_META, chrome::ink(ink)))
             }));
     }
     let stat = row
@@ -2252,7 +2254,7 @@ pub fn rail_row(row: &RailRow) -> Stateful<Div> {
                 .items_center()
                 .justify_center()
                 .h(px(NAV_MARK_ICON))
-                .child(mark(row.status, true)),
+                .child(chrome_mark(row.status, true)),
         )
         .children(row.key.map(|key| {
             components::tabular(
@@ -2789,7 +2791,7 @@ mod tests {
         );
         assert_eq!(
             NavTail::Working("1m".into()).member_word(),
-            Some(("1m".into(), TEXT_DIM))
+            Some(("1m".into(), ferrite_ui::theme::TEXT_DIM))
         );
         assert_eq!(NavTail::Age(age()).member_word(), None);
     }
@@ -2858,9 +2860,9 @@ mod tests {
         assert_eq!(RowStatus::Failing.ink(), BLOCKED);
         assert_eq!(RowStatus::Failed.ink(), BLOCKED);
         assert_eq!(RowStatus::NeedsYou.ink(), ATTENTION);
-        assert_eq!(RowStatus::Done.ink(), TEXT_DIM);
+        assert_eq!(RowStatus::Done.ink(), IDLE);
         assert_eq!(RowStatus::Idle.ink(), IDLE);
-        assert_eq!(RowStatus::Parked.ink(), TEXT_DIM);
+        assert_eq!(RowStatus::Parked.ink(), IDLE);
         let mut halo = mark_at(RowStatus::NeedsYou, NAV_ROW_PAD_X, MarkSeat::TwoLine);
         assert_eq!(
             halo.style().inset.left,
@@ -2907,10 +2909,10 @@ mod tests {
             (Failing, false, BLOCKED),
             (Decision, false, ATTENTION),
             (Blocked, false, BLOCKED),
-            (Done, false, TEXT_DIM),
-            (Done, true, TEXT_DIM),
-            (Idle, false, TEXT_DIM),
-            (Parked, false, TEXT_DIM),
+            (Done, false, IDLE),
+            (Done, true, IDLE),
+            (Idle, false, IDLE),
+            (Parked, false, IDLE),
         ] {
             assert_eq!(
                 RowStatus::of(state, unread, false).ink(),

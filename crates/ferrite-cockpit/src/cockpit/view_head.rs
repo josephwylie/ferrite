@@ -169,7 +169,7 @@ impl CockpitView {
 fn head_meta(text: SharedString) -> AnyElement {
     div()
         .flex_shrink_0()
-        .text_color(rgb(theme::TEXT_DIM))
+        .text_color(rgb(theme::chrome::TEXT_DIM))
         .child(text)
         .into_any_element()
 }

@@ -143,7 +143,7 @@ pub fn free_disk_words(bytes: u64) -> Option<(String, u32)> {
     let ink = if bytes < DISK_LOW_UNDER {
         crate::theme::ATTENTION
     } else {
-        crate::theme::CHROME_MUTED
+        crate::theme::chrome::TEXT_DIM
     };
     Some((words, ink))
 }
@@ -168,7 +168,7 @@ pub struct SettingsSheet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{ATTENTION, CHROME_MUTED};
+    use crate::theme::{chrome::TEXT_DIM, ATTENTION};
 
     /// SPEC §5.7: free disk shows only under 20 GB, in `ATTENTION` under
     /// 5 GB, one decimal under ten.
@@ -177,15 +177,15 @@ mod tests {
         assert_eq!(free_disk_words(20 * GB), None);
         assert_eq!(
             free_disk_words(19_600_000_000),
-            Some(("20 GB free".into(), CHROME_MUTED))
+            Some(("20 GB free".into(), TEXT_DIM))
         );
         assert_eq!(
             free_disk_words(12_300_000_000),
-            Some(("12 GB free".into(), CHROME_MUTED))
+            Some(("12 GB free".into(), TEXT_DIM))
         );
         assert_eq!(
             free_disk_words(7_500_000_000),
-            Some(("7.5 GB free".into(), CHROME_MUTED))
+            Some(("7.5 GB free".into(), TEXT_DIM))
         );
         assert_eq!(
             free_disk_words(4_990_000_000),

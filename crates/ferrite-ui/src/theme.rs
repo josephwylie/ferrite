@@ -236,12 +236,12 @@ pub const CARD: u32 = 0x181818;
 /// `#1e1e1e` — the bottom bar; diff and code-fence blocks.
 pub const BAR: u32 = 0x1e1e1e;
 /// The shell as glass — the nav, the heads, a Group's gutter, the bars:
-/// `#1c1c1c` at 60% over the window's blur, which is untinted (the
+/// `#141414` at 72% over the window's blur, which is untinted (the
 /// vendored `HeaderView` material, its tint layer hidden). The desktop
-/// reads through it, blurred and dimmed; black at 76% read as solid black
-/// over any dark window behind. Over a bright window the shell turns a mid
-/// grey: the operator chose the glass over a fixed shell contrast.
-pub const SHELL_GLASS: u32 = 0x1c1c1c99;
+/// reads through it, blurred and darkened; over a white window it lands on
+/// `#565656`, dark enough for the shell's own inks (`chrome`) to hold
+/// their floors there.
+pub const SHELL_GLASS: u32 = 0x141414b7;
 pub const BAR_GLASS: u32 = SHELL_GLASS;
 /// `#1f1f1f` — the Decision box.
 pub const DECISION: u32 = 0x1f1f1f;
@@ -434,10 +434,44 @@ pub const TEXT_DIM: u32 = 0x8c8c8c;
 /// `#5e5e5e` — structure, never words: `└`, diff line numbers, rails,
 /// disclosure glyphs, the parked ring.
 pub const TEXT_FAINT: u32 = 0x5e5e5e;
-/// The dim ink on the frame's glass (the sidebar, the bottom bar). Over a
-/// see-through ground the opaque `TEXT_DIM` loses its contrast against a
-/// bright desktop, so on glass it lifts a step; opaque builds keep it.
-pub const CHROME_MUTED: u32 = if GLASS { 0xb6b6b6 } else { TEXT_DIM };
+
+/// **The shell's inks** (rule 5 on glass): the ladder under the same names,
+/// for what sits on the shell — the nav, the view head, the bottom bar. On
+/// glass the shell's ground is whatever lies behind the window, so each
+/// step is chosen for the worst one, a white window under `SHELL_GLASS`
+/// (`#565656`): `TEXT_BAR` and up 4.5:1 there, `TEXT_FAINT` 3:1. A shell
+/// file imports these over `theme::*`; opaque builds keep the transcript's
+/// ladder. The reading surfaces (the card, the panel, floats) never use
+/// them.
+pub mod chrome {
+    const fn pick(glass: u32, opaque: u32) -> u32 {
+        if super::GLASS {
+            glass
+        } else {
+            opaque
+        }
+    }
+
+    pub const TEXT_STRONG: u32 = super::TEXT_STRONG;
+    pub const TEXT: u32 = pick(0xdcdcdc, super::TEXT);
+    pub const TEXT_BAR: u32 = pick(0xd2d2d2, super::TEXT_BAR);
+    pub const TEXT_MUTED: u32 = pick(0xc4c4c4, super::TEXT_MUTED);
+    pub const TEXT_DIM: u32 = pick(0xb8b8b8, super::TEXT_DIM);
+    pub const TEXT_FAINT: u32 = pick(0xa8a8a8, super::TEXT_FAINT);
+
+    /// A transcript ink a shared helper hands the shell (a state word, a
+    /// mark), as its step on the shell; a hue passes through.
+    pub const fn ink(ink: u32) -> u32 {
+        match ink {
+            super::TEXT => TEXT,
+            super::TEXT_BAR => TEXT_BAR,
+            super::TEXT_MUTED => TEXT_MUTED,
+            super::TEXT_DIM => TEXT_DIM,
+            super::TEXT_FAINT => TEXT_FAINT,
+            ink => ink,
+        }
+    }
+}
 
 // --------------------------------------------------------------- palette
 //
@@ -3180,7 +3214,36 @@ mod tests {
     fn the_paints_are_glass_on_macos_and_grey_elsewhere() {
         let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
         let near = |a: f32, b: f32| (a - b).abs() < 0.01;
-        assert!(near(alpha(SHELL_GLASS), 0.60), "the desktop reads through the shell");
+        assert!(alpha(SHELL_GLASS) <= 0.72, "the desktop reads through the shell");
+        // The shell's inks hold their floors over the worst ground: a white
+        // window under the glass. Each step stays a step below the last.
+        let worst = over(SHELL_GLASS, 0xffffff);
+        assert_eq!(worst, 0x565656);
+        let shell = [
+            ("TEXT_STRONG", chrome::TEXT_STRONG, 4.5),
+            ("TEXT", chrome::TEXT, 4.5),
+            ("TEXT_BAR", chrome::TEXT_BAR, 4.5),
+            ("TEXT_MUTED", chrome::TEXT_MUTED, 3.0),
+            ("TEXT_DIM", chrome::TEXT_DIM, 3.0),
+            ("TEXT_FAINT", chrome::TEXT_FAINT, 3.0),
+        ];
+        for pair in shell.windows(2) {
+            assert!(luminance(pair[0].1) > luminance(pair[1].1), "{} under {}", pair[1].0, pair[0].0);
+        }
+        if GLASS {
+            for (name, ink, min) in shell {
+                let ratio = contrast(ink, worst);
+                assert!(ratio >= min, "chrome::{name} over white is {ratio:.2}:1, below {min}:1");
+            }
+        } else {
+            // Opaque, the shell is the frame's grey and keeps the ladder.
+            assert_eq!(
+                [chrome::TEXT, chrome::TEXT_MUTED, chrome::TEXT_DIM, chrome::TEXT_FAINT],
+                [TEXT, TEXT_MUTED, TEXT_DIM, TEXT_FAINT]
+            );
+        }
+        assert_eq!(chrome::ink(TEXT_DIM), chrome::TEXT_DIM);
+        assert_eq!(chrome::ink(BLOCKED), BLOCKED, "a hue passes through");
         assert_eq!((FRAME_GLASS, BAR_GLASS), (SHELL_GLASS, SHELL_GLASS));
         assert!(paint::CARD.is_opaque() && paint::PANEL.is_opaque() && paint::BLOCK.is_opaque());
         assert_eq!(alpha(FLOAT_GLASS), 1.0, "a float hides what it covers");

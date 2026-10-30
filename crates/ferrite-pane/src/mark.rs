@@ -154,10 +154,20 @@ impl RowStatus {
 /// finish not yet seen `check-circle`, idle `terminal`, parked `terminal`
 /// at half ink. `small` is a member row's: 6px dots, 13px icons.
 pub fn mark(status: RowStatus, small: bool) -> AnyElement {
+    marked(status, status.ink(), small)
+}
+
+/// A row's mark on the shell (the nav, the rail): `mark`, its rest ink at
+/// the shell's step (`chrome::ink`).
+pub fn chrome_mark(status: RowStatus, small: bool) -> AnyElement {
+    marked(status, chrome::ink(status.ink()), small)
+}
+
+fn marked(status: RowStatus, ink: u32, small: bool) -> AnyElement {
     if small {
-        mark_sized(status, NAV_DOT_SMALL, NAV_MARK_ICON_SMALL)
+        mark_sized(status, ink, NAV_DOT_SMALL, NAV_MARK_ICON_SMALL)
     } else {
-        mark_sized(status, NAV_DOT, NAV_MARK_ICON)
+        mark_sized(status, ink, NAV_DOT, NAV_MARK_ICON)
     }
 }
 
@@ -166,7 +176,7 @@ pub fn mark(status: RowStatus, small: bool) -> AnyElement {
 /// (`PANE_HEAD_DOT_W`: a dot's halo overflows it), so the title starts
 /// where it is drawn.
 pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
-    let face = mark_sized(status, NAV_DOT, ferrite_ui::theme::PANE_HEAD_ICON);
+    let face = mark_sized(status, status.ink(), NAV_DOT, ferrite_ui::theme::PANE_HEAD_ICON);
     match status {
         RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background => div()
             .flex()
@@ -183,9 +193,9 @@ pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
 /// **The one status truth**: a state's mark, drawn here for every surface
 /// that shows a Thread's state (the nav row, the rail, the Pane head, the
 /// palette, a subagent's tab, the empty board's recent rows), in
-/// `RowStatus::ink`. `dot` and `glyph` are the surface's sizes.
-fn mark_sized(status: RowStatus, dot: f32, glyph: f32) -> AnyElement {
-    let ink = status.ink();
+/// `RowStatus::ink` (`ink`, at the shell's step there). `dot` and `glyph`
+/// are the surface's sizes.
+fn mark_sized(status: RowStatus, ink: u32, dot: f32, glyph: f32) -> AnyElement {
     let solid = || div().size(px(dot)).rounded_full().bg(rgb(ink));
     match status {
         RowStatus::Working | RowStatus::Failing => div()

@@ -41,6 +41,8 @@ use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
+// The shell's inks over the transcript's: the bars are on the shell.
+use ferrite_ui::theme::chrome::{TEXT_BAR, TEXT_DIM};
 
 /// The head row's drag strip over the board, as an overlay: the cards
 /// start at `board_top`, so this adds no layout and paints nothing — it
@@ -173,7 +175,7 @@ pub fn bar(bar: Bar) -> Div {
 /// The bottom bar (SPEC §5.7), the window's one bar (ADR 0014, amended by
 /// ADR 0033): full width on `paint::BAR`, closed above by a `BAR_TOP`
 /// hairline, `BAR_PAD_X` in from each end, `BAR_GAP` between its items,
-/// Geist `FS_META` in `TEXT_DIM` (`CHROME_MUTED`, its step up on glass).
+/// Geist `FS_META` in `TEXT_DIM`.
 /// Left the view `tabs`; the `vitals` pushed to the right end.
 ///
 /// The hairline lies on the frame's last row above the bar, as the
@@ -209,7 +211,7 @@ fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
                 .font_family(FONT_UI)
                 .text_size(px(FS_META))
                 .line_height(px(LH_META))
-                .text_color(rgb(CHROME_MUTED))
+                .text_color(rgb(TEXT_DIM))
                 .whitespace_nowrap()
                 .overflow_hidden()
                 .child(
@@ -286,7 +288,7 @@ fn bar_tab(
             }
         })
         .child(
-            components::tabular(div().text_color(rgb(CHROME_MUTED)))
+            components::tabular(div().text_color(rgb(TEXT_DIM)))
                 .child(SharedString::from(ordinal.to_string())),
         )
         .child(label)
