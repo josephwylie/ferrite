@@ -493,7 +493,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    // Open the fold: the elbow keeps the first line, the fold the rest.
+    // Open the fold: the call line keeps the first line, the fold the rest.
     view.update(cx, |view, cx| {
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
         cx.notify();
@@ -502,10 +502,11 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
     cx.update(|_, cx| ferrite_pane::rich::testing::select_all(cx));
     cx.simulate_keystrokes("cmd-c");
     let copied = clipboard(cx).unwrap();
-    // The fold holds the non-blank lines, as the elbow names them (CT-26).
+    // The fold holds the non-blank lines after the one its call line says
+    // (CT-26).
     assert!(
-        copied.contains("Bash(fixture)\n\nfirst\n\nlast"),
-        "the call, its elbow's line and the fold's copy as shown: {copied:?}"
+        copied.contains("Ran fixture \u{b7} first\n\nlast"),
+        "the call line and the fold's copy as shown: {copied:?}"
     );
 }
 

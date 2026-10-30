@@ -208,14 +208,14 @@ impl ToolBlock {
         if self.summary.is_empty() {
             name.to_string()
         } else {
-            format!("{name}({})", self.summary_line())
+            format!("{name}({})", self.argument())
         }
     }
 
     /// The call line's argument. It never lays out hard line breaks: the
     /// original command stays in the ToolBlock and becomes selectable in
     /// the disclosed details.
-    fn summary_line(&self) -> std::borrow::Cow<'_, str> {
+    pub fn argument(&self) -> std::borrow::Cow<'_, str> {
         // A command reads as the command (`Bash(cargo test)`), as Claude
         // Code prints it, whatever purpose the model wrote beside it
         // (Claude's Bash `description`: "Run cargo test to identify failing

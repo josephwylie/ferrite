@@ -424,9 +424,9 @@ impl gpui::RenderOnce for Markdown {
                         cx,
                     ));
                 }
-                // An issue ref stays a native link (its underline under the
-                // pointer); a click opens it on the checkout's remote.
-                if url.starts_with(ISSUE_SCHEME) {
+                // An issue ref and an activity line's path stay native links
+                // (their underline under the pointer); a click opens them.
+                if url.starts_with(ISSUE_SCHEME) || url.starts_with(PATH_SCHEME) {
                     return None;
                 }
                 let file = crate::file_links::FileLink::resolve(url, cwd.as_deref())?;
@@ -474,6 +474,7 @@ impl gpui::RenderOnce for Markdown {
                     }
                     return;
                 }
+                let url = url.strip_prefix(PATH_SCHEME).unwrap_or(url);
                 if let Some(file) = crate::file_links::FileLink::resolve(url, link_cwd.as_deref()) {
                     file.open(window, cx);
                 } else {
@@ -713,6 +714,10 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
 pub(crate) const CHIP_SCHEME: &str = "ferrite-chip:";
 /// The scheme `file_links::link_targets` gives an issue ref (`#212`).
 pub(crate) const ISSUE_SCHEME: &str = "issue:";
+/// The scheme of a path in an activity line (a call's argument, the
+/// banner's checkout): a native link in the line's flow, never a chip,
+/// that opens the file as a prose path does.
+pub(crate) const PATH_SCHEME: &str = "ferrite-path:";
 
 /// Markdown's look at the Standard reading size (see the WP-B section of
 /// `theme.rs` for the rules). Rems convert with the active root font size.

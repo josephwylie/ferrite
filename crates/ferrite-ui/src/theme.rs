@@ -43,8 +43,8 @@
 //!    borders, no keycap boxes, no boxed section labels. Only a floating
 //!    surface casts, one shadow (`components::float_shadow`); a modal adds
 //!    `VEIL`.
-//! 3. **Neutral greys.** The opaque surfaces, darkest first: `NODIFF` <
-//!    `SUNKEN` (a command well) < `CARD` < `BAR` (the bar; diff and fence
+//! 3. **Neutral greys.** The opaque surfaces, darkest first: `SUNKEN` (a
+//!    command well) < `CARD` < `BAR` (the bar; diff and fence
 //!    blocks) < `DECISION` < `FIELD_COMPACT` < `FRAME` = `FIELD` (the Solo
 //!    Composer, the prompt band) < `TAB_ACTIVE` < `RAISED` (chips, inline
 //!    code, secondary buttons, hover on the frame) < `SELECTED` (the
@@ -298,10 +298,6 @@ pub const SELECTION_HOVER: u32 = 0x363636;
 pub const SELECTION_HOVER_GLASS: u32 = 0xffffff24;
 /// `#3a3a3a` — the send button's circle (and a comment's avatar).
 pub const SEND: u32 = 0x3a3a3a;
-/// `#141414` — the empty side of a split diff (a row with no partner),
-/// below the card.
-pub const NODIFF: u32 = 0x141414;
-pub const NODIFF_GLASS: u32 = 0x00000033;
 /// `#f2f2f2` / `#161616` — the primary button (`primary_button`, dialogs
 /// and settings) and its ink. No hue: the primary is the strongest ink.
 pub const PRIMARY: u32 = TEXT_STRONG;
@@ -389,7 +385,6 @@ pub mod paint {
     /// An open pull request's pill: a hue overlay on every platform.
     pub const PR_OPEN_PILL: Paint = Paint(super::PR_OPEN_PILL);
     pub const FLOAT: Paint = Paint::pick(super::FLOAT_GLASS, solid(super::FLOAT));
-    pub const NODIFF: Paint = Paint::pick(super::NODIFF_GLASS, solid(super::NODIFF));
     /// The hairlines: white overlays on every platform.
     pub const HAIRLINE: Paint = Paint(super::HAIRLINE);
     pub const HAIRLINE_STRONG: Paint = Paint(super::HAIRLINE_STRONG);
@@ -1390,9 +1385,8 @@ pub fn init_components(cx: &mut gpui::App) {
 //   `DIFF_*_NUMBER` on a changed row), a `DIFF_SIGN_CELLS` sign carrying
 //   the hue, red and green row washes (`DIFF_*_WASH`) with the changed
 //   tokens washed deeper (`DIFF_*_WORD`), code in full syntax colour and
-//   one line per row, cut with `…`. Side by side once the transcript
-//   is `SPLIT_DIFF_MIN_W` wide, unified when narrower; a split row's empty
-//   side is `paint::NODIFF`. A later edit to a file already diffed in the
+//   one line per row, cut with `…`, always unified under a header naming
+//   the file and its size. A later edit to a file already diffed in the
 //   turn shows `+ show diff` instead.
 // - **No transcript row has a hover ground** but the keyboard's disclosure
 //   target (`paint::RAISED`).
@@ -1528,9 +1522,6 @@ pub const DIFF_NUMBER_PAD_CELLS: f32 = 1.5;
 /// Long tool output folds to this many lines under its elbow, then a
 /// `+ N lines` line that unfolds it in place.
 pub const OUTPUT_PREVIEW_LINES: usize = 3;
-/// A diff goes side by side once the transcript is this wide (the
-/// prototype's `@container (min-width: 1000px)`), unified when narrower.
-pub const SPLIT_DIFF_MIN_W: f32 = 1000.0;
 /// A diff's line-number column, in cells (its 1-cell pad included), and its
 /// sign column.
 pub const DIFF_NUMBER_CELLS: f32 = 5.0;
@@ -3097,7 +3088,6 @@ mod tests {
     #[test]
     fn the_surface_ladder_is_ordered_and_grey() {
         let ladder = [
-            ("NODIFF", NODIFF),
             ("SUNKEN", SUNKEN),
             ("CARD", CARD),
             ("BAR", BAR),
@@ -3226,7 +3216,6 @@ mod tests {
                 SELECTION_HOVER_GLASS,
                 SELECTION_HOVER,
             ),
-            (paint::NODIFF, NODIFF_GLASS, NODIFF),
             (paint::LINE, LINE_GLASS, LINE),
             (paint::LINE2, LINE2_GLASS, LINE2),
         ];

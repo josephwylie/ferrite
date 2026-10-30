@@ -145,8 +145,8 @@ fn a_test_run_reads_its_verdict_on_its_elbow() {
     assert_eq!(elbow.line(), "failed \u{b7} 341 passed; 1 failed");
 }
 
-/// A command's output folds whole behind its first line: `└ 7 issues · + 2
-/// lines`.
+/// A command's output folds whole behind its first line: `Ran cargo clippy
+/// · 7 issues + 2 lines`.
 #[test]
 fn a_commands_output_folds_behind_its_first_line() {
     let lint = call("Bash", "cargo clippy", ToolState::Ok, "7 issues\nA\n\nB\n");
@@ -160,7 +160,7 @@ fn a_commands_output_folds_behind_its_first_line() {
     assert_eq!(
         pane::command_fold(&call("Bash", "pwd", ToolState::Ok, "/x")),
         None,
-        "one line is all on the elbow"
+        "one line is all on the call line"
     );
     assert_eq!(
         pane::command_fold(&call("Read", "a.rs", ToolState::Ok, "1\n2")),
@@ -340,11 +340,11 @@ fn a_running_test_suite_shows_its_bar_and_count(cx: &mut TestAppContext) {
     assert_eq!(bar.size.height, px(ferrite_ui::theme::TEST_BAR_H));
 }
 
-/// A long Edit's diff in a wide transcript draws side by side in its box,
-/// stops at `HUNK_MAX_ROWS` with `… +N lines`, and a later edit to the
-/// same file still folds behind `+ show diff` until it is opened.
+/// A long Edit's diff draws unified in its card under a header naming the
+/// file, stops at `HUNK_MAX_ROWS` with `… +N lines`, and a later edit to
+/// the same file still folds behind `+ show diff` until it is opened.
 #[gpui::test]
-fn a_long_edit_diff_splits_caps_and_folds(cx: &mut TestAppContext) {
+fn a_long_edit_diff_caps_and_folds(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-long-diff", 1);
     let thread = core.threads()[0];
     core.send(thread, "Rewrite the nav".into());
@@ -391,8 +391,8 @@ fn a_long_edit_diff_splits_caps_and_folds(cx: &mut TestAppContext) {
         "the diff sits in its box"
     );
     assert!(
-        cx.debug_bounds("diff-split").is_some(),
-        "side by side when wide"
+        cx.debug_bounds("diff-header").is_some(),
+        "the card names its file"
     );
     assert!(
         cx.debug_bounds("diff-omitted").is_some(),
@@ -419,8 +419,8 @@ fn a_long_edit_diff_splits_caps_and_folds(cx: &mut TestAppContext) {
     );
 }
 
-/// A folded command's first line gives way in a narrow Pane: cut at its
-/// end, it keeps the row's width, and `+ N lines` stays in the row.
+/// A folded command's call line gives way in a narrow Pane: cut at the
+/// row's edge, and `+ N lines` stays in the row after it.
 #[gpui::test]
 fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-fold-head", 1);
@@ -452,7 +452,7 @@ fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
             fold.right() <= row.right() + px(0.5),
             "at {width}px the fold stays in the row: {fold:?} / {row:?}"
         );
-        let head = cx.debug_bounds("tool-fold-head").expect("the first line");
+        let head = cx.debug_bounds("tool-call").expect("the call line");
         assert!(head.right() <= fold.left(), "{head:?} before {fold:?}");
     }
 }

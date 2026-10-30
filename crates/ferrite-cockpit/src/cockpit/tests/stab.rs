@@ -1006,19 +1006,13 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     let edit = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Edit"));
     let stamp = id_of(&|body| matches!(body, Body::TurnEnd(_)));
 
-    // The agent's activity is code: a group summary, a tool call's line.
-    for (what, prefix) in [
-        (
-            "a command's call line",
-            format!("literal-{namespace}-{group:?}-0"),
-        ),
-        ("call line", format!("literal-{namespace}-{edit:?}-0")),
-    ] {
-        assert_eq!(face(cx, prefix).as_ref(), FONT_CODE, "{what} is code");
-    }
-    // The words around it read as the app's: the prompt, the stamp.
+    // Activity reads in the app's words, as the prompt does: a group's
+    // summary, a call's line (its argument an inline code span, below),
+    // the stamp.
     for (what, prefix) in [
         ("prompt", format!("literal-{namespace}-{prompt:?}-0")),
+        ("group summary", format!("literal-{namespace}-{group:?}-0")),
+        ("call line", format!("thinking-{namespace}-{edit:?}")),
         ("stamp", format!("literal-{namespace}-{stamp:?}-0")),
     ] {
         assert_eq!(face(cx, prefix).as_ref(), FONT_UI, "{what} is UI text");

@@ -4,32 +4,24 @@
 //! rendering tests compare both projections, including hidden tool details.
 use super::*;
 
-/// Where a path argument sits in its call line, in cells: `(start, len)` —
-/// after the name and its `(`. `None` when the argument is not a path.
-pub(super) fn path_argument(tool: &ToolBlock) -> Option<(usize, usize)> {
-    if !argument_is_path(tool) {
-        return None;
-    }
-    let name = ferrite_core::transcript::display_tool_name(&tool.name)
-        .chars()
-        .count();
-    Some((name + 1, tool.summary.chars().count()))
-}
-
-/// What a call whose result never came says under it.
+/// What a call whose result never came says after its call line.
 pub(super) const NO_RESULT: &str = "no result";
 
-/// What kind of work a call in a group did, for its summary. Classified by
-/// the tool alone: a command is a command whatever it ran — `cat` is not
-/// read as a read without knowing what the shell made of it.
+/// What kind of work a call did, for its call line's icon and verb and its
+/// group's summary. Classified by the tool alone: a command is a command
+/// whatever it ran — `cat` is not read as a read without knowing what the
+/// shell made of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum WorkKind {
     Command,
     Read,
+    Edit,
+    Write,
     Search,
     List,
     Fetch,
     WebSearch,
+    Agent,
     /// An MCP call, by its server (`mcp__github__get_issue` → `github`).
     Mcp(String),
     Other(String),
@@ -40,6 +32,9 @@ impl WorkKind {
         match tool.name.as_str() {
             "Bash" | "commandExecution" | "BashOutput" => Self::Command,
             "Read" | "NotebookRead" | "read_file" | "imageView" => Self::Read,
+            "Edit" | "MultiEdit" | "NotebookEdit" | "fileChange" => Self::Edit,
+            "Write" => Self::Write,
+            "Task" | "Agent" => Self::Agent,
             "Grep" | "Glob" => Self::Search,
             "LS" => Self::List,
             "WebFetch" => Self::Fetch,
@@ -64,10 +59,13 @@ impl WorkKind {
         match self {
             Self::Command => counted("Running", "Ran", "command", "commands"),
             Self::Read => counted("Reading", "Read", "file", "files"),
+            Self::Edit => counted("Editing", "Edited", "file", "files"),
+            Self::Write => counted("Writing", "Wrote", "file", "files"),
             Self::Search => counted("Searching for", "Searched for", "pattern", "patterns"),
             Self::List => counted("Listing", "Listed", "directory", "directories"),
             Self::Fetch => counted("Fetching", "Fetched", "page", "pages"),
             Self::WebSearch => counted("Running", "Ran", "web search", "web searches"),
+            Self::Agent => counted("Running", "Ran", "agent", "agents"),
             Self::Mcp(server) | Self::Other(server) => {
                 let verb = match (self, running) {
                     (Self::Mcp(_), true) => "Calling",
@@ -82,6 +80,200 @@ impl WorkKind {
             }
         }
     }
+
+    /// One call's verb, in the present tense while it runs: `Ran`, `Read`,
+    /// `Edited`; a tool with no verb of its own is named (`Agent`, `github`,
+    /// `TodoWrite`).
+    fn verb(&self, running: bool) -> &str {
+        let tense = |active, done| if running { active } else { done };
+        match self {
+            Self::Command => tense("Running", "Ran"),
+            Self::Read => tense("Reading", "Read"),
+            Self::Edit => tense("Editing", "Edited"),
+            Self::Write => tense("Writing", "Wrote"),
+            Self::Search => tense("Searching for", "Searched for"),
+            Self::List => tense("Listing", "Listed"),
+            Self::Fetch => tense("Fetching", "Fetched"),
+            Self::WebSearch => tense("Searching the web for", "Searched the web for"),
+            Self::Agent => "Agent",
+            Self::Mcp(name) | Self::Other(name) => name,
+        }
+    }
+
+    /// Whether a call of this kind takes a literal argument (a command, a
+    /// path, a pattern, a URL), set in Geist Mono; an agent's task or a
+    /// web query is words, set as the line is.
+    fn literal(&self) -> bool {
+        !matches!(
+            self,
+            Self::WebSearch | Self::Agent | Self::Mcp(_) | Self::Other(_)
+        )
+    }
+
+    /// The icon a call of this kind wears in its gutter.
+    fn icon(&self) -> &'static str {
+        match self {
+            Self::Command => icons::TERMINAL,
+            Self::Read => icons::FILE,
+            Self::Edit | Self::Write => icons::PENCIL,
+            Self::Search | Self::WebSearch => icons::SEARCH,
+            Self::List => icons::FOLDER,
+            Self::Fetch => icons::EXTERNAL,
+            Self::Agent => icons::SUBAGENTS,
+            Self::Mcp(_) | Self::Other(_) => icons::GEAR,
+        }
+    }
+}
+
+/// The icon a call wears in its gutter, by the kind of work it did.
+pub(crate) fn call_icon(tool: &ToolBlock) -> &'static str {
+    WorkKind::of(tool).icon()
+}
+
+/// A group's icon: its first call's.
+pub(crate) fn group_icon(members: &[Block]) -> &'static str {
+    group_tools(members).next().map_or(icons::GEAR, call_icon)
+}
+
+/// A call line as it reads and copies, in three runs: the verb in the app's
+/// words (`Ran `, its space carried when an argument follows), the argument
+/// as written (`cargo test -p ferrite-core`, a path; empty when the call has
+/// none) — `literal` when it is a command, a path or a pattern — and what
+/// came of it after its seam (` · 954 passed`), if anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CallLine {
+    pub verb: String,
+    pub argument: String,
+    pub literal: bool,
+    pub result: Option<String>,
+}
+
+/// The seam before a call line's result.
+pub(crate) const RESULT_SEAM: &str = " \u{b7} ";
+
+impl CallLine {
+    /// The call line as one Markdown run, so it selects and copies as the
+    /// one line it reads: the verb and the result as words, a literal
+    /// argument as inline code — a path (`path`) as a link that opens it
+    /// (`rich::PATH_SCHEME`) — anything else as words.
+    pub(crate) fn markdown(&self, path: bool) -> String {
+        let mut source = escape_words(&self.verb);
+        if path {
+            source.push_str(&path_link(&self.argument, &self.argument));
+        } else if self.literal && !self.argument.is_empty() {
+            source.push_str(&code_span(&self.argument));
+        } else {
+            source.push_str(&escape_words(&self.argument));
+        }
+        if let Some(result) = &self.result {
+            source.push_str(&escape_words(result));
+        }
+        source
+    }
+}
+
+/// A path in an activity line, as Markdown: `shown` linking to `path`
+/// (`rich::PATH_SCHEME`). A path with `<` or `>` in it reads as words.
+pub(crate) fn path_link(shown: &str, path: &str) -> String {
+    if path.contains(['<', '>']) {
+        return escape_words(shown);
+    }
+    format!(
+        "[{}](<{}{path}>)",
+        escape_words(shown),
+        crate::rich::PATH_SCHEME
+    )
+}
+
+/// A call's line as its one Markdown run (`CallLine::markdown`).
+pub(crate) fn call_markdown(tool: &ToolBlock) -> String {
+    call_line(tool).markdown(argument_is_path(tool))
+}
+
+/// Words as Markdown that reads them exactly: every ASCII punctuation mark
+/// escaped, so nothing in them is markup.
+pub(crate) fn escape_words(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Text as one inline code span that reads it exactly: fenced by one more
+/// backtick than its longest run, padded where it starts or ends with one.
+fn code_span(text: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for ch in text.chars() {
+        run = if ch == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    let fence = "`".repeat(longest + 1);
+    let pad = if text.starts_with(['`', ' ']) || text.ends_with(['`', ' ']) {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{pad}{text}{pad}{fence}")
+}
+
+pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
+    let argument = tool.argument().into_owned();
+    let kind = WorkKind::of(tool);
+    let mut verb = kind.verb(tool.state == ToolState::Running).to_owned();
+    if !argument.is_empty() {
+        verb.push(' ');
+    }
+    CallLine {
+        verb,
+        argument,
+        literal: kind.literal(),
+        result: call_result(tool).map(|result| format!("{RESULT_SEAM}{result}")),
+    }
+}
+
+/// What came of a call, said once after its call line: a test run's verdict
+/// (`954 passed`, `failed · 357 passed; 2 failed`), a command's first line,
+/// a read's `412 lines`, `failed`, `no result`. A running suite says nothing
+/// here (its bar does), nor does a settled edit (its diff does).
+fn call_result(tool: &ToolBlock) -> Option<String> {
+    match &tool.state {
+        ToolState::Running => tool
+            .result_line
+            .clone()
+            .filter(|_| tool.progress.is_none()),
+        ToolState::Unavailable => Some(NO_RESULT.to_owned()),
+        ToolState::Failed(_) => Some(
+            test_elbow(tool).map_or_else(|| theme::words::FAILED.to_owned(), |elbow| elbow.line()),
+        ),
+        ToolState::Ok => match test_elbow(tool) {
+            Some(elbow) if elbow.lead == theme::words::FAILED || elbow.rest.is_empty() => {
+                Some(elbow.line())
+            }
+            Some(elbow) => Some(elbow.rest),
+            None => match command_fold(tool) {
+                Some((first, _)) => Some(first),
+                None => tool.result_line.clone().filter(|_| tool.diffs.is_empty()),
+            },
+        },
+    }
+}
+
+/// A failed call's own words, on a line under its call line: its result
+/// line, else the first line of its error. `None` for a test run (its
+/// verdict and preview say it) or a failure that said nothing.
+pub(crate) fn call_failure(tool: &ToolBlock) -> Option<String> {
+    if !matches!(tool.state, ToolState::Failed(_)) || test_elbow(tool).is_some() {
+        return None;
+    }
+    tool.result_line
+        .clone()
+        .or_else(|| failed_excerpt(tool).map(str::to_owned))
+        .filter(|detail| !detail.trim().is_empty())
 }
 
 /// A group's summary line, as it reads and copies: what its calls did by
@@ -252,12 +444,11 @@ pub(crate) fn collect_output_text(block: BlockId, part: &str, text: &str, select
 
 /// One Block's copy fragments, in the order `render_block` registers them.
 /// `diff_shown` is whether a call's diff is drawn (a later edit's folds
-/// behind `+ show diff`); `wide` lays diffs side by side.
+/// behind `+ show diff`).
 pub(crate) fn collect_block_text(
     block: &Block,
     expanded: bool,
     diff_shown: bool,
-    wide: bool,
     selection: &TextRuns,
 ) {
     match &block.body {
@@ -303,7 +494,7 @@ pub(crate) fn collect_block_text(
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }
         Body::Tool(tool) => {
-            collect_tool_text(block.id, tool, expanded, diff_shown, wide, selection)
+            collect_tool_text(block.id, tool, expanded, diff_shown, selection)
         }
     }
 }
@@ -315,7 +506,6 @@ pub(crate) fn collect_group_text(
     members: &[Block],
     expanded: bool,
     member_expanded: impl Fn(&ToolBlock) -> bool,
-    wide: bool,
     selection: &TextRuns,
 ) {
     let Some(leader) = members.first() else {
@@ -334,7 +524,6 @@ pub(crate) fn collect_group_text(
                 tool,
                 member_expanded(tool),
                 false,
-                wide,
                 selection,
             );
         }
@@ -342,102 +531,60 @@ pub(crate) fn collect_group_text(
 }
 
 /// A call's copy fragments, in the order `render_tool` registers them: its
-/// call line; what hangs on its elbow (a test run's verdict and preview, a
-/// command's first line, a failure and its fold, a result); its disclosed
-/// details; its diffs while they are drawn.
+/// call line; a failure's own words; its output box (a failure's
+/// preview and open fold, an open command's output, its disclosed
+/// details); its diffs while they are drawn.
 fn collect_tool_text(
     block: BlockId,
     tool: &ToolBlock,
     expanded: bool,
     diff_shown: bool,
-    wide: bool,
     selection: &TextRuns,
 ) {
     let line = |text: String| {
         let _ = selection.line(block, text, Vec::new());
     };
-    line(tool.label());
-    let command = ferrite_core::docview::is_command_run(&tool.name);
-    match &tool.state {
-        ToolState::Running => {
-            if tool.progress.is_none() {
-                if let Some(result) = &tool.result_line {
-                    line(result.clone());
-                }
-            }
-            if expanded {
-                if shows_input(tool) {
-                    collect_output_text(block, "command", &tool.summary, selection);
-                }
-                if let Some(output) = disclosed_output(tool) {
-                    collect_output_text(block, "result", &output.text, selection);
-                }
-                if let Some(output) = tool.structured_preview.as_ref() {
-                    collect_output_text(block, "details", &output.text, selection);
-                }
+    let _ = selection.markdown(block, call_markdown(tool));
+    if let Some(failure) = call_failure(tool) {
+        line(failure);
+    }
+    let failed_test = test_elbow(tool).filter(|elbow| elbow.lead == theme::words::FAILED);
+    if let Some(elbow) = &failed_test {
+        if !elbow.preview.is_empty() {
+            line(elbow.preview.join("\n"));
+        }
+        if elbow.hidden > 0 && expanded {
+            collect_fold(block, tool, test_rest(tool, elbow), selection);
+        }
+    } else if matches!(tool.state, ToolState::Failed(_)) {
+        if let Some((shown, hidden)) = output_fold(tool) {
+            line(shown);
+            if hidden > 0 && expanded {
+                collect_fold(block, tool, failed_rest(tool, hidden), selection);
             }
         }
-        ToolState::Unavailable => {}
-        ToolState::Failed(_) => {
-            if let Some(elbow) = test_elbow(tool) {
-                line(elbow.line());
-                if !elbow.preview.is_empty() {
-                    line(elbow.preview.join("\n"));
-                }
-                if elbow.hidden > 0 && expanded {
-                    collect_fold(block, tool, test_rest(tool, &elbow), selection);
-                }
-            } else {
-                let detail = tool
-                    .result_line
-                    .clone()
-                    .or_else(|| failed_excerpt(tool).map(str::to_owned))
-                    .filter(|detail| !detail.trim().is_empty());
-                // Nothing said: the word alone, as `render_tool` draws it.
-                match detail {
-                    Some(detail) => {
-                        line(failed_head());
-                        line(detail);
-                    }
-                    None => line(theme::words::FAILED.to_string()),
-                }
-                if let Some((shown, hidden)) = output_fold(tool) {
-                    line(shown);
-                    if hidden > 0 && expanded {
-                        collect_fold(block, tool, failed_rest(tool, hidden), selection);
-                    }
-                }
-            }
+    } else if let Some((_, rest)) = command_fold(tool).filter(|_| expanded) {
+        collect_fold(block, tool, rest.join("\n"), selection);
+    }
+    let details = match tool.state {
+        ToolState::Running => expanded,
+        ToolState::Ok => expanded && !ferrite_core::docview::is_command_run(&tool.name),
+        _ => false,
+    };
+    if details {
+        if shows_input(tool) {
+            collect_output_text(block, "command", &tool.summary, selection);
         }
-        ToolState::Ok => {
-            if let Some(elbow) = test_elbow(tool) {
-                line(elbow.line());
-            } else if let Some((first, rest)) = command_fold(tool) {
-                line(first);
-                if expanded {
-                    collect_fold(block, tool, rest.join("\n"), selection);
-                }
-            } else if tool.diffs.is_empty() {
-                if let Some(result) = &tool.result_line {
-                    line(result.clone());
-                }
-            }
-            if expanded && !command {
-                if shows_input(tool) {
-                    collect_output_text(block, "command", &tool.summary, selection);
-                }
-                if let Some(output) = disclosed_output(tool) {
-                    collect_output_text(block, "result", &output.text, selection);
-                }
-                if let Some(output) = tool.structured_preview.as_ref() {
-                    collect_output_text(block, "details", &output.text, selection);
-                }
-            }
+        if let Some(output) = disclosed_output(tool) {
+            collect_output_text(block, "result", &output.text, selection);
+        }
+        if let Some(output) = tool.structured_preview.as_ref() {
+            collect_output_text(block, "details", &output.text, selection);
         }
     }
     if diff_shown {
         for diff in &tool.diffs {
-            collect_diff_text(block, diff, wide, selection);
+            collect_diff_text(block, diff, selection);
         }
     }
 }
@@ -454,13 +601,12 @@ fn collect_fold(block: BlockId, tool: &ToolBlock, rest: String, selection: &Text
     }
 }
 
-/// A diff's selectable code, in the order the rows register it
-/// (`DiffRow::selectable`).
-fn collect_diff_text(block: BlockId, diff: &Diff, wide: bool, selection: &TextRuns) {
+/// A diff's selectable code, in the order its rows register it.
+fn collect_diff_text(block: BlockId, diff: &Diff, selection: &TextRuns) {
     let (cap, _) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
-    for row in diff_rows(diff, cap, wide) {
-        for side in row.selectable() {
-            let _ = selection.line(block, side.body.clone(), Vec::new());
+    for row in diff_rows(diff, cap) {
+        if let DiffRow::Line(side) = row {
+            let _ = selection.line(block, side.body, Vec::new());
         }
     }
 }

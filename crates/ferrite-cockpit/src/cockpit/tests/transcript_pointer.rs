@@ -424,9 +424,9 @@ fn presses_on_chrome_select_nothing_and_a_drag_out_the_bottom_clamps(cx: &mut Te
     assert_eq!(clipboard(cx).as_deref(), Some("pha\nbravo\ncharlie"));
 }
 
-/// #27: copy is what you see. A sweep across a tool row takes its
-/// composed call pieces joined with nothing and its ⎿ continuation on
-/// its own line — never the ⏺ gutter, the verdict chip, or a duration.
+/// #27: copy is what you see. A sweep across a tool row takes its call
+/// line as one line, its result after its seam — never its icon, its
+/// code chip's markup, or a duration.
 #[gpui::test]
 fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("select-tool-row", 1);
@@ -473,7 +473,7 @@ fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestA
     cx.simulate_keystrokes("cmd-c");
     assert_eq!(
         clipboard(cx).as_deref(),
-        Some("before\n\nBash(echo hi)\n\ndone\n\nafter"),
-        "copy the call line and its elbow's words; omit the dot, the └ and the trail"
+        Some("before\n\nRan echo hi \u{b7} done\n\nafter"),
+        "copy the call line as it reads; omit the icon and the trail"
     );
 }

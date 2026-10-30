@@ -422,30 +422,6 @@ impl gpui::RenderOnce for PathText {
     }
 }
 
-/// A path target laid over a run of monospace text the selection owns (a
-/// tool call's argument, the banner's checkout): `start` cells in, `width`
-/// cells wide, one line tall at reading size `size`. It draws only the
-/// hover underline; the text under it stays one selectable run.
-pub(crate) fn path_overlay(
-    target: PathTarget,
-    start: usize,
-    width: usize,
-    size: f32,
-    line: f32,
-) -> AnyElement {
-    let cell = theme::tx_cell(size);
-    let key = target.key(&format!("overlay-{start}"));
-    let element = div()
-        .id(key.clone())
-        .absolute()
-        .top_0()
-        .left(px(start as f32 * cell))
-        .w(px(width as f32 * cell))
-        .h(px(line))
-        .child(underline(&key, theme::LINK_INK, size, line));
-    wire_target(element, target, key).into_any_element()
-}
-
 /// Wire an inline file chip (`attachments::inline_file`) as a path target
 /// with its underline: `ink` is the name's own.
 pub(crate) fn wire_inline(

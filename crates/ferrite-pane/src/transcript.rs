@@ -30,7 +30,7 @@ use self::{
     scroll::TranscriptScroll,
 };
 use crate::{
-    file_links::{PathTarget, TargetContext},
+    file_links::TargetContext,
     hover_card::{CardStat, HoverCard},
     pane::{self, DisclosureId, DisclosureState, Grid},
     preview::Preview,
@@ -246,9 +246,6 @@ pub struct TranscriptView {
     /// The disclosure the pointer last flipped, and to which state: only
     /// its chevron eases; a keyboard toggle turns it at once.
     eased: Option<(DisclosureId, bool)>,
-    /// The transcript is wide enough for side-by-side diffs
-    /// (`SPLIT_DIFF_MIN_W`), as of the last layout.
-    wide: Rc<Cell<bool>>,
     /// The pinned prompt band's height, as of the last layout: the next
     /// turn's band pushes it up by what it overlaps.
     pinned_h: Rc<Cell<gpui::Pixels>>,
@@ -394,7 +391,6 @@ impl TranscriptView {
             controls_end: cx.focus_handle().tab_stop(true),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
             eased: None,
-            wide: Rc::new(Cell::new(false)),
             pinned_h: Rc::new(Cell::new(gpui::px(0.))),
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
@@ -772,7 +768,7 @@ impl TranscriptView {
         match row.kind() {
             RowKind::Banner => {
                 if let Some(facts) = &self.input.banner {
-                    let _ = selection.line(BlockId::BANNER, banner_line(facts).text, Vec::new());
+                    let _ = selection.markdown(BlockId::BANNER, banner_markdown(facts));
                 }
                 return;
             }
@@ -790,7 +786,6 @@ impl TranscriptView {
                     self.tool_state(DisclosureId::Tool(tool.call.clone()))
                         == DisclosureState::Expanded
                 },
-                self.wide.get(),
                 selection,
             );
         } else if let Some(block) = row.blocks().first() {
@@ -803,7 +798,6 @@ impl TranscriptView {
                 block,
                 expanded,
                 row.diff_shown(),
-                self.wide.get(),
                 selection,
             );
         }
@@ -845,10 +839,8 @@ impl TranscriptView {
             preview: &self.input.preview,
             grid: self.grid(),
             solo: self.input.solo,
-            wide: self.wide.get(),
             focused: self.input.focused,
             scope: &self.input.namespace,
-            workspace: self.input.workspace.as_deref(),
         }
     }
 
@@ -1135,34 +1127,22 @@ impl TranscriptView {
         stops
     }
 
-    /// The banner (ADR 0014): one muted line — the checkout, on its branch,
-    /// and when the Thread started. The checkout is a path target in the
-    /// line's own ink, as a call's path argument is (SPEC §3.4): its
-    /// underline shows under the pointer. Its text is selectable.
+    /// The banner (ADR 0014): one muted line of activity — the checkout,
+    /// on its branch, and when the Thread started — a step under the prose.
+    /// The checkout is a file link (a path target, as a call's path is): its
+    /// underline shows under the pointer. It is one selectable run.
     fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
-        let grid = self.grid();
-        let line = banner_line(facts);
-        let overlay = line.path.map(|len| {
-            crate::file_links::path_overlay(
-                PathTarget::new(facts.workspace_path.clone())
-                    .shown(facts.workspace.clone())
-                    .in_scope(self.input.namespace.clone()),
-                0,
-                len,
-                grid.size,
-                grid.line,
-            )
-        });
-        pane::on_cells(div())
+        div()
             .debug_selector(|| "transcript-banner".into())
-            .relative()
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .truncate()
-            .text_color(gpui::rgb(theme::TEXT_DIM))
-            .child(selection.line(BlockId::BANNER, line.text, Vec::new()))
-            .children(overlay)
+            .text_size(px(self.grid().activity().size))
+            .child(
+                selection
+                    .markdown(BlockId::BANNER, banner_markdown(facts))
+                    .ink(theme::TEXT_DIM),
+            )
             .into_any_element()
     }
 
@@ -1369,29 +1349,30 @@ impl TranscriptView {
     }
 }
 
-/// The banner's line: its text, and how many characters of it, from its
-/// start, are the path target.
-struct BannerLine {
-    text: String,
-    path: Option<usize>,
-}
-
-/// `~/ferrite on dev · started 7:18 pm`: whichever of these the Thread has.
-fn banner_line(facts: &BannerFacts) -> BannerLine {
-    let mut text = facts.workspace.to_string();
-    let path = (!text.is_empty()).then(|| text.chars().count());
+/// The banner's line as Markdown: `~/ferrite on dev · started 7:18 pm`,
+/// whichever of these the Thread has, the checkout a link that opens it.
+fn banner_markdown(facts: &BannerFacts) -> String {
+    let mut source = String::new();
+    if !facts.workspace.is_empty() {
+        source.push_str(&pane::path_link(
+            &facts.workspace,
+            &facts.workspace_path.display().to_string(),
+        ));
+    }
+    let mut rest = String::new();
     if let Some(branch) = &facts.branch {
-        text.push_str(" on ");
-        text.push_str(branch);
+        rest.push_str(" on ");
+        rest.push_str(branch);
     }
     if let Some(started) = &facts.started_at {
-        if !text.is_empty() {
-            text.push_str(" \u{b7} ");
+        if !source.is_empty() || !rest.is_empty() {
+            rest.push_str(" \u{b7} ");
         }
-        text.push_str("started ");
-        text.push_str(started);
+        rest.push_str("started ");
+        rest.push_str(started);
     }
-    BannerLine { text, path }
+    source.push_str(&pane::escape_words(&rest));
+    source
 }
 
 /// What prose path targets resolve against: the checkout, and every path
@@ -1725,18 +1706,6 @@ impl TranscriptView {
                 .into_any_element(),
         )
     }
-
-    /// The transcript crossed `SPLIT_DIFF_MIN_W`: diffs lay out again, side
-    /// by side or unified, and their copy order follows.
-    fn width_changed(&mut self, wide: bool, cx: &mut Context<Self>) {
-        if self.wide.get() == wide {
-            return;
-        }
-        self.wide.set(wide);
-        self.sync_members(cx);
-        self.scroll.remeasure_all();
-        cx.notify();
-    }
 }
 
 /// The prompt band the top of the viewport reads under (see
@@ -1848,7 +1817,6 @@ impl Render for TranscriptView {
         let scroll = self.scroll.clone();
         let gaps = self.rows.clone();
         let heights = self.heights.clone();
-        let wide = self.wide.clone();
         let weak = cx.entity().downgrade();
         let pinned_drawn = self.pinned_drawn.clone();
         let pinned_asked = self.pinned_asked.clone();
@@ -2039,13 +2007,6 @@ impl Render for TranscriptView {
                             let _ = weak.update(cx, |_, cx| cx.notify());
                         });
                     }
-                }
-                let is_wide = width >= px(theme::SPLIT_DIFF_MIN_W);
-                if width > px(0.) && is_wide != wide.get() {
-                    let weak = weak.clone();
-                    window.defer(cx, move |_, cx| {
-                        let _ = weak.update(cx, |view, cx| view.width_changed(is_wide, cx));
-                    });
                 }
                 if anchored || settled {
                     // Lay this transcript (and the Pane around it) out again

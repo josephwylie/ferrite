@@ -213,7 +213,9 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
                     Body::Thinking(_) => {
                         vec![format!("thinking-{}-{:?}", pane.text_namespace(), block.id)]
                     }
-                    Body::Tool(_) => (2..=3)
+                    // Its call line is one Markdown run; its disclosed
+                    // input and output the literals after it.
+                    Body::Tool(_) => (0..=1)
                         .map(|ordinal| {
                             format!("literal-{}-{:?}-{ordinal}", pane.text_namespace(), block.id)
                         })
@@ -411,12 +413,12 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
             .any(|(_, _, _, text)| text.contains("let answer")));
         let first = runs
             .iter()
-            .find(|(_, _, _, text)| text.starts_with("Bash("))
+            .find(|(_, _, _, text)| text.starts_with("Running "))
             .unwrap()
             .0;
         let height = |block| {
             ferrite_pane::rich::testing::bounds(
-                &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
+                &format!("thinking-{}-{block:?}", view.panes[0].text_namespace()),
                 0,
                 cx,
             )
@@ -522,7 +524,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         };
         let x = |block| {
             ferrite_pane::rich::testing::bounds(
-                &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
+                &format!("thinking-{}-{block:?}", view.panes[0].text_namespace()),
                 0,
                 cx,
             )
@@ -537,11 +539,10 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     });
 
     let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
+    // The call line says the first line; the rest folds behind it.
     assert!(collapsed
         .iter()
-        .any(|(_, _, _, text)| text == "Bash(echo hi)"));
-    // The first line hangs on the elbow; the rest folds behind it.
-    assert!(collapsed.iter().any(|(_, _, _, text)| text == "first line"));
+        .any(|(_, _, _, text)| text == "Ran `echo hi` \u{b7} first line"));
     assert!(!collapsed
         .iter()
         .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
