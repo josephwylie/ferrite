@@ -44,7 +44,7 @@ fn the_prompt_being_read_copies_and_resends_from_commands(cx: &mut TestAppContex
         .unwrap();
     tick(cx);
 
-    // Nothing on the band answers the pointer.
+    // The pointer over the bubble shows its send time and no actions.
     let prompt = cx.debug_bounds("transcript-prompt").unwrap();
     cx.simulate_mouse_move(prompt.center(), None, gpui::Modifiers::none());
     tick(cx);
@@ -271,8 +271,8 @@ fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestA
         let line = ferrite_ui::theme::answer_line_height(size);
         assert_eq!(
             prompt.size.height,
-            px(line + 2. * ferrite_ui::theme::PROMPT_BAND_PAD_Y),
-            "{size:?}: the echo sits on the answer's line in its band"
+            px(line + 2. * ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
+            "{size:?}: the echo sits on the answer's line in its bubble"
         );
         let echo = view.read_with(cx, |view, cx| {
             let pane = &view.panes[0];
@@ -341,8 +341,9 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
         let answer = cx.debug_bounds("transcript-answer").unwrap();
         let stamp = cx.debug_bounds("turn-stamp").unwrap();
-        // Terminal-native: blocks sit one blank line apart under the
-        // prompt's band; consecutive calls fold into one summary line.
+        // Blocks sit one blank line apart under the prompt's bubble (its
+        // send time hangs in that line); consecutive calls fold into one
+        // summary line.
         let line = px(ferrite_ui::theme::LH_PROSE);
         assert_eq!(tools.top() - prompt.bottom(), line);
         assert!(
@@ -352,23 +353,22 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         assert_eq!(answer.top() - tools.bottom(), line);
         // The stamp is one blank line under the turn's last block.
         assert_eq!(stamp.top() - answer.bottom(), line);
-        // One content edge: the prompt's text, the group's summary and
-        // the answer's prose all start on the content column.
-        let prompt_start = caret(&view, cx, 0, 0).x;
+        // One content edge: the group's summary and the answer's prose
+        // start on the content column (the prompt's bubble keeps to the
+        // right).
         let tools_start = caret(&view, cx, 1, 0).x;
         let answer_start = caret(&view, cx, 3, 0).x;
-        assert_eq!(answer_start, prompt_start, "answer prose sits on C1");
-        assert_eq!(tools_start, prompt_start, "the summary sits on C1");
+        assert_eq!(answer_start, tools_start, "answer prose sits on C1");
         // The row's box is rounded to the pixel and its text keeps its
         // fraction (the browser's model, vendor/gpui-pre "Pixel
         // snapping"): the two agree to within a pixel.
         assert!(
-            (prompt_start
+            (tools_start
                 - tools.left()
                 - px(ferrite_ui::theme::tx_gutter(ferrite_ui::theme::FS_PROSE) + 0.5))
             .abs()
                 <= px(1.0),
-            "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset: {prompt_start:?} {tools:?}"
+            "the content column one 2-cell gutter past the row's left edge, plus the caret helper's half-pixel inset: {tools_start:?} {tools:?}"
         );
     }
 }

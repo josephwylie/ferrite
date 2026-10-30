@@ -1198,8 +1198,8 @@ fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
 }
 
 /// The prompt heads its turn: the operator's line is at prose size, the
-/// same size as the answer under it, on its band. Terminal-native: one
-/// blank line sits above the band, and the band's half line above its text.
+/// same size as the answer under it, in its bubble. One blank line sits
+/// above the bubble, and the bubble's padding above its text.
 #[gpui::test]
 fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("prompt-heads-turn", 1);
@@ -1263,8 +1263,8 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     // prompt is the turn step.
     assert_eq!(
         line(prompts[1]).top() - line(stamps[0]).bottom(),
-        px(ferrite_ui::theme::LH_PROSE + ferrite_ui::theme::PROMPT_BAND_PAD_Y),
-        "turns sit a blank line and the band's padding apart"
+        px(ferrite_ui::theme::LH_PROSE + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
+        "turns sit a blank line and the bubble's padding apart"
     );
 }
 

@@ -251,23 +251,20 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
         tick(cx);
         let chip = cx
             .debug_bounds("prompt-chip-data.weird-extension")
-            .expect("a sent file is its band's chip");
-        let band = cx.debug_bounds("transcript-prompt").unwrap();
-        // The band's padding above and below the chips (a Group Pane's),
-        // which wrap in a half-width Pane; the last chip line stands
-        // taller, as the inline chip makes it.
-        let lines = (band.size.height
-            - px(ferrite_ui::theme::PROMPT_CHIP_LINE_EXTRA
-                + 2. * ferrite_ui::theme::prompt_band_pad_y(false)))
+            .expect("a sent file is its bubble's chip");
+        let bubble = cx.debug_bounds("transcript-prompt").unwrap();
+        // The bubble's padding above and below the chips, which wrap in a
+        // half-width Pane.
+        let lines = (bubble.size.height - px(2. * ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y))
             / chip.size.height;
         assert!(
             lines >= 1. && lines.fract() == 0.,
-            "whole lines plus the chip line's extra: {band:?} / {chip:?}"
+            "whole chip lines: {bubble:?} / {chip:?}"
         );
-        assert!(
-            cx.debug_bounds("sent-image").is_some(),
-            "a sent image is framed under its band"
-        );
+        let image = cx
+            .debug_bounds("sent-image")
+            .expect("a sent image is a thumbnail under its bubble");
+        assert!(image.top() >= bubble.bottom(), "{image:?} under {bubble:?}");
         view.read_with(cx, |view, cx| {
             assert!(view.panes[view.focused()].composer.read(cx).is_empty());
         });

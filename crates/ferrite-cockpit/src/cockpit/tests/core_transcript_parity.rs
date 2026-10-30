@@ -170,22 +170,31 @@ fn a_commands_output_folds_behind_its_first_line() {
 }
 
 /// A prompt's files flow after its words as inline chips: its words
-/// escaped (they are never markup), then one chip link per file.
+/// escaped (they are never markup), then one chip link per file; an image
+/// is its thumbnail, never a chip.
 #[test]
 fn a_prompts_files_flow_inline_after_its_words() {
     let line = ferrite_core::prompt_files::compose(
         "Fix the [nav] jitter",
-        &[std::path::PathBuf::from("/tmp/nav-jitter.png")],
+        &[
+            std::path::PathBuf::from("/tmp/nav-jitter.png"),
+            std::path::PathBuf::from("/tmp/nav-notes.md"),
+        ],
     );
     let (text, files) = pane::prompt_text(&line);
-    assert_eq!(files.len(), 1);
+    assert_eq!(files.len(), 2);
     let pane::PromptText::Markdown(source) = text else {
         panic!("a prompt with files is Markdown");
     };
     assert_eq!(
         source,
-        "Fix the \\[nav\\] jitter [nav\\-jitter\\.png](<ferrite-chip:/tmp/nav-jitter.png>)"
+        "Fix the \\[nav\\] jitter [nav\\-notes\\.md](<ferrite-chip:/tmp/nav-notes.md>)"
     );
+    let line = ferrite_core::prompt_files::compose(
+        "Look",
+        &[std::path::PathBuf::from("/tmp/nav-jitter.png")],
+    );
+    assert!(matches!(pane::prompt_text(&line).0, pane::PromptText::Literal(words) if words == "Look"));
     let (plain, files) = pane::prompt_text("Just words");
     assert!(files.is_empty());
     assert!(matches!(plain, pane::PromptText::Literal(words) if words == "Just words"));

@@ -820,7 +820,7 @@ pub const SPACE_6: f32 = 24.0;
 
 // ------------------------------------------------------------------ radii
 //
-// **Radii by role** (rule 2, SPEC §3.6): 4 · 5 · 6 · 7 · 8 · 10 · 12, and
+// **Radii by role** (rule 2, SPEC §3.6): 4 · 5 · 6 · 7 · 8 · 10 · 12 · 16, and
 // round for dots, pills and the send circle (`rounded_full`).
 
 /// 4px — the inline code chip.
@@ -842,6 +842,10 @@ pub const R_BLOCK: f32 = 8.0;
 pub const R_PANE: f32 = 10.0;
 /// 12px — the palette.
 pub const R_PALETTE: f32 = 12.0;
+/// 12px — a sent image's thumbnail.
+pub const R_THUMB: f32 = R_PALETTE;
+/// 16px — the prompt bubble.
+pub const R_BUBBLE: f32 = 16.0;
 /// 2px — meter segments and other tiny marks.
 pub const R_TIGHT: f32 = 2.0;
 
@@ -1336,16 +1340,20 @@ pub fn init_components(cx: &mut gpui::App) {
 // - **The banner.** Every transcript opens on one `TEXT_DIM` line:
 //   `~/ferrite on dev · started 7:18 pm` (ADR 0014). The nav row names
 //   the Thread and the status line its model.
-// - **The prompt band.** The prompt echo is a `paint::FIELD` box
-//   (`R_CONTROL`), `PROMPT_BAND_PAD_X` either side and pulled out by as
+// - **The prompt bubble.** The prompt echo is a right-aligned
+//   `paint::RAISED` bubble (`R_BUBBLE`) shrinking to its words in Geist
+//   `TEXT_STRONG`, its non-image files' chips inline after them, its
+//   images as thumbnails under it, and its send time (`TEXT_FAINT`) under
+//   those while the pointer is over it.
+// - **The pinned band.** The prompt of the turn being read stays pinned at
+//   the top of the body while its output scrolls under it: a `paint::FIELD`
+//   box (`R_CONTROL`), `PROMPT_BAND_PAD_X` either side and pulled out by as
 //   much so its text keeps the column, `prompt_band_pad_y` above and below:
 //   `❯` (`W_STRONG`) in the gutter, the text in `TEXT_STRONG` at body
 //   weight, its attachments inline after the words (`TEXT_STRONG` names on
 //   `paint::RAISED` chips at `R_INLINE`), and its send time (`7:31 pm`,
-//   `TEXT_DIM`) in its own right-aligned column on the first line. The
-//   band of the turn being read stays pinned at the top of the body while
-//   its output scrolls under it — exactly the band, on the card, pushed up
-//   by the next turn's band. Nothing on a band answers the pointer.
+//   `TEXT_DIM`) in its own right-aligned column on the first line, pushed
+//   up by the next turn's prompt. Nothing on the band answers the pointer.
 // - **Tool rows.** `● Name(args)`, one row per call (never folded into a
 //   summary): the name `TEXT_STRONG` at `W_STRONG` (`Update`, `Bash`, the
 //   way Claude Code names them), the parens and arguments `TEXT_DIM` (a
@@ -1479,6 +1487,22 @@ pub fn prompt_band_pad_y(solo: bool) -> f32 {
     }
 }
 
+/// **The prompt bubble** (the prototype's `.bubble`): right-aligned,
+/// shrinking to its words, never wider than `PROMPT_BUBBLE_MAX_W` of the
+/// column; `paint::RAISED` at `R_BUBBLE`, `PROMPT_BUBBLE_PAD_X` either side
+/// and `PROMPT_BUBBLE_PAD_Y` above and below; `PROMPT_BUBBLE_GAP` between
+/// it, its thumbnails and its send time.
+pub const PROMPT_BUBBLE_MAX_W: f32 = 0.8;
+pub const PROMPT_BUBBLE_PAD_X: f32 = SPACE_4;
+pub const PROMPT_BUBBLE_PAD_Y: f32 = 10.0;
+pub const PROMPT_BUBBLE_GAP: f32 = SPACE_1_5;
+
+/// **A sent image's thumbnail** (the prototype's `.thumb`): the picture at
+/// its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H` (nor
+/// its own size), at `R_THUMB` in a 1px `FIELD_RING`.
+pub const THUMB_MAX_W: f32 = 320.0;
+pub const THUMB_MAX_H: f32 = 200.0;
+
 /// **The block box** — a diff's or a code fence's (SPEC §5.4): `paint::BAR`
 /// ground, `R_CONTROL` corners, an inset 1px `HAIRLINE`, `BLOCK_PAD_Y`
 /// above its first line and below its last, `BLOCK_MARGIN_T` under the row
@@ -1502,9 +1526,9 @@ pub const SPLIT_DIFF_MIN_W: f32 = 1000.0;
 /// sign column.
 pub const DIFF_NUMBER_CELLS: f32 = 5.0;
 pub const DIFF_SIGN_CELLS: f32 = 2.0;
-/// An inline image's frame in cells, its 1px `paint::LINE2` border included
-/// (the prototype's `.img{width:48ch}`, 374.4px at Standard); the picture
-/// fills it.
+/// An answer's image frame in cells, its 1px `paint::LINE2` border
+/// included (the prototype's `.img{width:48ch}`, 374.4px at Standard); the
+/// picture fills it.
 pub const IMAGE_CELLS: f32 = 48.0;
 
 /// **The minimap** (the transcript's scrollbar): a `MINIMAP_W` rail at the
@@ -1535,8 +1559,9 @@ pub const MINIMAP_SCROLL_MS: u64 = 300;
 /// `BANNER_PAD_T` above it (board Panes none, `.tx{padding-top:0}`), and the
 /// first band sits a line below it.
 pub const BANNER_PAD_T: f32 = LH_UI;
-/// The prompt band's send time: its own right-aligned column, this many
-/// cells of padding on its left (the prototype's `.when{padding-left:2ch}`).
+/// The pinned prompt band's send time: its own right-aligned column, this
+/// many cells of padding on its left (the prototype's
+/// `.when{padding-left:2ch}`).
 pub const PROMPT_TIME_PAD_CELLS: f32 = 2.0;
 /// What a prompt band's chip line adds below it: the prototype's chip is an
 /// `inline-flex` box seated on its icon's synthesized baseline, which lifts

@@ -1550,7 +1550,7 @@ impl TranscriptView {
         let lines = ((available / line_height) as usize)
             .saturating_sub(1)
             .clamp(1, 3);
-        let band = pane::prompt_row(block, line, &self.row_cx(&selection), Some(lines));
+        let band = pane::pinned_prompt(block, line, &self.row_cx(&selection), lines);
         let measured = self.pinned_h.clone();
         Some(
             div()
@@ -1572,7 +1572,9 @@ impl TranscriptView {
                         .block_mouse_except_scroll()
                         .cursor_default()
                         .w_full()
-                        .px(px(row_inset(RowKind::Prompt, self.input.solo)))
+                        // Pulled out by the band's padding, so its text
+                        // keeps the transcript's column.
+                        .px(px(theme::tx_inset(self.input.solo) - theme::PROMPT_BAND_PAD_X))
                         // The band over an opaque plane: together they hide
                         // the rows scrolling under it, glass or not.
                         .bg(gpui::rgb(theme::CARD))
@@ -1833,18 +1835,6 @@ fn pinned_of(
     Some((prompt, shift))
 }
 
-/// A row's inset from the list's edges: the transcript column's
-/// (`tx_inset`), less `PROMPT_BAND_PAD_X` for a prompt band, whose box
-/// reaches past the column so its text keeps it.
-fn row_inset(kind: RowKind, solo: bool) -> f32 {
-    let inset = theme::tx_inset(solo);
-    if kind == RowKind::Prompt {
-        inset - theme::PROMPT_BAND_PAD_X
-    } else {
-        inset
-    }
-}
-
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.arm_second_tick(cx);
@@ -1885,16 +1875,14 @@ impl Render for TranscriptView {
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
                 // resolve against and shrinks to its text. The wrapper holds
-                // the row's inset (`tx_inset`; a prompt band's box reaches
-                // `PROMPT_BAND_PAD_X` past it and insets its own text by as
-                // much) and the row's own gap above it (the first row's is
-                // the body's top padding: the list's own top padding
-                // flickers mid-scroll).
+                // the transcript column's inset (`tx_inset`) and the row's
+                // own gap above it (the first row's is the body's top
+                // padding: the list's own top padding flickers mid-scroll).
                 let gap = row.gap();
                 let wrapper = div()
                     .w_full()
                     .pt(px(gap))
-                    .px(px(row_inset(row.kind(), solo)));
+                    .px(px(theme::tx_inset(solo)));
                 // A row appended live rises into place; its gap does not
                 // move, so the rows above it hold still.
                 let wrapper = match arrival {
@@ -1930,7 +1918,7 @@ impl Render for TranscriptView {
         let reading = self.input.reading_size;
         let inset = theme::tx_inset(solo);
         let line = grid.line;
-        let band_pad = theme::prompt_band_pad_y(solo);
+        let bubble_pad = theme::PROMPT_BUBBLE_PAD_Y;
         let pad_b = theme::body_pad_b(solo);
         let list = div()
             // The wheel takes the scroll back from a minimap glide in
@@ -2029,7 +2017,7 @@ impl Render for TranscriptView {
                         gaps.get(index).map_or(0., |row| {
                             row.gap()
                                 + if row.kind() == RowKind::Prompt {
-                                    band_pad
+                                    bubble_pad
                                 } else {
                                     0.
                                 }

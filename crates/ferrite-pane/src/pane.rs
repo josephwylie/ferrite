@@ -4684,7 +4684,7 @@ pub(crate) fn render_block(
         // A visual's row owns a live page, so the transcript's `Shelf`
         // draws it (`TranscriptView::render_row`); it never reaches here.
         Body::Visual(_) => row.into_any_element(),
-        Body::Prompt(line) => prompt_row(block, line, row_cx, None),
+        Body::Prompt(line) => prompt_row(block, line, row_cx),
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.
         Body::Paragraph { spans } => row
@@ -4871,22 +4871,31 @@ pub(crate) fn render_block(
     }
 }
 
-/// What a prompt's band text is: its words as one literal run, or — with
-/// attachments — Markdown whose links are the inline chips, so a chip flows
-/// right after the words and wraps only when it does not fit.
+/// What a prompt's text is: its words as one literal run, or — with
+/// attachments that chip — Markdown whose links are the inline chips, so a
+/// chip flows right after the words and wraps only when it does not fit.
 pub enum PromptText {
     Literal(String),
     Markdown(String),
 }
 
-/// A prompt line as its band draws (and copies) it, and the files it
-/// carries.
+/// A prompt line as its bubble draws (and copies) it, and the files it
+/// carries: an image is its thumbnail, so only its other files chip.
 pub fn prompt_text(line: &str) -> (PromptText, Vec<std::path::PathBuf>) {
+    prompt_text_chipping(line, |path| !crate::image_viewer::is_image(path))
+}
+
+/// A prompt line with a chip for each of its files that `chips`.
+fn prompt_text_chipping(
+    line: &str,
+    chips: fn(&std::path::Path) -> bool,
+) -> (PromptText, Vec<std::path::PathBuf>) {
     let (text, files) = ferrite_core::prompt_files::split(String::from(line));
-    if files.is_empty() {
+    let chipped: Vec<_> = files.iter().filter(|path| chips(path)).cloned().collect();
+    if chipped.is_empty() {
         return (PromptText::Literal(text), files);
     }
-    (PromptText::Markdown(prompt_markdown(&text, &files)), files)
+    (PromptText::Markdown(prompt_markdown(&text, &chipped)), files)
 }
 
 /// The prompt's words with every Markdown character escaped (they are the
@@ -4929,32 +4938,148 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
     out
 }
 
-/// The prompt echo (SPEC §5.4): a `paint::FIELD` box at `R_CONTROL`,
-/// `PROMPT_BAND_PAD_X` either side (the row's inset pulls it out by as
-/// much, so its text keeps the transcript's column) and
-/// `prompt_band_pad_y` above and below; the `❯` in the gutter in
-/// `W_STRONG` `TEXT_STRONG`, the operator's words in `TEXT_STRONG` at body
-/// weight with its files' chips flowing inline after them, and its send
-/// time (`7:31 pm`, `TEXT_DIM`) in its own right-aligned column on the
-/// first line — so a wrapping prompt keeps the time beside its first line.
-/// An image hangs under the band in its 1px frame with its caption.
-/// Nothing on the band answers the pointer. `pinned` draws exactly the band
-/// again for the top of the body (not part of the selection, no image).
-pub(crate) fn prompt_row(
+/// A prompt's words: its literal run or its Markdown with its chips, in
+/// `TEXT_STRONG`; in the selection, or (`clamp`, the pinned band) outside
+/// it, ending its last kept line in `…` so it says there is more above.
+/// `None` for a prompt of attachments alone.
+fn prompt_words(
     block: &Block,
-    line: &str,
+    text: PromptText,
+    gallery: &std::sync::Arc<[std::path::PathBuf]>,
     row_cx: &RowCx,
-    preview_lines: Option<usize>,
-) -> AnyElement {
-    let grid = row_cx.grid();
-    let pinned = preview_lines.is_some();
-    let (text, files) = prompt_text(line);
-    // The images a chip or a picture opens among: ← → step through them.
-    let gallery: std::sync::Arc<[std::path::PathBuf]> = files
+    clamp: Option<usize>,
+) -> Option<AnyElement> {
+    Some(match text {
+        PromptText::Literal(words) if words.is_empty() => return None,
+        PromptText::Literal(words) => match clamp {
+            Some(lines) => div()
+                .w_full()
+                .min_w_0()
+                .line_clamp(lines)
+                .text_ellipsis()
+                .child(SharedString::from(words))
+                .into_any_element(),
+            None => div()
+                .min_w_0()
+                .child(row_cx.selection.line(block.id, words, Vec::new()))
+                .into_any_element(),
+        },
+        PromptText::Markdown(source) => match clamp {
+            Some(_) => crate::rich::Markdown::new(
+                format!("pinned-prompt-{}-{:?}", row_cx.scope, block.id),
+                source,
+                row_cx.rich.clone(),
+            ),
+            None => row_cx.selection.markdown(block.id, source),
+        }
+        .ink(TEXT_STRONG)
+        .chips(row_cx.preview.clone(), gallery.clone())
+        .into_any_element(),
+    })
+}
+
+/// A prompt's images, in its order: what a chip or a thumbnail opens
+/// among (← → step through them).
+fn prompt_gallery(files: &[std::path::PathBuf]) -> std::sync::Arc<[std::path::PathBuf]> {
+    files
         .iter()
         .filter(|path| crate::image_viewer::is_image(path))
         .cloned()
+        .collect()
+}
+
+/// The group a prompt row's parts style themselves by while the pointer is
+/// over the row (its send time showing).
+const PROMPT_GROUP: &str = "transcript-prompt-row";
+
+/// The prompt echo (the prototype's `.me`): right-aligned, the operator's
+/// words in a `paint::RAISED` bubble at `R_BUBBLE` that shrinks to them
+/// (never wider than `PROMPT_BUBBLE_MAX_W` of the column), Geist
+/// `TEXT_STRONG` at body weight with its non-image files' chips flowing
+/// inline after them; its images as thumbnails in a wrapping row under it;
+/// its send time (`7:31 pm`, `TEXT_FAINT`) hanging under those in the gap
+/// before the next row, shown only while the pointer is over the row, so
+/// the row keeps every row's rhythm.
+pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElement {
+    let (text, files) = prompt_text(line);
+    let gallery = prompt_gallery(&files);
+    let bubble = prompt_words(block, text, &gallery, row_cx, None).map(|words| {
+        div()
+            .debug_selector(|| "transcript-prompt".into())
+            .max_w(relative(theme::PROMPT_BUBBLE_MAX_W))
+            .min_w_0()
+            .py(px(theme::PROMPT_BUBBLE_PAD_Y))
+            .px(px(theme::PROMPT_BUBBLE_PAD_X))
+            .bg(theme::paint::RAISED)
+            .rounded(px(theme::R_BUBBLE))
+            .font_family(theme::FONT_UI)
+            .font_weight(theme::W_BODY)
+            .text_color(rgb(TEXT_STRONG))
+            .child(words)
+    });
+    let images: Vec<_> = gallery
+        .iter()
+        .enumerate()
+        .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview))
         .collect();
+    let time = block.sent_at.clone();
+    div()
+        .id(SharedString::from(format!("prompt-{:?}", block.id)))
+        .group(PROMPT_GROUP)
+        .relative()
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(px(theme::PROMPT_BUBBLE_GAP))
+        .w_full()
+        .min_w_0()
+        .children(bubble)
+        .when(!images.is_empty(), |row| {
+            row.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap(px(theme::PROMPT_BUBBLE_GAP))
+                    .max_w_full()
+                    .children(images),
+            )
+        })
+        .children(time.map(|time| {
+            div()
+                .debug_selector(|| "prompt-time".into())
+                .absolute()
+                .top(relative(1.))
+                .right_0()
+                .pt(px(theme::PROMPT_BUBBLE_GAP))
+                .whitespace_nowrap()
+                .text_color(rgb(TEXT_FAINT))
+                .opacity(0.)
+                .group_hover(PROMPT_GROUP, |style| style.opacity(1.))
+                .child(SharedString::from(time))
+        }))
+        .into_any_element()
+}
+
+/// The pinned prompt band (SPEC §5.4) over the top of the body: a
+/// `paint::FIELD` box at `R_CONTROL`, `PROMPT_BAND_PAD_X` either side (its
+/// wrapper pulls it out by as much, so its text keeps the transcript's
+/// column) and `prompt_band_pad_y` above and below; the `❯` in the gutter
+/// in `W_STRONG` `TEXT_STRONG`, the operator's words in `TEXT_STRONG` at
+/// body weight, clamped to `lines`, with all its files' chips (its images'
+/// too) flowing inline after them, and its send time (`7:31 pm`,
+/// `TEXT_DIM`) in its own right-aligned column on the first line — so a
+/// wrapping prompt keeps the time beside its first line. Not part of the
+/// selection; nothing on it answers the pointer.
+pub(crate) fn pinned_prompt(
+    block: &Block,
+    line: &str,
+    row_cx: &RowCx,
+    lines: usize,
+) -> AnyElement {
+    let grid = row_cx.grid();
+    let (text, files) = prompt_text_chipping(line, |_| true);
+    let gallery = prompt_gallery(&files);
     // The chips close the prompt; their line stands taller, as the
     // prototype's inline chip makes it.
     let chip_line = if files.is_empty() {
@@ -4962,61 +5087,11 @@ pub(crate) fn prompt_row(
     } else {
         theme::PROMPT_CHIP_LINE_EXTRA
     };
-    // A prompt of attachments alone has no words to register or draw.
-    let words = match text {
-        PromptText::Literal(words) if words.is_empty() => None,
-        // A clamped band ends its last line in `…`, so it says there is
-        // more of the prompt above.
-        PromptText::Literal(words) if pinned => Some(
-            div()
-                .w_full()
-                .min_w_0()
-                .when_some(preview_lines, |words, lines| {
-                    words.line_clamp(lines).text_ellipsis()
-                })
-                .child(SharedString::from(words))
-                .into_any_element(),
-        ),
-        PromptText::Literal(words) => Some(
-            div()
-                .w_full()
-                .min_w_0()
-                .child(row_cx.selection.line(block.id, words, Vec::new()))
-                .into_any_element(),
-        ),
-        PromptText::Markdown(source) if pinned => Some(
-            crate::rich::Markdown::new(
-                format!("pinned-prompt-{}-{:?}", row_cx.scope, block.id),
-                source,
-                row_cx.rich.clone(),
-            )
-            .ink(TEXT_STRONG)
-            .chips(row_cx.preview.clone(), gallery.clone())
-            .into_any_element(),
-        ),
-        PromptText::Markdown(source) => Some(
-            row_cx
-                .selection
-                .markdown(block.id, source)
-                .ink(TEXT_STRONG)
-                .chips(row_cx.preview.clone(), gallery.clone())
-                .into_any_element(),
-        ),
-    };
+    let words = prompt_words(block, text, &gallery, row_cx, Some(lines));
     let time = block.sent_at.clone();
-    let band = div()
-        .debug_selector(move || {
-            if pinned {
-                "transcript-pinned-prompt".into()
-            } else {
-                "transcript-prompt".into()
-            }
-        })
-        .id(SharedString::from(format!(
-            "{}prompt-{:?}",
-            if pinned { "pinned-" } else { "" },
-            block.id
-        )))
+    div()
+        .debug_selector(|| "transcript-pinned-prompt".into())
+        .id(SharedString::from(format!("pinned-prompt-{:?}", block.id)))
         .flex()
         .items_start()
         .w_full()
@@ -5041,49 +5116,19 @@ pub(crate) fn prompt_row(
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .when_some(preview_lines, |column, lines| {
-                    column.max_h(px(lines as f32 * grid.line)).overflow_hidden()
-                })
+                .max_h(px(lines as f32 * grid.line))
+                .overflow_hidden()
                 .children(words),
         )
         .children(time.map(|time| {
             div()
-                .debug_selector(|| "prompt-time".into())
+                .debug_selector(|| "pinned-prompt-time".into())
                 .flex_shrink_0()
                 .pl(px(theme::PROMPT_TIME_PAD_CELLS * grid.cell()))
                 .whitespace_nowrap()
                 .text_color(rgb(TEXT_DIM))
                 .child(SharedString::from(time))
-        }));
-    if pinned {
-        return band.into_any_element();
-    }
-    let images: Vec<_> = gallery
-        .iter()
-        .enumerate()
-        .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview, grid))
-        .collect();
-    if images.is_empty() {
-        return band.into_any_element();
-    }
-    div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .min_w_0()
-        .child(band)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(grid.half()))
-                .w_full()
-                .min_w_0()
-                .pt(px(grid.half()))
-                .pl(px(theme::PROMPT_BAND_PAD_X + grid.gutter()))
-                .pr(px(theme::PROMPT_BAND_PAD_X))
-                .children(images),
-        )
+        }))
         .into_any_element()
 }
 
@@ -5104,7 +5149,7 @@ fn open_file(
 /// `paint::RAISED` at `R_INLINE` with a cell of padding each side. A click opens it (an
 /// image in the Pane's preview, in the Panel, among its prompt's `gallery`).
 /// Sized for the Markdown flow that places it: monospace cells at the size
-/// it is drawn in.
+/// it is drawn in, its name set in `FONT_CODE` so it fills them.
 pub(crate) fn prompt_chip(
     path: std::path::PathBuf,
     label: &str,
@@ -5140,6 +5185,7 @@ pub(crate) fn prompt_chip(
         .rounded(px(theme::R_INLINE))
         .cursor_pointer()
         .whitespace_nowrap()
+        .font_family(theme::FONT_CODE)
         .font_weight(theme::W_BODY)
         .text_color(rgb(TEXT_STRONG))
         .child(icon(
@@ -5162,11 +5208,11 @@ pub(crate) fn prompt_chip(
     (gpui::size(px(width), line), element.into_any_element())
 }
 
-/// A sent image under its prompt (the prototype's `.img` and `.cap`): a
-/// frame `IMAGE_CELLS` wide at the reading size, its 1px `paint::LINE2`
-/// border included (374.4px at Standard, drawn 374), the picture filling
-/// it at its own proportions; under it `name · W×H · 41 KB`, all of it
-/// `TEXT_DIM`. A click opens it in the Pane's preview, among its
+/// A sent image under its prompt (the prototype's `.thumb`): the picture
+/// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
+/// nor its own size (covering that box when its header cannot be read), at
+/// `R_THUMB` in a 1px `FIELD_RING`; its caption (`name · W×H · 41 KB`) is
+/// its tooltip. A click opens it in the Pane's preview, among its
 /// prompt's `gallery`.
 fn inline_image(
     block: BlockId,
@@ -5174,7 +5220,6 @@ fn inline_image(
     path: &std::path::Path,
     gallery: &std::sync::Arc<[std::path::PathBuf]>,
     preview: &crate::preview::Preview,
-    grid: Grid,
 ) -> AnyElement {
     let name = path
         .file_name()
@@ -5182,21 +5227,23 @@ fn inline_image(
         .to_string_lossy()
         .to_string();
     let facts = image_facts(path);
-    // Whole pixels, as the prototype's frame paints: a browser snaps a box's
-    // edges to the CSS pixel (374.4 draws 374, a 205.46 picture 205), where
-    // gpui would round each length to the half pixel and push every row
-    // under the frame down by one.
-    let frame_w = (theme::IMAGE_CELLS * grid.cell()).floor();
-    let width = frame_w - 2.0;
-    let height = match facts {
+    // Whole pixels, so the ring sits on the pixel grid.
+    let (width, height) = match facts {
         Some(ImageFacts {
             width: w,
             height: h,
             ..
-        }) if w > 0 && h > 0 => width * h as f32 / w as f32,
-        _ => width * 0.5,
-    }
-    .floor();
+        }) if w > 0 && h > 0 => {
+            let scale = (theme::THUMB_MAX_W / w as f32)
+                .min(theme::THUMB_MAX_H / h as f32)
+                .min(1.0);
+            (
+                (w as f32 * scale).round().max(1.0),
+                (h as f32 * scale).round().max(1.0),
+            )
+        }
+        _ => (theme::THUMB_MAX_W, theme::THUMB_MAX_H),
+    };
     let caption = image_caption(&name, facts);
     let host = preview.clone();
     let gallery = gallery.clone();
@@ -5204,35 +5251,23 @@ fn inline_image(
     div()
         .id(SharedString::from(format!("sent-image-{block:?}-{index}")))
         .debug_selector(|| "sent-image".into())
-        .flex()
-        .flex_col()
-        .min_w_0()
+        .flex_shrink_0()
+        .rounded(px(theme::R_THUMB))
+        .border_1()
+        .border_color(rgba(theme::FIELD_RING))
+        .overflow_hidden()
         .cursor_pointer()
+        .tooltip(ferrite_ui::menu::tooltip(caption))
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
             open_file(&open, &gallery, &host, window, cx);
         })
         .child(
-            div()
-                .debug_selector(|| "sent-image-frame".into())
-                .flex_shrink_0()
-                .w(px(frame_w))
-                .border_1()
-                .border_color(theme::paint::LINE2)
-                .child(
-                    gpui::img(path.to_path_buf())
-                        .w(px(width))
-                        .h(px(height))
-                        .object_fit(gpui::ObjectFit::Fill),
-                ),
-        )
-        .child(
-            div()
-                .debug_selector(|| "sent-image-caption".into())
-                .min_w_0()
-                .truncate()
-                .text_color(rgb(TEXT_DIM))
-                .child(SharedString::from(caption)),
+            gpui::img(path.to_path_buf())
+                .w(px(width))
+                .h(px(height))
+                .rounded(px(theme::R_THUMB - theme::HAIRLINE_W))
+                .object_fit(gpui::ObjectFit::Cover),
         )
         .into_any_element()
 }

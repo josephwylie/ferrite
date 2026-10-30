@@ -369,12 +369,11 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     }
 }
 
-/// SPEC §5.4: the transcript column sits `tx_inset` in from the Pane's
-/// edge (Solo's 28px), the prompt band's box `PROMPT_BAND_PAD_X` outside it,
-/// so the band's `❯` keeps the column every other row's mark is on. (The
-/// Composer's `❯` leaves with its box, SPEC §5.5.)
+/// The transcript column sits `tx_inset` in from the Pane's edges (Solo's
+/// 28px): the answer's `●` on its left edge, the prompt's bubble ending on
+/// its right.
 #[gpui::test]
-fn the_prompt_mark_keeps_the_transcript_column(cx: &mut TestAppContext) {
+fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
     let thread = core.threads()[0];
     core.send(thread, "Line the marks up".into());
@@ -389,20 +388,16 @@ fn the_prompt_mark_keeps_the_transcript_column(cx: &mut TestAppContext) {
     tick(cx);
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     let column = px(rect.x + ferrite_ui::theme::TX_INSET_SOLO);
-    let mark = cx.debug_bounds("prompt-mark").unwrap();
-    let band = cx.debug_bounds("transcript-prompt").unwrap();
+    let column_end = px(rect.x + rect.w - ferrite_ui::theme::TX_INSET_SOLO);
+    let bubble = cx.debug_bounds("transcript-prompt").unwrap();
     assert!(
-        (band.left() - (column - px(ferrite_ui::theme::PROMPT_BAND_PAD_X))).abs() <= px(1.),
-        "the band reaches past the column: {band:?} / {rect:?}"
-    );
-    assert!(
-        (mark.left() - column).abs() <= px(1.),
-        "the band's ❯ {mark:?} is on the column {column:?}"
+        (bubble.right() - column_end).abs() <= px(1.),
+        "the bubble {bubble:?} ends on the column {column_end:?}"
     );
     let answer = cx.debug_bounds("answer-mark").unwrap();
     assert!(
-        (answer.left() - mark.left()).abs() <= px(1.),
-        "the answer's ● {answer:?} and the ❯ {mark:?} share an axis"
+        (answer.left() - column).abs() <= px(1.),
+        "the answer's ● {answer:?} is on the column {column:?}"
     );
 }
 
