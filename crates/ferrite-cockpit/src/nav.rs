@@ -60,6 +60,7 @@ use gpui::{
 use crate::cockpit::Attention;
 use crate::machines::{Connection, MachineRow};
 use crate::notifications::{Row as NoticeRow, State as NoticeState};
+use crate::pr::{PrLabel, PrMark};
 use ferrite_core::cockpit::StatusRow;
 pub use ferrite_pane::mark::{mark, NavTail, RowStatus};
 use ferrite_ui::components;
@@ -239,9 +240,6 @@ pub struct ProjectSection {
     /// What the heading says at its right: the shared branch's drift
     /// against its upstream (`↑715`, `↑1 ↓5`). `None` says nothing.
     pub drift: Option<SharedString>,
-    /// A task's own space: its row's numbers (`8% 16m`), under the heading
-    /// (ADR 0031).
-    pub numbers: Option<SharedString>,
     /// The heading folded it: one row, and nothing under it.
     pub folded: bool,
     /// Its own rows' roll-up word (`RollUp::of`), which a folded heading
@@ -297,13 +295,8 @@ impl RollUp {
             }
         }
         if waiting > 0 {
-            let word = if waiting == 1 {
-                words::NEEDS_YOU
-            } else {
-                words::NEED_YOU
-            };
             return Some(RollUp {
-                text: format!("{waiting} {word}").into(),
+                text: words::needs_you(waiting).into(),
                 ink: ATTENTION,
             });
         }
@@ -509,25 +502,6 @@ pub struct ThreadRow {
     pub details: RowDetails,
     /// Its state's word (C10): what line 2 says for a state with a reason.
     pub tail: NavTail,
-    /// The board's words for the Thread's agent, under its line 2 (ADR
-    /// 0031).
-    pub task: Option<TaskRows>,
-}
-
-/// Rows 2 and 3 of herdr's sidebar entry for a Thread the board runs, in
-/// the board's own words (`sidebar::Told::rows`).
-#[derive(Clone, Debug, PartialEq)]
-pub struct TaskRows {
-    /// Row 2: who is on it and where it stands, then its time, last
-    /// (`agent · working · R#1 PR#113 · 6m`).
-    pub stands_timed: SharedString,
-    /// Row 2 without its time, for a row too short for the whole.
-    pub stands: SharedString,
-    /// Row 2's ink: where the task stands.
-    pub ink: u32,
-    /// Row 3, dim: the row's numbers, bare (`8% 16m`, `Q#2`), or the
-    /// Coordinator's latest message.
-    pub third: SharedString,
 }
 
 /// A row's checkout facts: commits ahead of and behind its upstream and a
@@ -538,11 +512,11 @@ pub struct RowDetails {
     pub ahead: u32,
     pub behind: u32,
     pub dirty: bool,
-    pub pr: Option<String>,
+    pub pr: Option<PrLabel>,
 }
 
 impl RowDetails {
-    pub fn of(status: Option<&ferrite_core::workspace::BranchStatus>, pr: Option<String>) -> Self {
+    pub fn of(status: Option<&ferrite_core::workspace::BranchStatus>, pr: Option<PrLabel>) -> Self {
         RowDetails {
             ahead: status.map_or(0, |status| status.ahead),
             behind: status.map_or(0, |status| status.behind),
@@ -938,6 +912,59 @@ fn measure_space() -> f32 {
 
 // ------------------------------------------------------------- line 2
 
+/// A row's PR label at line 2's right: `#N` in line 2's quiet ink (never a
+/// state's: the PR is not why the row waits), then its mark (`pr_mark`).
+fn pr_label(pr: &PrLabel, selected: bool) -> Div {
+    let ink = if selected { NAV_LINE2_SELECTED } else { TEXT_DIM };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_1))
+        .pl(px(NAV_WORD_GAP))
+        .child(components::tabular(
+            div()
+                .text_size(px(FS_META))
+                .line_height(px(NAV_LINE))
+                .text_color(rgb(ink))
+                .child(pr.number_text()),
+        ))
+        .children(pr.mark.map(|mark| pr_mark(mark, ink)))
+}
+
+/// How wide `pr_label` draws, its leading gap aside.
+fn pr_width(pr: &PrLabel, measure: &Measure) -> f32 {
+    measure.ui(&pr.number_text(), FS_META, W_BODY)
+        + pr.mark.map_or(0.0, |_| SPACE_1 + NAV_PR_MARK)
+}
+
+/// Where a PR stands, as one drawn icon at `NAV_PR_MARK`: passing a check,
+/// failing a cross in `BLOCKED` (the one mark with a hue: a failing PR is a
+/// failure, rule 6), pending a dot, a reading on its way the refresh glyph,
+/// merged the merge glyph, closed a crossed circle; the rest in `ink`.
+fn pr_mark(mark: PrMark, ink: u32) -> Div {
+    let glyph = |path: &'static str, ink: u32| icon(path, NAV_PR_MARK, ink).into_any_element();
+    let drawn = match mark {
+        PrMark::Passing => glyph(icons::CHECK, ink),
+        PrMark::Failing => glyph(icons::CLOSE, BLOCKED),
+        PrMark::Checking => glyph(icons::REFRESH, ink),
+        PrMark::Merged => glyph(icons::GIT_MERGE, ink),
+        PrMark::Closed => glyph(icons::X_CIRCLE, ink),
+        PrMark::Pending => div()
+            .size(px(NAV_PR_DOT))
+            .rounded_full()
+            .bg(rgb(ink))
+            .into_any_element(),
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(px(NAV_PR_MARK))
+        .child(drawn)
+}
+
 /// A Thread row's line 2 (§5.1.5), in the parts a short row gives up:
 /// its lead (the branch, or the state's words), its time (a working
 /// Thread's elapsed, a failure's age) and its details (`↑2↓1*`), and the
@@ -1154,8 +1181,6 @@ pub enum Trailing {
     Pill(usize),
     /// A dim count, hidden at 0.
     Count(usize),
-    /// Dim words (the Tasks tally).
-    Text(SharedString),
 }
 
 /// The views under the head, 14px clear of the tree.
@@ -1188,7 +1213,6 @@ pub fn view_row(
     } else {
         motion::mix(rgb(rest).into(), rgb(TEXT).into(), t)
     };
-    let words = matches!(tail, Trailing::Text(_));
     let end: Option<AnyElement> = match tail {
         Trailing::None => None,
         Trailing::Chord(keys) => Some(
@@ -1203,17 +1227,6 @@ pub fn view_row(
                 .debug_selector(move || format!("{key}-count"))
                 .into_any_element(),
         ),
-        // Words give way before the label: the Tasks tally is cut, never
-        // the `Tasks` beside it.
-        Trailing::Text(text) => Some(
-            trailing(text, FS_META, TEXT_DIM)
-                .debug_selector(move || format!("{key}-words"))
-                .ml_auto()
-                .flex_shrink(1.)
-                .min_w_0()
-                .truncate()
-                .into_any_element(),
-        ),
     };
     line_frame(key, blend, active)
         .debug_selector(move || key.into())
@@ -1223,8 +1236,9 @@ pub fn view_row(
         .child(
             div()
                 .debug_selector(move || format!("{key}-label"))
-                .when(words, |label| label.flex_shrink_0())
-                .when(!words, |label| label.flex_1().min_w_0().truncate())
+                .flex_1()
+                .min_w_0()
+                .truncate()
                 .child(label),
         )
         .children(end)
@@ -1433,20 +1447,6 @@ fn project_row(
 /// A hover action at the right of its line, after the title's box.
 fn at_right(action: AnyElement) -> Div {
     div().flex().flex_1().justify_end().child(action)
-}
-
-/// A task's own space's numbers (`8% 16m`) under its heading, dim at the
-/// label's edge (ADR 0031).
-pub fn space_numbers(numbers: SharedString) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .h(px(NAV_LINE))
-        .pl(px(NAV_TITLE_X))
-        .text_size(px(FS_META))
-        .text_color(rgb(TEXT_DIM))
-        .whitespace_nowrap()
-        .child(numbers)
 }
 
 /// A branch held to `NAV_BRANCH_MAX_CH` characters, an ellipsis standing
@@ -1760,8 +1760,7 @@ fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
 /// The one Thread row builder, with the title leaf supplied by the caller —
 /// see `group_row_with_title`. As a `RowPlace::Row`, two lines (§5.1.5):
 /// the mark, the title and the diffstat, then line 2 (`LineTwo`) and the
-/// PR's label; a Thread the board runs has its entry's lines under that
-/// (`task_lines`). With nothing for line 2, one 30px line. Under the shown
+/// PR's label. With nothing for line 2, one 30px line. Under the shown
 /// Group (`RowPlace::Member`), one line: the mark at 35, the title, and
 /// its state's word (`NavTail::member_word`). Line 1's right says the
 /// diffstat, else how long ago the Thread was last used (`meta_age`); under
@@ -1868,28 +1867,11 @@ pub fn thread_row_with_title(
         .children(action.map(at_right));
     let two = LineTwo::of(row);
     let pr = row.details.pr.clone();
-    let pr_w = pr
-        .as_deref()
-        .map_or(0.0, |pr| measure.ui(pr, FS_META, W_BODY) + NAV_WORD_GAP);
+    let pr_w = pr.as_ref().map_or(0.0, |pr| pr_width(pr, measure) + NAV_WORD_GAP);
     let room = text_w - pr_w;
     let text = two.fit(|text| measure.ui(text, FS_META, W_BODY) <= room);
-    let extra: Vec<Div> = row
-        .task
-        .as_ref()
-        .map(|task| {
-            task_lines(task, |text| measure.ui(text, FS_META, W_BODY) <= text_w)
-                .into_iter()
-                .map(|(text, ink)| {
-                    div()
-                        .flex()
-                        .h(px(NAV_LINE))
-                        .child(fitted(text_w, FS_META, ink, W_BODY, text))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
     // Only as tall as its content: with nothing for line 2, one line.
-    if text.is_empty() && pr.is_none() && extra.is_empty() {
+    if text.is_empty() && pr.is_none() {
         return frame
             .flex_row()
             .items_center()
@@ -1921,17 +1903,15 @@ pub fn thread_row_with_title(
                 .flex_1()
                 .justify_end()
                 .debug_selector(move || format!("nav-pr-{}", thread.get()))
-                .child(trailing(pr, FS_META, line_ink))
+                .child(pr_label(&pr, row.selected))
         }));
-    let height = NAV_ROW2_H + extra.len() as f32 * NAV_LINE;
     frame
         .flex_col()
         .justify_center()
-        .h(px(height))
+        .h(px(NAV_ROW2_H))
         .child(mark_at(row.status, place.mark_x(), MarkSeat::TwoLine))
         .child(line_one)
         .child(line_two)
-        .children(extra)
 }
 
 /// An Attention list row (`RowPlace::Line`): the tree row's frame, its
@@ -2002,23 +1982,6 @@ pub fn attention_list(sections: Vec<AnyElement>) -> Div {
         .flex_shrink_0()
         .mb(px(NAV_SECTION_GAP))
         .children(sections)
-}
-
-// ------------------------------------------------------- the board's rows
-
-/// What a task row says under its line 2, each line in its ink (ADR
-/// 0031): row 2, its time dropped first when the whole would not `fit`,
-/// then row 3. A line with nothing to say is not drawn.
-pub fn task_lines(task: &TaskRows, fits: impl Fn(&str) -> bool) -> Vec<(SharedString, u32)> {
-    let stands = if fits(&task.stands_timed) {
-        &task.stands_timed
-    } else {
-        &task.stands
-    };
-    [(stands.clone(), task.ink), (task.third.clone(), TEXT_DIM)]
-        .into_iter()
-        .filter(|(text, _)| !text.is_empty())
-        .collect()
 }
 
 // ------------------------------------------------------------- the views' lists
@@ -2526,7 +2489,6 @@ mod tests {
             age: "2h".into(),
             details: RowDetails::default(),
             tail: NavTail::Age("2h".into()),
-            task: None,
         }
     }
 
@@ -2547,7 +2509,6 @@ mod tests {
             label: "ferrite".into(),
             branch: None,
             drift: None,
-            numbers: None,
             folded,
             roll_up: None,
             count: 2,
@@ -2680,7 +2641,10 @@ mod tests {
                 ahead: 2,
                 behind: 1,
                 dirty: true,
-                pr: Some("#12 \u{2713}".into()),
+                pr: Some(PrLabel {
+                    number: 12,
+                    mark: Some(PrMark::Passing),
+                }),
             },
             ..thread()
         });
@@ -2770,7 +2734,10 @@ mod tests {
         let two = Some(px(NAV_ROW2_H).into());
         let with_pr = ThreadRow {
             details: RowDetails {
-                pr: Some("#91".into()),
+                pr: Some(PrLabel {
+                    number: 91,
+                    mark: None,
+                }),
                 ..Default::default()
             },
             ..bare.clone()
@@ -2847,19 +2814,6 @@ mod tests {
                 "{status:?}"
             );
         }
-        let task = ThreadRow {
-            task: Some(TaskRows {
-                stands_timed: "agent \u{b7} working \u{b7} 6m".into(),
-                stands: "agent \u{b7} working".into(),
-                ink: YELLOW,
-                third: "8% 16m".into(),
-            }),
-            ..bare.clone()
-        };
-        assert_eq!(
-            height(thread_row(&task)),
-            Some(px(NAV_ROW2_H + 2.0 * NAV_LINE).into())
-        );
         let mut member = thread_row_with_title(
             &bare,
             "thread-08",
@@ -3018,32 +2972,6 @@ mod tests {
             Some("\u{2191}2\u{2193}1*".into())
         );
         assert_eq!(details(0, 3, false).text(), Some("\u{2193}3".into()));
-    }
-
-    /// A task row's entry (ADR 0031): row 2 in its task's ink, its time
-    /// the first thing a short row drops, then row 3 dim.
-    #[test]
-    fn a_task_rows_entry_drops_its_time_before_it_cuts_where_it_stands() {
-        let task = TaskRows {
-            stands_timed: "agent \u{b7} working \u{b7} 6m".into(),
-            stands: "agent \u{b7} working".into(),
-            ink: YELLOW,
-            third: "8% 16m".into(),
-        };
-        let lines = |room: usize| -> Vec<(String, u32)> {
-            task_lines(&task, |text| text.chars().count() <= room)
-                .into_iter()
-                .map(|(text, ink)| (text.to_string(), ink))
-                .collect()
-        };
-        assert_eq!(
-            lines(30),
-            [
-                ("agent \u{b7} working \u{b7} 6m".to_string(), YELLOW),
-                ("8% 16m".to_string(), TEXT_DIM)
-            ]
-        );
-        assert_eq!(lines(16)[0].0, "agent \u{b7} working");
     }
 
     /// The marks (§6): a spinner for work, the blocked dot's halo, a red

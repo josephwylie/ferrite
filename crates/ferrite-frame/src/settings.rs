@@ -727,11 +727,10 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                 .mr(px(-CH))
                 .group(COPY_GROUP)
                 .hover_raised(key)
-                .tooltip(ferrite_ui::menu::tooltip(if copied {
-                    "Copied"
-                } else {
-                    "Copy path"
-                }))
+                // The check confirms the copy, as `components::copy_button`'s
+                // does: gpui hides a tooltip on the press and builds the next
+                // once, so a swapped one would show late and go stale.
+                .tooltip(ferrite_ui::menu::tooltip("Copy path"))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.clone()));

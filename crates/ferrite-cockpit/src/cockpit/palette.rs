@@ -144,11 +144,6 @@ impl CockpitView {
         }))
         .on_action(cx.listener(|view, _: &palette::Dismiss, _, cx| view.close_palette(cx)))
         .on_action(
-            cx.listener(|view, _: &crate::projects::Toggle, window, cx| {
-                view.toggle_projects(window, cx)
-            }),
-        )
-        .on_action(
             cx.listener(|view, _: &shortcuts::Toggle, window, cx| {
                 view.toggle_shortcuts(window, cx)
             }),
@@ -185,16 +180,12 @@ impl CockpitView {
     /// the shortcuts sheet, the notifications list): render's focus rule
     /// leaves it alone.
     pub(super) fn floats_hold_focus(&self) -> bool {
-        self.floats.palette.is_some()
-            || self.floats.shortcuts.is_some()
-            || self.projects.board_shown()
+        self.floats.palette.is_some() || self.floats.shortcuts.is_some()
     }
 
     /// Whether the palette or the shortcuts sheet is up (the veil is).
     pub(super) fn sheet_float_open(&self) -> bool {
-        self.floats.palette.is_some()
-            || self.floats.shortcuts.is_some()
-            || self.projects.popup_shown()
+        self.floats.palette.is_some() || self.floats.shortcuts.is_some()
     }
 
     /// Close every other surface a float opening replaces.
@@ -205,7 +196,6 @@ impl CockpitView {
         self.mode_picker = None;
         self.context_checks = None;
         self.floats.shortcuts = None;
-        self.projects.drop_popup();
     }
 
     // ------------------------------------------------------------ palette
@@ -1087,7 +1077,6 @@ impl CockpitView {
             Command::ResetKeys,
         );
         let _ = cx;
-        rows.extend(self.palette_projects_rows());
         rows.extend(self.user_command_rows());
         rows
     }
@@ -1244,7 +1233,6 @@ impl CockpitView {
             }
             Command::ResetKeys => self.reset_keys(cx),
             Command::User(index) => self.run_user_command(index, cx),
-            Command::Projects(command) => self.run_projects_command(command, window, cx),
         }
         cx.notify();
     }
@@ -1441,9 +1429,18 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let machines = self.machines.as_ref().map(|machines| machines.read(cx));
-        let standing = self.needs_you.toasts().last().and_then(|toast| {
-            self.alert_row(&toast.alert, machines, ferrite_core::clock::system_time())
-        });
+        // C8: a toast is the rail's voice. With the nav open its rows are
+        // the queue, so the toast stands down (fading as one that goes on
+        // its own) and stands again if the nav folds while it still waits.
+        // Sounds and system notifications ring either way.
+        let standing = self
+            .needs_you
+            .toasts()
+            .last()
+            .filter(|_| self.nav_railed())
+            .and_then(|toast| {
+                self.alert_row(&toast.alert, machines, ferrite_core::clock::system_time())
+            });
         let leaving = self.toast_stage.borrow_mut().stage(
             standing.as_ref(),
             cx.background_executor().now(),
@@ -1455,8 +1452,9 @@ impl CockpitView {
         let viewport = window.viewport_size();
         // What it hangs under, at its width and right edge: the window's
         // head over the panel's content column, or the head and a Pane's
-        // head row over the board.
-        let panel = self.panel_column_w();
+        // head row over the board. Read where the panel will rest, not its
+        // riding width, so a ride moves the toast once, not every frame.
+        let panel = self.panel_rest_column_w();
         let (width, right, over) = if panel > 0. {
             (
                 TOAST_W.min(panel - PANEL_PAD_L - PANEL_PAD_R),

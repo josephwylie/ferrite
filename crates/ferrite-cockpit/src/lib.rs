@@ -2,8 +2,6 @@
 // content. The app (`ferrite`) opens the window on it and owns the frame
 // around it (`ferrite_ui::frame`, ADR 0035).
 mod background_chips;
-#[cfg(unix)]
-mod board;
 mod cli_updates;
 pub mod cockpit;
 pub mod cockpit_window;
@@ -18,11 +16,8 @@ mod notifications;
 pub mod palette;
 mod pr;
 mod project_editor;
-pub mod projects;
 mod review;
 pub mod shortcuts;
-#[cfg(unix)]
-mod sidebar;
 mod status;
 mod system_notifications;
 

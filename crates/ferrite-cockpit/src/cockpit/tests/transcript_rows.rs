@@ -786,7 +786,7 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
 }
 
 #[gpui::test]
-fn native_progress_stays_visible_while_scrolling_and_metadata_refreshes_the_wall(
+fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(
     cx: &mut TestAppContext,
 ) {
     use ferrite_core::progress::{Phase, ProgressEvent};
@@ -809,12 +809,10 @@ fn native_progress_stays_visible_while_scrolling_and_metadata_refreshes_the_wall
         })
         .unwrap();
     tick(cx);
-    let before = cx
-        .debug_bounds("transcript-progress")
-        .expect("the live line is pinned above the composer");
-    let metadata = cx
-        .debug_bounds("progress-metadata")
-        .expect("live metadata shares the pinned line");
+    cx.debug_bounds("transcript-progress")
+        .expect("the live line is the transcript's last row");
+    cx.debug_bounds("progress-metadata")
+        .expect("live metadata shares the working line");
     assert!(
         cx.debug_bounds("progress-caption-Working").is_some(),
         "visible reasoning is not duplicated in the pinned row"
@@ -834,22 +832,11 @@ fn native_progress_stays_visible_while_scrolling_and_metadata_refreshes_the_wall
         cx.notify();
     });
     cx.run_until_parked();
+    // The working line is the transcript's last row: scrolled back, it is
+    // out of view with the tail, and the way back to both is in view.
     assert!(
-        cx.debug_bounds("progress-caption-Checking fold call sites")
-            .is_some(),
-        "pinned headline remains available when its history is offscreen"
-    );
-    // The caption may swap to the offscreen headline; the line itself,
-    // and the row its metadata sits on, stay put.
-    assert_eq!(
-        cx.debug_bounds("transcript-progress").unwrap(),
-        before,
-        "scrollback cannot move the progress component"
-    );
-    assert_eq!(
-        cx.debug_bounds("progress-metadata").unwrap().top(),
-        metadata.top(),
-        "scrollback cannot move the progress metadata off its line"
+        cx.debug_bounds("jump-to-latest").is_some(),
+        "scrolled away from a working tail, jump to latest is offered"
     );
     // Working-phase detail appends no transcript block. Its wall caption
     // must still change, or the smallest panes freeze on the old heading.

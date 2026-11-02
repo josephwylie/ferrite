@@ -280,8 +280,6 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // focused Thread's branch in the Review beside it.
         (with_primary("shift-p"), "palette::ShowParked", None),
         (with_primary("shift-d"), "palette::ReviewBranch", None),
-        // ⌘⇧A: the work board (ADR 0031), herdr-projects' prefix+a.
-        (with_primary("shift-a"), "projects::Toggle", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
         (with_primary("="), "cockpit::TextLarger", None),
@@ -510,57 +508,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             ("cmd-m".into(), MAC_ONLY[2], None),
         ]);
     }
-    board_reads_its_keys(&mut table, platform);
     table
-}
-
-/// The work board's key context.
-const PROJECTS: &str = "Projects";
-
-/// The work board reads every key but the window's own, as herdr-projects'
-/// board reads its terminal's (`board::keys::press_of`): every keystroke
-/// the table binds anywhere is masked under it, so nothing bound around it
-/// (a wall's y/n/a and digits, Submit's enter, Windows' ctrl keys) acts
-/// before it. The window keeps ⌘ but its paste, which the board takes as
-/// one paste, and the key that opens and leaves the board
-/// (`projects::Toggle`). Its keys are its own, listed by its `?` menu.
-///
-/// Run again over a changed table, it masks the keys now bound and lifts
-/// the mask from a key the window now keeps.
-fn board_reads_its_keys(table: &mut Vec<Binding>, platform: Platform) {
-    let paste = match platform {
-        Platform::Mac => "cmd-v",
-        Platform::Windows => "ctrl-v",
-    };
-    let kept: Vec<String> = table
-        .iter()
-        .filter(|(keys, action, _)| {
-            *action == "projects::Toggle"
-                || (keys.as_str() != paste
-                    && parse(keys, platform).is_ok_and(|strokes| strokes[0].modifiers.platform))
-        })
-        .map(|(keys, _, _)| keys.clone())
-        .collect();
-    table
-        .retain(|(keys, action, context)| !is_board_mask(action, *context) || !kept.contains(keys));
-    let mut masked: Vec<String> = table
-        .iter()
-        .filter(|(_, action, context)| is_board_mask(action, *context))
-        .map(|(keys, _, _)| keys.clone())
-        .collect();
-    let mut rows = Vec::new();
-    for (keys, _, _) in table.iter() {
-        if !kept.contains(keys) && !masked.contains(keys) {
-            masked.push(keys.clone());
-            rows.push((keys.clone(), NO_ACTION, Some(PROJECTS)));
-        }
-    }
-    table.extend(rows);
-}
-
-/// Whether a row is the board's mask over a key (`board_reads_its_keys`).
-fn is_board_mask(action: &str, context: Option<&str>) -> bool {
-    action == NO_ACTION && context == Some(PROJECTS)
 }
 
 /// Actions with no default key, for the operator to bind (Settings
@@ -707,7 +655,6 @@ pub fn with_user_keys(
                 holder != bound && held_context == context && Some(held) == strokes.as_ref()
             })
     });
-    board_reads_its_keys(&mut table, platform);
     (table, refused)
 }
 
@@ -762,44 +709,6 @@ pub fn active() -> Vec<Binding> {
 mod tests {
     use super::*;
 
-    /// The work board reads every key the table binds but the window's ⌘
-    /// and the key that leaves it: each is masked under it, on both
-    /// platforms and with the operator's keys laid over the defaults.
-    #[test]
-    fn the_board_reads_every_key_but_the_windows_own() {
-        let masked = |table: &[Binding], keys: &str| {
-            table.contains(&(keys.into(), NO_ACTION, Some(PROJECTS)))
-        };
-        for platform in [Platform::Mac, Platform::Windows] {
-            let table = bindings(platform);
-            for keys in ["y", "n", "a", "1", "2", "3", "enter", "escape", "?", "tab"] {
-                assert!(masked(&table, keys), "{platform:?}: {keys}");
-            }
-            let (primary, toggle) = match platform {
-                Platform::Mac => ("cmd", "cmd-shift-a"),
-                Platform::Windows => ("ctrl", "ctrl-shift-a"),
-            };
-            assert!(masked(&table, &format!("{primary}-v")), "the board pastes");
-            assert!(!masked(&table, toggle), "the key that leaves the board");
-            assert_eq!(
-                masked(&table, &format!("{primary}-k")),
-                platform == Platform::Windows,
-                "⌘ is the window's; Windows' ctrl keys are the board's"
-            );
-        }
-        let keys = BTreeMap::from([
-            ("projects::Toggle".to_string(), Some("ctrl-g".to_string())),
-            ("palette::Toggle".to_string(), Some("ctrl-p".to_string())),
-        ]);
-        let (table, refused) = with_user_keys(Platform::Mac, &keys);
-        assert!(refused.is_empty(), "{refused:?}");
-        assert!(
-            !masked(&table, "ctrl-g"),
-            "the operator's key leaves the board"
-        );
-        assert!(masked(&table, "ctrl-p"), "an operator's key is masked too");
-    }
-
     /// Windows has no cmd key: a binding spelled cmd-* is dead there.
     #[test]
     fn windows_never_binds_the_cmd_modifier() {
@@ -837,7 +746,6 @@ mod tests {
             ("palette::Toggle", "k"),
             ("palette::ShowParked", "shift-p"),
             ("palette::ReviewBranch", "shift-d"),
-            ("projects::Toggle", "shift-a"),
             ("cockpit::TextLarger", "="),
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),
@@ -867,17 +775,13 @@ mod tests {
     }
 
     /// The two platforms differ in spelling only: same actions, same order,
-    /// same key contexts. The board's masks are not compared: they follow
-    /// each platform's distinct keystrokes, fewer on Windows, where ⌘ and
-    /// ctrl keys share one spelling.
+    /// same key contexts.
     #[test]
     fn both_platforms_bind_the_same_actions_in_the_same_contexts() {
         let shape = |platform: Platform| -> Vec<(&'static str, Option<&'static str>)> {
             bindings(platform)
                 .into_iter()
-                .filter(|(_, action, context)| {
-                    !is_board_mask(action, *context) && !MAC_ONLY.contains(action)
-                })
+                .filter(|(_, action, _)| !MAC_ONLY.contains(action))
                 .map(|(_, action, context)| (action, context))
                 .collect()
         };
@@ -1289,12 +1193,7 @@ mod tests {
             at(&defaults, "y", "cockpit::Allow"),
             "the row keeps its place"
         );
-        let actions = |table: &[Binding]| {
-            table
-                .iter()
-                .filter(|(_, action, context)| !is_board_mask(action, *context))
-                .count()
-        };
+        let actions = |table: &[Binding]| table.len();
         assert_eq!(
             actions(&table),
             actions(&defaults) - 2,

@@ -2,10 +2,11 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// FL-18: a request from a Thread off the focused Pane toasts with the nav
-/// open, as one float top right: in the panel's content column under the
-/// window's head, or with no panel `TOAST_W` wide under the Pane heads —
-/// never over a Composer.
+/// FL-18 and C8: a request from a Thread off the focused Pane rings, but
+/// with the nav open its row is the queue and no toast draws; with the nav
+/// folded it toasts as one float top right — in the panel's content column
+/// under the window's head, or with no panel `TOAST_W` wide under the Pane
+/// heads — never over a Composer.
 #[gpui::test]
 fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("toast-side", 2);
@@ -30,19 +31,21 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     tick(cx);
     ring(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.needs_you.toasts().len(),
-            1,
-            "the nav is open, and it toasts"
-        );
+        assert_eq!(view.needs_you.toasts().len(), 1, "it rings");
     });
     let selector: &'static str = format!("toast-{}", off_focus.get()).leak();
-    let toast = cx.debug_bounds(selector).expect("the toast is up");
+    assert!(
+        cx.debug_bounds(selector).is_none(),
+        "the nav is open: its row is the queue, nothing toasts"
+    );
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    ring(cx);
+    let toast = cx.debug_bounds(selector).expect("the nav folded: it toasts");
     use ferrite_ui::theme::{
         PANEL_PAD_L, PANEL_PAD_R, PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_TOP, TOAST_W, WIN_CHROME_H,
     };
     let window = cx.update(|window, _| window.viewport_size());
-    let panel = view.read_with(cx, |view, _| view.panel_column_w());
+    let panel = view.read_with(cx, |view, _| view.panel_rest_column_w());
     // Over the panel's content column under the window's head, or with no
     // panel `TOAST_W` wide under the Pane heads.
     let (width, right, top) = if panel > 0. {

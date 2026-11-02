@@ -44,7 +44,7 @@
 //!    surface casts, one shadow (`components::float_shadow`); a modal adds
 //!    `VEIL`.
 //! 3. **Neutral greys.** The opaque surfaces, darkest first: `SUNKEN` (a
-//!    command well) < `CARD` < `BAR` (diff and fence
+//!    command well) < `CARD` < `BLOCK` (diff and fence
 //!    blocks) < `DECISION` < `FIELD_COMPACT` < `FRAME` = `FIELD` (the Solo
 //!    Composer, the prompt band) < `TAB_ACTIVE` < `RAISED` (chips, inline
 //!    code, secondary buttons) < `SELECTED` (the
@@ -226,7 +226,7 @@ pub const SUNKEN: u32 = 0x161616;
 /// `#181818` — the card: a Pane's body, the transcript's surface.
 pub const CARD: u32 = 0x181818;
 /// `#1e1e1e` — diff and code-fence blocks.
-pub const BAR: u32 = 0x1e1e1e;
+pub const BLOCK: u32 = 0x1e1e1e;
 /// `#1f1f1f` — the Decision box.
 pub const DECISION: u32 = 0x1f1f1f;
 /// `#202020` — the compact Composer in a Group Pane.
@@ -339,7 +339,7 @@ pub mod paint {
     pub const BAR: Paint = FRAME;
     /// A diff's or a code fence's box, on a reading surface (the card, the
     /// panel).
-    pub const BLOCK: Paint = Paint::solid(super::BAR);
+    pub const BLOCK: Paint = Paint::solid(super::BLOCK);
     pub const FIELD: Paint = Paint::solid(super::FIELD);
     pub const RAISED: Paint = Paint::solid(super::RAISED);
     pub const SELECTED: Paint = Paint::solid(super::SELECTED);
@@ -473,6 +473,13 @@ pub mod words {
     pub const NEEDS_YOU: &str = "needs you";
     /// `NEEDS_YOU` counted past one (`2 need you`).
     pub const NEED_YOU: &str = "need you";
+
+    /// A count of waiting agents: `1 needs you`, `2 need you`. The nav's
+    /// tally and the bottom bar both say it so.
+    pub fn needs_you(count: usize) -> String {
+        let word = if count == 1 { NEEDS_YOU } else { NEED_YOU };
+        format!("{count} {word}")
+    }
     /// What a waiting agent needs: a permission request.
     pub const APPROVAL: &str = "approval";
     /// What a waiting agent needs: an answer.
@@ -922,7 +929,7 @@ pub const PANEL_BUTTON_H: f32 = 32.0;
 /// `RAISED`, a door's hover a step up (`SELECTED`).
 pub const PANEL_FILE_ACTION: f32 = NAV_HEADING_BUTTON;
 pub const PANEL_FILE_ACTION_GLYPH: f32 = 13.0;
-/// A file block's hunk area (phase 7b): on `BAR`, padding 4 0 6, its lines
+/// A file block's hunk area (phase 7b): on `BLOCK`, padding 4 0 6, its lines
 /// in the panel's diff face (`FS_PANEL_DIFF`/`LH_PANEL_DIFF`), each on a
 /// 2.5-cell sign column inset 1 cell; no line numbers.
 pub const PANEL_HUNK_PAD_T: f32 = SPACE_1;
@@ -982,7 +989,9 @@ pub const ICON_PR_BUTTON_GLYPH: f32 = 14.0;
 /// hollow ring is 11 inside it.
 pub const PR_MARK: f32 = 15.0;
 pub const PR_MARK_RING: f32 = 11.0;
-/// 40px — a readiness row (icon 15, padding 0 12, 10px gaps).
+/// 40px — a readiness row (icon 15, 10px gaps). Its padding, a comment
+/// card's, the heads', the rows' and the description's are all
+/// `PANEL_ROW_ICON_X`: every Panel tab shares one content edge.
 pub const PR_READY_ROW_H: f32 = 40.0;
 /// The checks listed before `Show N more`.
 pub const PR_CHECKS_SHOWN: usize = 8;
@@ -1002,10 +1011,6 @@ pub const PR_LIST_HANG: f32 = 16.0;
 /// The lines the folded description shows: its opening heading, if it has
 /// one, and the first lines under it.
 pub const PR_DESCRIPTION_LINES: usize = 5;
-/// How far a flush row's hover ground (a check, `Show more`, `N resolved`)
-/// reaches past the column either side: its content keeps the section
-/// heads' inset, and the ground still clears it.
-pub const PR_ROW_BLEED: f32 = SPACE_1;
 /// 26px — a reply's indent under its comment.
 pub const PR_REPLY_INDENT: f32 = 26.0;
 /// The ink a resolved comment card keeps.
@@ -1028,8 +1033,8 @@ pub const PANE_PAD_X: f32 = SPACE_4;
 /// The Pane body's padding: 16px top, so the first line never kisses the
 /// head rule, and half a row (10px) at the bottom (the prototype's `.tx`
 /// `padding-bottom: calc(var(--lh)/2)`): an idle followed tail ends 10px
-/// above the Composer's rule. The working line is not an overlay: it sits
-/// in the Composer's stack and pushes the transcript up while it shows.
+/// above the Composer's rule. The working line is the transcript's last
+/// row while a turn runs (`pane::working_tail`), under the newest output.
 pub const BODY_PAD_T: f32 = SPACE_4;
 pub const BODY_PAD_B: f32 = LH_UI / 2.0;
 /// A Group Pane's body ends 14px over its compact Composer (SPEC §5.9, the
@@ -1249,11 +1254,12 @@ pub fn init_components(cx: &mut gpui::App) {
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
     // A toast is the rail's voice only (C8): with the nav open its rows'
-    // marks are the queue, and a toast shows only while the nav is
-    // collapsed and its Thread is off the board (`NeedsYou::present`). Every
-    // toast, the kit's and the Needs-you one, stands TopRight under the
-    // window's head (`TOAST_TOP`), clear of the Composer the operator types
-    // in, one at a time; the Inbox holds the rest.
+    // marks are the queue, so the Needs-you toast draws only while the nav
+    // is railed (`cockpit::toast_float`) and its Thread is off the board
+    // (the ring's `in_view`); its sound and system notification ring either
+    // way. Every toast, the kit's and the Needs-you one, stands TopRight
+    // (`TOAST_*`), clear of the Composer the operator types in, one at a
+    // time; the Inbox holds the rest.
     theme.notification.placement = gpui::Anchor::TopRight;
     theme.notification.margins = gpui::base::Edges {
         top: px(WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP),
@@ -1350,7 +1356,7 @@ pub fn init_components(cx: &mut gpui::App) {
 // - **Failure** is a word: a failed call's line stays in the work's ink and
 //   its verdict (`· failed`) follows the cut, `failed` in `BLOCKED`; what
 //   it printed reads as output does.
-// - **Diffs** sit in the block box (`BLOCK_*`: `paint::BAR`, `R_CONTROL`,
+// - **Diffs** sit in the block box (`BLOCK_*`: `paint::BLOCK`, `R_CONTROL`,
 //   an inset `HAIRLINE`), `BLOCK_MARGIN_T` under their call: a `TEXT_DIM`
 //   hunk header naming its section (none when it has none), line numbers
 //   right-aligned in `DIFF_NUMBER_CELLS` (`TEXT_FAINT`, or
@@ -1467,7 +1473,7 @@ pub const PROMPT_BUBBLE_GAP: f32 = SPACE_1_5;
 pub const THUMB_MAX_W: f32 = 320.0;
 pub const THUMB_MAX_H: f32 = 200.0;
 
-/// **The block box** — a diff's or a code fence's (SPEC §5.4): `paint::BAR`
+/// **The block box** — a diff's or a code fence's (SPEC §5.4): `paint::BLOCK`
 /// ground, `R_CONTROL` corners, an inset 1px `HAIRLINE`, `BLOCK_PAD_Y`
 /// above its first line and below its last, `BLOCK_MARGIN_T` under the row
 /// it hangs from.
@@ -1516,9 +1522,11 @@ pub const MINIMAP_BAND_HOVER: u32 = 0xffffff1c;
 /// A minimap jump's scroll: eased over this long (reduced motion jumps).
 pub const MINIMAP_SCROLL_MS: u64 = 300;
 
-/// The room over a Solo transcript's first row (board Panes none,
-/// `.tx{padding-top:0}`).
+/// The room over a transcript's first row: a Solo Pane's `TX_PAD_T`, a
+/// board Pane's `TX_PAD_T_BOARD`, so a first prompt's bubble never meets
+/// the head's rule.
 pub const TX_PAD_T: f32 = LH_UI;
+pub const TX_PAD_T_BOARD: f32 = SPACE_3;
 /// What a prompt band's chip line adds below it: the prototype's chip is an
 /// `inline-flex` box seated on its icon's synthesized baseline, which lifts
 /// it above the line's strut and grows that line box by two pixels. The
@@ -1566,17 +1574,21 @@ pub const TURN_STAMP_RULE_GAP: f32 = SPACE_3;
 /// bubble) and a turn's answer's (`Copy`, under it) show under the pointer
 /// anywhere on the message. Each is a `MESSAGE_ACTION` square at `R_CHIP`,
 /// its `MESSAGE_ACTION_GLYPH` icon in `TEXT_DIM`, the raised hover blend;
-/// a copy turns to a check (`Copied`) for `COPIED_HOLD_MS`. An answer's row
+/// a copy turns to a check for `COPIED_HOLD_MS`. An answer's row
 /// stands `MESSAGE_ACTIONS_GAP` under its prose, laid out at rest so the
 /// pointer never moves the transcript.
 pub const MESSAGE_ACTION: f32 = SPACE_6;
 pub const MESSAGE_ACTION_GLYPH: f32 = 14.0;
 pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_1;
 pub const COPIED_HOLD_MS: u64 = 1_500;
-/// **The top fade**: what scrolls under the top of the transcript (or under
-/// its pinned prompt) fades out over this height into the card, so no row
-/// ends on a hard cut.
+/// **The edge fades**: what scrolls under the top of the transcript (or
+/// under its pinned prompt) fades out over this height into the card, so no
+/// row ends on a hard cut; while the reader is scrolled away from the tail,
+/// the foot fades the same way. A fade holds near-opaque (`TX_FADE_HOLD`)
+/// over its first third, so a row cut right at the edge is hidden, then
+/// eases out.
 pub const TX_TOP_FADE: f32 = SPACE_6;
+pub const TX_FADE_HOLD: f32 = 0.88;
 /// The pinned prompt keeps at most this many of its lines, its plane
 /// `PINNED_PROMPT_PAD_Y` above and below the bubble.
 pub const PINNED_PROMPT_LINES: usize = 2;
@@ -1799,14 +1811,13 @@ pub const PANE_HEAD_FILL_GLYPH: f32 = 14.0;
 /// The compact Composer (SPEC §5.9 item 5, `pane::compact_composer`): a
 /// 38px box `COMPACT_COMPOSER_INSET` in from the card's sides and foot,
 /// padded 12 before the input and 7 after the send circle (24, its
-/// `arrow-up` 12), `COMPACT_WORKING_GAP` under the working line.
+/// `arrow-up` 12).
 pub const COMPACT_COMPOSER_H: f32 = 38.0;
 pub const COMPACT_COMPOSER_INSET: f32 = 10.0;
 pub const COMPACT_COMPOSER_PAD_L: f32 = SPACE_3;
 /// Off the space scale: centres the 24px circle 7px from the box's edge,
 /// as the mockup draws it.
 pub const COMPACT_COMPOSER_PAD_R: f32 = 7.0;
-pub const COMPACT_WORKING_GAP: f32 = 14.0;
 pub const SEND_CIRCLE_SM: f32 = SPACE_6;
 pub const SEND_GLYPH_SM: f32 = SPACE_3;
 
@@ -1823,6 +1834,9 @@ pub const RETRY_PAD_X: f32 = 10.0;
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
 pub const HEAD_TITLE_MIN_W: f32 = 96.0;
+/// How much readier a Group head's title is to shrink than its state word
+/// (flex shrink factors): the title ellipsizes to its floor first.
+pub const HEAD_TITLE_SHRINK: f32 = 64.0;
 /// The tasks meter: 6 × 3 segments, 1px radius, 2px apart (an 8px pitch).
 /// Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track.
 pub const METER_SEG_W: f32 = 6.0;
@@ -1952,12 +1966,12 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 /// **The Composer is a box in the card** (SPEC §5.5). In Solo it stands
 /// under the reading column: at most `TX_COLUMN_MAX_W` wide, centred as
 /// the transcript is, and never nearer the card's sides and foot than
-/// `COMPOSER_INSET` (the working line and the shelf keep the same column):
+/// `COMPOSER_INSET` (the shelf keeps the same column):
 /// `paint::FIELD` at `R_PANE`, a 1px `FIELD_RING` laid outside it (it takes
 /// no layout).
 ///
-/// - **The working line** (`pane::working_line`) is the stack's top row,
-///   `COMPOSER_WORKING_GAP_SOLO` above what follows it.
+/// - **The working line** is not the stack's: it is the transcript's last
+///   row while a turn runs (`pane::working_tail`), spaced as the work is.
 /// - **The shelf** stands `SHELF_GAP` above the box its files are for:
 ///   pending files at left, background tasks at right, chips
 ///   `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, `FS_META`.
@@ -1998,10 +2012,6 @@ pub const TABLE_TEXT_DROP: f32 = 1.0;
 /// `ATTENTION` from `CTX_METER_WARN`, `BLOCKED` from `CTX_METER_FULL`.
 pub const CTX_METER_WARN: f32 = 0.60;
 pub const CTX_METER_FULL: f32 = 0.85;
-/// Under the working line, above Solo's box: 15 (off the scale: the
-/// mockup's, the transcript line's half-leading over the box's 14px
-/// inset).
-pub const COMPOSER_WORKING_GAP_SOLO: f32 = 15.0;
 /// The provider's logomark in a status segment or a picker section.
 pub const STATUS_LOGO: f32 = 11.0;
 /// A logomark set inline in a status segment's line (the prototype's
@@ -2269,10 +2279,10 @@ pub const PALETTE_ROW_PAD_X: f32 = 10.0;
 pub const PALETTE_MARK_W: f32 = 14.0;
 pub const PALETTE_MARK_ICON: f32 = 14.0;
 pub const PALETTE_ENTER_ICON: f32 = 13.0;
-/// The key column: wide enough for a four-glyph chord (`⌃⌥⌘K`) at 12px.
 /// The note a list with nothing to show stands in (`No matches`), centred
 /// in two rows' height, so an empty result does not collapse the dialog.
 pub const PALETTE_EMPTY_H: f32 = 2.0 * PALETTE_ROW_H;
+/// The key column: wide enough for a four-glyph chord (`⌃⌥⌘K`) at 12px.
 pub const PALETTE_KEYS_W: f32 = SPACE_6 + SPACE_4;
 pub const PALETTE_FOOT_H: f32 = 36.0;
 pub const PALETTE_MAX_H: f32 = 12.0 * PALETTE_ROW_H;
@@ -2614,6 +2624,10 @@ pub const NAV_HALO_FILL: u32 = 0xe6c47c26;
 /// 12px — a Group row's chevron, at x 11 (`NAV_CHEVRON_X`).
 pub const NAV_CHEVRON: f32 = 12.0;
 pub const NAV_CHEVRON_X: f32 = 11.0;
+/// 12px — a row's PR mark after its `#N` (`nav::pr_mark`): every mark one
+/// drawn icon at one size; pending a `NAV_PR_DOT` dot centred in its box.
+pub const NAV_PR_MARK: f32 = 12.0;
+pub const NAV_PR_DOT: f32 = 6.0;
 /// 36px — the foot: `Ferrite 0.5` and the gear, 8px under the tree.
 pub const NAV_FOOT_PAD_T: f32 = SPACE_2;
 /// The most characters a folded Project's branch takes before it is cut.
@@ -2868,6 +2882,13 @@ mod tests {
         assert_eq!(word_ink("done"), TEXT_DIM);
     }
 
+    /// One waiting agent `needs you`; more `need you`, on every surface.
+    #[test]
+    fn a_needs_you_count_agrees_with_its_number() {
+        assert_eq!(words::needs_you(1), "1 needs you");
+        assert_eq!(words::needs_you(2), "2 need you");
+    }
+
     /// WCAG 2.x relative luminance of an opaque `0xRRGGBB`.
     fn luminance(rgb: u32) -> f32 {
         let channel = |shift: u32| {
@@ -2913,7 +2934,7 @@ mod tests {
     const GROUNDS: &[(&str, u32)] = &[
         ("FRAME", FRAME),
         ("CARD", CARD),
-        ("BAR", BAR),
+        ("BLOCK", BLOCK),
         ("FIELD", FIELD),
         ("FIELD_COMPACT", FIELD_COMPACT),
         ("DECISION", DECISION),
@@ -2969,7 +2990,7 @@ mod tests {
                 ("CARD", CARD),
                 ("FRAME", FRAME),
                 ("FLOAT", FLOAT),
-                ("BAR", BAR),
+                ("BLOCK", BLOCK),
             ],
             2.0,
         );
@@ -2995,7 +3016,7 @@ mod tests {
                 ("CARD", CARD),
                 ("FRAME", FRAME),
                 ("FLOAT", FLOAT),
-                ("BAR", BAR),
+                ("BLOCK", BLOCK),
             ],
             4.5,
         );
@@ -3085,7 +3106,7 @@ mod tests {
         let ladder = [
             ("SUNKEN", SUNKEN),
             ("CARD", CARD),
-            ("BAR", BAR),
+            ("BLOCK", BLOCK),
             ("DECISION", DECISION),
             ("FIELD_COMPACT", FIELD_COMPACT),
             ("FRAME", FRAME),
@@ -3109,7 +3130,7 @@ mod tests {
             assert!(r == g && g == b, "{name} #{face:06x} is not a neutral grey");
         }
         assert_eq!(
-            [FRAME, CARD, BAR, FIELD, RAISED, SELECTED],
+            [FRAME, CARD, BLOCK, FIELD, RAISED, SELECTED],
             [0x222222, 0x181818, 0x1e1e1e, 0x222222, 0x2a2a2a, 0x2e2e2e]
         );
         assert_eq!((PRIMARY, ON_PRIMARY), (TEXT_STRONG, 0x161616));
@@ -3173,7 +3194,7 @@ mod tests {
         let paints = [
             (paint::CARD, CARD),
             (paint::FRAME, FRAME),
-            (paint::BLOCK, BAR),
+            (paint::BLOCK, BLOCK),
             (paint::FIELD, FIELD),
             (paint::RAISED, RAISED),
             (paint::SELECTED, SELECTED),
@@ -3196,11 +3217,15 @@ mod tests {
         assert!(!paint::HAIRLINE.is_opaque());
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
-        for ground in [CARD, FRAME, BAR, FLOAT] {
+        for ground in [CARD, FRAME, BLOCK, FLOAT] {
             let step = (over(HOVER_WASH, ground) & 0xff) - (ground & 0xff);
             assert!((7..=8).contains(&step), "{ground:06x} steps {step}");
         }
-        assert_eq!(over(HOVER_WASH, FRAME), RAISED, "on the frame, the old face");
+        assert_eq!(
+            over(HOVER_WASH, FRAME),
+            RAISED,
+            "on the frame, the old face"
+        );
         // A paint converts the way `rgba()` does, never the way `rgb()` would.
         let fill: gpui::Fill = paint::CARD.into();
         assert_eq!(fill, gpui::Fill::from(gpui::rgba(paint::CARD.0)));

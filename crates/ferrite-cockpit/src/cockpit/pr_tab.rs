@@ -391,7 +391,7 @@ impl CockpitView {
             .flex_col()
             .flex_shrink_0()
             .pt(px(SPACE_0_5))
-            .px(px(SPACE_0_5))
+            .px(px(PANEL_ROW_ICON_X))
             .pb(px(PR_SECTION_GAP))
             .child(
                 div()
@@ -507,7 +507,7 @@ impl CockpitView {
             });
             let (mark, word, word_ink) = check_face(check.status);
             section = section.child(
-                flush_row(gpui::ElementId::from(("pr-check", index)), SPACE_0_5)
+                flush_row(gpui::ElementId::from(("pr-check", index)))
                     .debug_selector(move || format!("pr-check-{index}"))
                     .gap(px(PR_ROW_GAP))
                     .child(mark)
@@ -662,7 +662,7 @@ impl CockpitView {
             .flex_shrink_0()
             .gap(px(SPACE_1_5))
             .py(px(PR_COMMENT_PAD_Y))
-            .px(px(SPACE_3))
+            .px(px(PANEL_ROW_ICON_X))
             .rounded(px(R_BLOCK))
             .bg(paint::RAISED)
             .cursor_pointer()
@@ -913,18 +913,18 @@ fn section_head(selector: &'static str, name: &'static str, count: Option<String
         .items_center()
         .h(px(PANEL_SECTION_H))
         .mt(px(PR_SECTION_GAP))
-        .px(px(SPACE_0_5))
+        .px(px(PANEL_ROW_ICON_X))
         .text_size(px(FS_META))
         .text_color(rgb(TEXT_DIM))
         .child(div().flex_1().font_weight(W_LABEL).child(name))
         .children(count.map(SharedString::from))
 }
 
-/// A 30px row a click opens or unfolds, its content `inset` into the
-/// column as the section heads' is: under the pointer its hover ground
-/// reaches `PR_ROW_BLEED` past the column either side, so the mark or text
-/// keeps its place and the ground still clears it.
-fn flush_row(id: gpui::ElementId, inset: f32) -> Stateful<Div> {
+/// A 30px row a click opens or unfolds, its content on the Panel's one
+/// content edge (`PANEL_ROW_ICON_X`, as the section heads' and every other
+/// tab's): under the pointer its hover ground spans the column, the cards'
+/// outer edge.
+fn flush_row(id: gpui::ElementId) -> Stateful<Div> {
     use ferrite_ui::theme::*;
     let key = ferrite_ui::pointer::hover_key(&id);
     div()
@@ -933,8 +933,7 @@ fn flush_row(id: gpui::ElementId, inset: f32) -> Stateful<Div> {
         .flex_shrink_0()
         .items_center()
         .h(px(PANEL_SECTION_H))
-        .mx(px(-PR_ROW_BLEED))
-        .px(px(inset + PR_ROW_BLEED))
+        .px(px(PANEL_ROW_ICON_X))
         .rounded(px(R_CONTROL))
         .hover_row(key)
         .press_row()
@@ -943,7 +942,7 @@ fn flush_row(id: gpui::ElementId, inset: f32) -> Stateful<Div> {
 /// A quiet row (`Show N more`, `More on GitHub`).
 fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
     use ferrite_ui::theme::*;
-    flush_row(id.into(), SPACE_1)
+    flush_row(id.into())
         .debug_selector(move || id.into())
         .text_size(px(FS_LABEL))
         .text_color(rgb(TEXT_DIM))
@@ -960,7 +959,7 @@ fn fold_row(
     words: impl Into<SharedString>,
 ) -> Stateful<Div> {
     use ferrite_ui::theme::*;
-    flush_row(id.into(), SPACE_1)
+    flush_row(id.into())
         .debug_selector(move || id.into())
         .gap(px(SPACE_2))
         .text_size(px(FS_LABEL))
@@ -1011,7 +1010,7 @@ impl RenderOnce for Description {
             TextViewState::markdown(&body, cx)
         });
         state.update(cx, |state, cx| state.set_text(&body, cx));
-        let view = small_markdown(TextView::new(&state), window).px(px(SPACE_0_5));
+        let view = small_markdown(TextView::new(&state), window).px(px(PANEL_ROW_ICON_X));
         let view = if self.unfolded {
             view
         } else {
@@ -1280,7 +1279,7 @@ fn readiness_group(pr: &WirePr) -> Option<Div> {
                     .items_center()
                     .gap(px(PR_ROW_GAP))
                     .h(px(PR_READY_ROW_H))
-                    .px(px(SPACE_3))
+                    .px(px(PANEL_ROW_ICON_X))
                     .child(mark(row.glyph, row.ink))
                     .child(
                         div()

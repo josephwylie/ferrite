@@ -563,7 +563,7 @@ impl CockpitView {
             find.bar.search(text.lines(), from, cx)
         };
         if changed {
-            reveal_found(tab, document.renders_markdown(), true);
+            reveal_found(tab, &text, document.renders_markdown(), true);
         }
         cx.notify();
     }
@@ -582,7 +582,9 @@ impl CockpitView {
             .as_mut()
             .is_some_and(|find| find.bar.step(forward).is_some())
         {
-            reveal_found(tab, document.renders_markdown(), false);
+            if let Some(text) = document.text() {
+                reveal_found(tab, text, document.renders_markdown(), false);
+            }
             cx.notify();
         }
     }
@@ -606,15 +608,16 @@ impl CockpitView {
 }
 
 /// A file's lines, numbered (F-14), in the code face on the grid's cells
-/// (`CH`, what the cut below counts in) — monospaced, so the numbers stand
-/// in tabular columns: a `READER_NUMBER_W` column of numbers, right-aligned
-/// and dim, `READER_NUMBER_GAP` before the code, the code in its syntax
-/// colours (`highlight_tokens` for the path's language). The target line
-/// lies on `paint::SELECTED` with its number in `TEXT_STRONG`. A line wider
-/// than the preview is cut at its edge; the one holding the find's
-/// occurrence starts further in when that would lie past it (`shown_from`).
-/// Virtualised: only the rows in view are laid out, read from the shared
-/// text without copying the rest.
+/// (`CH`) — monospaced, so the numbers stand in tabular columns: a
+/// `READER_NUMBER_W` column of numbers, right-aligned and dim,
+/// `READER_NUMBER_GAP` before the code, the code in its syntax colours
+/// (`highlight_tokens` for the path's language). The target line lies on
+/// `paint::SELECTED` with its number in `TEXT_STRONG`. A line wider than
+/// the preview is never cut: the list scrolls sideways as wide as its
+/// widest line, the numbers standing still over the code on the card's
+/// own ground while it slides under them; a find's occurrence past the
+/// edge scrolls into view (`reveal_found`). Virtualised: only the rows in
+/// view are laid out, read from the shared text without copying the rest.
 fn numbered_lines(
     path: &Path,
     text: Arc<Text>,
@@ -625,6 +628,7 @@ fn numbered_lines(
     use ferrite_ui::theme::*;
     let language = ferrite_core::transcript::language_for_path(path);
     let count = text.line_count();
+    let widest = text.widest_line();
     // A find's occurrences: its query, and the line and ordinal it is on.
     let find = find.map(|find| {
         (
@@ -634,62 +638,61 @@ fn numbered_lines(
     });
     let list = scroll.clone();
     gpui::uniform_list("preview-lines", count, move |range, _window, _cx| {
-        // The cells a line shows before the preview's edge cuts it.
-        let width = list.0.borrow().base_handle.bounds().size.width;
-        let columns = ((f32::from(width) - READER_NUMBER_W) / CH).max(0.) as usize;
+        // How far the code has slid left: the numbers stay put by as much.
+        let slid = -list.0.borrow().base_handle.offset().x;
         range
             .map(|at| {
                 let line = text.line(at);
                 let tokens = ferrite_core::transcript::highlight_tokens(language, line);
                 let highlights = pane::code(line, Some(tokens.as_slice()));
                 let mut washes = Vec::new();
-                let mut from = 0;
                 if let Some((query, active)) = &find {
                     for (ordinal, range) in query.matches(line).into_iter().enumerate() {
                         let on = *active == Some((at, ordinal));
-                        if on {
-                            from = shown_from(line, &range, columns);
-                        }
                         washes.push((range, if on { FIND_ACTIVE_WASH } else { FIND_WASH }));
                     }
                 }
-                let (line, highlights) = cut_head(
-                    line.to_string(),
-                    ferrite_pane::find::washed(highlights, &washes),
-                    from,
-                );
+                let highlights = ferrite_pane::find::washed(highlights, &washes);
                 let number = at + 1;
                 let marked = target == Some(number as u32);
                 div()
+                    .relative()
                     .flex()
                     .w_full()
                     .h(px(LH_UI))
+                    .pl(px(READER_NUMBER_W))
                     .whitespace_nowrap()
                     .when(marked, |row| row.bg(paint::SELECTED))
                     .child(
                         div()
-                            .flex()
                             .flex_shrink_0()
-                            .justify_end()
-                            .w(px(READER_NUMBER_W))
-                            .pr(px(READER_NUMBER_GAP))
-                            .text_color(rgb(if marked { TEXT_STRONG } else { TEXT_DIM }))
-                            .child(SharedString::from(number.to_string())),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
+                            .pr(px(CH))
                             .text_color(rgb(SYN_PLAIN))
                             .child(
-                                gpui::StyledText::new(SharedString::from(line))
+                                gpui::StyledText::new(SharedString::from(line.to_string()))
                                     .with_highlights(highlights),
                             ),
+                    )
+                    // Laid after the code, so it covers what slides under it.
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left(slid)
+                            .flex()
+                            .justify_end()
+                            .w(px(READER_NUMBER_W))
+                            .h(px(LH_UI))
+                            .pr(px(READER_NUMBER_GAP))
+                            .bg(if marked { paint::SELECTED } else { paint::CARD })
+                            .text_color(rgb(if marked { TEXT_STRONG } else { TEXT_DIM }))
+                            .child(SharedString::from(number.to_string())),
                     )
             })
             .collect::<Vec<_>>()
     })
+    .with_horizontal_sizing_behavior(gpui::ListHorizontalSizingBehavior::Unconstrained)
+    .with_width_from_item(Some(widest))
     .track_scroll(&scroll)
     .flex_1()
     .min_h_0()
@@ -744,42 +747,13 @@ fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElem
         .into_any_element()
 }
 
-/// Where a file's line starts drawing so the occurrence the find is on
-/// (`found`) shows in the `columns` cells before the preview's edge: its
-/// head (0) when it fits, else the occurrence a third of the way in.
-fn shown_from(text: &str, found: &std::ops::Range<usize>, columns: usize) -> usize {
-    if columns == 0 || text[..found.end].chars().count() <= columns {
-        return 0;
-    }
-    let lead = (text[..found.start].chars().count()).saturating_sub(columns / 3);
-    text.char_indices().nth(lead).map_or(0, |(at, _)| at)
-}
-
-/// `text` from byte `from` on, a `…` in place of the head it skips, its
-/// highlights moved with it.
-fn cut_head(
-    text: String,
-    highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
-    from: usize,
-) -> (String, Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>) {
-    if from == 0 {
-        return (text, highlights);
-    }
-    let shift = |at: usize| at.max(from) - from + '…'.len_utf8();
-    let highlights = highlights
-        .into_iter()
-        .filter(|(range, _)| range.end > from)
-        .map(|(range, style)| (shift(range.start)..shift(range.end), style))
-        .collect();
-    (format!("…{}", &text[from..]), highlights)
-}
-
 /// Bring the preview's active occurrence into view: a file's line centred
-/// (the list scrolls itself), or a Markdown occurrence once it has painted
-/// (`settle_markdown_found`). A new query (`start_in_view`) in a Markdown
-/// document is on its first occurrence until that paint says which is the
-/// first in view.
-fn reveal_found(tab: &mut PreviewTab, markdown: bool, start_in_view: bool) {
+/// (the list scrolls itself) and, when the occurrence lies past either
+/// side of the view, the code slid so it starts a third of the way in; or
+/// a Markdown occurrence once it has painted (`settle_markdown_found`). A
+/// new query (`start_in_view`) in a Markdown document is on its first
+/// occurrence until that paint says which is the first in view.
+fn reveal_found(tab: &mut PreviewTab, text: &Text, markdown: bool, start_in_view: bool) {
     let Some(find) = &mut tab.find else {
         return;
     };
@@ -792,10 +766,35 @@ fn reveal_found(tab: &mut PreviewTab, markdown: bool, start_in_view: bool) {
         report.ahead.set(None);
         find.reveal = ferrite_pane::find::REVEAL_FRAMES;
         find.start_in_view = start_in_view;
-    } else {
-        tab.scroll
-            .scroll_to_item(hit.unit, gpui::ScrollStrategy::Center);
+        return;
     }
+    tab.scroll
+        .scroll_to_item(hit.unit, gpui::ScrollStrategy::Center);
+    if hit.unit >= text.line_count() {
+        return;
+    }
+    let line = text.line(hit.unit);
+    let Some(found) = find.bar.query().matches(line).into_iter().nth(hit.ordinal) else {
+        return;
+    };
+    let handle = &tab.scroll.0.borrow().base_handle;
+    let offset = handle.offset();
+    let view = f32::from(handle.bounds().size.width) - ferrite_ui::theme::READER_NUMBER_W;
+    let x = slide_to(line, &found, -f32::from(offset.x), view);
+    handle.set_offset(gpui::point(px(-x), offset.y));
+}
+
+/// How far a file's line slides left so its occurrence `found` shows in a
+/// `view` wide: where it is now (`slid`) while the occurrence lies inside,
+/// else the occurrence a third of the way in (never past the line's head).
+fn slide_to(line: &str, found: &std::ops::Range<usize>, slid: f32, view: f32) -> f32 {
+    let cell = ferrite_ui::theme::CH;
+    let start = line[..found.start].chars().count() as f32 * cell;
+    let end = line[..found.end].chars().count() as f32 * cell;
+    if start >= slid && end <= slid + view {
+        return slid;
+    }
+    (start - view / 3.).max(0.)
 }
 
 /// Each frame while a Markdown reveal is due: once the active occurrence
@@ -842,21 +841,25 @@ fn settle_markdown_found(find: &mut PreviewFind, scroll: &ScrollHandle, window: 
 mod tests {
     use super::*;
 
-    /// A file's line too long for the preview starts further in on the
-    /// line the find is on, so its occurrence shows: a third of the way
-    /// across, a `…` for the head, the highlights moved with the text.
+    /// A find's occurrence past the view's edge slides a long line so it
+    /// starts a third of the way in; one already in view leaves the line
+    /// where it is.
     #[test]
     fn a_long_line_slides_its_occurrence_into_view() {
+        let cell = ferrite_ui::theme::CH;
         let text = format!("{}needle()", "x".repeat(100));
         let found = 100..106;
-        assert_eq!(shown_from(&text, &found, 120), 0, "it fits");
-        let from = shown_from(&text, &found, 60);
-        assert_eq!(from, 80, "a third of 60 cells before it");
-        let wash = gpui::HighlightStyle::default();
-        let (shown, highlights) = cut_head(text, vec![(0..4, wash), (100..106, wash)], from);
-        assert_eq!(shown, format!("…{}needle()", "x".repeat(20)));
-        let at = &highlights[0].0;
-        assert_eq!(highlights.len(), 1, "the skipped head's highlight is gone");
-        assert_eq!(&shown[at.clone()], "needle");
+        assert_eq!(slide_to(&text, &found, 0., 120. * cell), 0., "it fits");
+        assert_eq!(
+            slide_to(&text, &found, 0., 60. * cell),
+            80. * cell,
+            "a third of 60 cells before it"
+        );
+        assert_eq!(
+            slide_to(&text, &found, 90. * cell, 60. * cell),
+            90. * cell,
+            "already in view: it stays"
+        );
+        assert_eq!(slide_to(&text, &(0..1), 90. * cell, 60. * cell), 0., "back to the head");
     }
 }

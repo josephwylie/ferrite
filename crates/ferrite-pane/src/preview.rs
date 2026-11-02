@@ -71,6 +71,9 @@ pub struct Text {
     pub source: SharedString,
     /// Each line's bytes in `source`, as `str::lines` splits it.
     lines: Vec<Range<usize>>,
+    /// The line with the most characters: what a reader sizes its
+    /// sideways scroll by.
+    widest: usize,
 }
 
 impl Text {
@@ -83,10 +86,21 @@ impl Text {
             lines.push(start..start + text.len());
             start += line.len();
         }
+        let widest = lines
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, range)| source[(*range).clone()].chars().count())
+            .map_or(0, |(at, _)| at);
         Self {
             source: source.into(),
             lines,
+            widest,
         }
+    }
+
+    /// The index of the line with the most characters (0 for no lines).
+    pub fn widest_line(&self) -> usize {
+        self.widest
     }
 
     pub fn line_count(&self) -> usize {

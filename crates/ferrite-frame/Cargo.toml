@@ -20,3 +20,5 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
 # The kit's components, initialised as the window does.
 ferrite-pane = { path = "../ferrite-pane" }
+# The glyph-coverage check (`ferrite_ui::face`) the lib tests run.
+ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }

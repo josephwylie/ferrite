@@ -176,7 +176,7 @@ pub const IMAGE: &str = "icons/image.svg";
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
-/// The work board's door: three columns of cards, in the line family.
+/// A board of Panes: three columns of cards, in the line family.
 pub const BOARD: &str = "icons/board.svg";
 // (end WP-E)
 

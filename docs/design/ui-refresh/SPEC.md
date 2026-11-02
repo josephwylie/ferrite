@@ -333,9 +333,6 @@ a 10px gap, a label in `TEXT_MUTED`, and a trailing item:
 - **`Parked`**: trailing count in `TEXT_DIM`. It shows the parked list in
   place of the tree, the same rows as today's bottom `parked N` section,
   which goes. ⌘⇧P (palette parked scope) is unchanged.
-- **`Tasks`**: only when Projects is live (ADR 0031). It replaces the
-  bar's `board_door`, and its trailing text is the `projects_bar_word`
-  tally.
 
 The Parked list is grouped as the tree is (§5.1.4):
 by Project in creation order (`other` last), then by home Group within
@@ -407,9 +404,7 @@ and the group-error notice keep their places, restyled in this type.
 right-aligned summary in 12 `TEXT_DIM`: the section branch's
 ahead/behind (`↑715`, `↑1 ↓5`). Clicking it folds the Project. A folded
 Project with nothing working or blocked shows as one row (`workmate 1`).
-The branch name moves from this heading to each row's line 2. The
-Projects (ADR 0031) `space_numbers` line stays under its heading, in 12
-`TEXT_DIM`.
+The branch name moves from this heading to each row's line 2.
 
 Everything inside a Project reads as one unit, a tree with guides (the
 operator's choice, `nav-full.html` variant 1):
@@ -459,8 +454,12 @@ centred on it.
   - working: `<branch> · <elapsed>`;
   - otherwise: `<branch>`, plus the row details `↑2↓1*`.
 
-  At the right of line 2 goes the PR label (`#123 ✓`, from `facts.pr`;
-  ADR 0026 keeps it on the row). The branch comes from `facts.branch`.
+  At the right of line 2 goes the PR label (`#123` and its mark, from
+  `facts.pr`; ADR 0026 keeps it on the row): the number in line 2's quiet
+  ink, then one drawn 12px icon — `check` passing (skipped checks pass),
+  `close` failing in `BLOCKED`, a 6px dot pending, `refresh` while a
+  reading is out, `git-merge` merged, `x-circle` closed — never a font
+  glyph, and never in the row's attention ink. The branch comes from `facts.branch`.
   Truncation order (narrowest first): drop the details, then the age,
   then ellipsise the branch, keeping the PR label. Port `row_words`'
   priority.
@@ -472,8 +471,6 @@ centred on it.
   the context menu's `Park thread`. A Project heading shows a `+` there
   in place of its drift: a new Thread in that Project. The press stops
   at the button.
-- Board-run task rows (ADR 0031, `task_lines`) keep their extra lines
-  under line 2, in 12 `TEXT_DIM`.
 
 **5.1.6 Group row (30) and members.**
 - **The row.** A chevron at x 11 (`chevron-right` folded,
@@ -720,8 +717,8 @@ or a command's output opens in the panel itself, in a Preview tab
     sits in the column's right padding, as the nav's does.
 - **Showing and hiding.** The panel rides in and out the way the nav
   folds (`motion::RESIZE`, 200ms CSS `ease`, interruptible), whatever
-  made it come or go: the toggle, or focus moving to or from a draft,
-  the empty board or the Projects coordinator. The board gives up or
+  made it come or go: the toggle, or focus moving to or from a draft
+  or the empty board. The board gives up or
   takes back the width every frame. The panel's content keeps its
   304 layout against the window's right edge, clipped where the board's
   edge is (never re-wrapped), and fades on the nav's 150ms clock. Under
@@ -764,8 +761,8 @@ or a command's output opens in the panel itself, in a Preview tab
   Group (the focused Pane's Thread; focusing another Pane switches it,
   and each Thread keeps its last tab), and with the Beside slot open.
   It shows exactly when the operator has it on (`panel_shown`, default
-  on) and there is a Thread: never on a draft, the empty board or the
-  Projects coordinator. There are no size rules (§4). When the panel
+  on) and there is a Thread: never on a draft or the empty board.
+  There are no size rules (§4). When the panel
   hides, the board takes its width.
 - **What it replaces.** The bar's `ctx` meter and its card
   (`context_usage_element`), and the files chip and its card
@@ -993,7 +990,7 @@ Full width. `BAR` ground, a `BAR_TOP` line, padding 0 14, gap 18, Geist
 - **What leaves the bar:**
   - the sidebar toggle goes to the nav head;
   - the bell goes to the Inbox;
-  - the board door goes to the nav's `Tasks` view;
+  - the board door is gone (the work board was removed);
   - the gear goes to the nav foot;
   - `ferrite` goes to the nav foot;
   - the focused Pane's status line goes to the Composer and panel;
@@ -1271,7 +1268,7 @@ One phase per pull request, each shippable on its own. In every phase:
 | --- | --- | --- |
 | **0. Tokens and faces** | §3: the new values, Geist registered, `FONT_UI` Geist, radii set, `ACCENT` remapped to `TEXT_STRONG`/`PRIMARY`, cyan and magenta retired. ADR 0033 → accepted; theme doc rewritten. | The app runs with sans chrome and no blue anywhere (grep for `ACCENT` finds only aliases). The theme tests assert the new ladder, floors and radii, and the glyph test covers Geist. |
 | **1. Frame and cards** | §4: the head row at 46, the bar at 30, the Pane as a card on `FRAME` with an 8px gutter, `GRID_GAP` 8, the seam grab band in the gutter, the rings by `PaneEdge`. | Solo and a 2×2 Group match the mockups' frame (positions within 2px at 1600×960). Seams still resize, and drag-to-swap still works. |
-| **2. Nav** | §5.1: head, views (Search, Inbox, Parked, Tasks), headings, two-line rows, Group rows and members, rail, foot. The Inbox replaces the bell's list. | The nav matches `solo.png` and `group.png`. The attention sort, hold-under-pointer, drag-to-Group and ⌘B still work. ⌘D walks the needs-you queue. |
+| **2. Nav** | §5.1: head, views (Search, Inbox, Parked), headings, two-line rows, Group rows and members, rail, foot. The Inbox replaces the bell's list. | The nav matches `solo.png` and `group.png`. The attention sort, hold-under-pointer, drag-to-Group and ⌘B still work. ⌘D walks the needs-you queue. |
 | **3. Bar** | §5.7: view tabs with roll-up dots, need-you count, usage labels, clock; items moved out. Free disk lands here (§8) or in phase 9. | The bar matches the mockups. Nothing that left the bar is unreachable (toggle, Notices, gear, `?`, Tasks). |
 | **4. Pane head and tab strip** | §5.2 Solo head (title, branch chip), §5.3 card strip with live tabs and the `N done` menu, split right. | A Thread with 3 running and 20 finished Subagents shows `Main`, 3 tabs and `20 done ▾`. Picking a done Subagent opens it. Esc stops a Subagent. |
 | **5. Transcript** | §5.4: prompt band, inks, inline code chips, fence and diff boxes, working line without parentheses. | `core_transcript_parity` passes with updated inks. A long Edit diff in split view still renders and folds. |

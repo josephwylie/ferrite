@@ -1,12 +1,13 @@
-//! A Thread's pull request, as its nav row labels it: `#123 ✓` — the PR of
+//! A Thread's pull request, as its nav row labels it: `#123` and a mark
+//! (`PrLabel`, drawn as an icon by the nav) — the PR of
 //! the branch its checkout is on, read by `gh` where the checkout is
 //! (`Cockpit::pull_request`). The behaviour matches herdr-plugin-gh-pr's
 //! README; none of its code is used (it carries no license).
 //!
 //! A reading is asked for when the operator focuses a Thread and when a
 //! Thread's worktree opens, at most once per `AUTO_EVERY`; the `refresh PR
-//! status` action asks at once. While an answer is out the label's symbol
-//! is `⟳`. With no `gh`, no login or no PR there is no label: a row never
+//! status` action asks at once. While an answer is out the label's mark
+//! is `Checking`. With no `gh`, no login or no PR there is no label: a row never
 //! shows an error.
 
 use std::time::{Duration, Instant};
@@ -72,32 +73,61 @@ impl PrWatch {
         moved
     }
 
-    /// The row's label (`#123 ✓`, `#123 ⟳`), or nothing without a PR.
-    pub fn label(&self) -> Option<String> {
+    /// The row's label (`#123` and its mark), or nothing without a PR.
+    pub fn label(&self) -> Option<PrLabel> {
         let pr = self.reading.as_ref()?;
-        let symbol = if self.checking {
-            Some('\u{27f3}')
-        } else {
-            symbol(pr)
-        };
-        Some(match symbol {
-            Some(symbol) => format!("#{} {symbol}", pr.number),
-            None => format!("#{}", pr.number),
+        Some(PrLabel {
+            number: pr.number,
+            mark: if self.checking {
+                Some(PrMark::Checking)
+            } else {
+                PrMark::of(pr)
+            },
         })
     }
 }
 
-/// The PR's one symbol: merged `◆` and closed `⊘` first, else its CI —
-/// passing `✓`, failing `✗`, pending `●` — and nothing for an open PR
-/// with no checks.
-fn symbol(pr: &PullRequest) -> Option<char> {
-    match (pr.state, pr.checks) {
-        (PrState::Merged, _) => Some('\u{25c6}'),
-        (PrState::Closed, _) => Some('\u{2298}'),
-        (PrState::Open, Some(CheckState::Passing)) => Some('\u{2713}'),
-        (PrState::Open, Some(CheckState::Failing)) => Some('\u{2717}'),
-        (PrState::Open, Some(CheckState::Pending | CheckState::Skipped)) => Some('\u{25cf}'),
-        (PrState::Open, None) => None,
+/// A row's PR label: its number, and one mark for where it stands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrLabel {
+    pub number: u64,
+    pub mark: Option<PrMark>,
+}
+
+impl PrLabel {
+    /// The number as the row types it: `#123`.
+    pub fn number_text(&self) -> String {
+        format!("#{}", self.number)
+    }
+}
+
+/// Where a PR stands, one mark: the nav draws each as an icon of one size
+/// (`nav::pr_mark`), never a font's glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrMark {
+    Passing,
+    Failing,
+    Pending,
+    /// A reading is on its way.
+    Checking,
+    Merged,
+    Closed,
+}
+
+impl PrMark {
+    /// Merged and closed first, else its CI — skipped checks pass — and
+    /// nothing for an open PR with no checks.
+    fn of(pr: &PullRequest) -> Option<Self> {
+        match (pr.state, pr.checks) {
+            (PrState::Merged, _) => Some(PrMark::Merged),
+            (PrState::Closed, _) => Some(PrMark::Closed),
+            (PrState::Open, Some(CheckState::Passing | CheckState::Skipped)) => {
+                Some(PrMark::Passing)
+            }
+            (PrState::Open, Some(CheckState::Failing)) => Some(PrMark::Failing),
+            (PrState::Open, Some(CheckState::Pending)) => Some(PrMark::Pending),
+            (PrState::Open, None) => None,
+        }
     }
 }
 
@@ -116,7 +146,7 @@ mod tests {
         }
     }
 
-    fn label(reading: PullRequest) -> Option<String> {
+    fn label(reading: PullRequest) -> Option<PrLabel> {
         PrWatch {
             reading: Some(reading),
             ..PrWatch::default()
@@ -124,35 +154,45 @@ mod tests {
         .label()
     }
 
-    /// The README's table: the number, then one symbol for where the PR
+    /// The README's table: the number, then one mark for where the PR
     /// stands.
     #[test]
-    fn the_label_is_the_number_and_one_symbol() {
+    fn the_label_is_the_number_and_one_mark() {
         let cases = [
-            (PrState::Open, Some(CheckState::Passing), "#123 \u{2713}"),
-            (PrState::Open, Some(CheckState::Failing), "#123 \u{2717}"),
-            (PrState::Open, Some(CheckState::Pending), "#123 \u{25cf}"),
-            (PrState::Merged, Some(CheckState::Failing), "#123 \u{25c6}"),
-            (PrState::Closed, None, "#123 \u{2298}"),
-            (PrState::Open, None, "#123"),
+            (PrState::Open, Some(CheckState::Passing), Some(PrMark::Passing)),
+            (PrState::Open, Some(CheckState::Skipped), Some(PrMark::Passing)),
+            (PrState::Open, Some(CheckState::Failing), Some(PrMark::Failing)),
+            (PrState::Open, Some(CheckState::Pending), Some(PrMark::Pending)),
+            (PrState::Merged, Some(CheckState::Failing), Some(PrMark::Merged)),
+            (PrState::Closed, None, Some(PrMark::Closed)),
+            (PrState::Open, None, None),
         ];
-        for (state, checks, want) in cases {
-            assert_eq!(label(pr(state, checks)).as_deref(), Some(want));
+        for (state, checks, mark) in cases {
+            assert_eq!(
+                label(pr(state, checks)),
+                Some(PrLabel { number: 123, mark })
+            );
         }
         assert_eq!(PrWatch::default().label(), None, "no PR, no label");
     }
 
-    /// While an answer is out the symbol turns; a Thread with no PR yet
+    /// While an answer is out the mark says so; a Thread with no PR yet
     /// still says nothing.
     #[test]
-    fn a_reading_on_its_way_turns_the_symbol() {
+    fn a_reading_on_its_way_marks_the_label() {
         let now = Instant::now();
         let mut watch = PrWatch::default();
         assert!(watch.ask(now, false));
         assert_eq!(watch.label(), None);
         assert!(watch.answered(Some(pr(PrState::Open, Some(CheckState::Passing)))));
         assert!(watch.ask(now + AUTO_EVERY, false));
-        assert_eq!(watch.label().as_deref(), Some("#123 \u{27f3}"));
+        assert_eq!(
+            watch.label(),
+            Some(PrLabel {
+                number: 123,
+                mark: Some(PrMark::Checking)
+            })
+        );
         assert!(watch.answered(None), "gh had nothing to say");
         assert_eq!(watch.label(), None);
     }

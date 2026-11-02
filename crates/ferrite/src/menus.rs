@@ -76,7 +76,6 @@ pub fn app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Commands\u{2026}", palette::Toggle),
                 MenuItem::action("Review Branch", palette::ReviewBranch),
-                MenuItem::action("Tasks", ferrite_cockpit::projects::Toggle),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
                 MenuItem::action("Toggle Panel", TogglePanel),

@@ -71,7 +71,7 @@ pull request and its context, one tab each, and its **preview** while one
 is open. It follows the focused Thread in every view (Solo, a Group's
 focused Pane, a fullscreen Pane, with a Review open beside it), shown
 while the operator has it on; there is none without a Thread (a draft,
-the empty board, the Projects coordinator), but for a draft's preview.
+the empty board), but for a draft's preview.
 _Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
 board).
 
@@ -311,8 +311,9 @@ _Avoid_: routine, cron job.
 **Work board**
 herdr-projects 1.0's board (ADR 0031): the list of tasks by need — needs
 you, ready to approve, working, to do, done — each delegated to an agent,
-with the chat to the Coordinator under it. Opened by the projects key in
-the board's place (`board.open: tab`) or as a sheet over it (`popup`).
+with the chat to the Coordinator under it. Ferrite no longer draws it: the
+Cockpit's Tasks page was removed, and only the Server's Projects
+integration (the keeper, the hooks, `ferrite-projects`) remains.
 _Avoid_: dashboard, kanban; "the board" alone is the Cockpit's Panes.
 
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and

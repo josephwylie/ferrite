@@ -29,8 +29,6 @@ mod parking;
 mod pr;
 mod pr_tab;
 mod project_picker;
-#[cfg(unix)]
-mod projects;
 mod provider_controls;
 mod provider_forms;
 mod provider_navigation;

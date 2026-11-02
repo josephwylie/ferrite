@@ -353,7 +353,6 @@ pub fn launch() {
                                     whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
                                     keys_refused: keys_refused.clone(),
-                                    board: true,
                                 },
                                 cx,
                             );

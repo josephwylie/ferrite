@@ -22,7 +22,7 @@ impl CockpitView {
     /// The head over the board, when the board shows a view to name: a
     /// Thread in Solo, or a Group.
     pub(super) fn view_head(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.empty_board_shown() || self.projects.coordinator_shown() {
+        if self.empty_board_shown() {
             return None;
         }
         let mut parts = match self.cockpit.roster().view() {

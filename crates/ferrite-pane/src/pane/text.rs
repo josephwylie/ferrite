@@ -554,8 +554,8 @@ fn collect_tool_text(
                 collect_fold(block, tool, failed_rest(tool, hidden), selection);
             }
         }
-    } else if let Some((_, rest)) = command_fold(tool).filter(|_| expanded) {
-        collect_fold(block, tool, rest.join("\n"), selection);
+    } else if let Some((all, _)) = command_open(tool).filter(|_| expanded) {
+        collect_fold(block, tool, all, selection);
     }
     let details = match tool.state {
         ToolState::Running => expanded,

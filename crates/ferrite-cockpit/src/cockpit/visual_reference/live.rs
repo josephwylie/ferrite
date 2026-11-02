@@ -431,7 +431,6 @@ pub fn capture(output: String) {
         whats_new: None,
         unreadable: None,
         keys_refused: Vec::new(),
-        board: false,
     };
     let window = cx
         .open_window(gpui::size(gpui::px(1440.), gpui::px(900.)), |window, cx| {
@@ -461,7 +460,7 @@ pub fn capture(output: String) {
         repo.display(),
         store_dir.display()
     ));
-    live.act(|view, window, cx| {
+    live.act(|_, window, cx| {
         window.activate_window();
         cx.notify();
     });

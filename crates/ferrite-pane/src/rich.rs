@@ -405,7 +405,9 @@ impl gpui::RenderOnce for Markdown {
         );
         // Headings scale with the reading size the answer row set.
         let base = window.text_style().font_size.to_pixels(window.rem_size());
-        let text_style = style_at(window.rem_size(), base);
+        // The view runs a cell past its column for a line's trailing space
+        // (below); its blocks take that cell back.
+        let text_style = hung_style(window.rem_size(), base);
         let text_style = if self.muted {
             // A thought stays one step down the ink ladder, headings too.
             (1..=6).fold(
@@ -794,6 +796,20 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
 /// Markdown's look for prose set at `base`: headings are ratios of it
 /// (`theme::heading_scale`), each on its own pixel line height.
 pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
+    style_hanging(rem_size, base, 0.)
+}
+
+/// `style_at` for a view that runs one cell past its column so a line's
+/// trailing space can hang there (`Markdown::render`): its blocks — a
+/// fence, a table, a rule — keep a cell's margin on the right, so they end
+/// on the column's edge with the prompt bubble and the Composer.
+fn hung_style(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
+    style_hanging(rem_size, base, theme::tx_cell(f32::from(base)))
+}
+
+/// Markdown's look at `base`, its blocks `hang` short of the view's right
+/// edge.
+fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextViewStyle {
     let rem = |value: f32| rems(value / f32::from(rem_size));
     let size = f32::from(base);
     let line = theme::prose_line_height(size);
@@ -830,7 +846,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             font_weight: Some(theme::W_STRONG),
             ..Default::default()
         })
-        // A fence is the diff's block box (`pane::block_box`): `BAR`,
+        // A fence is the diff's block box (`pane::block_box`): `BLOCK`,
         // `R_CONTROL` corners, a 1px `HAIRLINE`, `BLOCK_PAD_Y` above and
         // below, the code `CODE_PAD_CELLS` in, a half step under the prose.
         .with_code_background(gpui::transparent_black())
@@ -841,6 +857,10 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 // A fence holds to the measure too (`max-width: 108ch`): its
                 // language word sits at that edge.
                 .max_w(px(theme::MEASURE_CH * cell))
+                // Auto, not the vendor's full width, so the margin narrows
+                // it rather than pushing it past the view.
+                .w_auto()
+                .mr(px(hang))
                 .bg(theme::paint::BLOCK)
                 .border_1()
                 .border_color(theme::paint::HAIRLINE)
@@ -867,6 +887,7 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             // No box and no ground.
             let mut table = gpui::StyleRefinement::default()
                 .border_0()
+                .mr(px(hang))
                 .bg(gpui::transparent_black());
             table.overflow.x = Some(gpui::Overflow::Scroll);
             table
@@ -907,11 +928,13 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             gpui::StyleRefinement::default()
                 .h(px(1.))
                 .bg(theme::paint::LINE)
-                .my(px(theme::RULE_MARGIN_Y)),
+                .my(px(theme::RULE_MARGIN_Y))
+                .mr(px(hang)),
         )
         // Prose holds to the measure (`MEASURE_CH` cells), left-aligned;
-        // code, tables and rules keep the column. One cell more, for the
-        // trailing space a line hangs (see `Markdown::render`).
+        // code, tables and rules keep the column (`hang` short of a hung
+        // view's edge). One cell more, for the trailing space a line hangs
+        // (see `Markdown::render`).
         .with_prose_max_width(Some(px(((theme::MEASURE_CH + 1.0) * cell).round())))
         // A list's `•` hangs in the first of two cells, dim; its text on
         // the second's far side.
@@ -944,7 +967,9 @@ pub fn inline_code_wash() -> gpui::base::text::InlineCodeWash {
     gpui::base::text::InlineCodeWash {
         color: theme::paint::RAISED.hsla(),
         radius: px(theme::R_INLINE),
-        overhang: px(theme::INLINE_CODE_PAD_X),
+        // The wash covers the laid-out room either side and no more, so
+        // it meets neither neighbouring space.
+        overhang: px(0.),
         pad: px(theme::INLINE_CODE_PAD_X),
         inset_y: px(theme::INLINE_CODE_INSET_Y),
     }
@@ -2750,6 +2775,23 @@ mod style_tests {
             Some(px(theme::MEASURE_CH * theme::tx_cell(theme::FS_PROSE)).into())
         );
         assert_eq!(style.table().max_size.width, None);
+    }
+
+    /// The answer view runs a cell past its column for a line's trailing
+    /// space; its fence, table and rule take that cell back, so they end on
+    /// the column's edge with the prompt bubble and the Composer — at every
+    /// reading size. A view without the hang keeps them flush.
+    #[test]
+    fn blocks_take_back_the_hang_cell() {
+        for base in [theme::FS_PROSE, 18.] {
+            let cell = Some(px(theme::tx_cell(base)).into());
+            let hung = hung_style(px(theme::FS_UI), px(base));
+            assert_eq!(hung.code_block().margin.right, cell, "fence at {base}");
+            assert_eq!(hung.table().margin.right, cell, "table at {base}");
+            assert_eq!(hung.rule().margin.right, cell, "rule at {base}");
+            let flush = style_at(px(theme::FS_UI), px(base));
+            assert_eq!(flush.code_block().margin.right, Some(px(0.).into()));
+        }
     }
 
     /// Terminal-native (clean): a `W_STRONG` head over a `LINE2` rule, row

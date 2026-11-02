@@ -599,12 +599,17 @@ impl Inline {
                 continue;
             }
             for line in code_line_bounds(&self.text, text_layout, range.clone(), line_height) {
-                // A padded run's last glyph ends `pad` short of the next
-                // glyph, where the line's box ends.
+                // Ferrite: the run's box, as the inline flow reports it,
+                // starts at its left room (`pad` before its first glyph) and
+                // ends at its last glyph, `pad` short of its right room. The
+                // wash covers both rooms, `overhang` past them.
                 let bounds = Bounds::from_corners(
-                    point(line.left() - wash.overhang, line.top() + wash.inset_y),
                     point(
-                        line.right() - wash.pad + wash.overhang,
+                        line.left() + wash.pad - wash.overhang,
+                        line.top() + wash.inset_y,
+                    ),
+                    point(
+                        line.right() + wash.overhang,
                         line.bottom() - wash.inset_y,
                     ),
                 );

@@ -92,20 +92,21 @@ gpui::actions!(
     ]
 );
 
-/// The slot's keys, as its footer spells them.
-const FOOTER: [(&str, &str); 11] = [
+/// The slot's keys over a diff, as its footer spells them: the five a
+/// review leans on, which fit the slot's usual width whole. The rest
+/// (range, uncomment, markdown, PR, files, base, reread) are in the
+/// shortcuts sheet's `Review` section (theme rule 11: no footer is cut).
+const FOOTER: [(&str, &str); 5] = [
     ("\u{2191}\u{2193}", "line"),
-    ("\u{21e7}\u{2191}\u{2193}", "range"),
     ("c", "comment"),
-    ("\u{232b}", "uncomment"),
     ("\u{21e5}", "scope"),
     ("/", "search"),
-    ("m", "markdown"),
-    ("p", "PR"),
-    ("a", "files"),
-    ("\u{21e7}B", "base"),
     ("esc", ""),
 ];
+
+/// The slot's keys with no line to act on (a read that failed, or is
+/// still out, or a scope with nothing in it): only what moves on.
+const IDLE_FOOTER: [(&str, &str); 3] = [("\u{21e5}", "scope"), ("r", "reread"), ("esc", "")];
 
 /// The slot's keys while it lists the branch's commits.
 const COMMITS_FOOTER: [(&str, &str); 6] = [
@@ -2644,6 +2645,8 @@ impl Render for ReviewView {
             &COMMITS_FOOTER
         } else if self.pr_open || self.file.is_some() {
             &BACK_FOOTER
+        } else if self.error.is_some() || self.diff.is_none() || self.lines.is_empty() {
+            &IDLE_FOOTER
         } else {
             &FOOTER
         };

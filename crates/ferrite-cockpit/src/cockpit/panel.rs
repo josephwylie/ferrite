@@ -13,7 +13,7 @@
 //! which shows it whatever the setting. There are no other size rules:
 //! hidden, the board takes its width; shown, the board gives it up,
 //! however narrow. A draft has no Thread, so no panel but for its preview;
-//! the empty board and the Projects coordinator have none at all.
+//! the empty board has none at all.
 //!
 //! Its width (`Rest`): hidden, `PANEL_W`, or wide while the Preview tab is
 //! the one shown (`preview_w`). Moving between them the column rides
@@ -134,14 +134,13 @@ impl CockpitView {
     }
 
     /// The Pane the panel is for, shown or hidden: the focused Pane's, a
-    /// Thread's or a draft's with a preview open. None on the empty board
-    /// and the Projects coordinator.
+    /// Thread's or a draft's with a preview open. None on the empty board.
     pub(super) fn panel_candidate(&self) -> Option<PaneIdentity> {
         Some(self.panes[self.panel_candidate_index()?].identity)
     }
 
     fn panel_candidate_index(&self) -> Option<usize> {
-        if self.projects.coordinator_shown() || self.empty_board_shown() {
+        if self.empty_board_shown() {
             return None;
         }
         let index = self.focused();
@@ -271,6 +270,16 @@ impl CockpitView {
     /// What the board leaves at its right once the column's ride ends.
     pub(super) fn board_right_rest(&self) -> f32 {
         self.rest_w(self.panel_rest().0)
+    }
+
+    /// The panel's column where it comes to rest, 0 when it rests hidden:
+    /// what stands over it (a toast) takes one place for the whole ride
+    /// rather than following the riding width.
+    pub(super) fn panel_rest_column_w(&self) -> f32 {
+        match self.panel_rest() {
+            (rest, Some(_)) => self.rest_w(rest),
+            (_, None) => 0.,
+        }
     }
 
     /// The Pane the panel draws this frame, its tab and its column's width:
@@ -533,7 +542,11 @@ impl CockpitView {
                 .absolute()
                 .top_0()
                 .right_0()
-                .bottom(px(STATUS_BAR_H))
+                // A hairline short of the bar: the bar's top rule
+                // (`BAR_TOP`) lies on the frame's last row, and the panel
+                // paints after the bar, so it would cover the rule's run
+                // under it. The bar keeps its line the window's width.
+                .bottom(px(STATUS_BAR_H + ferrite_ui::theme::HAIRLINE_W))
                 .w(px(width))
                 .overflow_hidden()
                 .bg(paint::PANEL)
@@ -689,6 +702,10 @@ impl CockpitView {
         let noun = if count == 1 { "file" } else { "files" };
         // The section line folds and unfolds every file at once, its
         // chevron on the rows' icon column and its words on their text's.
+        // Under the pointer its words blend up to `TEXT`, as the nav's fold
+        // headings do (a wash would run past the columns it is laid to); a
+        // press lands at `TEXT_STRONG`.
+        let section_key = SharedString::from(format!("panel-changes-section-{}", thread.get()));
         let all = self.panel_files_unfolded(thread, files.iter().map(|file| file.path.as_str()));
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         body = body.child(
@@ -703,7 +720,13 @@ impl CockpitView {
                 .pl(px(PANEL_ROW_TEXT_X))
                 .pr(px(PANEL_ROW_ICON_X))
                 .text_size(px(FS_META))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(ferrite_ui::motion::hover_blend(
+                    &section_key,
+                    rgb(TEXT_DIM).into(),
+                    rgb(TEXT).into(),
+                ))
+                .on_hover(ferrite_ui::motion::hover_listener(section_key))
+                .active(|style| style.text_color(rgb(TEXT_STRONG)))
                 .cursor_pointer()
                 .tooltip(ferrite_ui::menu::tooltip(if all {
                     "Collapse all"
@@ -960,7 +983,7 @@ impl CockpitView {
                 "panel-no-context",
                 None,
                 "No context reading yet",
-                "What fills the context window shows here once the session reports it.",
+                "What fills the context window shows here once the provider reports it.",
             )
             .into_any_element();
         };

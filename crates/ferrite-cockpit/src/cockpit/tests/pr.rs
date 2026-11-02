@@ -2,6 +2,7 @@
 //! asked, and the two actions on it.
 use super::*;
 use crate::palette::{Act, Command};
+use crate::pr::{PrLabel, PrMark};
 
 fn asked(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<(ThreadId, bool)> {
     view.update(cx, |view, _| std::mem::take(&mut view.pr_asked))
@@ -11,7 +12,7 @@ fn label(
     view: &Entity<CockpitView>,
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
-) -> Option<String> {
+) -> Option<PrLabel> {
     view.read_with(cx, |view, _| view.thread_row(thread).details.pr)
 }
 
@@ -45,7 +46,13 @@ fn a_threads_row_wears_its_prs_label(cx: &mut TestAppContext) {
     assert_eq!(label(&view, thread, cx), None, "no PR known yet");
 
     land(&view, thread, Some(pr_with_checks()), cx);
-    assert_eq!(label(&view, thread, cx).as_deref(), Some("#48 \u{2717}"));
+    assert_eq!(
+        label(&view, thread, cx),
+        Some(PrLabel {
+            number: 48,
+            mark: Some(PrMark::Failing)
+        })
+    );
 
     run(&view, Command::RefreshPr, cx);
     assert_eq!(
@@ -53,7 +60,13 @@ fn a_threads_row_wears_its_prs_label(cx: &mut TestAppContext) {
         [(thread, true)],
         "a manual ask waits for nothing"
     );
-    assert_eq!(label(&view, thread, cx).as_deref(), Some("#48 \u{27f3}"));
+    assert_eq!(
+        label(&view, thread, cx),
+        Some(PrLabel {
+            number: 48,
+            mark: Some(PrMark::Checking)
+        })
+    );
 
     land(&view, thread, None, cx);
     assert_eq!(label(&view, thread, cx), None, "no gh, no PR: no label");

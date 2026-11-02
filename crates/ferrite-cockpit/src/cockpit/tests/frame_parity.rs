@@ -512,6 +512,12 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
         (bar.top() - px(1.), bar.top(), window.width),
         "on the row above the bar, full width"
     );
+    if let Some(panel) = cx.debug_bounds("panel") {
+        assert!(
+            panel.bottom() <= rule.top(),
+            "nothing later covers the rule"
+        );
+    }
     assert_eq!(work.left() - solo.right(), px(2.), "tabs 2px apart");
     let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
     let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
@@ -540,7 +546,7 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
     tick(cx);
     let needs = cx
         .debug_bounds("bottom-bar-needs-you")
-        .expect("one waits: `1 need you`");
+        .expect("one waits: `1 needs you`");
     let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
     let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
     assert!(needs.left() >= vitals.left() && needs.right() <= clock.left());
@@ -695,11 +701,12 @@ fn dragging_the_vertical_seam_moves_both_rows(cx: &mut TestAppContext) {
 
 /// SPEC §4: Solo's card sits on the frame flush right of the nav, under
 /// the 46px head row, `BOARD_PAD` short of the 30px bar and flush with the
-/// panel's column (§5.6), which runs from the window's top to the bar —
+/// panel's column (§5.6), which runs from the window's top to the bar's
+/// hairline —
 /// the mockups' frame at their 1600×960.
 #[gpui::test]
 fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{BOARD_PAD, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
+    use ferrite_ui::theme::{BOARD_PAD, HAIRLINE_W, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
     let (core, _fake) = cockpit("frame-solo-card", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -716,7 +723,7 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
         panel,
         gpui::Bounds::new(
             gpui::point(px(1296.), px(0.)),
-            gpui::size(px(PANEL_W), px(960. - STATUS_BAR_H))
+            gpui::size(px(PANEL_W), px(960. - STATUS_BAR_H - HAIRLINE_W))
         )
     );
     let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
@@ -932,7 +939,11 @@ fn a_short_transcript_reads_from_the_top(cx: &mut TestAppContext) {
         let body = bounds(cx, format!("pane-body-{key}"));
         let prompt = cx.debug_bounds("transcript-prompt").expect("the prompt");
         let answer = cx.debug_bounds("transcript-answer").expect("the answer");
-        let pad = px(if grouped { 0. } else { ferrite_ui::theme::TX_PAD_T });
+        let pad = px(if grouped {
+            ferrite_ui::theme::TX_PAD_T_BOARD
+        } else {
+            ferrite_ui::theme::TX_PAD_T
+        });
         assert!(
             (prompt.top() - body.top() - pad).abs() <= px(2.),
             "grouped {grouped}: the first row heads the body: {prompt:?} / {body:?}"

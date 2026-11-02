@@ -14,8 +14,8 @@
 
 use super::*;
 
-/// One board Pane's Composer: the working line and the shelf over the box
-/// (`composer_stack`), as Solo's, then the box.
+/// One board Pane's Composer: the shelf over the box (`composer_stack`), as
+/// Solo's, then the box.
 pub(super) fn compact_composer(
     view: &PaneView,
     transcript: Option<&Transcript>,
@@ -32,7 +32,6 @@ pub(super) fn compact_composer(
         draft,
         draft_error,
         suggestion,
-        working,
         focused,
         drop_target,
         toolbar,
@@ -165,7 +164,7 @@ pub(super) fn compact_composer(
     } else {
         (None, None)
     };
-    composer_stack(attachments, background, working, false)
+    composer_stack(attachments, background, false)
         // A draft's failed bootstrap says why over the box.
         .children(draft_error.map(|error| {
             div()

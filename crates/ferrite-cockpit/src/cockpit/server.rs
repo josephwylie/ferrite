@@ -486,8 +486,7 @@ impl CockpitView {
             rows.push(settings::toggle(
                 "settings-start-at-login",
                 "Start at login",
-                "Your agents' server starts when you log in, so their Threads resume \
-                 without a window.",
+                "Your agents keep running with no window open",
                 self.prefs.settings.start_at_login,
                 {
                     let view = view.clone();

@@ -982,8 +982,8 @@ pub fn greeting() -> Div {
 /// the prototype's `viewBox="280 30 700 1130"` (the two paths of the
 /// 1254-unit mark, the `#C7D5E8 → #9FB3D0 → #748EBA` gradient, a 26-unit
 /// stroke with round joins) — so what follows it starts the gap after the
-/// mark, not after its box. The empty board's banner and every transcript's
-/// banner draw it three rows tall.
+/// mark, not after its box. The empty board's banner draws it `HOME_MARK_H`
+/// tall.
 ///
 /// The browser draws an inline `<svg>` at its own size from its box's
 /// rounded corner; an image at the mark's own 700 × 1130 would be shrunk by
@@ -2029,8 +2029,10 @@ pub fn scrollbar_bar(
 
 /// The one copy button (a message's `Copy`, a changed file's `Copy path`,
 /// a preview's): an icon door that writes `text` to the clipboard and
-/// says so, its `copy` glyph turning to a `check` and its tooltip to
-/// `Copied` for `COPIED_HOLD_MS`, then back. The door is `size` square at
+/// says so, its `copy` glyph turning to a `check` for `COPIED_HOLD_MS`,
+/// then back. The check alone says it: gpui hides a tooltip on the press
+/// and builds the next one once, so a swapped tooltip would show late and
+/// outlive the hold. The door is `size` square at
 /// `radius` holding a `glyph`-sized icon in `TEXT_DIM`; its hover is the
 /// raised blend, or, on a ground already `RAISED` (`on_raised`), a step up
 /// to `SELECTED`. It keeps its own moment of having copied (keyed by `id`),
@@ -2114,11 +2116,7 @@ impl gpui::RenderOnce for CopyButton {
             door.hover_raised(key)
         };
         door.press_raised()
-            .tooltip(crate::menu::tooltip(if shown {
-                SharedString::from("Copied")
-            } else {
-                self.tooltip
-            }))
+            .tooltip(crate::menu::tooltip(self.tooltip))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();

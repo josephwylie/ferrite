@@ -208,7 +208,11 @@ fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
                 .right_0()
                 .top(px(-HAIRLINE_W))
                 .h(px(HAIRLINE_W))
-                .bg(paint::BAR_TOP),
+                // On the frame's own grey: the row is the frame's under
+                // the nav and the board, but under the panel (which stops
+                // a hairline short) only the window's ground lies there.
+                .bg(paint::BAR)
+                .child(div().size_full().bg(paint::BAR_TOP)),
         )
         .child(
             div()
@@ -316,8 +320,8 @@ fn bar_tab(
 }
 
 /// The need-you count (SPEC §5.7): a `BAR_NEED_DOT` `ATTENTION` dot and
-/// `N need you` in `TEXT_BAR`. `None` at zero. The cockpit wires the press
-/// to the Inbox. A press target among the vitals, it answers the
+/// `words::needs_you` (`1 needs you`, `2 need you`) in `TEXT_BAR`. `None`
+/// at zero. The cockpit wires the press to the Inbox. A press target among the vitals, it answers the
 /// pointer as the nav's doors do — its words brighten to `TEXT_STRONG`
 /// over the hover blend — rather than with a ground: a ground would need
 /// padding the vitals' even gaps cannot spare.
@@ -338,7 +342,7 @@ fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
             .child(bar_dot(BAR_NEED_DOT, ATTENTION))
             .child(
                 components::tabular(div().text_color(ink))
-                    .child(SharedString::from(format!("{count} need you"))),
+                    .child(SharedString::from(words::needs_you(count))),
             )
     })
 }

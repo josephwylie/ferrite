@@ -1451,3 +1451,115 @@ fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
     let reopened = cx.update(|window, cx| view.read(cx).level_now(window));
     assert_eq!(reopened, Level::Wall, "cmd-b toggles back");
 }
+
+/// The Threads in creation order.
+fn in_order(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<ThreadId> {
+    view.read_with(cx, |view, _| {
+        let mut threads = view.cockpit.threads();
+        threads.sort();
+        threads
+    })
+}
+
+/// Does the focused Pane's Composer hold the keyboard?
+fn composer_has_keys(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
+    view.update_in(cx, |view, window, cx| {
+        let pane = &view.panes[view.focused()];
+        pane.composer.read(cx).focus_handle(cx).is_focused(window)
+    })
+}
+
+/// A press on a tree row opens its Thread and leaves the keyboard with its
+/// Composer: the tree takes the keys only from ⌘⇧E, so typing after
+/// picking a Thread lands in it.
+#[gpui::test]
+fn a_press_on_a_row_leaves_the_keys_with_the_composer(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-press-keys", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    let threads = in_order(&view, cx);
+    let other = threads
+        .into_iter()
+        .find(|thread| view.read_with(cx, |view, _| view.focused_thread()) != Some(*thread))
+        .expect("a Thread not shown");
+    let row = cx
+        .debug_bounds(format!("nav-thread-{}", other.get()).leak())
+        .expect("its tree row");
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.focused_thread()), Some(other));
+    assert!(
+        !view.update_in(cx, |view, window, _| view.nav_view_focus.is_focused(window)),
+        "the tree did not take the keys"
+    );
+    assert!(composer_has_keys(&view, cx), "the Composer types");
+    cx.simulate_input("hi");
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| {
+        view.panes[view.focused()]
+            .composer
+            .read(cx)
+            .text()
+            .ends_with("hi")
+    }));
+}
+
+/// ⌘⇧E hands the tree the keys and puts its cursor on a row; however the
+/// keys leave, the cursor and its hover face go with them.
+#[gpui::test]
+fn the_cursor_clears_when_the_tree_lets_go(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-cursor-clears", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-e down");
+    tick(cx);
+    let key = view
+        .read_with(cx, |view, _| view.nav_cursor.clone())
+        .expect("a cursor")
+        .key;
+    // The keys go to the board without Esc.
+    view.update_in(cx, |view, window, cx| {
+        let pane = &view.panes[view.focused()];
+        window.focus(&pane.composer.read(cx).focus_handle(cx), cx);
+    });
+    tick(cx);
+    leap(cx, Duration::from_millis(500));
+    assert!(view.read_with(cx, |view, _| view.nav_cursor.is_none()));
+    assert_eq!(
+        cx.update(|_, _| ferrite_ui::motion::hover_t(&key)),
+        0.0,
+        "its row no longer wears the hover face"
+    );
+}
+
+/// ← on a loose Thread moves the cursor to its Project's heading and folds
+/// the Project, as an outline's ← goes to the parent.
+#[gpui::test]
+fn left_on_a_loose_row_folds_its_project(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-left-folds", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    // ⌘⇧E starts on the row the board shows: a loose, idle Thread.
+    cx.simulate_keystrokes("cmd-shift-e");
+    tick(cx);
+    let start = view.read_with(cx, |view, _| view.nav_cursor.clone().map(|c| c.item));
+    assert!(matches!(start, Some(nav::NavItem::Thread(_, None))), "{start:?}");
+    cx.simulate_keystrokes("left");
+    tick(cx);
+    let project = view
+        .read_with(cx, |view, _| view.nav_state().sections[0].project)
+        .expect("the fixture's Project");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.nav_cursor.clone().map(|c| c.item)),
+        Some(nav::NavItem::Heading(NavFold::Project(project)))
+    );
+    assert!(view.read_with(cx, |view, _| view
+        .nav_folds
+        .contains(&NavFold::Project(project))));
+}

@@ -312,10 +312,11 @@ pub fn footer_shell() -> Div {
 
 /// One step of a short ladder (an effort level, a two-way setting), a
 /// `TOKEN_H` pill `TOKEN_PAD_X` either side of its word: the chosen one
-/// on the selection fill (`FLOAT_SEL`) in `TEXT_STRONG` at `W_LABEL` — a
-/// segmented control's lit step, the same lift a cursor row gets, not a
-/// second primary button — the rest `TEXT_DIM`, `FLOAT_HOVER` under the
-/// pointer.
+/// on the selection fill (`FLOAT_SEL`) in `TEXT_STRONG` — a segmented
+/// control's lit step, the same lift a cursor row gets, not a second
+/// primary button — the rest `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
+/// The lit step changes fill and ink only, never weight: picking another
+/// step never moves the steps beside it.
 pub fn token(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -339,7 +340,6 @@ pub fn token(
         token
             .bg(FLOAT_SEL)
             .text_color(rgb(TEXT_STRONG))
-            .font_weight(W_LABEL)
     } else {
         token
             .text_color(rgb(TEXT_DIM))

@@ -2623,6 +2623,8 @@ fn needs_you_toast_comes_and_goes(
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    // A toast is the rail's voice (C8): the nav folded.
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     settle(cx);
     fake.streams.borrow()[2]

@@ -1015,9 +1015,11 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             (scene, setup)
         }
         // The notifications scene with the panel up: toasts only.
+        // The Needs-you toast: the rail's voice (C8), so the nav folded.
         "toasts" => {
             let (scene, _) = notifications();
-            (scene, none)
+            let setup: Setup = Box::new(|view, _, cx| view.set_nav_collapsed(true, cx));
+            (scene, setup)
         }
         // (end WP-E)
 

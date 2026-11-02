@@ -18,13 +18,6 @@ use markdown::OpenSection;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockId(u64);
 
-impl BlockId {
-    /// Render-only selection identity for transcript metadata that is not a
-    /// transcript Block: the banner heading a transcript, whose title and
-    /// facts select and copy like any row.
-    pub const BANNER: Self = Self(u64::MAX - 1);
-}
-
 /// One rendered unit of the transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -887,7 +880,8 @@ const ANSWER_ALLOWED: &str = "allowed";
 const ANSWER_DENIED: &str = "denied";
 
 /// The note a first send leaves of where the Thread works (`opened in
-/// ~/ferrite`): the banner heading the transcript says it, so no row does.
+/// ~/ferrite`): the head names the Thread's Project and the Panel its
+/// checkout, so no row repeats it.
 pub fn is_opened_notice(text: &str) -> bool {
     text.starts_with(OPENED_IN)
 }
@@ -1228,7 +1222,7 @@ impl Transcript {
     }
 
     /// When the Thread's first prompt in this window was sent, as its band
-    /// prints it: the banner's `started 7:18 pm`.
+    /// prints it (`7:18 pm`).
     pub fn started_at(&self) -> Option<&str> {
         self.blocks
             .iter()
@@ -1236,7 +1230,7 @@ impl Transcript {
             .and_then(|block| block.sent_at.as_deref())
     }
 
-    /// How many turns have ended in this window: the banner's `2 turns`.
+    /// How many turns have ended in this window.
     pub fn turn_count(&self) -> usize {
         self.blocks
             .iter()
@@ -1244,7 +1238,7 @@ impl Transcript {
             .count()
     }
 
-    /// The latest completed turn's settled time: the banner's `41s working`.
+    /// The latest completed turn's settled time (`41s`).
     pub fn last_working_ms(&self) -> Option<u64> {
         self.blocks
             .iter()

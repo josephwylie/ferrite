@@ -9,7 +9,7 @@
 //! A folded file reads nothing.
 //!
 //! The panel draws what changed with one line of context either side, on
-//! `BAR` in the panel's diff face: a sign column, the add and delete
+//! `BLOCK` in the panel's diff face: a sign column, the add and delete
 //! washes, no line numbers and no syntax colour.
 
 use super::*;
@@ -337,7 +337,7 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
     }
 }
 
-/// The hunk area (`BAR`, the panel's diff face): each line on a 2.5ch sign
+/// The hunk area (`BLOCK`, the panel's diff face): each line on a 2.5ch sign
 /// column inset 1ch, changed lines on their wash in body ink, context in
 /// `TEXT_DIM`; a hairline between hunks.
 fn hunks_element(index: usize, shown: &Shown) -> Div {

@@ -117,6 +117,14 @@ pub struct TranscriptInput {
     pub expanded: HashSet<DisclosureId>,
     pub target: Option<DisclosureId>,
     pub disclosure_focus: FocusHandle,
+    /// The working row while a turn runs (`pane::working_tail`), after the
+    /// last row.
+    pub working: Option<TranscriptTail>,
+    /// The live reasoning caption the working line names, and whether the
+    /// Cockpit took its own row for in view when it chose the line's words:
+    /// once laid out, if that is wrong, the transcript says so
+    /// (`TranscriptEvent::ReasoningShown`) and the line is chosen again.
+    pub working_reasoning: Option<(String, bool)>,
     /// The row after the last (the pending Decision).
     pub tail: Option<TranscriptTail>,
     /// The call a pending Decision gates: hidden while it waits.
@@ -143,6 +151,7 @@ pub struct TranscriptKey {
     pub focused: bool,
     pub signal_status: Option<Status>,
     pub reading_size: ferrite_core::settings::ReadingSize,
+    pub working: Option<u64>,
     pub tail: Option<u64>,
     pub pending_call: Option<String>,
     pub workspace: Option<PathBuf>,
@@ -159,6 +168,7 @@ impl TranscriptInput {
             focused: self.focused,
             signal_status: self.signal_status,
             reading_size: self.reading_size,
+            working: self.working.as_ref().map(|working| working.key),
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
             workspace: self.workspace.clone(),
@@ -170,7 +180,12 @@ impl TranscriptInput {
     /// What the rows are projected with.
     fn shape(&self) -> RowShape {
         RowShape {
-            top_pad: if self.solo { theme::TX_PAD_T } else { 0. },
+            top_pad: if self.solo {
+                theme::TX_PAD_T
+            } else {
+                theme::TX_PAD_T_BOARD
+            },
+            working: self.working.as_ref().map(|working| working.key),
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
             thinking: self.thinking,
@@ -187,6 +202,9 @@ pub enum TranscriptEvent {
         path: PathBuf,
         line: Option<u32>,
     },
+    /// The live reasoning caption's own row came into or left view, against
+    /// what the working line was chosen for (`working_reasoning`).
+    ReasoningShown,
 }
 
 /// A minimap jump in flight: from one scroll position to another, eased.
@@ -291,6 +309,8 @@ impl TranscriptView {
                 expanded: HashSet::new(),
                 target: None,
                 disclosure_focus: cx.focus_handle(),
+                working: None,
+                working_reasoning: None,
                 tail: None,
                 pending_call: None,
                 workspace: None,
@@ -428,6 +448,9 @@ impl TranscriptView {
         let disclosure_changed =
             self.input.expanded != input.expanded || self.input.target != input.target;
         let reading_changed = before.reading_size != after.reading_size;
+        // The answer above the working row drops its actions row while the
+        // turn runs: its height changes when the turn starts or ends.
+        let working_toggled = before.working.is_some() != after.working.is_some();
         let shape_changed = self.input.shape() != input.shape();
         let display_changed = before != after || disclosure_changed;
         let workspace_changed = before.workspace != after.workspace;
@@ -447,7 +470,15 @@ impl TranscriptView {
         // re-projects them, re-spacing every row whose gap scales; a diff
         // opening or the top padding and tail changing re-project them too.
         if content_changed || reading_changed || shape_changed {
-            let tail = self.rows.rows().last().map(|row| row.id().clone());
+            // The newest content row: the working row and the Decision
+            // stand after it, and do not move it.
+            let tail = self
+                .rows
+                .rows()
+                .iter()
+                .rev()
+                .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::Tail))
+                .map(|row| row.id().clone());
             let delta =
                 self.rows
                     .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
@@ -462,7 +493,7 @@ impl TranscriptView {
             self.visuals.retain(&|id| live.contains(id));
         }
         if content_changed || display_changed {
-            if disclosure_changed || reading_changed {
+            if disclosure_changed || reading_changed || working_toggled {
                 self.scroll.remeasure_all();
             }
             let scope = if self.input.focused {
@@ -478,7 +509,8 @@ impl TranscriptView {
         }
     }
 
-    /// Stamp the rows that now follow what was the tail: appended live.
+    /// Stamp the content rows that now follow what was the newest: appended
+    /// live. The working row and the Decision after them are not content.
     fn note_arrivals(&mut self, tail: Option<RowId>, cx: &App) {
         let now = cx.background_executor().now();
         let spell = ferrite_ui::motion::FADE_IN.duration();
@@ -492,7 +524,9 @@ impl TranscriptView {
             return;
         };
         for row in &rows[at + 1..] {
-            self.arrivals.insert(row.id().clone(), now);
+            if !matches!(row.kind(), RowKind::Working | RowKind::Tail) {
+                self.arrivals.insert(row.id().clone(), now);
+            }
         }
     }
 
@@ -595,13 +629,31 @@ impl TranscriptView {
     /// Whether the received reasoning caption's own row is mounted in the
     /// viewport. Cockpit uses this to keep the pinned live caption from
     /// duplicating historical prose.
+    /// After a layout: if the live reasoning's own row is in view where the
+    /// working line was chosen as if it were not (or the other way round),
+    /// ask for the line again.
+    fn check_reasoning_shown(&self, cx: &mut Context<Self>) {
+        if let Some((caption, assumed)) = &self.input.working_reasoning {
+            if self.received_reasoning_is_visible(caption) != *assumed {
+                cx.emit(TranscriptEvent::ReasoningShown);
+            }
+        }
+    }
+
     pub fn received_reasoning_is_visible(&self, caption: &str) -> bool {
+        // The newest content row: the working row and the Decision stand
+        // after it.
+        let newest = self
+            .rows
+            .rows()
+            .iter()
+            .rposition(|row| !matches!(row.kind(), RowKind::Working | RowKind::Tail));
         self.rows.rows().iter().enumerate().any(|(index, row)| {
             // Parent Pane rendering asks before the list's first child has
-            // measured. At the followed tail the final row is nevertheless
-            // the visible row; once geometry exists, use its exact bounds.
+            // measured. At the followed tail the newest row is nevertheless
+            // visible; once geometry exists, use its exact bounds.
             (self.scroll.item_is_visible(index)
-                || (self.scroll.is_following_tail() && index + 1 == self.rows.len()))
+                || (self.scroll.is_following_tail() && Some(index) == newest))
                 && row.blocks().iter().any(|block| {
                     matches!(&block.body, Body::Thinking(thought)
                         if pane::reasoning_text(thought).0 == caption)
@@ -728,7 +780,7 @@ impl TranscriptView {
     }
 
     fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns) {
-        if row.kind() == RowKind::Tail {
+        if matches!(row.kind(), RowKind::Tail | RowKind::Working) {
             return;
         }
         if let Some(source) = row.source() {
@@ -800,6 +852,12 @@ impl TranscriptView {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if row.kind() == RowKind::Working {
+            return match (&self.input.working, window) {
+                (Some(working), Some(window)) => (working.render)(window, cx),
+                _ => div().into_any_element(),
+            };
+        }
         if row.kind() == RowKind::Tail {
             return match (&self.input.tail, window) {
                 (Some(tail), Some(window)) => div()
@@ -825,8 +883,18 @@ impl TranscriptView {
             // turn's answer reads bright.
             let narration = row.kind() == RowKind::Answer { narration: true };
             // A turn's answer carries its actions under it (narration is
-            // the work's, and copies with it).
-            let actions = (!narration).then(|| {
+            // the work's, and copies with it) — once it is written: the
+            // answer still streaming above the working row has none, so
+            // the working line stands right under its words.
+            let streaming = self.input.working.is_some()
+                && self
+                    .rows
+                    .rows()
+                    .iter()
+                    .rev()
+                    .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::Tail))
+                    .is_some_and(|last| last.id() == row.id());
+            let actions = (!narration && !streaming).then(|| {
                 message_actions().child(self.copy_action(row.id(), source.to_owned()))
             });
             return div()
@@ -894,7 +962,12 @@ impl TranscriptView {
                         .text_color(gpui::rgb(theme::TEXT_DIM))
                         .child(SharedString::from(at))
                 }))
-                .child(self.copy_action(row.id(), line.clone()));
+                // Its words, as the bubble shows them: the attachments'
+                // trailer is chips, never copied text.
+                .child(self.copy_action(
+                    row.id(),
+                    ferrite_core::prompt_files::split(line.clone()).0,
+                ));
             return div()
                 .group(MESSAGE_GROUP)
                 .w_full()
@@ -1423,15 +1496,44 @@ fn message_actions() -> gpui::Div {
 }
 
 /// The top fade (`TX_TOP_FADE`): the card's fill fading to nothing, over
-/// what scrolls under the top of the transcript or its pinned prompt. It
-/// answers no pointer.
+/// what scrolls under the top of the transcript or its pinned prompt.
 fn top_fade() -> gpui::Div {
+    edge_fade(false)
+}
+
+/// The foot fade: the same fill rising from the transcript's foot while the
+/// reader is scrolled away from the tail, so a row cut there does not read
+/// as one with what stands under it.
+fn bottom_fade() -> gpui::Div {
+    edge_fade(true)
+}
+
+/// An edge fade, `TX_TOP_FADE` tall: the card's fill eased out, holding
+/// near-opaque at the edge (`TX_FADE_HOLD` of it over its first third) so a
+/// row cut there is hidden, then fading to nothing. gpui's gradient has two
+/// stops, so the ease is two of them stacked. `rising` runs it up from the
+/// foot. It answers no pointer.
+fn edge_fade(rising: bool) -> gpui::Div {
     let card: gpui::Hsla = gpui::rgb(theme::CARD).into();
-    div().w_full().h(px(theme::TX_TOP_FADE)).bg(gpui::linear_gradient(
-        180.,
-        gpui::linear_color_stop(card, 0.),
-        gpui::linear_color_stop(gpui::Hsla { a: 0., ..card }, 1.),
-    ))
+    let at = |a: f32| gpui::Hsla { a, ..card };
+    let angle = if rising { 0. } else { 180. };
+    let edge = (theme::TX_TOP_FADE / 3.).round();
+    let hold = div().w_full().h(px(edge)).bg(gpui::linear_gradient(
+        angle,
+        gpui::linear_color_stop(at(1.), 0.),
+        gpui::linear_color_stop(at(theme::TX_FADE_HOLD), 1.),
+    ));
+    let ease = div().w_full().flex_1().bg(gpui::linear_gradient(
+        angle,
+        gpui::linear_color_stop(at(theme::TX_FADE_HOLD), 0.),
+        gpui::linear_color_stop(at(0.), 1.),
+    ));
+    let fade = div().flex().w_full().h(px(theme::TX_TOP_FADE));
+    if rising {
+        fade.flex_col().child(ease).child(hold)
+    } else {
+        fade.flex_col().child(hold).child(ease)
+    }
 }
 
 /// What prose path targets resolve against: the checkout, and every path
@@ -1483,6 +1585,7 @@ impl Mark {
         match row.kind() {
             RowKind::Prompt => return Some(Self::Prompt),
             RowKind::Tail => return Some(Self::Decision),
+            RowKind::Working => return None,
             _ => {}
         }
         let mut pass = false;
@@ -1760,6 +1863,9 @@ fn pinned_of(
 
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The working row's spinner and shimmer are loops: the overlay
+        // draws them, so their steps rebuild nothing of this transcript.
+        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
         self.document.begin_viewport_update(cx);
         crate::file_links::begin_layout(&self.input.namespace, cx);
         // The answers' file links are this transcript's path targets.
@@ -1846,6 +1952,7 @@ impl Render for TranscriptView {
         let reading = self.input.reading_size;
         let inset = theme::tx_inset(solo);
         let pad_b = theme::body_pad_b(solo);
+        let check_reasoning = self.input.working_reasoning.is_some();
         let list = div()
             // The wheel takes the scroll back from a minimap glide in
             // flight, rather than the glide overriding it to its end.
@@ -1983,6 +2090,16 @@ impl Render for TranscriptView {
                         });
                     }
                 }
+                // The working line's words depend on whether the live
+                // reasoning's own row is in view: check against this layout,
+                // while there is a line to choose (a deferred call costs a
+                // frame, so an idle transcript asks nothing).
+                if check_reasoning {
+                    let weak = weak.clone();
+                    window.defer(cx, move |_, cx| {
+                        let _ = weak.update(cx, |view, cx| view.check_reasoning_shown(cx));
+                    });
+                }
                 if anchored || settled {
                     // Lay this transcript (and the Pane around it) out again
                     // where the scroll settled; nothing else moved.
@@ -2023,10 +2140,11 @@ impl Render for TranscriptView {
                 self.input.selection_scope
             });
         let pinned = pinned.and_then(|(index, shift)| self.pinned_band(index, shift, cx));
-        let scrolled = {
-            let top = self.scroll.list_state().logical_scroll_top();
-            top.item_ix > 0 || top.offset_in_item > px(0.)
-        };
+        // Scrolled past the body's top padding: a fade over the padding
+        // alone would dim the first row (the list's logical top can name a
+        // later row while the rows fit, so read the pixel offset).
+        let scrolled = -self.scroll.list_state().scroll_px_offset_for_scrollbar().y
+            > px(self.input.shape().top_pad.max(1.));
         let latest = self.jump_to_latest(cx);
         let minimap = self.minimap(cx);
         if crate::file_links::take_fading() {
@@ -2057,6 +2175,15 @@ impl Render for TranscriptView {
                     .child(top_fade())
             }))
             .children(pinned)
+            .children(latest.is_some().then(|| {
+                div()
+                    .debug_selector(|| "transcript-bottom-fade".into())
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .child(bottom_fade())
+            }))
             .children(latest)
             .children(minimap)
             .children(card)

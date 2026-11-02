@@ -409,8 +409,9 @@ pub struct WallCard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WallLine {
     pub text: String,
-    /// Agent prose: wider than the tile it wraps once, to a continuation
-    /// at col 2 (`  from the spike notes`); every other line truncates.
+    /// Agent prose: wider than the tile it wraps once, its continuation
+    /// hanging under the first word (`pane::wall_rows`); every other line
+    /// truncates.
     pub wraps: bool,
 }
 

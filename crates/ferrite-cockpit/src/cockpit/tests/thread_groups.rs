@@ -348,7 +348,6 @@ fn the_titlebar_band_says_nothing_and_the_bar_keeps_views_and_vitals(cx: &mut Te
         "settings-gear",
         "bottom-bar-session",
         "bottom-bar-help",
-        "projects-board-door",
     ] {
         assert!(
             cx.debug_bounds(gone)

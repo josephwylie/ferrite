@@ -23,6 +23,8 @@ pub(crate) enum RowId {
     /// A run of routine calls folded under one summary, named by its first
     /// call's block: the run grows at its tail, so the name holds.
     Group(BlockId),
+    /// The working row while a turn runs (`pane::working_tail`).
+    Working,
     /// What a package appends after the last row (the pending Decision).
     Tail,
 }
@@ -56,6 +58,9 @@ pub(crate) enum RowKind {
     /// diffed call does: a line above and below it, so the page never sits
     /// flush against the calls around it.
     Visual,
+    /// The working line, under the newest row while a turn runs: it spaces
+    /// as the work does.
+    Working,
     /// The tail row (the Decision), a line under the row before it.
     Tail,
     /// A fallback prose or code block.
@@ -102,7 +107,7 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     let work = |kind| {
         matches!(
             kind,
-            Activity | Group | Visual | Notice | Answer { narration: true }
+            Activity | Group | Visual | Notice | Working | Answer { narration: true }
         )
     };
     match (previous, kind) {
@@ -117,8 +122,11 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
 /// while it waits), and whether thinking draws.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowShape {
-    /// Room over the first row (`TX_PAD_T` in Solo, none on a board).
+    /// Room over the first row (`TX_PAD_T` in Solo, `TX_PAD_T_BOARD` on a
+    /// board).
     pub top_pad: f32,
+    /// The working row's key, while a turn runs.
+    pub working: Option<u64>,
     pub tail: Option<u64>,
     pub pending_call: Option<String>,
     /// The model's thinking drawn as `∴` rows; off, it draws nothing.
@@ -441,6 +449,11 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 RowKind::of(block),
             )),
         }
+    }
+    if let Some(key) = shape.working {
+        let mut working = row(RowId::Working, &[], None, RowKind::Working);
+        working.tail_key = Some(key);
+        rows.push(working);
     }
     if let Some(key) = shape.tail {
         let mut tail = row(RowId::Tail, &[], None, RowKind::Tail);

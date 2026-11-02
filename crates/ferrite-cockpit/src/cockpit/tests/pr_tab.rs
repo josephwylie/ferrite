@@ -216,7 +216,10 @@ fn a_newer_snapshot_flips_the_readiness_row_on_the_next_tick(cx: &mut TestAppCon
     assert!(shows(cx, "pr-ready-unpushed"));
     assert_eq!(
         view.read_with(cx, |view, _| view.thread_row(thread).details.pr),
-        Some("#146 \u{2713}".into()),
+        Some(crate::pr::PrLabel {
+            number: 146,
+            mark: Some(crate::pr::PrMark::Passing)
+        }),
         "the snapshot gives the label"
     );
 
@@ -234,7 +237,10 @@ fn a_newer_snapshot_flips_the_readiness_row_on_the_next_tick(cx: &mut TestAppCon
     assert!(!shows(cx, "pr-ready-unpushed"));
     assert_eq!(
         view.read_with(cx, |view, _| view.thread_row(thread).details.pr),
-        Some("#146 \u{2717}".into()),
+        Some(crate::pr::PrLabel {
+            number: 146,
+            mark: Some(crate::pr::PrMark::Failing)
+        }),
         "a check failing moves the label"
     );
 }

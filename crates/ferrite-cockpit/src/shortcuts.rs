@@ -9,7 +9,8 @@
 //! the chord at the right, and the palette's footer, `↑↓ scroll · esc`. Typing keeps the rows whose label, section or chord
 //! match, as the palette filters. The floats' own keys (the palette's, the
 //! list's, this sheet's) and the Review slot's are in their footers, so the
-//! sheet leaves them out; the label table still names them, so a key the
+//! sheet leaves them out — but for the Review keys its footer has no room
+//! for, which the sheet's `Review` section lists; the label table still names them, so a key the
 //! table gains without a label fails `every_bound_action_has_a_label`.
 
 use std::ops::Range;
@@ -36,6 +37,7 @@ pub(crate) enum Place {
     Decision,
     Wall,
     Transcript,
+    Review,
 }
 
 impl Place {
@@ -47,6 +49,7 @@ impl Place {
             Place::Decision => "Decision",
             Place::Wall => "Wall",
             Place::Transcript => "Transcript",
+            Place::Review => "Review",
         }
     }
 }
@@ -72,7 +75,6 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::NewGroup" => Row(Threads, "New group"),
         "palette::OpenGroups" => Row(Threads, "Open a group"),
         "palette::Toggle" => Row(Threads, "Commands"),
-        "projects::Toggle" => Row(Threads, "Tasks"),
         "cockpit::CloseThread" => Row(Threads, "Park thread"),
         "cockpit::ReopenThread" => Row(Threads, "Reopen last"),
         "palette::ShowParked" => Row(Threads, "Show parked"),
@@ -194,25 +196,27 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "shortcuts::ScrollDown"
         | "shortcuts::Dismiss"
         | "zed::NoAction" => Hidden,
-        // So do the Review slot's.
+        // The Review slot's keys its footer has no room for (it keeps the
+        // five a review leans on: line, comment, scope, search, esc).
+        "review::ExtendPrevious" => Row(Review, "Stretch the pick up"),
+        "review::ExtendNext" => Row(Review, "Stretch the pick down"),
+        "review::Uncomment" => Row(Review, "Take back a comment"),
+        "review::Reread" => Row(Review, "Read again"),
+        "review::ToggleMarkdown" => Row(Review, "Render Markdown"),
+        "review::ShowPullRequest" => Row(Review, "Show the pull request"),
+        "review::AllFiles" => Row(Review, "List every file"),
+        "review::PickBase" => Row(Review, "Pick the branch\u{2019}s base"),
+        // The rest are in its footers.
         "review::Previous"
         | "review::Next"
-        | "review::ExtendPrevious"
-        | "review::ExtendNext"
         | "review::Comment"
-        | "review::Uncomment"
         | "review::NextScope"
-        | "review::Reread"
         | "review::Close"
         | "review::Search"
-        | "review::ToggleMarkdown"
-        | "review::ShowPullRequest"
         | "review::SaveComment"
         | "review::CancelComment"
         | "review::OpenFound"
         | "review::CloseSearch"
-        | "review::AllFiles"
-        | "review::PickBase"
         | "review::ChooseBase"
         | "review::CloseBases" => Hidden,
         // And the image viewer's: the zoom keys every viewer has, ← → and esc.

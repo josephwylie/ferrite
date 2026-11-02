@@ -936,10 +936,12 @@ fn a_toast_press_goes_to_its_machine(cx: &mut TestAppContext) {
     let (root, cx) = machine_window(cx, core, machines.clone());
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     let first = shown(&root, cx);
-    first.update(cx, |view, _| {
+    first.update(cx, |view, cx| {
         view.prefs
             .settings
-            .set_provider_sounds(Provider::Claude, false)
+            .set_provider_sounds(Provider::Claude, false);
+        // A toast is the rail's voice (C8): the nav folded.
+        view.set_nav_collapsed(true, cx);
     });
     let thread = ThreadId::new(4);
     hear_box(&machines, box_snapshot(&[(thread, "Deploy")], vec![]), cx);

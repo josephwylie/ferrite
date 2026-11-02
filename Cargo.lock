@@ -2167,9 +2167,6 @@ dependencies = [
  "gpui-pre-platform",
  "image",
  "serde_json",
- "sw-board",
- "toml 0.9.12+spec-1.1.0",
- "unicode-segmentation",
  "url",
 ]
 

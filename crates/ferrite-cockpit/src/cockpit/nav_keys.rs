@@ -3,14 +3,20 @@
 //! order it draws them — the Attention list's heads and rows, then each
 //! Project's heading, its loose Threads, its Groups and their members —
 //! ⏎ opens what the row stands for (a heading's ⏎ folds it), ← folds the
-//! fold the row is in or heads and → unfolds it. Esc gives the keys back
-//! to the board.
+//! fold the row heads, or from a row inside one moves to its head and
+//! folds it, and → unfolds what the row heads. Esc gives the keys back to
+//! the board.
+//!
+//! Only ⌘⇧E hands the tree the keys: a press in the tree never takes them
+//! (a row's press opens its Thread, whose Composer keeps typing), and a
+//! press while the tree holds them hands them back first.
 //!
 //! One cursor, the pointer's: the row under the keyboard wears the hover
 //! face (its wash, its hover action), driven through the same blend a
 //! pointer drives, so a row never shows two kinds of "here". It is not the
-//! selection, which stays what the board shows. A move scrolls the row
-//! into view (`cursor_reveal`).
+//! selection, which stays what the board shows, and it clears whenever the
+//! tree lets go of the keyboard. A move scrolls the row into view
+//! (`cursor_reveal`).
 
 use super::*;
 use crate::nav::{NavCursor, NavItem};
@@ -19,17 +25,23 @@ use gpui::{App, Bounds};
 
 impl CockpitView {
     /// Every row the keyboard can stand on, in the tree's drawing order,
-    /// each with the blend key its row's hover face reads. It walks what
-    /// `nav_tree` draws, folds and all.
-    fn nav_items(&self, cx: &App) -> Vec<NavCursor> {
+    /// each with the blend key its row's hover face reads and the fold's
+    /// head it sits under (`Placed`). It walks what `nav_tree` draws, folds
+    /// and all.
+    fn nav_items(&self, cx: &App) -> Vec<Placed> {
         let state = self.nav_state();
         let attention = self.attention_list(&state);
         let mut items = Vec::new();
         for block in &attention.sections {
-            let fold = NavFold::List(block.section);
-            items.push(NavCursor::heading(fold, block.section.key()));
+            let head = NavCursor::heading(NavFold::List(block.section), block.section.key());
+            items.push(Placed::head(head.clone()));
             if !block.folded {
-                items.extend(block.rows.iter().map(|row| NavCursor::line(row.thread)));
+                items.extend(
+                    block
+                        .rows
+                        .iter()
+                        .map(|row| Placed::under(NavCursor::line(row.thread), Some(&head))),
+                );
             }
         }
         let machine_folded = self
@@ -40,33 +52,29 @@ impl CockpitView {
             return items;
         }
         for (index, section) in state.sections.iter().enumerate() {
-            match (section.mixed, section.project) {
-                (true, _) => items.push(NavCursor::heading(NavFold::Groups, "nav-groups-heading")),
-                (false, Some(project)) => items.push(NavCursor::heading(
+            let head = match (section.mixed, section.project) {
+                (true, _) => Some(NavCursor::heading(NavFold::Groups, "nav-groups-heading")),
+                (false, Some(project)) => Some(NavCursor::heading(
                     NavFold::Project(project),
                     format!("nav-project-section-{index}"),
                 )),
                 // `Other` names no Project, and its heading folds nothing.
-                (false, None) => {}
-            }
+                (false, None) => None,
+            };
+            items.extend(head.clone().map(Placed::head));
             if section.folded {
                 continue;
             }
-            items.extend(
-                section
-                    .solos
-                    .iter()
-                    .map(|row| NavCursor::thread(state.solos[*row].thread, None)),
-            );
+            items.extend(section.solos.iter().map(|row| {
+                Placed::under(NavCursor::thread(state.solos[*row].thread, None), head.as_ref())
+            }));
             for group in section.groups.iter().map(|at| &state.groups[*at]) {
-                items.push(NavCursor::group(group.id));
+                let row = NavCursor::group(group.id);
+                items.push(Placed::under(row.clone(), head.as_ref()));
                 if !group.folded {
-                    items.extend(
-                        group
-                            .members
-                            .iter()
-                            .map(|row| NavCursor::thread(row.thread, Some(group.id))),
-                    );
+                    items.extend(group.members.iter().map(|member| {
+                        Placed::under(NavCursor::thread(member.thread, Some(group.id)), Some(&row))
+                    }));
                 }
             }
         }
@@ -85,21 +93,37 @@ impl CockpitView {
         let shown = self.focused_thread();
         let start = items
             .iter()
+            .map(|placed| &placed.cursor)
             .find(|cursor| match cursor.item {
                 NavItem::Thread(thread, _) | NavItem::Line(thread) => Some(thread) == shown,
                 _ => false,
             })
-            .or(items.first())
+            .or(items.first().map(|placed| &placed.cursor))
             .cloned();
+        self.nav_keys_held = true;
         window.focus(&self.nav_view_focus, cx);
+        // However the keys leave (Esc, a press on the board, ⌘K, ⌘I), the
+        // cursor goes with them.
+        self.nav_blur = Some(cx.on_blur(&self.nav_view_focus, window, |view, window, cx| {
+            view.release_nav(window, cx)
+        }));
         self.move_nav_cursor(start, window, cx);
     }
 
-    /// Esc: the keys go back to the board (render's focus rule hands them
-    /// to the focused Pane once the tree lets go).
-    fn leave_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// The tree lets go of the keyboard: its cursor clears, and render's
+    /// focus rule hands the keys to the focused Pane.
+    fn release_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.nav_keys_held = false;
         self.move_nav_cursor(None, window, cx);
-        window.blur(cx);
+    }
+
+    /// Esc, ⏎ on a row, or a press in the tree while it holds the keys:
+    /// they go back to the board.
+    fn leave_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.release_nav(window, cx);
+        if self.nav_view_focus.is_focused(window) {
+            window.blur(cx);
+        }
         cx.notify();
     }
 
@@ -127,15 +151,16 @@ impl CockpitView {
     /// the top.
     pub(super) fn step_nav(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
         let items = self.nav_items(cx);
-        let at = self
-            .nav_cursor
-            .as_ref()
-            .and_then(|cursor| items.iter().position(|item| item.item == cursor.item));
+        let at = self.nav_cursor.as_ref().and_then(|cursor| {
+            items
+                .iter()
+                .position(|placed| placed.cursor.item == cursor.item)
+        });
         let next = match at {
             Some(at) => at.saturating_add_signed(by).min(items.len().saturating_sub(1)),
             None => 0,
         };
-        let next = items.get(next).cloned();
+        let next = items.get(next).map(|placed| placed.cursor.clone());
         self.move_nav_cursor(next, window, cx);
     }
 
@@ -165,21 +190,34 @@ impl CockpitView {
         }
     }
 
-    /// ← (`fold`) or →: the fold the cursor's row heads, or for a member
-    /// row its Group's. Folding from a member moves the cursor to its
-    /// Group, so it never stands on a row the fold took away.
+    /// ← (`fold`) or →: the fold the cursor's row heads (a heading's, a
+    /// Group's). ← on a row with nothing under it (a Thread, an Attention
+    /// row) moves to the head it sits under and folds that, as an outline's
+    /// ← goes to the parent, so the cursor never stands on a row the fold
+    /// took away. → there does nothing.
     fn fold_nav_cursor(&mut self, fold: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.nav_cursor.as_ref().map(|cursor| cursor.item) else {
             return;
         };
-        let target = match item {
-            NavItem::Heading(target) => target,
-            NavItem::Group(group) => NavFold::Group(group),
-            NavItem::Thread(_, Some(group)) if fold => {
-                self.move_nav_cursor(Some(NavCursor::group(group)), window, cx);
-                NavFold::Group(group)
+        let head = match item {
+            NavItem::Heading(_) | NavItem::Group(_) => self.nav_cursor.clone(),
+            NavItem::Thread(..) | NavItem::Line(_) if fold => {
+                let parent = self
+                    .nav_items(cx)
+                    .into_iter()
+                    .find(|placed| placed.cursor.item == item)
+                    .and_then(|placed| placed.parent);
+                if parent.is_some() {
+                    self.move_nav_cursor(parent.clone(), window, cx);
+                }
+                parent
             }
-            NavItem::Thread(..) | NavItem::Line(_) => return,
+            NavItem::Thread(..) | NavItem::Line(_) => None,
+        };
+        let target = match head.map(|head| head.item) {
+            Some(NavItem::Heading(target)) => target,
+            Some(NavItem::Group(group)) => NavFold::Group(group),
+            _ => return,
         };
         self.set_nav_fold(target, fold, cx);
     }
@@ -188,6 +226,19 @@ impl CockpitView {
     pub(super) fn nav_keys(&self, tree: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
         tree.track_focus(&self.nav_view_focus)
             .key_context("NavTree")
+            // A press never takes the keys (it runs before the tree's own
+            // focus-on-press, which it prevents, and so does the root's):
+            // the Composer keeps typing. While the tree holds them, a press
+            // hands them back first, as a press on the board would.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, window, cx| {
+                    window.prevent_default();
+                    if view.nav_keys_held {
+                        view.leave_nav(window, cx);
+                    }
+                }),
+            )
             .on_action(cx.listener(|view, _: &nav::SelectNext, window, cx| {
                 view.step_nav(1, window, cx)
             }))
@@ -259,6 +310,29 @@ impl CockpitView {
             self.focus_thread(thread, cx);
         } else {
             self.revive_thread(thread, cx);
+        }
+    }
+}
+
+/// A row the keyboard can stand on, and the head of the fold it sits in
+/// (a heading's, a Group's): where ← goes from a row that heads nothing.
+struct Placed {
+    cursor: NavCursor,
+    parent: Option<NavCursor>,
+}
+
+impl Placed {
+    fn head(cursor: NavCursor) -> Self {
+        Placed {
+            cursor,
+            parent: None,
+        }
+    }
+
+    fn under(cursor: NavCursor, parent: Option<&NavCursor>) -> Self {
+        Placed {
+            cursor,
+            parent: parent.cloned(),
         }
     }
 }
