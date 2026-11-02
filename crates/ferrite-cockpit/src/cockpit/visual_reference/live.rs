@@ -462,7 +462,6 @@ pub fn capture(output: String) {
         store_dir.display()
     ));
     live.act(|view, window, cx| {
-        view.set_launch_dir(repo.clone());
         window.activate_window();
         cx.notify();
     });
@@ -944,7 +943,7 @@ fn scenario(
         live.dump(codex, "codex after turn 4");
     }
 
-    // ---- the Needs-you view: its rows, keys and `mark all read`
+    // ---- the Inbox: its rows, keys and `mark all read`
     focus_thread(live, claude);
     live.key("cmd-i");
     live.shot("notifications");

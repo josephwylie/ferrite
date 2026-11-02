@@ -112,15 +112,12 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     }
     assert!(near(always.top(), allow.bottom()) && near(deny.top(), always.bottom()));
     assert!(
-        near(card.bottom() - deny.bottom(), pad),
-        "{deny:?} / {card:?}"
+        near(hints.top() - deny.bottom(), gap),
+        "the hint is the box's last section: {deny:?} / {hints:?}"
     );
     assert!(
-        near(
-            hints.top() - card.bottom(),
-            px(ferrite_ui::theme::DECISION_HINT_GAP)
-        ),
-        "the hint sits under the box: {card:?} / {hints:?}"
+        near(card.bottom() - hints.bottom(), pad),
+        "{hints:?} / {card:?}"
     );
     assert!(near(well.left(), head.left()) && near(allow.left(), well.left()));
     assert!(near(allow.right(), well.right()));

@@ -41,8 +41,6 @@ use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
-// The shell's inks over the transcript's: the bars are on the shell.
-use ferrite_ui::theme::chrome::{TEXT_BAR, TEXT_DIM};
 
 /// The head row's drag strip over the board, as an overlay: the cards
 /// start at `board_top`, so this adds no layout and paints nothing — it
@@ -140,13 +138,25 @@ fn drag_region(maximized: bool) -> Div {
 // ------------------------------------------------------------- bottom bar
 
 /// The bottom bar as the Cockpit fills it: its view tabs, then the
-/// vitals — who needs you, usage, free disk and the clock.
+/// vitals — who needs you, usage, free disk and the clock. A lone view
+/// (Solo, no Group yet) is a label, not a tab: with nothing to switch to,
+/// a selected ground would offer a choice that is not there.
 pub fn bar(bar: Bar) -> Div {
+    let lone = bar.tabs.len() == 1;
     let tabs = bar
         .tabs
         .into_iter()
         .map(|tab| {
-            bar_tab(tab.id, tab.ordinal, tab.label, tab.current, tab.roll_up)
+            if lone {
+                return bar_tab(tab.id, tab.ordinal, tab.label, Face::Lone, tab.roll_up)
+                    .into_any_element();
+            }
+            let face = if tab.current {
+                Face::Current
+            } else {
+                Face::Other
+            };
+            bar_tab(tab.id, tab.ordinal, tab.label, face, tab.roll_up)
                 .on_click(tab.press)
                 .into_any_element()
         })
@@ -251,17 +261,26 @@ fn bar_dot(size: f32, ink: u32) -> Div {
         .bg(rgb(ink))
 }
 
+/// How a view's tab answers: the current one, another, or the only one.
+#[derive(Clone, Copy, PartialEq)]
+enum Face {
+    Current,
+    Other,
+    Lone,
+}
+
 /// One view's tab (SPEC §5.7): `1 Solo`, `2 Work` — `BAR_TAB_H` high,
 /// `BAR_TAB_PAD_X` in, radius `R_SMALL`, the digit in `TEXT_DIM` and the
 /// name in `TEXT_BAR`, then the view's roll-up dot. The current view's
 /// sits on `paint::SELECTED` with its name `TEXT_STRONG` at the label
-/// weight; the rest take the hover fill under the pointer. The cockpit
+/// weight; the rest take the hover fill under the pointer. A lone view is
+/// its words alone, on no ground and answering no pointer. The cockpit
 /// wires the press.
 fn bar_tab(
     id: SharedString,
     ordinal: usize,
     label: SharedString,
-    current: bool,
+    face: Face,
     roll_up: Option<RollUp>,
 ) -> Stateful<Div> {
     let selector = id.clone();
@@ -277,15 +296,14 @@ fn bar_tab(
         .h(px(BAR_TAB_H))
         .px(px(BAR_TAB_PAD_X))
         .rounded(px(R_SMALL))
-        .map(|tab| {
-            if current {
-                tab.cursor_pointer()
-                    .bg(paint::SELECTED)
-                    .text_color(rgb(TEXT_STRONG))
-                    .font_weight(W_LABEL)
-            } else {
-                tab.hover_row(key).press_row().text_color(rgb(TEXT_BAR))
-            }
+        .map(|tab| match face {
+            Face::Current => tab
+                .cursor_pointer()
+                .bg(paint::SELECTED)
+                .text_color(rgb(TEXT_STRONG))
+                .font_weight(W_LABEL),
+            Face::Other => tab.hover_row(key).press_row().text_color(rgb(TEXT_BAR)),
+            Face::Lone => tab.text_color(rgb(TEXT_BAR)),
         })
         .child(
             components::tabular(div().text_color(rgb(TEXT_DIM)))
@@ -299,7 +317,7 @@ fn bar_tab(
 
 /// The need-you count (SPEC §5.7): a `BAR_NEED_DOT` `ATTENTION` dot and
 /// `N need you` in `TEXT_BAR`. `None` at zero. The cockpit wires the press
-/// to the Needs-you view. A press target among the vitals, it answers the
+/// to the Inbox. A press target among the vitals, it answers the
 /// pointer as the nav's doors do — its words brighten to `TEXT_STRONG`
 /// over the hover blend — rather than with a ground: a ground would need
 /// padding the vitals' even gaps cannot spare.

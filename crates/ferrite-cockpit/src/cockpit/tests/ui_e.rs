@@ -37,22 +37,33 @@ fn a_request_toast_stands_two_cells_in_and_over_the_bottom_bar(cx: &mut TestAppC
     });
     let selector: &'static str = format!("toast-{}", off_focus.get()).leak();
     let toast = cx.debug_bounds(selector).expect("the toast is up");
+    use ferrite_ui::theme::{
+        PANEL_PAD_L, PANEL_PAD_R, PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_TOP, TOAST_W, WIN_CHROME_H,
+    };
     let window = cx.update(|window, _| window.viewport_size());
+    let panel = view.read_with(cx, |view, _| view.panel_column_w());
+    // Over the panel's content column under the window's head, or with no
+    // panel `TOAST_W` wide under the Pane heads.
+    let (width, right, top) = if panel > 0. {
+        (
+            TOAST_W.min(panel - PANEL_PAD_L - PANEL_PAD_R),
+            PANEL_PAD_R,
+            WIN_CHROME_H + TOAST_TOP,
+        )
+    } else {
+        (TOAST_W, TOAST_BOX_RIGHT, WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP)
+    };
     assert!(
-        (toast.size.width - px(ferrite_ui::theme::TOAST_W)).abs() <= px(1.),
-        "TOAST_W wide: {toast:?}"
+        (toast.size.width - px(width)).abs() <= px(1.),
+        "{width} wide: {toast:?}"
     );
     assert!(
-        (toast.right() - (window.width - px(ferrite_ui::theme::TOAST_BOX_RIGHT))).abs() <= px(1.),
-        "TOAST_BOX_RIGHT in from the window's edge: {toast:?}"
+        (toast.right() - (window.width - px(right))).abs() <= px(1.),
+        "{right} in from the window's edge: {toast:?}"
     );
     assert!(
-        (toast.bottom()
-            - (window.height
-                - px(ferrite_ui::theme::STATUS_BAR_H + ferrite_ui::theme::TOAST_BOTTOM)))
-        .abs()
-            <= px(1.),
-        "TOAST_BOTTOM over the bottom bar: {toast:?}"
+        (toast.top() - px(top)).abs() <= px(1.),
+        "{top} from the window's top: {toast:?}"
     );
 }
 

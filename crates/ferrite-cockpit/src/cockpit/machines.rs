@@ -1,6 +1,6 @@
 //! The window's machines (ADR 0026): their headings and their Threads in
 //! the nav, the window going to another one, what a machine that went
-//! looks like, what the Needs-you view says of the machines off screen, and Settings
+//! looks like, what the Inbox says of the machines off screen, and Settings
 //! › Machines. A window with only this computer draws none of it.
 
 use std::rc::Rc;
@@ -171,7 +171,7 @@ impl CockpitView {
         }
     }
 
-    /// The Needs-you view's rows for the machines off screen: their live requests,
+    /// The Inbox's rows for the machines off screen: their live requests,
     /// then their finished turns with when each finished, each named by
     /// its machine.
     pub(super) fn away_rows(

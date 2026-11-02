@@ -34,6 +34,10 @@ fn the_context_tab_shows_context_and_subscription_windows(cx: &mut TestAppContex
     tick(cx);
     assert!(cx.debug_bounds("context-usage-current-64000").is_some());
     assert!(
+        cx.debug_bounds("panel-foot-64000").is_none(),
+        "the Context tab reads the meter whole: no foot under it"
+    );
+    assert!(
         cx.debug_bounds("context-usage-limits-unknown").is_some(),
         "no account window reported: one line, no bars"
     );

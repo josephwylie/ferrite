@@ -51,7 +51,7 @@ fn notifications_keep_focus_until_escape_closes_the_needs_you_view(cx: &mut Test
     assert_eq!(
         *fake.interrupts.borrow(),
         0,
-        "Escape only dismisses the Needs-you view"
+        "Escape only dismisses the Inbox"
     );
     view.read_with(cx, |view, _| assert!(!view.needs_you_shown()));
     cx.simulate_keystrokes("escape");
@@ -147,7 +147,7 @@ fn a_finished_thread_needs_you_until_it_is_seen(cx: &mut TestAppContext) {
         assert_eq!(
             notifications.notices().count(),
             1,
-            "the Needs-you view still lists it"
+            "the Inbox still lists it"
         );
     });
 }
@@ -237,7 +237,7 @@ fn a_window_opened_unfocused_sees_nothing_until_focused(cx: &mut TestAppContext)
 }
 
 /// A finish on the Pane the operator is already on is read as it is
-/// born: it joins the Needs-you view, but nothing shouts.
+/// born: it joins the Inbox, but nothing shouts.
 #[gpui::test]
 fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("finished-focused", 1);
@@ -262,7 +262,7 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
     });
 }
 
-/// Opening a Notice — a toast, or a row of the Needs-you view — lands the
+/// Opening a Notice — a toast, or a row of the Inbox — lands the
 /// operator on its Pane and closes the panel.
 #[gpui::test]
 fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
@@ -282,7 +282,7 @@ fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
         view.cockpit.notifications().newest().unwrap()
     });
     view.update(cx, |view, cx| {
-        view.nav_view = nav::NavView::NeedsYou;
+        view.nav_view = nav::NavView::Inbox;
         view.notice_verb(Verb::Open(id), cx);
     });
     view.read_with(cx, |view, _| {
@@ -402,7 +402,7 @@ fn a_request_toast_expires(cx: &mut TestAppContext) {
         assert_eq!(
             view.cockpit.notifications().unread(),
             1,
-            "the request still waits in the Needs-you view"
+            "the request still waits in the Inbox"
         );
     });
 }

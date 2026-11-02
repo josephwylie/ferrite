@@ -174,17 +174,9 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .when_some(on_remove.clone(), |chip, remove| {
                 let removed = path.clone();
                 chip.child(
-                    ferrite_ui::components::button(("remove-attachment", index))
-                        .tab_stop(true)
-                        .p_0()
-                        .flex_shrink_0()
-                        .h(px(theme::ATTACH_CHIP_H))
-                        .px(px(theme::SPACE_0_5))
-                        .rounded(px(theme::R_TIGHT))
-                        .key_context("PromptAttachment")
+                    remove_button(("remove-attachment", index))
                         .accessibility_label(format!("Remove {name}"))
                         .tooltip(format!("Remove {}", path.display()))
-                        .child(div().text_color(rgb(theme::TEXT_DIM)).child("\u{d7}"))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             remove(&removed, window, cx);
@@ -246,24 +238,37 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
         .child(SharedString::from(label))
         .when_some(on_drop, |chip, on_drop| {
             chip.child(
-                ferrite_ui::components::button("drop-review-comments")
+                remove_button("drop-review-comments")
                     .debug_selector(|| "drop-review-comments".into())
-                    .tab_stop(true)
-                    .p_0()
-                    .flex_shrink_0()
-                    .h(px(theme::ATTACH_CHIP_H))
-                    .px(px(theme::SPACE_0_5))
-                    .rounded(px(theme::R_TIGHT))
-                    .key_context("PromptAttachment")
                     .accessibility_label("Remove the review comments")
                     .tooltip("Remove the review comments")
-                    .child(div().text_color(rgb(theme::TEXT_DIM)).child("\u{d7}"))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         on_drop(window, cx);
                     }),
             )
         })
+}
+
+/// A chip's remove control: the `close` icon (`ATTACH_REMOVE_ICON`) in
+/// `TEXT_DIM` on an `ATTACH_REMOVE` square, the kit ghost's fill under the
+/// pointer — a tab stop in the `PromptAttachment` context, so its Enter
+/// never sends.
+fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
+    use ferrite_ui::theme;
+    ferrite_ui::components::button(id)
+        .tab_stop(true)
+        .p_0()
+        .flex_shrink_0()
+        .h(px(theme::ATTACH_CHIP_H))
+        .w(px(theme::ATTACH_REMOVE))
+        .rounded(px(theme::R_TIGHT))
+        .key_context("PromptAttachment")
+        .child(ferrite_ui::icons::icon(
+            ferrite_ui::icons::CLOSE,
+            theme::ATTACH_REMOVE_ICON,
+            theme::TEXT_DIM,
+        ))
 }
 
 impl RenderOnce for Attachments {

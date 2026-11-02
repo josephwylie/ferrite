@@ -287,9 +287,10 @@ impl CockpitView {
         );
     }
 
-    /// Where the Server stands, in one wording for Settings › About and
-    /// Settings › Server: its build and uptime and whether it is the
-    /// installed one, restarting, or not running.
+    /// Where the Server stands, as Settings › Server's `Status` row says
+    /// it: its build and uptime and whether it is the installed one,
+    /// restarting, or not running. (About does not repeat it: one place per
+    /// fact.)
     fn server_standing(&self) -> String {
         if matches!(
             self.cockpit.server_restart(),
@@ -328,26 +329,6 @@ impl CockpitView {
         } else {
             Build::Installed
         })
-    }
-
-    /// Settings › About's Server row: where it stands, as it changes, and
-    /// the restart onto this build when it is an older one.
-    pub(super) fn server_status_row(&self, window: &Window, cx: &Context<Self>) -> settings::Row {
-        let handle = window.window_handle();
-        let view = cx.entity().downgrade();
-        settings::action(
-            "settings-about-server",
-            "Server",
-            self.server_standing(),
-            SharedString::default(),
-            (self.server_build() == Some(Build::Older)).then(|| "Restart".into()),
-            move |cx| {
-                let view = view.clone();
-                let _ = handle.update(cx, |_, window, cx| {
-                    view.update(cx, |view, cx| view.restart_server(window, cx))
-                });
-            },
-        )
     }
 
     /// Take down the bands this view put up: a window going to another
@@ -466,7 +447,7 @@ impl CockpitView {
             // fact's machine-text value.
             return vec![settings::action(
                 "settings-server-none",
-                "Server",
+                "Status",
                 self.server_standing(),
                 SharedString::default(),
                 None,
@@ -497,7 +478,7 @@ impl CockpitView {
             }
         };
         let view = cx.entity().downgrade();
-        let mut rows = vec![settings::fact("Server", status)];
+        let mut rows = vec![settings::fact("Status", status)];
         // A development build never installs the LaunchAgent (main), and
         // must not point the operator's at itself. A machine's Server is
         // not this computer's to start.

@@ -48,7 +48,11 @@ impl CockpitView {
                 .flex()
                 .items_center()
                 .gap(px(theme::VIEW_HEAD_GAP))
-                .pl(px(theme::VIEW_HEAD_PAD_L))
+                .pl(px(theme::VIEW_HEAD_PAD_X))
+                // Against the panel, the head's end stands in as its start
+                // does, so `New thread` never abuts the panel's tabs; the
+                // toggle's room is laid flush, under the frame's toggle.
+                .when(!toggle_room, |head| head.pr(px(theme::VIEW_HEAD_PAD_X)))
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
@@ -169,7 +173,7 @@ impl CockpitView {
 fn head_meta(text: SharedString) -> AnyElement {
     div()
         .flex_shrink_0()
-        .text_color(rgb(theme::chrome::TEXT_DIM))
+        .text_color(rgb(theme::TEXT_DIM))
         .child(text)
         .into_any_element()
 }

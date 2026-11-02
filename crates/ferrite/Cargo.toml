@@ -19,8 +19,6 @@ test = false
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 # The captures are the Cockpit's (`cockpit::visual_reference`).
 visual-reference = ["ferrite-cockpit/visual-reference"]
-# The opaque greys on macOS too (`theme::GLASS`, in ferrite-ui).
-opaque = ["ferrite-ui/opaque"]
 # Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013), on macOS and
 # Windows. The release packaging (`scripts/install-app.sh`,
 # `scripts/package-windows.ps1`) turns it on. Off by default so a plain

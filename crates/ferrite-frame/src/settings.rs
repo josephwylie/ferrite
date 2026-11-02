@@ -227,6 +227,7 @@ fn body(
                 .flex_shrink_0()
                 .items_center()
                 .h(px(ROW))
+                .px(px(SETTINGS_ROW_PAD_X))
                 .font_weight(W_STRONG)
                 .text_color(rgb(TEXT_STRONG))
                 .child(shown.title.clone()),
@@ -241,6 +242,7 @@ fn body(
                 .when(searching && shown.groups.is_empty(), |list| {
                     list.child(
                         components::text_ui()
+                            .px(px(SETTINGS_ROW_PAD_X))
                             .text_color(rgb(TEXT_DIM))
                             .child("No matching settings"),
                     )
@@ -253,6 +255,30 @@ fn body(
                 ),
         );
 
+    // The page scrolls under a fade at its foot, so a row cut by the
+    // sheet's edge reads as more below rather than as clipped.
+    let ground: gpui::Hsla = FLOAT_GROUND.into();
+    let content = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .child(content)
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(ROW))
+                .bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(gpui::Hsla { a: 0., ..ground }, 0.),
+                    gpui::linear_color_stop(ground, 1.),
+                )),
+        );
     div()
         .flex()
         .flex_1()
@@ -334,7 +360,9 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
 }
 
 /// A group: its label (and a provider's mark) as a `TEXT_DIM` row, then
-/// its rows, each over a `FLOAT_RULE` hairline.
+/// its rows, each over a `FLOAT_RULE` hairline. The title, the label and
+/// every row's text stand on one edge, `SETTINGS_ROW_PAD_X` in; only the
+/// hairlines reach the column's edges.
 fn group_rows(
     label: Option<SharedString>,
     group: &Group,
@@ -360,6 +388,7 @@ fn group_rows(
                 .items_center()
                 .gap(px(CH))
                 .h(px(ROW))
+                .px(px(SETTINGS_ROW_PAD_X))
                 .text_color(rgb(TEXT_DIM))
                 .children(group.mark.map(|(path, ink)| icon(path, STATUS_LOGO, ink)))
                 .child(section_words(&label))
@@ -525,28 +554,26 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                 )
             })
             .into_any_element(),
-        // An on/off setting: one word on the row — `on` in `TEXT_STRONG`,
-        // `off` dim — that flips the setting on a click, Enter or Space (a
-        // tab stop with the focus outline), `paint::RAISED` under the
-        // pointer. No iOS switch.
+        // An on/off setting: the one switch (`components::switch`), a tab
+        // stop that flips the setting on a click, Enter or Space. It is its
+        // own face, so no hover ground lies behind it.
         Control::Toggle {
             id,
             checked,
             change,
         } => {
-            let (word, ink) = toggle_face(checked);
-            components::form_button(id, cx)
+            let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
+            components::faded_button(id, none, none, none, rgb(TEXT).into(), cx)
+                .tab_stop(true)
                 .selected(checked)
                 .debug_selector(move || id.into())
-                .accessibility_label(format!("{title}: {word}"))
+                .accessibility_label(format!(
+                    "{title}: {}",
+                    if checked { "on" } else { "off" }
+                ))
                 .h(px(SETTINGS_CONTROL_H))
-                .px(px(CH))
-                .child(
-                    components::text_ui()
-                        .font_weight(if checked { W_STRONG } else { W_BODY })
-                        .text_color(rgb(ink))
-                        .child(word),
-                )
+                .px(px(SPACE_1))
+                .child(components::switch(SharedString::from(format!("{id}-switch")), checked))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     change(!checked, cx);
@@ -569,7 +596,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                 let ink = if live { TEXT } else { TEXT_FAINT };
                 let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
                 let (hover, press): (gpui::Hsla, gpui::Hsla) = if live {
-                    (paint::RAISED.into(), paint::PRESS.into())
+                    (paint::HOVER.into(), paint::PRESS.into())
                 } else {
                     (none, none)
                 };
@@ -710,7 +737,13 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.clone()));
                     on_copy(cx);
                 })
-                .child(fact_value(&title, shown))
+                // One line, cut from its start: a path's end names it.
+                .child(
+                    fact_value(&title, shown)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start(),
+                )
                 .child(
                     icon(
                         if copied { icons::CHECK } else { icons::COPY },
@@ -728,27 +761,17 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
 /// What a chooser's `CLI default` row says about itself.
 const CLI_DEFAULT_NOTE: &str = "follows the CLI";
 
-/// The on/off token's word and ink: `on` in `TEXT_STRONG` at `W_STRONG`, `off`
-/// in `TEXT_DIM`.
-fn toggle_face(checked: bool) -> (&'static str, u32) {
-    if checked {
-        ("on", TEXT_STRONG)
-    } else {
-        ("off", TEXT_DIM)
-    }
-}
-
 /// One option of a short ladder (a two-way choice, a stepper's ends): a
 /// token one row high with a cell of padding. Chosen, it is inverse —
 /// `PRIMARY` with `ON_PRIMARY` at `W_STRONG`; the rest `TEXT_DIM`,
-/// `paint::RAISED` under the pointer. A tab stop.
+/// `paint::HOVER` under the pointer. A tab stop.
 fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (rest, hover, ink): (gpui::Hsla, gpui::Hsla, u32) = if selected {
         (rgb(PRIMARY).into(), rgb(TEXT).into(), ON_PRIMARY)
     } else {
         (
             gpui::rgba(TRANSPARENT).into(),
-            paint::RAISED.into(),
+            paint::HOVER.into(),
             TEXT_DIM,
         )
     };
@@ -867,14 +890,6 @@ mod tests {
         assert!(shown(&pages, PageKey::NewThreads, "nothing like it")
             .groups
             .is_empty());
-    }
-
-    /// Terminal-native (WP-E): an on/off setting is a word, `on` in the
-    /// strong and `off` dim — no iOS switch.
-    #[test]
-    fn a_toggle_reads_on_in_the_accent_and_off_dim() {
-        assert_eq!(toggle_face(true), ("on", TEXT_STRONG));
-        assert_eq!(toggle_face(false), ("off", TEXT_DIM));
     }
 
     /// The chosen token of a short ladder is inverse — `TEXT_STRONG` ground

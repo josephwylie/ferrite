@@ -24,14 +24,13 @@
 //! equal to rest so the kit's own hover never snaps over it.
 //!
 //! **One ladder on every ground** (theme rules 3 and 4): rest nothing;
-//! hover `paint::RAISED`; the cursor or a selected row `paint::SELECTED`;
-//! that row under the pointer `paint::SELECTION_HOVER`; press
-//! `paint::PRESS`. On glass (macOS) every face is a white overlay, so it
-//! reads on chrome, the plane or a band alike; elsewhere each is its opaque
-//! grey. A float is opaque until it can frost (theme WP-E, FL-15), so its
-//! rows wear the float's own inks (`hover_float`, `float_cursor`,
-//! `press_float`: `FLOAT_HOVER`, `FLOAT_SEL`, steps over `FLOAT`), never a
-//! glass overlay over an opaque ground; its cursor row keeps `FLOAT_SEL`
+//! hover `paint::HOVER`, a white overlay that lands one equal step over
+//! whatever ground is under it; the cursor or a selected row
+//! `paint::SELECTED`; that row under the pointer `paint::SELECTION_HOVER`;
+//! press `paint::PRESS`.
+//! A float has its own ground (`FLOAT`), so its rows wear the float's own
+//! inks (`hover_float`, `float_cursor`, `press_float`: `FLOAT_HOVER`,
+//! `FLOAT_SEL`, steps over `FLOAT`); its cursor row keeps `FLOAT_SEL`
 //! under the pointer, so the row the arrows hold and the row the pointer
 //! is on read apart. The palette, a float on the frame's grey
 //! (`PALETTE_GROUND`), takes the frame's steps instead (`hover_palette`,
@@ -143,16 +142,6 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
         self.cursor_pointer().bg(PALETTE_SEL)
     }
 
-    /// A surface whose resting edge is the hairline (a Pane): under the
-    /// pointer the edge steps up to `paint::LINE2`, saying a click lands
-    /// here. No cursor change — the surface is a focus target, not a
-    /// button. Apply it only while the edge is the resting hairline: the
-    /// hover refinement would otherwise replace a state colour.
-    #[allow(dead_code)]
-    fn hover_edge(self) -> Self {
-        self.hover(edge_lift)
-    }
-
     /// Selectable transcript text (#27): the I-beam says characters are
     /// grabbable, and nothing washes — the SELECTION wash is painted per
     /// character by the overlay, not by hover.
@@ -235,15 +224,15 @@ pub fn button_variant(ground: Hsla, ink: Hsla, press: Hsla, cx: &App) -> ButtonC
 // Each role's hover face, named so the tokens are assertable as data.
 
 fn row_face() -> Hsla {
-    paint::RAISED.into()
+    paint::HOVER.into()
 }
 
 fn control_face() -> Hsla {
-    paint::RAISED.into()
+    paint::HOVER.into()
 }
 
 fn raised_face() -> Hsla {
-    paint::RAISED.into()
+    paint::HOVER.into()
 }
 
 fn carried_face() -> Hsla {
@@ -252,11 +241,6 @@ fn carried_face() -> Hsla {
 
 fn float_face() -> Hsla {
     FLOAT_HOVER.into()
-}
-
-#[allow(dead_code)]
-fn edge_lift(surface: StyleRefinement) -> StyleRefinement {
-    surface.border_color(paint::LINE2)
 }
 
 fn row_press(row: StyleRefinement) -> StyleRefinement {
@@ -285,16 +269,14 @@ mod tests {
     }
 
     /// The pairing the trait owns: each role's face is exactly its paint
-    /// (theme rule 4: a white overlay on glass, the opaque grey elsewhere),
-    /// and every role sets the pointer cursor. One hover face on every
-    /// ground, one step under the selection, so a hovered row never reads
-    /// as the armed one. (The old opaque-only rule, `rgb` never `rgba`, is
-    /// retired with the glass frame.)
+    /// (theme rule 4), and every role sets the pointer cursor. One hover
+    /// face on every ground, one step under the selection, so a hovered row
+    /// never reads as the armed one.
     #[test]
     fn each_role_pairs_its_token_with_the_pointer() {
-        assert_eq!(row_face(), Hsla::from(paint::RAISED));
-        assert_eq!(control_face(), Hsla::from(paint::RAISED));
-        assert_eq!(raised_face(), Hsla::from(paint::RAISED));
+        assert_eq!(row_face(), Hsla::from(paint::HOVER));
+        assert_eq!(control_face(), Hsla::from(paint::HOVER));
+        assert_eq!(raised_face(), Hsla::from(paint::HOVER));
         assert_ne!(raised_face(), Hsla::from(paint::SELECTED));
         for press in [row_press, control_press, raised_press] {
             assert_eq!(
@@ -364,17 +346,6 @@ mod tests {
         // grabbable, nothing is a button (#27).
         let mut text = div().hover_text();
         assert_eq!(text.style().mouse_cursor, Some(CursorStyle::IBeam));
-    }
-
-    /// The edge role lifts only the border, to the strong hairline, and
-    /// leaves the cursor alone: a Pane is a focus target, not a button.
-    #[test]
-    fn the_edge_role_lifts_the_border_and_keeps_the_cursor() {
-        let edge = edge_lift(StyleRefinement::default());
-        assert_eq!(edge.border_color, Some(paint::LINE2.into()));
-        assert_eq!(background(&edge), None);
-        let mut surface = div().hover_edge();
-        assert_eq!(surface.style().mouse_cursor, None);
     }
 
     /// One hover blend (rule 2.10.2): no render site writes its own hover

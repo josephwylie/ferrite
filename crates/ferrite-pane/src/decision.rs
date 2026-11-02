@@ -3,7 +3,8 @@
 //!
 //! A Decision is the transcript's tail row, drawn as a box (SPEC §5.9):
 //! the `shield` head (a question's `?`), the command well, the options and,
-//! under the box on the Pane that holds the keyboard, a dim hint line.
+//! as the box's last section on the Pane that holds the keyboard, a dim
+//! hint line (a question's beside its Skip and Send).
 //! Every approval offers exactly three options — `1 Allow`, `2 Allow
 //! <pattern> for this thread`, `3 Deny, and tell <Provider> what to do
 //! instead` — and the first is pre-selected: the cursor's row `SELECTED`.
@@ -712,18 +713,11 @@ pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stat
         .children(children)
 }
 
-/// The box, then the hint line under it (`DECISION_HINT_GAP` below): the
-/// keys, said only where the keyboard is.
-pub fn with_hint(card: Stateful<Div>, hint: Option<Div>) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .gap(px(theme::DECISION_HINT_GAP))
-        .w_full()
-        .min_w_0()
-        .child(card)
-        .children(hint)
+/// The box with its hint line as its last section: the keys, said only
+/// where the keyboard is, inside the box as a question's footer says them,
+/// so every kind of Decision is one component with one shape.
+pub fn with_hint(card: Stateful<Div>, hint: Option<Div>) -> Stateful<Div> {
+    card.children(hint.map(section))
 }
 
 /// A section of the box: the box's gap spaces it.
@@ -991,6 +985,19 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         }
         None => words = words.child(label),
     }
+    // `Recommended` follows its label, a quiet word in the meta size, so it
+    // reads as part of the option rather than a column at the far edge.
+    if row.recommended {
+        words = words.child(
+            div()
+                .debug_selector(|| "decision-recommended".into())
+                .flex_shrink_0()
+                .pl(px(theme::CH))
+                .text_size(px(theme::FS_META))
+                .text_color(rgb(theme::TEXT_DIM))
+                .child("Recommended"),
+        );
+    }
     let keyed = row.key.is_some();
     let key = row.key.filter(|_| row.enabled);
     let trailing = || {
@@ -1060,13 +1067,6 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                         .map(|text| div().text_color(rgb(theme::TEXT_DIM)).child(text)),
                 ),
         )
-        .when(row.recommended, |button| {
-            button.child(
-                trailing()
-                    .text_color(rgb(theme::TEXT_DIM))
-                    .child("recommended"),
-            )
-        })
         .when(row.picked, |button| {
             button.child(trailing().child(components::glyph("\u{2713}", theme::TEXT_STRONG)))
         })

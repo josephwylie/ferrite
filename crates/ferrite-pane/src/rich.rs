@@ -594,7 +594,8 @@ impl gpui::RenderOnce for Markdown {
     }
 }
 
-/// Each fenced block retains its own copy confirmation while the answer streams.
+/// Each fenced block holds its own copy confirmation (`COPIED_HOLD_MS`), also
+/// while the answer streams.
 /// The source comes directly from the native code node, never rendered labels.
 struct CodeActions {
     code: SharedString,
@@ -713,6 +714,18 @@ impl gpui::Render for CodeActions {
                             ));
                             view.copied = true;
                             cx.notify();
+                            // `Copied` holds a moment, then the block's
+                            // `Copy` is ready again.
+                            let hold =
+                                std::time::Duration::from_millis(theme::COPIED_HOLD_MS);
+                            cx.spawn(async move |view, cx| {
+                                cx.background_executor().timer(hold).await;
+                                let _ = view.update(cx, |view, cx| {
+                                    view.copied = false;
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
                         })),
                 ),
         );
@@ -747,7 +760,7 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
     ferrite_ui::components::faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        theme::paint::RAISED.into(),
+        theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT_DIM).into(),
         cx,
@@ -767,8 +780,8 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
 pub(crate) const CHIP_SCHEME: &str = "ferrite-chip:";
 /// The scheme `file_links::link_targets` gives an issue ref (`#212`).
 pub(crate) const ISSUE_SCHEME: &str = "issue:";
-/// The scheme of a path in an activity line (a call's argument, the
-/// banner's checkout): a native link in the line's flow, never a chip,
+/// The scheme of a path in an activity line (a call's argument, a
+/// directory): a native link in the line's flow, never a chip,
 /// that opens the file as a prose path does.
 pub(crate) const PATH_SCHEME: &str = "ferrite-path:";
 

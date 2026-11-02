@@ -59,6 +59,26 @@ fn idle_thumb_opacity(elapsed: f32, reduced: bool) -> Option<f32> {
     (opacity > 1e-3).then_some(opacity)
 }
 
+/// The thumb's widen (0 thin, 1 wide) a frame `dt` on: it rides toward
+/// `active` over the hover blend, as a native thumb swells under the
+/// pointer, rather than snapping 4→6px. Reduced motion lands at once.
+fn step_widen(widen: f32, active: bool, dt: Duration, reduced: bool) -> f32 {
+    let target = if active { 1.0 } else { 0.0 };
+    if reduced {
+        return target;
+    }
+    let step = dt.as_secs_f32() / crate::motion::HOVER_FADE.duration().as_secs_f32();
+    if active {
+        (widen + step).min(1.0)
+    } else {
+        (widen - step).max(0.0)
+    }
+}
+
+/// The longest frame a widen steps by: after an idle stretch the first
+/// frame's gap is not motion, so the ride starts from where it rested.
+const WIDEN_MAX_DT: Duration = Duration::from_millis(32);
+
 use gpui::component::scroll::{ScrollbarHandle, ScrollbarMode as ScrollbarShow};
 
 #[doc(hidden)]
@@ -81,6 +101,10 @@ struct ScrollbarStateInner {
     // Last update offset
     last_update: Instant,
     idle_timer_scheduled: bool,
+    /// Per axis (vertical, horizontal): how wide the thumb has ridden
+    /// (`step_widen`), and when it last stepped.
+    widen: [f32; 2],
+    widen_at: [Instant; 2],
 }
 
 impl Default for ScrollbarState {
@@ -95,6 +119,8 @@ impl Default for ScrollbarState {
             wheeled: false,
             last_update: Instant::now(),
             idle_timer_scheduled: false,
+            widen: [0.0; 2],
+            widen_at: [Instant::now(); 2],
         })))
     }
 }
@@ -581,7 +607,7 @@ impl Element for Scrollbar {
             let is_hovered_on_thumb = state.get().hovered_on_thumb == Some(axis);
             let is_offset_changed = state.get().last_scroll_offset != self.scroll_handle.offset();
 
-            let (thumb_bg, bar_bg, bar_border, thumb_width, radius) =
+            let (thumb_bg, bar_bg, bar_border, thumb_width, _) =
                 if state.get().dragged_axis == Some(axis) {
                     Self::style_for_active(cx)
                 } else if is_hover_to_show && (is_hovered_on_bar || is_hovered_on_thumb) {
@@ -641,6 +667,41 @@ impl Element for Scrollbar {
 
                     idle_state
                 };
+
+            // The styles name the thin or the wide thumb; the drawn one
+            // rides between them, width and ink together.
+            let (thumb_bg, thumb_width, radius) = {
+                let active = thumb_width == THUMB_ACTIVE_WIDTH;
+                let reduced = crate::motion::reduced_motion(cx);
+                let slot = usize::from(!is_vertical);
+                let now = Instant::now();
+                let mut inner = state.get();
+                let dt = now.duration_since(inner.widen_at[slot]).min(WIDEN_MAX_DT);
+                let widen = step_widen(inner.widen[slot], active, dt, reduced);
+                inner.widen[slot] = widen;
+                inner.widen_at[slot] = now;
+                state.set(inner);
+                if widen != f32::from(u8::from(active)) {
+                    window.request_animation_frame();
+                }
+                let t = crate::motion::HOVER_FADE.progress(widen);
+                let width = px(crate::motion::lerp(
+                    theme::SCROLLBAR_THUMB_W,
+                    theme::SCROLLBAR_THUMB_W_HOVER,
+                    t,
+                ));
+                let ink = if thumb_bg.a > 0.0 {
+                    crate::motion::mix(
+                        rgb(theme::SCROLLBAR).into(),
+                        rgb(theme::SCROLLBAR_HOVER).into(),
+                        t,
+                    )
+                    .opacity(thumb_bg.a)
+                } else {
+                    thumb_bg
+                };
+                (ink, width, width / 2.)
+            };
 
             // Every style keeps the scroller's one inset.
             let inset = self.inset;
@@ -1064,5 +1125,12 @@ mod tests {
         assert_eq!(idle_thumb_opacity(1.55, false), None);
         assert_eq!(idle_thumb_opacity(3.0, false), None);
         assert_eq!(idle_thumb_opacity(1.45, true), None, "reduced: no fade");
+        // The widen rides over the hover blend, both ways, and lands at
+        // once under reduced motion.
+        let half = Duration::from_millis(theme::MOTION_HOVER_FADE_MS / 2);
+        assert!((step_widen(0.0, true, half, false) - 0.5).abs() < 1e-3);
+        assert_eq!(step_widen(0.9, true, half, false), 1.0);
+        assert_eq!(step_widen(0.2, false, half, false), 0.0);
+        assert_eq!(step_widen(0.0, true, Duration::ZERO, true), 1.0);
     }
 }

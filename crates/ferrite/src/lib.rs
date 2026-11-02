@@ -6,7 +6,7 @@ mod menus;
 
 use ferrite_cockpit::{cockpit, cockpit_window, demo, ferrite_update, machines};
 use ferrite_pane::visual;
-use ferrite_ui::keymap::Quit;
+use ferrite_ui::keymap::{Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 use ferrite_ui::{frame, icons, keymap, motion, platform_text, register_fonts, theme};
 
 use ::gpui as kit;
@@ -329,11 +329,8 @@ pub fn launch() {
                             px(theme::WINDOW_MIN_W),
                             px(theme::WINDOW_MIN_H),
                         )),
-                        // Glass on the frame (theme rule 4): macOS blurs
-                        // what is behind the window, and every region paints
-                        // its own translucent fill over it; elsewhere the
-                        // window is opaque grey.
-                        window_background: theme::window_background(),
+                        // Opaque on every platform (theme rule 4).
+                        window_background: gpui::WindowBackgroundAppearance::Opaque,
                         // Windows draws a DirectComposition window with no
                         // redirection bitmap: shown before gpui presents,
                         // it is an empty see-through frame. It opens hidden
@@ -368,10 +365,8 @@ pub fn launch() {
                                 None => view,
                             }
                         });
-                        // The kit Root paints its theme's opaque `background`
-                        // under everything; on glass the window's root paints
-                        // nothing (`paint::WINDOW`), so the blur reaches the
-                        // regions' own fills.
+                        // The kit Root paints the window's ground
+                        // (`paint::WINDOW`) under every region.
                         let content =
                             cx.new(|cx| cockpit_window::CockpitWindow::new(view, window, cx));
                         // The Cockpit the window shows when it is asked:
@@ -407,6 +402,19 @@ pub fn launch() {
                 if !matches!(asked, Ok(Ok(()))) {
                     cx.quit();
                 }
+            });
+            // The app's and the window's own verbs (the Ferrite and Window
+            // menus): the platform does each.
+            cx.on_action(|_: &Hide, cx| cx.hide());
+            cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+            cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+            cx.on_action(move |_: &Minimize, cx| {
+                window
+                    .update(cx, |_, window, _| window.minimize_window())
+                    .ok();
+            });
+            cx.on_action(move |_: &Zoom, cx| {
+                window.update(cx, |_, window, _| window.zoom_window()).ok();
             });
 
             window

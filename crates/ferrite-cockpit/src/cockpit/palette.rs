@@ -959,7 +959,7 @@ impl CockpitView {
         );
         add(
             true,
-            "Needs you".into(),
+            "Inbox".into(),
             "",
             bound_chord("cockpit::ToggleNotifications"),
             Command::Notifications,
@@ -1094,7 +1094,7 @@ impl CockpitView {
 
     /// Every parked Thread, whatever the nav's filter admits (the palette
     /// is not filtered).
-    fn parked_threads_all(&self) -> Vec<ThreadId> {
+    pub(super) fn parked_threads_all(&self) -> Vec<ThreadId> {
         self.facts
             .parked()
             .iter()
@@ -1430,10 +1430,11 @@ impl CockpitView {
         vec![veil, float]
     }
 
-    /// The newest standing toast (FL-18), its right edge two cells in from
-    /// the window's, its foot 36px over the bottom bar: rising in when it
-    /// comes, and over the face of the one before it while that fades
-    /// away (`notifications::ToastStage`).
+    /// The newest standing toast (FL-18), top right where it covers the
+    /// least (theme `TOAST_*`): in the right panel's content column under
+    /// the window's head, or with no panel under the Pane heads, clear of
+    /// every Composer. It drops in when it comes, over the face of the one
+    /// before it while that fades away (`notifications::ToastStage`).
     pub(super) fn toast_float(
         &self,
         window: &mut Window,
@@ -1448,26 +1449,44 @@ impl CockpitView {
             cx.background_executor().now(),
             ferrite_ui::motion::reduced_motion(cx),
         );
+        use ferrite_ui::theme::{
+            PANEL_PAD_L, PANEL_PAD_R, PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_W, WIN_CHROME_H,
+        };
         let viewport = window.viewport_size();
+        // What it hangs under, at its width and right edge: the window's
+        // head over the panel's content column, or the head and a Pane's
+        // head row over the board.
+        let panel = self.panel_column_w();
+        let (width, right, over) = if panel > 0. {
+            (
+                TOAST_W.min(panel - PANEL_PAD_L - PANEL_PAD_R),
+                PANEL_PAD_R,
+                WIN_CHROME_H,
+            )
+        } else {
+            (TOAST_W, TOAST_BOX_RIGHT, WIN_CHROME_H + PANE_HEAD_H)
+        };
         let anchor = gpui::Bounds::new(
-            gpui::point(
-                viewport.width
-                    - px(ferrite_ui::theme::TOAST_BOX_RIGHT + ferrite_ui::theme::TOAST_W),
-                viewport.height
-                    - px(ferrite_ui::theme::STATUS_BAR_H + ferrite_ui::theme::TOAST_BOTTOM),
-            ),
-            gpui::size(px(ferrite_ui::theme::TOAST_W), px(0.)),
+            gpui::point(viewport.width - px(right + width), px(0.)),
+            gpui::size(px(width), px(over)),
         );
-        let hang =
-            |toast: AnyElement| float::hang_element(toast, anchor, FloatPlace::Above { gap: 0. });
+        let hang = |toast: AnyElement| {
+            float::hang_element(
+                toast,
+                anchor,
+                FloatPlace::Below {
+                    gap: ferrite_ui::theme::TOAST_TOP,
+                },
+            )
+        };
         let leaving = leaving.map(|(row, left)| {
             hang(
-                ferrite_ui::motion::toast_out(left, crate::notifications::toast_face(&row))
+                ferrite_ui::motion::toast_out(left, crate::notifications::toast_face(&row, width))
                     .into_any_element(),
             )
         });
         let standing = standing.map(|row| {
-            let toast = crate::notifications::toast(&row, self.notice_handle(cx));
+            let toast = crate::notifications::toast(&row, self.notice_handle(cx), width);
             hang(
                 ferrite_ui::motion::toast_in(crate::notifications::toast_key(&row), toast)
                     .into_any_element(),

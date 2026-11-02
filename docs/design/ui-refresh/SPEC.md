@@ -317,9 +317,10 @@ bar. Its tooltip reads `Toggle sidebar ⌘B`, from the keymap.
 a 10px gap, a label in `TEXT_MUTED`, and a trailing item:
 - **`Search`**: trailing chord (`palette::Toggle`, ⌘K) in 12px
   `TEXT_DIM`. Opens the palette (§5.8).
-- **`Needs you`**: a trailing count pill (min-width 18, height 18, radius
+- **`Inbox`** (named `Needs you` until 2026-11-03, when it read as the
+  Attention list's `Needs you` section under it): a trailing count pill (min-width 18, height 18, radius
   9, `ATTENTION` 16% fill, `ATTENTION` 11/600), hidden at 0. It opens the
-  **Needs-you list** in place of the tree:
+  **Inbox** in place of the tree:
   - first, blocked Threads oldest-first (`Cockpit::needs_you()`), as
     two-line rows;
   - then a `Recent` section holding the bell's Notices
@@ -341,7 +342,7 @@ by Project in creation order (`other` last), then by home Group within
 the Project, with the same indents and guides. Their Project headings
 are plain: the folder and the label, with no fold and no summary. A
 Group row there is the tree's: a press opens the Group, and its chevron
-folds it, the same fold the tree holds. The Needs-you list stays flat, in its
+folds it, the same fold the tree holds. The Inbox stays flat, in its
 oldest-first queue order, because ⌘D walks that order.
 
 Row states:
@@ -446,7 +447,9 @@ centred on it.
 - **Line 1.** The title in 13 `TEXT`, ellipsised (`TEXT_STRONG` while
   unseen-done, the existing unread rule). At the right, when
   `facts.changed_files` is non-empty, its summed diffstat: `+N` in
-  `RUNNING` and `−N` in `BLOCKED`, Geist Mono 11.5.
+  `RUNNING` and `−N` in `BLOCKED`, Geist Mono 11.5; with no diffstat,
+  an idle or unseen-done Thread's last-used age (`3h`) in 12 `TEXT_DIM`
+  (2026-11-03: every list Codex and Claude draw dates its rows).
 - **Line 2.** 12 `TEXT_DIM`. Its content depends on state:
   - blocked: `needs you · <reason>` in `ATTENTION`, using the existing
     words (`approval`, `plan`, `question`; the mockup's `allow Bash?` is
@@ -463,7 +466,12 @@ centred on it.
   priority.
 - **Selected** (the focused Pane's Thread): `SELECTED` fill, inset 1px
   `ROW_RING`, title `TEXT_STRONG` 500, line 2 `#9a9a9a`.
-- **Hover:** `RAISED` fill, at today's 80ms blend.
+- **Hover:** `RAISED` fill, at today's 80ms blend. An open Thread's row
+  (tree and Attention list) shows a 20px `archive` icon button at line
+  1's right in place of the diffstat, age or word: it parks the Thread,
+  the context menu's `Park thread`. A Project heading shows a `+` there
+  in place of its drift: a new Thread in that Project. The press stops
+  at the button.
 - Board-run task rows (ADR 0031, `task_lines`) keep their extra lines
   under line 2, in 12 `TEXT_DIM`.
 
@@ -472,7 +480,8 @@ centred on it.
   `chevron-down` open), then the Group title, both moved in a level
   inside a Project. At the right, the roll-up:
   the worst state's word in its ink (`1 failed`, `2 need you`), then
-  `· N` members in `TEXT_DIM`.
+  `· N threads` in `TEXT_DIM` (2026-11-03: a bare `· 4` read as part of
+  the word).
 - **Its members** nest one level further, with their own guide from under
   the Group's chevron (`NAV_GROUP_GUIDE_X`, 17 plus the Group's indent)
   to 8px short of the last member's foot.
@@ -972,7 +981,7 @@ Full width. `BAR` ground, a `BAR_TOP` line, padding 0 14, gap 18, Geist
   - Name the Solo tab `Solo` (sentence case).
 - **Right**, in this order:
   1. a 6px `ATTENTION` dot and `N need you` in `TEXT_BAR`. Hidden at 0.
-     A click opens the Needs-you view (§5.1.2).
+     A click opens the Inbox (§5.1.2).
   2. per provider with limits: its glyph (`✻` Claude, `◉` Codex) in its
      ink, then `N% this week`, or `N% of 5h` when the five-hour window is
      the more used (`usage_window`'s rule). Data comes from
@@ -983,7 +992,7 @@ Full width. `BAR` ground, a `BAR_TOP` line, padding 0 14, gap 18, Geist
   4. the clock (`clock_label`) in `TEXT_BAR`, with tabular figures.
 - **What leaves the bar:**
   - the sidebar toggle goes to the nav head;
-  - the bell goes to the Needs-you view;
+  - the bell goes to the Inbox;
   - the board door goes to the nav's `Tasks` view;
   - the gear goes to the nav foot;
   - `ferrite` goes to the nav foot;
@@ -1191,7 +1200,7 @@ Nothing new moves.
   - Transcript parity (`core_transcript_parity.rs`) should mostly hold;
     the inks and the boxes change.
 - **`CONTEXT.md`.** Add **Panel** (the Solo view's right column: Changes
-  and Context; not the Beside slot) and **Needs-you view**. Note that
+  and Context; not the Beside slot) and **Inbox**. Note that
   "the bar" no longer carries the status line.
 - **`README.md`.** Update the feature list where it describes the strip,
   the status line and the bell.
@@ -1262,7 +1271,7 @@ One phase per pull request, each shippable on its own. In every phase:
 | --- | --- | --- |
 | **0. Tokens and faces** | §3: the new values, Geist registered, `FONT_UI` Geist, radii set, `ACCENT` remapped to `TEXT_STRONG`/`PRIMARY`, cyan and magenta retired. ADR 0033 → accepted; theme doc rewritten. | The app runs with sans chrome and no blue anywhere (grep for `ACCENT` finds only aliases). The theme tests assert the new ladder, floors and radii, and the glyph test covers Geist. |
 | **1. Frame and cards** | §4: the head row at 46, the bar at 30, the Pane as a card on `FRAME` with an 8px gutter, `GRID_GAP` 8, the seam grab band in the gutter, the rings by `PaneEdge`. | Solo and a 2×2 Group match the mockups' frame (positions within 2px at 1600×960). Seams still resize, and drag-to-swap still works. |
-| **2. Nav** | §5.1: head, views (Search, Needs you, Parked, Tasks), headings, two-line rows, Group rows and members, rail, foot. The Needs-you view replaces the bell's list. | The nav matches `solo.png` and `group.png`. The attention sort, hold-under-pointer, drag-to-Group and ⌘B still work. ⌘D walks the needs-you queue. |
+| **2. Nav** | §5.1: head, views (Search, Inbox, Parked, Tasks), headings, two-line rows, Group rows and members, rail, foot. The Inbox replaces the bell's list. | The nav matches `solo.png` and `group.png`. The attention sort, hold-under-pointer, drag-to-Group and ⌘B still work. ⌘D walks the needs-you queue. |
 | **3. Bar** | §5.7: view tabs with roll-up dots, need-you count, usage labels, clock; items moved out. Free disk lands here (§8) or in phase 9. | The bar matches the mockups. Nothing that left the bar is unreachable (toggle, Notices, gear, `?`, Tasks). |
 | **4. Pane head and tab strip** | §5.2 Solo head (title, branch chip), §5.3 card strip with live tabs and the `N done` menu, split right. | A Thread with 3 running and 20 finished Subagents shows `Main`, 3 tabs and `20 done ▾`. Picking a done Subagent opens it. Esc stops a Subagent. |
 | **5. Transcript** | §5.4: prompt band, inks, inline code chips, fence and diff boxes, working line without parentheses. | `core_transcript_parity` passes with updated inks. A long Edit diff in split view still renders and folds. |

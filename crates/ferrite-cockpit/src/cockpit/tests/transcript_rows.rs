@@ -339,7 +339,8 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         let prompt = cx.debug_bounds("transcript-prompt").unwrap();
         let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
         let answer = cx.debug_bounds("transcript-answer").unwrap();
-        let stamp = cx.debug_bounds("turn-stamp").unwrap();
+        // A quick turn closes on no stamp (`TURN_STAMP_MIN_MS`).
+        assert!(cx.debug_bounds("turn-stamp").is_none());
         // Blocks stand a line and a half apart; consecutive calls fold
         // into one summary line.
         let line = pane::Grid::pane(Default::default(), true).line;
@@ -351,7 +352,6 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         );
         // The turn's last prose is its answer, a block under the work.
         assert_eq!(answer.top() - tools.bottom(), block);
-        assert_eq!(stamp.top() - answer.bottom(), block);
         // One content edge: the group's summary and the answer's prose
         // start on the content column (the prompt's bubble keeps to the
         // right).

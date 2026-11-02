@@ -704,7 +704,7 @@ impl CockpitView {
     }
 
     /// A Thread's review as its own board slot (ADR 0021): the review under
-    /// its head (`reading_head` — `review · dev` and its ×, the slot's drag
+    /// its head (`reading_head` — `Review · dev` and its ×, the slot's drag
     /// handle). A press lands on the Pane that opened it; escape closes it.
     /// Mid-slide the slot lies at `pin` (`reader_pin`), the cell clipping
     /// it.
@@ -725,11 +725,25 @@ impl CockpitView {
             reader: true,
             size: self.slot_size(leaf),
         };
+        // `Review · main`: the surface's name in the head's ink, what it
+        // reads dim after it, as the preview's head names its file.
         let label = div()
+            .flex()
             .min_w_0()
-            .truncate()
-            .text_color(rgb(TEXT_DIM))
-            .child(format!("review \u{b7} {}", shown.title));
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(TEXT))
+                    .child("Review"),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT_DIM))
+                    .child(format!(" \u{b7} {}", shown.title)),
+            );
         let close = head_door(
             "close-review",
             format!("review-close-{}", owner.get()),

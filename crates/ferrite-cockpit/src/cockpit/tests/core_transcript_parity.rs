@@ -1,8 +1,8 @@
 //! Terminal-native parity, core-transcript package: the reading grid, the
-//! banner, call rows and their groups, elbows and folds, the turn's stamp, the
+//! call rows and their groups, elbows and folds, the turn's stamp, the
 //! prompt's inline chips, the hover card's placement and the Markdown knobs.
 use super::*;
-use ferrite_core::transcript::{BlockId, ToolBlock, ToolOutput, ToolState, TurnEnd};
+use ferrite_core::transcript::{ToolBlock, ToolOutput, ToolState, TurnEnd};
 
 /// A settled or running call with its retained output.
 fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock {
@@ -238,10 +238,10 @@ fn answers_underline_links_on_hover_align_numbers_and_frame_images() {
     );
 }
 
-/// The banner heads the transcript; edits fold into one group (`Edited 2
-/// files`); an edit's diff shows once its call is opened.
+/// The transcript opens on its prompt, no banner; edits fold into one group
+/// (`Edited 2 files`); an edit's diff shows once its call is opened.
 #[gpui::test]
-fn the_banner_heads_the_rows_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
+fn edits_fold_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("ct-banner-rows", 1);
     let thread = core.threads()[0];
     core.send(thread, "Fix the nav".into());
@@ -284,14 +284,9 @@ fn the_banner_heads_the_rows_and_an_edits_diff_waits_to_be_opened(cx: &mut TestA
         })
         .unwrap();
     tick(cx);
-    assert!(cx.debug_bounds("transcript-banner").is_some(), "the banner");
+    assert!(cx.debug_bounds("transcript-banner").is_none(), "no banner");
     assert!(cx.debug_bounds("tool-group-edit-1").is_some(), "one group");
     let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
-    assert!(
-        runs.iter()
-            .any(|(block, _, _, text)| *block == BlockId::BANNER && text.contains("started")),
-        "the banner's facts select like any row: {runs:?}"
-    );
     assert!(
         !runs.iter().any(|(_, _, _, text)| text == "new one" || text == "new two"),
         "no diff shows until its call is opened"

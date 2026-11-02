@@ -7,6 +7,22 @@ use super::*;
 /// What a call whose result never came says after its call line.
 pub(super) const NO_RESULT: &str = "no result";
 
+/// How a turn's end reads in the transcript, if it says anything: a
+/// completed turn `Worked for 5m 22s` once it took `TURN_STAMP_MIN_MS` (a
+/// quicker one, or one whose time was never observed, says nothing); an
+/// interrupted or failed one always, as core words it (`failed · 0.1s ·
+/// <message>`).
+pub(crate) fn turn_stamp(end: &ferrite_core::transcript::TurnEnd) -> Option<String> {
+    if !end.completed() {
+        return Some(end.text());
+    }
+    let elapsed = end.elapsed_ms.filter(|ms| *ms >= theme::TURN_STAMP_MIN_MS)?;
+    Some(format!(
+        "Worked for {}",
+        ferrite_core::progress::settled_duration_label(std::time::Duration::from_millis(elapsed))
+    ))
+}
+
 /// What kind of work a call did, for its call line's verb and its group's
 /// summary. Classified by the tool alone: a command is a command
 /// whatever it ran — `cat` is not read as a read without knowing what the
@@ -161,9 +177,21 @@ pub(crate) fn path_link(shown: &str, path: &str) -> String {
     )
 }
 
-/// A call's line as its one Markdown run (`CallLine::markdown`).
+/// A call's line as its one Markdown run (`CallLine::markdown`), less a
+/// failed call's verdict (`call_verdict`), which stands apart from it.
 pub(crate) fn call_markdown(tool: &ToolBlock) -> String {
-    call_line(tool).markdown(argument_is_path(tool))
+    let mut line = call_line(tool);
+    if call_failed(tool) {
+        line.result = None;
+    }
+    line.markdown(argument_is_path(tool))
+}
+
+/// A failed call's verdict after its call line (` · failed`, ` · failed ·
+/// 357 passed; 2 failed`): its own run, so its lead word alone wears the
+/// failure ink and it stays in view when a long command is cut.
+pub(crate) fn call_verdict(tool: &ToolBlock) -> Option<String> {
+    call_failed(tool).then(|| call_line(tool).result).flatten()
 }
 
 /// Words as Markdown that reads them exactly: every ASCII punctuation mark
@@ -453,7 +481,9 @@ pub(crate) fn collect_block_text(block: &Block, expanded: bool, selection: &Text
             let _ = selection.line(block.id, text.clone(), Vec::new());
         }
         Body::TurnEnd(end) => {
-            let _ = selection.line(block.id, end.text(), Vec::new());
+            if let Some(stamp) = turn_stamp(end) {
+                let _ = selection.line(block.id, stamp, Vec::new());
+            }
         }
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());
@@ -503,6 +533,9 @@ fn collect_tool_text(
         let _ = selection.line(block, text, Vec::new());
     };
     let _ = selection.markdown(block, call_markdown(tool));
+    if let Some(verdict) = call_verdict(tool) {
+        line(verdict);
+    }
     if let Some(failure) = call_failure(tool) {
         line(failure);
     }

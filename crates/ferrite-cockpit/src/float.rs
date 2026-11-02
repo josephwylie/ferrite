@@ -2,13 +2,8 @@
 //! notifications list, a toast, the shortcuts sheet and the hover card are
 //! each a view, placed against an anchor in window coordinates.
 //!
-//! Floats draw in-window, over everything (`deferred`), as opaque surfaces.
-//! The prototype frosts them (`.glass .float`, a 30px backdrop blur). gpui
-//! blurs no element, so the only way to frost one is to give it a window of
-//! its own with `WindowBackgroundAppearance::Blurred` — and that path is
-//! blocked in gpui-pre-macos 0.3.3: see the FL-15 record in theme WP-E
-//! (`FLOAT_FROSTED`). The opaque inks (`paint::FLOAT_*`) are the floats'
-//! whole grammar until it lands.
+//! Floats draw in-window, over everything (`deferred`), as opaque surfaces
+//! on their own inks (`FLOAT_*`, theme WP-E).
 
 use gpui::prelude::*;
 use gpui::{
@@ -18,8 +13,9 @@ use gpui::{
 /// How a float stands against its anchor's bounds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum FloatPlace {
-    /// Over the anchor, its left edge on the anchor's, its foot `gap` above.
-    Above { gap: f32 },
+    /// Under the anchor, its left edge on the anchor's, its head `gap`
+    /// below: a toast under the window's head.
+    Below { gap: f32 },
     /// Centred on the anchor (the board), `width` wide, its head `top`
     /// below the anchor's top: the palette and the shortcuts sheet. As the
     /// prototype centres its palette — `left: 50%`, then `translateX(-50%)`
@@ -42,9 +38,9 @@ pub(crate) fn placement(
 ) -> (Anchor, gpui::Point<Pixels>, gpui::Point<Pixels>) {
     let zero = point(px(0.), px(0.));
     match place {
-        FloatPlace::Above { gap } => (
-            Anchor::BottomLeft,
-            point(anchor.left(), anchor.top() - px(gap)),
+        FloatPlace::Below { gap } => (
+            Anchor::TopLeft,
+            point(anchor.left(), anchor.bottom() + px(gap)),
             zero,
         ),
         FloatPlace::BoardTop { top, .. } => (
@@ -190,9 +186,9 @@ mod tests {
         assert_eq!(at, point(px(281.8 + 1158.2 / 2.), px(88.)));
         assert_eq!(offset, point(px(0.), px(0.)));
 
-        let band = bounds(419., 815., 100., 0.);
-        let (corner, at, _) = placement(band, FloatPlace::Above { gap: 5. });
-        assert_eq!(corner, Anchor::BottomLeft);
-        assert_eq!(at, point(px(419.), px(810.)));
+        let head = bounds(1024., 0., 400., 38.);
+        let (corner, at, _) = placement(head, FloatPlace::Below { gap: 8. });
+        assert_eq!(corner, Anchor::TopLeft);
+        assert_eq!(at, point(px(1024.), px(46.)));
     }
 }

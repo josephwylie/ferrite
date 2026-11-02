@@ -8,9 +8,7 @@
 //!
 //! The `refresh-*` states rebuild the UI refresh's mockups
 //! (`docs/design/ui-refresh/mockups/`) on their one world
-//! (`mockup_scenes.rs`, at size `refresh`); run them with
-//! `--features visual-reference,opaque` so paints are the opaque greys the
-//! shots use.
+//! (`mockup_scenes.rs`, at size `refresh`).
 
 #[path = "cockpit/visual_reference/mockup_scenes.rs"]
 mod mockup_scenes;
@@ -434,6 +432,7 @@ const STATES: &[(&str, &[&str])] = &[
     // (end WP-E)
 
     // ---- WP-F states (append above the end line)
+    ("panel-context", &["app"]),
     // (end WP-F)
 
     // ---- visuals (ADR 0013): agents' pages inline. With `--features cef`
@@ -446,6 +445,8 @@ const STATES: &[(&str, &[&str])] = &[
     // ---- WP-G states (append above the end line)
     ("navrail", &["app"]),
     ("navlist", &["app"]),
+    ("navhover", &["app"]),
+    ("navkeys", &["app"]),
     ("palettefilter", &["app"]),
     // (end WP-G)
 
@@ -947,7 +948,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "emptyboard" => {
             let mut scene = Scene::new("emptyboard");
             let ferrite = scene.project("ferrite");
-            let _ = scene.open(Provider::Claude, &ferrite, "Closed");
+            let _ = scene.open(Provider::Claude, &ferrite, "Retained transcript rendering");
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 view.close_pane(ferrite_core::roster::PaneIdentity::Thread(thread), cx);
@@ -1021,6 +1022,15 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-E)
 
         // ---- WP-F scene arms (append above the end line)
+        // The Panel's Context tab, picked: the usage card and its legend.
+        "panel-context" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, _, cx| {
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                view.open_panel_tab(thread, crate::cockpit::panel::PanelTab::Context, cx);
+            });
+            (scene, setup)
+        }
         // (end WP-F)
 
         // ---- WP-G scene arms (append above the end line)
@@ -1056,6 +1066,53 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     .find(|thread| view.facts.name(*thread).as_ref() == "Release notes 0.9")
                     .expect("the fixture's done Thread");
                 view.land_on_thread(notes, cx);
+            });
+            (scene, setup)
+        }
+        // The pointer over a tree row and a Project heading: each row's
+        // hover action (park, new Thread) in place of what it says there.
+        "navhover" => {
+            let (scene, branches) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                branches(view, window, cx);
+                let state = view.nav_state();
+                let review = state
+                    .solos
+                    .iter()
+                    .find(|row| row.name.as_ref() == "Menu photography brief")
+                    .expect("the fixture's idle Thread")
+                    .thread;
+                let heading = state
+                    .sections
+                    .iter()
+                    .position(|section| section.label.as_ref() == "swarmdeck")
+                    .expect("the fixture's swarmdeck");
+                for key in [
+                    format!("nav-thread-0-{}", review.get()),
+                    format!("nav-project-section-{heading}"),
+                ] {
+                    ferrite_ui::motion::hover_listener_with(key.into(), crate::nav::ROW_HOVER)(
+                        &true, window, cx,
+                    );
+                }
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // The tree holding the keyboard (⌘⇧E), its cursor walked down onto
+        // a Project heading, and the Attention list's `Done` folded to its
+        // head, chevron and count.
+        "navkeys" => {
+            let (scene, branches) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                branches(view, window, cx);
+                view.set_nav_fold(
+                    crate::nav::NavFold::List(crate::nav::ListSection::Done),
+                    true,
+                    cx,
+                );
+                view.focus_nav(window, cx);
+                view.step_nav(2, window, cx);
             });
             (scene, setup)
         }

@@ -2,8 +2,8 @@
 //! board and outside it. Its head sits in the head row over it: the
 //! `Changes`, `PR` and `Context` tabs, a `Preview` tab while a preview is
 //! open (`preview.rs`), and the toggle that hides it. Under the head, the
-//! shown tab's body; under every tab but the preview, the foot's context
-//! meter. The Review, which needs the board's width and takes line
+//! shown tab's body; under `Changes` and `PR`, the foot's context meter
+//! (`Context` is that meter read whole, so it has none). The Review, which needs the board's width and takes line
 //! comments, still opens beside its Pane inside the board (ADR 0021).
 //!
 //! When it shows (`panel_pane`): for the focused Pane, in every view —
@@ -39,8 +39,10 @@
 //! One function per tab draws its body (`panel_changes`, `panel_context`,
 //! the PR tab's `panel_pr`, in `pr_tab`, which also reads it, and the
 //! preview's `panel_preview`): 7b adds a file's hunks under its head
-//! (`panel_file_block`, `hunks`). The body switches at once with its tab,
-//! and each Thread's tab keeps its own scroll.
+//! (`panel_file_block`, `hunks`). A tab the operator picks fades its body
+//! in (`motion::swap_in`); one shown because focus moved switches at once.
+//! Each Thread's tab keeps its own scroll. A tab with nothing to show yet
+//! says so in the Panel's one empty state (`panel_empty`).
 
 pub(crate) mod hunks;
 pub(crate) mod preview;
@@ -100,6 +102,10 @@ pub(crate) struct Panel {
     tended: bool,
     /// A scene's held ride out to a preview's width (`fixture_hold_panel`).
     hold: Option<f32>,
+    /// The tab the operator last picked and how many picks there have
+    /// been: that tab's body fades in under the count (`motion::swap_in`),
+    /// so each pick plays once and a tab merely drawn again does not.
+    picked: Option<(ThreadId, PanelTab, u64)>,
 }
 
 /// How wide the Panel is while its Preview tab shows, in a window `width`
@@ -411,6 +417,14 @@ impl CockpitView {
     }
 
     fn select_panel_tab(&mut self, thread: ThreadId, tab: PanelTab, cx: &mut Context<Self>) {
+        let shown = self
+            .panel_pane()
+            .map(|index| self.shown_tab(index))
+            .filter(|_| self.panel_candidate().and_then(|owner| owner.thread()) == Some(thread));
+        if shown.is_some_and(|shown| shown != tab) {
+            let count = self.panel.picked.map_or(0, |(.., count)| count + 1);
+            self.panel.picked = Some((thread, tab, count));
+        }
         self.deselect_preview_tab(thread);
         let was = self.panel.tabs.insert(thread, tab);
         if tab == PanelTab::Context && was != Some(PanelTab::Context) {
@@ -494,9 +508,22 @@ impl CockpitView {
                     .get(&(thread, tab))
                     .cloned()
                     .unwrap_or_default();
-                content
-                    .child(panel_body(body, &scroll))
-                    .children(self.panel_foot(thread))
+                let body = panel_body(body, &scroll);
+                let body = match self.panel.picked {
+                    Some((picked, at, count)) if picked == thread && at == tab => {
+                        ferrite_ui::motion::swap_in(
+                            SharedString::from(format!("panel-tab-in-{count}")),
+                            body,
+                        )
+                        .into_any_element()
+                    }
+                    _ => body.into_any_element(),
+                };
+                // The Context tab reads the same meter whole: no foot under it.
+                let foot = (tab != PanelTab::Context)
+                    .then(|| self.panel_foot(thread))
+                    .flatten();
+                content.child(body).children(foot)
             }
             (_, None) => content,
         };
@@ -647,34 +674,57 @@ impl CockpitView {
         let files = &facts.changed_files;
         if files.is_empty() {
             return body
-                .child(
-                    div()
-                        .debug_selector(|| "panel-no-changes".into())
-                        .flex()
-                        .items_center()
-                        .h(px(PANEL_SECTION_H))
-                        .mt(px(SPACE_2))
-                        .px(px(PANEL_ROW_ICON_X))
-                        .text_size(px(FS_META))
-                        .text_color(rgb(TEXT_DIM))
-                        .child("No changes yet"),
-                )
+                .flex_1()
+                .child(panel_empty(
+                    "panel-no-changes",
+                    Some(icons::FILE),
+                    "No changes yet",
+                    "Files this thread edits show here, each with its diff.",
+                ))
                 .into_any_element();
         }
         let added = files.iter().map(|file| file.added).sum();
         let removed = files.iter().map(|file| file.removed).sum();
         let count = files.len();
         let noun = if count == 1 { "file" } else { "files" };
+        // The section line folds and unfolds every file at once, its
+        // chevron on the rows' icon column and its words on their text's.
+        let all = self.panel_files_unfolded(thread, files.iter().map(|file| file.path.as_str()));
+        let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         body = body.child(
             div()
+                .id("panel-changes-section")
                 .debug_selector(|| "panel-changes-section".into())
+                .relative()
                 .flex()
                 .items_center()
                 .h(px(PANEL_SECTION_H))
                 .mt(px(SPACE_2))
-                .px(px(PANEL_ROW_ICON_X))
+                .pl(px(PANEL_ROW_TEXT_X))
+                .pr(px(PANEL_ROW_ICON_X))
                 .text_size(px(FS_META))
                 .text_color(rgb(TEXT_DIM))
+                .cursor_pointer()
+                .tooltip(ferrite_ui::menu::tooltip(if all {
+                    "Collapse all"
+                } else {
+                    "Expand all"
+                }))
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    view.toggle_panel_files(thread, paths.clone(), cx);
+                }))
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(PANEL_ROW_ICON_X))
+                        .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
+                        .child(fold_chevron(
+                            format!("panel-fold-all-{}", thread.get()),
+                            all,
+                            PANEL_ROW_ICON,
+                            TEXT_DIM,
+                        )),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -718,12 +768,13 @@ impl CockpitView {
         .into_any_element()
     }
 
-    /// The branch row (48): the branch, `from <default branch>` under it,
+    /// The branch row (48): the branch, `from <default branch>` under it
+    /// (none on the default branch itself: `main from main` says nothing),
     /// and the checkout's drift and dirt at the right when git has said
     /// (`↑2 ↓1 · 3 dirty`).
     fn panel_branch_row(&self, branch: SharedString, facts: &crate::facts::ThreadFacts) -> Div {
         use ferrite_ui::theme::*;
-        let base = facts.default_branch.clone();
+        let base = facts.default_branch.clone().filter(|base| *base != branch);
         let drift = facts.status.as_ref().and_then(|status| {
             let mut words = Vec::new();
             match (status.ahead, status.behind) {
@@ -737,7 +788,7 @@ impl CockpitView {
             }
             (!words.is_empty()).then(|| words.join(" \u{b7} "))
         });
-        panel_row(icons::BRANCH, TEXT_DIM)
+        panel_row(icons::BRANCH, TEXT_DIM, base.is_some())
             .debug_selector(|| "panel-branch".into())
             .child(
                 div()
@@ -806,6 +857,11 @@ impl CockpitView {
                     .to_string()
             })
             .filter(|dir| !dir.is_empty());
+        let shown_path = match &dir {
+            Some(dir) => format!("{dir}/{name}"),
+            None => name.clone(),
+        };
+        let actions = file_actions(index, shown_path, path.clone(), dir.is_some(), cx);
         let unfolded = self.panel_file_unfolded(thread, file, cx);
         let group = SharedString::from(format!("panel-file-head-{index}"));
         let slot = div()
@@ -833,9 +889,9 @@ impl CockpitView {
                     )),
             );
         let fold_path = file.path.clone();
-        let head = panel_row_with(slot)
+        let head = panel_row_with(slot, dir.is_some())
             .id(("panel-file-head", index))
-            .group(group)
+            .group(group.clone())
             .bg(paint::RAISED)
             .cursor_pointer()
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -871,7 +927,12 @@ impl CockpitView {
                     .text_size(px(FS_META))
                     .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(dir))
-            }));
+            }))
+            .child(
+                actions
+                    .invisible()
+                    .group_hover(group, |style| style.visible()),
+            );
         div()
             .flex()
             .flex_col()
@@ -895,13 +956,13 @@ impl CockpitView {
             return div().into_any_element();
         };
         let Some(usage) = open.transcript().usage() else {
-            return div()
-                .pt(px(SPACE_2))
-                .px(px(PANEL_ROW_ICON_X))
-                .text_size(px(FS_META))
-                .text_color(rgb(TEXT_DIM))
-                .child("Context not reported yet")
-                .into_any_element();
+            return panel_empty(
+                "panel-no-context",
+                None,
+                "No context reading yet",
+                "What fills the context window shows here once the session reports it.",
+            )
+            .into_any_element();
         };
         // The tab scrolls inside the body, under the head and over the
         // foot.
@@ -933,7 +994,7 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The foot under every tab: a hairline, `Context` with its
+    /// The foot under every tab but `Context` (which reads it whole): a hairline, `Context` with its
     /// `84k / 200k`, and the context meter. None until the Session reports
     /// its usage: no reading is invented.
     fn panel_foot(&self, thread: ThreadId) -> Option<Div> {
@@ -1006,6 +1067,59 @@ fn overhang(content_w: f32, width: f32) -> f32 {
     (content_w - width).clamp(0., content_w - ferrite_ui::theme::PANEL_W)
 }
 
+/// A tab's empty state, the Panel's one design for "nothing here yet" (no
+/// changes, no pull request, no `gh`, no context reading): a badge holding
+/// the tab's icon, a title, and a line saying what will show and when,
+/// centred in the room the tab leaves it and raised a little
+/// (`PANEL_EMPTY_*`). It grows to fill the body, so it is laid as the
+/// body's last child.
+pub(super) fn panel_empty(
+    selector: &'static str,
+    glyph: Option<&'static str>,
+    title: &'static str,
+    detail: impl IntoElement,
+) -> Div {
+    use ferrite_ui::theme::*;
+    div()
+        .debug_selector(move || selector.into())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap(px(PANEL_EMPTY_GAP))
+        .py(px(SPACE_6))
+        .pb(px(PANEL_EMPTY_LIFT))
+        .px(px(SPACE_3))
+        .children(glyph.map(|glyph| {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(PANEL_EMPTY_BADGE))
+                .rounded(px(R_PANE))
+                .bg(paint::RAISED)
+                .child(icon(glyph, PANEL_EMPTY_ICON, TEXT_MUTED))
+        }))
+        .child(
+            div()
+                .text_size(px(FS_UI))
+                .font_weight(W_LABEL)
+                .text_color(rgb(TEXT_STRONG))
+                .child(title),
+        )
+        .child(
+            div()
+                .max_w(px(PANEL_EMPTY_W))
+                .whitespace_normal()
+                .text_center()
+                .text_size(px(FS_LABEL))
+                .line_height(px(PR_BODY_LH))
+                .text_color(rgb(TEXT_DIM))
+                .child(detail),
+        )
+}
+
 /// The toggle's room at the end of whichever head the toggle lies over
 /// (`panel_toggle_element`): the toggle's own box, kept clear.
 pub(super) fn toggle_room() -> Div {
@@ -1047,36 +1161,26 @@ fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
         )
 }
 
-/// A fold's chevron in the panel (a file block's, the PR tab's): pointing
-/// right while folded, a quarter turn down while unfolded. The turn eases
-/// over `motion::CHEVRON` when the fold flips under it; drawn first already
-/// unfolded, it is simply turned.
+/// A fold's chevron in the panel (a file block's, the PR tab's): the
+/// shared one (`components::fold_chevron`).
 pub(super) fn fold_chevron(
     key: impl Into<SharedString>,
     unfolded: bool,
     size: f32,
     ink: u32,
 ) -> impl IntoElement {
-    ferrite_ui::motion::settled(
-        key.into(),
-        unfolded,
-        ferrite_ui::motion::CHEVRON,
-        move |turn| {
-            icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
-                gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
-            ))
-        },
-    )
+    ferrite_ui::components::fold_chevron(key, unfolded, size, ink)
 }
 
-/// A two-line panel row (48): its icon at the row's left, its two lines
-/// (the caller's children) on the text column, centred down the row.
-fn panel_row(glyph: &'static str, ink: u32) -> Div {
-    panel_row_with(icon(glyph, ferrite_ui::theme::PANEL_ROW_ICON, ink))
+/// A panel row (48): its icon at the row's left, its lines (the caller's
+/// children) on the text column, centred down the row. The icon sits on
+/// the first of two lines, or centred beside one.
+fn panel_row(glyph: &'static str, ink: u32, two_lines: bool) -> Div {
+    panel_row_with(icon(glyph, ferrite_ui::theme::PANEL_ROW_ICON, ink), two_lines)
 }
 
-/// A two-line panel row whose icon slot holds `slot`.
-fn panel_row_with(slot: impl IntoElement) -> Div {
+/// A panel row whose icon slot holds `slot`.
+fn panel_row_with(slot: impl IntoElement, two_lines: bool) -> Div {
     use ferrite_ui::theme::*;
     div()
         .relative()
@@ -1092,8 +1196,76 @@ fn panel_row_with(slot: impl IntoElement) -> Div {
             div()
                 .absolute()
                 .left(px(PANEL_ROW_ICON_X))
-                .top(px(PANEL_ROW_ICON_Y))
+                .top(px(if two_lines {
+                    PANEL_ROW_ICON_Y
+                } else {
+                    (PANEL_ROW_H - PANEL_ROW_ICON) / 2.
+                }))
                 .child(slot),
+        )
+}
+
+/// A changed file's actions, laid over its head's diffstat and shown while
+/// the pointer is on the head (`PANEL_FILE_ACTION`): copy the path as the
+/// block reads it, and open the file in the app the system gives it. A
+/// click on the name previews it; the rest of the head folds its hunks.
+fn file_actions(
+    index: usize,
+    shown_path: String,
+    path: std::path::PathBuf,
+    two_lines: bool,
+    cx: &mut Context<CockpitView>,
+) -> Div {
+    use ferrite_ui::theme::*;
+    let door = |id: &'static str, glyph: &'static str, tooltip: &'static str| {
+        let element = gpui::ElementId::from((id, index));
+        let key = ferrite_ui::pointer::hover_key(&element);
+        div()
+            .id(element)
+            .debug_selector(move || format!("{id}-{index}"))
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(PANEL_FILE_ACTION))
+            .rounded(px(R_SMALL))
+            .cursor_pointer()
+            .bg(ferrite_ui::motion::hover_blend(
+                &key,
+                paint::RAISED.into(),
+                paint::SELECTED.into(),
+            ))
+            .on_hover(ferrite_ui::motion::hover_listener(key))
+            .press_control()
+            .tooltip(ferrite_ui::menu::tooltip(tooltip))
+            .child(icon(glyph, PANEL_FILE_ACTION_GLYPH, TEXT_MUTED))
+    };
+    div()
+        .absolute()
+        // Centred on the name's line.
+        .top(px((PANEL_ROW_H - LH_UI - if two_lines { LH_META } else { 0. }) / 2.
+            + (LH_UI - PANEL_FILE_ACTION) / 2.))
+        .right(px(SPACE_1_5))
+        .flex()
+        .gap(px(SPACE_0_5))
+        .pl(px(SPACE_1))
+        .bg(paint::RAISED)
+        .child(
+            div()
+                .debug_selector(move || format!("panel-file-copy-{index}"))
+                .child(
+                    ferrite_ui::components::copy_button(("panel-file-copy", index), shown_path)
+                        .tooltip("Copy path")
+                        .door(PANEL_FILE_ACTION, PANEL_FILE_ACTION_GLYPH, R_SMALL)
+                        .on_raised(),
+                ),
+        )
+        .child(
+            door("panel-file-open", icons::EXTERNAL, "Open in its app").on_click(
+                cx.listener(move |_, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    ferrite_pane::preview::open_original(&path, window, cx);
+                }),
+            ),
         )
 }
 
@@ -1108,20 +1280,11 @@ fn diffstat(added: usize, removed: usize) -> Div {
         .child(pane::trail_diff_stat(added, removed))
 }
 
-/// The foot's meter: one segment per category the Session says fills the
-/// window, in its `CTX_*` ink and at its share, 2px apart, then the empty
-/// track. A Session that names no categories gives one segment. Past the
-/// warn fraction every segment turns `ATTENTION`, past full `BLOCKED`.
+/// The foot's meter: `pane::context_meter_segments` (the Context tab's bar
+/// draws the same), 2px apart with rounded ends, then the empty track.
 fn context_meter(total: u64, window: u64, details: Option<&ferrite_core::ContextDetails>) -> Div {
     use ferrite_ui::theme::*;
-    let fraction = total as f32 / window as f32;
-    let state = (fraction >= CTX_METER_WARN).then(|| pane::ctx_meter_ink(fraction));
-    let mut segments: Vec<(u32, f32)> = details
-        .map(|details| pane::context_segments(&details.categories, window))
-        .unwrap_or_default();
-    if segments.is_empty() {
-        segments.push((CTX_CYCLE[0], fraction));
-    }
+    let segments = pane::context_meter_segments(total, window, details);
     let segment = |ink: u32| div().h_full().rounded(px(R_TIGHT)).bg(rgb(ink));
     div()
         .debug_selector(|| "panel-meter".into())
@@ -1129,7 +1292,7 @@ fn context_meter(total: u64, window: u64, details: Option<&ferrite_core::Context
         .gap(px(SPACE_0_5))
         .h(px(PANEL_METER_H))
         .children(segments.into_iter().map(|(ink, share)| {
-            segment(state.unwrap_or(ink))
+            segment(ink)
                 .flex_shrink_0()
                 .w(relative(share.clamp(0., 1.)))
         }))

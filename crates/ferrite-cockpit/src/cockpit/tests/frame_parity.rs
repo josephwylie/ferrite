@@ -382,8 +382,9 @@ fn a_held_ride_sits_on_the_resize_curve(cx: &mut TestAppContext) {
     });
 }
 
-/// F-13: the empty board's rows walk with `Next` / `Previous`, wrapping,
-/// and its recent list stops at four.
+/// F-13: the empty board offers only what would do something (no parked
+/// Thread to reopen, no Group to open here), its rows walk with `Next` /
+/// `Previous`, wrapping, and its recent list stops at four.
 #[gpui::test]
 fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("frame-empty-board", 6);
@@ -392,9 +393,13 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     view.update(cx, |view, cx| view.show_empty_board(cx));
     tick(cx);
     assert!(cx.debug_bounds("empty-board").is_some());
-    for at in 0..5 {
+    for at in 0..3 {
         assert!(debug_bounds(cx, format!("empty-board-command-{at}")).is_some());
     }
+    assert!(
+        debug_bounds(cx, "empty-board-command-3".to_string()).is_none(),
+        "no `Reopen last` or `Open a group` with nothing to reopen or open"
+    );
     let step = |action: Box<dyn gpui::Action>, cx: &mut gpui::VisualTestContext| {
         cx.update(|window, cx| window.dispatch_action(action, cx));
         tick(cx);
@@ -402,10 +407,10 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     step(Box::new(empty_board::Next), cx);
     step(Box::new(empty_board::Next), cx);
     view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 2));
+    step(Box::new(empty_board::Next), cx);
+    view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 0, "it wraps"));
     step(Box::new(empty_board::Previous), cx);
-    step(Box::new(empty_board::Previous), cx);
-    step(Box::new(empty_board::Previous), cx);
-    view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 4, "it wraps"));
+    view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 2, "both ways"));
     let recent = view.read_with(cx, |view, _| view.cockpit.threads().len());
     assert!(recent > ferrite_ui::theme::EMPTY_RECENT_MAX);
     assert_eq!(ferrite_ui::theme::EMPTY_RECENT_MAX, 4);
@@ -474,7 +479,7 @@ fn the_solo_tabs_dot_follows_the_thread_it_shows(cx: &mut TestAppContext) {
 /// the views' tabs (22 high, centred: 4 over and 4 under) at its left, the
 /// vitals at its right ending in the clock. Its hairline lies on the
 /// frame's last row above it, as the mockups draw it. `N need you` shows
-/// only while a Thread waits, and opens the nav's Needs-you view; free
+/// only while a Thread waits, and opens the nav's Inbox; free
 /// disk only under 20 GB, and never while unknown.
 #[gpui::test]
 fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
@@ -543,7 +548,7 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
     tick(cx);
     assert!(
         view.read_with(cx, |view, _| view.needs_you_shown()),
-        "the Needs-you view is up"
+        "the Inbox is up"
     );
 
     for (free, shown) in [

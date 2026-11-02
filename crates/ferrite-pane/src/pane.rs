@@ -17,7 +17,9 @@
 
 mod compact_composer;
 mod text;
-pub(crate) use text::{collect_block_text, collect_group_text, escape_words, group_live, path_link};
+pub(crate) use text::{
+    collect_block_text, collect_group_text, group_live, turn_stamp,
+};
 
 use ferrite_core::activity::{AgentStatus, Subject};
 use ferrite_core::cockpit::ThreadView;
@@ -1067,8 +1069,10 @@ pub(crate) struct WorkingFacts {
 /// Composer region to draw as its top row: while the transcript streams,
 /// the line; while a Session starts with nothing streaming yet, its
 /// starting shape; otherwise nothing. Only the Pane holding the keyboard
-/// (`focused`) animates it; every line names `esc to interrupt`, as the
-/// prototype's do, though the key acts only where the keyboard is.
+/// (`focused`) animates it. Solo's send circle turns into stop while the
+/// turn runs, so its line spends no words on the key; a Group Pane's
+/// compact box has no stop, so its line names `esc to interrupt` while it
+/// holds the keyboard (the only place the key acts).
 pub(crate) fn working_line(
     view: &PaneView,
     transcript: &Transcript,
@@ -1426,13 +1430,19 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     );
     // The body says nothing — the Composer's placeholder says what to do,
     // once (rule 2.11.4) — but it is not a void. A lone draft at L1 is a
-    // launch: the mark, embossed, over the Composer, the pair centred in
-    // the Pane, where the eye already is. The first send makes it a
-    // Thread, whose Composer sits at the foot. On a board the line keeps
-    // the grid's foot, and the mark centres in the body above it.
+    // launch: the home's greeting (`components::greeting`, the empty
+    // board's own heading) over the Composer, the pair centred in the
+    // Pane, where the eye already is. The first send makes it a Thread,
+    // whose Composer sits at the foot. On a board the line keeps the
+    // grid's foot, and the mark alone, embossed, centres in the body above.
     let launch = !show_focus && level == Level::Transcript;
-    let mark = (level == Level::Transcript)
-        .then(|| components::embossed_mark(theme::DRAFT_MARK, theme::EMBOSS_ON_PANE));
+    let mark = (level == Level::Transcript).then(|| {
+        if launch {
+            components::greeting()
+        } else {
+            components::embossed_mark(theme::DRAFT_MARK, theme::EMBOSS_ON_PANE)
+        }
+    });
     let body = div()
         .debug_selector(|| "draft-empty".into())
         .flex_1()
@@ -1453,6 +1463,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         shell
             .child(body)
             .children(drop_target.then(crate::prompt_drop::sheet))
+            // The Composer holds itself to the reading column
+            // (`TX_COLUMN_MAX_W`, `in_column`), centred under the greeting.
             .when(level != Level::Wall, |pane| pane.child(composer))
             // The launch's lower half: a touch taller than the upper, so
             // the pair sits just above the Pane's middle.
@@ -2676,11 +2688,21 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
         .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, TEXT_DIM))
 }
 
-/// The send circle: `COMPOSER_SEND` round on `paint::SEND`, `arrow-up` in
-/// `TEXT_STRONG` — or, while a turn runs with nothing typed, `stop`. The
-/// `compact` Composer's (SPEC §5.9) is `SEND_CIRCLE_SM`, its glyph
-/// `SEND_GLYPH_SM`, spaced by its box's gap.
-pub fn send_button(stop: bool, compact: bool, cx: &gpui::App) -> gpui::component::button::Button {
+/// The send circle (`COMPOSER_SEND` round; the `compact` Composer's, SPEC
+/// §5.9, `SEND_CIRCLE_SM` with its glyph `SEND_GLYPH_SM`, spaced by its
+/// box's gap). Three faces, as Claude's and Codex's: with something to send,
+/// lit — `PRIMARY` with an `ON_PRIMARY` `arrow-up`; with nothing (`empty`),
+/// at rest — `paint::SEND` with the arrow in `TEXT_DIM` (still pressable:
+/// an empty ↵ has its own acts); while a turn runs with nothing typed
+/// (`stop`), `paint::SEND` with `stop` in `TEXT_STRONG`. The ground changes
+/// at once with the keystroke that changes it; the glyph morphs
+/// (`send_glyph`). The tooltip names the key.
+pub fn send_button(
+    stop: bool,
+    empty: bool,
+    compact: bool,
+    cx: &gpui::App,
+) -> gpui::component::button::Button {
     let (size, glyph, gap) = if compact {
         (theme::SEND_CIRCLE_SM, theme::SEND_GLYPH_SM, 0.)
     } else {
@@ -2690,33 +2712,78 @@ pub fn send_button(stop: bool, compact: bool, cx: &gpui::App) -> gpui::component
             theme::COMPOSER_SEND_GAP,
         )
     };
-    components::faded_button(
-        "composer-send",
-        theme::paint::SEND.into(),
-        theme::paint::SEND.into(),
-        theme::paint::PRESS.into(),
-        rgb(TEXT_STRONG).into(),
-        cx,
+    let lit = !stop && !empty;
+    let (rest, hover, press, ink): (gpui::Hsla, gpui::Hsla, gpui::Hsla, u32) = if lit {
+        (
+            rgb(theme::PRIMARY).into(),
+            rgb(TEXT).into(),
+            rgb(TEXT).into(),
+            theme::ON_PRIMARY,
+        )
+    } else {
+        (
+            theme::paint::SEND.into(),
+            theme::paint::SEND.into(),
+            theme::paint::PRESS.into(),
+            if stop { TEXT_STRONG } else { TEXT_DIM },
+        )
+    };
+    components::faded_button("composer-send", rest, hover, press, rgb(ink).into(), cx)
+        .debug_selector(move || {
+            if stop {
+                "composer-stop"
+            } else {
+                "composer-send"
+            }
+            .into()
+        })
+        .p_0()
+        .size(px(size))
+        .ml(px(gap))
+        .flex_shrink_0()
+        .rounded_full()
+        .map(|button| {
+            if stop {
+                button.tip_with_key("Stop", components::bound_chord("cockpit::Interrupt"))
+            } else {
+                button.tip_with_key("Send", Some(components::spell_chord("enter")))
+            }
+        })
+        .child(send_glyph(stop, glyph, ink))
+}
+
+/// The send circle's glyph, morphing between `arrow-up` and `stop` when
+/// the state flips under it (`motion::settled`, `FADE_QUICK`): the old
+/// glyph fades and shrinks to `MOTION_SEND_GLYPH_FROM` as the new one fades
+/// and grows into its place, both centred in the circle. First paint lands
+/// on its state.
+fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
+    ferrite_ui::motion::settled(
+        "send-glyph",
+        stop,
+        ferrite_ui::motion::FADE_QUICK,
+        move |t| {
+            let face = |path: &'static str, shown: f32| {
+                let scale = theme::MOTION_SEND_GLYPH_FROM
+                    + (1.0 - theme::MOTION_SEND_GLYPH_FROM) * shown;
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(shown)
+                    .child(icon(path, extent, ink).with_transformation(
+                        gpui::Transformation::scale(gpui::size(scale, scale)),
+                    ))
+            };
+            div()
+                .relative()
+                .size(px(extent))
+                .child(face(icons::ARROW_UP, 1.0 - t))
+                .child(face(icons::STOP, t))
+        },
     )
-    .debug_selector(move || {
-        if stop {
-            "composer-stop"
-        } else {
-            "composer-send"
-        }
-        .into()
-    })
-    .p_0()
-    .size(px(size))
-    .ml(px(gap))
-    .flex_shrink_0()
-    .rounded_full()
-    .tip(if stop { "Stop" } else { "Send" })
-    .child(icon(
-        if stop { icons::STOP } else { icons::ARROW_UP },
-        glyph,
-        TEXT_STRONG,
-    ))
 }
 
 /// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): the `+`, `lead` — a
@@ -2785,7 +2852,7 @@ pub fn tool_has_details(tool: &ToolBlock) -> bool {
         || !tool.diffs.is_empty()
 }
 
-/// What every working line says at its right end.
+/// What a focused Group Pane's working line says at its right end.
 const INTERRUPT_HINT: &str = "esc to interrupt";
 
 /// The working line's mark (the prototype's `.spin`): the star spinner
@@ -2833,12 +2900,12 @@ fn working_row(
 /// live caption in its colour — the turn's spinner verb (`Reticulating…`,
 /// `progress::spinner_verb`, held for the whole turn) unless the provider
 /// has something better to say (R16) — then `1m04s · ↑ 4.1k tokens` in
-/// `TEXT_DIM`, and `esc to interrupt` (`TEXT_DIM`) at the line's right. Every working line's spinner cycles,
+/// `TEXT_DIM`, and on a focused Group Pane `esc to interrupt` (`TEXT_DIM`)
+/// at the line's right (Solo's stop button says it). Every working line's spinner cycles,
 /// on the one shared clock, so all of them show the same frame (the
 /// prototype's `.spin`); only the focused Pane's caption shimmers. The seconds
 /// are whole (`progress::live_seconds`), tabular, so the text changes once a
-/// second. Every line names `esc to interrupt`, focused or not, as the
-/// prototype's do (the key acts only where the keyboard is). The caption is
+/// second. The caption is
 /// what truncates; the facts keep
 /// their room. L2 (`compact`) draws the same row without the token count.
 fn working_line_for(
@@ -2950,17 +3017,18 @@ fn working_line_for(
                         .child(StyledText::new(metadata).with_highlights(highlights)),
                 ))
             })
-            // Every working line names the key, focused or not (it acts
-            // where the keyboard is), at the right end of the line.
-            .child(div().flex_1().min_w(px(theme::SPACE_6)))
-            .child(
-                div()
-                    .debug_selector(|| "progress-interrupt".into())
-                    .flex_shrink_0()
-                    .whitespace_nowrap()
-                    .text_color(rgb(TEXT_DIM))
-                    .child(INTERRUPT_HINT),
-            );
+            // Where no stop button stands for the key (a Group Pane's
+            // compact box), the focused line names it at its right end.
+            .when(!solo && focused, |row| {
+                row.child(div().flex_1().min_w(px(theme::SPACE_6))).child(
+                    div()
+                        .debug_selector(|| "progress-interrupt".into())
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(INTERRUPT_HINT),
+                )
+            });
     }
     div().w_full().min_w_0().flex_shrink_0().child(row)
 }
@@ -3039,9 +3107,9 @@ struct ComposerStack<'a> {
 }
 
 /// The Composer stack (theme WP-D): a board cell's compact box
-/// (`compact_composer`), Solo's box (`box_composer`, SPEC §5.5). The shelf —
-/// pending files at left, background tasks at right — and the working line
-/// stand above either. The Pane lays the stack out `flex_shrink_0` below
+/// (`compact_composer`), Solo's box (`box_composer`, SPEC §5.5). The working
+/// line and the shelf stand above either: background tasks, and on a board
+/// the pending files (Solo's ride inside its box, over the text). The Pane lays the stack out `flex_shrink_0` below
 /// the body, so the transcript gives way. The Decision row is **not**
 /// here: it is the transcript's tail. While a Decision pends the input
 /// carries the `Decision` key context, so its keys answer with the
@@ -3056,8 +3124,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
 
 /// The Solo Composer (SPEC §5.5): a box `COMPOSER_INSET` inside the card's
 /// sides and foot — `paint::FIELD` at `R_PANE`, its `FIELD_RING` laid
-/// outside it — holding the queued row, the input (Geist, no `❯`) and the
-/// toolbar the cockpit wires.
+/// outside it — holding the queued row, the pending files, the input
+/// (Geist, no `❯`) and the toolbar the cockpit wires. Files dragged over
+/// it light its edge and say `Drop files to attach` over its contents.
 fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
         grid: _,
@@ -3091,7 +3160,6 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
-        .mx(px(theme::COMPOSER_INSET))
         .rounded(px(theme::R_PANE))
         .bg(theme::paint::FIELD)
         .font_family(theme::FONT_UI)
@@ -3106,7 +3174,24 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
             ..geometry.get()
         })
     });
-    // Files hovering the Pane: the box's edge in `DROP_EDGE`.
+    // Files hovering the Pane: the box's edge in `DROP_EDGE`, and (last,
+    // so it paints over the contents) one line that says what letting go
+    // does.
+    let drop_hint = drop_target.then(|| {
+            div()
+                .debug_selector(|| "composer-drop-hint".into())
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(theme::SPACE_2))
+                .rounded(px(theme::R_PANE))
+                .bg(theme::paint::FIELD)
+                .text_color(rgb(TEXT_MUTED))
+                .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, TEXT_MUTED))
+                .child("Drop files to attach")
+    });
     if drop_target {
         field = field.child(ring(theme::DROP_EDGE));
     }
@@ -3123,6 +3208,24 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .whitespace_normal()
                 .text_color(rgb(BLOCKED))
                 .child(error),
+        );
+    }
+    // The pending files ride inside the box, over the text they go with
+    // (as Claude's and Codex's do), the text `ATTACH_ROW_GAP` under them.
+    let attached = attachments.is_some();
+    if let Some(attachments) = attachments {
+        field = field.child(
+            div()
+                .debug_selector(|| "composer-attachments".into())
+                .flex()
+                .flex_shrink_0()
+                .w_full()
+                .min_w_0()
+                .pt(px(theme::COMPOSER_INPUT_PAD_T))
+                .px(px(theme::COMPOSER_INPUT_PAD_X))
+                // A row's slot, as the shelf gives them: the chips take the
+                // width and cut their names only when it runs out.
+                .child(div().flex_1().min_w_0().child(attachments)),
         );
     }
     // The one line that grows: `COMPOSER_ROW_H` per visual row. The
@@ -3156,12 +3259,16 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
             .items_start()
             .min_h(px(theme::COMPOSER_ROW_H))
             .min_w_0()
-            .pt(px(theme::COMPOSER_INPUT_PAD_T))
+            .pt(px(if attached {
+                theme::ATTACH_ROW_GAP
+            } else {
+                theme::COMPOSER_INPUT_PAD_T
+            }))
             .px(px(theme::COMPOSER_INPUT_PAD_X))
             .pb(px(theme::COMPOSER_INPUT_PAD_B))
             .child(line),
     );
-    field = field.children(toolbar);
+    field = field.children(toolbar).children(drop_hint);
     // The `/` or `@` popover paints above the stack — deferred, so it
     // escapes the Pane's clip and draws over the transcript (#24) — from
     // the box's left edge, at most `SLASH_MENU_W` wide.
@@ -3176,9 +3283,9 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .child(div().max_w(px(theme::SLASH_MENU_W)).child(menu)),
         ));
     }
-    composer_stack(attachments, background, working, true)
+    composer_stack(None, background, working, true)
         .pb(px(theme::COMPOSER_INSET))
-        .child(field)
+        .child(in_column(theme::COMPOSER_INSET, true, field))
 }
 
 /// What stands over either Composer: on top the working line (`.comp >
@@ -3194,10 +3301,10 @@ fn composer_stack(
     working: Option<AnyElement>,
     boxed: bool,
 ) -> Div {
-    let (shelf_l, shelf_r) = if boxed {
-        (theme::COMPOSER_INSET, theme::COMPOSER_INSET)
+    let inset = if boxed {
+        theme::COMPOSER_INSET
     } else {
-        (theme::COMPACT_COMPOSER_INSET, theme::COMPACT_COMPOSER_INSET)
+        theme::COMPACT_COMPOSER_INSET
     };
     div()
         .flex()
@@ -3206,38 +3313,51 @@ fn composer_stack(
         .min_w_0()
         .when_some(working, |stack, working| {
             stack.child(
-                div()
+                in_column(theme::tx_inset(boxed), boxed, working)
                     .debug_selector(|| "transcript-progress".into())
                     .flex_shrink_0()
-                    .min_w_0()
-                    .px(px(theme::tx_inset(boxed)))
                     .mb(px(if boxed {
                         theme::COMPOSER_WORKING_GAP_SOLO
                     } else {
                         theme::COMPACT_WORKING_GAP
-                    }))
-                    .child(working),
+                    })),
             )
         })
         .when(attachments.is_some() || background.is_some(), |stack| {
-            stack.child(
-                div()
-                    .debug_selector(|| "composer-shelf".into())
-                    .flex()
-                    .items_end()
-                    .gap(px(theme::SPACE_2))
-                    .min_w_0()
-                    .pl(px(shelf_l))
-                    .pr(px(shelf_r))
-                    .pb(px(theme::SHELF_GAP))
-                    .when_some(attachments, |shelf, attachments| {
-                        shelf.child(div().flex_1().min_w_0().child(attachments))
-                    })
-                    .when_some(background, |shelf, chips| {
-                        shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
-                    }),
-            )
+            let shelf = div()
+                .debug_selector(|| "composer-shelf".into())
+                .flex()
+                .items_end()
+                .gap(px(theme::SPACE_2))
+                .min_w_0()
+                .when_some(attachments, |shelf, attachments| {
+                    shelf.child(div().flex_1().min_w_0().child(attachments))
+                })
+                .when_some(background, |shelf, chips| {
+                    shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
+                });
+            stack.child(in_column(inset, boxed, shelf).pb(px(theme::SHELF_GAP)))
         })
+}
+
+/// One row of the Composer stack, `inset` in from the card's sides — and in
+/// Solo (`column`) at most the reading column wide (`TX_COLUMN_MAX_W`),
+/// centred as the transcript is, so the box, the shelf and the working line
+/// stand under the messages they follow (as Claude's and Codex's do). A
+/// Group Pane's rows keep the card's whole width.
+fn in_column(inset: f32, column: bool, row: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .justify_center()
+        .min_w_0()
+        .px(px(inset))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .when(column, |row| row.max_w(px(theme::TX_COLUMN_MAX_W)))
+                .child(row),
+        )
 }
 
 /// The Solo box's queued row (`QUEUED_ROW_H`, a `HAIRLINE` under it):
@@ -3306,13 +3426,13 @@ pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
         .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, TEXT_DIM))
 }
 
-/// A quiet control's button: no ground at rest, `paint::RAISED` under the
+/// A quiet control's button: no ground at rest, `paint::HOVER` under the
 /// pointer over the one 150ms blend, `paint::PRESS` pressed at once.
 fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::component::button::Button {
     components::faded_button(
         id,
         gpui::rgba(theme::TRANSPARENT).into(),
-        theme::paint::RAISED.into(),
+        theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
         rgb(TEXT_DIM).into(),
         cx,
@@ -3880,6 +4000,32 @@ pub fn context_segments(
         .collect()
 }
 
+/// What the context meter draws, wherever it is drawn (the Panel's foot,
+/// the Context tab's bar): one segment per category in the window, in its
+/// `CTX_*` ink and at its share of `window`, or one `CTX_CYCLE[0]` segment
+/// when the Session names none; past `CTX_METER_WARN` every segment wears
+/// the state's ink (`ctx_meter_ink`).
+pub fn context_meter_segments(
+    total: u64,
+    window: u64,
+    details: Option<&ferrite_core::ContextDetails>,
+) -> Vec<(u32, f32)> {
+    let fraction = total as f32 / window as f32;
+    let mut segments = details
+        .map(|details| context_segments(&details.categories, window))
+        .unwrap_or_default();
+    if segments.is_empty() {
+        segments.push((theme::CTX_CYCLE[0], fraction));
+    }
+    if fraction >= theme::CTX_METER_WARN {
+        let ink = ctx_meter_ink(fraction);
+        for segment in &mut segments {
+            segment.0 = ink;
+        }
+    }
+    segments
+}
+
 /// The panel's Context tab (SPEC §5.6): the context window and the
 /// account windows, in that order, each a labelled bar over the reading
 /// behind it. Counts are reported values, never estimates. An account
@@ -4021,9 +4167,13 @@ pub fn context_usage(
             ),
     );
     let context_fraction = maximum.map(|maximum| current as f32 / maximum as f32);
-    // The bar: stacked by category when the provider says what fills the
-    // window, one status-ink fill when it only reports the total.
-    let in_window = context_segments(categories, denominator);
+    // The bar: the Panel foot's meter, segment for segment
+    // (`context_meter_segments`); with no window to divide by, the
+    // categories' shares of what they add up to, or no bar at all.
+    let in_window = match maximum {
+        Some(maximum) => context_meter_segments(current, maximum, details),
+        None => context_segments(categories, denominator),
+    };
     let context_bar = if !in_window.is_empty() {
         Some(
             div()
@@ -4042,8 +4192,8 @@ pub fn context_usage(
                 .into_any_element(),
         )
     } else {
-        // No window to divide by: the count alone, no empty bar.
-        context_fraction.map(|fraction| bar(fraction).into_any_element())
+        // Nothing to draw: the count alone, no empty bar.
+        None
     };
     // The context heading is the legend's door when there is one: the
     // whole line is the hit row, lifting to the hover face like a menu row,
@@ -4195,10 +4345,13 @@ pub fn context_usage(
         .text_color(rgb(TEXT))
         .child(context);
     if limits.five_hour.is_none() && limits.weekly.is_none() {
+        // On the blocks' inset, not a float's: the card's left edge.
         card = card.child(
-            ferrite_ui::menu::note("limits not reported by this provider")
+            block()
                 .id("context-usage-limits-unknown")
-                .debug_selector(|| "context-usage-limits-unknown".into()),
+                .debug_selector(|| "context-usage-limits-unknown".into())
+                .text_color(rgb(TEXT_DIM))
+                .child("Limits not reported by this provider"),
         );
     }
     if let Some(limit) = limits.five_hour {
@@ -4566,16 +4719,13 @@ fn content_row(_grid: Grid) -> Div {
 }
 
 /// Everything one transcript row reads besides its block: the selection its
-/// runs register with, the text cache a pinned copy draws from, the calls'
-/// provider, the preview host, the grid, and the transcript's scope.
+/// runs register with, the text cache a pinned copy draws from, the
+/// preview host, the grid, and the transcript's scope.
 pub(crate) struct RowCx<'a> {
     pub selection: &'a TextRuns,
     pub rich: &'a crate::rich::TextCache,
-    pub provider: Option<Provider>,
     pub preview: &'a crate::preview::Preview,
     pub grid: Grid,
-    /// The Pane stands alone (Solo), not on a Group's board.
-    pub solo: bool,
     pub scope: &'a SharedString,
     /// The row is narration (`RowKind::Answer { narration }`): fallback
     /// prose reads with the work, muted.
@@ -4622,7 +4772,7 @@ pub(crate) fn render_block(
         // A visual's row owns a live page, so the transcript's `Shelf`
         // draws it (`TranscriptView::render_row`); it never reaches here.
         Body::Visual(_) => row.into_any_element(),
-        Body::Prompt(line) => prompt_row(block, line, row_cx),
+        Body::Prompt(line) => prompt_row(block, line, row_cx, None),
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.
         Body::Paragraph { spans } => row
@@ -4926,22 +5076,19 @@ fn prompt_gallery(files: &[std::path::PathBuf]) -> std::sync::Arc<[std::path::Pa
 /// (never wider than `PROMPT_BUBBLE_MAX_W` of the column), Geist
 /// `TEXT_STRONG` at body weight with its non-image files' chips flowing
 /// inline after them; its images as thumbnails in a wrapping row under it.
-/// No time: no row carries one.
-pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElement {
+/// `actions` (the transcript's: its send time, `Copy`) stand left of the
+/// bubble, on its foot.
+pub(crate) fn prompt_row(
+    block: &Block,
+    line: &str,
+    row_cx: &RowCx,
+    actions: Option<AnyElement>,
+) -> AnyElement {
     let (text, files) = prompt_text(line);
     let gallery = prompt_gallery(&files);
     let bubble = prompt_words(block, text, &gallery, row_cx, None).map(|words| {
-        div()
+        prompt_bubble()
             .debug_selector(|| "transcript-prompt".into())
-            .max_w(relative(theme::PROMPT_BUBBLE_MAX_W))
-            .min_w_0()
-            .py(px(theme::PROMPT_BUBBLE_PAD_Y))
-            .px(px(theme::PROMPT_BUBBLE_PAD_X))
-            .bg(theme::paint::RAISED)
-            .rounded(px(theme::R_BUBBLE))
-            .font_family(theme::FONT_UI)
-            .font_weight(theme::W_BODY)
-            .text_color(rgb(TEXT_STRONG))
             .child(words)
     });
     let images: Vec<_> = gallery
@@ -4949,6 +5096,17 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElemen
         .enumerate()
         .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview))
         .collect();
+    let bubble = bubble.map(|bubble| {
+        div()
+            .flex()
+            .justify_end()
+            .items_end()
+            .gap(px(theme::SPACE_1))
+            .w_full()
+            .min_w_0()
+            .children(actions)
+            .child(bubble)
+    });
     div()
         .id(SharedString::from(format!("prompt-{:?}", block.id)))
         .relative()
@@ -4973,63 +5131,57 @@ pub(crate) fn prompt_row(block: &Block, line: &str, row_cx: &RowCx) -> AnyElemen
         .into_any_element()
 }
 
-/// The pinned prompt band (SPEC §5.4) over the top of the body: a
-/// `paint::FIELD` box at `R_CONTROL`, `PROMPT_BAND_PAD_X` either side (its
-/// wrapper pulls it out by as much, so its text keeps the transcript's
-/// column) and `prompt_band_pad_y` above and below; the `❯` in the gutter
-/// in `W_STRONG` `TEXT_STRONG`, the operator's words in `TEXT_STRONG` at
-/// body weight, clamped to `lines`, with all its files' chips (its images'
-/// too) flowing inline after them. Not part of the selection; nothing on
-/// it answers the pointer.
+/// The pinned prompt: the turn's bubble (`prompt_row`'s) stuck to the top
+/// of the body while its output scrolls under it — the same `paint::RAISED`
+/// bubble at `R_BUBBLE`, right-aligned, its words clamped to `lines` with
+/// all its files' chips (its images' too) flowing inline after them. Not
+/// part of the selection; the transcript makes it the way back to its turn.
 pub(crate) fn pinned_prompt(
     block: &Block,
     line: &str,
     row_cx: &RowCx,
     lines: usize,
-) -> AnyElement {
+) -> Div {
     let grid = row_cx.grid();
     let (text, files) = prompt_text_chipping(line, |_| true);
     let gallery = prompt_gallery(&files);
     // The chips close the prompt; their line stands taller, as the
-    // prototype's inline chip makes it.
+    // inline chip makes it.
     let chip_line = if files.is_empty() {
         0.0
     } else {
         theme::PROMPT_CHIP_LINE_EXTRA
     };
     let words = prompt_words(block, text, &gallery, row_cx, Some(lines));
-    div()
+    prompt_bubble()
         .debug_selector(|| "transcript-pinned-prompt".into())
-        .id(SharedString::from(format!("pinned-prompt-{:?}", block.id)))
-        .flex()
-        .items_start()
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .bg(theme::paint::FIELD)
-        .rounded(px(theme::R_CONTROL))
-        .pt(px(theme::prompt_band_pad_y(row_cx.solo)))
-        .pb(px(theme::prompt_band_pad_y(row_cx.solo) + chip_line))
-        .px(px(theme::PROMPT_BAND_PAD_X))
-        .font_weight(theme::W_BODY)
-        .text_color(rgb(TEXT_STRONG))
-        .child(mark_gutter(
-            grid,
-            div()
-                .debug_selector(|| "prompt-mark".into())
-                .child(components::prompt_mark(TEXT_STRONG)),
-        ))
+        .pb(px(theme::PROMPT_BUBBLE_PAD_Y + chip_line))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .flex_1()
                 .min_w_0()
                 .max_h(px(lines as f32 * grid.line))
                 .overflow_hidden()
                 .children(words),
         )
-        .into_any_element()
+}
+
+/// The prompt's bubble (the prototype's `.me`): `paint::RAISED` at
+/// `R_BUBBLE`, shrinking to its words in Geist `TEXT_STRONG` at body
+/// weight, never wider than `PROMPT_BUBBLE_MAX_W` of the column. One face
+/// for the echo in its row and its pinned copy.
+fn prompt_bubble() -> Div {
+    div()
+        .max_w(relative(theme::PROMPT_BUBBLE_MAX_W))
+        .min_w_0()
+        .py(px(theme::PROMPT_BUBBLE_PAD_Y))
+        .px(px(theme::PROMPT_BUBBLE_PAD_X))
+        .bg(theme::paint::RAISED)
+        .rounded(px(theme::R_BUBBLE))
+        .font_family(theme::FONT_UI)
+        .font_weight(theme::W_BODY)
+        .text_color(rgb(TEXT_STRONG))
 }
 
 /// Open a sent file in the Pane's preview (the Panel's Preview tab), an
@@ -5305,19 +5457,22 @@ pub(crate) fn omitted_line(bytes: usize) -> Div {
         )))
 }
 
-/// How a turn ended, as an activity line (`activity_line`), one selectable
-/// run that copies back as it reads. A completed turn is the provider's `✻`
-/// and `41s · 2.9k tokens`; an interrupted or failed one is `failed · 0.1s ·
-/// API Error: 529 overloaded`, its lead word the only coloured one —
-/// `interrupted` in `TEXT` (the operator did it; nothing failed), `failed`
-/// in `BLOCKED`.
+/// How a turn ended (`text::turn_stamp`), one selectable run that copies
+/// back as it reads. A completed turn that took a while closes on `Worked
+/// for 5m 22s` in `TEXT_DIM`, a `HAIRLINE` running on from it to the
+/// column's end; an interrupted or failed one is an activity line, `failed
+/// · 0.1s · API Error: 529 overloaded`, its lead word the only coloured
+/// one — `interrupted` in `TEXT` (the operator did it; nothing failed),
+/// `failed` in `BLOCKED`. A quick completed turn has no row at all.
 fn turn_end(
     block: BlockId,
     end: &ferrite_core::transcript::TurnEnd,
     row_cx: &RowCx,
 ) -> AnyElement {
     use ferrite_core::TurnOutcome;
-    let text = end.text();
+    let Some(text) = text::turn_stamp(end) else {
+        return div().into_any_element();
+    };
     let mut highlights = separators(&text);
     let lead = match &end.outcome {
         TurnOutcome::Completed => None,
@@ -5336,19 +5491,21 @@ fn turn_end(
             ),
         );
     }
-    let mark = end.completed().then(|| {
-        components::glyph(components::WORKED.to_string(), provider_ink(row_cx.provider))
-            .debug_selector(|| "turn-stamp-mark".into())
-            .into_any_element()
-    });
     let words = div().child(
         div()
             .min_w_0()
             .child(row_cx.selection.line(block, text, highlights)),
     );
-    components::tabular(activity_line(row_cx.grid(), mark, words))
-        .debug_selector(|| "turn-stamp".into())
-        .into_any_element()
+    let line = components::tabular(activity_line(row_cx.grid(), None, words))
+        .debug_selector(|| "turn-stamp".into());
+    if end.completed() {
+        return line
+            .items_center()
+            .gap(px(theme::TURN_STAMP_RULE_GAP))
+            .child(div().flex_1().h(px(1.)).bg(theme::paint::HAIRLINE))
+            .into_any_element();
+    }
+    line.into_any_element()
 }
 
 /// The `·` seams in a transcript line: `TEXT_DIM`, at body weight
@@ -6067,7 +6224,8 @@ fn output_box(grid: Grid, lines: Vec<AnyElement>) -> Div {
 /// app's words (`text::call_line`) — the verb, the argument (a literal one
 /// a step brighter on no chip, a path a link), what came of it after a `·`
 /// (`954 passed`, a command's first line) — and its `›` when it opens; a
-/// failed call's line in `BLOCKED`. No icon, no time. Under it: a
+/// failed call's verdict after the cut (`text::call_verdict`), only its
+/// `failed` in `BLOCKED`. No icon, no time. Under it: a
 /// failure's own words (`text::call_failure`), a running suite's bar, and,
 /// once open, anything literal — a failure's output preview and its fold,
 /// an open command's output, disclosed details — in one output box
@@ -6120,8 +6278,25 @@ pub(crate) fn render_tool(
     // One run on one line at its own width, cut with `…` at the row's edge:
     // it selects and copies as one line, and never spills onto the rows
     // under it. The run hangs a cell past its box (`rich::Markdown`); the
-    // box makes room for it. A failed call reads in the failure ink.
-    let ink = if text::call_failed(tool) { BLOCKED } else { TEXT_DIM };
+    // box makes room for it. A failed call's verdict follows the cut, its
+    // lead word in the failure ink (rule 6: colour on the word).
+    let verdict = text::call_verdict(tool).map(|verdict| {
+        let mut highlights = separators(&verdict);
+        if let Some(at) = verdict.find(theme::words::FAILED) {
+            highlights.push((
+                at..at + theme::words::FAILED.len(),
+                HighlightStyle {
+                    color: Some(rgb(BLOCKED).into()),
+                    ..Default::default()
+                },
+            ));
+        }
+        div()
+            .debug_selector(|| "tool-verdict".into())
+            .flex_shrink_0()
+            .whitespace_nowrap()
+            .child(selection.line(block, verdict, highlights))
+    });
     let words = div()
         .child(
             div()
@@ -6130,15 +6305,16 @@ pub(crate) fn render_tool(
                 .min_w_0()
                 .child(edge_cut(
                     grid.line,
-                    ink,
+                    TEXT_DIM,
                     div().pr(px(small.cell())).child(
                         selection
                             .markdown(block, text::call_markdown(tool))
-                            .ink(ink)
+                            .ink(TEXT_DIM)
                             .activity(),
                     ),
                 )),
         )
+        .children(verdict)
         .children(chevron);
     let row_selector = format!("tool-row-{}", tool.call);
     let line = activity_line(grid, None, words)
@@ -6153,7 +6329,7 @@ pub(crate) fn render_tool(
             on_cells(content_row(grid))
                 .debug_selector(|| "tool-failure".into())
                 .text_size(px(small.size))
-                .text_color(rgb(BLOCKED))
+                .text_color(rgb(TEXT_DIM))
                 .child(
                     div()
                         .flex_1()
@@ -7858,10 +8034,9 @@ mod tests {
                 "one line, and no command detail below it"
             );
             assert!(metadata.right() <= px(width), "the caption truncates first");
-            let interrupt = cx.debug_bounds("progress-interrupt").unwrap();
             assert!(
-                interrupt.left() >= metadata.right(),
-                "`esc to interrupt` closes the line, after its facts"
+                cx.debug_bounds("progress-interrupt").is_none(),
+                "Solo's stop button names the key; its line does not"
             );
         }
     }
@@ -8024,7 +8199,6 @@ mod tests {
                 display_revision: self.display_revision,
                 blocks: self.blocks.clone(),
                 signal_status: Some(Status::Idle),
-                provider: None,
                 focused: true,
                 reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
@@ -8033,7 +8207,6 @@ mod tests {
                 target: None,
                 disclosure_focus: cx.focus_handle(),
                 tail: None,
-                banner: None,
                 pending_call: None,
                 workspace: None,
                 solo: false,
@@ -8061,7 +8234,6 @@ mod tests {
                     display_revision: 0,
                     blocks: blocks.clone(),
                     signal_status: Some(Status::Idle),
-                    provider: None,
                         focused: true,
                     reading_size: Default::default(),
                     selection_scope: gpui::base::TextSelectionScopeId::new(),
@@ -8070,7 +8242,6 @@ mod tests {
                     target: None,
                     disclosure_focus: cx.focus_handle(),
                     tail: None,
-                    banner: None,
                     pending_call: None,
                     workspace: None,
                     solo: false,
@@ -9218,32 +9389,34 @@ mod tests {
     }
 
     /// A turn's end leads with the lexicon's own lowercase words; a
-    /// finished one says its time and tokens and nothing else.
+    /// finished one says how long it worked once that was a while, and
+    /// nothing when it was quick.
     #[test]
     fn turn_ends_speak_the_lexicon() {
         use ferrite_core::transcript::TurnEnd;
         assert_eq!(TurnEnd::INTERRUPTED, theme::words::INTERRUPTED);
         assert_eq!(TurnEnd::FAILED, theme::words::FAILED);
-        for (outcome, text) in [
-            (ferrite_core::TurnOutcome::Completed, "<1s \u{b7} 3.7k tokens"),
-            (
-                ferrite_core::TurnOutcome::Interrupted,
-                "interrupted \u{b7} 0.1s",
-            ),
-            (
-                ferrite_core::TurnOutcome::Error("API Error: 529 overloaded".into()),
-                "failed \u{b7} 0.1s \u{b7} API Error: 529 overloaded",
-            ),
-        ] {
-            let end = TurnEnd {
-                outcome,
-                elapsed_ms: Some(100),
-                completed_at: Some("7:10 pm".into()),
-                input_tokens: Some(1_260_000),
-                output_tokens: Some(3_700),
-            };
-            assert_eq!(end.text(), text);
-        }
+        let end = |outcome, elapsed_ms| TurnEnd {
+            outcome,
+            elapsed_ms: Some(elapsed_ms),
+            completed_at: Some("7:10 pm".into()),
+            input_tokens: Some(1_260_000),
+            output_tokens: Some(3_700),
+        };
+        use ferrite_core::TurnOutcome::*;
+        assert_eq!(turn_stamp(&end(Completed, 100)), None);
+        assert_eq!(
+            turn_stamp(&end(Completed, 322_000)).as_deref(),
+            Some("Worked for 5m 22s")
+        );
+        assert_eq!(
+            turn_stamp(&end(Interrupted, 100)).as_deref(),
+            Some("interrupted \u{b7} 0.1s")
+        );
+        assert_eq!(
+            turn_stamp(&end(Error("API Error: 529 overloaded".into()), 100)).as_deref(),
+            Some("failed \u{b7} 0.1s \u{b7} API Error: 529 overloaded")
+        );
     }
 
     #[test]

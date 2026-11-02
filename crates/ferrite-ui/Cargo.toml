@@ -9,9 +9,6 @@ description = "Ferrite's shared UI: theme, icons, components, motion and menus"
 doctest = false
 
 [features]
-# The opaque greys on macOS too (`theme::GLASS`): what the headless parity
-# captures render, since a capture cannot show the desktop blur.
-opaque = []
 # The test hooks the app's own tests reach for.
 test-support = []
 

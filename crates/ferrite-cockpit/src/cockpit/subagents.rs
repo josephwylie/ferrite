@@ -998,7 +998,7 @@ impl CockpitView {
                 .h(px(theme::ICON_BUTTON))
                 .p_0()
                 .rounded(px(theme::R_TAB))
-                .accessibility_label("Split right")
+                .accessibility_label("Open a thread beside")
                 .tooltip("Open a thread beside")
                 .child(ferrite_ui::icons::icon(
                     ferrite_ui::icons::SPLIT_RIGHT,

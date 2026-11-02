@@ -1,6 +1,6 @@
 //! Resolve transcript destinations once, then hand the OS a real file URL;
 //! and the transcript's path targets — every path the transcript names
-//! (a tool call's argument, a prose path, a Markdown file link, the banner's
+//! (a tool call's argument, a prose path, a Markdown file link, a
 //! checkout, an inline file chip) underlines under the pointer, opens the
 //! hover card (`hover_card`), and ⌘-click opens it in a reader pane beside
 //! the Thread (`TranscriptEvent::OpenReader` → `CockpitView::open_beside`).
@@ -381,7 +381,7 @@ fn wire_target(
     })
 }
 
-/// A path in its own run (`path_text`, the Phase-0 seam the banner and the
+/// A path in its own run (`path_text`, the Phase-0 seam the
 /// empty board share): the label in `LINK_INK`, underlined under the
 /// pointer, the hover card, ⌘-click to a reader. It inherits the face and
 /// size it sits in.

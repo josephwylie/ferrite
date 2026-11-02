@@ -148,7 +148,6 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     let World {
         core,
         sessions,
-        launch,
         cast,
         folded,
         branches,
@@ -170,7 +169,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         // once (ADR 0015's seen rule), so the operator reads that word only
         // while the window is in the background. The shot is taken so.
         let active = shot != Shot::Group;
-        prepare(view, launch, branches, &folded, active, window, cx);
+        prepare(view, branches, &folded, active, window, cx);
         // The Groups the mockups draw folded: InvoiceMate Business, and
         // WORK wherever it is not the view.
         let shut: Vec<_> = view
@@ -203,20 +202,18 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
     (scene, setup)
 }
 
-/// What every refresh view shares: where Ferrite was launched, the CLIs it
+/// What every refresh view shares: the CLIs it
 /// found, the checkouts' branches (before git's own reads land), workmate
 /// and tempo folded, no toast for a request that was standing when the
 /// window opened, and a window that has the keyboard when `active`.
 fn prepare(
     view: &mut CockpitView,
-    launch: std::path::PathBuf,
     branches: Vec<(ThreadId, BranchStatus)>,
     folded: &[ProjectId],
     active: bool,
     window: &mut Window,
     cx: &mut Context<CockpitView>,
 ) {
-    view.set_launch_dir(launch);
     // Seeded, so no scene probes the operator's own CLIs.
     view.cli_versions = Some((
         "2.1.289 \u{b7} /usr/local/bin/claude".into(),

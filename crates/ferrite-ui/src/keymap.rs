@@ -16,8 +16,13 @@ use std::sync::RwLock;
 
 use gpui::Keystroke;
 
-// The table's one verb no view owns: the app quits on it.
-gpui::actions!(ferrite, [Quit]);
+// The verbs no view owns: the app's and the window's (`ferrite::lib`).
+gpui::actions!(ferrite, [Quit, Hide, HideOthers, ShowAll, Minimize, Zoom]);
+
+/// The macOS application and window verbs: the system's own chords (⌘H,
+/// ⌥⌘H, ⌘M), bound only there. Windows gives them to the caption buttons
+/// and the taskbar; its ctrl-h and ctrl-m mean nothing of the kind.
+const MAC_ONLY: [&str; 3] = ["ferrite::Hide", "ferrite::HideOthers", "ferrite::Minimize"];
 
 /// Which convention the primary modifier follows. Linux, when it arrives,
 /// sits on the ctrl side.
@@ -257,8 +262,11 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("alt-b"), "cockpit::TogglePanel", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
-        // The Needs-you view: what finished while the operator looked elsewhere.
+        // The Inbox: what finished while the operator looked elsewhere.
         (with_primary("i"), "cockpit::ToggleNotifications", None),
+        // The nav tree takes the keys (VS Code's explorer chord): ↑↓ walk
+        // its rows, ⏎ opens, ←→ fold, esc hands the keys back.
+        (with_primary("shift-e"), "nav::Focus", None),
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
@@ -296,6 +304,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // typed into text is just a character.
         ("?".into(), "shortcuts::Toggle", Some("ComposerEmpty")),
         ("?".into(), "shortcuts::Toggle", Some(NO_TEXT_FIELD)),
+        // ⌘/ anywhere, a text field's too: the desktop apps' shortcuts key,
+        // and the Help menu's chord.
+        (with_primary("/"), "shortcuts::Toggle", None),
         // Close parks the Thread; it is still there, and reopening revives it.
         (with_primary("w"), "cockpit::CloseThread", None),
         // And back again: the most recently parked Thread, revived.
@@ -387,6 +398,12 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             Some("Notifications"),
         ),
         ("escape".into(), "nav::CloseView", Some("NavView")),
+        ("up".into(), "nav::SelectPrevious", Some("NavTree")),
+        ("down".into(), "nav::SelectNext", Some("NavTree")),
+        ("enter".into(), "nav::Open", Some("NavTree")),
+        ("left".into(), "nav::Fold", Some("NavTree")),
+        ("right".into(), "nav::Unfold", Some("NavTree")),
+        ("escape".into(), "nav::CloseView", Some("NavTree")),
         ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
         ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
         ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
@@ -486,6 +503,13 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("shift-g"), "find::Previous", Some("Find")),
         ("escape".into(), "find::Close", Some("Find")),
     ];
+    if platform == Platform::Mac {
+        table.extend([
+            ("cmd-h".into(), MAC_ONLY[0], None),
+            ("cmd-alt-h".into(), MAC_ONLY[1], None),
+            ("cmd-m".into(), MAC_ONLY[2], None),
+        ]);
+    }
     board_reads_its_keys(&mut table, platform);
     table
 }
@@ -851,7 +875,9 @@ mod tests {
         let shape = |platform: Platform| -> Vec<(&'static str, Option<&'static str>)> {
             bindings(platform)
                 .into_iter()
-                .filter(|(_, action, context)| !is_board_mask(action, *context))
+                .filter(|(_, action, context)| {
+                    !is_board_mask(action, *context) && !MAC_ONLY.contains(action)
+                })
                 .map(|(_, action, context)| (action, context))
                 .collect()
         };

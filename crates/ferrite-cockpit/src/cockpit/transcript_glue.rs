@@ -1,5 +1,5 @@
 //! The cockpit's side of a transcript: what `sync_transcript` hands each
-//! retained `TranscriptView` besides its blocks (its banner, its tail row,
+//! retained `TranscriptView` besides its blocks (its tail row,
 //! the call a pending Decision gates, the checkout its paths resolve
 //! against), and the commands that act on the transcript the operator is
 //! reading — copy and resend the prompt in view, scroll to a target, open a
@@ -12,44 +12,13 @@
 
 use std::path::PathBuf;
 
-use ferrite_core::transcript::Transcript;
 use ferrite_core::ThreadId;
 use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 
-use super::{home_relative, CockpitView};
-use ferrite_pane::transcript::{BannerFacts, ScrollTarget, TranscriptTail};
+use super::CockpitView;
+use ferrite_pane::transcript::{ScrollTarget, TranscriptTail};
 
 impl CockpitView {
-    /// What the banner heading `thread`'s transcript says: its checkout on
-    /// its branch, and when its first prompt went out.
-    pub(super) fn banner_facts(
-        &self,
-        thread: ThreadId,
-        transcript: &Transcript,
-    ) -> Option<BannerFacts> {
-        let open = self.cockpit.thread(thread)?;
-        let workspace_path =
-            ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_default();
-        let workspace = if workspace_path.as_os_str().is_empty() {
-            SharedString::default()
-        } else {
-            SharedString::from(home_relative(&workspace_path))
-        };
-        Some(BannerFacts {
-            workspace,
-            workspace_path,
-            branch: self
-                .facts
-                .get(thread)
-                .and_then(|facts| facts.branch.clone()),
-            started_at: transcript
-                .started_at()
-                .map(|at| SharedString::from(at.to_string())),
-        })
-    }
-
     /// The row after a transcript's last: the pending Decision, as its
     /// card is built for the tail (`CockpitView::decision_tail`, the
     /// Decision card's owner).
@@ -223,7 +192,7 @@ impl CockpitView {
         true
     }
 
-    /// Scroll Pane `index`'s transcript to `target`: the banner, the live
+    /// Scroll Pane `index`'s transcript to `target`: the top, the live
     /// tail, or a turn's band with its output under it (a scene's views).
     #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub(crate) fn scroll_transcript(

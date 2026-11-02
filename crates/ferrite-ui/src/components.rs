@@ -115,19 +115,25 @@ impl Tip for Button {
     }
 }
 
-/// A form action: nothing at rest, `paint::RAISED` under the pointer
+/// A form action: nothing at rest, `paint::HOVER` under the pointer
 /// (blended), `paint::PRESS` pressed.
 pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
     form_button_on(id, theme::Paint(theme::TRANSPARENT), cx)
 }
 
 /// `form_button` resting on its own `rest` ground (a filled field-like
-/// control): the same blend and press.
+/// control): the same blend and press. A filled rest steps to `RAISED`;
+/// the hover overlay would replace, not lie over, its own ground.
 pub fn form_button_on(id: impl Into<ElementId>, rest: theme::Paint, cx: &App) -> Button {
+    let hover = if rest.is_opaque() {
+        theme::paint::RAISED
+    } else {
+        theme::paint::HOVER
+    };
     faded_button(
         id,
         rest.into(),
-        theme::paint::RAISED.into(),
+        hover.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
         cx,
@@ -909,6 +915,69 @@ pub fn prompt_mark(ink: u32) -> AnyElement {
         .into_any_element()
 }
 
+/// An on/off switch's face (theme `SWITCH_*`): a pill track, `PRIMARY` on
+/// and `SWITCH_OFF` off, its round knob at the end that says which —
+/// `ON_PRIMARY` on, `TEXT_DIM` off. A flip slides the knob and blends the
+/// track over `FADE_QUICK` (`motion::settled`); under reduced motion it
+/// lands at once. The caller makes it a control (a tab stop that flips on
+/// a press, Enter or Space).
+pub fn switch(id: impl Into<ElementId>, on: bool) -> impl IntoElement {
+    motion::settled(id, on, motion::FADE_QUICK, move |t| {
+        let off: Hsla = theme::SWITCH_OFF.into();
+        let knob = theme::SWITCH_H - 2.0 * theme::SWITCH_INSET;
+        div()
+            .relative()
+            .flex_shrink_0()
+            .w(px(theme::SWITCH_W))
+            .h(px(theme::SWITCH_H))
+            .rounded_full()
+            .bg(motion::mix(off, rgb(theme::PRIMARY).into(), t))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(theme::SWITCH_INSET))
+                    .left(px(
+                        theme::SWITCH_INSET + t * (theme::SWITCH_W - theme::SWITCH_H)
+                    ))
+                    .size(px(knob))
+                    .rounded_full()
+                    .bg(motion::mix(
+                        rgb(theme::TEXT_DIM).into(),
+                        rgb(theme::ON_PRIMARY).into(),
+                        t,
+                    )),
+            )
+    })
+}
+
+/// The words the home greets with: the empty board's and a launching
+/// draft's heading.
+pub const GREETING: &str = "What should we work on?";
+
+/// The home's heading (theme `HOME_*`): the steel mark over the greeting,
+/// centred. The empty board and a launching draft both stand on it, so
+/// opening a draft from the board keeps the picture.
+pub fn greeting() -> Div {
+    div()
+        .debug_selector(|| "greeting".into())
+        .flex()
+        .flex_col()
+        .items_center()
+        .flex_shrink_0()
+        .gap(px(theme::HOME_MARK_GAP))
+        .child(steel_mark(theme::HOME_MARK_H))
+        .child(
+            div()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_HOME_TITLE))
+                .line_height(px(theme::LH_HOME_TITLE))
+                .font_weight(theme::W_STRONG)
+                .text_color(rgb(theme::TEXT_STRONG))
+                .whitespace_nowrap()
+                .child(GREETING),
+        )
+}
+
 /// Ferrite's steel mark, `height` tall, cropped to the shards themselves —
 /// the prototype's `viewBox="280 30 700 1130"` (the two paths of the
 /// 1254-unit mark, the `#C7D5E8 → #9FB3D0 → #748EBA` gradient, a 26-unit
@@ -1139,13 +1208,13 @@ pub fn key_word(key: &str) -> String {
 }
 
 /// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT`;
-/// hover `paint::RAISED`, press `paint::PRESS`. A button is read like any
+/// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
 /// row, so it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
     faded_button(
         id,
         rgba(theme::TRANSPARENT).into(),
-        theme::paint::RAISED.into(),
+        theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
         rgb(theme::TEXT).into(),
         cx,
@@ -1432,6 +1501,24 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
         })
 }
 
+/// A fold's chevron, every surface's (the nav's sections and Groups, the
+/// panel's file blocks and the PR tab): `chevron-right` while folded, a
+/// quarter turn down while open. The turn eases over `motion::CHEVRON`
+/// when the fold flips under it (`key` holds its clock); drawn first
+/// already open, it is simply turned.
+pub fn fold_chevron(
+    key: impl Into<SharedString>,
+    open: bool,
+    size: f32,
+    ink: u32,
+) -> impl IntoElement {
+    motion::settled(key.into(), open, motion::CHEVRON, move |turn| {
+        icons::icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(
+            gpui::Transformation::rotate(gpui::radians(std::f32::consts::FRAC_PI_2 * turn)),
+        )
+    })
+}
+
 /// A menu row. The only place a menu row takes its pointer role: the raised
 /// hover and press faces, or the carried face on the cursor row; an armed or
 /// disabled row takes none. Callers add selectors and handlers only.
@@ -1493,8 +1580,8 @@ pub fn menu_section(
 /// `paint::FRAME` path over its own box with a rounded hole per card (in
 /// window coordinates), the hole taking the card's ring too (`R_PANE` and
 /// `FOCUS_RING_W` past the card's edge). The column paints its gutters and
-/// head row with it, so the frame and the cards stay separate regions on
-/// glass; laid over the cards, it also covers whatever a card's children
+/// head row with it, so the frame and the cards stay separate regions
+/// (rule 4); laid over the cards, it also covers whatever a card's children
 /// paint past its rounded corners, which gpui's square clip lets through.
 pub fn frame_around(cards: Vec<gpui::Bounds<gpui::Pixels>>) -> impl IntoElement {
     gpui::canvas(
@@ -1514,6 +1601,23 @@ pub fn frame_around(cards: Vec<gpui::Bounds<gpui::Pixels>>) -> impl IntoElement 
                 window.with_content_mask(Some(mask), |window| {
                     window.paint_path(path, theme::paint::FRAME.hsla())
                 });
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// The cards' settle (`motion::Swap`): each card (window coordinates)
+/// under its own grey at `opacity`, so what it now shows comes up out of
+/// the card. Paints only; the pointer passes through.
+pub fn card_veil(cards: Vec<gpui::Bounds<gpui::Pixels>>, opacity: f32) -> impl IntoElement {
+    let ink = theme::paint::CARD.hsla().opacity(opacity);
+    gpui::canvas(
+        |_, _, _| {},
+        move |_, _, window, _| {
+            for card in &cards {
+                window.paint_quad(gpui::fill(*card, ink).corner_radii(px(theme::R_PANE)));
             }
         },
     )
@@ -1923,6 +2027,130 @@ pub fn scrollbar_bar(
         .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover)
 }
 
+/// The one copy button (a message's `Copy`, a changed file's `Copy path`,
+/// a preview's): an icon door that writes `text` to the clipboard and
+/// says so, its `copy` glyph turning to a `check` and its tooltip to
+/// `Copied` for `COPIED_HOLD_MS`, then back. The door is `size` square at
+/// `radius` holding a `glyph`-sized icon in `TEXT_DIM`; its hover is the
+/// raised blend, or, on a ground already `RAISED` (`on_raised`), a step up
+/// to `SELECTED`. It keeps its own moment of having copied (keyed by `id`),
+/// so a caller holds no state for it. A press on it is its own: it never
+/// reaches the row under it.
+#[derive(IntoElement)]
+pub struct CopyButton {
+    id: ElementId,
+    text: SharedString,
+    tooltip: SharedString,
+    size: f32,
+    glyph: f32,
+    radius: f32,
+    on_raised: bool,
+}
+
+/// A [`CopyButton`] for `text`, `Copy` its tooltip at rest.
+pub fn copy_button(id: impl Into<ElementId>, text: impl Into<SharedString>) -> CopyButton {
+    CopyButton {
+        id: id.into(),
+        text: text.into(),
+        tooltip: "Copy".into(),
+        size: theme::MESSAGE_ACTION,
+        glyph: theme::MESSAGE_ACTION_GLYPH,
+        radius: theme::R_CHIP,
+        on_raised: false,
+    }
+}
+
+impl CopyButton {
+    /// The tooltip at rest (`Copy path`).
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = tooltip.into();
+        self
+    }
+
+    /// The door's box, its glyph and its corner radius.
+    pub fn door(mut self, size: f32, glyph: f32, radius: f32) -> Self {
+        self.size = size;
+        self.glyph = glyph;
+        self.radius = radius;
+        self
+    }
+
+    /// The door stands on a `RAISED` ground: its hover steps up to
+    /// `SELECTED`.
+    pub fn on_raised(mut self) -> Self {
+        self.on_raised = true;
+        self
+    }
+}
+
+impl gpui::RenderOnce for CopyButton {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        use crate::pointer::{Pointer, PointerPressed};
+        let copied = window.use_keyed_state(
+            SharedString::from(format!("copy-button-{:?}", self.id)),
+            cx,
+            |_, _| None::<std::time::Instant>,
+        );
+        let shown = copied.read(cx).is_some();
+        let key = crate::pointer::hover_key(&self.id);
+        let text = self.text;
+        let door = div()
+            .id(self.id)
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(px(self.size))
+            .rounded(px(self.radius));
+        let door = if self.on_raised {
+            door.cursor_pointer()
+                .bg(motion::hover_blend(
+                    &key,
+                    theme::paint::RAISED.into(),
+                    theme::paint::SELECTED.into(),
+                ))
+                .on_hover(motion::hover_listener(key))
+        } else {
+            door.hover_raised(key)
+        };
+        door.press_raised()
+            .tooltip(crate::menu::tooltip(if shown {
+                SharedString::from("Copied")
+            } else {
+                self.tooltip
+            }))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+                // Each copy holds its own moment: a second one restarts
+                // the hold rather than being cut short by the first's end.
+                let at = std::time::Instant::now();
+                copied.update(cx, |copied, cx| {
+                    *copied = Some(at);
+                    cx.notify();
+                });
+                let copied = copied.downgrade();
+                let hold = Duration::from_millis(theme::COPIED_HOLD_MS);
+                cx.spawn(async move |cx| {
+                    cx.background_executor().timer(hold).await;
+                    let _ = copied.update(cx, |copied, cx| {
+                        if *copied == Some(at) {
+                            *copied = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            })
+            .child(icons::icon(
+                if shown { icons::CHECK } else { icons::COPY },
+                self.glyph,
+                theme::TEXT_DIM,
+            ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1965,7 +2193,7 @@ mod tests {
         let style = surface.style();
         assert_eq!(style.background, Some(Fill::from(theme::FLOAT_GROUND)));
         assert_eq!(style.border_color, Some(theme::FLOAT_EDGE.into()));
-        // Opaque until floats can frost (FL-15): never a glass overlay.
+        // Floats are opaque (FL-15).
         assert!(theme::FLOAT_GROUND.is_opaque() && theme::FLOAT_SEL.is_opaque());
         assert_eq!(style.corner_radii.top_left, Some(px(theme::R_BLOCK).into()));
         assert_eq!(style.box_shadow, Some(float_shadow()));

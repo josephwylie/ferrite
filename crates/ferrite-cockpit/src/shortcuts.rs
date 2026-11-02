@@ -78,11 +78,14 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "palette::ShowParked" => Row(Threads, "Show parked"),
         "palette::ReviewBranch" => Row(Threads, "Review branch"),
         "cockpit::NextDecision" => Row(Threads, "Next request"),
-        "cockpit::ToggleNotifications" => Row(Threads, "Needs you"),
+        "cockpit::ToggleNotifications" => Row(Threads, "Inbox"),
+        "nav::Focus" => Row(Threads, "Focus sidebar"),
         "cockpit::OpenSettings" => Row(Threads, "Settings"),
         "cockpit::RefreshPrStatus" => Row(Threads, "Refresh PR status"),
         "cockpit::OpenPrInBrowser" => Row(Threads, "Open PR in browser"),
         "ferrite::Quit" => Row(Threads, "Quit"),
+        // The system's own verbs: the menu bar spells them.
+        "ferrite::Hide" | "ferrite::HideOthers" | "ferrite::Minimize" => Hidden,
         // The board.
         "cockpit::NextPane" => Row(Board, "Next pane"),
         "cockpit::PreviousPane" => Row(Board, "Previous pane"),
@@ -182,6 +185,11 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "notifications::Dismiss"
         | "notifications::Close"
         | "nav::CloseView"
+        | "nav::SelectNext"
+        | "nav::SelectPrevious"
+        | "nav::Open"
+        | "nav::Fold"
+        | "nav::Unfold"
         | "shortcuts::ScrollUp"
         | "shortcuts::ScrollDown"
         | "shortcuts::Dismiss"
@@ -370,15 +378,7 @@ impl Render for Shortcuts {
             );
         }
         if shown.is_empty() {
-            list = list.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h(px(PALETTE_ROW_H))
-                    .px(px(PALETTE_ROW_PAD_X))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(crate::palette::NO_MATCHES),
-            );
+            list = list.child(crate::palette::empty_note(crate::palette::NO_MATCHES));
         }
         // In on the palette's entrance, over the same veil.
         ferrite_ui::motion::dialog_in_casting(

@@ -7,12 +7,13 @@
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
 
 use ferrite_cockpit::{cockpit, palette, shortcuts};
-use ferrite_ui::keymap::Quit;
+use ferrite_ui::keymap::{Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 
 pub fn app_menus() -> Vec<Menu> {
     use cockpit::{
-        CloseThread, NewGroup, NewThread, NewWorktreeThread, NextPane, OpenSettings, PreviousPane,
-        ReopenThread, ToggleFullscreen, ToggleNav, ToggleNotifications, TogglePanel,
+        CloseThread, NewGroup, NewThread, NewWorktreeThread, NextPane, OpenPrInBrowser,
+        OpenSettings, PreviousPane, RefreshPrStatus, ReopenThread, TextLarger, TextReset,
+        TextSmaller, ToggleFullscreen, ToggleNav, ToggleNotifications, TogglePanel,
     };
     use ferrite_pane::pane::NextDecision;
     vec![
@@ -23,6 +24,10 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Hide Ferrite", Hide),
+                MenuItem::action("Hide Others", HideOthers),
+                MenuItem::action("Show All", ShowAll),
                 MenuItem::separator(),
                 MenuItem::action("Quit Ferrite", Quit),
             ],
@@ -41,6 +46,9 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Park Thread", CloseThread),
                 MenuItem::action("Reopen Parked Thread", ReopenThread),
                 MenuItem::action("Show Parked", palette::ShowParked),
+                MenuItem::separator(),
+                MenuItem::action("Open Pull Request in Browser", OpenPrInBrowser),
+                MenuItem::action("Refresh Pull Request Status", RefreshPrStatus),
             ],
         },
         Menu {
@@ -68,11 +76,17 @@ pub fn app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Commands\u{2026}", palette::Toggle),
                 MenuItem::action("Review Branch", palette::ReviewBranch),
+                MenuItem::action("Tasks", ferrite_cockpit::projects::Toggle),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
                 MenuItem::action("Toggle Panel", TogglePanel),
-                MenuItem::action("Needs You", ToggleNotifications),
+                MenuItem::action("Inbox", ToggleNotifications),
                 MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
+                MenuItem::separator(),
+                // The transcript's reading size (the browser's zoom keys).
+                MenuItem::action("Larger Text", TextLarger),
+                MenuItem::action("Smaller Text", TextSmaller),
+                MenuItem::action("Actual Size", TextReset),
                 MenuItem::separator(),
                 MenuItem::action("Next Pane", NextPane),
                 MenuItem::action("Previous Pane", PreviousPane),
@@ -82,7 +96,11 @@ pub fn app_menus() -> Vec<Menu> {
         Menu {
             disabled: false,
             name: "Window".into(),
-            items: vec![],
+            // AppKit lists the windows under these.
+            items: vec![
+                MenuItem::action("Minimize", Minimize),
+                MenuItem::action("Zoom", Zoom),
+            ],
         },
         // The keys' door off the bar (SPEC §5.7), beside the palette's
         // `keyboard shortcuts`.

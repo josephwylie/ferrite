@@ -8,7 +8,8 @@
 //!
 //! Under the bar, each changed file's rows as the vendored diff model
 //! builds them: numbered on both sides, signed and washed like every diff
-//! Ferrite draws, the changed words washed deeper, long unchanged runs
+//! Ferrite draws, the changed words washed deeper, a line too long for the
+//! slot wrapped under its code's first cell (never cut), long unchanged runs
 //! folded (`⋯ N lines`: a click, or ⏎ on it, opens it). A press picks a
 //! row, a shift-press or a drag stretches the pick to a range in the same
 //! file; ↑↓ and ⇧↑↓ do the same from the keyboard. A right-click asks the
@@ -1482,6 +1483,9 @@ impl ReviewView {
         let ink = DiffKind::of(&row.marker().to_string()).paint();
         let text = row.text();
         let highlights = self.highlights_at(at, &text);
+        // The line's own indent stands as padding, so a wrapped line's rest
+        // hangs under its code rather than at the margin.
+        let (indent_cells, text, highlights) = hang(&text, highlights);
         // The numbers wear a tool row's diff ink (structure on a context
         // row, the sign's hue dimmed on a changed one); the pick's are the
         // keyboard's `TEXT_STRONG`.
@@ -1507,10 +1511,14 @@ impl ReviewView {
             _ => row.old_no(),
         };
         // The pick lays the selection over the row's wash rather than in
-        // its place, so a picked run still reads added or removed.
+        // its place, so a picked run still reads added or removed. A line
+        // longer than the slot wraps, its rest hanging under its code's
+        // first character (the numbers and the sign stand beside its first
+        // line alone): no code is ever cut.
         let cells = div()
             .flex()
-            .size_full()
+            .w_full()
+            .min_h(px(line_h))
             .pl(px(cell))
             .when(picked, |cells| cells.bg(paint::SELECTED))
             .child(number(old))
@@ -1526,7 +1534,8 @@ impl ReviewView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
+                    .pl(px(indent_cells as f32 * cell))
+                    .whitespace_normal()
                     .text_color(rgb(ink.code_color))
                     .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
             )
@@ -1561,7 +1570,7 @@ impl ReviewView {
             .id(("review-line", at))
             .debug_selector(move || format!("review-line-{at}"))
             .w_full()
-            .h(px(line_h))
+            .min_h(px(line_h))
             .whitespace_nowrap()
             .cursor_pointer()
             .when_some(ink.wash, |line, wash| line.bg(rgba(wash)))
@@ -2395,21 +2404,47 @@ impl ReviewView {
                     .text_color(rgb(TEXT_DIM))
                     .child(SharedString::from(text))
             }))
-            .child(div().flex_1())
-            // A read that failed shows no diff, so no stat of one.
-            .children(
+            // A read that failed shows no diff, so no stat of one; the stat
+            // takes the room left, ending at the bar's right.
+            .child(
                 self.diff
                     .as_ref()
                     .filter(|_| self.showing_diff() && self.error.is_none())
-                    .map(|files| stat(files, CH)),
+                    .map_or_else(|| div().flex_1(), |files| stat(files, CH)),
             );
         bar.into_any_element()
     }
 }
 
+/// A diff line cut at its indent: the indent's width in cells (a tab four),
+/// the code after it, and its highlights moved to match (a run over the
+/// indent alone is dropped).
+fn hang(
+    text: &str,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+) -> (usize, String, Vec<(Range<usize>, HighlightStyle)>) {
+    let code = text.trim_start_matches([' ', '\t']);
+    let cut = text.len() - code.len();
+    let cells = text[..cut]
+        .chars()
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum();
+    let highlights = highlights
+        .into_iter()
+        .filter_map(|(range, style)| {
+            let start = range.start.max(cut);
+            (range.end > start).then(|| (start - cut..range.end - cut, style))
+        })
+        .collect();
+    (cells, code.to_string(), highlights)
+}
+
 /// `3 files +40 −12`: what a diff adds up to, its `+N −N` inked as each
-/// file head's (and the Panel's). In a narrow slot the count gives way
-/// first, cut with `…`, and the numbers stay whole.
+/// file head's (and the Panel's), filling the bar's room and ending at its
+/// right. In a narrow slot the count gives way first, whole — never a
+/// lone `…` — and the numbers stay whole: the count lies in a one-line
+/// wrapping row after an empty first item, so when it does not fit beside
+/// that item it wraps to the row's second line, which is clipped.
 fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
     let added: u32 = files.iter().map(|file| file.additions).sum();
     let removed: u32 = files.iter().map(|file| file.deletions).sum();
@@ -2418,14 +2453,27 @@ fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
     div()
         .debug_selector(|| "review-stat".into())
         .flex()
+        .flex_1()
         .min_w_0()
+        .items_center()
         .gap(px(gap))
         .child(
             div()
+                .flex()
+                .flex_wrap()
+                .justify_end()
+                .flex_1()
                 .min_w_0()
-                .truncate()
-                .text_color(rgb(TEXT_DIM))
-                .child(SharedString::from(count)),
+                .h(px(LH_UI))
+                .overflow_hidden()
+                .child(div().w_0().h(px(LH_UI)))
+                .child(
+                    div()
+                        .debug_selector(|| "review-stat-count".into())
+                        .flex_shrink_0()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(SharedString::from(count)),
+                ),
         )
         .child(ferrite_ui::components::tabular(
             div()
@@ -3148,6 +3196,21 @@ mod tests {
             lines.right(),
             slot.right()
         );
+    }
+
+    /// A line's indent becomes padding, and its highlights follow its
+    /// code; a run over the indent alone goes.
+    #[test]
+    fn a_line_hangs_at_its_indent() {
+        let style = HighlightStyle::default();
+        let (cells, code, runs) = hang(
+            "\t  let x = 1;",
+            vec![(0..2, style), (3..6, style), (1..9, style)],
+        );
+        assert_eq!(cells, 6);
+        assert_eq!(code, "let x = 1;");
+        let ranges: Vec<_> = runs.into_iter().map(|(range, _)| range).collect();
+        assert_eq!(ranges, vec![0..3, 0..6]);
     }
 
     /// Notes speak in sentences: reviewr's lower-case notices take a

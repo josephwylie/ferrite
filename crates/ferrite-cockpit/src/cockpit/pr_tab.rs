@@ -1,7 +1,7 @@
 //! The panel's PR tab (SPEC §5.6.2): a read-only view of the branch's pull
 //! request, answering at a glance "can this merge, and what's in the way",
-//! and saying what it is. Top to bottom: the head (state pill, `#N`,
-//! refresh and open buttons, title, branches), the readiness group, the
+//! and saying what it is. Top to bottom: the head (state pill, refresh
+//! and open buttons, title, branches; its `#N` is the tab's), the readiness group, the
 //! description (its body, clamped), the checks, the comments, and `Review
 //! PR`. With no pull request, the empty state; with no `gh` or no login,
 //! its line says how to sign in.
@@ -300,7 +300,7 @@ impl CockpitView {
                     div()
                         .flex()
                         .flex_col()
-                        .child(self.pr_head(thread, pill, reading.number, None, fetching, cx))
+                        .child(self.pr_head(thread, pill, None, fetching, cx))
                         .into_any_element()
                 }
                 // Nor has the label's: say it is asking rather than claim
@@ -329,7 +329,7 @@ impl CockpitView {
             .debug_selector(|| "pr-tab".into())
             .flex()
             .flex_col()
-            .child(self.pr_head(thread, pill, pr.number, Some(pr), fetching, cx))
+            .child(self.pr_head(thread, pill, Some(pr), fetching, cx))
             .children(readiness_group(pr))
             .children(self.description_section(thread, pr, cx))
             .children(self.checks_section(thread, pr, cx))
@@ -359,13 +359,13 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The head (padding 2 2 14): the pill, `#N`, `refresh` and `external`;
-    /// then, from a snapshot, the title and the branches.
+    /// The head (padding 2 2 14): the pill, `refresh` and `external` (the
+    /// number is the tab's, `PR #N`, one place per fact); then, from a
+    /// snapshot, the title and the branches.
     fn pr_head(
         &self,
         thread: ThreadId,
         pill: Pill,
-        number: u64,
         pr: Option<&WirePr>,
         fetching: bool,
         cx: &mut Context<Self>,
@@ -399,13 +399,6 @@ impl CockpitView {
                     .items_center()
                     .gap(px(SPACE_2))
                     .child(pill.element())
-                    .child(
-                        div()
-                            .font_family(FONT_CODE)
-                            .text_size(px(FS_META))
-                            .text_color(rgb(TEXT_DIM))
-                            .child(SharedString::from(format!("#{number}"))),
-                    )
                     .child(div().flex_1())
                     .child(refresh)
                     .child(external),
@@ -800,40 +793,12 @@ impl CockpitView {
             Absent::NoPr => "panel-no-pr",
             Absent::NoCli => "panel-no-gh",
         };
-        div()
-            .debug_selector(move || selector.into())
-            .flex()
-            .flex_col()
-            .items_start()
-            .gap(px(PR_EMPTY_GAP))
-            .pt(px(PR_EMPTY_PAD_T))
-            .px(px(SPACE_1))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(PR_EMPTY_BADGE))
-                    .rounded(px(R_PANE))
-                    .bg(paint::RAISED)
-                    .child(icon(icons::GIT_PULL_REQUEST, PR_EMPTY_ICON, TEXT_MUTED)),
-            )
-            .child(
-                div()
-                    .text_size(px(FS_TITLE))
-                    .font_weight(W_STRONG)
-                    .text_color(rgb(TEXT_STRONG))
-                    .child("No pull request"),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .whitespace_normal()
-                    .text_size(px(FS_LABEL))
-                    .line_height(px(PR_BODY_LH))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(StyledText::new(text).with_highlights(highlights)),
-            )
+        super::panel::panel_empty(
+            selector,
+            Some(icons::GIT_PULL_REQUEST),
+            "No pull request",
+            StyledText::new(text).with_highlights(highlights),
+        )
             .into_any_element()
     }
 }

@@ -15,7 +15,6 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use ferrite_core::{
-    store::Provider,
     transcript::{Block, BlockId, Body, Status, ToolState},
     ThreadId,
 };
@@ -62,24 +61,11 @@ impl std::fmt::Debug for TranscriptTail {
     }
 }
 
-/// What the banner says about its Thread (filled by `sync_transcript`):
-/// `~/ferrite on dev · started 7:18 pm`. The title, provider and model are
-/// the nav row's, the head's and the status line's to say.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BannerFacts {
-    /// The checkout, `~`-abbreviated.
-    pub workspace: SharedString,
-    pub workspace_path: PathBuf,
-    pub branch: Option<SharedString>,
-    /// The first prompt's send time.
-    pub started_at: Option<SharedString>,
-}
-
 /// Where a scene (or a command) asks a transcript to scroll.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
 pub enum ScrollTarget {
-    /// The banner at the top.
+    /// The top of the rows.
     Top,
     /// `offset` pixels below the top of turn `turn`'s prompt band (0 is the
     /// first prompt in the window), its band pinned above.
@@ -124,8 +110,6 @@ pub struct TranscriptInput {
     pub display_revision: u64,
     pub blocks: Vec<Block>,
     pub signal_status: Option<Status>,
-    /// The Thread's provider: its `✻` at a turn's end wears its colour.
-    pub provider: Option<Provider>,
     pub focused: bool,
     pub reading_size: ferrite_core::settings::ReadingSize,
     pub selection_scope: gpui::base::TextSelectionScopeId,
@@ -135,13 +119,11 @@ pub struct TranscriptInput {
     pub disclosure_focus: FocusHandle,
     /// The row after the last (the pending Decision).
     pub tail: Option<TranscriptTail>,
-    /// The banner heading the rows.
-    pub banner: Option<BannerFacts>,
     /// The call a pending Decision gates: hidden while it waits.
     pub pending_call: Option<String>,
     /// The Thread's checkout, which path targets resolve against.
     pub workspace: Option<PathBuf>,
-    /// The Pane stands alone (Solo): the banner takes the body's top
+    /// The Pane stands alone (Solo): the first row takes the body's top
     /// padding, which board Panes do not have.
     pub solo: bool,
     /// Whether the model's thinking shows as `∴` rows (Settings'
@@ -161,7 +143,6 @@ pub struct TranscriptKey {
     pub focused: bool,
     pub signal_status: Option<Status>,
     pub reading_size: ferrite_core::settings::ReadingSize,
-    pub banner: Option<BannerFacts>,
     pub tail: Option<u64>,
     pub pending_call: Option<String>,
     pub workspace: Option<PathBuf>,
@@ -178,7 +159,6 @@ impl TranscriptInput {
             focused: self.focused,
             signal_status: self.signal_status,
             reading_size: self.reading_size,
-            banner: self.banner.clone(),
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
             workspace: self.workspace.clone(),
@@ -190,8 +170,7 @@ impl TranscriptInput {
     /// What the rows are projected with.
     fn shape(&self) -> RowShape {
         RowShape {
-            banner: self.banner.is_some(),
-            banner_pad: if self.solo { theme::BANNER_PAD_T } else { 0. },
+            top_pad: if self.solo { theme::TX_PAD_T } else { 0. },
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
             thinking: self.thinking,
@@ -216,6 +195,8 @@ struct Glide {
     from: f32,
     to: f32,
     started: Instant,
+    /// The glide ends at the tail and follows it again (jump to latest).
+    follow: bool,
 }
 
 /// A stable GPUI entity for one Pane Subject's heavy transcript subtree.
@@ -258,13 +239,9 @@ pub struct TranscriptView {
     /// A minimap jump easing in.
     glide: Option<Glide>,
     /// Room past the last row so a band jump can put its band at the top
-    /// of a transcript shorter than that (a board Pane with its banner
+    /// of a transcript shorter than that (a board Pane with its first prompt
     /// scrolled away, R2): see `Runway`.
     runway: Rc<Cell<Runway>>,
-    /// The room over the first row while the rows are shorter than the
-    /// viewport: it sets them on the viewport's foot (SPEC §5.4's bottom
-    /// alignment), and is zero once they fill it.
-    lift: Rc<Cell<f32>>,
     /// The agents' visuals in these rows: their live pages (ADR 0013).
     visuals: crate::visual::Shelf,
     /// The list's width as of the last layout (rows can't ask the list
@@ -307,7 +284,6 @@ impl TranscriptView {
                 display_revision: 0,
                 blocks: Vec::new(),
                 signal_status: None,
-                provider: None,
                 focused: false,
                 reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
@@ -316,7 +292,6 @@ impl TranscriptView {
                 target: None,
                 disclosure_focus: cx.focus_handle(),
                 tail: None,
-                banner: None,
                 pending_call: None,
                 workspace: None,
                 solo: false,
@@ -390,7 +365,6 @@ impl TranscriptView {
             hover_card: None,
             glide: None,
             runway: Rc::default(),
-            lift: Rc::default(),
             visuals,
             list_w: Rc::default(),
             texts: Vec::new(),
@@ -471,7 +445,7 @@ impl TranscriptView {
         }
         // The gap table is part of the rows: a reading-size change
         // re-projects them, re-spacing every row whose gap scales; a diff
-        // opening or the banner and tail changing re-project them too.
+        // opening or the top padding and tail changing re-project them too.
         if content_changed || reading_changed || shape_changed {
             let tail = self.rows.rows().last().map(|row| row.id().clone());
             let delta =
@@ -641,7 +615,7 @@ impl TranscriptView {
         cx.notify();
     }
 
-    /// Scroll to `target` (a scene's Solo views): the banner,
+    /// Scroll to `target` (a scene's Solo views): the top,
     /// the live tail, or a turn's band with its output scrolled under it.
     #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
@@ -754,15 +728,8 @@ impl TranscriptView {
     }
 
     fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns) {
-        match row.kind() {
-            RowKind::Banner => {
-                if let Some(facts) = &self.input.banner {
-                    let _ = selection.markdown(BlockId::BANNER, banner_markdown(facts));
-                }
-                return;
-            }
-            RowKind::Tail => return,
-            _ => {}
+        if row.kind() == RowKind::Tail {
+            return;
         }
         if let Some(source) = row.source() {
             let block = &row.blocks()[0];
@@ -818,10 +785,8 @@ impl TranscriptView {
         pane::RowCx {
             selection,
             rich: &self.rich,
-            provider: self.input.provider,
             preview: &self.input.preview,
             grid: self.grid(),
-            solo: self.input.solo,
             scope: &self.input.namespace,
             narration: false,
         }
@@ -835,26 +800,17 @@ impl TranscriptView {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        match row.kind() {
-            RowKind::Banner => {
-                return match &self.input.banner {
-                    Some(facts) => self.render_banner(facts, selection),
-                    None => div().into_any_element(),
-                };
-            }
-            RowKind::Tail => {
-                return match (&self.input.tail, window) {
-                    (Some(tail), Some(window)) => div()
-                        .debug_selector(|| "transcript-tail".into())
-                        .w_full()
-                        .min_w_0()
-                        .flex_shrink_0()
-                        .child((tail.render)(window, cx))
-                        .into_any_element(),
-                    _ => div().into_any_element(),
-                };
-            }
-            _ => {}
+        if row.kind() == RowKind::Tail {
+            return match (&self.input.tail, window) {
+                (Some(tail), Some(window)) => div()
+                    .debug_selector(|| "transcript-tail".into())
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .child((tail.render)(window, cx))
+                    .into_any_element(),
+                _ => div().into_any_element(),
+            };
         }
         let blocks = row.blocks();
         if let Some(source) = row.source() {
@@ -868,6 +824,11 @@ impl TranscriptView {
             // in its turn — reads with the work, a step down and muted; the
             // turn's answer reads bright.
             let narration = row.kind() == RowKind::Answer { narration: true };
+            // A turn's answer carries its actions under it (narration is
+            // the work's, and copies with it).
+            let actions = (!narration).then(|| {
+                message_actions().child(self.copy_action(row.id(), source.to_owned()))
+            });
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -882,13 +843,15 @@ impl TranscriptView {
                 .when(narration, |row| {
                     row.text_size(px(grid.activity().size))
                 })
+                .when(actions.is_some(), |row| row.flex_col().group(MESSAGE_GROUP))
                 .child(
-                    div().flex_1().min_w_0().child(
+                    div().w_full().flex_1().min_w_0().child(
                         selection
                             .answer(first, self.linked(source))
                             .when(narration, |answer| answer.quiet()),
                     ),
                 )
+                .children(actions.map(|actions| actions.mt(px(theme::MESSAGE_ACTIONS_GAP))))
                 .into_any_element();
         }
         let Some(block) = blocks.first() else {
@@ -913,6 +876,31 @@ impl TranscriptView {
         };
         if row.kind() == RowKind::Group {
             return self.render_group(row, &row_cx, view);
+        }
+        if let Body::Prompt(line) = &block.body {
+            // Its send time and `Copy`, left of the bubble.
+            let actions = message_actions()
+                .children(block.sent_at.clone().map(|at| {
+                    div()
+                        .debug_selector(|| "prompt-sent-at".into())
+                        .px(px(theme::SPACE_1))
+                        .text_size(px(theme::FS_META))
+                        .line_height(px(theme::LH_META))
+                        .text_color(gpui::rgb(theme::TEXT_DIM))
+                        .child(SharedString::from(at))
+                }))
+                .child(self.copy_action(row.id(), line.clone()));
+            return div()
+                .group(MESSAGE_GROUP)
+                .w_full()
+                .min_w_0()
+                .child(pane::prompt_row(
+                    block,
+                    line,
+                    &row_cx,
+                    Some(actions.into_any_element()),
+                ))
+                .into_any_element();
         }
         match &block.body {
             Body::Tool(tool) => self.render_call(block.id, tool, &row_cx, view.as_ref()),
@@ -1100,25 +1088,6 @@ impl TranscriptView {
         stops
     }
 
-    /// The banner (ADR 0014): one muted line of activity — the checkout,
-    /// on its branch, and when the Thread started — a step under the prose.
-    /// The checkout is a file link (a path target, as a call's path is): its
-    /// underline shows under the pointer. It is one selectable run.
-    fn render_banner(&self, facts: &BannerFacts, selection: &TextRuns) -> AnyElement {
-        div()
-            .debug_selector(|| "transcript-banner".into())
-            .w_full()
-            .min_w_0()
-            .flex_shrink_0()
-            .text_size(px(self.grid().activity().size))
-            .child(
-                selection
-                    .markdown(BlockId::BANNER, banner_markdown(facts))
-                    .ink(theme::TEXT_DIM),
-            )
-            .into_any_element()
-    }
-
     /// A toggle that flips `call`'s disclosure from inside its row (a
     /// fold's `+ N lines`).
     fn toggle(&self, call: DisclosureId, view: Entity<Self>) -> pane::DisclosureToggle {
@@ -1244,32 +1213,220 @@ impl TranscriptView {
         };
         Some(crate::hover_card::hang(card, hovered.anchor, window, cx))
     }
+
+    /// A message's `Copy` (`components::copy_button`, the message action's
+    /// door): `text` to the clipboard, a check for `COPIED_HOLD_MS` after.
+    fn copy_action(&self, row: &RowId, text: String) -> AnyElement {
+        let id = gpui::ElementId::from(SharedString::from(format!(
+            "message-copy-{}-{row:?}",
+            self.input.namespace
+        )));
+        // The hover blend draws through this cached view: ask for its next
+        // frame.
+        let t = ferrite_ui::motion::hover_t(&ferrite_ui::pointer::hover_key(&id));
+        if t > 0. && t < 1. {
+            crate::file_links::mark_fading();
+        }
+        div()
+            .debug_selector(|| "message-copy".into())
+            .flex_shrink_0()
+            .child(ferrite_ui::components::copy_button(id, text))
+            .into_any_element()
+    }
+
+    /// The pinned prompt: its turn's bubble stuck to the top on a plane in
+    /// the card's fill, the rows passing under it into the top fade. A
+    /// click glides back to its turn. Wheel gestures scroll the list.
+    fn pinned_band(
+        &self,
+        index: usize,
+        shift: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let row = self.rows.get(index)?;
+        let block = row.blocks().first()?;
+        let Body::Prompt(line) = &block.body else {
+            return None;
+        };
+        let selection = self.text_runs();
+        let line_height = self.grid().line;
+        let available = f32::from(self.scroll.list_state().viewport_bounds().size.height) / 4.;
+        let lines = ((available / line_height) as usize).clamp(1, theme::PINNED_PROMPT_LINES);
+        let bubble = pane::pinned_prompt(block, line, &self.row_cx(&selection), lines);
+        let measured = self.pinned_h.clone();
+        let goal = self.estimated_tops().0.get(index).copied().unwrap_or(0.);
+        let weak = cx.entity().downgrade();
+        let id = gpui::ElementId::from(SharedString::from(format!(
+            "transcript-pinned-{}",
+            self.input.namespace
+        )));
+        let key = ferrite_ui::pointer::hover_key(&id);
+        let t = ferrite_ui::motion::hover_t(&key);
+        if t > 0. && t < 1. {
+            crate::file_links::mark_fading();
+        }
+        let bubble = bubble.id(id).cursor_pointer().bg(ferrite_ui::motion::mix(
+            theme::paint::RAISED.into(),
+            theme::paint::SELECTION_HOVER.into(),
+            t,
+        ));
+        let blend = ferrite_ui::motion::hover_listener(key);
+        let bubble = bubble
+            .on_hover(blend)
+            .tooltip(ferrite_ui::menu::tooltip("Back to this prompt"))
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                cx.stop_propagation();
+                let _ = weak.update(cx, |view, cx| view.glide_to(goal, cx));
+            });
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(shift)
+                .on_children_prepainted(move |bounds, _, _| {
+                    if let Some(bounds) = bounds.first() {
+                        measured.set(bounds.size.height);
+                    }
+                })
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "transcript-pinned-plane-{}",
+                            self.input.namespace
+                        )))
+                        .block_mouse_except_scroll()
+                        .cursor_default()
+                        .flex()
+                        .justify_center()
+                        .w_full()
+                        .px(px(theme::tx_inset(self.input.solo)))
+                        .py(px(theme::PINNED_PROMPT_PAD_Y))
+                        .bg(gpui::rgb(theme::CARD))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .w_full()
+                                .max_w(px(theme::TX_COLUMN_MAX_W))
+                                .child(bubble),
+                        ),
+                )
+                .child(top_fade())
+                .into_any_element(),
+        )
+    }
+
+    /// Jump to latest: while the reader is scrolled away from the tail, a
+    /// round button over the transcript's foot glides back to it.
+    fn jump_to_latest(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.scroll.is_following_tail() || self.glide.is_some_and(|glide| glide.follow) {
+            return None;
+        }
+        // Within a couple of lines of the end (past the list's own foot
+        // room) there is nothing to jump to.
+        let state = self.scroll.list_state();
+        let below = state.max_offset_for_scrollbar().y + state.scroll_px_offset_for_scrollbar().y;
+        let room = theme::body_pad_b(self.input.solo) + self.runway.get().room;
+        if below < px(room + 2. * self.grid().line) {
+            return None;
+        }
+        let id = gpui::ElementId::from(SharedString::from(format!(
+            "transcript-latest-{}",
+            self.input.namespace
+        )));
+        let key = ferrite_ui::pointer::hover_key(&id);
+        let t = ferrite_ui::motion::hover_t(&key);
+        if t > 0. && t < 1. {
+            crate::file_links::mark_fading();
+        }
+        let weak = cx.entity().downgrade();
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(px(theme::JUMP_LATEST_INSET))
+                .flex()
+                .justify_center()
+                .child(
+                        div()
+                            .id(id)
+                            .debug_selector(|| "jump-to-latest".into())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(theme::ICON_BUTTON))
+                            .rounded_full()
+                            .bg(ferrite_ui::motion::mix(
+                                theme::paint::RAISED.into(),
+                                theme::paint::SELECTION_HOVER.into(),
+                                t,
+                            ))
+                            .shadow(ferrite_ui::components::float_shadow())
+                            .cursor_pointer()
+                            .on_hover(ferrite_ui::motion::hover_listener(key))
+                            .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                cx.stop_propagation();
+                                let _ = weak.update(cx, |view, cx| view.glide_to_latest(cx));
+                            })
+                            .child(ferrite_ui::icons::icon(
+                                ferrite_ui::icons::ARROW_DOWN,
+                                theme::ICON_BUTTON_GLYPH,
+                                theme::TEXT,
+                            )),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Glide to the tail and follow it again; reduced motion jumps.
+    fn glide_to_latest(&mut self, cx: &mut Context<Self>) {
+        let (tops, total) = self.estimated_tops();
+        if ferrite_ui::motion::reduced_motion(cx) {
+            self.glide = None;
+            self.scroll.scroll_to_bottom();
+        } else {
+            let view_h = f32::from(self.scroll.list_state().viewport_bounds().size.height);
+            self.glide = Some(Glide {
+                from: self.scroll_position(&tops, total),
+                to: (total - view_h).max(0.),
+                started: cx.background_executor().now(),
+                follow: true,
+            });
+        }
+        cx.notify();
+    }
 }
 
-/// The banner's line as Markdown: `~/ferrite on dev · started 7:18 pm`,
-/// whichever of these the Thread has, the checkout a link that opens it.
-fn banner_markdown(facts: &BannerFacts) -> String {
-    let mut source = String::new();
-    if !facts.workspace.is_empty() {
-        source.push_str(&pane::path_link(
-            &facts.workspace,
-            &facts.workspace_path.display().to_string(),
-        ));
-    }
-    let mut rest = String::new();
-    if let Some(branch) = &facts.branch {
-        rest.push_str(" on ");
-        rest.push_str(branch);
-    }
-    if let Some(started) = &facts.started_at {
-        if !source.is_empty() || !rest.is_empty() {
-            rest.push_str(" \u{b7} ");
-        }
-        rest.push_str("started ");
-        rest.push_str(started);
-    }
-    source.push_str(&pane::escape_words(&rest));
-    source
+/// The group a message row names: its actions show under the pointer
+/// anywhere on it.
+const MESSAGE_GROUP: &str = "transcript-message";
+
+/// A message's actions (`MESSAGE_ACTION`s in a row), laid out at rest and
+/// shown under the pointer anywhere on the message.
+fn message_actions() -> gpui::Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::SPACE_0_5))
+        .h(px(theme::MESSAGE_ACTION))
+        .opacity(0.)
+        .group_hover(MESSAGE_GROUP, |style| style.opacity(1.))
+}
+
+/// The top fade (`TX_TOP_FADE`): the card's fill fading to nothing, over
+/// what scrolls under the top of the transcript or its pinned prompt. It
+/// answers no pointer.
+fn top_fade() -> gpui::Div {
+    let card: gpui::Hsla = gpui::rgb(theme::CARD).into();
+    div().w_full().h(px(theme::TX_TOP_FADE)).bg(gpui::linear_gradient(
+        180.,
+        gpui::linear_color_stop(card, 0.),
+        gpui::linear_color_stop(gpui::Hsla { a: 0., ..card }, 1.),
+    ))
 }
 
 /// What prose path targets resolve against: the checkout, and every path
@@ -1352,65 +1509,6 @@ impl TranscriptView {
         pinned_of(&self.rows, self.scroll.list_state(), self.pinned_h.get())
     }
 
-    /// The pinned prompt band (the prototype's sticky `.prompt`): exactly
-    /// the turn's band — its `❯`, its words, its attachment chip and its
-    /// send time — laid over the top of the list on the plane so it hides
-    /// what scrolls under it. Long prompts show a compact preview; their
-    /// full text remains in the list. Wheel gestures scroll that same list.
-    fn pinned_band(&self, index: usize, shift: gpui::Pixels) -> Option<AnyElement> {
-        let row = self.rows.get(index)?;
-        let block = row.blocks().first()?;
-        let Body::Prompt(line) = &block.body else {
-            return None;
-        };
-        let selection = self.text_runs();
-        let line_height = self.grid().line;
-        let available = f32::from(self.scroll.list_state().viewport_bounds().size.height) / 3.;
-        // Reserve a line for the band's padding, then keep whole text lines.
-        let lines = ((available / line_height) as usize)
-            .saturating_sub(1)
-            .clamp(1, 3);
-        let band = pane::pinned_prompt(block, line, &self.row_cx(&selection), lines);
-        let measured = self.pinned_h.clone();
-        Some(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(shift)
-                .on_children_prepainted(move |bounds, _, _| {
-                    if let Some(bounds) = bounds.first() {
-                        measured.set(bounds.size.height);
-                    }
-                })
-                .child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "transcript-pinned-{}",
-                            self.input.namespace
-                        )))
-                        .block_mouse_except_scroll()
-                        .cursor_default()
-                        .flex()
-                        .justify_center()
-                        .w_full()
-                        // Pulled out by the band's padding, so its text
-                        // keeps the transcript's centred column.
-                        .px(px(theme::tx_inset(self.input.solo) - theme::PROMPT_BAND_PAD_X))
-                        // The band over an opaque plane: together they hide
-                        // the rows scrolling under it, glass or not.
-                        .bg(gpui::rgb(theme::CARD))
-                        .child(
-                            div()
-                                .w_full()
-                                .max_w(px(theme::TX_COLUMN_MAX_W + 2. * theme::PROMPT_BAND_PAD_X))
-                                .child(band),
-                        ),
-                )
-                .into_any_element(),
-        )
-    }
-
     /// Every row's estimated top and the whole transcript's height, from the
     /// heights the list last measured (an unmeasured row counts as the
     /// measured average).
@@ -1468,6 +1566,7 @@ impl TranscriptView {
                 from: self.scroll_position(&tops, total),
                 to: goal,
                 started: cx.background_executor().now(),
+                follow: false,
             });
         }
         cx.notify();
@@ -1487,7 +1586,11 @@ impl TranscriptView {
         let (tops, _) = self.estimated_tops();
         if elapsed >= spec.duration() {
             self.glide = None;
-            self.jump_to(glide.to, &tops);
+            if glide.follow {
+                self.scroll.scroll_to_bottom();
+            } else {
+                self.jump_to(glide.to, &tops);
+            }
             return;
         }
         let at = ferrite_ui::motion::lerp(glide.from, glide.to, spec.progress_at(elapsed));
@@ -1723,7 +1826,6 @@ impl Render for TranscriptView {
         .pb(px(
             theme::body_pad_b(self.input.solo) + self.runway.get().room
         ))
-        .pt(px(self.lift.get()))
         .size_full()
         .min_h_0();
         let scroll = self.scroll.clone();
@@ -1734,13 +1836,10 @@ impl Render for TranscriptView {
         let pinned_asked = self.pinned_asked.clone();
         let pinned_h = self.pinned_h.clone();
         let runway = self.runway.clone();
-        let lift = self.lift.clone();
         let shelf = self.visuals.clone();
         let list_w = self.list_w.clone();
         let reading = self.input.reading_size;
         let inset = theme::tx_inset(solo);
-        let line = grid.line;
-        let bubble_pad = theme::PROMPT_BUBBLE_PAD_Y;
         let pad_b = theme::body_pad_b(solo);
         let list = div()
             // The wheel takes the scroll back from a minimap glide in
@@ -1801,52 +1900,11 @@ impl Render for TranscriptView {
                         }
                     }
                 }
-                // Bottom alignment: while every row fits, the space left
-                // under the last one moves over the first; once they
-                // overflow, none. The list reports a row's bounds without
-                // its top padding, so they read as if the lift were zero.
-                {
-                    let state = scroll.list_state();
-                    let viewport = state.viewport_bounds();
-                    let first = state.bounds_for_item(0);
-                    let last = gaps
-                        .len()
-                        .checked_sub(1)
-                        .and_then(|at| state.bounds_for_item(at));
-                    let now = lift.get();
-                    let next = match (first, last) {
-                        (Some(first), Some(last)) if first.top() >= viewport.top() - px(0.5) => {
-                            (f32::from(viewport.bottom() - last.bottom()) - pad_b).max(0.0)
-                        }
-                        _ => 0.0,
-                    };
-                    if (next - now).abs() >= 0.5 {
-                        lift.set(next);
-                        let weak = weak.clone();
-                        window.defer(cx, move |_, cx| {
-                            let _ = weak.update(cx, |_, cx| cx.notify());
-                        });
-                    }
-                }
-                // A pinned band hides the list's top down to its foot, and
-                // the row passing under the foot down to its next whole
-                // line.
+                // A pinned band covers the list's top down to its foot; the
+                // rows pass under it into its fade.
                 let now = pinned_of(&gaps, scroll.list_state(), pinned_h.get());
-                let band = now.map(|(_, shift)| pinned_h.get() + shift);
-                let settled = scroll.settle_top(
-                    band,
-                    |index| {
-                        gaps.get(index).map_or(0., |row| {
-                            row.gap()
-                                + if row.kind() == RowKind::Prompt {
-                                    bubble_pad
-                                } else {
-                                    0.
-                                }
-                        })
-                    },
-                    line,
-                );
+                let settled =
+                    scroll.set_top_mask(now.map(|(_, shift)| pinned_h.get() + shift));
                 // What the list measured feeds the minimap's estimates.
                 {
                     let state = scroll.list_state();
@@ -1959,7 +2017,12 @@ impl Render for TranscriptView {
             } else {
                 self.input.selection_scope
             });
-        let pinned = pinned.and_then(|(index, shift)| self.pinned_band(index, shift));
+        let pinned = pinned.and_then(|(index, shift)| self.pinned_band(index, shift, cx));
+        let scrolled = {
+            let top = self.scroll.list_state().logical_scroll_top();
+            top.item_ix > 0 || top.offset_in_item > px(0.)
+        };
+        let latest = self.jump_to_latest(cx);
         let minimap = self.minimap(cx);
         if crate::file_links::take_fading() {
             cx.notify();
@@ -1977,21 +2040,19 @@ impl Render for TranscriptView {
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .child(list)
-            // The band and the row passing under its foot, down to its next
-            // whole line: under an opaque plane (a 94% glass plane would let
-            // a cut glyph ghost through), so no partial line shows
-            // (`settle_top`).
-            .children((self.scroll.top_mask() > px(0.)).then(|| {
+            // What scrolls under the top fades out into the card, under the
+            // pinned prompt when there is one.
+            .children(pinned.is_none().then_some(scrolled).filter(|s| *s).map(|_| {
                 div()
-                    .debug_selector(|| "transcript-top-mask".into())
+                    .debug_selector(|| "transcript-top-fade".into())
                     .absolute()
                     .top_0()
                     .left_0()
                     .right_0()
-                    .h(self.scroll.top_mask())
-                    .bg(gpui::rgb(theme::CARD))
+                    .child(top_fade())
             }))
             .children(pinned)
+            .children(latest)
             .children(minimap)
             .children(card)
             .children(find_bar)

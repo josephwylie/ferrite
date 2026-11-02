@@ -14,7 +14,7 @@
 //! | --- | --- | --- |
 //! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
-//! | toasts | [`TOAST_IN`] 180ms, 4px rise / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18) rises into place from 0.3 ([`toast_in`]); one that goes on its own fades away sinking 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server, update and Projects toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
+//! | toasts | [`TOAST_IN`] 180ms, 4px drop / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18), hung top right under the window's head, drops into place from 0.3 ([`toast_in`]); one that goes on its own fades away lifting 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server, update and Projects toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
@@ -25,9 +25,11 @@
 //! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
 //! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks, the PR tab's `N resolved` and `Show more`) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
+//! | switch | [`FADE_QUICK`] 150ms | a Settings on/off switch (`components::switch`): its knob slides to the other end and its track blends between off and on ([`settled`]) |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); a preview opening in the Panel, or another document replacing it, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
-//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
+//! | (Ferrite's) swap | [`SWAP`] 120ms, from 0.5 | the board settling on what it now shows, Solo's Thread or the view ([`Swap`]): a veil of the card's grey lifts off the cards (`components::card_veil`), drawn by the Cockpit over its cached Panes, which replay untouched; never first paint, and a switch within 120ms of the last (a held key) lands at once |
+//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms, and widens 4 → 6px under the pointer over [`HOVER_FADE`] (`scrollbar::step_widen`); idle, nothing is drawn |
 //!
 //! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
 //! keep the kit's own behaviour. A tool group's disclosure in the transcript
@@ -58,7 +60,9 @@
 //!   carry their 0.96 → 1 scale as a 2px shift plus the fade, as Zeron does.
 //! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
 //!   dropped; opacity and scale carry it.
-//! - **Frost and edge fades.** Fork-only paint effects; not ported.
+//! - **Frost.** A fork-only paint effect; not ported. An edge fade is a
+//!   `linear_gradient` overlay in the surface's own fill (the transcript's
+//!   top fade, `TX_TOP_FADE`).
 //! - **The kit's toast card.** Ferrite sets the kit stack's timing
 //!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
 //!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px
@@ -75,7 +79,7 @@
 //! declares nothing, a [`Tween`] reads its target, and a hover snaps.
 //! [`init`] sets the flag from the system setting at launch.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -216,6 +220,7 @@ impl MotionSpec {
 }
 
 pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
+pub const SWAP: MotionSpec = MotionSpec::new(theme::MOTION_SWAP_MS, EASE_OUT_EXPO);
 pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_OUT_EXPO);
 /// The sidebar's ride (cmd-B) and the board riding with it: the
 /// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
@@ -366,9 +371,68 @@ where
     })
 }
 
-/// `toast-in` for a toast hung over the bottom bar: fades up from
-/// `MOTION_MENU_FROM_OPACITY` while rising `MOTION_TOAST_RISE` into place,
-/// over `TOAST_IN`.
+/// `swap` for a place whose content is replaced at keyboard rate (Solo's
+/// Thread, the board's view): the new content settles in from
+/// `MOTION_SWAP_FROM_OPACITY` over [`SWAP`], drawn as a veil of its ground
+/// lifting off it (`components::card_veil`). Not the content's own opacity:
+/// it is a cached part, whose replayed paint keeps the opacity it was first
+/// drawn at, and rebuilding it every frame (its native text included) is
+/// the cost this kit exists to avoid. The veil redraws only the view that
+/// paints it. First paint lands at once, and so does a swap within [`SWAP`]
+/// of the last (a held key walking Threads): selection is keyboard-rate,
+/// and the settle never trails it.
+pub struct Swap<K: Copy + PartialEq> {
+    shown: Cell<Option<K>>,
+    changed: Cell<Option<Instant>>,
+    settle: Cell<Option<Instant>>,
+}
+
+impl<K: Copy + PartialEq> Default for Swap<K> {
+    fn default() -> Self {
+        Self {
+            shown: Cell::new(None),
+            changed: Cell::new(None),
+            settle: Cell::new(None),
+        }
+    }
+}
+
+impl<K: Copy + PartialEq> Swap<K> {
+    /// Note that the place shows `key` at `now`: a change starts a settle,
+    /// unless it is the first thing shown or follows the last change
+    /// within [`SWAP`].
+    fn note(&self, key: K, now: Instant) {
+        if self.shown.get() == Some(key) {
+            return;
+        }
+        let first = self.shown.get().is_none();
+        let rapid = self
+            .changed
+            .get()
+            .is_some_and(|at| now.saturating_duration_since(at) < SWAP.duration());
+        self.shown.set(Some(key));
+        self.changed.set(Some(now));
+        self.settle.set((!first && !rapid).then_some(now));
+    }
+
+    /// The veil's opacity over the place showing `key` this frame: 0 at
+    /// rest, asking for the next frame while it lifts.
+    pub fn veil(&self, key: K, window: &mut Window, cx: &mut App) -> f32 {
+        self.note(key, cx.background_executor().now());
+        let Some(at) = self.settle.get() else {
+            return 0.0;
+        };
+        let t = play(Origin::At(at), SWAP, window, cx);
+        if t >= 1.0 {
+            self.settle.set(None);
+        }
+        (1.0 - theme::MOTION_SWAP_FROM_OPACITY) * (1.0 - t)
+    }
+}
+
+/// `toast-in` for a toast hung under the window's head: fades up from
+/// `MOTION_MENU_FROM_OPACITY` while dropping `MOTION_TOAST_DROP` into
+/// place, over `TOAST_IN`.
 pub fn toast_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
@@ -376,12 +440,12 @@ where
     entrance(id, TOAST_IN, element, |el, t| {
         float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
             .relative()
-            .top(px(theme::MOTION_TOAST_RISE * (1.0 - t)))
+            .top(px(-theme::MOTION_TOAST_DROP * (1.0 - t)))
     })
 }
 
 /// `toast-out` for a toast that went on its own at `left`: fades away over
-/// `TOAST_OUT`, sinking half its rise — shorter and softer than it came.
+/// `TOAST_OUT`, lifting half its drop — shorter and softer than it came.
 /// The caller draws it as a face that answers no pointer, and stops once
 /// [`TOAST_OUT`] has passed.
 pub fn toast_out<E>(left: Instant, element: E) -> impl IntoElement
@@ -395,7 +459,7 @@ where
         face: |el: E, t: f32| {
             float_face(el, 1.0 - t)
                 .relative()
-                .top(px(theme::MOTION_TOAST_RISE / 2.0 * t))
+                .top(px(-theme::MOTION_TOAST_DROP / 2.0 * t))
         },
     }
 }
@@ -1466,6 +1530,37 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+
+    /// A switch settles; the first thing shown, the same thing again and a
+    /// switch hard on the last one land at once.
+    #[test]
+    fn a_swap_settles_only_when_it_is_not_keyboard_rate() {
+        let swap = Swap::default();
+        let t0 = Instant::now();
+        swap.note(1, t0);
+        assert_eq!(swap.settle.get(), None, "first paint lands");
+        let t1 = t0 + Duration::from_secs(1);
+        swap.note(2, t1);
+        assert_eq!(swap.settle.get(), Some(t1), "a switch settles");
+        swap.note(2, t1 + Duration::from_millis(10));
+        assert_eq!(
+            swap.settle.get(),
+            Some(t1),
+            "the same content keeps settling"
+        );
+        let t2 = t1 + SWAP.duration() / 2;
+        swap.note(3, t2);
+        assert_eq!(swap.settle.get(), None, "a held key lands each at once");
+        swap.note(4, t2 + SWAP.duration() / 2);
+        assert_eq!(swap.settle.get(), None, "still walking");
+        swap.note(5, t2 + SWAP.duration() * 4);
+        assert!(swap.settle.get().is_some(), "a fresh switch settles again");
+    }
 }
 
 #[cfg(test)]

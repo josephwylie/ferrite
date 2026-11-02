@@ -157,12 +157,6 @@ pub fn mark(status: RowStatus, small: bool) -> AnyElement {
     marked(status, status.ink(), small)
 }
 
-/// A row's mark on the shell (the nav, the rail): `mark`, its rest ink at
-/// the shell's step (`chrome::ink`).
-pub fn chrome_mark(status: RowStatus, small: bool) -> AnyElement {
-    marked(status, chrome::ink(status.ink()), small)
-}
-
 fn marked(status: RowStatus, ink: u32, small: bool) -> AnyElement {
     if small {
         mark_sized(status, ink, NAV_DOT_SMALL, NAV_MARK_ICON_SMALL)

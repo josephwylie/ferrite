@@ -197,7 +197,7 @@ _Avoid_: compare (the read-only view it replaced), code review (a PR's).
 Ferrite's own record that a Thread's Main finished for good: its turn ended
 and no Subagent is still working, so the operator is wanted back. Unread
 until it is **seen** — its Thread on screen while the window has focus —
-or opened from the Needs-you view; shown there, by a toast, a chime, the
+or opened from the Inbox; shown there, by a toast, a chime, the
 Thread's done mark, and a system notification
 (herdr-focus-notify's) unless it is seen first or its Thread is on the
 board while the window has focus. A Subagent finishing, an interrupt, or a held
@@ -212,12 +212,15 @@ rolls up by and the palette filters by; Ferrite's finer states (failing,
 background, failed, parked) are faces within these.
 _Avoid_: status (too broad), unread (that is the Notice's).
 
-**Needs-you view**
+**Inbox**
 The nav's list of what wants the operator, shown in the tree's place: the
 blocked Threads oldest-first (the queue ⌘D walks), then the Notices under
-`Recent`. Opened from the nav's `Needs you` row, the Bar's count or ⌘I. It
-replaced the bell's list.
-_Avoid_: bell, inbox, needs-you strip (the strip in the tree is gone).
+`Recent`. Opened from the nav's `Inbox` row, the Bar's count or ⌘I. It
+replaced the bell's list. Named apart from the state it lists: *needs you*
+is a Thread's word (the Attention list's `Needs you` section, a row's
+`needs you · approval`), the Inbox the place.
+_Avoid_: Needs-you view (its old name, which read as the section beside
+it), bell, needs-you strip (the strip in the tree is gone).
 
 **Attention list**
 The nav's always-on list, over `Projects`, of the Threads in flight by

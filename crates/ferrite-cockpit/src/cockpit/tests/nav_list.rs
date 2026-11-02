@@ -97,7 +97,7 @@ fn two_decisions_mark_their_rows_and_their_group_and_no_toast(cx: &mut TestAppCo
     });
 }
 
-/// §5.1.2: the Needs-you view stands in the tree's place —
+/// §5.1.2: the Inbox stands in the tree's place —
 /// the blocked Threads oldest-first as their two-line rows, then
 /// `Recent` — counted by the view row's pill. Esc and a click on the
 /// active view return to the tree, and ⌘D still walks the queue.

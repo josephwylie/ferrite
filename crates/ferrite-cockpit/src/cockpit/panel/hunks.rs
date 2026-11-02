@@ -77,6 +77,17 @@ impl Hunks {
         true
     }
 
+    /// Unfold every one of `keys`, or fold them all.
+    fn set_all(&mut self, keys: impl IntoIterator<Item = FileKey>, unfolded: bool) {
+        for key in keys {
+            if unfolded {
+                self.unfolded.insert(key);
+            } else {
+                self.unfolded.remove(&key);
+            }
+        }
+    }
+
     fn unfolded(&self, key: &FileKey) -> bool {
         self.unfolded.contains(key)
     }
@@ -120,6 +131,30 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.panel.hunks.toggle((thread, path));
+        cx.notify();
+    }
+
+    /// Whether every one of `paths` is unfolded (the section line's fold).
+    pub(super) fn panel_files_unfolded<'a>(
+        &self,
+        thread: ThreadId,
+        mut paths: impl Iterator<Item = &'a str>,
+    ) -> bool {
+        paths.all(|path| self.panel.hunks.unfolded(&(thread, path.to_string())))
+    }
+
+    /// The section line's fold: unfold every one of `paths` unless all
+    /// are, then fold them all.
+    pub(crate) fn toggle_panel_files(
+        &mut self,
+        thread: ThreadId,
+        paths: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let unfold = !self.panel_files_unfolded(thread, paths.iter().map(String::as_str));
+        self.panel
+            .hunks
+            .set_all(paths.into_iter().map(|path| (thread, path)), unfold);
         cx.notify();
     }
 

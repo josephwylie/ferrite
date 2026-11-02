@@ -36,37 +36,44 @@
 //! 2. **Cards on a frame** (supersedes "square and flat inside"). The
 //!    window's frame is `FRAME` #222 (the nav, the heads, the right panel,
 //!    a Group's gutter); a Pane is a card on it, `CARD` #181818, radius
-//!    `R_PANE`, a 1px `CARD_RING`. Only the bottom bar (`BAR`) is
-//!    full-bleed. Radii run by role (`R_INLINE` 4 … `R_PALETTE` 12; dots,
+//!    `R_PANE`, a 1px `CARD_RING`. Only the bottom bar (`paint::BAR`, the
+//!    frame's grey under a `BAR_TOP` hairline) is full-bleed. Radii run by role (`R_INLINE` 4 … `R_PALETTE` 12; dots,
 //!    pills and the send circle round). Separation is a 1px white hairline
 //!    (`HAIRLINE` 6% … `HAIRLINE_STRONG` 10%) or a fill step: no visible grey
 //!    borders, no keycap boxes, no boxed section labels. Only a floating
 //!    surface casts, one shadow (`components::float_shadow`); a modal adds
 //!    `VEIL`.
 //! 3. **Neutral greys.** The opaque surfaces, darkest first: `SUNKEN` (a
-//!    command well) < `CARD` < `BAR` (the bar; diff and fence
+//!    command well) < `CARD` < `BAR` (diff and fence
 //!    blocks) < `DECISION` < `FIELD_COMPACT` < `FRAME` = `FIELD` (the Solo
 //!    Composer, the prompt band) < `TAB_ACTIVE` < `RAISED` (chips, inline
-//!    code, secondary buttons, hover on the frame) < `SELECTED` (the
+//!    code, secondary buttons) < `SELECTED` (the
 //!    selected row, tab, option, cursor) < `SELECTION_HOVER` (every press)
 //!    < `SEND`. `FLOAT` grounds menus and popovers. `PRIMARY` (the
-//!    strongest ink, with `ON_PRIMARY`) is the primary button.
-//! 4. **Glass on the frame, terminal in the card** (macOS: `GLASS`). The
-//!    window opens blurred (`window_background`) and its root paints nothing
-//!    (`paint::WINDOW`); each region paints its own fill once, from
-//!    `paint::*`: the shell (the frame and the bars) as glass
-//!    (`SHELL_GLASS`) the desktop reads through, blurred and dimmed; what
-//!    is read (the card, the right panel, a code block) opaque, never a
-//!    busy picture under text; fields, raised and selected fills as white overlays. gpui blurs no
-//!    single element, so a float paints opaque (`paint::FLOAT`), and a
+//!    strongest ink, with `ON_PRIMARY`) is the primary button. Hover is
+//!    not a grey but a white overlay (`HOVER_WASH`, `paint::HOVER`): one
+//!    equal step (+8) on whatever ground the control rests on, the card,
+//!    the frame, a block or a sheet alike.
+//! 4. **An opaque frame, the terminal in a card.** The window is opaque on
+//!    every platform (`WindowBackgroundAppearance::Opaque`): nothing of the
+//!    desktop reads through, so the hierarchy is carried by small value
+//!    steps of rule 3 and by hairlines alone. The root paints the card's
+//!    grey (`paint::WINDOW`); each region paints its own fill once, from
+//!    `paint::*`: the shell is one plane, the frame (`FRAME`: the nav, the
+//!    heads, a Group's gutter, the right panel, the bottom bar), one quiet
+//!    step over the card (`CARD`), the darkest plane, so the reading
+//!    surface recedes and the chrome around it sits forward, the way a
+//!    desktop sidebar does. Only hairlines divide the shell (the bar's
+//!    `BAR_TOP`), never a second grey band. Inside a region, fields, raised and
+//!    selected fills are the next opaque steps. gpui blurs no element, so
+//!    no surface is frosted: a float paints opaque (`paint::FLOAT`), and a
 //!    surface that must occlude what scrolls under it (the sticky prompt, a
-//!    Decision docked over the tail) stacks over its card, never over the
-//!    bare window. Every other platform paints the opaque greys of rule 3.
-//!    Fills and lines go through `theme::paint` (typed `Paint`, so `rgb()`
-//!    cannot swallow one by mistake); the bare consts are the opaque values,
-//!    for contrast math. **Never stack two region fills**: the frame and
-//!    the card are separate regions, and what sits inside a region paints
-//!    an overlay or nothing.
+//!    Decision docked over the tail) paints a solid fill. Fills and lines
+//!    go through `theme::paint` (typed `Paint`, so `rgb()` cannot swallow
+//!    an `0xRRGGBBAA` by mistake); the bare consts are the `0xRRGGBB`
+//!    values, for contrast math. **Never stack two region fills**: the
+//!    frame and the card are separate regions, and what sits inside a
+//!    region paints its own step or nothing.
 //! 5. **An ink ladder with floors**, brightest first: `TEXT_STRONG` #f2f2f2
 //!    (titles, selected rows, the prompt, `**strong**`, `❯`, the caret,
 //!    focus, links and paths in prose), `TEXT_PROSE` (assistant prose),
@@ -153,22 +160,15 @@
 
 use gpui::FontWeight;
 
-// --------------------------------------------------------------- platform
-
-/// Glass on the frame (rule 4): macOS opens the window blurred and paints
-/// translucent fills; every other platform paints the opaque greys. The
-/// `opaque` Cargo feature forces the opaque greys on macOS too (the
-/// headless parity captures, which cannot show the desktop blur).
-pub const GLASS: bool = cfg!(target_os = "macos") && !cfg!(feature = "opaque");
+// ------------------------------------------------------------------ paint
 
 /// An opaque `0xRRGGBB` as a `0xRRGGBBAA` paint.
 pub const fn solid(rgb: u32) -> u32 {
     (rgb << 8) | 0xff
 }
 
-/// A fill or a line whose value depends on the platform (rule 4):
-/// `0xRRGGBBAA`, translucent glass on macOS and the opaque grey elsewhere.
-/// It converts into `Hsla`, `Rgba` and `Fill`, so `.bg(paint::CARD)` and
+/// A fill or a line (rule 4), `0xRRGGBBAA`: an opaque grey or a white
+/// overlay (a hairline). It converts into `Hsla`, `Rgba` and `Fill`, so `.bg(paint::CARD)` and
 /// `.border_color(paint::LINE)` just work, and `rgb()` refuses it: the one
 /// mistake a bare `u32` would let through silently (`rgb(0x1a1a1bf0)` drops
 /// the red byte and paints blue).
@@ -176,13 +176,9 @@ pub const fn solid(rgb: u32) -> u32 {
 pub struct Paint(pub u32);
 
 impl Paint {
-    /// `glass` on macOS, `opaque` elsewhere, both `0xRRGGBBAA`.
-    pub const fn pick(glass: u32, opaque: u32) -> Paint {
-        if GLASS {
-            Paint(glass)
-        } else {
-            Paint(opaque)
-        }
+    /// An opaque `0xRRGGBB` grey.
+    pub const fn solid(rgb: u32) -> Paint {
+        Paint(solid(rgb))
     }
 
     /// The raw `0xRRGGBBAA`, for an API that takes one (`rgba()`).
@@ -220,64 +216,35 @@ impl From<Paint> for gpui::Fill {
 
 // ---------------------------------------------------------------- surfaces
 //
-// The opaque greys (`docs/design/ui-refresh/SPEC.md` §3.1), darkest first,
-// each beside its glass value (`0xRRGGBBAA`, rule 4). Paint a region with
-// `paint::*`, which picks between them; the bare consts are the opaque
-// values, for contrast math and the few places that must be opaque.
+// The opaque greys (`docs/design/ui-refresh/SPEC.md` §3.1), darkest first
+// (rule 3). Paint a region with `paint::*`; the bare consts are the
+// `0xRRGGBB` values, for contrast math.
 
 /// `#161616` — sunk below the card: a Decision's command well, the
 /// palette scrim's base.
 pub const SUNKEN: u32 = 0x161616;
-/// Sunk as glass: a black overlay on the card.
-pub const SUNKEN_GLASS: u32 = 0x00000014;
-/// `#181818` — the card: a Pane's body, the transcript's surface. Opaque
-/// on glass too: the reading never sits on the desktop.
+/// `#181818` — the card: a Pane's body, the transcript's surface.
 pub const CARD: u32 = 0x181818;
-/// `#1e1e1e` — the bottom bar; diff and code-fence blocks.
+/// `#1e1e1e` — diff and code-fence blocks.
 pub const BAR: u32 = 0x1e1e1e;
-/// The shell as glass — the nav, the heads, a Group's gutter, the bars:
-/// `#141414` at 40% over the window's blur, which is untinted (the
-/// vendored `HeaderView` material, its tint layer hidden). The desktop
-/// reads through it in its own colours, barely dimmed; over a white window
-/// it lands on `#a1a1a1`, the worst ground the shell's own inks (`chrome`)
-/// lie on.
-pub const SHELL_GLASS: u32 = 0x14141466;
-pub const BAR_GLASS: u32 = SHELL_GLASS;
 /// `#1f1f1f` — the Decision box.
 pub const DECISION: u32 = 0x1f1f1f;
-/// The Decision box as glass: a white overlay on the card.
-pub const DECISION_GLASS: u32 = 0xffffff08;
 /// `#202020` — the compact Composer in a Group Pane.
 pub const FIELD_COMPACT: u32 = 0x202020;
-/// The compact Composer as glass: a white overlay on the card.
-pub const FIELD_COMPACT_GLASS: u32 = 0xffffff09;
 /// `#222222` — the frame behind the cards: the nav, the heads, the right
 /// panel, a Group's gutter.
 pub const FRAME: u32 = 0x222222;
-/// The frame as glass: the shell's (`SHELL_GLASS`). The right panel is
-/// read like the card, so it paints the frame's grey opaque
-/// (`paint::PANEL`).
-pub const FRAME_GLASS: u32 = SHELL_GLASS;
 /// `#222222` — a field on the card: the Solo Composer's box, the prompt
 /// band. The frame's value, a step over the card.
 pub const FIELD: u32 = 0x222222;
-/// A field as glass: a white overlay on the card.
-pub const FIELD_GLASS: u32 = 0xffffff0d;
 /// `#262626` — the active tab inside a card.
 pub const TAB_ACTIVE: u32 = 0x262626;
-/// The active tab as glass: a white overlay on the card.
-pub const TAB_ACTIVE_GLASS: u32 = 0xffffff0f;
 /// `#2a2a2a` — raised a step: chips, inline code, secondary buttons, the
 /// panel's file block, and the hover fill on the frame.
 pub const RAISED: u32 = 0x2a2a2a;
-pub const RAISED_GLASS: u32 = 0xffffff0f;
 /// `#2a2a2c` — the floating ground: menus, pickers, the palette, popovers,
 /// tooltips, toasts, sheets.
 pub const FLOAT: u32 = 0x2a2a2c;
-/// A float as glass: opaque. gpui blurs no single element, so a backdrop
-/// the prototype's blur softened would let the rows under a menu ghost
-/// through as sharp text; a float must stay legible on its own.
-pub const FLOAT_GLASS: u32 = 0x2c2c2fff;
 /// `#2e2e30` · `#343437` — a float's hover and cursor fills, opaque steps
 /// over its own ground: `RAISED` and `SELECTED` are tuned to the frame
 /// (#222) and land 2 under and 4 over `FLOAT`, so on a float the pointer
@@ -290,10 +257,8 @@ pub const FLOAT_SELECTED: u32 = 0x343437;
 /// `#2e2e2e` — selected: the selected nav row, the active view and panel
 /// tab, the cursor row of a menu, a Decision option and the palette.
 pub const SELECTED: u32 = 0x2e2e2e;
-pub const SELECTED_GLASS: u32 = 0xffffff1c;
 /// `#363636` — a selected row under the pointer, and every press.
 pub const SELECTION_HOVER: u32 = 0x363636;
-pub const SELECTION_HOVER_GLASS: u32 = 0xffffff24;
 /// `#3a3a3a` — the send button's circle (and a comment's avatar).
 pub const SEND: u32 = 0x3a3a3a;
 /// `#f2f2f2` / `#161616` — the primary button (`primary_button`, dialogs
@@ -303,9 +268,9 @@ pub const ON_PRIMARY: u32 = 0x161616;
 
 // -------------------------------------------------------------- hairlines
 //
-// White at an opacity over whatever is below (SPEC §3.2): the same on
-// glass and on the opaque greys, so these are `0xRRGGBBAA` and paint with
-// `rgba()` or `paint::*`.
+// White at an opacity over whatever is below (SPEC §3.2), so one hairline
+// reads the same on every grey: `0xRRGGBBAA`, painted with `rgba()` or
+// `paint::*`.
 
 /// 1px — every hairline's width (rule 2).
 pub const HAIRLINE_W: f32 = 1.0;
@@ -322,14 +287,22 @@ pub const HAIRLINE_STRONG: u32 = 0xffffff1a;
 pub const ROW_RING: u32 = 0xffffff0f;
 /// 5% — the bottom bar's top edge.
 pub const BAR_TOP: u32 = 0xffffff0d;
+/// 3.5% — the hover face of a control or row with no ground of its own
+/// (rule 3): over its parent's ground it lands the same step everywhere,
+/// `#181818` → `#202020` on the card, `#222222` → `#2a2a2a` on the frame
+/// (`RAISED`, the old frame-only face), where an opaque grey would be +18
+/// on the card and vanish on a float.
+pub const HOVER_WASH: u32 = 0xffffff09;
 /// 22% — the focused Pane on a Group (more than one Pane shows), a drop
 /// target's edge.
 pub const FOCUS_RING: u32 = 0xffffff38;
 /// `ATTENTION` at 35% — the ring of a Pane whose Thread is blocked,
 /// focused or not.
 pub const WAIT_RING: u32 = 0xe6c47c59;
-/// `ATTENTION` at 22% — the Decision box's inset ring.
-pub const DECISION_RING: u32 = 0xe6c47c38;
+/// `ATTENTION` at 14% — the Decision box's inset ring: enough hue to say
+/// "needs you" beside the yellow mark in its head, quiet enough that the
+/// box reads as part of the transcript, not an alarm.
+pub const DECISION_RING: u32 = 0xe6c47c24;
 /// 6% — the compact Composer's ring at rest; 12% on the focused Pane.
 pub const COMPACT_RING: u32 = 0xffffff0f;
 pub const COMPACT_RING_FOCUSED: u32 = 0xffffff1f;
@@ -344,59 +317,55 @@ pub const FAILURE_WASH: u32 = 0xef8a8012;
 
 /// `#2c2c2c` — a rule: a seam, a table's row rules, a break.
 pub const LINE: u32 = 0x2c2c2c;
-pub const LINE_GLASS: u32 = 0xffffff14;
 /// `#3a3a3a` — a strong rule: a table's head rule, a code block's
 /// rail, an image's frame.
 pub const LINE2: u32 = 0x3a3a3a;
-pub const LINE2_GLASS: u32 = 0xffffff24;
 /// Fully transparent — an edge that is always in layout and only changes
 /// colour, so nothing reflows when a Decision or a blocker arrives.
 pub const TRANSPARENT: u32 = 0x00000000;
 
-/// **The paints** (rule 4): what a region lays down, glass on macOS and
-/// opaque grey elsewhere. Every fill and line is painted from here.
+/// **The paints** (rule 4): what a region lays down. Every fill and line is
+/// painted from here.
 pub mod paint {
-    use super::{solid, Paint, TRANSPARENT};
+    use super::Paint;
 
-    /// The window's own root: nothing on glass, so each region's fill shows
-    /// the blur behind the window; the card elsewhere.
-    pub const WINDOW: Paint = Paint::pick(TRANSPARENT, solid(super::CARD));
-    pub const CARD: Paint = Paint(solid(super::CARD));
-    pub const FRAME: Paint = Paint::pick(super::FRAME_GLASS, solid(super::FRAME));
-    pub const PANEL: Paint = Paint(solid(super::FRAME));
-    pub const BAR: Paint = Paint::pick(super::BAR_GLASS, solid(super::BAR));
-    /// A diff's or a code fence's box: the bar's grey, opaque on glass too,
-    /// since it sits on a reading surface (the card, the panel), never the
-    /// shell.
-    pub const BLOCK: Paint = Paint(solid(super::BAR));
-    pub const FIELD: Paint = Paint::pick(super::FIELD_GLASS, solid(super::FIELD));
-    pub const RAISED: Paint = Paint::pick(super::RAISED_GLASS, solid(super::RAISED));
-    pub const SELECTED: Paint = Paint::pick(super::SELECTED_GLASS, solid(super::SELECTED));
-    pub const SUNKEN: Paint = Paint::pick(super::SUNKEN_GLASS, solid(super::SUNKEN));
-    pub const DECISION: Paint = Paint::pick(super::DECISION_GLASS, solid(super::DECISION));
-    pub const FIELD_COMPACT: Paint =
-        Paint::pick(super::FIELD_COMPACT_GLASS, solid(super::FIELD_COMPACT));
-    pub const TAB_ACTIVE: Paint = Paint::pick(super::TAB_ACTIVE_GLASS, solid(super::TAB_ACTIVE));
-    pub const SELECTION_HOVER: Paint =
-        Paint::pick(super::SELECTION_HOVER_GLASS, solid(super::SELECTION_HOVER));
+    /// The window's own root, under every region: the card's grey.
+    pub const WINDOW: Paint = CARD;
+    pub const CARD: Paint = Paint::solid(super::CARD);
+    pub const FRAME: Paint = Paint::solid(super::FRAME);
+    /// The right panel: the frame's grey.
+    pub const PANEL: Paint = FRAME;
+    /// The bottom bar: the frame's grey, one shell plane (rule 4).
+    pub const BAR: Paint = FRAME;
+    /// A diff's or a code fence's box, on a reading surface (the card, the
+    /// panel).
+    pub const BLOCK: Paint = Paint::solid(super::BAR);
+    pub const FIELD: Paint = Paint::solid(super::FIELD);
+    pub const RAISED: Paint = Paint::solid(super::RAISED);
+    pub const SELECTED: Paint = Paint::solid(super::SELECTED);
+    pub const SUNKEN: Paint = Paint::solid(super::SUNKEN);
+    pub const DECISION: Paint = Paint::solid(super::DECISION);
+    pub const FIELD_COMPACT: Paint = Paint::solid(super::FIELD_COMPACT);
+    pub const TAB_ACTIVE: Paint = Paint::solid(super::TAB_ACTIVE);
+    pub const SELECTION_HOVER: Paint = Paint::solid(super::SELECTION_HOVER);
     /// Every press: the selected row's hover face.
     pub const PRESS: Paint = SELECTION_HOVER;
-    /// The send circle: a control, not a region, so opaque everywhere (a
-    /// PR comment's avatar wears it too).
-    pub const SEND: Paint = Paint(solid(super::SEND));
-    /// An open pull request's pill: a hue overlay on every platform.
+    /// The hover face of a groundless control or row (`HOVER_WASH`).
+    pub const HOVER: Paint = Paint(super::HOVER_WASH);
+    /// The send circle (a PR comment's avatar wears it too).
+    pub const SEND: Paint = Paint::solid(super::SEND);
+    /// An open pull request's pill: a hue overlay.
     pub const PR_OPEN_PILL: Paint = Paint(super::PR_OPEN_PILL);
-    pub const FLOAT: Paint = Paint::pick(super::FLOAT_GLASS, solid(super::FLOAT));
-    /// The hairlines: white overlays on every platform.
+    pub const FLOAT: Paint = Paint::solid(super::FLOAT);
+    /// The hairlines: white overlays.
     pub const HAIRLINE: Paint = Paint(super::HAIRLINE);
     pub const HAIRLINE_STRONG: Paint = Paint(super::HAIRLINE_STRONG);
     pub const BAR_TOP: Paint = Paint(super::BAR_TOP);
-    pub const LINE: Paint = Paint::pick(super::LINE_GLASS, solid(super::LINE));
-    pub const LINE2: Paint = Paint::pick(super::LINE2_GLASS, solid(super::LINE2));
+    pub const LINE: Paint = Paint::solid(super::LINE);
+    pub const LINE2: Paint = Paint::solid(super::LINE2);
 
-    /// The prompt band: a field that must occlude what scrolls under it, so
-    /// on glass it is 80% over the card (composing to ~99%), not an overlay.
-    pub const PROMPT_BAND: Paint = Paint::pick(0x222222cc, solid(super::FIELD));
+    /// The prompt band: a field that occludes what scrolls under it.
+    pub const PROMPT_BAND: Paint = FIELD;
 }
 
 // ------------------------------------------------------------------ edges
@@ -411,8 +380,8 @@ pub const SCROLLBAR: u32 = 0x3a3a3a;
 pub const SCROLLBAR_HOVER: u32 = 0x555555;
 /// `#ffffff1a` — an unlit meter segment and the usage lines' tracks.
 pub const METER_OFF: u32 = 0xffffff1a;
-/// The veil behind a modal sheet: lighter over glass, which already dims.
-pub const VEIL: u32 = if GLASS { 0x00000033 } else { 0x00000059 };
+/// Black at 35% — the veil behind a modal sheet.
+pub const VEIL: u32 = 0x00000059;
 
 // -------------------------------------------------------------------- ink
 
@@ -434,45 +403,6 @@ pub const TEXT_DIM: u32 = 0x8c8c8c;
 /// `#5e5e5e` — structure, never words: `└`, diff line numbers, rails,
 /// disclosure glyphs, the parked ring.
 pub const TEXT_FAINT: u32 = 0x5e5e5e;
-
-/// **The shell's inks** (rule 5 on glass): the ladder under the same names,
-/// for what sits on the shell — the nav, the view head, the bottom bar. On
-/// glass the shell's ground is whatever lies behind the window, so each
-/// step is chosen for the worst one, a white window under `SHELL_GLASS`
-/// (`#a1a1a1`): near-white, so every word stays above 2:1 there and
-/// `TEXT_FAINT` above 1.7:1, while the steps still read over the desktop. A shell
-/// file imports these over `theme::*`; opaque builds keep the transcript's
-/// ladder. The reading surfaces (the card, the panel, floats) never use
-/// them.
-pub mod chrome {
-    const fn pick(glass: u32, opaque: u32) -> u32 {
-        if super::GLASS {
-            glass
-        } else {
-            opaque
-        }
-    }
-
-    pub const TEXT_STRONG: u32 = pick(0xffffff, super::TEXT_STRONG);
-    pub const TEXT: u32 = pick(0xfafafa, super::TEXT);
-    pub const TEXT_BAR: u32 = pick(0xf2f2f2, super::TEXT_BAR);
-    pub const TEXT_MUTED: u32 = pick(0xeaeaea, super::TEXT_MUTED);
-    pub const TEXT_DIM: u32 = pick(0xe0e0e0, super::TEXT_DIM);
-    pub const TEXT_FAINT: u32 = pick(0xd4d4d4, super::TEXT_FAINT);
-
-    /// A transcript ink a shared helper hands the shell (a state word, a
-    /// mark), as its step on the shell; a hue passes through.
-    pub const fn ink(ink: u32) -> u32 {
-        match ink {
-            super::TEXT => TEXT,
-            super::TEXT_BAR => TEXT_BAR,
-            super::TEXT_MUTED => TEXT_MUTED,
-            super::TEXT_DIM => TEXT_DIM,
-            super::TEXT_FAINT => TEXT_FAINT,
-            ink => ink,
-        }
-    }
-}
 
 // --------------------------------------------------------------- palette
 //
@@ -907,18 +837,20 @@ pub const NAV_WIDTH: f32 = 264.0;
 /// scale: a 28px control and 9px of frame either side.
 pub const WIN_CHROME_H: f32 = TITLEBAR_H;
 /// 46px — the head row, and `STATUS_BAR_H` 30 the bottom bar (full width,
-/// `BAR` under a `BAR_TOP` line). Off the scale: the mockups' rows.
+/// `paint::BAR` under a `BAR_TOP` line). Off the scale: the mockups' rows.
 pub const TITLEBAR_H: f32 = 46.0;
 pub const STATUS_BAR_H: f32 = 30.0;
 /// The view head in the head row over the board (SPEC §5.2): padded
-/// `VIEW_HEAD_PAD_L` (6) inside the board's column, its parts
+/// `VIEW_HEAD_PAD_X` (6) inside the board's column at both ends (the
+/// title over the cards' left edge, `New thread` over their right, clear
+/// of the panel's tabs), its parts
 /// `VIEW_HEAD_GAP` (10) apart — the title (`FS_TITLE` 600), the Project in
 /// `TEXT_DIM`, a spacer, then `New thread` (Group) and, while the panel is
 /// hidden, the panel toggle. A secondary button is `CONTROL_H` at
 /// `R_CONTROL` on `RAISED`, padded `CONTROL_CHIP_PAD_X` (10), its icon
 /// and label `CONTROL_CHIP_GAP` (6) apart, the icon `CONTROL_CHIP_ICON`
 /// (13). Off the scale: the mockups' head.
-pub const VIEW_HEAD_PAD_L: f32 = SPACE_1_5;
+pub const VIEW_HEAD_PAD_X: f32 = SPACE_1_5;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
 pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
 pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
@@ -984,6 +916,12 @@ pub const PANEL_ROW_TEXT_X: f32 = 34.0;
 pub const PANEL_SECTION_H: f32 = 30.0;
 /// 32px — the panel's full-width secondary buttons (`Review changes`).
 pub const PANEL_BUTTON_H: f32 = 32.0;
+/// A changed file's actions (copy its path, open it in its app), laid
+/// over its diffstat while the pointer is on its head: 22px doors (the
+/// nav heading's `+`) holding a 13px glyph, 2px apart, on the head's own
+/// `RAISED`, a door's hover a step up (`SELECTED`).
+pub const PANEL_FILE_ACTION: f32 = NAV_HEADING_BUTTON;
+pub const PANEL_FILE_ACTION_GLYPH: f32 = 13.0;
 /// A file block's hunk area (phase 7b): on `BAR`, padding 4 0 6, its lines
 /// in the panel's diff face (`FS_PANEL_DIFF`/`LH_PANEL_DIFF`), each on a
 /// 2.5-cell sign column inset 1 cell; no line numbers.
@@ -1005,8 +943,7 @@ pub const PANEL_FOOT_PAD_B: f32 = SPACE_1;
 
 //
 // Off the space scale where the mockup's PR tab is (`pr-states.html`): its
-// 10px row gaps and paddings, the pill's 5 · 7 · 9, the empty state's 18
-// and 36.
+// 10px row gaps and paddings, the pill's 5 · 7 · 9, the empty state's 36.
 
 /// 14px — between the PR tab's sections (SPEC §5.6.2), and under its head.
 pub const PR_SECTION_GAP: f32 = 14.0;
@@ -1027,12 +964,17 @@ pub const PR_TITLE_GAP: f32 = 10.0;
 pub const PR_ROW_GAP: f32 = 10.0;
 /// 10px — a comment card's block padding (12px inline, `SPACE_3`).
 pub const PR_COMMENT_PAD_Y: f32 = 10.0;
-/// The empty state (no pull request, no `gh`): 18px down, its parts 10px
-/// apart; a 36px badge (r10, `RAISED`) holding a 17px icon.
-pub const PR_EMPTY_PAD_T: f32 = 18.0;
-pub const PR_EMPTY_GAP: f32 = 10.0;
-pub const PR_EMPTY_BADGE: f32 = 36.0;
-pub const PR_EMPTY_ICON: f32 = 17.0;
+/// Every Panel tab's empty state (`panel::panel_empty`: no changes, no
+/// pull request, no `gh`, no context reading): its parts 10px apart, a
+/// 36px badge (r10, `RAISED`) holding a 17px icon, its explanation at most
+/// `PANEL_EMPTY_W` wide; the block centred in the room the tab leaves it,
+/// raised `PANEL_EMPTY_LIFT` so it reads at the eye's middle, not the
+/// column's.
+pub const PANEL_EMPTY_GAP: f32 = 10.0;
+pub const PANEL_EMPTY_BADGE: f32 = 36.0;
+pub const PANEL_EMPTY_ICON: f32 = 17.0;
+pub const PANEL_EMPTY_W: f32 = 240.0;
+pub const PANEL_EMPTY_LIFT: f32 = 2. * SPACE_6;
 /// 26px — the head's `refresh` and `external` buttons (r6), a 14px icon.
 pub const PR_ICON_BUTTON: f32 = 26.0;
 pub const ICON_PR_BUTTON_GLYPH: f32 = 14.0;
@@ -1072,8 +1014,9 @@ pub const PR_RESOLVED_OPACITY: f32 = 0.6;
 pub const PR_SPIN_MS: u64 = 900;
 pub const PR_SPIN_STEPS: usize = 18;
 
-/// A toast's width.
-pub const TOAST_W: f32 = 400.0;
+/// A toast's widest: over the right panel it takes the panel's content
+/// column instead, when that is narrower (`cockpit::toast_float`).
+pub const TOAST_W: f32 = 320.0;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
 /// one toast (`max_items`), so this is only ever the kit's own spacing.
 pub const TOAST_GAP: f32 = SPACE_3;
@@ -1203,16 +1146,6 @@ pub const FONT_UI: &str = "Geist";
 /// anywhere: Geist Mono, the kit's `mono_font_family`.
 pub const FONT_CODE: &str = "Geist Mono";
 
-/// How the window's own background is drawn (rule 4): blurred glass on
-/// macOS, opaque elsewhere. The root then paints `paint::WINDOW`.
-pub fn window_background() -> gpui::WindowBackgroundAppearance {
-    if GLASS {
-        gpui::WindowBackgroundAppearance::Blurred
-    } else {
-        gpui::WindowBackgroundAppearance::Opaque
-    }
-}
-
 /// Install Longbridge once per app, then map its semantic theme to Ferrite's
 /// tokens. Constructors also call this for standalone test windows. The
 /// window mounts the toolkit Root for Settings search input and focus.
@@ -1239,9 +1172,8 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.motion.spring_move = gpui::base::Spring::new(std::time::Duration::from_millis(120))
         .with_damping(1.0)
         .with_epsilon(0.1);
-    // The kit's ground is the opaque plane: its fields and dialogs sit on
-    // a region already painted, never on the bare glass window (the window
-    // Root's own ground is overridden with `paint::WINDOW`, `lib.rs`).
+    // The kit's ground is the card (the window Root's own ground is
+    // `paint::WINDOW`, `lib.rs`).
     theme.background = rgb(CARD).into();
     theme.foreground = rgb(TEXT).into();
     theme.border = paint::LINE2.into();
@@ -1318,14 +1250,15 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
     // A toast is the rail's voice only (C8): with the nav open its rows'
     // marks are the queue, and a toast shows only while the nav is
-    // collapsed and its Thread is off the board (`NeedsYou::present`). It
-    // stands BottomRight, above the Composer, one at a time; the Needs-you view
-    // holds the rest.
-    theme.notification.placement = gpui::Anchor::BottomRight;
+    // collapsed and its Thread is off the board (`NeedsYou::present`). Every
+    // toast, the kit's and the Needs-you one, stands TopRight under the
+    // window's head (`TOAST_TOP`), clear of the Composer the operator types
+    // in, one at a time; the Inbox holds the rest.
+    theme.notification.placement = gpui::Anchor::TopRight;
     theme.notification.margins = gpui::base::Edges {
-        top: px(WIN_CHROME_H + GRID_PAD),
-        right: px(GRID_PAD),
-        bottom: px(TOAST_ABOVE_COMPOSER),
+        top: px(WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP),
+        right: px(TOAST_BOX_RIGHT),
+        bottom: px(STATUS_BAR_H + TOAST_TOP),
         left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
@@ -1381,23 +1314,24 @@ pub fn init_components(cx: &mut gpui::App) {
 //   `RUNNING` live, `BLOCKED` failed; never pulsing); `✻` (in the
 //   provider's colour) the turn's end; `◆` (`ATTENTION`) a Decision — all
 //   typed (rule 10). `∴` (drawn) heads reasoning.
-// - **The banner.** Every transcript opens on one `TEXT_DIM` line:
-//   `~/ferrite on dev · started 7:18 pm` (ADR 0014). The nav row names
-//   the Thread and the status line its model.
+// - **No banner.** A transcript opens on its first prompt: the head names
+//   the Thread and its Project, the Panel its branch (ADR 0014's banner is
+//   retired).
 // - **The prompt bubble.** The prompt echo is a right-aligned
 //   `paint::RAISED` bubble (`R_BUBBLE`) shrinking to its words in Geist
 //   `TEXT_STRONG`, its non-image files' chips inline after them, its
-//   images as thumbnails under it, and its send time (`TEXT_FAINT`) under
-//   those while the pointer is over it.
-// - **The pinned band.** The prompt of the turn being read stays pinned at
-//   the top of the body while its output scrolls under it: a `paint::FIELD`
-//   box (`R_CONTROL`), `PROMPT_BAND_PAD_X` either side and pulled out by as
-//   much so its text keeps the column, `prompt_band_pad_y` above and below:
-//   `❯` (`W_STRONG`) in the gutter, the text in `TEXT_STRONG` at body
-//   weight, its attachments inline after the words (`TEXT_STRONG` names on
-//   `paint::RAISED` chips at `R_INLINE`), and its send time (`7:31 pm`,
-//   `TEXT_DIM`) in its own right-aligned column on the first line, pushed
-//   up by the next turn's prompt. Nothing on the band answers the pointer.
+//   images as thumbnails under it; its send time and `Copy` left of it
+//   while the pointer is on it (the message actions). A turn's answer
+//   carries its `Copy` under it the same way.
+// - **Reading order.** Rows read down from the top of the body, as a new
+//   conversation does; the tail is followed once they overflow, and a
+//   reader scrolled away from it gets `Jump to latest`.
+// - **The pinned prompt.** The prompt of the turn being read stays pinned at
+//   the top of the body while its output scrolls under it: its own bubble,
+//   right-aligned, clamped to `PINNED_PROMPT_LINES`, on a plane in the
+//   card's fill (`PINNED_PROMPT_PAD_Y` above and below), the rows passing
+//   under it into the top fade (`TX_TOP_FADE`); pushed up by the next
+//   turn's prompt. A click on it glides back to its turn.
 // - **Activity.** A call or a run of calls is one muted line in the app's
 //   words (`Edited 3 files ›`, `Ran cargo test · 954 passed ›`), a literal
 //   a step brighter on no chip; no icon, no time, its `›` when it opens.
@@ -1409,9 +1343,13 @@ pub fn init_components(cx: &mut gpui::App) {
 //   a line and a half off; a row that answers the one above it sits flush.
 //   The space above a row is chosen at reconcile from the row before it
 //   (`rows::gap_before`) and is part of the row's identity.
-// - **The turn's end.** `✻ 41s · 2.9k tokens`, `TEXT_DIM`; a failed or
-//   interrupted turn says `failed · 0.1s · <message>`, the lead word in its
-//   state ink.
+// - **The turn's end.** A turn that took `TURN_STAMP_MIN_MS` or more closes
+//   on `Worked for 5m 22s`, `TEXT_DIM`, a `HAIRLINE` running on to the
+//   column's end; a quicker one says nothing. A failed or interrupted turn
+//   says `failed · 0.1s · <message>`, the lead word in its state ink.
+// - **Failure** is a word: a failed call's line stays in the work's ink and
+//   its verdict (`· failed`) follows the cut, `failed` in `BLOCKED`; what
+//   it printed reads as output does.
 // - **Diffs** sit in the block box (`BLOCK_*`: `paint::BAR`, `R_CONTROL`,
 //   an inset `HAIRLINE`), `BLOCK_MARGIN_T` under their call: a `TEXT_DIM`
 //   hunk header naming its section (none when it has none), line numbers
@@ -1488,12 +1426,10 @@ pub fn tx_half(line: f32) -> f32 {
 
 /// The transcript column's inset from the card's edges, left and right
 /// (SPEC §5.4): 28px in Solo, 18px in a Group Pane. Off the space scale:
-/// the mockups' `padding: 0 28px` / `0 18px`, which put the prompt band
-/// (pulled out `PROMPT_BAND_PAD_X`) 16px and 6px in from the card. The
-/// right inset clears the minimap rail (`MINIMAP_W`).
+/// the mockups' `padding: 0 28px` / `0 18px`. The right inset clears the
+/// minimap rail (`MINIMAP_W`).
 pub const TX_INSET_SOLO: f32 = 28.0;
 pub const TX_INSET_GROUP: f32 = 18.0;
-const _: () = assert!(TX_INSET_GROUP - PROMPT_BAND_PAD_X > 0.0);
 
 /// The reading column's widest: the transcript centres in the card with
 /// this at most between its edges (the Claude app's ~720px column), the
@@ -1512,25 +1448,6 @@ pub fn tx_inset(solo: bool) -> f32 {
         TX_INSET_SOLO
     } else {
         TX_INSET_GROUP
-    }
-}
-
-/// **The prompt band** (SPEC §5.4): a `paint::FIELD` box, `R_CONTROL`
-/// corners, `PROMPT_BAND_PAD_X` either side and pulled out by as much, so
-/// its `❯` and words keep the transcript's column; `PROMPT_BAND_PAD_Y`
-/// above and below in Solo, `PROMPT_BAND_PAD_Y_GROUP` in a Group Pane (the
-/// mockups' `padding: 8px 12px` / `7px 12px`: one off-scale pixel less on
-/// the Group's 20px line).
-pub const PROMPT_BAND_PAD_X: f32 = SPACE_3;
-pub const PROMPT_BAND_PAD_Y: f32 = SPACE_2;
-pub const PROMPT_BAND_PAD_Y_GROUP: f32 = 7.0;
-
-/// The prompt band's padding above and below its text, Solo or Group.
-pub fn prompt_band_pad_y(solo: bool) -> f32 {
-    if solo {
-        PROMPT_BAND_PAD_Y
-    } else {
-        PROMPT_BAND_PAD_Y_GROUP
     }
 }
 
@@ -1599,10 +1516,9 @@ pub const MINIMAP_BAND_HOVER: u32 = 0xffffff1c;
 /// A minimap jump's scroll: eased over this long (reduced motion jumps).
 pub const MINIMAP_SCROLL_MS: u64 = 300;
 
-/// **The banner** (a transcript's first row): one muted line; Solo pads
-/// `BANNER_PAD_T` above it (board Panes none, `.tx{padding-top:0}`), and the
-/// first band sits a line below it.
-pub const BANNER_PAD_T: f32 = LH_UI;
+/// The room over a Solo transcript's first row (board Panes none,
+/// `.tx{padding-top:0}`).
+pub const TX_PAD_T: f32 = LH_UI;
 /// What a prompt band's chip line adds below it: the prototype's chip is an
 /// `inline-flex` box seated on its icon's synthesized baseline, which lifts
 /// it above the line's strut and grows that line box by two pixels. The
@@ -1638,6 +1554,39 @@ pub const HOVER_CARD_NUMBER_PAD_CELLS: f32 = 2.0;
 /// ink, fading in over `PATH_UNDERLINE_FADE_MS`; transparent at rest.
 pub const PATH_UNDERLINE_W: f32 = 1.0;
 pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
+// ---- transcript app pass (owner: transcript.rs and its rows)
+/// A completed turn closes with `Worked for 5m 22s` only when it took at
+/// least this long: a quick answer needs no receipt. An interrupted or
+/// failed turn always says so.
+pub const TURN_STAMP_MIN_MS: u64 = 30_000;
+/// The turn stamp's rule runs from its words to the column's end, this far
+/// after them.
+pub const TURN_STAMP_RULE_GAP: f32 = SPACE_3;
+/// **Message actions**: a prompt's (its send time and `Copy`, left of its
+/// bubble) and a turn's answer's (`Copy`, under it) show under the pointer
+/// anywhere on the message. Each is a `MESSAGE_ACTION` square at `R_CHIP`,
+/// its `MESSAGE_ACTION_GLYPH` icon in `TEXT_DIM`, the raised hover blend;
+/// a copy turns to a check (`Copied`) for `COPIED_HOLD_MS`. An answer's row
+/// stands `MESSAGE_ACTIONS_GAP` under its prose, laid out at rest so the
+/// pointer never moves the transcript.
+pub const MESSAGE_ACTION: f32 = SPACE_6;
+pub const MESSAGE_ACTION_GLYPH: f32 = 14.0;
+pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_1;
+pub const COPIED_HOLD_MS: u64 = 1_500;
+/// **The top fade**: what scrolls under the top of the transcript (or under
+/// its pinned prompt) fades out over this height into the card, so no row
+/// ends on a hard cut.
+pub const TX_TOP_FADE: f32 = SPACE_6;
+/// The pinned prompt keeps at most this many of its lines, its plane
+/// `PINNED_PROMPT_PAD_Y` above and below the bubble.
+pub const PINNED_PROMPT_LINES: usize = 2;
+pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
+/// **Jump to latest**: while the reader is scrolled away from the tail, a
+/// round `ICON_BUTTON` (`paint::RAISED`, the down arrow) floats centred
+/// `JUMP_LATEST_INSET` above the transcript's foot; a click glides back to
+/// the tail and follows it again.
+pub const JUMP_LATEST_INSET: f32 = SPACE_3;
+// ---- (end transcript app pass)
 // (end WP-A) — append above this line only
 
 // ======================================== WP-B · markdown, prose, scrollbars
@@ -1933,25 +1882,36 @@ pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
 /// enough that the board under it still reads.
 pub const DRAG_GHOST_OPACITY: f32 = 0.86;
 
-/// The empty board, on the plane: two rows down and four cells in, a
-/// banner (the mark three rows tall, `EMPTY_BANNER_GAP` before its lines),
-/// then the commands and the recent Threads as rows on the grid.
-pub const EMPTY_PAD_Y: f32 = 2.0 * ROW;
-pub const EMPTY_PAD_X: f32 = 4.0 * CH;
-pub const EMPTY_BANNER_GAP: f32 = 3.0 * CH;
-pub const EMPTY_MARK_H: f32 = 3.0 * ROW;
-/// A command row (fit-content): the `❯` column, the verb's 30 cells, the
-/// key's 10 right-aligned, a cell of padding after it. A row's band (the
-/// selection, a recent row's hover) hangs `EMPTY_ROW_INSET` outside the
-/// text's edge, so its rounded fill clears the `❯`.
-pub const EMPTY_ROW_INSET: f32 = SPACE_2;
-pub const EMPTY_VERB_W: f32 = 30.0 * CH;
-pub const EMPTY_KEY_W: f32 = 10.0 * CH;
-/// A recent row (fit-content, 68 cells under the hover band): two cells of
-/// air, the dot's two, the title's 44, the project's 14, the age's 6.
-pub const EMPTY_RECENT_TITLE_W: f32 = 44.0 * CH;
-pub const EMPTY_RECENT_PROJECT_W: f32 = 14.0 * CH;
-pub const EMPTY_RECENT_AGE_W: f32 = 6.0 * CH;
+/// **The home**: what an empty board shows and what a launching draft
+/// stands over its Composer — the steel mark `HOME_MARK_H` tall, then
+/// `HOME_MARK_GAP` lower the greeting (`components::greeting`) in
+/// `FS_HOME_TITLE` on its own line height, centred. One picture for "start
+/// something", so an empty board that opens a draft keeps its heading.
+pub const HOME_MARK_H: f32 = 2.0 * ROW;
+pub const HOME_MARK_GAP: f32 = SPACE_4;
+/// 20/28 — the home's greeting: the one display size in the chrome.
+pub const FS_HOME_TITLE: f32 = 20.0;
+pub const LH_HOME_TITLE: f32 = 28.0;
+/// The empty board: one column, the reading column's `TX_COLUMN_MAX_W`
+/// wide as a launching draft's Composer is (narrower in a narrow board,
+/// `EMPTY_PAD` clear of its edges), centred and lifted
+/// `DRAFT_LAUNCH_LIFT` over the middle as a launching draft is. Under the
+/// greeting, `EMPTY_FACTS_GAP` down, the CLIs found in `FS_META`; then,
+/// `EMPTY_SECTION_GAP` apart, the start actions and the recent Threads.
+pub const EMPTY_PAD: f32 = SPACE_6;
+pub const EMPTY_FACTS_GAP: f32 = SPACE_1_5;
+pub const EMPTY_SECTION_GAP: f32 = SPACE_6 + SPACE_2;
+/// A home row (an action or a recent Thread): `EMPTY_ROW_H`, radius
+/// `R_CONTROL`, `EMPTY_ROW_PAD_X` in; an `EMPTY_ICON_W` column for its
+/// icon or state mark, `EMPTY_ROW_GAP` before the label; the key or the
+/// project and age at the right in `FS_META` `TEXT_DIM`. The selected
+/// action is `paint::SELECTED`, the rest the row hover.
+pub const EMPTY_ROW_H: f32 = ROW + SPACE_3;
+pub const EMPTY_ROW_PAD_X: f32 = SPACE_3;
+pub const EMPTY_ROW_GAP: f32 = SPACE_3;
+pub const EMPTY_ICON_W: f32 = NAV_ICON;
+/// The recent heading's foot over its first row.
+pub const EMPTY_HEADING_PAD_B: f32 = SPACE_1_5;
 /// How many recent Threads the empty board lists (R13).
 pub const EMPTY_RECENT_MAX: usize = 4;
 
@@ -1973,11 +1933,12 @@ pub const BAR_NEED_DOT: f32 = SPACE_1_5;
 
 /// An empty draft's mark, flat, in a quiet ink a step over the plane.
 pub const EMBOSS_ON_PANE: u32 = LINE;
-/// 44px — an empty draft's mark over its Composer (Solo) or at its body's
-/// centre (a board): the Pane is ready, and the Composer's placeholder
-/// still says what to do, once.
+/// 44px — an empty draft's mark at its body's centre on a board: the Pane
+/// is ready, and the Composer's placeholder still says what to do. A
+/// launching draft (Solo) stands the home's greeting over its Composer
+/// instead (`HOME_*`).
 pub const DRAFT_MARK: f32 = 44.0;
-/// 24px — from a launching draft's mark down to its Composer.
+/// 24px — from a launching draft's greeting down to its Composer.
 pub const DRAFT_MARK_GAP: f32 = SPACE_6;
 /// 64px — how far a launching draft's pair sits above the Pane's middle:
 /// the optical centre is above the measured one.
@@ -1989,8 +1950,11 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 // Edit values and append tokens only inside this section.
 
 /// **The Composer is a box in the card** (SPEC §5.5). In Solo it stands
-/// `COMPOSER_INSET` from the card's sides and foot: `paint::FIELD` at
-/// `R_PANE`, a 1px `FIELD_RING` laid outside it (it takes no layout).
+/// under the reading column: at most `TX_COLUMN_MAX_W` wide, centred as
+/// the transcript is, and never nearer the card's sides and foot than
+/// `COMPOSER_INSET` (the working line and the shelf keep the same column):
+/// `paint::FIELD` at `R_PANE`, a 1px `FIELD_RING` laid outside it (it takes
+/// no layout).
 ///
 /// - **The working line** (`pane::working_line`) is the stack's top row,
 ///   `COMPOSER_WORKING_GAP_SOLO` above what follows it.
@@ -2025,11 +1989,7 @@ pub const DRAFT_LAUNCH_LIFT: f32 = 64.0;
 ///
 /// Any pad or line change here must update `pane::composer_fixed_height` in
 /// the same commit.
-/// The old board band's padding, kept for the kit's toast margin
-/// (`TOAST_ABOVE_COMPOSER`).
-pub const COMPOSER_PAD_Y: f32 = 6.0;
 pub const COMPOSER_ROW_H: f32 = LH_UI;
-pub const COMPOSER_STATUS_PAD_B: f32 = 6.0;
 /// How far a table cell's text sits under the cell's top (`rich::style`):
 /// the prototype's 19px line centred in its 20px cell, rounded down to the
 /// whole pixel.
@@ -2125,11 +2085,19 @@ pub const IMAGE_DRAG_SLOP: f32 = 3.0;
 /// still `RUNNING` dot, the task cut at 32 cells, and a quiet `×` that
 /// stops it.
 pub const BG_CHIP_MAX_W: f32 = 32.0 * CH;
-/// A pending file on the shelf (a shelf chip): the image mark (or a 12px
-/// thumbnail) and the name in `LINK_INK`, cut at 32 cells, then `×`.
+/// A pending file (a shelf chip; in Solo inside the box, over the input):
+/// the image mark (or a 12px thumbnail) and the name in `LINK_INK`, cut at
+/// 32 cells, then the `close` icon (`ATTACH_REMOVE_ICON`) in `TEXT_DIM` on
+/// an `ATTACH_REMOVE` square, a ghost fill under the pointer.
 pub const ATTACH_CHIP_H: f32 = SHELF_CHIP_H;
 pub const ATTACH_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_THUMB: f32 = 12.0;
+pub const ATTACH_REMOVE: f32 = SPACE_4;
+pub const ATTACH_REMOVE_ICON: f32 = 10.0;
+/// In Solo the pending files ride inside the box, a row of chips
+/// `COMPOSER_INPUT_PAD_X` in and `COMPOSER_INPUT_PAD_T` under its top (or
+/// the queued row), `ATTACH_ROW_GAP` over the text.
+pub const ATTACH_ROW_GAP: f32 = SPACE_2;
 /// The model picker hangs off the model chip: its left edge 8px left of
 /// the chip's (so its section logo sits left of the chip's logo), its foot
 /// 5px over the chip.
@@ -2202,9 +2170,10 @@ pub const COMPOSER_SEND_GAP: f32 = SPACE_1_5;
 /// - **A footer** (`menu::footer`): a `FLOAT_RULE` hairline, then one row
 ///   of key hints in 12 `TEXT_DIM` (its `·` too): `↑↓ select · ⏎ open ·
 ///   esc`.
-/// - **An inverse token** (`menu::token`): the chosen one of a short ladder
-///   (an effort, a two-way setting) on `PRIMARY` in `ON_PRIMARY`; the rest
-///   `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
+/// - **A lit token** (`menu::token`): the chosen one of a short ladder
+///   (an effort, a two-way setting) on `FLOAT_SEL` in `TEXT_STRONG` at
+///   `W_LABEL` (the primary's white stays the one primary action); the
+///   rest `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
 pub const FLOAT_DETAIL_GAP: f32 = MENU_ROW_GAP;
 pub const FLOAT_SECTION_GAP: f32 = SPACE_1;
 pub const FLOAT_FOOT_H: f32 = FLOAT_ROW_H + 1.0;
@@ -2229,17 +2198,19 @@ pub const FORM_BUTTON_PAD_X: f32 = CH;
 pub const TOOLTIP_PAD_X: f32 = FLOAT_PAD_X;
 pub const TOOLTIP_PAD_Y: f32 = (FLOAT_ROW_H - LH_UI) / 2.0;
 pub const TOOLTIP_MAX_W: f32 = 320.0;
-/// The kit's own toast stack (unused by the Needs-you view, kept for the kit's
-/// margins in `init_components`): this far up from the window's foot.
-pub const TOAST_ABOVE_COMPOSER: f32 =
-    GRID_PAD + 1.0 + 2.0 * COMPOSER_PAD_Y + COMPOSER_ROW_H + COMPOSER_STATUS_PAD_B + HALF_ROW;
-/// **A toast**: a float `TOAST_W` wide, its right edge
-/// `TOAST_BOX_RIGHT` in from the window's, its foot `TOAST_BOTTOM` over the
-/// bottom bar. One row of head (`◆ needs you · <title>`, `⌘D`), one body
-/// line, then the quick answers: `TOKEN_H` pills (`menu::token`'s size),
+/// **A toast** hangs top right, `TOAST_TOP` under what it clears, and
+/// never over the Composer the operator types in. With the right panel
+/// shown it stands in the panel's content column (its pads in, at most
+/// `TOAST_W`), under the window's head: the panel is reference, the board
+/// is what is being read. With no panel it is `TOAST_W` wide, its right
+/// edge `TOAST_BOX_RIGHT` in, under a Pane's head or tab strip
+/// (`PANE_HEAD_H`), so it covers no head's controls (the kit's toast stack
+/// stands there too).
+/// One row of head (`◆ needs you · <title>`), one body line, then
+/// the quick answers: `TOKEN_H` buttons (`Allow 1`, `Deny 3`, `Open ⏎`),
 /// `TOAST_QUICK_GAP` over the float's edge.
 pub const TOAST_BOX_RIGHT: f32 = SPACE_4;
-pub const TOAST_BOTTOM: f32 = SPACE_4;
+pub const TOAST_TOP: f32 = SPACE_2;
 pub const TOAST_QUICK_GAP: f32 = SPACE_2;
 /// **The palette** (command search, ⌘K; SPEC §5.8, `command-search.png`):
 /// a 640px dialog centred on the board, its head `PALETTE_TOP` under the
@@ -2257,8 +2228,10 @@ pub const TOAST_QUICK_GAP: f32 = SPACE_2;
 ///   heading after the first `PALETTE_SECTION_GAP` lower; rows
 ///   `PALETTE_ROW_H`, radius `R_CONTROL`, `PALETTE_ROW_PAD_X` in, their
 ///   parts `PALETTE_GAP` apart — the `PALETTE_MARK_W` mark column, the
-///   name, the context and chord at the right, then the
-///   `PALETTE_ENTER_ICON` enter mark's column;
+///   name, the context at the right, then the `PALETTE_KEYS_W` key
+///   column (right-aligned: the row's chord, or on a chordless cursor row
+///   the `PALETTE_ENTER_ICON` enter mark), so every context ends on one
+///   edge;
 /// - the footer, `PALETTE_FOOT_H` under a `HAIRLINE`, `PALETTE_PAD_X` in.
 ///
 /// The shortcuts sheet takes the same width, input row and veil.
@@ -2269,13 +2242,13 @@ pub const PALETTE_TOP: f32 = 56.0;
 /// a bare 4 levels over its ground and all but vanish (a deliberate
 /// departure from SPEC §5.8's `FLOAT ground`). Opaque on every platform,
 /// as every float is (FL-15).
-pub const PALETTE_GROUND: Paint = Paint(solid(FRAME));
+pub const PALETTE_GROUND: Paint = paint::FRAME;
 /// The palette's rows on that ground: the frame's own steps, opaque —
 /// `RAISED` under the pointer, `SELECTED` the cursor (the mockup's
 /// `#2e2e2e`). The float inks (`FLOAT_HOVER`, `FLOAT_SEL`) step over
 /// `FLOAT` instead.
-pub const PALETTE_HOVER: Paint = Paint(solid(RAISED));
-pub const PALETTE_SEL: Paint = Paint(solid(SELECTED));
+pub const PALETTE_HOVER: Paint = paint::RAISED;
+pub const PALETTE_SEL: Paint = paint::SELECTED;
 pub const PALETTE_INPUT_H: f32 = 50.0;
 pub const PALETTE_PAD_X: f32 = SPACE_4;
 /// 10 — between a row's parts, and the input row's (off the space scale,
@@ -2296,6 +2269,11 @@ pub const PALETTE_ROW_PAD_X: f32 = 10.0;
 pub const PALETTE_MARK_W: f32 = 14.0;
 pub const PALETTE_MARK_ICON: f32 = 14.0;
 pub const PALETTE_ENTER_ICON: f32 = 13.0;
+/// The key column: wide enough for a four-glyph chord (`⌃⌥⌘K`) at 12px.
+/// The note a list with nothing to show stands in (`No matches`), centred
+/// in two rows' height, so an empty result does not collapse the dialog.
+pub const PALETTE_EMPTY_H: f32 = 2.0 * PALETTE_ROW_H;
+pub const PALETTE_KEYS_W: f32 = SPACE_6 + SPACE_4;
 pub const PALETTE_FOOT_H: f32 = 36.0;
 pub const PALETTE_MAX_H: f32 = 12.0 * PALETTE_ROW_H;
 /// **The find bar** (⌘F): a one-row float `FIND_W` wide, hung
@@ -2303,66 +2281,20 @@ pub const PALETTE_MAX_H: f32 = 12.0 * PALETTE_ROW_H;
 /// `search` icon (`FIND_ICON`), the query, the count.
 pub const FIND_W: f32 = 320.0;
 pub const FIND_ICON: f32 = 14.0;
-/// **FL-15 · frosted floats: blocked in gpui-pre-macos 0.3.3, so every
-/// float stays opaque.** The prototype frosts its floats (`.glass .float`:
-/// a 30px backdrop blur under `rgba(44,44,47,.74)`). gpui blurs no element,
-/// so a float could only frost what is behind it as a window of its own
-/// (`WindowKind::PopUp`, `WindowBackgroundAppearance::Blurred`). That
-/// window cannot be the prototype's float, for three reasons, each in the
-/// gpui-pre-macos 0.3.3 source:
-///
-/// 1. **It is always a titled window.** `MacWindow::open` builds the style
-///    mask as `NSTitledWindowMask | NSFullSizeContentViewWindowMask` when no
-///    titlebar is asked for (`src/window.rs:918-937`), and PopUp only adds
-///    `NSWindowStyleMaskNonactivatingPanel` (`src/window.rs:946`). AppKit
-///    gives a titled window rounded corners and its own window shadow, and
-///    `WindowOptions` offers no borderless mask, corner radius or shadow
-///    switch (`gpui-pre-0.3.3/src/platform.rs:1948-2017`; its
-///    `window_decorations` is X11/Wayland only, `:2008-2010`). A float has
-///    its own radius (rule 2) and casts the one `0 6px 14px` shadow;
-///    drawn inside the window instead, that shadow's margin would be
-///    frosted with the rest of the rect, since the blur view fills the
-///    whole content view (`set_background_appearance`,
-///    `src/window.rs:1659-1692`).
-/// 2. **It takes the keyboard when clicked.** Both window classes answer
-///    `canBecomeKeyWindow` with YES (`build_window_class`,
-///    `src/window.rs:376`, used for the panel class at `:134`); the
-///    non-activating mask keeps the app from activating, not the panel from
-///    becoming key. A palette or picker clicked with the pointer would pull
-///    the keyboard out of the main window, whose key table (the Composer,
-///    the Decision keys, the palette's own) is the only one the floats run
-///    on.
-/// 3. **No anchored native popup exists.** `MacPlatform::open_window`
-///    rejects `WindowKind::AnchoredPopup` with `PopupNotSupportedError`
-///    (`src/platform.rs:657-661`), so a PopUp is placed by hand in screen
-///    space and follows no move, resize, Space or fullscreen change of its
-///    owner.
-///
-/// The verdict: floats render in-window and opaque (`float::hang`), on the
-/// opaque float inks below (`FLOAT_GROUND` `#2a2a2c`, `FLOAT_SEL` and
-/// `FLOAT_HOVER` its own steps, `FLOAT_SELECTED` and `FLOAT_RAISED`; the
-/// edge and rule are hairlines), never a glass overlay over an opaque
-/// ground, and `FLOAT_GLASS` stays opaque. Flip `FLOAT_FROSTED` when a
-/// gpui release lifts the three blocks; the inks then follow the glass
-/// values.
-pub const FLOAT_FROSTED: bool = false;
-const fn float_ink(glass: u32, opaque: u32) -> Paint {
-    if FLOAT_FROSTED {
-        Paint::pick(glass, solid(opaque))
-    } else {
-        Paint(solid(opaque))
-    }
-}
+/// **Floats are opaque** (FL-15). gpui blurs no element, and a float as a
+/// blurred window of its own is a titled window that takes the keyboard
+/// and anchors to nothing (gpui-pre-macos 0.3.3), so floats render
+/// in-window (`float::hang`) on their own opaque steps over `FLOAT`.
 /// A float's ground, edge, inner rule (under a head, over a footer), the
 /// cursor row and a row under the pointer (FL-14).
-pub const FLOAT_GROUND: Paint = float_ink(FLOAT_GLASS, FLOAT);
+pub const FLOAT_GROUND: Paint = paint::FLOAT;
 pub const FLOAT_EDGE: Paint = paint::HAIRLINE_STRONG;
 pub const FLOAT_RULE: Paint = paint::HAIRLINE;
-pub const FLOAT_SEL: Paint = float_ink(SELECTED_GLASS, FLOAT_SELECTED);
-pub const FLOAT_HOVER: Paint = float_ink(RAISED_GLASS, FLOAT_RAISED);
+pub const FLOAT_SEL: Paint = Paint::solid(FLOAT_SELECTED);
+pub const FLOAT_HOVER: Paint = Paint::solid(FLOAT_RAISED);
 /// A quick answer's pill on a float (a toast's buttons), stepping up to
 /// `FLOAT_SEL` under the pointer.
-pub const FLOAT_BAND2: Paint = float_ink(RAISED_GLASS, FLOAT_RAISED);
+pub const FLOAT_BAND2: Paint = FLOAT_HOVER;
 /// A sheet (Settings, the Project editor, the image preview) is a float at
 /// sheet size: its head two rows (the title and the one close control over
 /// a `paint::LINE`), its body two cells in, a footer under a `paint::LINE`.
@@ -2383,7 +2315,7 @@ pub const MENU_PATH_TAIL: usize = 48;
 //
 // **The Settings sheet** (`prefs.rs`) is a float at sheet size: the
 // float's shell (radius `R_BLOCK`, the `FLOAT_EDGE` ring), Geist on the
-// space scale, rows and hairlines, no cards and no iOS controls.
+// space scale, rows and hairlines, no cards.
 //
 // - **Sidebar** (`SETTINGS_SIDEBAR_W`): the search line on top (the
 //   `search` icon, then the field), a `HAIRLINE` under it, then one
@@ -2396,11 +2328,14 @@ pub const MENU_PATH_TAIL: usize = 48;
 //   provider's led by its logomark), its rows split by rules.
 // - **Row:** the label (`TEXT`) over an optional hint (`TEXT_DIM`) at the
 //   left; the control right and centred.
-// - **Controls** are words on the row: an on/off setting is `on` in
-//   `TEXT_STRONG` or `off` in `TEXT_DIM`; a two-way choice is a pair of
-//   tokens, the chosen one inverse (`menu::token`); a longer list is the
-//   value and a chevron that opens a menu; a size is `‹ 14px ›`. Each is a
-//   tab stop with the one focus outline, `paint::RAISED` under the pointer.
+// - **Controls** sit at the row's right: an on/off setting is the one
+//   switch (`components::switch`, `SWITCH_*`: a `PRIMARY` track with a dark
+//   knob on, a `SWITCH_OFF` track with a `TEXT_DIM` knob off, the knob
+//   sliding over `FADE_QUICK`), as macOS and the Claude app draw one; a
+//   two-way choice is a pair of tokens, the chosen one lit
+//   (`menu::token`); a longer list is the value and a chevron that opens a
+//   menu; a size is `‹ 14px ›`. Each is a tab stop with the one focus
+//   outline.
 // - **About** is a list of facts: the key at the left, the value at the
 //   right in `TEXT_DIM`. A path copies on click.
 // - **Search** filters every page at once: matching rows keep their groups,
@@ -2427,6 +2362,14 @@ pub const SETTINGS_MENU_MAX_W: f32 = 220.0;
 pub const SETTINGS_FACT_KEY_W: f32 = 110.0;
 /// A typed field on a Settings row (Machines' ssh target).
 pub const SETTINGS_FIELD_W: f32 = 188.0;
+/// The on/off switch (`components::switch`): a `SWITCH_W` × `SWITCH_H`
+/// pill, its round knob `SWITCH_INSET` inside it.
+pub const SWITCH_W: f32 = 28.0;
+pub const SWITCH_H: f32 = SPACE_4;
+pub const SWITCH_INSET: f32 = SPACE_0_5;
+/// The off track: the control line's grey, which reads on every ground a
+/// switch stands on (a selection fill vanishes on the float's).
+pub const SWITCH_OFF: Paint = paint::LINE2;
 // (end WP-E) — append above this line only
 
 // ======================================== WP-F · decisions and subagents
@@ -2445,16 +2388,16 @@ pub const SETTINGS_FIELD_W: f32 = 188.0;
 /// `DECISION_OPTION_H` rows at `R_TAB`, the key in Geist Mono 12 `TEXT_DIM`,
 /// the label in Geist 13, the cursor's row `SELECTED` and `TEXT_STRONG`.
 /// The hint line (`↑↓ select · 1–3 pick · esc deny · tab amend`, 12
-/// `TEXT_DIM`) sits `DECISION_HINT_GAP` under the box, on the Pane that
-/// holds the keyboard only. Head 20 · gap 10 · well 32 · gap 10 · options
-/// 3 × 30, inside 12 of padding.
+/// `TEXT_DIM`) is the box's last section, on the Pane that holds the
+/// keyboard only — every kind says its keys in the same place, a
+/// question's beside its Skip and Send. Head 20 · gap 10 · well 32 · gap
+/// 10 · options 3 × 30 · gap 10 · hints 20, inside 12 of padding.
 ///
 /// Where a card still docks over the transcript's foot (the requests
 /// overlay) it lies on the plane, `DECISION_PAD_Y` inside.
 pub const DECISION_PAD_Y: f32 = HALF_ROW;
 pub const DECISION_PAD: f32 = SPACE_3;
 pub const DECISION_GAP: f32 = 10.0;
-pub const DECISION_HINT_GAP: f32 = SPACE_2;
 pub const DECISION_HEAD_ICON: f32 = 14.0;
 pub const DECISION_OPTION_H: f32 = 30.0;
 pub const DECISION_OPTION_PAD_X: f32 = 10.0;
@@ -2772,6 +2715,11 @@ pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 /// spends its second half settling the last few pixels, so a slot sliding
 /// across half the board reads as one physical move rather than a jump.
 pub const MOTION_EASE_SLIDE: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
+/// `swap`: the board settling on what it now shows (Solo's Thread, the
+/// view): 120ms on `MOTION_EASE_OUT_EXPO` up from 50%, quicker and gentler
+/// than `row-in`, since it follows a keyboard-rate switch.
+pub const MOTION_SWAP_MS: u64 = 120;
+pub const MOTION_SWAP_FROM_OPACITY: f32 = 0.5;
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a line arriving inside a card already open (the usage card's legend).
 pub const MOTION_ROW_IN_MS: u64 = 180;
@@ -2787,6 +2735,10 @@ pub const MOTION_RESIZE_MS: u64 = 200;
 pub const MOTION_SEAM_FADE_MS: u64 = 120;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
+/// The send circle's glyph swap (send ⇄ stop, `fade-quick`): the leaving
+/// glyph shrinks to this scale as it fades, the arriving one grows from it
+/// (an `svg` transform: the icon swap's scale without its blur).
+pub const MOTION_SEND_GLYPH_FROM: f32 = 0.5;
 /// `menu-in`: 140ms, settling 2px away from its opener (Zeron's 0.96 scale
 /// has no div transform here; the shift and fade carry it). A menu closes
 /// at once: no exit.
@@ -2810,14 +2762,14 @@ pub const MOTION_CHEVRON_MS: u64 = 150;
 pub const MOTION_IMAGE_ZOOM_MS: u64 = 240;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
 pub const MOTION_HOVER_FADE_MS: u64 = 150;
-/// A toast's timing: it rises in over 180ms and leaves over 100ms (the
+/// A toast's timing: it drops in over 180ms and leaves over 100ms (the
 /// Needs-you toast, `motion::toast_in` / `toast_out`; the kit's toast
 /// stack settles on the same two).
 pub const MOTION_TOAST_IN_MS: u64 = 180;
 pub const MOTION_TOAST_OUT_MS: u64 = 100;
-/// How far a toast rises into place over the bottom bar; it sinks half
-/// that as it fades away.
-pub const MOTION_TOAST_RISE: f32 = 4.0;
+/// How far a toast drops into place under the window's head (it settles
+/// away from the edge it hangs on); it lifts half that as it fades away.
+pub const MOTION_TOAST_DROP: f32 = 4.0;
 /// 1.4s — how long a scrollbar thumb holds after the last scroll frame
 /// (C26) before it fades out over `MOTION_HOVER_FADE_MS`. Idle, no thumb.
 pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
@@ -3211,109 +3163,41 @@ mod tests {
         assert_eq!(IDLE, TEXT_DIM, "done and idle wear no hue");
     }
 
-    /// Rule 4: glass on macOS — the window paints nothing, the shell is
-    /// black glass, what is read is opaque, overlays are white, a float
-    /// stays opaque — and the opaque greys everywhere else.
+    /// Rule 4: every region is an opaque grey, the hairlines white
+    /// overlays, and the frame sits a quiet step over the card.
     #[test]
-    fn the_paints_are_glass_on_macos_and_grey_elsewhere() {
-        let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
-        let near = |a: f32, b: f32| (a - b).abs() < 0.01;
-        assert!(alpha(SHELL_GLASS) <= 0.4, "the desktop reads through the shell");
-        // The shell's inks hold their floors over the worst ground: a white
-        // window under the glass. Each step stays a step below the last.
-        let worst = over(SHELL_GLASS, 0xffffff);
-        assert_eq!(worst, 0xa1a1a1);
-        let shell = [
-            ("TEXT_STRONG", chrome::TEXT_STRONG, 2.5),
-            ("TEXT", chrome::TEXT, 2.4),
-            ("TEXT_BAR", chrome::TEXT_BAR, 2.3),
-            ("TEXT_MUTED", chrome::TEXT_MUTED, 2.1),
-            ("TEXT_DIM", chrome::TEXT_DIM, 1.9),
-            ("TEXT_FAINT", chrome::TEXT_FAINT, 1.7),
-        ];
-        for pair in shell.windows(2) {
-            assert!(luminance(pair[0].1) > luminance(pair[1].1), "{} under {}", pair[1].0, pair[0].0);
-        }
-        if GLASS {
-            for (name, ink, min) in shell {
-                let ratio = contrast(ink, worst);
-                assert!(ratio >= min, "chrome::{name} over white is {ratio:.2}:1, below {min}:1");
-            }
-        } else {
-            // Opaque, the shell is the frame's grey and keeps the ladder.
-            assert_eq!(
-                [chrome::TEXT, chrome::TEXT_MUTED, chrome::TEXT_DIM, chrome::TEXT_FAINT],
-                [TEXT, TEXT_MUTED, TEXT_DIM, TEXT_FAINT]
-            );
-        }
-        assert_eq!(chrome::ink(TEXT_DIM), chrome::TEXT_DIM);
-        assert_eq!(chrome::ink(BLOCKED), BLOCKED, "a hue passes through");
-        assert_eq!((FRAME_GLASS, BAR_GLASS), (SHELL_GLASS, SHELL_GLASS));
-        assert!(paint::CARD.is_opaque() && paint::PANEL.is_opaque() && paint::BLOCK.is_opaque());
-        assert_eq!(alpha(FLOAT_GLASS), 1.0, "a float hides what it covers");
-        for (overlay, opacity) in [
-            (FIELD_GLASS, 0.05),
-            (RAISED_GLASS, 0.06),
-            (SELECTED_GLASS, 0.11),
-            (SELECTION_HOVER_GLASS, 0.14),
-            (LINE_GLASS, 0.08),
-            (LINE2_GLASS, 0.14),
-        ] {
-            assert_eq!(overlay >> 8, 0xffffff, "{overlay:08x} is a white overlay");
-            assert!(near(alpha(overlay), opacity), "{overlay:08x}");
-        }
-        // Glass overlays step up in the same order as the opaque ladder.
-        const {
-            assert!(FIELD_GLASS & 0xff < RAISED_GLASS & 0xff);
-            assert!(RAISED_GLASS & 0xff < SELECTED_GLASS & 0xff);
-            assert!(SELECTED_GLASS & 0xff < SELECTION_HOVER_GLASS & 0xff);
-        }
+    fn the_paints_are_opaque_greys() {
         let paints = [
-            (paint::FRAME, FRAME_GLASS, FRAME),
-            (paint::BAR, BAR_GLASS, BAR),
-            (paint::FIELD, FIELD_GLASS, FIELD),
-            (paint::RAISED, RAISED_GLASS, RAISED),
-            (paint::SELECTED, SELECTED_GLASS, SELECTED),
-            (
-                paint::SELECTION_HOVER,
-                SELECTION_HOVER_GLASS,
-                SELECTION_HOVER,
-            ),
-            (paint::LINE, LINE_GLASS, LINE),
-            (paint::LINE2, LINE2_GLASS, LINE2),
+            (paint::CARD, CARD),
+            (paint::FRAME, FRAME),
+            (paint::BLOCK, BAR),
+            (paint::FIELD, FIELD),
+            (paint::RAISED, RAISED),
+            (paint::SELECTED, SELECTED),
+            (paint::SELECTION_HOVER, SELECTION_HOVER),
+            (paint::FLOAT, FLOAT),
+            (paint::LINE, LINE),
+            (paint::LINE2, LINE2),
         ];
-        for (paint, glass, opaque) in paints {
-            if GLASS {
-                assert_eq!(paint.rgba(), glass);
-                assert!(!paint.is_opaque());
-            } else {
-                assert_eq!(paint.rgba(), solid(opaque));
-                assert!(paint.is_opaque());
-            }
+        for (paint, grey) in paints {
+            assert_eq!(paint.rgba(), solid(grey));
+            assert!(paint.is_opaque());
         }
-        // The hairlines are the same white overlay on every platform.
+        assert_eq!(paint::WINDOW, paint::CARD);
+        assert_eq!(paint::PANEL, paint::FRAME);
+        assert_eq!(paint::BAR, paint::FRAME, "the shell is one plane");
+        assert!(luminance(CARD) < luminance(FRAME));
+        // The hairlines are white overlays.
         assert_eq!(paint::HAIRLINE.rgba(), HAIRLINE);
         assert_eq!(paint::HAIRLINE_STRONG.rgba(), HAIRLINE_STRONG);
+        assert!(!paint::HAIRLINE.is_opaque());
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
-        // A float is opaque on every platform: glass picks its own grey.
-        assert!(paint::FLOAT.is_opaque());
-        assert_eq!(
-            paint::FLOAT.rgba(),
-            if GLASS { FLOAT_GLASS } else { solid(FLOAT) }
-        );
-        if GLASS {
-            assert_eq!(paint::WINDOW.rgba(), TRANSPARENT, "the root paints nothing");
-            assert_eq!(
-                window_background(),
-                gpui::WindowBackgroundAppearance::Blurred
-            );
-        } else {
-            assert_eq!(paint::WINDOW.rgba(), solid(CARD));
-            assert_eq!(
-                window_background(),
-                gpui::WindowBackgroundAppearance::Opaque
-            );
+        // Hover is one equal step on every ground (rule 3).
+        for ground in [CARD, FRAME, BAR, FLOAT] {
+            let step = (over(HOVER_WASH, ground) & 0xff) - (ground & 0xff);
+            assert!((7..=8).contains(&step), "{ground:06x} steps {step}");
         }
+        assert_eq!(over(HOVER_WASH, FRAME), RAISED, "on the frame, the old face");
         // A paint converts the way `rgba()` does, never the way `rgb()` would.
         let fill: gpui::Fill = paint::CARD.into();
         assert_eq!(fill, gpui::Fill::from(gpui::rgba(paint::CARD.0)));

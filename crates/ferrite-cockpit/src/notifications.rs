@@ -1,5 +1,5 @@
 //! Needs you: every request that waits on the operator and every Thread
-//! that finished while they looked elsewhere (CONTEXT.md's Needs-you view,
+//! that finished while they looked elsewhere (CONTEXT.md's Inbox,
 //! its alerts and toasts).
 //!
 //! Drawing and toasts only. What counts as waiting or finished is decided
@@ -7,7 +7,7 @@
 //! are read from there, worded by the cockpit (`Row`), and every click or
 //! key comes back as one `Verb`. Ferrite draws all of it in the float
 //! grammar (theme WP-E): the bar's need-you door and its badge (FL-17), the
-//! Needs-you view's rows (FL-16), and the toasts (FL-18).
+//! Inbox's rows (FL-16), and the toasts (FL-18).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -35,7 +35,7 @@ pub enum QuickAnswer {
     Deny,
 }
 
-/// What a click or a key on the Needs-you view's surfaces means. The cockpit answers
+/// What a click or a key on the Inbox's surfaces means. The cockpit answers
 /// each against the core and repaints.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verb {
@@ -362,7 +362,7 @@ pub struct Ring {
     pub redraw: bool,
 }
 
-/// What the Needs-you view has heard of one machine: the Notice watermark (Notices
+/// What the Inbox has heard of one machine: the Notice watermark (Notices
 /// at or below it were heard) and the live requests.
 #[derive(Default)]
 struct Heard {
@@ -370,7 +370,7 @@ struct Heard {
     requests: BTreeSet<DecisionNoticeId>,
 }
 
-/// The window's side of the Needs-you view: whether its list is down and where its
+/// The window's side of the Inbox: whether its list is down and where its
 /// cursor stands, which Notices and requests it has heard of each machine,
 /// the events waiting out `ALERT_DELAY`, the toasts standing (oldest
 /// first; the newest draws), and the system notifications posted.
@@ -387,13 +387,13 @@ struct Heard {
 /// (the window just left it, or met it already waiting); what it says
 /// after rings like the rest. Nobody looks at a machine off screen, so its
 /// alerts are never in view. When the window goes to another machine, the
-/// Needs-you view moves with it (`moved`): an alert rings once, off screen or on, and
+/// Inbox moves with it (`moved`): an alert rings once, off screen or on, and
 /// what waits or stands goes on doing so. A machine not heard from yet (the
 /// one just left, or the one arrived at before it answers) cannot say
 /// whether its alerts still stand: they wait for it, no longer than a
 /// toast would stand.
 pub struct NeedsYou {
-    /// The list's cursor row in the Needs-you view (`nav::NavView`),
+    /// The list's cursor row in the Inbox (`nav::NavView`),
     /// first on open.
     pub cursor: usize,
     /// Per machine; `None` is the one on screen.
@@ -417,7 +417,7 @@ impl NeedsYou {
         }
     }
 
-    /// The Needs-you view of a window that went from machine `left` to `arrived`:
+    /// The Inbox of a window that went from machine `left` to `arrived`:
     /// all it holds of each re-keyed (the one left is off screen now, the
     /// one arrived at on screen), so neither rings again for what it rang
     /// already, and what waits, stands or is posted goes on. A system
@@ -542,7 +542,7 @@ impl NeedsYou {
         }
     }
 
-    /// Bring the Needs-you view up to `now`. A standing toast goes once it expired,
+    /// Bring the Inbox up to `now`. A standing toast goes once it expired,
     /// is no longer `live` (read, resolved, dismissed) or is `in_view`. A
     /// waiting event whose delay is up is checked again: still live and
     /// not in view, it rings — toasting in place of its Thread's toast.
@@ -638,8 +638,9 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
 
 // ---------------------------------------------------------------- toasts
 
-/// A quick answer's pill: the key in `TEXT_DIM` and the word in `ink`, on
-/// a `TOKEN_H` pill of the float's raised fill (`FLOAT_BAND2`), radius
+/// A quick answer's button: the word (sentence case, a button's) in `ink`,
+/// then its key as a hint in `TEXT_DIM` (`Allow 1`, `Open ⏎`), on a
+/// `TOKEN_H` button of the float's raised fill (`FLOAT_BAND2`), radius
 /// `R_SMALL`.
 fn quick_pill(key: &'static str, word: &'static str, ink: gpui::Hsla) -> Div {
     div()
@@ -647,13 +648,14 @@ fn quick_pill(key: &'static str, word: &'static str, ink: gpui::Hsla) -> Div {
         .flex_shrink_0()
         .items_center()
         .justify_center()
+        .gap(px(SPACE_1_5))
         .h(px(TOKEN_H))
         .px(px(TOKEN_PAD_X))
         .rounded(px(R_SMALL))
         .bg(FLOAT_BAND2)
         .whitespace_nowrap()
-        .child(div().text_color(rgb(TEXT_DIM)).child(key))
         .child(div().text_color(ink).child(word))
+        .child(components::glyph(key, TEXT_DIM))
 }
 
 /// A quick answer in a toast: its pill, under the pointer a step up and
@@ -673,25 +675,24 @@ fn quick_button(
 }
 
 /// A toast (the prototype's `.toast`, FL-18), in the float grammar with no
-/// close: the head (`◆ needs you · <title>`, `⌘D` at its right while a
-/// request waits; `✓ done · <title>` for a finished turn), one body line,
-/// and the quick answers — `1 allow` `3 deny` `⏎ open` for an approval,
-/// `⏎ open` alone for a question, a finished turn, or anything on a
+/// close: the head (`◆ needs you · <title>`; `✓ done · <title>` for a
+/// finished turn), one body line,
+/// and the quick answers — `Allow 1` `Deny 3` `Open ⏎` for an approval,
+/// `Open ⏎` alone for a question, a finished turn, or anything on a
 /// machine off screen (its status link answers nothing).
-pub fn toast(row: &Row, handle: Handle) -> Div {
-    toast_card(row, Some(handle))
+pub fn toast(row: &Row, handle: Handle, width: f32) -> Div {
+    toast_card(row, Some(handle), width)
 }
 
 /// A toast on its way out (`ToastStage`): the same card, answering no
 /// pointer — its answers drawn at rest and pressing nothing, nothing under
 /// it occluded, none of the live toast's selectors (`toast-leaving`).
-pub fn toast_face(row: &Row) -> Div {
-    toast_card(row, None)
+pub fn toast_face(row: &Row, width: f32) -> Div {
+    toast_card(row, None, width)
 }
 
-fn toast_card(row: &Row, handle: Option<Handle>) -> Div {
+fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
     let thread = row.thread.get() as usize;
-    let request = row.request();
     let word = row.word();
     let body: AnyElement = match &row.detail {
         Detail::Run { tool, command } => div()
@@ -726,18 +727,18 @@ fn toast_card(row: &Row, handle: Option<Handle>) -> Div {
     {
         answers.push((
             "toast-allow",
-            "1 ",
-            "allow",
+            "1",
+            "Allow",
             Verb::Answer(id.clone(), QuickAnswer::Allow),
         ));
         answers.push((
             "toast-deny",
-            "3 ",
-            "deny",
+            "3",
+            "Deny",
             Verb::Answer(id.clone(), QuickAnswer::Deny),
         ));
     }
-    answers.push(("toast-open", "\u{23ce} ", "open", row.open_verb()));
+    answers.push(("toast-open", "\u{23ce}", "Open", row.open_verb()));
     let buttons = answers.into_iter().map(|(name, key, word, verb)| {
         let Some(handle) = handle.clone() else {
             return quick_pill(key, word, rgb(TEXT).into()).into_any_element();
@@ -758,7 +759,7 @@ fn toast_card(row: &Row, handle: Option<Handle>) -> Div {
             .p(px(0.))
             .debug_selector(|| "toast-leaving".into()),
     };
-    card.w(px(TOAST_W))
+    card.w(px(width))
         .child(
             div()
                 .flex()
@@ -786,16 +787,7 @@ fn toast_card(row: &Row, handle: Option<Handle>) -> Div {
                                 .text_color(rgb(TEXT_DIM))
                                 .child(SharedString::from(format!(" \u{b7} {}", row.title))),
                         ),
-                )
-                .when(request, |head| {
-                    head.children(
-                        components::bound_chord("cockpit::NextDecision").map(|keys| {
-                            components::key_combo(&keys, TEXT_DIM)
-                                .flex_shrink_0()
-                                .ml(px(FLOAT_DETAIL_GAP))
-                        }),
-                    )
-                }),
+                ),
         )
         .child(
             div()

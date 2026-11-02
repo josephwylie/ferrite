@@ -16,8 +16,6 @@ use ferrite_core::transcript::{Block, BlockId, Body, ToolBlock, ToolState};
 /// A stable semantic-row identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RowId {
-    /// The Thread's banner, the first row of every transcript.
-    Banner,
     /// An adjacent native Markdown answer, named by its original run.
     Markdown(BlockId),
     /// One transcript block: a prompt, a tool call, a note.
@@ -32,7 +30,6 @@ pub(crate) enum RowId {
 /// What a row is, for the gap table: derived once in `project`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RowKind {
-    Banner,
     Prompt,
     /// Agent prose. `narration`: more work follows it in its turn, so it
     /// is the agent talking while it works (muted, as the work is); the
@@ -90,13 +87,12 @@ impl RowKind {
 /// its own kind and the answer size `reading`: the transcript's one table
 /// of vertical rhythm (the transcript grammar in `theme.rs`). The work of a
 /// turn — its calls, groups, visuals and the narration between them — reads
-/// as one list, its rows half a line apart; every other block (the banner,
-/// a prompt, an answer, the stamp, the Decision) stands a line and a half
-/// from its neighbours. A row that answers the one above it (a decision
-/// record, an interrupted or failed turn's end) sits flush under it. A
-/// first row is flush to the top when it is a prompt and a line down
-/// otherwise (the banner, first whenever there is one, takes the body's own
-/// top padding instead).
+/// as one list, its rows half a line apart; every other block (a prompt, an
+/// answer, the stamp, the Decision) stands a line and a half from its
+/// neighbours. A row that answers the one above it (a decision record, an
+/// interrupted or failed turn's end) sits flush under it. A first row is
+/// flush to the top when it is a prompt and a line down otherwise (both
+/// under the body's own top padding, `RowShape::top_pad`).
 pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32) -> f32 {
     use RowKind::*;
     let line = ferrite_ui::theme::prose_line_height(reading);
@@ -116,13 +112,13 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     }
 }
 
-/// What a projection reads besides the blocks: the banner and its top
-/// padding, the tail row's key, the call a pending Decision gates (hidden
+/// What a projection reads besides the blocks: the body's top padding, the
+/// tail row's key, the call a pending Decision gates (hidden
 /// while it waits), and whether thinking draws.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowShape {
-    pub banner: bool,
-    pub banner_pad: f32,
+    /// Room over the first row (`TX_PAD_T` in Solo, none on a board).
+    pub top_pad: f32,
     pub tail: Option<u64>,
     pub pending_call: Option<String>,
     /// The model's thinking drawn as `∴` rows; off, it draws nothing.
@@ -315,7 +311,7 @@ pub(crate) fn groups(tool: &ToolBlock) -> bool {
 
 /// A block that projects to no row: blank or hidden thinking, an answered
 /// request's record, the `opened in` note, the call a pending Decision
-/// gates. A group of calls reads across it.
+/// gates, a quick turn's end (`pane::turn_stamp`). A group of calls reads across it.
 fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
     if block.markdown.is_some() {
         return false;
@@ -325,6 +321,7 @@ fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
         Body::Meta(text) => ferrite_core::transcript::is_decision_record(text),
         Body::Notice(text) => ferrite_core::transcript::is_opened_notice(text),
         Body::Tool(tool) => is_gated(tool, shape),
+        Body::TurnEnd(end) => crate::pane::turn_stamp(end).is_none(),
         _ => false,
     }
 }
@@ -374,9 +371,6 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         gap: 0.,
         tail_key: None,
     };
-    if shape.banner {
-        rows.push(row(RowId::Banner, &[], None, RowKind::Banner));
-    }
     let mut index = 0;
     while index < blocks.len() {
         let block = &blocks[index];
@@ -437,8 +431,8 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
             }
             // Hidden thinking; an answered request's record (`allowed
             // Bash`), whose call's own row is its account, as the approved
-            // transcript draws it; and where the Thread works, which the
-            // banner says.
+            // transcript draws it; where the Thread works, which the head
+            // and the Panel say; and a quick turn's end.
             _ if draws_nothing(block, shape) => {}
             _ => rows.push(row(
                 RowId::Block(block.id),
@@ -465,11 +459,8 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
     }
     let mut previous = None;
     for row in rows.iter_mut() {
-        row.gap = if row.kind == RowKind::Banner {
-            shape.banner_pad
-        } else {
-            gap_before(previous, row.kind, reading)
-        };
+        row.gap = gap_before(previous, row.kind, reading)
+            + if previous.is_none() { shape.top_pad } else { 0. };
         previous = Some(row.kind);
     }
     rows.into_iter().map(Rc::new).collect()
@@ -492,7 +483,7 @@ fn common_suffix_after_prefix<T: Eq>(left: &[T], right: &[T], prefix: usize) -> 
 }
 
 /// The splices that turn `previous` into `next`. Past their common start
-/// (the banner and any rows before the first change), they align on the first previous
+/// (any rows before the first change), they align on the first previous
 /// row `next` still holds: the head before it on either side is one splice
 /// — history evicted from the far end, rows prepended, or a group renamed
 /// for a new oldest call — and the rest a common prefix, one splice and a
@@ -702,14 +693,11 @@ mod tests {
     /// A long transcript's oldest row is a group of calls named for its
     /// oldest one: when that call falls off the far end while a row
     /// arrives, the group takes a new name, and only it and the arrival
-    /// splice. The banner above and the rows between keep their place, so
-    /// the list never redraws whole.
+    /// splice. The rows between keep their place, so the list never redraws
+    /// whole.
     #[test]
     fn a_renamed_head_and_an_arrival_splice_only_themselves() {
-        let shape = RowShape {
-            banner: true,
-            ..shape()
-        };
+        let shape = shape();
         let mut transcript = Transcript::default();
         for id in ["r1", "r2", "r3"] {
             tool(&mut transcript, id);
@@ -720,20 +708,20 @@ mod tests {
         }
         let mut rows = TranscriptRows::new(transcript.blocks(), &shape, READING);
         let old = rows.rows().to_vec();
-        assert_eq!(old[0].kind(), RowKind::Banner);
+        assert_eq!(old[0].kind(), RowKind::Group);
 
         prompt(&mut transcript, "c");
         let delta = rows.reconcile(&transcript.blocks()[1..], &shape, READING);
         assert_ne!(
-            old[1].id(),
-            rows.get(1).unwrap().id(),
+            old[0].id(),
+            rows.get(0).unwrap().id(),
             "the group took a new name"
         );
         assert_eq!(
             delta.splices,
             vec![
                 RowSplice {
-                    old_range: 1..2,
+                    old_range: 0..1,
                     new_count: 1
                 },
                 RowSplice {
@@ -742,7 +730,7 @@ mod tests {
                 }
             ]
         );
-        assert!(Rc::ptr_eq(&old[2], rows.get(2).unwrap()));
+        assert!(Rc::ptr_eq(&old[1], rows.get(1).unwrap()));
     }
 
     #[test]
@@ -974,7 +962,6 @@ mod tests {
         for (previous, kind, gap) in [
             (None, Prompt, 0.),
             (None, Activity, line),
-            (Some(Banner), Prompt, block),
             (Some(stamp), Prompt, block),
             (Some(answer), Prompt, block),
             (Some(Prompt), narration, block),
@@ -1076,47 +1063,40 @@ mod tests {
         );
     }
 
-    /// CT-34/41: the banner heads the rows on the body's padding, the
-    /// Decision closes them a line down, and a changed tail key is a
+    /// CT-34/41: the first row stands on the body's top padding, the
+    /// Decision closes the rows a line down, and a changed tail key is a
     /// changed row.
     #[test]
-    fn the_banner_heads_the_rows_and_the_tail_closes_them() {
+    fn the_top_padding_heads_the_rows_and_the_tail_closes_them() {
         let mut transcript = Transcript::default();
         prompt(&mut transcript, "go");
         text(&mut transcript, "answer");
         let line = (ferrite_ui::theme::prose_line_height(READING) * 1.5).round();
         let solo = RowShape {
-            banner: true,
-            banner_pad: ferrite_ui::theme::BANNER_PAD_T,
+            top_pad: ferrite_ui::theme::TX_PAD_T,
             tail: Some(7),
             ..RowShape::default()
         };
         let mut rows = TranscriptRows::new(transcript.blocks(), &solo, READING);
         let ids: Vec<_> = rows.rows().iter().map(|row| row.id().clone()).collect();
-        assert_eq!(ids.first(), Some(&RowId::Banner));
         assert_eq!(ids.last(), Some(&RowId::Tail));
-        assert_eq!(rows.get(0).unwrap().gap(), ferrite_ui::theme::BANNER_PAD_T);
-        assert_eq!(
-            rows.get(1).unwrap().gap(),
-            line,
-            "the first band a block down"
-        );
+        assert_eq!(rows.get(0).unwrap().gap(), ferrite_ui::theme::TX_PAD_T);
         assert_eq!(rows.rows().last().unwrap().gap(), line);
         let board = RowShape {
-            banner_pad: 0.,
+            top_pad: 0.,
             tail: Some(8),
             ..solo.clone()
         };
         let delta = rows.reconcile(transcript.blocks(), &board, READING);
-        assert!(delta.remeasure.contains(&0), "the banner's padding changed");
+        assert!(delta.remeasure.contains(&0), "the top padding changed");
         assert!(
             delta.remeasure.contains(&(rows.len() - 1)),
             "the tail's key changed"
         );
         assert_eq!(rows.rows().last().unwrap().tail_key(), Some(8));
-        // An empty Thread still has its banner.
+        // An empty Thread has only its tail.
         let empty = TranscriptRows::new(&[], &solo, READING);
-        assert_eq!(empty.len(), 2);
+        assert_eq!(empty.len(), 1);
     }
 
     /// CT-40: the call a pending Decision gates stays out of the rows until

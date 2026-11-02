@@ -10,10 +10,10 @@
 //! inset `FLOAT_PAD` from the float's edge (`row`, `item_row`), the cursor
 //! row a `FLOAT_SEL` fill with its label `TEXT_STRONG`, and a footer of key
 //! hints under a `FLOAT_RULE` hairline (`footer`), every word of it
-//! `TEXT_DIM`. A short ladder's chosen step is an inverse token (`token`).
+//! `TEXT_DIM`. A short ladder's chosen step is a lit token (`token`).
 //! Floats are opaque (theme WP-E, FL-15), so their rows wear the float
-//! inks (`FLOAT_SEL` on the cursor row, `FLOAT_HOVER` under the pointer)
-//! and never a glass overlay.
+//! inks (`FLOAT_SEL` on the cursor row, `FLOAT_HOVER` under the pointer),
+//! steps over `FLOAT`.
 //!
 //! A destructive verb never runs on one press: its row arms on the first
 //! (the selection ground, the label `BLOCKED` and `· press again` after it)
@@ -86,6 +86,8 @@ pub fn section(
         .whitespace_nowrap()
         .cursor_default()
         .text_size(px(FS_META))
+        // The meta pair's line, so the word and its logo share one centre.
+        .line_height(px(LH_META))
         .font_weight(W_LABEL)
         .text_color(rgb(TEXT_DIM))
         .when_some(logo, |line, (path, ink)| {
@@ -310,8 +312,10 @@ pub fn footer_shell() -> Div {
 
 /// One step of a short ladder (an effort level, a two-way setting), a
 /// `TOKEN_H` pill `TOKEN_PAD_X` either side of its word: the chosen one
-/// inverse — `PRIMARY` with `ON_PRIMARY` at `W_LABEL` — the rest
-/// `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
+/// on the selection fill (`FLOAT_SEL`) in `TEXT_STRONG` at `W_LABEL` — a
+/// segmented control's lit step, the same lift a cursor row gets, not a
+/// second primary button — the rest `TEXT_DIM`, `FLOAT_HOVER` under the
+/// pointer.
 pub fn token(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -333,8 +337,8 @@ pub fn token(
         .child(label);
     if chosen {
         token
-            .bg(rgb(PRIMARY))
-            .text_color(rgb(ON_PRIMARY))
+            .bg(FLOAT_SEL)
+            .text_color(rgb(TEXT_STRONG))
             .font_weight(W_LABEL)
     } else {
         token

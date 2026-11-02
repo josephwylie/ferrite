@@ -496,15 +496,7 @@ impl Render for Palette {
             } else {
                 NO_MATCHES.into()
             };
-            list = list.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h(px(PALETTE_ROW_H))
-                    .px(px(PALETTE_ROW_PAD_X))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(note),
-            );
+            list = list.child(empty_note(note));
         }
         let footer = match (
             self.selected().and_then(|row| row.detail.clone()),
@@ -529,6 +521,21 @@ impl Render for Palette {
             components::dialog_shadow,
         )
     }
+}
+
+/// What a dialog's list says when it has nothing to show (the palette's,
+/// the shortcuts sheet's): its note, `TEXT_DIM`, centred in
+/// `PALETTE_EMPTY_H`.
+pub(crate) fn empty_note(note: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .debug_selector(|| "palette-empty".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .h(px(PALETTE_EMPTY_H))
+        .text_color(rgb(TEXT_DIM))
+        .child(note.into())
 }
 
 /// The status filter's word in its state's ink: hue for the two states
@@ -653,10 +660,9 @@ fn mark(row: &Row) -> Option<gpui::AnyElement> {
 /// One palette row (SPEC §5.8): `PALETTE_ROW_H`, radius `R_CONTROL`, its
 /// parts `PALETTE_GAP` apart — the mark column, the name (`TEXT`, its
 /// matches 600 `TEXT_STRONG`), the context at the right in 12 `TEXT_DIM`,
-/// the chord after it as plain 12 `TEXT_DIM` text, then the enter mark's
-/// column: `corner-down-left` on the cursor row (`SELECTED`, its name all
-/// `TEXT_STRONG`), held empty on a row with no chord so the contexts line
-/// up.
+/// then the key column, `PALETTE_KEYS_W` on every row so the contexts end
+/// on one edge: the chord as plain 12 `TEXT_DIM` text, or, on a chordless
+/// cursor row (`SELECTED`, its name all `TEXT_STRONG`), `corner-down-left`.
 fn row_element(
     at: usize,
     row: &Row,
@@ -695,27 +701,27 @@ fn row_element(
         .when(!row.context.is_empty(), |element| {
             element.child(meta().min_w_0().truncate().child(row.context.clone()))
         })
-        .when_some(row.keys.clone(), |element, keys| {
-            element.child(
-                meta().flex_shrink_0().child(
-                    components::key_combo(&keys, TEXT_DIM)
-                        .font_family(FONT_UI)
-                        .text_size(px(FS_META)),
-                ),
-            )
-        })
-        .when(cursor || row.keys.is_none(), |element| {
-            element.child(div().flex().flex_shrink_0().w(px(PALETTE_ENTER_ICON)).when(
-                cursor,
-                |cell| {
-                    cell.child(ferrite_ui::icons::icon(
+        .child(
+            meta()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_end()
+                .min_w(px(PALETTE_KEYS_W))
+                .map(|cell| match row.keys.clone() {
+                    Some(keys) => cell.child(
+                        components::key_combo(&keys, TEXT_DIM)
+                            .font_family(FONT_UI)
+                            .text_size(px(FS_META)),
+                    ),
+                    None if cursor => cell.child(ferrite_ui::icons::icon(
                         ferrite_ui::icons::CORNER_DOWN_LEFT,
                         PALETTE_ENTER_ICON,
                         TEXT_DIM,
-                    ))
-                },
-            ))
-        });
+                    )),
+                    None => cell,
+                }),
+        );
     if cursor {
         element.palette_cursor().press_float()
     } else {

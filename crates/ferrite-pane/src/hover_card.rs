@@ -52,7 +52,7 @@ pub(crate) fn enter(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // A directory (the banner's checkout) has no lines to preview: it
+    // A directory (a checkout) has no lines to preview: it
     // underlines and ⌘-click opens it, but no card hangs.
     if target.scope.is_none() || target.path.is_dir() {
         return;

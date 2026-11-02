@@ -18,7 +18,7 @@ mod notifications;
 pub mod palette;
 mod pr;
 mod project_editor;
-mod projects;
+pub mod projects;
 mod review;
 pub mod shortcuts;
 #[cfg(unix)]

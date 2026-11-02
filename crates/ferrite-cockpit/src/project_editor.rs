@@ -196,14 +196,15 @@ pub fn primary_button(
         ))
 }
 
-/// One directory: its name, `main` beside the first, and its full path
-/// under it in `TEXT_DIM`, wrapping anywhere rather than cut — a path is
-/// machine text. The row's height is its content's. Under the pointer it
-/// takes `paint::RAISED`, hung a cell outside the text's edge, so the text
-/// stays on the sheet's column.
+/// One directory: its name, `main` beside the first, and its path under
+/// it as the operator reads it (`shown`, home spelled `~`) in `TEXT_DIM`,
+/// one line cut from its start — a path's end names it — and whole in the
+/// tooltip. Under the pointer the row takes `paint::RAISED`, hung a cell
+/// outside the text's edge, so the text stays on the sheet's column.
 pub fn directory_row(
     index: usize,
     path: SharedString,
+    shown: SharedString,
     main: bool,
     actions: impl IntoElement,
 ) -> gpui::Stateful<Div> {
@@ -228,6 +229,7 @@ pub fn directory_row(
         .py(px(SPACE_1))
         .gap(px(2.0 * CH))
         .hover_raised(format!("project-directory-row-{index}"))
+        .tooltip(ferrite_ui::menu::tooltip(path.clone()))
         .cursor_default()
         .child(
             div()
@@ -261,9 +263,12 @@ pub fn directory_row(
                 )
                 .child(
                     components::text_ui()
-                        .text_color(rgb(LINK_INK))
-                        .whitespace_normal()
-                        .child(path),
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(shown),
                 ),
         )
         .child(div().flex_shrink_0().child(actions))
@@ -283,7 +288,7 @@ pub fn destructive_button(
     let (hover, press): (gpui::Hsla, gpui::Hsla) = if disabled {
         (none, none)
     } else {
-        (paint::RAISED.into(), paint::PRESS.into())
+        (paint::HOVER.into(), paint::PRESS.into())
     };
     components::faded_button(id, none, hover, press, rgb(TEXT_DIM).into(), cx)
         .tab_stop(true)

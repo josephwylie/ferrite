@@ -699,8 +699,16 @@ fn a_project_headings_menu_opens_its_tasks(cx: &mut TestAppContext) {
             .flatten()
             .map(|(item, _)| item.label.to_string())
             .collect();
-        assert_eq!(labels, ["Open tasks for this project"]);
-        view.press_menu_row(0, window, cx);
+        assert_eq!(
+            labels,
+            [
+                "New thread in this project",
+                "Open tasks for this project",
+                "Reveal in Finder",
+                "Copy path",
+            ]
+        );
+        view.press_menu_row(1, window, cx);
     });
     tick(cx);
 

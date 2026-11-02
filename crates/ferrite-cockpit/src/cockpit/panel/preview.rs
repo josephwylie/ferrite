@@ -271,9 +271,9 @@ impl CockpitView {
     /// foot level with theirs and its head level with the Pane head beside
     /// it. The head (`reading_head`) reads the file's path from the
     /// Thread's workspace in `LINK_INK` and its `:line` dim — an image its
-    /// name and its place among its gallery's, `· 2/3` — then the original
-    /// (an image, a file it cannot show) and the ×. A press lands on the
-    /// Pane that opened it; escape closes it.
+    /// place among its gallery's, `· 2/3` — then, for a file, copy its path
+    /// and open it in its app, and the ×. A press lands on the Pane that
+    /// opened it; escape closes it.
     pub(in crate::cockpit) fn panel_preview(
         &self,
         owner: PaneIdentity,
@@ -342,7 +342,7 @@ impl CockpitView {
         let title = self.preview_title(pane, &document);
         let label = match &document.body {
             Body::Image { gallery, at, .. } => {
-                head_title(title).children((gallery.len() > 1).then(|| {
+                head_title(title.clone()).children((gallery.len() > 1).then(|| {
                     head_suffix(format!(" \u{b7} {}/{}", at + 1, gallery.len()))
                         .id("reader-image-count")
                         .tooltip(|window, cx| {
@@ -353,29 +353,41 @@ impl CockpitView {
                         })
                 }))
             }
-            _ => head_title(title)
+            _ => head_title(title.clone())
                 .children(document.line().map(|line| head_suffix(format!(":{line}")))),
         };
-        let original = matches!(document.body, Body::Image { .. } | Body::Unshown(_))
-            .then(|| document.path.clone());
-        let doors = original
-            .map(|original| {
-                head_door(
-                    "open-original-image",
-                    "preview-original".into(),
-                    ferrite_ui::icons::EXTERNAL,
-                )
-                .tooltip(|window, cx| {
-                    gpui::component::tooltip::Tooltip::new("Open the original in the default app")
-                        .build(window, cx)
-                })
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    ferrite_pane::preview::open_original(&original, window, cx);
-                })
-                .into_any_element()
+        // A file (not a command's output, which no file holds) can have its
+        // path copied, as the head reads it, and open in its own app.
+        let file = document
+            .name
+            .is_none()
+            .then(|| (document.path.clone(), title.clone()));
+        let doors = file
+            .map(|(original, shown)| {
+                [
+                    div()
+                        .debug_selector(|| "preview-copy-path".into())
+                        .child(
+                            ferrite_ui::components::copy_button("preview-copy-path", shown)
+                                .tooltip("Copy path")
+                                .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_TAB),
+                        )
+                        .into_any_element(),
+                    head_door(
+                        "open-original-image",
+                        "preview-original".into(),
+                        ferrite_ui::icons::EXTERNAL,
+                    )
+                    .tooltip(ferrite_ui::menu::tooltip("Open in its app"))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        ferrite_pane::preview::open_original(&original, window, cx);
+                    })
+                    .into_any_element(),
+                ]
             })
             .into_iter()
+            .flatten()
             .chain([head_door(
                 "preview-close",
                 "preview-close".into(),
@@ -456,19 +468,12 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// What the head reads for `document`: a command's name, an image's,
-    /// else the path from the Thread's workspace, else from `~`.
+    /// What the head reads for `document`: a command's name, else the
+    /// path from the Thread's workspace, else from `~` — an image's too:
+    /// the tab above already reads its name.
     fn preview_title(&self, pane: &PaneView, document: &ferrite_pane::preview::Document) -> String {
         if let Some(name) = &document.name {
             return name.clone();
-        }
-        if matches!(document.body, Body::Image { .. }) {
-            return document
-                .path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
         }
         pane.thread()
             .and_then(|thread| self.thread_path(thread))

@@ -1,6 +1,6 @@
 //! The floats package's cockpit-level tests (FL-1…FL-19): the palette, its
 //! keys and commands, ⌘G, the shortcuts sheet, ⇧⇥, ⌘⌫, ⌘1…⌘9, the
-//! notifications list, the Needs-you view's badge, the toasts and the key contexts
+//! notifications list, the Inbox's badge, the toasts and the key contexts
 //! an empty Composer line adds.
 #[allow(unused_imports)]
 use super::*;
@@ -495,7 +495,7 @@ fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {
         }));
 }
 
-/// FL-16 / FL-17: the Needs-you view is the nav's (§5.1.2),
+/// FL-16 / FL-17: the Inbox is the nav's (§5.1.2),
 /// its first row selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
 /// interrupting, `mark all read` reads everything and removes nothing; the
 /// unread count is the waiting requests only.
@@ -549,7 +549,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     let column = cx.debug_bounds("nav-column").unwrap();
     let list = cx
         .debug_bounds("nav-view-needs-you-list")
-        .expect("the Needs-you view is up");
+        .expect("the Inbox is up");
     assert!(
         column.contains(&list.origin),
         "in the nav, in the tree's place: {list:?} / {column:?}"

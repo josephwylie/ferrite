@@ -646,7 +646,7 @@ fn box_request(thread: ThreadId, serial: u64) -> ferrite_core::protocol::WireNot
     }
 }
 
-/// What the Needs-you view calls box's Decision `serial` on `thread`.
+/// What the Inbox calls box's Decision `serial` on `thread`.
 fn box_asked(thread: ThreadId, serial: u64) -> crate::notifications::RowTarget {
     crate::notifications::RowTarget::Decision(ferrite_core::notifications::DecisionNoticeId {
         thread,
@@ -855,7 +855,7 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
     });
 }
 
-/// The Needs-you view moves with the window: a system notification posted about
+/// The Inbox moves with the window: a system notification posted about
 /// this computer while the window was on it still opens, from box, on
 /// this computer's Thread.
 #[gpui::test]
