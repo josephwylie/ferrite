@@ -2739,16 +2739,19 @@ pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// glyph shrinks to this scale as it fades, the arriving one grows from it
 /// (an `svg` transform: the icon swap's scale without its blur).
 pub const MOTION_SEND_GLYPH_FROM: f32 = 0.5;
-/// `menu-in`: 140ms, settling 2px away from its opener (Zeron's 0.96 scale
-/// has no div transform here; the shift and fade carry it). A menu closes
-/// at once: no exit.
+/// `menu-in`: 140ms, growing from `MOTION_FLOAT_FROM_SCALE` about its
+/// centre while settling 2px away from its opener, so it reads as opening
+/// out of it. A menu closes at once: no exit.
 pub const MOTION_MENU_IN_MS: u64 = 140;
 pub const MOTION_MENU_SHIFT: f32 = 2.0;
 /// The opacity a menu starts from: it is already legible on its first frame.
 pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
-/// `dialog-in`: 180ms, rising 2px (the 0.96 scale approximated likewise).
+/// `dialog-in`: 180ms, growing from `MOTION_FLOAT_FROM_SCALE` while rising 2px.
 pub const MOTION_DIALOG_IN_MS: u64 = 180;
 pub const MOTION_DIALOG_RISE: f32 = 2.0;
+/// The scale a menu or sheet grows from (Zeron's 0.96): a CSS `scale` on
+/// what it paints, its layout and hit area at rest.
+pub const MOTION_FLOAT_FROM_SCALE: f32 = 0.96;
 /// A board slot opening beside its owner (the Review beside its Pane)
 /// slides in over 240ms on `MOTION_EASE_SLIDE`, the owner narrowing with
 /// it, and slides out over a shorter 200ms before it is removed.

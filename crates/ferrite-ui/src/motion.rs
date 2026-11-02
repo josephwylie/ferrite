@@ -16,9 +16,9 @@
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | [`TOAST_IN`] 180ms, 4px drop / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18), hung top right under the window's head, drops into place from 0.3 ([`toast_in`]); one that goes on its own fades away lifting 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server, update and Projects toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
+//! | `menu-in` | [`MENU_IN`] 140ms, 0.96 → 1 scale | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
-//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`]; the palette, the shortcuts sheet and the Projects popup with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
+//! | `dialog-in` | [`DIALOG_IN`] 180ms, 0.96 → 1 scale | the Settings and Project sheets via [`dialog_in`]; the palette, the shortcuts sheet and the Projects popup with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel rides the same way at the board's right edge, through [`ColumnRide`], between hidden, its 304 and a preview's wide width (`cockpit/panel.rs`): coming and going (⌥⌘B, a preview opening while it is hidden, focus moving to or from a Pane with none) its content fades on the nav's clock; changing width (a preview opening or closing, a tab picked) it does not. Its content keeps its layout at rest and never re-wraps — the Panel's own width anchored to the window's edge, a preview's beyond it pinned to the board's edge, so it slides in with it |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
@@ -56,8 +56,11 @@
 //! Zeron runs a gpui fork; Ferrite runs gpui-kit 0.6 on gpui-pre. Dropped or
 //! approximated:
 //!
-//! - **`div` scale.** Only `svg` has a transform. `menu-in` and `dialog-in`
-//!   carry their 0.96 → 1 scale as a 2px shift plus the fade, as Zeron does.
+//! - **Scale is painted only.** `Styled::scale` (Ferrite's gpui patch,
+//!   `Window::with_element_scale`) scales what an element paints about its
+//!   centre: `menu-in` and `dialog-in` grow 0.96 → 1 with their fade and
+//!   2px shift. Its layout and hit area stay at rest, and a `deferred`
+//!   draw or a loop hosted in the loops overlay inside it is not scaled.
 //! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
 //!   dropped; opacity and scale carry it.
 //! - **Frost.** A fork-only paint effect; not ported. An edge fade is a
@@ -315,27 +318,40 @@ fn faded<E: Styled>(el: E, opacity: f32, shadow: Vec<gpui::BoxShadow>) -> E {
         .shadow(crate::components::shadow_faded(shadow, opacity * opacity))
 }
 
+/// A floating surface `t` of the way through growing to its size from
+/// `MOTION_FLOAT_FROM_SCALE`, about its centre. The scale is painted only,
+/// so a float that places itself by its own box (`Opens::InPlace`) holds
+/// still, and it answers the pointer where it rests.
+fn grown<E: Styled>(el: E, t: f32) -> E {
+    el.scale(lerp(theme::MOTION_FLOAT_FROM_SCALE, 1.0, t))
+}
+
 /// `menu-in` for a floating surface in flow (inside `anchored` or a
-/// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` while settling
-/// `MOTION_MENU_SHIFT` away from its opener.
+/// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` and grows from
+/// `MOTION_FLOAT_FROM_SCALE` while settling `MOTION_MENU_SHIFT` away from
+/// its opener.
 pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
     entrance(id, MENU_IN, element, move |el, t| {
-        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
-            .relative()
-            .top(px(opens.shift(t)))
+        grown(
+            float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)),
+            t,
+        )
+        .relative()
+        .top(px(opens.shift(t)))
     })
 }
 
-/// `dialog-in` for a sheet: opacity 0 → 1 rising `MOTION_DIALOG_RISE`.
+/// `dialog-in` for a sheet: opacity 0 → 1, growing from
+/// `MOTION_FLOAT_FROM_SCALE` and rising `MOTION_DIALOG_RISE`.
 pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
     entrance(id, DIALOG_IN, element, |el, t| {
-        float_face(el, t)
+        grown(float_face(el, t), t)
             .relative()
             .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })
@@ -352,7 +368,7 @@ where
     E: Styled + IntoElement + 'static,
 {
     entrance(id, DIALOG_IN, element, move |el, t| {
-        faded(el, t, shadow())
+        grown(faded(el, t, shadow()), t)
             .relative()
             .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })

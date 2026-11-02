@@ -1260,6 +1260,9 @@ pub struct Window {
     /// Ferrite's patch: translations applied after rounding (`with_transform_offset`).
     pub(crate) transform_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
+    /// Ferrite's patch: the scale and move every primitive painted now gets
+    /// (`with_element_scale`), as `(factor, offset)` in logical pixels.
+    pub(crate) element_scale_stack: Vec<(f32, Point<Pixels>)>,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     /// The [`TextInputConfiguration`] most recently forwarded to the platform
@@ -2100,6 +2103,7 @@ impl Window {
             transform_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
+            element_scale_stack: Vec::new(),
             requested_autoscroll: None,
             last_text_input_configuration: None,
             focused_text_input_active: false,
@@ -4017,6 +4021,50 @@ impl Window {
         result
     }
 
+    /// Paint (or prepaint) scaled by `factor` about `origin`, composed with
+    /// the current scale, as a CSS `scale`: every primitive painted in `f`
+    /// has its boxes, clip, radii, borders and blur scaled after it is
+    /// placed on the device pixel. Layout, hitboxes and the content mask
+    /// stack keep their unscaled boxes, so what is scaled answers the
+    /// pointer where it rests. Prepaint carries it so a cached view's key
+    /// can include it (Ferrite's patch).
+    pub fn with_element_scale<R>(
+        &mut self,
+        origin: Point<Pixels>,
+        factor: Option<f32>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+
+        let Some(factor) = factor.filter(|factor| *factor != 1.0) else {
+            return f(self);
+        };
+
+        // Inner first, about `origin`, then the scale already in force.
+        let (outer, outer_offset) = self.element_scale().unwrap_or((1.0, Point::default()));
+        let offset = origin.map(|value| value * (1.0 - factor) * outer) + outer_offset;
+        self.element_scale_stack.push((outer * factor, offset));
+        let result = f(self);
+        self.element_scale_stack.pop();
+        result
+    }
+
+    /// The scale in force now (`with_element_scale`), if any, as
+    /// `(factor, offset)`: a point `p` paints at `p * factor + offset`.
+    pub fn element_scale(&self) -> Option<(f32, Point<Pixels>)> {
+        self.element_scale_stack.last().copied()
+    }
+
+    /// Inserts a primitive into the next frame's scene under the scale in
+    /// force (Ferrite's patch).
+    fn insert_primitive(&mut self, primitive: impl Into<crate::Primitive>) {
+        let mut primitive = primitive.into();
+        if let Some((factor, offset)) = self.element_scale() {
+            primitive.scale_and_offset(factor, offset.scale(self.scale_factor()));
+        }
+        self.next_frame.scene.insert_primitive(primitive);
+    }
+
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
@@ -4353,9 +4401,17 @@ impl Window {
         let content_mask = self.content_mask();
         let clipped_bounds = bounds.intersect(&content_mask.bounds);
         if !clipped_bounds.is_empty() {
-            self.next_frame
-                .scene
-                .push_layer(self.cover_bounds(clipped_bounds));
+            // A layer orders what is painted in it against what it covers,
+            // so it covers what they do under the scale in force.
+            let mut layer_bounds = self.cover_bounds(clipped_bounds);
+            if let Some((factor, offset)) = self.element_scale() {
+                layer_bounds = crate::scene::scale_and_offset_bounds(
+                    layer_bounds,
+                    factor,
+                    offset.scale(self.scale_factor()),
+                );
+            }
+            self.next_frame.scene.push_layer(layer_bounds);
         }
 
         let result = f(self);
@@ -4390,7 +4446,7 @@ impl Window {
                 continue;
             }
             let shadow_bounds = (bounds + shadow.offset).dilate(shadow.spread_radius);
-            self.next_frame.scene.insert_primitive(Shadow {
+            self.insert_primitive(Shadow {
                 order: 0,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: self.cover_bounds(shadow_bounds),
@@ -4435,7 +4491,7 @@ impl Window {
                 bottom_right: (corner_radii.bottom_right - shadow.spread_radius).max(zero),
                 bottom_left: (corner_radii.bottom_left - shadow.spread_radius).max(zero),
             };
-            self.next_frame.scene.insert_primitive(Shadow {
+            self.insert_primitive(Shadow {
                 order: 0,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: self.cover_bounds(hole),
@@ -4516,7 +4572,7 @@ impl Window {
         };
 
         if !quad.background.is_transparent() {
-            self.next_frame.scene.insert_primitive(quad);
+            self.insert_primitive(quad);
             return;
         }
 
@@ -4526,7 +4582,7 @@ impl Window {
         let inner_bounds = Self::largest_border_interior(&quad);
 
         if inner_bounds.is_empty() {
-            self.next_frame.scene.insert_primitive(quad);
+            self.insert_primitive(quad);
             return;
         }
 
@@ -4556,7 +4612,7 @@ impl Window {
         for strip in strips {
             let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
             if !content_mask_bounds.is_empty() {
-                self.next_frame.scene.insert_primitive(Quad {
+                self.insert_primitive(Quad {
                     content_mask: ContentMask {
                         bounds: content_mask_bounds,
                     },
@@ -4578,9 +4634,7 @@ impl Window {
         path.content_mask = content_mask;
         let color: Background = color.into();
         path.color = color.opacity(opacity);
-        self.next_frame
-            .scene
-            .insert_primitive(path.scale(scale_factor));
+        self.insert_primitive(path.scale(scale_factor));
     }
 
     /// Paint an underline into the scene for the next frame at the current z-index.
@@ -4607,7 +4661,7 @@ impl Window {
         };
         let element_opacity = self.element_opacity();
 
-        self.next_frame.scene.insert_primitive(Underline {
+        self.insert_primitive(Underline {
             order: 0,
             pad: 0,
             bounds,
@@ -4637,7 +4691,7 @@ impl Window {
         };
         let opacity = self.element_opacity();
 
-        self.next_frame.scene.insert_primitive(Underline {
+        self.insert_primitive(Underline {
             order: 0,
             pad: 0,
             bounds,
@@ -4712,7 +4766,7 @@ impl Window {
             let content_mask = self.snapped_content_mask();
 
             if subpixel_rendering {
-                self.next_frame.scene.insert_primitive(SubpixelSprite {
+                self.insert_primitive(SubpixelSprite {
                     order: 0,
                     pad: 0,
                     bounds,
@@ -4722,7 +4776,7 @@ impl Window {
                     transformation: TransformationMatrix::unit(),
                 });
             } else {
-                self.next_frame.scene.insert_primitive(MonochromeSprite {
+                self.insert_primitive(MonochromeSprite {
                     order: 0,
                     pad: 0,
                     bounds,
@@ -4803,7 +4857,7 @@ impl Window {
             let content_mask = self.snapped_content_mask();
             let opacity = self.element_opacity();
 
-            self.next_frame.scene.insert_primitive(PolychromeSprite {
+            self.insert_primitive(PolychromeSprite {
                 order: 0,
                 pad: 0,
                 grayscale: false.into(),
@@ -4869,7 +4923,7 @@ impl Window {
             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
             .map_size(|size| size.ceil());
 
-        self.next_frame.scene.insert_primitive(MonochromeSprite {
+        self.insert_primitive(MonochromeSprite {
             order: 0,
             pad: 0,
             bounds: final_bounds,
@@ -4975,7 +5029,7 @@ impl Window {
             .scale(self.scale_factor());
         let opacity = self.element_opacity();
 
-        self.next_frame.scene.insert_primitive(PolychromeSprite {
+        self.insert_primitive(PolychromeSprite {
             order: 0,
             pad: 0,
             grayscale: grayscale.into(),
@@ -4999,7 +5053,7 @@ impl Window {
 
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
-        self.next_frame.scene.insert_primitive(PaintSurface {
+        self.insert_primitive(PaintSurface {
             order: 0,
             bounds,
             content_mask,

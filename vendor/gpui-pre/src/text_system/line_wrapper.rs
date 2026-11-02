@@ -1,4 +1,4 @@
-use crate::{FontId, Pixels, SharedString, TextRun, TextSystem, px};
+use crate::{FontId, LineLayout, Pixels, SharedString, TextRun, TextSystem, px};
 use collections::HashMap;
 use std::{borrow::Cow, iter, sync::Arc};
 
@@ -296,6 +296,42 @@ impl LineWrapper {
         } else {
             (line, Cow::Borrowed(runs))
         }
+    }
+
+    /// `truncate_line` from the end, its cut placed by the shaped line's own
+    /// glyph positions rather than by summed per-character advances
+    /// (Ferrite's patch). Kerning makes a shaped run narrower than its
+    /// advances, so the summed budget cut a glyph early and left a gap
+    /// between the ellipsis and whatever sits beside the box. `layout` is
+    /// `line` shaped whole, unwrapped, with `runs`.
+    pub fn truncate_line_end_shaped<'a>(
+        &mut self,
+        line: SharedString,
+        layout: &LineLayout,
+        truncate_width: Pixels,
+        truncation_affix: &str,
+        runs: &'a [TextRun],
+    ) -> (SharedString, Cow<'a, [TextRun]>) {
+        let affix_width = truncation_affix
+            .chars()
+            .map(|c| self.width_for_char(c))
+            .fold(px(0.0), |a, x| a + x);
+        let budget = truncate_width - affix_width;
+        // A glyph's x is the shaped width of the text before it: the last
+        // glyph starting within the budget is where the kept text ends.
+        let mut cut = 0;
+        for glyph in layout.runs.iter().flat_map(|run| &run.glyphs) {
+            if glyph.position.x > budget {
+                break;
+            }
+            cut = glyph.index;
+        }
+        let kept = line[..cut]
+            .trim_end_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation());
+        let result = SharedString::from(format!("{kept}{truncation_affix}"));
+        let mut runs = runs.to_vec();
+        update_runs_after_truncation(&result, truncation_affix, &mut runs, TruncateFrom::End);
+        (result, Cow::Owned(runs))
     }
 
     /// Truncate text to fit within a given number of wrapped lines.

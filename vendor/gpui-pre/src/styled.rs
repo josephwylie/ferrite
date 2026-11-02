@@ -748,6 +748,14 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Scales what this element and its children paint by `factor` about
+    /// its centre, as a CSS `scale`: its layout and hit area keep their
+    /// unscaled box (Ferrite's patch).
+    fn scale(mut self, factor: f32) -> Self {
+        self.style().scale = Some(factor);
+        self
+    }
+
     /// Sets the grid columns of this element.
     fn grid_cols(mut self, cols: u16) -> Self {
         self.style().grid_cols = Some(GridTemplate {

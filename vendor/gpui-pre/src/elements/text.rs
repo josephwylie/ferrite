@@ -729,29 +729,46 @@ impl TextLayout {
                             &runs,
                             truncate_from,
                         )
-                    } else if let Some(unclipped) = window
-                        .text_system()
-                        .shape_text(text.clone(), font_size, &runs, None, None)
-                        .log_err()
-                        && unclipped
-                            .iter()
-                            .all(|line| line.size(line_height).width <= truncate_width)
-                    {
-                        // The truncation decision below sums per-character advances,
-                        // which overestimates the shaped width (no kerning), truncating
-                        // text that fits exactly in its measured width. Skip truncation
-                        // whenever the honestly-shaped text fits; the shaping result
+                    } else {
+                        // The per-character truncation sums advances, which
+                        // overestimates the shaped width (no kerning): it would
+                        // truncate text that fits exactly in its measured width,
+                        // and cut a glyph early from text that does not. So the
+                        // honestly-shaped text decides both: kept whole when it
+                        // fits, and cut where its own glyphs reach the budget
+                        // (one unwrapped line, from the end). The shaping result
                         // comes from the line layout cache when the same text was
                         // already measured untruncated this frame.
-                        (text.clone(), Cow::Borrowed(&*runs))
-                    } else {
-                        line_wrapper.truncate_line(
-                            text.clone(),
-                            truncate_width,
-                            &truncation_affix,
-                            &runs,
-                            truncate_from,
-                        )
+                        let shaped = window
+                            .text_system()
+                            .shape_text(text.clone(), font_size, &runs, None, None)
+                            .log_err();
+                        if shaped.as_ref().is_some_and(|lines| {
+                            lines
+                                .iter()
+                                .all(|line| line.size(line_height).width <= truncate_width)
+                        }) {
+                            (text.clone(), Cow::Borrowed(&*runs))
+                        } else if truncate_from == TruncateFrom::End
+                            && let Some([line]) = shaped.as_deref()
+                            && line.wrap_boundaries.is_empty()
+                        {
+                            line_wrapper.truncate_line_end_shaped(
+                                text.clone(),
+                                &line.unwrapped_layout,
+                                truncate_width,
+                                &truncation_affix,
+                                &runs,
+                            )
+                        } else {
+                            line_wrapper.truncate_line(
+                                text.clone(),
+                                truncate_width,
+                                &truncation_affix,
+                                &runs,
+                                truncate_from,
+                            )
+                        }
                     }
                 } else {
                     (text.clone(), Cow::Borrowed(&*runs))

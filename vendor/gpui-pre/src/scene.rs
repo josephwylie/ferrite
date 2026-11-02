@@ -154,11 +154,11 @@ impl Scene {
         self.paths.sort_by_key(|path| path.order);
         self.underlines.sort_by_key(|underline| underline.order);
         self.monochrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+            .sort_by_key(|sprite| (sprite.order, sprite.tile.texture_id.index));
         self.subpixel_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+            .sort_by_key(|sprite| (sprite.order, sprite.tile.texture_id.index));
         self.polychrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+            .sort_by_key(|sprite| (sprite.order, sprite.tile.texture_id.index));
         self.surfaces.sort_by_key(|surface| surface.order);
     }
 
@@ -256,6 +256,81 @@ impl Primitive {
             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
             Primitive::Surface(surface) => &surface.content_mask,
         }
+    }
+
+    /// Scales this primitive by `factor` and then moves it by `offset`, as a
+    /// whole: its boxes, clip, radii, borders, blur and strokes (Ferrite's
+    /// patch, for `Window::with_element_scale`). A sprite's raster is
+    /// sampled into its scaled box.
+    pub(crate) fn scale_and_offset(&mut self, factor: f32, offset: Point<ScaledPixels>) {
+        let length = |value: &ScaledPixels| *value * factor;
+        let bounds = |bounds: &mut Bounds<ScaledPixels>| {
+            *bounds = scale_and_offset_bounds(*bounds, factor, offset);
+        };
+        let mask = |mask: &mut ContentMask<ScaledPixels>| bounds(&mut mask.bounds);
+        match self {
+            Primitive::Shadow(shadow) => {
+                bounds(&mut shadow.bounds);
+                bounds(&mut shadow.element_bounds);
+                mask(&mut shadow.content_mask);
+                shadow.blur_radius = length(&shadow.blur_radius);
+                shadow.corner_radii = shadow.corner_radii.map(length);
+                shadow.element_corner_radii = shadow.element_corner_radii.map(length);
+            }
+            Primitive::Quad(quad) => {
+                bounds(&mut quad.bounds);
+                mask(&mut quad.content_mask);
+                quad.corner_radii = quad.corner_radii.map(length);
+                quad.border_widths = quad.border_widths.map(length);
+            }
+            Primitive::Path(path) => {
+                bounds(&mut path.bounds);
+                mask(&mut path.content_mask);
+                for vertex in &mut path.vertices {
+                    let at = vertex.xy_position;
+                    vertex.xy_position = point(at.x * factor + offset.x, at.y * factor + offset.y);
+                    mask(&mut vertex.content_mask);
+                }
+            }
+            Primitive::Underline(underline) => {
+                bounds(&mut underline.bounds);
+                mask(&mut underline.content_mask);
+                underline.thickness = length(&underline.thickness);
+            }
+            Primitive::MonochromeSprite(sprite) => {
+                bounds(&mut sprite.bounds);
+                mask(&mut sprite.content_mask);
+            }
+            Primitive::SubpixelSprite(sprite) => {
+                bounds(&mut sprite.bounds);
+                mask(&mut sprite.content_mask);
+            }
+            Primitive::PolychromeSprite(sprite) => {
+                bounds(&mut sprite.bounds);
+                mask(&mut sprite.content_mask);
+                sprite.corner_radii = sprite.corner_radii.map(length);
+            }
+            Primitive::Surface(surface) => {
+                bounds(&mut surface.bounds);
+                mask(&mut surface.content_mask);
+            }
+        }
+    }
+}
+
+/// `bounds` scaled by `factor` and then moved by `offset` (Ferrite's patch,
+/// for `Window::with_element_scale`).
+pub(crate) fn scale_and_offset_bounds(
+    bounds: Bounds<ScaledPixels>,
+    factor: f32,
+    offset: Point<ScaledPixels>,
+) -> Bounds<ScaledPixels> {
+    Bounds {
+        origin: point(
+            bounds.origin.x * factor + offset.x,
+            bounds.origin.y * factor + offset.y,
+        ),
+        size: bounds.size.map(|value| value * factor),
     }
 }
 

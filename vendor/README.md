@@ -210,6 +210,14 @@ browser does, so the same CSS geometry lands on the same device pixels:
   sizes (a text run's width) are rounded up to the next 1/64 instead of the
   next whole pixel. A text measure wraps and truncates with a layout unit of
   slack, so a run laid out at the width it measured never wraps on float error.
+- **Truncation** (`elements/text.rs`, `text_system/line_wrapper.rs`). A
+  truncating line is shaped whole first: kept whole when the shaped run fits,
+  and otherwise cut from the end where its own glyph positions reach the
+  budget less the ellipsis (`LineWrapper::truncate_line_end_shaped`), as a
+  browser's `text-overflow: ellipsis` places it. Upstream sums per-character
+  advances (no kerning), which cut a glyph early and left a gap before
+  whatever sits beside the box. Wrapped, start and middle truncation keep
+  upstream's cut.
 - **Pixel snapping** (`taffy.rs`, `window.rs`). Snapping moved from the layout
   engine to `Window::layout_bounds`, on each node's absolute position after
   any element offset: a box's edges round to the whole *logical* pixel, half
@@ -230,6 +238,21 @@ browser does, so the same CSS geometry lands on the same device pixels:
 - **Transforms** (`window.rs`). `Window::with_transform_offset` moves what it
   lays out after its boxes are rounded, a box's edges then rounded again to
   the device pixel and a run of text moved exactly: a CSS `translate(..)`.
+- **Scale** (`style.rs`, `styled.rs`, `elements/div.rs`, `window.rs`,
+  `scene.rs`, `view.rs`). `Styled::scale` (`Style::scale`) scales what a
+  div and its children paint about the div's centre, as a CSS `scale`
+  (the menus' and sheets' 0.96 → 1 entrance). The div pushes
+  `Window::with_element_scale` around its prepaint and paint, composed
+  with any scale above it; every primitive inserted under it
+  (`Window::insert_primitive`) has its box, clip, radii, borders, blur and
+  strokes scaled after it is placed on the device pixel
+  (`Primitive::scale_and_offset`), and so does a `paint_layer`'s bounds,
+  or what is painted in the layer would order under what it covers. A
+  sprite's raster is sampled into its scaled box. Layout, hitboxes and the
+  content mask stack keep the unscaled box, so a scaled element answers
+  the pointer where it rests; a cached view's key includes the scale; a
+  `deferred` draw inside is not scaled. Factor 1 is a no-op, so a settled
+  frame is unchanged.
 - **SVG supersampling** (`svg_renderer.rs`). `SMOOTH_SVG_SCALE_FACTOR` is 1:
   icons rasterize at their device size, as a browser rasterizes inline SVG,
   rather than at twice it and filtered down.
@@ -241,11 +264,6 @@ browser does, so the same CSS geometry lands on the same device pixels:
   fallback written `postscript:<name>` names one face exactly (the braille
   spinner's `AppleBraille-Outline6Dot`, whose family's faces share one
   weight).
-- **Blur material** (`gpui-pre-macos`, `window.rs`). A blurred window's
-  `NSVisualEffectView` uses `HeaderView`, not upstream's `Selection`: macOS 27
-  removed `Selection`'s backdrop blur (no `CABackdropLayer`, only a vibrancy
-  tint), so the window showed the desktop unblurred. `HeaderView` keeps the
-  gaussian blur on every supported macOS.
 - **Hover listener's view** (`elements/div.rs`, `window.rs`). An `on_hover`
   listener runs with `Window::hover_listener_view` naming the view that
   painted it, so a hover blend can notify that view alone instead of
@@ -282,6 +300,19 @@ browser does, so the same CSS geometry lands on the same device pixels:
 - **Debug bounds kept by a reused view** (`window.rs`, `elements/div.rs`,
   test support only). A cached view's reused paint range carries its
   `debug_selector` bounds into the next frame, as a fresh paint would.
+- **Cached views follow inherited opacity** (`view.rs`, `elements/div.rs`;
+  upstream zed#65951, `8fa085e3`, hand-merged). A div applies its opacity
+  in prepaint as well as paint, and a cached view's key includes the
+  inherited opacity, so a view under a fading ancestor redraws instead of
+  replaying the opacity it was painted at; replayed under a different
+  opacity (an ancestor's hover, known only at paint), it redraws on the
+  next frame. Remove when the vendored GPUI includes it.
+- **Sprites batched by atlas texture** (`scene.rs`; upstream zed#65814,
+  `b4ecc454`, the sort key only). Sprites of one draw order sort by their
+  atlas texture rather than their tile, so a frame splits into fewer
+  sprite batches. Upstream also moved `tile` first in the sprite structs;
+  that needs the shaders to match, including the registry's Windows and
+  Linux ones, so it is not taken. Remove when the vendored GPUI includes it.
 - **Debug bounds on a window** (`window.rs`, test support only).
   `Window::debug_bounds` reads the last frame's `debug_selector` bounds,
   which upstream exposes only through `VisualTestContext`: the live

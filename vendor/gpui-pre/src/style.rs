@@ -301,6 +301,11 @@ pub struct Style {
     /// The opacity of this element
     pub opacity: Option<f32>,
 
+    /// A uniform scale of what this element and its children paint, about
+    /// its centre: a CSS `scale`. Layout and hit areas keep the unscaled
+    /// box (Ferrite's patch, `Window::with_element_scale`).
+    pub scale: Option<f32>,
+
     /// The grid columns of this element
     /// Roughly equivalent to the Tailwind `grid-cols-<number>`
     pub grid_cols: Option<GridTemplate>,
@@ -809,6 +814,7 @@ impl Default for Style {
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,
+            scale: None,
             grid_rows: None,
             grid_cols: None,
             grid_location: None,
