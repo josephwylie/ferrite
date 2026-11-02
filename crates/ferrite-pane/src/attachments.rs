@@ -251,7 +251,7 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
 }
 
 /// A chip's remove control: the `close` icon (`ATTACH_REMOVE_ICON`) in
-/// `TEXT_DIM` on an `ATTACH_REMOVE` square, the kit ghost's fill under the
+/// `TEXT_DIM` in an `ATTACH_REMOVE`-wide slot, the kit ghost's fill under the
 /// pointer — a tab stop in the `PromptAttachment` context, so its Enter
 /// never sends.
 fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {

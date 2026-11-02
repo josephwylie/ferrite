@@ -834,7 +834,6 @@ impl TranscriptView {
                     "answer-{}-{first:?}",
                     self.input.namespace
                 )))
-                .debug_selector(|| "transcript-answer".into())
                 .flex()
                 .items_start()
                 .min_w_0()
@@ -845,11 +844,17 @@ impl TranscriptView {
                 })
                 .when(actions.is_some(), |row| row.flex_col().group(MESSAGE_GROUP))
                 .child(
-                    div().w_full().flex_1().min_w_0().child(
-                        selection
-                            .answer(first, self.linked(source))
-                            .when(narration, |answer| answer.quiet()),
-                    ),
+                    // The prose alone, its actions under it apart.
+                    div()
+                        .debug_selector(|| "transcript-answer".into())
+                        .w_full()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            selection
+                                .answer(first, self.linked(source))
+                                .when(narration, |answer| answer.quiet()),
+                        ),
                 )
                 .children(actions.map(|actions| actions.mt(px(theme::MESSAGE_ACTIONS_GAP))))
                 .into_any_element();

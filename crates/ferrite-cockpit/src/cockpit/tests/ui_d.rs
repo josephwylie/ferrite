@@ -2,8 +2,9 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// SPEC §5.5: Solo's Composer is a box `COMPOSER_INSET` inside the card's
-/// sides, its editor `COMPOSER_INPUT_PAD_X` in from the box's edge; the bar
+/// SPEC §5.5: Solo's Composer is a box in the reading column (at most
+/// `TX_COLUMN_MAX_W`, centred, `COMPOSER_INSET` from the card's sides at
+/// least), its editor `COMPOSER_INPUT_PAD_X` in from the box's edge; the bar
 /// carries no status line.
 #[gpui::test]
 fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
@@ -18,10 +19,14 @@ fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
             .or_else(|| cx.debug_bounds("prompt-editor"))
             .unwrap();
         let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+        // The reading column: at most `TX_COLUMN_MAX_W`, centred in the
+        // card, never nearer its sides than `COMPOSER_INSET`.
         let inset = ferrite_ui::theme::COMPOSER_INSET;
+        let w = (pane.w - 2. * inset).min(ferrite_ui::theme::TX_COLUMN_MAX_W);
+        let left = pane.x + (pane.w - w) / 2.;
         assert!(
-            (block.left() - px(pane.x + inset)).abs() <= px(1.)
-                && (block.right() - px(pane.x + pane.w - inset)).abs() <= px(1.),
+            (block.left() - px(left)).abs() <= px(1.)
+                && (block.size.width - px(w)).abs() <= px(1.),
             "{block:?} / {pane:?}"
         );
         assert!(

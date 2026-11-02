@@ -193,6 +193,13 @@ impl<K: Copy + Eq + Hash + Ord> Schedule<K> {
             .or_insert(wake);
     }
 
+    /// `view` no longer draws a loop (reduced motion holds them still):
+    /// forget its wakes now rather than after one more.
+    pub fn withdraw(&mut self, view: K) {
+        self.loops.remove(&view);
+        self.riders.remove(&view);
+    }
+
     /// The instant to arm the timer for, or `None` to park: no loop is
     /// waiting, whatever rides.
     pub fn next_wake(&self) -> Option<Instant> {

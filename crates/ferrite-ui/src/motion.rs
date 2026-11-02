@@ -1034,7 +1034,11 @@ fn run_loop(
     view: EntityId,
     cx: &mut App,
 ) -> f32 {
-    if reduced_motion(cx) || period.is_zero() {
+    if reduced_motion(cx) {
+        hold_still(view, cx);
+        return 0.0;
+    }
+    if period.is_zero() {
         return 0.0;
     }
     let now = cx.background_executor().now();
@@ -1050,6 +1054,17 @@ fn run_loop(
         arm(now, cx);
     }
     looped.phase(now)
+}
+
+/// `view` draws its loops still (reduced motion): its lease from before
+/// goes now, and with nothing else waiting the clock parks, rather than
+/// serving one more wake of a loop that no longer moves.
+pub fn hold_still(view: EntityId, cx: &mut App) {
+    let clock = cx.default_global::<PulseClock>();
+    clock.schedule.withdraw(view);
+    if clock.schedule.next_wake().is_none() {
+        clock.timer = None;
+    }
 }
 
 thread_local! {
@@ -1088,7 +1103,9 @@ pub fn ride(view: EntityId, at: Instant, cx: &mut App) {
 
 /// Text in `view` that must move on its own at `at` whatever else runs
 /// (a live tool call's `3s` → `4s`): `view` is drawn on the grid then,
-/// under reduced motion too — a clock is no motion.
+/// under reduced motion too — a clock is no motion. Under reduced motion a
+/// loop drawn in the same view withdraws its wakes (`run_loop`), so call
+/// this after the view's loops.
 pub fn wake_at(view: EntityId, at: Instant, cx: &mut App) {
     let now = cx.background_executor().now();
     let clock = cx.default_global::<PulseClock>();

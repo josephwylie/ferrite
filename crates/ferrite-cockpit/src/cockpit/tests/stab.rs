@@ -1004,16 +1004,14 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     let prompt = id_of(&|body| matches!(body, Body::Prompt(_)));
     let group = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Bash"));
     let edit = id_of(&|body| matches!(body, Body::Tool(tool) if tool.name == "Edit"));
-    let stamp = id_of(&|body| matches!(body, Body::TurnEnd(_)));
 
     // Activity reads in the app's words, as the prompt does: a group's
-    // summary, a call's line (its argument an inline code span, below),
-    // the stamp.
+    // summary, a call's line (its argument an inline code span, below).
+    // A quick turn closes on no stamp (`pane::turn_stamp`).
     for (what, prefix) in [
         ("prompt", format!("literal-{namespace}-{prompt:?}-0")),
         ("group summary", format!("literal-{namespace}-{group:?}-0")),
         ("call line", format!("thinking-{namespace}-{edit:?}")),
-        ("stamp", format!("literal-{namespace}-{stamp:?}-0")),
     ] {
         assert_eq!(face(cx, prefix).as_ref(), FONT_UI, "{what} is UI text");
     }
@@ -1196,8 +1194,9 @@ fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
 }
 
 /// The prompt heads its turn: the operator's line is at prose size, the
-/// same size as the answer under it, in its bubble. One blank line sits
-/// above the bubble, and the bubble's padding above its text.
+/// same size as the answer under it, in its bubble. Under the last turn's
+/// answer and its actions row, a block sits above the bubble, and the
+/// bubble's padding above its text.
 #[gpui::test]
 fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("prompt-heads-turn", 1);
@@ -1226,7 +1225,7 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
             .unwrap();
         tick(cx);
     }
-    let (namespace, prompts, stamps) = view.read_with(cx, |view, _| {
+    let (namespace, prompts, answers) = view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
         let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
         let ids = |kind: fn(&Body) -> bool| -> Vec<_> {
@@ -1241,7 +1240,13 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
         (
             pane.text_namespace(),
             ids(|body| matches!(body, Body::Prompt(_))),
-            ids(|body| matches!(body, Body::TurnEnd(_))),
+            thread
+                .transcript()
+                .blocks()
+                .iter()
+                .filter(|block| block.markdown.is_some())
+                .map(|block| block.markdown_run.unwrap_or(block.id))
+                .collect::<Vec<_>>(),
         )
     });
     let size = cx.update(|_, cx| {
@@ -1255,19 +1260,24 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
         Some(px(ferrite_ui::theme::tx_size(Default::default(), true))),
         "prose size"
     );
+    let answer = cx.update(|_, cx| {
+        ferrite_pane::rich::testing::bounds(&format!("markdown-{namespace}-{:?}", answers[0]), 0, cx)
+            .unwrap()
+    });
     let mut line = |id| {
         cx.update(|_, cx| {
             ferrite_pane::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx)
                 .unwrap()
         })
     };
-    // Measured, not just declared: the first turn's stamp to the second
-    // prompt is the turn step.
+    // Measured, not just declared: the first turn's answer (its actions
+    // row under it) to the second prompt is the turn step.
     let block = (ferrite_pane::pane::Grid::pane(Default::default(), true).line * 1.5).round();
+    let actions = ferrite_ui::theme::MESSAGE_ACTIONS_GAP + ferrite_ui::theme::MESSAGE_ACTION;
     assert_eq!(
-        line(prompts[1]).top() - line(stamps[0]).bottom(),
-        px(block + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
-        "turns sit a block and the bubble's padding apart"
+        line(prompts[1]).top() - answer.bottom(),
+        px(actions + block + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
+        "turns sit the answer's actions, a block and the bubble's padding apart"
     );
 }
 

@@ -3,10 +3,11 @@
 use super::*;
 
 /// FL-18: a request from a Thread off the focused Pane toasts with the nav
-/// open, as one float 52 cells wide, its right edge two cells in from the
-/// window's, its foot 36px over the bottom bar.
+/// open, as one float top right: in the panel's content column under the
+/// window's head, or with no panel `TOAST_W` wide under the Pane heads —
+/// never over a Composer.
 #[gpui::test]
-fn a_request_toast_stands_two_cells_in_and_over_the_bottom_bar(cx: &mut TestAppContext) {
+fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("toast-side", 2);
     let threads = core.threads();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -108,9 +109,10 @@ fn the_rails_one_toast_clears_every_pane_head_and_goes_on_landing(cx: &mut TestA
     for thread in &threads[..2] {
         let head: &'static str = format!("pane-head-{}", thread.get()).leak();
         let head = cx.debug_bounds(head).expect("the board shows a Pane head");
+        // Clear of it: under it, or beside it over the panel's column.
         assert!(
-            head.bottom() <= toast.top(),
-            "a toast would cover the Pane head at {head:?}"
+            !head.intersects(&toast),
+            "a toast {toast:?} would cover the Pane head at {head:?}"
         );
     }
 

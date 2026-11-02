@@ -900,11 +900,11 @@ fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
     assert_eq!(sent(&fake), 2, "Retry sent the prompt again");
 }
 
-/// SPEC §5.4: a transcript shorter than its viewport sits at the bottom,
-/// on the Composer, with the empty space above it — in a Group Pane and
-/// in Solo alike.
+/// A transcript shorter than its viewport reads down from the top, as a new
+/// conversation does, the empty space under it — in a Group Pane and in
+/// Solo alike.
 #[gpui::test]
-fn a_short_transcript_sits_at_the_bottom(cx: &mut TestAppContext) {
+fn a_short_transcript_reads_from_the_top(cx: &mut TestAppContext) {
     for grouped in [true, false] {
         let (mut core, fake) = cockpit(
             if grouped {
@@ -932,14 +932,14 @@ fn a_short_transcript_sits_at_the_bottom(cx: &mut TestAppContext) {
         let body = bounds(cx, format!("pane-body-{key}"));
         let prompt = cx.debug_bounds("transcript-prompt").expect("the prompt");
         let answer = cx.debug_bounds("transcript-answer").expect("the answer");
-        let pad = px(ferrite_ui::theme::body_pad_b(!grouped));
+        let pad = px(if grouped { 0. } else { ferrite_ui::theme::TX_PAD_T });
         assert!(
-            (body.bottom() - pad - answer.bottom()).abs() <= px(2.),
-            "grouped {grouped}: the last row sits on the body's foot: {answer:?} / {body:?}"
+            (prompt.top() - body.top() - pad).abs() <= px(2.),
+            "grouped {grouped}: the first row heads the body: {prompt:?} / {body:?}"
         );
         assert!(
-            prompt.top() - body.top() > px(100.),
-            "grouped {grouped}: the empty space is above the rows: {prompt:?} / {body:?}"
+            body.bottom() - answer.bottom() > px(100.),
+            "grouped {grouped}: the empty space is under the rows: {answer:?} / {body:?}"
         );
     }
 }

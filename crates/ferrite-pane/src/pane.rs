@@ -1199,9 +1199,15 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
         let working = cx
             .transcript
             .and_then(|transcript| working_line(cx.view, transcript, !cx.grid, cx.focused));
+        // The footer stands where the box would: in the box's column.
+        let inset = if cx.grid {
+            theme::COMPACT_COMPOSER_INSET
+        } else {
+            theme::COMPOSER_INSET
+        };
         return Some(
             composer_stack(None, None, working, !cx.grid)
-                .child(footer)
+                .child(in_column(inset, !cx.grid, footer))
                 .into_any_element(),
         );
     }
@@ -6279,7 +6285,12 @@ pub(crate) fn render_tool(
     // it selects and copies as one line, and never spills onto the rows
     // under it. The run hangs a cell past its box (`rich::Markdown`); the
     // box makes room for it. A failed call's verdict follows the cut, its
-    // lead word in the failure ink (rule 6: colour on the word).
+    // lead word in the failure ink (rule 6: colour on the word). Runs
+    // register as they are built: the call line first, then its verdict.
+    let call = selection
+        .markdown(block, text::call_markdown(tool))
+        .ink(TEXT_DIM)
+        .activity();
     let verdict = text::call_verdict(tool).map(|verdict| {
         let mut highlights = separators(&verdict);
         if let Some(at) = verdict.find(theme::words::FAILED) {
@@ -6306,12 +6317,7 @@ pub(crate) fn render_tool(
                 .child(edge_cut(
                     grid.line,
                     TEXT_DIM,
-                    div().pr(px(small.cell())).child(
-                        selection
-                            .markdown(block, text::call_markdown(tool))
-                            .ink(TEXT_DIM)
-                            .activity(),
-                    ),
+                    div().pr(px(small.cell())).child(call),
                 )),
         )
         .children(verdict)
@@ -8234,7 +8240,7 @@ mod tests {
                     display_revision: 0,
                     blocks: blocks.clone(),
                     signal_status: Some(Status::Idle),
-                        focused: true,
+                    focused: true,
                     reading_size: Default::default(),
                     selection_scope: gpui::base::TextSelectionScopeId::new(),
                     preview: crate::preview::Preview::new(cx),
@@ -8777,6 +8783,8 @@ mod tests {
         let blocks: Vec<Block> = transcript.blocks().to_vec();
         let ids: Vec<ferrite_core::transcript::BlockId> = blocks
             .iter()
+            // A quick turn's end draws no row (`text::turn_stamp`).
+            .filter(|block| !matches!(&block.body, Body::TurnEnd(end) if turn_stamp(end).is_none()))
             .map(|block| {
                 if block.markdown.is_some() {
                     block.markdown_run.unwrap_or(block.id)

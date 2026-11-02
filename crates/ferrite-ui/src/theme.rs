@@ -2088,7 +2088,7 @@ pub const BG_CHIP_MAX_W: f32 = 32.0 * CH;
 /// A pending file (a shelf chip; in Solo inside the box, over the input):
 /// the image mark (or a 12px thumbnail) and the name in `LINK_INK`, cut at
 /// 32 cells, then the `close` icon (`ATTACH_REMOVE_ICON`) in `TEXT_DIM` on
-/// an `ATTACH_REMOVE` square, a ghost fill under the pointer.
+/// an `ATTACH_REMOVE`-wide, chip-high slot, a ghost fill under the pointer.
 pub const ATTACH_CHIP_H: f32 = SHELF_CHIP_H;
 pub const ATTACH_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_THUMB: f32 = 12.0;

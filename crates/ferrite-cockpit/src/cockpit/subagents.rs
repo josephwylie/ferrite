@@ -1228,14 +1228,13 @@ impl CockpitView {
                         )),
                     ),
             );
-        // The Composer's slot: its box's inset from the card's sides and
-        // foot.
+        // The Composer's slot: its box's inset from the card's foot (the
+        // Pane sets it in the Composer's column, sides and all).
         Some(
             native_keys(
                 div()
                     .flex_shrink_0()
                     .min_w_0()
-                    .px(px(inset))
                     .pb(px(inset))
                     .child(footer),
             )

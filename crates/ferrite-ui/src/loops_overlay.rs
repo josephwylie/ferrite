@@ -338,9 +338,14 @@ pub fn overlay<T: 'static>(window: &Window, cx: &mut Context<T>) -> Entity<Loops
 pub struct LoopsOverlay;
 
 impl Render for LoopsOverlay {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(any(test, feature = "test-support"))]
         testing::OVERLAY_RENDERS.with(|renders| renders.set(renders.get() + 1));
+        // Under reduced motion it hosts nothing (`hosting`): the blink it
+        // declared before must not keep the clock armed.
+        if crate::motion::reduced_motion(cx) {
+            crate::motion::hold_still(cx.entity_id(), cx);
+        }
         div().absolute().child(Layer::new(None)).children(
             LAYERS
                 .map(|priority| gpui::deferred(Layer::new(Some(priority))).with_priority(priority)),
