@@ -418,7 +418,10 @@ fn the_head_says_the_branch_while_the_panel_is_hidden(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some(), "the premise: it shows");
-    assert!(cx.debug_bounds("view-branch").is_none(), "the panel says it");
+    assert!(
+        cx.debug_bounds("view-branch").is_none(),
+        "the panel says it"
+    );
 
     cx.simulate_keystrokes("cmd-alt-b");
     tick(cx);

@@ -176,7 +176,12 @@ mod tests {
     fn a_turn_names_the_files_it_wrote() {
         let turn = [
             call(1, "Write", ToolState::Ok, &[("/w/notes.md", hunk(3, 2))]),
-            call(2, "fileChange", ToolState::Ok, &[("src/new.rs", hunk(0, 0))]),
+            call(
+                2,
+                "fileChange",
+                ToolState::Ok,
+                &[("src/new.rs", hunk(0, 0))],
+            ),
             call(3, "Edit", ToolState::Ok, &[("src/old.rs", hunk(4, 1))]),
             call(
                 4,
@@ -200,7 +205,12 @@ mod tests {
     #[test]
     fn a_turn_names_its_pages() {
         let turn = [
-            call(1, "Write", ToolState::Ok, &[("site/index.html", hunk(0, 0))]),
+            call(
+                1,
+                "Write",
+                ToolState::Ok,
+                &[("site/index.html", hunk(0, 0))],
+            ),
             prose(
                 2,
                 "Open [the chart](out/chart.HTML), or run it at \
@@ -230,7 +240,11 @@ mod tests {
         ] {
             assert!(is_local_address(local), "{local}");
         }
-        for remote in ["http://localhost.example.com", "https://example.com", "localhost:3000"] {
+        for remote in [
+            "http://localhost.example.com",
+            "https://example.com",
+            "localhost:3000",
+        ] {
             assert!(!is_local_address(remote), "{remote}");
         }
     }

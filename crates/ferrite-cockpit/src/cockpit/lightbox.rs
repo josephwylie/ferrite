@@ -58,9 +58,10 @@ impl CockpitView {
         let (index, lightbox) = self.lightbox()?;
         let count = lightbox.gallery.len();
         let path = lightbox.path().to_path_buf();
-        let name = path
-            .file_name()
-            .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         let viewer = lightbox.viewer.clone();
         let bar = div()
             .debug_selector(|| "lightbox-bar".into())
@@ -84,12 +85,15 @@ impl CockpitView {
                     .child(name.clone()),
             )
             .child(
-                door("lightbox-zoom", icons::ZOOM_IN, "Zoom \u{b7} click the image").on_click(
-                    move |_, _, cx| {
-                        cx.stop_propagation();
-                        viewer.update(cx, |viewer, cx| viewer.toggle_zoom(cx));
-                    },
-                ),
+                door(
+                    "lightbox-zoom",
+                    icons::ZOOM_IN,
+                    "Zoom \u{b7} click the image",
+                )
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    viewer.update(cx, |viewer, cx| viewer.toggle_zoom(cx));
+                }),
             )
             .child({
                 let path = path.clone();
@@ -199,28 +203,33 @@ impl CockpitView {
             .child(stage)
             .child(bar)
             .when(many, |root| {
-                root.child(stepper("lightbox-previous", icons::BACK, -1, lightbox.at > 0))
-                    .child(stepper(
-                        "lightbox-next",
-                        icons::FORWARD,
-                        1,
-                        lightbox.at + 1 < count,
-                    ))
-                    .child(
-                        div()
-                            .debug_selector(|| "lightbox-count".into())
-                            .absolute()
-                            .bottom_0()
-                            .left_0()
-                            .right_0()
-                            .h(px(theme::LIGHTBOX_FOOT_H))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(theme::FS_META))
-                            .text_color(rgb(theme::INK_SUBTLE))
-                            .child(count_text(lightbox.at, count)),
-                    )
+                root.child(stepper(
+                    "lightbox-previous",
+                    icons::BACK,
+                    -1,
+                    lightbox.at > 0,
+                ))
+                .child(stepper(
+                    "lightbox-next",
+                    icons::FORWARD,
+                    1,
+                    lightbox.at + 1 < count,
+                ))
+                .child(
+                    div()
+                        .debug_selector(|| "lightbox-count".into())
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(theme::LIGHTBOX_FOOT_H))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(theme::FS_META))
+                        .text_color(rgb(theme::INK_SUBTLE))
+                        .child(count_text(lightbox.at, count)),
+                )
             });
         Some(
             deferred(ferrite_ui::motion::dim_in(

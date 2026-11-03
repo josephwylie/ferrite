@@ -60,7 +60,12 @@ fn turn<'a>(
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     let streams = fake.streams.borrow();
     wrote(&streams[0], "write-notes", "notes.md", "# Notes");
-    wrote(&streams[0], "write-page", "site/index.html", "<title>Sales report</title>");
+    wrote(
+        &streams[0],
+        "write-page",
+        "site/index.html",
+        "<title>Sales report</title>",
+    );
     streams[0]
         .send(SessionEvent::TextDelta {
             text: "Wrote the report; the dev server is at http://localhost:5173/.".into(),
@@ -206,7 +211,10 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     let expand = cx.debug_bounds("preview-expand").unwrap();
     cx.simulate_click(expand.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(f32::from(cx.debug_bounds("panel").unwrap().size.width), wide);
+    assert_eq!(
+        f32::from(cx.debug_bounds("panel").unwrap().size.width),
+        wide
+    );
 
     // × closes it, and the hidden Panel with it.
     let close = cx.debug_bounds("preview-close").expect("a ×");

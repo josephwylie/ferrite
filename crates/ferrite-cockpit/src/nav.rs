@@ -58,7 +58,8 @@ use ferrite_core::ThreadId;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, App, Div, FontWeight, Hsla, ScrollHandle, SharedString, Stateful,
+    div, px, rgb, rgba, AnyElement, App, Div, FontWeight, Hsla, ScrollHandle, SharedString,
+    Stateful,
 };
 
 use crate::machines::{Connection, MachineRow};

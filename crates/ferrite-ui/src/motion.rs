@@ -453,11 +453,7 @@ where
     E: Styled + IntoElement + 'static,
 {
     entrance(id, FADE_QUICK, element, move |el, t| {
-        el.bg(mix(
-            gpui::transparent_black(),
-            gpui::rgba(dim).into(),
-            t,
-        ))
+        el.bg(mix(gpui::transparent_black(), gpui::rgba(dim).into(), t))
     })
 }
 

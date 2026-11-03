@@ -114,7 +114,10 @@ fn a_sent_image_opens_in_the_lightbox(cx: &mut TestAppContext) {
     let (path, viewer) = shown(&view, cx).expect("an image opened");
     assert!(path == wide || path == small, "{path:?}");
     let gallery = view.read_with(cx, |view, _| {
-        view.panes[0].preview.lightbox().map(|lightbox| lightbox.gallery.len())
+        view.panes[0]
+            .preview
+            .lightbox()
+            .map(|lightbox| lightbox.gallery.len())
     });
     assert_eq!(gallery, Some(2), "it steps among the prompt's images");
     settle(cx);

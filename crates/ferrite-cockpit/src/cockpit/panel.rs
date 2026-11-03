@@ -108,10 +108,7 @@ impl CockpitView {
     /// window, and make sure the shown Thread's sections have their scroll.
     pub(super) fn tend_panel(&mut self, window: &mut Window) {
         self.tend_previews(window);
-        self.panel.wide = preview_w(
-            f32::from(window.viewport_size().width),
-            self.panel.expanded,
-        );
+        self.panel.wide = preview_w(f32::from(window.viewport_size().width), self.panel.expanded);
         if let Some(thread) = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())

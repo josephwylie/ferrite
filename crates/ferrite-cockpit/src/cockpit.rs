@@ -41,9 +41,9 @@ use ferrite_core::followup;
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
-use ferrite_pane::page::PageSource;
 use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::sound::Sound;
+use ferrite_pane::page::PageSource;
 
 /// The loose rows the nav last drew, in order, and under `sort: attention`
 /// the state each row was ranked by (C8, "never re-sort under the
@@ -1107,15 +1107,13 @@ impl NavChip {
                 None,
                 false,
             ),
-            NavChip::Group(group) => {
-                nav::group_row_with_title(
-                    group,
-                    group.title.clone(),
-                    nav::group_fold(group),
-                    0,
-                    false,
-                )
-            }
+            NavChip::Group(group) => nav::group_row_with_title(
+                group,
+                group.title.clone(),
+                nav::group_fold(group),
+                0,
+                false,
+            ),
         })
     }
 }
@@ -14513,7 +14511,8 @@ impl CockpitView {
         let folded = group.folded;
         let fold = self.group_fold(group, cx);
         let title = self.editable_group_title(id, group.title.clone(), cx);
-        let editing = matches!(&self.rename, Some((RenameTarget::Group(editing), _)) if *editing == id);
+        let editing =
+            matches!(&self.rename, Some((RenameTarget::Group(editing), _)) if *editing == id);
         let head = nav::group_row_with_title(group, title, fold, 0, editing)
             .children(self.cursor_reveal(nav::NavItem::Group(id)));
         let chip = NavChip::Group(group.clone());

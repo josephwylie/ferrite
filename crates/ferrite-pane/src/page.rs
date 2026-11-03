@@ -42,8 +42,10 @@ impl PageSource {
     pub fn title(&self) -> String {
         match self {
             PageSource::File(path) => page_title(path).unwrap_or_else(|| {
-                path.file_name()
-                    .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
+                path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
             }),
             PageSource::Address(address) => address
                 .split_once("://")
@@ -74,7 +76,10 @@ fn title_of(html: &str) -> Option<String> {
     let open = lower.find("<title")?;
     let start = open + lower[open..].find('>')? + 1;
     let end = start + lower[start..].find("</title")?;
-    let title = html[start..end].split_whitespace().collect::<Vec<_>>().join(" ");
+    let title = html[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     (!title.is_empty()).then_some(title)
 }
 
@@ -142,13 +147,18 @@ impl PageView {
                 ferrite_core::settings::ReadingSize::STANDARD,
             ),
         };
-        Shown::Live(self.web.get_or_init(|| WebView::new(engine, page, cx)).clone())
+        Shown::Live(
+            self.web
+                .get_or_init(|| WebView::new(engine, page, cx))
+                .clone(),
+        )
     }
 }
 
 /// Why a local address shows no page here: the engine draws the agent's
 /// files, never a server's.
-const ADDRESS_UNSHOWN: &str = "Ferrite draws pages from files; a local server opens in your browser";
+const ADDRESS_UNSHOWN: &str =
+    "Ferrite draws pages from files; a local server opens in your browser";
 
 #[cfg(test)]
 mod tests {

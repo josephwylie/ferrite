@@ -592,9 +592,10 @@ fn output_cards(label: &str) -> (super::Scene, std::path::PathBuf) {
     .unwrap();
     std::fs::write(ferrite.join("NOTES.md"), "# Q3 notes\n").unwrap();
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Q3 sales report");
-    scene
-        .core
-        .send(thread, "Build a one-page Q3 sales report and serve it.".into());
+    scene.core.send(
+        thread,
+        "Build a one-page Q3 sales report and serve it.".into(),
+    );
     let created = |line: &str| ferrite_core::Hunk {
         old_start: 0,
         old_lines: 0,

@@ -56,12 +56,14 @@ enum Verb {
 impl Opened {
     fn verbs(&self) -> &'static [(&'static str, Verb)] {
         match self {
-            Opened::Page(PageSource::File(_)) => {
-                &[("Open in browser", Verb::Browser), ("Copy path", Verb::Copy)]
-            }
-            Opened::Page(PageSource::Address(_)) => {
-                &[("Open in browser", Verb::Browser), ("Copy address", Verb::Copy)]
-            }
+            Opened::Page(PageSource::File(_)) => &[
+                ("Open in browser", Verb::Browser),
+                ("Copy path", Verb::Copy),
+            ],
+            Opened::Page(PageSource::Address(_)) => &[
+                ("Open in browser", Verb::Browser),
+                ("Copy address", Verb::Copy),
+            ],
             Opened::File(_) => &[("Finder", Verb::Finder), ("Default app", Verb::DefaultApp)],
         }
     }
@@ -69,7 +71,8 @@ impl Opened {
     fn run(&self, verb: Verb, window: &mut gpui::Window, cx: &mut gpui::App) {
         match (self, verb) {
             (Opened::Page(page), Verb::Browser) => cx.open_url(&page.url()),
-            (Opened::Page(PageSource::File(path)), Verb::Copy) | (Opened::File(path), Verb::Copy) => {
+            (Opened::Page(PageSource::File(path)), Verb::Copy)
+            | (Opened::File(path), Verb::Copy) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()))
             }
             (Opened::Page(PageSource::Address(address)), Verb::Copy) => {
@@ -102,11 +105,7 @@ impl TranscriptView {
     }
 
     /// An outputs row: its cards, one under another.
-    pub(super) fn render_outputs(
-        &self,
-        row: &TranscriptRow,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(super) fn render_outputs(&self, row: &TranscriptRow, cx: &mut Context<Self>) -> AnyElement {
         let key = format!("{}-{:?}", self.input.namespace, row.id());
         div()
             .debug_selector(|| "transcript-outputs".into())
@@ -176,12 +175,19 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
     let key = format!("{row}-{index}");
     let key = key.as_str();
     let (selector, lead, title, detail) = match &opened {
-        Opened::Page(page) => ("page-card", thumbnail(), page.title(), page.kind().to_owned()),
+        Opened::Page(page) => (
+            "page-card",
+            thumbnail(),
+            page.title(),
+            page.kind().to_owned(),
+        ),
         Opened::File(path) => (
             "file-card",
             file_mark(),
-            path.file_name()
-                .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned()),
+            path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
             ferrite_ui::components::home_relative(path.parent().unwrap_or(path)),
         ),
     };
@@ -189,16 +195,26 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
         Opened::Page(page) => {
             let shown = page.clone();
             vec![
-                text_door(&format!("{key}-open"), format!("page-card-open-{index}"), "Open", false)
-                    .on_click(cx.listener(move |view, _: &gpui::ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        view.input.preview.open_page(shown.clone(), window);
-                    }))
-                    .into_any_element(),
+                text_door(
+                    &format!("{key}-open"),
+                    format!("page-card-open-{index}"),
+                    "Open",
+                    false,
+                )
+                .on_click(cx.listener(move |view, _: &gpui::ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.input.preview.open_page(shown.clone(), window);
+                }))
+                .into_any_element(),
                 more_door(&format!("{key}-more"), index, opened.clone(), cx),
             ]
         }
-        Opened::File(_) => vec![open_in_door(&format!("{key}-open-in"), index, opened.clone(), cx)],
+        Opened::File(_) => vec![open_in_door(
+            &format!("{key}-open-in"),
+            index,
+            opened.clone(),
+            cx,
+        )],
     };
     let body = opened.clone();
     let hover = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(gpui::SharedString::from(
@@ -246,10 +262,12 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
                 ),
         )
         .children(doors)
-        .on_click(cx.listener(move |view, _: &gpui::ClickEvent, window, cx| match &body {
-            Opened::Page(page) => view.input.preview.open_page(page.clone(), window),
-            Opened::File(path) => view.input.preview.open(path.clone(), None, &[], window, cx),
-        }))
+        .on_click(
+            cx.listener(move |view, _: &gpui::ClickEvent, window, cx| match &body {
+                Opened::Page(page) => view.input.preview.open_page(page.clone(), window),
+                Opened::File(path) => view.input.preview.open(path.clone(), None, &[], window, cx),
+            }),
+        )
         .into_any_element()
 }
 
@@ -266,7 +284,11 @@ fn thumbnail() -> AnyElement {
         .h(px(inner))
         .rounded(px(theme::R_CONTROL))
         .bg(paint::CARD)
-        .child(icon(icons::GLOBE, theme::ICON_BUTTON_GLYPH, theme::INK_SUBTLE))
+        .child(icon(
+            icons::GLOBE,
+            theme::ICON_BUTTON_GLYPH,
+            theme::INK_SUBTLE,
+        ))
         .into_any_element()
 }
 
@@ -280,7 +302,11 @@ fn file_mark() -> AnyElement {
         .size(px(theme::OUTPUT_ICON_TILE))
         .rounded(px(theme::R_CONTROL))
         .bg(paint::CARD)
-        .child(icon(icons::FILE, theme::ICON_BUTTON_GLYPH, theme::INK_SUBTLE))
+        .child(icon(
+            icons::FILE,
+            theme::ICON_BUTTON_GLYPH,
+            theme::INK_SUBTLE,
+        ))
         .into_any_element()
 }
 
@@ -312,7 +338,11 @@ fn text_door(
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(label)
         .when(chevron, |door| {
-            door.child(icon(icons::CHEVRON_RIGHT, theme::FS_META, theme::INK_SUBTLE))
+            door.child(icon(
+                icons::CHEVRON_RIGHT,
+                theme::FS_META,
+                theme::INK_SUBTLE,
+            ))
         })
 }
 
@@ -351,7 +381,11 @@ fn more_door(
         .rounded(px(theme::R_CONTROL))
         .hover_raised(hover)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(icon(icons::ELLIPSIS, theme::ICON_BUTTON_GLYPH, theme::INK_SUBTLE))
+        .child(icon(
+            icons::ELLIPSIS,
+            theme::ICON_BUTTON_GLYPH,
+            theme::INK_SUBTLE,
+        ))
         .on_click(cx.listener(move |view, event: &gpui::ClickEvent, _, cx| {
             cx.stop_propagation();
             view.open_output_menu(opened.clone(), event.position(), cx);
@@ -373,7 +407,9 @@ mod tests {
             ["Finder", "Default app"]
         );
         assert_eq!(
-            labels(Opened::Page(PageSource::Address("http://localhost:3000".into()))),
+            labels(Opened::Page(PageSource::Address(
+                "http://localhost:3000".into()
+            ))),
             ["Open in browser", "Copy address"]
         );
         assert_eq!(

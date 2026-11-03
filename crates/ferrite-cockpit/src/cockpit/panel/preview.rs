@@ -487,12 +487,7 @@ impl CockpitView {
 
     /// A page head's title: its name and a ▾, a press opening its menu
     /// (`MenuTarget::Page`) under it.
-    fn page_title_menu(
-        &self,
-        owner: PaneIdentity,
-        title: String,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn page_title_menu(&self, owner: PaneIdentity, title: String, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         let id = gpui::ElementId::from("preview-page-title");
         let key = ferrite_ui::pointer::hover_key(&id);
@@ -513,9 +508,12 @@ impl CockpitView {
                 .hover_raised(key)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
-                    gpui::canvas(move |bounds, _, _| measured.set(Some(bounds)), |_, _, _, _| {})
-                        .absolute()
-                        .size_full(),
+                    gpui::canvas(
+                        move |bounds, _, _| measured.set(Some(bounds)),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
                 )
                 .child(
                     div()
@@ -534,10 +532,7 @@ impl CockpitView {
                     cx.stop_propagation();
                     // Under the title, its left edge on the title's.
                     let at = drawn.get().map_or(event.position(), |title| {
-                        gpui::point(
-                            title.left(),
-                            title.bottom() + px(MENU_UNDER_GAP),
-                        )
+                        gpui::point(title.left(), title.bottom() + px(MENU_UNDER_GAP))
                     });
                     view.open_context_menu_at(
                         MenuTarget::Page(owner),

@@ -64,9 +64,15 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
         "{top} from the window's top: {toast:?}"
     );
     let shown = cx.debug_bounds("panel").expect("the panel");
-    assert!(!shown.intersects(&toast), "{toast:?} covers the panel {shown:?}");
+    assert!(
+        !shown.intersects(&toast),
+        "{toast:?} covers the panel {shown:?}"
+    );
     assert_eq!(
-        cx.update(|_, cx| gpui::component::Theme::global(cx).notification.margins.right),
+        cx.update(|_, cx| gpui::component::Theme::global(cx)
+            .notification
+            .margins
+            .right),
         px(right),
         "the kit's toasts keep to the same column"
     );
