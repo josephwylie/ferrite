@@ -1,5 +1,5 @@
 //! The API's Projects (Herdr's Spaces), worktrees, saved machines
-//! and the nav's focus: what herdr-projects asks of Herdr beyond Threads
+//! and the nav's focus: what an agent driving others asks beyond Threads
 //! (ADR 0030). A Project is the registry's: keyed by its directories, it
 //! is named on the wire by its number as a string (`api::project_id`) and
 //! labelled by its title.

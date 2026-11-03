@@ -986,25 +986,24 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     );
 }
 
-/// Projects' turn-end hooks (ADR 0031): herdr-projects hands its agent a
-/// `--settings` file of `Stop`/`StopFailure` hooks through `thread.start
-/// --args`; it reaches the CLI last, after Ferrite's own flags, with the
-/// environment those hooks run the program in.
+/// A Thread's own arguments (`thread.start --args`, a `--settings` file
+/// here) reach the CLI last, after Ferrite's own flags, with its own
+/// environment (`--env`).
 #[test]
-fn projects_settings_reach_the_cli_after_ferrites_flags() {
-    let log = log_path("argv-projects.log");
+fn a_threads_args_reach_the_cli_after_ferrites_flags() {
+    let log = log_path("argv-thread-args.log");
     let program = stub(
-        "claude-echoes-projects",
+        "claude-echoes-thread-args",
         &format!(
-            "{PRELUDE}\necho \"$@ | $HERDR_SOCKET_PATH $FERRITE_PROJECTS_BIN\" > '{}'\nexec cat > /dev/null",
+            "{PRELUDE}\necho \"$@ | $TOOL_SOCKET $TOOL_BIN\" > '{}'\nexec cat > /dev/null",
             log.display()
         ),
     );
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
         env: vec![
-            ("HERDR_SOCKET_PATH".into(), "/store/api.sock".into()),
-            ("FERRITE_PROJECTS_BIN".into(), "/f/ferrite-projects".into()),
+            ("TOOL_SOCKET".into(), "/store/tool.sock".into()),
+            ("TOOL_BIN".into(), "/f/tool".into()),
         ],
         args: vec!["--settings".into(), "/d/tasks/app/1/claude.json".into()],
         ..Default::default()
@@ -1016,7 +1015,7 @@ fn projects_settings_reach_the_cli_after_ferrites_flags() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
+         --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan --settings /d/tasks/app/1/claude.json | /store/tool.sock /f/tool"
     );
 }
 
