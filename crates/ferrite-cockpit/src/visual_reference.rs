@@ -2322,7 +2322,7 @@ fn menu() -> (Scene, Setup) {
             path: None,
             // Where each comes from, as the CLI marks it.
             source: Some(match name {
-                "commit" | "simplify" => ferrite_core::CommandSource::Skill,
+                "code-review" | "commit" | "simplify" => ferrite_core::CommandSource::Skill,
                 "tdd:red-green" => ferrite_core::CommandSource::Plugin {
                     plugin: "tdd".into(),
                 },
