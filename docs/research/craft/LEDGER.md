@@ -76,15 +76,15 @@ These are kept as they are:
 
 ## Lane P — the panel, preview and sidebar
 
-- [ ] A page and preview pane: open a rendered page or URL beside the transcript, with a title menu, expand and close.
-- [ ] Preview cards in the transcript: a thumbnail, Open and ⋯.
-- [ ] A lightbox: a dimmed overlay with arrows, "1 of N", zoom and download.
-- [ ] The right panel is closed by default.
-- [ ] Toasts no longer cover the right panel.
-- [ ] Long sidebar titles fade out instead of ending in "…".
-- [ ] Remove the "↑N" ahead/behind counts from project headings.
-- [ ] When the panel is hidden, the window title shows the branch.
-- [ ] File cards, with Open in, for files the agent produces.
+- [x] A page and preview pane: open a rendered page or URL beside the transcript, with a title menu, expand and close (`fa36929a`). An `.html` file draws live through the visuals engine under `--features cef`; a local URL, or any page without Chromium, shows the can't-show note with Open in browser. The engine is sandboxed and loads no URLs.
+- [x] Preview cards in the transcript: a thumbnail, Open and ⋯ (`cdc328f3`). The thumbnail is a globe glyph; no page snapshot yet.
+- [x] A lightbox: a dimmed overlay with arrows, "1 of N", zoom and download (`bcef8604`, `cda2c1c5`).
+- [x] The right panel is closed by default (`8a9ac2e3`).
+- [x] Toasts no longer cover the right panel (`4eb04ac0`, `2cba4d9c`).
+- [x] Long sidebar titles fade out instead of ending in "…" (`76e2c416`).
+- [x] Remove the "↑N" ahead/behind counts from project headings (`fdc65449`).
+- [x] When the panel is hidden, the window title shows the branch (`69525ef2`).
+- [x] File cards, with Open in, for files the agent produces (`cdc328f3`). Open in offers Finder and the default app; Ferrite knows no list of editors.
 
 ## Lane X — Codex parity and checks
 
