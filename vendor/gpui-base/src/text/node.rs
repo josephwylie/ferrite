@@ -952,6 +952,70 @@ impl Paragraph {
         text
     }
 
+    /// Ferrite: each line's width as `Inline` lays it out, its ends
+    /// trimmed: every run in its own face over `base` — bold in the
+    /// style's strong, inline code in `inline_code_font` with its wash's
+    /// `pad` either side — summed run by run through `width` (text and its
+    /// one `TextRun`). Blank lines are left out.
+    pub(super) fn line_widths(
+        &self,
+        base: &gpui::TextStyle,
+        style: &TextViewStyle,
+        mut width: impl FnMut(&str, gpui::TextRun) -> f32,
+    ) -> Vec<f32> {
+        // Each byte's face: (bold, code).
+        let text = self.text();
+        let mut faces = vec![(false, false); text.len()];
+        let mut offset = 0;
+        for node in &self.children {
+            for (range, mark) in &node.marks {
+                let range = (offset + range.start).min(text.len())..(offset + range.end).min(text.len());
+                for face in &mut faces[range] {
+                    face.0 |= mark.bold;
+                    face.1 |= mark.code;
+                }
+            }
+            offset += node.text.len();
+        }
+        let pad = style.inline_code_wash().map_or(0., |wash| f32::from(wash.pad));
+        let mut widths = Vec::new();
+        let mut start = 0;
+        for line in text.split('\n') {
+            let trimmed = line.trim();
+            let at = start + (trimmed.as_ptr() as usize - line.as_ptr() as usize);
+            start += line.len() + 1;
+            if trimmed.is_empty() {
+                continue;
+            }
+            let mut sum = 0.;
+            let mut run_start = 0;
+            for (ix, _) in trimmed.char_indices().skip(1).chain([(trimmed.len(), ' ')]) {
+                if ix < trimmed.len() && faces[at + ix] == faces[at + run_start] {
+                    continue;
+                }
+                let (bold, code) = faces[at + run_start];
+                let mut face = base.clone();
+                if bold {
+                    face = face.highlight(style.strong());
+                }
+                if code {
+                    face = face.highlight(style.inline_code_highlight());
+                    if let Some(family) = style.inline_code_font() {
+                        face.font_family = family;
+                    }
+                }
+                let run = &trimmed[run_start..ix];
+                sum += width(run, face.to_run(run.len()));
+                if code {
+                    sum += 2. * pad;
+                }
+                run_start = ix;
+            }
+            widths.push(sum);
+        }
+        widths
+    }
+
     /// Synchronously clear the selection stored in every inline state.
     ///
     /// Mirrors the [`selected_text`](Self::selected_text) traversal.
@@ -2347,9 +2411,11 @@ impl BlockNode {
         //
         // Ferrite: measured in the face the cells draw in — the
         // `table_cell` refinement's, and the head's over it for the first
-        // row (a bolder head is wider) — and with the cell's own horizontal
-        // padding where the refinement sets it in pixels, so a column fitted
-        // to its content (`table_columns_fit`) never wraps its widest line.
+        // row (a bolder head is wider), each run in its own face
+        // (`Paragraph::line_widths`: inline code in the code family with
+        // its wash's room) — and with the cell's own horizontal padding
+        // where the refinement sets it in pixels, so a column given its
+        // content's width never wraps its widest line.
         let rem = window.rem_size();
         let cell_refinement = node_cx.style.table_cell();
         let mut body_style = window.text_style();
@@ -2370,19 +2436,14 @@ impl BlockNode {
                 let Some(slot) = col_w.get_mut(ix) else {
                     continue;
                 };
-                let mut w = 0.0_f32;
-                for line in cell.children.text().split('\n') {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    let run = text_style.to_run(line.len());
-                    let line_w = window
-                        .text_system()
-                        .layout_line(line, font_size, &[run], None)
-                        .width;
-                    w = w.max(f32::from(line_w).ceil());
-                }
+                let w = cell
+                    .children
+                    .line_widths(text_style, &node_cx.style, |text, run| {
+                        let line = window.text_system().layout_line(text, font_size, &[run], None);
+                        f32::from(line.width)
+                    })
+                    .into_iter()
+                    .fold(0.0_f32, |w, line| w.max(line.ceil()));
                 // Border-box widths, so the padding and border the cell draws
                 // must leave the measured text its full width.
                 let border = if ix + 1 < col_count {
@@ -2447,10 +2508,9 @@ impl BlockNode {
                         // space so a narrow table still fills the frame, while
                         // shrinking is clamped at `min_w` — the flex engine
                         // squeezes columns (their text wraps) down to the
-                        // floors before the track starts to scroll. Fitted
-                        // columns (`table_columns_fit`) never grow.
+                        // floors before the track starts to scroll.
                         .flex_basis(px(width))
-                        .flex_grow(if style.table_columns_fit() { 0. } else { width })
+                        .flex_grow(width)
                         .flex_shrink(1.)
                         .min_w(px(min_width))
                         .overflow_hidden()

@@ -1295,6 +1295,9 @@ pub struct MenuItem {
     /// turns `BLOCKED` and asks for the second press.
     pub destructive: bool,
     pub disabled: bool,
+    /// Why a disabled row is disabled, in its tooltip: a row stays one
+    /// line, as Claude's do.
+    pub why: Option<SharedString>,
 }
 
 impl MenuItem {
@@ -1352,6 +1355,12 @@ impl MenuItem {
     }
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+    /// Disabled, saying `why` in the row's tooltip.
+    pub fn disabled_because(mut self, why: impl Into<SharedString>) -> Self {
+        self.disabled = true;
+        self.why = Some(why.into());
         self
     }
 }

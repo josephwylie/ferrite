@@ -344,6 +344,21 @@ pub fn prose_beyond_subject(decision: &Decision, command: Option<&str>) -> Optio
     (!rest.is_empty()).then(|| rest.join(" \u{b7} "))
 }
 
+/// What an approval's prose says, as Claude's card does: the tool's own
+/// description of the call (a Bash call's `description` input, `List a
+/// directory that doesn't exist`), else what the agent's reason says
+/// beyond the head and the well (`prose_beyond_subject`).
+pub fn approval_prose(decision: &Decision, command: Option<&str>) -> Option<String> {
+    decision
+        .input
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_owned)
+        .or_else(|| prose_beyond_subject(decision, command))
+}
+
 // ------------------------------------------------------------ the patterns
 
 /// A shell command's leading words, as a rule names them: up to two, and
@@ -1498,6 +1513,38 @@ mod tests {
         rows.iter()
             .map(|row| (row.key.to_string(), row.label.to_string()))
             .collect()
+    }
+
+    /// An approval's prose is the tool's own description where it has one
+    /// (Claude's card: `List a directory that doesn't exist`); the agent's
+    /// reason only where it has none.
+    #[test]
+    fn an_approval_says_the_tools_description_first() {
+        let described = Decision {
+            description: "Inspect the fixture without modifying files.".into(),
+            ..approval(
+                "Bash",
+                serde_json::json!({
+                    "command": "ls /definitely-missing-dir",
+                    "description": "List a directory that doesn't exist",
+                }),
+                vec![],
+            )
+        };
+        let command = Some("ls /definitely-missing-dir");
+        assert_eq!(
+            approval_prose(&described, command).as_deref(),
+            Some("List a directory that doesn't exist")
+        );
+        let reasoned = Decision {
+            description: "Inspect the fixture without modifying files.".into(),
+            ..bash("ls /definitely-missing-dir")
+        };
+        assert_eq!(
+            approval_prose(&reasoned, command).as_deref(),
+            Some("Inspect the fixture without modifying files.")
+        );
+        assert_eq!(approval_prose(&bash("ls"), Some("ls")), None);
     }
 
     /// D-3: every approval offers exactly three options, keyed 1–3, in the

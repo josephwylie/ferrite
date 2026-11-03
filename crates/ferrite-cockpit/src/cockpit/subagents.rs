@@ -1360,7 +1360,12 @@ impl Cards {
             let command = decision::shell_source(decision)
                 .map(std::borrow::Cow::into_owned)
                 .or_else(|| pane::approval_source(decision));
-            decision::prose_beyond_subject(decision, command.as_deref()).map(SharedString::from)
+            if matches!(decision.kind, ferrite_core::DecisionKind::Approval) {
+                decision::approval_prose(decision, command.as_deref())
+            } else {
+                decision::prose_beyond_subject(decision, command.as_deref())
+            }
+            .map(SharedString::from)
         };
         let serial = request.handle.serial;
         let title = title.map(|title| {

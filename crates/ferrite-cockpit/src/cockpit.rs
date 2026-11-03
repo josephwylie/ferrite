@@ -823,14 +823,14 @@ impl PaneGhost {
 }
 
 impl Render for PaneGhost {
-    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use ferrite_ui::theme;
         if let Some((_, chip)) = self
             .row_left_of
             .as_ref()
             .filter(|(edge, _)| f32::from(window.mouse_position().x) < *edge)
         {
-            return chip.element();
+            return chip.element(&nav::Measure::Text(cx));
         }
         let scale = self.scale();
         let (w, h) = self.face.size;
@@ -1017,7 +1017,7 @@ enum NavChip {
 }
 
 impl NavChip {
-    fn element(&self) -> Div {
+    fn element(&self, measure: &nav::Measure) -> Div {
         nav::drag_row(match self {
             NavChip::Thread(row) => nav::thread_row_with_title(
                 row,
@@ -1026,6 +1026,7 @@ impl NavChip {
                 nav::RowPlace::ROOT,
                 None,
                 false,
+                measure,
             ),
             NavChip::Group(group) => nav::group_row_with_title(
                 group,
@@ -1033,6 +1034,7 @@ impl NavChip {
                 nav::group_fold(group),
                 0,
                 false,
+                measure,
             ),
         })
     }
@@ -1053,8 +1055,8 @@ struct NavDrag {
 }
 
 impl Render for NavDragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.0.element()
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.0.element(&nav::Measure::Text(cx))
     }
 }
 
@@ -13390,7 +13392,7 @@ impl CockpitView {
         let activity = self.activity(state);
         let row = |entry: &nav::ActivityRow| -> AnyElement {
             let thread = entry.row.thread;
-            nav::activity_row(entry)
+            nav::activity_row(entry, &nav::Measure::Text(cx))
                 .on_click(
                     cx.listener(move |view, _: &ClickEvent, _, cx| view.land_on_thread(thread, cx)),
                 )
@@ -13514,6 +13516,7 @@ impl CockpitView {
                     nav::RowPlace::Inbox,
                     None,
                     false,
+                    &nav::Measure::Text(cx),
                 );
                 div()
                     .id(("notice-row", index))
@@ -13631,6 +13634,7 @@ impl CockpitView {
                         self.group_fold(group, cx),
                         0,
                         false,
+                        &nav::Measure::Text(cx),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -14086,8 +14090,9 @@ impl CockpitView {
         let title = self.editable_group_title(id, group.title.clone(), cx);
         let editing =
             matches!(&self.rename, Some((RenameTarget::Group(editing), _)) if *editing == id);
-        let head = nav::group_row_with_title(group, title, fold, 0, editing)
-            .children(self.cursor_reveal(nav::NavItem::Group(id)));
+        let head =
+            nav::group_row_with_title(group, title, fold, 0, editing, &nav::Measure::Text(cx))
+                .children(self.cursor_reveal(nav::NavItem::Group(id)));
         let chip = NavChip::Group(group.clone());
         let lifted = self.nav_dragging == Some(Drag::Group(id));
         let mut block = nav::group_block(id)
@@ -14260,8 +14265,16 @@ impl CockpitView {
                 .into_any_element(),
         );
         let item = nav::NavItem::Thread(thread, group);
-        let head = nav::thread_row_with_title(row, title, action, place, group, editing)
-            .children(self.cursor_reveal(item));
+        let head = nav::thread_row_with_title(
+            row,
+            title,
+            action,
+            place,
+            group,
+            editing,
+            &nav::Measure::Text(cx),
+        )
+        .children(self.cursor_reveal(item));
         let face = self.thread_ghost(thread);
         let nav_edge = self.nav_width();
         let chip = NavChip::Thread(row.clone());

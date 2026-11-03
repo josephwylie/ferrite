@@ -44,7 +44,6 @@ pub struct TextViewStyle {
     list_item_gap: Pixels,
     link_underline_on_hover: bool,
     numeric_columns_right: bool,
-    table_columns_fit: bool,
     image: StyleRefinement,
 }
 
@@ -120,7 +119,6 @@ impl PartialEq for TextViewStyle {
             && self.list_item_gap == other.list_item_gap
             && self.link_underline_on_hover == other.link_underline_on_hover
             && self.numeric_columns_right == other.numeric_columns_right
-            && self.table_columns_fit == other.table_columns_fit
             && self.image == other.image
     }
 }
@@ -184,7 +182,6 @@ impl TextViewStyle {
             list_item_gap: px(0.),
             link_underline_on_hover: false,
             numeric_columns_right: false,
-            table_columns_fit: false,
             image: StyleRefinement::default(),
         }
     }
@@ -349,14 +346,6 @@ impl TextViewStyle {
         self
     }
 
-    /// A scrolling table's columns keep their content's width (`true`),
-    /// leaving the frame's spare width empty at the right, rather than
-    /// sharing it out (`false`, the default).
-    pub fn with_table_columns_fit(mut self, fit: bool) -> Self {
-        self.table_columns_fit = fit;
-        self
-    }
-
     /// Refines the frame a Markdown image is drawn in (its border, width,
     /// ground), after the defaults. The image fills the frame at its own
     /// proportions.
@@ -469,11 +458,6 @@ impl TextViewStyle {
     /// Whether all-number table columns right-align by default.
     pub fn numeric_columns_right(&self) -> bool {
         self.numeric_columns_right
-    }
-
-    /// Whether a scrolling table's columns keep their content's width.
-    pub fn table_columns_fit(&self) -> bool {
-        self.table_columns_fit
     }
 
     /// The refinement on a Markdown image's frame.

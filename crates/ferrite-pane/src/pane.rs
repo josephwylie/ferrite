@@ -2696,13 +2696,16 @@ pub fn approval_input(
 ) -> Option<AnyElement> {
     use gpui::component::scroll::ScrollableElement as _;
 
-    let source = match decision::shell_source(decision) {
-        Some(command) => command.into_owned(),
-        None => approval_source(decision)?,
+    // A command reads in Claude's command green; other input in the
+    // well's own ink.
+    let (source, ink) = match decision::shell_source(decision) {
+        Some(command) => (command.into_owned(), Some(theme::SHELL_COMMAND_INK)),
+        None => (approval_source(decision)?, None),
     };
     Some(
         div()
             .debug_selector(|| "approval-input".into())
+            .when_some(ink, |input, ink| input.text_color(rgb(ink)))
             .w_full()
             .min_w_0()
             .flex_shrink_0()
@@ -3204,8 +3207,9 @@ pub(crate) fn render_block(
 }
 
 /// What a prompt's text is: its words as one literal run, or — with
-/// attachments that chip — Markdown whose links are the inline chips, so a
-/// chip flows right after the words and wraps only when it does not fit.
+/// attachments that chip, or `code` quoted in backticks — Markdown whose
+/// links are the inline chips, so a chip flows right after the words and
+/// wraps only when it does not fit, and whose code spans are code chips.
 pub enum PromptText {
     Literal(String),
     Markdown(String),
@@ -3226,7 +3230,10 @@ fn prompt_text_chipping(
     let words = crate::quote::split(line).1;
     let (text, files) = ferrite_core::prompt_files::split(String::from(words));
     let chipped: Vec<_> = files.iter().filter(|path| chips(path)).cloned().collect();
-    if chipped.is_empty() {
+    let quotes_code = text
+        .split('\n')
+        .any(|line| code_spans(line).iter().any(|(code, _)| *code));
+    if chipped.is_empty() && !quotes_code {
         return (PromptText::Literal(text), files);
     }
     (
@@ -3236,7 +3243,8 @@ fn prompt_text_chipping(
 }
 
 /// The prompt's words with every Markdown character escaped (they are the
-/// operator's own, never markup), hard breaks where they broke the line,
+/// operator's own, never markup) but for their code spans, which stay code
+/// (Claude draws them as chips); hard breaks where they broke the line,
 /// then one `ferrite-chip:` link per file, which the band renders as its
 /// chip (`prompt_chip`).
 fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
@@ -3245,11 +3253,17 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
         if index > 0 {
             out.push_str("\\\n");
         }
-        for ch in line.chars() {
-            if ch.is_ascii_punctuation() {
-                out.push('\\');
+        for (code, span) in code_spans(line) {
+            if code {
+                out.push_str(span);
+                continue;
             }
-            out.push(ch);
+            for ch in span.chars() {
+                if ch.is_ascii_punctuation() {
+                    out.push('\\');
+                }
+                out.push(ch);
+            }
         }
     }
     for path in files {
@@ -3273,6 +3287,45 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
         out.push_str(">)");
     }
     out
+}
+
+/// A line cut into its code spans (`true`, backticks and all) and the
+/// words between them, in order: as CommonMark reads a code span, a run of
+/// backticks closed by the next run of the same length. A run never
+/// closed is words.
+fn code_spans(line: &str) -> Vec<(bool, &str)> {
+    let ticks = |at: usize| line[at..].bytes().take_while(|&b| b == b'`').count();
+    let mut spans = Vec::new();
+    let (mut words, mut at) = (0, 0);
+    while let Some(found) = line[at..].find('`') {
+        let open = at + found;
+        let run = ticks(open);
+        let mut search = open + run;
+        let close = loop {
+            let Some(found) = line[search..].find('`') else {
+                break None;
+            };
+            let start = search + found;
+            let length = ticks(start);
+            if length == run {
+                break Some(start + length);
+            }
+            search = start + length;
+        };
+        let Some(end) = close else {
+            at = open + run;
+            continue;
+        };
+        if words < open {
+            spans.push((false, &line[words..open]));
+        }
+        spans.push((true, &line[open..end]));
+        (words, at) = (end, end);
+    }
+    if words < line.len() {
+        spans.push((false, &line[words..]));
+    }
+    spans
 }
 
 /// A prompt's words: its literal run or its Markdown with its chips, in

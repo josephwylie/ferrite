@@ -371,7 +371,7 @@ impl Markdown {
 
     /// Draw `ferrite-chip:` links as a prompt's inline chips (a prompt's
     /// band: its words, then its files), opening in `preview` — an image
-    /// among the prompt's `images`.
+    /// among the prompt's `images`; its code in the prompt's own chip.
     pub fn chips(
         mut self,
         preview: crate::preview::Preview,
@@ -470,6 +470,19 @@ impl gpui::RenderOnce for Markdown {
                     ..Default::default()
                 })
                 .with_inline_code_wash(None)
+        } else {
+            text_style
+        };
+        // A sent prompt's code is Claude's: `PROMPT_CODE_INK` on a
+        // `PROMPT_CODE_CHIP`, a step over the bubble.
+        let text_style = if self.chips.is_some() {
+            text_style
+                .with_inline_code(gpui::HighlightStyle {
+                    color: Some(rgb(theme::PROMPT_CODE_INK).into()),
+                    font_weight: Some(theme::W_BODY),
+                    ..Default::default()
+                })
+                .with_inline_code_wash(Some(prompt_code_wash()))
         } else {
             text_style
         };
@@ -900,12 +913,12 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         })
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
         .with_inline_code_wash(Some(inline_code_wash()))
-        // A table's rules run the full column (Claude's), its columns as
-        // wide as their content and no wider, the spare width left empty at
-        // the right; every one left-aligned as Claude's are — numbers too,
+        // A table's rules run the full column (Claude's), each column its
+        // content's width — inline code at its own face — and a share of
+        // the spare width in proportion, so a table that fits wraps no
+        // cell; every one left-aligned as Claude's are — numbers too,
         // unless the table's own `---:` asks otherwise; its rules, the
         // head's and the rows', are the one `LINE`.
-        .with_table_columns_fit(true)
         .with_border(theme::paint::LINE.into())
         .with_table({
             // No box and no ground.
@@ -1019,6 +1032,14 @@ pub fn inline_code_wash() -> gpui::base::text::InlineCodeWash {
         overhang: px(0.),
         pad: px(theme::INLINE_CODE_PAD_X),
         inset_y: px(theme::INLINE_CODE_INSET_Y),
+    }
+}
+
+/// `inline_code_wash` in a sent prompt's bubble: `PROMPT_CODE_CHIP`.
+fn prompt_code_wash() -> gpui::base::text::InlineCodeWash {
+    gpui::base::text::InlineCodeWash {
+        color: theme::paint::PROMPT_CODE_CHIP.hsla(),
+        ..inline_code_wash()
     }
 }
 
@@ -1753,6 +1774,26 @@ mod file_link_tests {
         assert!(
             (table.right() - px(420.)).abs() <= px(1.),
             "the table ends where the fence does: {table:?} / {fence:?}"
+        );
+    }
+
+    /// CP7 regression 3: a table that fits its column wraps no cell —
+    /// inline code is measured in its own face with its chip's room, and
+    /// the spare width is shared out — so each row stays one
+    /// `TABLE_ROW_H` line under the head, as Claude's does.
+    #[gpui::test]
+    fn a_table_that_fits_keeps_its_code_on_one_line(cx: &mut TestAppContext) {
+        let source = "| Command | Result |\n| --- | --- |\n| `ls /definitely-missing-dir` | Exit 1: `No such file or directory` |\n| `sleep 15 && echo done` | Exit 0: printed `done` after 15s |";
+        let (_view, cx) = fixture(cx, source);
+        cx.simulate_resize(gpui::size(px(640.), px(400.)));
+        cx.run_until_parked();
+        let track = cx
+            .debug_bounds("markdown-table-track")
+            .expect("the table's track");
+        let one_line = theme::TABLE_HEAD_H + 2.0 * theme::TABLE_ROW_H + 2.0;
+        assert!(
+            f32::from(track.size.height) <= one_line,
+            "every cell on one line: {track:?}, at most {one_line}"
         );
     }
 

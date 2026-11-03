@@ -371,11 +371,11 @@ impl CockpitView {
         }
         rows.push(Some((key("Rename", "R"), MenuVerb::Rename)));
         if let Some(allowed) = open.as_ref().and_then(super::transcript_glue::rewind_gate) {
-            let mut fork = key("Fork", "F");
-            if let Err(why) = allowed {
-                fork = fork.disabled(true);
-                fork.note = Some(why);
-            }
+            let fork = key("Fork", "F");
+            let fork = match allowed {
+                Ok(()) => fork,
+                Err(why) => fork.disabled_because(why),
+            };
             rows.push(Some((fork, MenuVerb::Fork)));
         }
         if self.cockpit.roster().focused_thread() != Some(thread) {

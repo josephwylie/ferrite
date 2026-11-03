@@ -167,6 +167,26 @@ fn a_prompts_files_flow_inline_after_its_words() {
     assert!(matches!(plain, pane::PromptText::Literal(words) if words == "Just words"));
 }
 
+/// A prompt's `code` is Markdown code — Claude's red chip — while the rest
+/// of its words stay escaped; a backtick never closed stays a backtick.
+#[test]
+fn a_prompts_code_is_drawn_as_code() {
+    let (text, files) =
+        pane::prompt_text("Run `ls /definitely-missing-dir`, then ``a ` b`` (once) and `open");
+    assert!(files.is_empty());
+    let pane::PromptText::Markdown(source) = text else {
+        panic!("a prompt that quotes code is Markdown");
+    };
+    assert_eq!(
+        source,
+        "Run `ls /definitely-missing-dir`\\, then ``a ` b`` \\(once\\) and \\`open"
+    );
+    assert!(matches!(
+        pane::prompt_text("an `unclosed tick").0,
+        pane::PromptText::Literal(words) if words == "an `unclosed tick"
+    ));
+}
+
 /// The hover card hangs `HOVER_CARD_GAP` under its path, flips above it
 /// near the window's foot, and keeps `HOVER_CARD_EDGE` from the window's
 /// right edge.

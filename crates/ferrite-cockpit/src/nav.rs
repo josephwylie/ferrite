@@ -570,7 +570,8 @@ impl Measure<'_> {
 /// sidebar titles do, rather than ending in "…": the line lays out whole,
 /// the box clips it, and `components::line_fade` in `ground` — the row's
 /// fill under it (`row_ground`) — fades the cut. `ground` is `None` where
-/// the box holds a rename field, whose caret the fade would hide.
+/// the line fits (`cut_ground`), so a whole name keeps its last letters,
+/// and where the box holds a rename field, whose caret the fade would hide.
 ///
 /// A pinned line needs a **definite** width on its very first measure.
 /// gpui caches a nowrap line's first measure permanently, and taffy only
@@ -611,6 +612,19 @@ fn fitted(
             ),
         )
         .children(ground.map(components::line_fade))
+}
+
+/// `ground`, for `fitted`'s fade, only where `text` at `size` and `weight`
+/// runs past `width`: a line that fits is drawn whole.
+fn cut_ground(
+    measure: &Measure,
+    text: &str,
+    size: f32,
+    weight: FontWeight,
+    width: f32,
+    ground: Hsla,
+) -> Option<Hsla> {
+    (measure.ui(text, size, weight) > width).then_some(ground)
 }
 
 /// The ground under a row's text, as `wash` lays it over the column: the
@@ -1119,13 +1133,12 @@ fn project_row(
         (None, None) => 0.0,
     };
     let title_w = INNER_W - 2.0 * NAV_ROW_PAD_X - right_w;
+    let natural = measure.ui(&label, FS_META, W_BODY);
     // The caret follows the label itself, so the label's box is its own
     // width, out to what the caret leaves of the title's.
     let (label_w, caret) = match fold {
         Some(folded) => (
-            measure
-                .ui(&label, FS_META, W_BODY)
-                .min(title_w - SPACE_1 - NAV_HEADING_CARET),
+            natural.min(title_w - SPACE_1 - NAV_HEADING_CARET),
             Some(
                 div()
                     .debug_selector(move || format!("{key}-{index}-chevron"))
@@ -1141,6 +1154,7 @@ fn project_row(
         ),
         None => (title_w, None),
     };
+    let ground = (natural > label_w).then_some(ground);
     line_frame((key, index), blend, false)
         .debug_selector(move || format!("{key}-{index}"))
         .gap(px(NAV_ICON_GAP))
@@ -1150,14 +1164,7 @@ fn project_row(
                 .flex_shrink_0()
                 .items_center()
                 .gap(px(SPACE_1))
-                .child(fitted(
-                    label_w,
-                    FS_META,
-                    INK_SUBTLE,
-                    W_BODY,
-                    label,
-                    Some(ground),
-                ))
+                .child(fitted(label_w, FS_META, INK_SUBTLE, W_BODY, label, ground))
                 .children(caret),
         )
         .children(right.map(|(right, right_ink)| {
@@ -1304,7 +1311,14 @@ pub fn member_tail(id: GroupId) -> Stateful<Div> {
 /// in with it.
 #[cfg(test)]
 pub fn group_row(row: &GroupBlock, depth: usize) -> Stateful<Div> {
-    group_row_with_title(row, row.title.clone(), group_fold(row), depth, false)
+    group_row_with_title(
+        row,
+        row.title.clone(),
+        group_fold(row),
+        depth,
+        false,
+        &Measure::Cells(7.0),
+    )
 }
 
 /// `group_row` with the title leaf and the chevron supplied by the caller
@@ -1321,10 +1335,10 @@ pub fn group_row_with_title(
     fold: Stateful<Div>,
     depth: usize,
     editing: bool,
+    measure: &Measure,
 ) -> Stateful<Div> {
     let id = row.id;
     let key = SharedString::from(format!("nav-group-{}", id.get()));
-    let ground = (!editing).then(|| row_ground(&key, row.selected));
     // What its members roll up to, as one mark (`state_mark`): the
     // Group's row is as quiet as a Thread's.
     let mark = roll_up(&row.members).and_then(state_mark);
@@ -1335,6 +1349,13 @@ pub fn group_row_with_title(
         (INK_STRONG, W_BODY)
     };
     let place = RowPlace::Row(depth);
+    let title_w = place.text_w() - NAV_TREE_INDENT - right_w;
+    let ground = (!editing)
+        .then(|| {
+            let ground = row_ground(&key, row.selected);
+            cut_ground(measure, &row.title, FS_NAV, weight, title_w, ground)
+        })
+        .flatten();
     pitched(row_frame(
         ("nav-group", id.get() as usize),
         key,
@@ -1353,14 +1374,7 @@ pub fn group_row_with_title(
             .left(px(place.title_x()))
             .child(fold),
     )
-    .child(fitted(
-        place.text_w() - NAV_TREE_INDENT - right_w,
-        FS_NAV,
-        ink,
-        weight,
-        title,
-        ground,
-    ))
+    .child(fitted(title_w, FS_NAV, ink, weight, title, ground))
     .children(mark.map(|mark| {
         at_right(
             mark.debug_selector(move || format!("nav-group-state-{}", id.get()))
@@ -1414,7 +1428,15 @@ fn branch(rows: Vec<AnyElement>) -> Div {
 /// The Thread row at root — see `thread_row_with_title`.
 #[cfg(test)]
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
-    thread_row_with_title(row, row.name.clone(), None, RowPlace::ROOT, None, false)
+    thread_row_with_title(
+        row,
+        row.name.clone(),
+        None,
+        RowPlace::ROOT,
+        None,
+        false,
+        &Measure::Cells(7.0),
+    )
 }
 
 /// A title's ink and weight (§5.1.5): primary ink (`INK_STRONG`), as
@@ -1447,6 +1469,7 @@ pub fn thread_row_with_title(
     place: RowPlace,
     group: Option<GroupId>,
     editing: bool,
+    measure: &Measure,
 ) -> Stateful<Div> {
     let thread = row.thread;
     let key = SharedString::from(format!(
@@ -1467,7 +1490,12 @@ pub fn thread_row_with_title(
         .then(|| state_mark(row.status))
         .flatten();
     let title_w = title_w(place, action.is_some() || mark.is_some());
-    let ground = (!editing).then(|| row_ground(&key, filled));
+    let ground = (!editing)
+        .then(|| {
+            let ground = row_ground(&key, filled);
+            cut_ground(measure, &row.name, FS_NAV, weight, title_w, ground)
+        })
+        .flatten();
     pitched(row_frame(
         ("nav-thread", thread.get() as usize),
         key,
@@ -1566,7 +1594,7 @@ pub fn activity_list(priority: Vec<AnyElement>, today: Vec<AnyElement>) -> Div {
 /// `NAV_ACTIVITY_PREVIEW_LINES` of the last message, wrapped and cut with
 /// an ellipsis, in `INK_SUBTLE` too. It washes and selects as a tree row
 /// does; the cockpit wires its press (`land_on_thread`).
-pub fn activity_row(activity: &ActivityRow) -> Stateful<Div> {
+pub fn activity_row(activity: &ActivityRow, measure: &Measure) -> Stateful<Div> {
     let row = &activity.row;
     let thread = row.thread;
     let key = SharedString::from(format!("nav-activity-row-{}", thread.get()));
@@ -1575,6 +1603,7 @@ pub fn activity_row(activity: &ActivityRow) -> Stateful<Div> {
     let title_w = text_w - if mark.is_some() { RIGHT_ROOM } else { 0.0 };
     let (ink, weight) = title_face(row);
     let ground = row_ground(&key, row.selected);
+    let title_ground = cut_ground(measure, &row.name, FS_NAV, weight, title_w, ground);
     let meta = |text: SharedString| {
         div()
             .w(px(text_w))
@@ -1603,7 +1632,7 @@ pub fn activity_row(activity: &ActivityRow) -> Stateful<Div> {
                 ink,
                 weight,
                 row.name.clone(),
-                Some(ground),
+                title_ground,
             ))
             .children(mark.map(|mark| {
                 at_right(
@@ -1662,6 +1691,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
     // Primary ink, as every nav title; unread says so in weight.
     let title_weight = if cursor || !row.read { W_LABEL } else { W_BODY };
     let ground = row_ground(&key, cursor);
+    let line_ground = cut_ground(measure, &line, FS_META, W_BODY, text_w, ground);
     row_frame(("notice-row", index), key, cursor)
         .debug_selector(move || format!("notice-row-{index}"))
         .flex_col()
@@ -1681,7 +1711,14 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
                     INK_STRONG,
                     title_weight,
                     row.title.clone(),
-                    Some(ground),
+                    cut_ground(
+                        measure,
+                        &row.title,
+                        FS_NAV,
+                        title_weight,
+                        text_w - age_w,
+                        ground,
+                    ),
                 ))
                 .children(age.map(|age| {
                     div()
@@ -1697,7 +1734,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
             ink,
             W_BODY,
             SharedString::from(line),
-            Some(ground),
+            line_ground,
         )))
 }
 
@@ -2124,7 +2161,8 @@ pub fn rename_target_group(id: GroupId, title: SharedString) -> Stateful<Div> {
         .id(("rename-group", id.get() as usize))
         .debug_selector(move || format!("rename-group-{}", id.get()))
         .min_w_0()
-        .truncate()
+        .overflow_hidden()
+        .whitespace_nowrap()
         .child(title)
 }
 
@@ -2135,7 +2173,8 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .id(("rename-thread", thread.get() as usize))
         .debug_selector(move || format!("rename-thread-{}", thread.get()))
         .min_w_0()
-        .truncate()
+        .overflow_hidden()
+        .whitespace_nowrap()
         .child(title)
 }
 
@@ -2261,7 +2300,7 @@ mod tests {
             },
             preview: Some("Split the nav into its views".into()),
         };
-        let mut drawn = activity_row(&working);
+        let mut drawn = activity_row(&working, &Measure::Cells(7.0));
         assert_eq!(drawn.style().padding.left, Some(px(NAV_ROW_PAD_X).into()));
         assert!(state_mark(RowStatus::Working).is_some(), "the spinner");
         assert_eq!(NAV_ACTIVITY_PREVIEW_LINES, 2);
@@ -2269,7 +2308,7 @@ mod tests {
             preview: None,
             ..working
         };
-        let _ = activity_row(&quiet);
+        let _ = activity_row(&quiet, &Measure::Cells(7.0));
     }
 
     /// N-5, the selection rule: one selection, on the row of what the board
@@ -2288,6 +2327,7 @@ mod tests {
                 RowPlace::Member(0),
                 Some(GroupId::new(1)),
                 false,
+                &Measure::Cells(7.0),
             )),
             None,
             "an unfocused member carries no fill"
@@ -2426,6 +2466,7 @@ mod tests {
             RowPlace::Member(0),
             None,
             false,
+            &Measure::Cells(7.0),
         );
         assert_eq!(height(member), one);
         let rail = RailRow {
@@ -2724,6 +2765,37 @@ mod tests {
         let key = SharedString::from("nav-thread-0-fade");
         assert_eq!(row_ground(&key, true), paint::SIDEBAR_SELECTED.hsla());
         assert_eq!(row_ground(&key, false), paint::SIDEBAR.hsla());
+    }
+
+    /// CP7 regression 1: the fade is drawn only over a line that runs
+    /// past its box — `ferrite` at seven 7px cells fits 49px whole and
+    /// keeps its `e`; in 40px it is cut, and fades.
+    #[test]
+    fn only_a_cut_line_fades() {
+        let measure = Measure::Cells(7.0);
+        let ground = paint::SIDEBAR.hsla();
+        let cut = |width| cut_ground(&measure, "ferrite", FS_META, W_BODY, width, ground);
+        assert_eq!(cut(49.0), None, "a name that fits is whole");
+        assert_eq!(cut(120.0), None);
+        assert_eq!(cut(40.0), Some(ground), "a cut name fades");
+    }
+
+    /// CP7 regression 2: a title the box cuts ends in the fade alone —
+    /// clipped on one line, never ellipsized under it.
+    #[test]
+    fn a_title_is_clipped_not_ellipsized() {
+        for mut title in [
+            rename_target_thread(
+                ThreadId::new(1),
+                "UI test: color tokens and shell commands".into(),
+            ),
+            rename_target_group(GroupId::new(1), "A long group title".into()),
+        ] {
+            let style = title.style().clone();
+            assert_eq!(style.text.text_overflow, None, "no …");
+            assert_eq!(style.text.white_space, Some(gpui::WhiteSpace::Nowrap));
+            assert_eq!(style.overflow.x, Some(gpui::Overflow::Hidden));
+        }
     }
 
     /// The foot names the app and its major and minor version.

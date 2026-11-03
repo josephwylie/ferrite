@@ -1462,7 +1462,10 @@ fn legacy(state: &str) -> (Scene, Setup) {
                     tool_name: "Bash".into(),
                     description: "Inspect the fixture without modifying files.".into(),
                     suggestions: vec![],
-                    input: serde_json::json!({"command":"printf 'one  two\\n'\ncat formatting.md"}),
+                    input: serde_json::json!({
+                        "command": "printf 'one  two\\n'\ncat formatting.md",
+                        "description": "Print a spaced line, then read the fixture",
+                    }),
                 },
             });
         }

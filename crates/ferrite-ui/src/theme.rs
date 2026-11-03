@@ -273,6 +273,9 @@ pub const SECONDARY_HOVER: u32 = 0x454545;
 pub const PROMPT_BUBBLE: u32 = 0x262626;
 /// `#2a2a2a` — the inline-code chip, matching Claude (typecolour.md).
 pub const INLINE_CODE_CHIP: u32 = 0x2a2a2a;
+/// `#303030` — inline code's chip in a sent prompt, a step over its
+/// `PROMPT_BUBBLE` (sampled from claude/running.png's user bubble).
+pub const PROMPT_CODE_CHIP: u32 = 0x303030;
 /// `#262626` — a code fence's block, under a `BLOCK_RING`: a fence
 /// reads as a block at a glance.
 pub const BLOCK: u32 = 0x262626;
@@ -380,6 +383,7 @@ pub mod paint {
     pub const RAISED: Paint = Paint::solid(super::RAISED);
     pub const PROMPT_BUBBLE: Paint = Paint::solid(super::PROMPT_BUBBLE);
     pub const INLINE_CODE_CHIP: Paint = Paint::solid(super::INLINE_CODE_CHIP);
+    pub const PROMPT_CODE_CHIP: Paint = Paint::solid(super::PROMPT_CODE_CHIP);
     pub const SELECTED: Paint = Paint::solid(super::SELECTED);
     pub const SUNKEN: Paint = Paint::solid(super::SUNKEN);
     pub const SECONDARY: Paint = Paint::solid(super::SECONDARY);
@@ -1759,6 +1763,10 @@ pub const PROSE_GAP: f32 = SPACE_3;
 /// 0033). The Markdown path paints both; the plain-text fallback carries
 /// the ink alone.
 pub const INLINE_CODE_INK: u32 = INK_STRONG;
+/// Inline code's ink in a sent prompt: `RED` (`#f3767b`, sampled from
+/// claude/running.png's user bubble) on its `PROMPT_CODE_CHIP`, as Claude
+/// draws the code an operator quotes.
+pub const PROMPT_CODE_INK: u32 = RED;
 /// The inline-code chip (`rich::inline_code_wash`): a `paint::INLINE_CODE_CHIP`
 /// ground at `R_CONTROL`, with `INLINE_CODE_PAD_X` of room laid out either
 /// side of the code (the text after a chip moves along, as the mockups'
@@ -2656,6 +2664,9 @@ pub const DECISION_QUESTIONS_GAP: f32 = ROW;
 /// when the Pane is short it is the one section that shrinks, never below
 /// one line (`DECISION_WELL_MIN_H`).
 pub const DECISION_WELL_PAD_X: f32 = 10.0;
+/// A shell command's ink in the well: `#99ea71`, sampled from
+/// claude/approval.png (Claude's command green, brighter than `GREEN`).
+pub const SHELL_COMMAND_INK: u32 = 0x99ea71;
 pub const DECISION_WELL_PAD_Y: f32 = SPACE_1_5;
 pub const DECISION_WELL_MIN_H: f32 = LH_UI + 2.0 * DECISION_WELL_PAD_Y;
 pub const DECISION_INPUT_MAX_H: f32 = 160.0;

@@ -266,11 +266,14 @@ fn badge_face(text: SharedString) -> Div {
 /// A row with its pointer role: `FLOAT_HOVER` under the pointer and the
 /// press face; the cursor row keeps `FLOAT_SEL` under the pointer (hover
 /// never moves the cursor or lightens its fill); an armed or disabled row takes
-/// none. Callers add selectors and handlers only.
+/// none, a disabled one saying why in its tooltip. Callers add selectors
+/// and handlers only.
 pub fn item_row(id: impl Into<ElementId>, item: &Item, cursor: bool, armed: bool) -> Stateful<Div> {
     let id = id.into();
     let key = crate::pointer::hover_key(&id);
-    let row = row_face(item, cursor, armed).id(id);
+    let row = row_face(item, cursor, armed)
+        .id(id)
+        .when_some(item.why.clone(), |row, why| row.tooltip(tooltip(why)));
     if item.disabled || armed {
         row
     } else if cursor {
@@ -1368,6 +1371,23 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A disabled row says why in its tooltip and stays one line — a
+    /// disabled Fork never wraps to "a turn is running; stop it first".
+    #[test]
+    fn a_disabled_rows_reason_is_its_tooltip_not_a_second_line() {
+        let item = Item::new("Fork")
+            .shortcut("F")
+            .disabled_because("a turn is running; stop it first");
+        assert!(item.disabled);
+        assert_eq!(item.note, None);
+        assert_eq!(
+            item.why.as_deref(),
+            Some("a turn is running; stop it first")
+        );
+        let mut row = row_face(&item, false, false);
+        assert_eq!(row.style().size.height, Some(px(FLOAT_ROW_H).into()));
+    }
 
     /// Every tooltip Ferrite draws is the measured one (`tooltip`, its
     /// keyed kin): nothing builds the kit's default `Tooltip` itself, and
