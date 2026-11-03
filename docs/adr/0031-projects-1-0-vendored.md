@@ -1,10 +1,17 @@
 ---
-status: accepted
+status: superseded (Projects removed, 2026-11-03)
 date: 2026-10-16
 supersedes: 0030
 ---
 
 # Projects: herdr-projects 1.0 vendored
+
+> Superseded: Projects were removed on 2026-11-03, as the operator no
+> longer uses them. The vendored crates (`ferrite-projects*`), the
+> Cockpit's board, the Server's hooks and keeper, herdr's pane
+> environment and the bundled `ferrite-projects` are gone. The API
+> operations ADR 0027 added for Projects stay, as the API's own; an old
+> `~/.herdr-projects` is left where it is.
 
 Replaces ADR 0030's vendoring of herdr-projects 0.2.34. Builds on the
 Server (ADR 0025) and its API and CLI (ADR 0027).
