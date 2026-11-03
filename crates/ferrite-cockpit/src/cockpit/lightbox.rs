@@ -258,7 +258,8 @@ fn door(key: &'static str, glyph: &'static str, tip: &'static str) -> Stateful<D
 /// panel, in Downloads, under its own name). A copy that fails says so.
 fn save_copy(path: std::path::PathBuf, name: &str, window: &mut Window, cx: &mut gpui::App) {
     use gpui::component::{notification::Notification, WindowExt};
-    let directory = dirs_downloads().unwrap_or_else(|| path.parent().unwrap_or(&path).to_path_buf());
+    let directory =
+        dirs_downloads().unwrap_or_else(|| path.parent().unwrap_or(path.as_path()).to_path_buf());
     let chosen = cx.prompt_for_new_path(&directory, Some(name));
     let handle = window.window_handle();
     cx.spawn(async move |cx| {

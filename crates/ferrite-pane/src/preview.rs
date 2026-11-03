@@ -213,7 +213,7 @@ impl Preview {
             Arc::from([path.clone()])
         };
         let at = gallery.iter().position(|image| *image == path).unwrap_or(0);
-        let viewer = match self.image() {
+        let viewer = match self.lightbox().map(|lightbox| lightbox.viewer) {
             Some(viewer) => viewer,
             None => cx.new(|cx| ImageViewer::new(path, cx)),
         };
