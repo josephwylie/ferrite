@@ -1,8 +1,9 @@
 //! Scenes for the features the first references predate: the Review slot (ADR
 //! 0021) at rest and mid-slide, a file in the Panel's preview, find in a
 //! transcript (ADR 0020), the nav's PR labels and the four
-//! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
-//! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
+//! states (ADR 0015), a mermaid diagram (ADR 0016), a finish toast (ADR
+//! 0017), a turn's file and page cards, a page beside the transcript and
+//! the lightbox. Every one is seeded: no network, no provider CLI, no `gh`, and
 //! nothing of the operator's (the projects root is under the scene's own).
 
 use ferrite_core::protocol::{
@@ -37,6 +38,9 @@ pub(super) const STATES: &[&str] = &[
     "nav-states",
     "mermaid",
     "toast-done",
+    "output-cards",
+    "page-pane",
+    "lightbox",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -66,6 +70,12 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "nav-states" => nav_states(),
         "mermaid" => mermaid(),
         "toast-done" => toast_done(),
+        "output-cards" => {
+            let (scene, _) = output_cards("output-cards");
+            (scene, Box::new(|_, _, _| {}))
+        }
+        "page-pane" => page_pane(),
+        "lightbox" => lightbox(),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -562,4 +572,108 @@ fn toast_done() -> (Scene, Setup) {
             cost_usd: Some(0.09),
         });
     (scene, Box::new(|_, _, _| {}))
+}
+
+// ------------------------------------------------------------------ outputs
+
+/// A turn that wrote a note and a page and started a dev server: its cards
+/// under the answer — the page's, the server's and the note's. The page
+/// file is on disk, so its card reads its `<title>`.
+fn output_cards(label: &str) -> (super::Scene, std::path::PathBuf) {
+    let mut scene = super::Scene::new(label);
+    let ferrite = scene.project("ferrite");
+    let page = ferrite.join("site/report.html");
+    std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+    std::fs::write(
+        &page,
+        "<html><head><title>Q3 sales report</title></head>\
+         <body><h1>Q3 sales</h1><p>Revenue up 18% on Q2.</p></body></html>",
+    )
+    .unwrap();
+    std::fs::write(ferrite.join("NOTES.md"), "# Q3 notes\n").unwrap();
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Q3 sales report");
+    scene
+        .core
+        .send(thread, "Build a one-page Q3 sales report and serve it.".into());
+    let created = |line: &str| ferrite_core::Hunk {
+        old_start: 0,
+        old_lines: 0,
+        new_start: 1,
+        new_lines: 1,
+        lines: vec![format!("+{line}")],
+        section: None,
+    };
+    feed.boot(Provider::Claude, 22_000)
+        .tool(
+            "write-page",
+            "Write",
+            serde_json::json!({ "file_path": "site/report.html" }),
+        )
+        .done(
+            "write-page",
+            "created",
+            false,
+            ferrite_core::ToolResult::FileEdit {
+                path: "site/report.html".into(),
+                hunks: vec![created("<title>Q3 sales report</title>")],
+            },
+        )
+        .tool(
+            "write-notes",
+            "Write",
+            serde_json::json!({ "file_path": "NOTES.md" }),
+        )
+        .done(
+            "write-notes",
+            "created",
+            false,
+            ferrite_core::ToolResult::FileEdit {
+                path: "NOTES.md".into(),
+                hunks: vec![created("# Q3 notes")],
+            },
+        )
+        .text(
+            "The report is in `site/report.html`, and the dev server is up at \
+             http://localhost:5173/. I kept the open questions in `NOTES.md`.",
+        )
+        .end(0.06);
+    (scene, page)
+}
+
+/// The report's page card opened: the page beside the transcript, in the
+/// Panel, its head naming it by its title. No Chromium in a reference
+/// build, so the body is the "can't show" note.
+fn page_pane() -> (Scene, Setup) {
+    let (scene, page) = output_cards("page-pane");
+    let setup: Setup = Box::new(move |view, window, _| {
+        view.empty_shown = false;
+        view.panes[0]
+            .preview
+            .open_page(ferrite_pane::page::PageSource::File(page.clone()), window);
+    });
+    (scene, setup)
+}
+
+/// A prompt's three screenshots, the second open in the lightbox: the dim,
+/// the bar's name and doors, the ← → doors and `2 of 3`.
+fn lightbox() -> (Scene, Setup) {
+    let scene = conversation("lightbox");
+    let shots = scene.root.join("shots");
+    std::fs::create_dir_all(&shots).unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/research/ferrite-transcript-implementation-2026-09-06");
+    let gallery: Vec<std::path::PathBuf> = ["approval-wide", "decision-wide", "edges-wide"]
+        .iter()
+        .map(|name| {
+            let to = shots.join(format!("{name}.png"));
+            let _ = std::fs::copy(source.join(format!("{name}.png")), &to);
+            to
+        })
+        .collect();
+    let setup: Setup = Box::new(move |view, window, cx| {
+        view.panes[0]
+            .preview
+            .open(gallery[1].clone(), None, &gallery, window, cx);
+    });
+    (scene, setup)
 }
