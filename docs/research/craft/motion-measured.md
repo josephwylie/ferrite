@@ -1,5 +1,17 @@
 # Motion, measured: Claude and Codex against Ferrite
 
+> **Superseded for Claude's numbers.** Claude Desktop's motion has since been read from its source: [`motion-claude-source.md`](motion-claude-source.md) is the authority, and Ferrite's motion tokens (`theme.rs`, the motion section) follow it. This page stays as the record of what the recordings showed, and for Codex. Where the two disagree, the source wins:
+>
+> - **Chevrons rotate** (Code's over 60 ms, a `Collapsible` caret's over 150 ms); they do not snap.
+> - **The user bubble** pops over 450 ms on an overshoot: scale 0.92 → 1 from its right edge and a 6 px rise. The centroid drift below was that scale and rise, not fade bias.
+> - **The approval card** settles over 220 ms `cubic-bezier(.215,.61,.355,1)` from opacity 0.75, 6 px above and scale 0.97 about its top; not a 155 ms near-linear fade.
+> - **Streaming text** fades each span over 400 ms *linear*; at turn end the fades still running speed up to finish within 120 ms rather than snapping.
+> - **The queue strip's** removal is unconfirmed (the floating composer's queued card moves over 200 ms on the quart).
+> - **The sidebar (⌘B)** snaps.
+> - **"Animation is reserved for content arriving on its own" is too strong.** Claude also animates tooltips, message-action reveals, dialog and palette exits, toasts, button presses, the jump button and sidebar group folds. It snaps menus, popovers, row hover grounds, tool-step folds, the sidebar and the panel.
+>
+> Changes under about 150 ms, exits during pointer travel and small scales on anchored elements do not survive these recordings; read the source first.
+
 Every number below comes from `mov/*.mp4`, decoded frame by frame with ffprobe pts. Times are seconds into each clip. Pixel boxes are screen px (1x, so px = pt). The recorder writes about 90 frames a second (one every 11 ms, with gaps of 22 to 56 ms under load). "One frame" therefore means the change finished within 11 to 22 ms. A small residual that decays over the next 100 to 200 ms after a snap is the H.264 encoder refining a large change, not an animation: in-region intensity holds flat from the first frame (`claude-menus` + menu, frames 771 to 792).
 
 The click itself is not visible in a recording. "Delay" is measured from the trigger's hover or press state to the first changed frame, so it is an upper bound.

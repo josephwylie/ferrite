@@ -1276,6 +1276,9 @@ pub struct Window {
     next_hitbox_id: HitboxId,
     pub(crate) next_tooltip_id: TooltipId,
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
+    /// Ferrite's patch: the last frame a tooltip was drawn, on the
+    /// executor's clock (`tooltip_shown_within`).
+    pub(crate) tooltip_seen_at: Option<std::time::Instant>,
     pub(crate) next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
     /// Ferrite's patch: every entity notified since the last frame, views or
@@ -2113,6 +2116,7 @@ impl Window {
             next_hitbox_id: HitboxId(0),
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
+            tooltip_seen_at: None,
             dirty_views: FxHashSet::default(),
             notified_entities: FxHashSet::default(),
             deferred_depth: 0,
@@ -3568,6 +3572,7 @@ impl Window {
                 id: tooltip_request.id,
                 bounds: tooltip_bounds,
             });
+            self.tooltip_seen_at = Some(cx.background_executor().now());
             return Some(element);
         }
         None
@@ -5303,6 +5308,18 @@ impl Window {
     /// than refreshing every view in the window. `None` anywhere else.
     pub fn hover_listener_view(&self) -> Option<EntityId> {
         self.hover_listener_view
+    }
+
+    /// Ferrite's patch: whether a tooltip was drawn within `within` of now
+    /// — the pointer is moving between tooltips, so the next one shows at
+    /// once and without an entrance, as Claude's grouped tooltips do.
+    pub fn tooltip_shown_within(&self, within: Duration, cx: &App) -> bool {
+        self.tooltip_seen_at.is_some_and(|seen| {
+            cx.background_executor()
+                .now()
+                .saturating_duration_since(seen)
+                < within
+        })
     }
 
     /// Ferrite's patch: whether the element now drawing sits inside a

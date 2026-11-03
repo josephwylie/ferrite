@@ -22,7 +22,7 @@
 //!
 //! **A list on the sidebar.** The column is `paint::SIDEBAR` (a step over
 //! the plane) from the window's top. Rows are rounded, wear
-//! `paint::SIDEBAR_HOVER` under the pointer (the one 100ms hover blend) and
+//! `paint::SIDEBAR_HOVER` under the pointer (at once, as Claude's rows) and
 //! `paint::SIDEBAR_SELECTED` (no ring) when they stand for what the
 //! board shows: the Solo Thread's row, or the shown Group's. A Thread row
 //! is one quiet line, as Claude's list: its title, and at its right one
@@ -67,7 +67,7 @@ use ferrite_core::cockpit::StatusRow;
 pub use ferrite_pane::mark::{mark, NavTail, RowStatus};
 use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
-use ferrite_ui::motion::{self, MotionSpec};
+use ferrite_ui::motion;
 use ferrite_ui::theme::*;
 
 /// The nav's two widths — 264 open, and the 52px rail folded (cmd-B).
@@ -140,10 +140,6 @@ impl NavCursor {
 const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
 
 const COLLAPSE_KEY: &str = "nav-collapse";
-
-/// The column's content fading as it folds or opens, on its own clock
-/// apart from the width's ride.
-pub(crate) const CONTENT_FADE: MotionSpec = MotionSpec::new(MOTION_NAV_FADE_MS, motion::EASE);
 
 /// What a fold in the nav holds shut (N-4): a Project section shut to its
 /// heading, the Pinned or Groups section, or a Group shut to its row (its
@@ -643,7 +639,7 @@ fn trailing(text: impl Into<SharedString>, size: f32, ink: u32) -> Div {
 // ------------------------------------------------------------- the rows
 
 /// The nav's one pointer role: nothing at rest, `paint::SIDEBAR_HOVER`
-/// under the pointer reaching full in 100ms, and the selected row
+/// under the pointer at once (Claude's rows snap), and the selected row
 /// `paint::SIDEBAR_SELECTED` whatever the pointer does: no ring, the fill
 /// alone (Claude's, +32 over the column to the hover's +8). The pointer
 /// stays the arrow.
@@ -662,9 +658,7 @@ fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selec
             ));
         }
     }
-    element
-        .interactivity()
-        .on_hover(motion::hover_listener(key));
+    element.interactivity().on_hover(motion::hover_snap(key));
     element
 }
 
@@ -812,7 +806,7 @@ pub fn head(
 
 /// An icon button of the column (the toggle, the gear, the heading's `+`):
 /// `size` square, its glyph `INK_STRONG` (Claude's header icons), under the
-/// pointer `paint::RAISED` over 100ms.
+/// pointer `paint::RAISED`, at once (Claude's sidebar buttons snap).
 pub fn icon_button(
     key: impl Into<SharedString>,
     glyph: &'static str,
@@ -839,7 +833,7 @@ pub fn icon_button(
                 t,
             ))
         })
-        .on_hover(motion::hover_listener(blend))
+        .on_hover(motion::hover_snap(blend))
         .child(icon(glyph, glyph_size, INK_STRONG))
 }
 
@@ -991,7 +985,7 @@ pub fn heading_with_action(
     heading_frame(key)
         .id(key)
         .text_color(rgb(INK_SUBTLE))
-        .on_hover(motion::hover_listener(blend))
+        .on_hover(motion::hover_snap(blend))
         .child(div().flex_1().child(label))
         .when(shown, |heading| heading.child(action()))
 }
@@ -1025,7 +1019,7 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
             rgb(INK_STRONG).into(),
             t,
         ))
-        .on_hover(motion::hover_listener(blend))
+        .on_hover(motion::hover_snap(blend))
         .child(
             div()
                 .flex()
@@ -1038,6 +1032,7 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
                         .debug_selector(move || format!("{key}-chevron"))
                         .flex()
                         .child(components::fold_chevron(
+                            SharedString::from(format!("{key}-caret")),
                             !folded,
                             NAV_HEADING_CARET,
                             INK_SUBTLE,
@@ -1136,6 +1131,7 @@ fn project_row(
                     .flex()
                     .flex_shrink_0()
                     .child(components::fold_chevron(
+                        SharedString::from(format!("{key}-{index}-caret")),
                         !folded,
                         NAV_HEADING_CARET,
                         INK_SUBTLE,
@@ -1380,6 +1376,7 @@ pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .child(components::fold_chevron(
+            "nav-group-chevron",
             !row.folded,
             NAV_CHEVRON,
             if row.selected { INK_STRONG } else { INK_SUBTLE },
@@ -1816,7 +1813,7 @@ pub fn parked_link() -> Stateful<Div> {
         .id(KEY)
         .debug_selector(|| KEY.into())
         .text_color(ink)
-        .on_hover(motion::hover_listener(blend))
+        .on_hover(motion::hover_snap(blend))
         .child("Show parked threads")
 }
 
@@ -1903,7 +1900,12 @@ pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
         .id(("nav-machine-fold", index))
         .debug_selector(move || format!("nav-machine-fold-{index}"))
         .flex_shrink_0()
-        .child(components::fold_chevron(!folded, NAV_CHEVRON, INK_SUBTLE))
+        .child(components::fold_chevron(
+            ("nav-machine-chevron", index),
+            !folded,
+            NAV_CHEVRON,
+            INK_SUBTLE,
+        ))
 }
 
 /// One open Thread on a machine the window is not on: its mark, its title
@@ -2707,12 +2709,11 @@ mod tests {
         assert!(long.ends_with('\u{2026}'));
     }
 
-    /// The nav's own clock: the content fades over 150ms on CSS `ease`
-    /// (its hovers take the one hover blend, `motion::HOVER_FADE`).
+    /// The nav's folds open and shut over Claude's 150ms `ease-out`.
     #[test]
     fn the_nav_keeps_its_clocks() {
-        assert_eq!(CONTENT_FADE.duration_ms, 150);
-        assert_eq!(CONTENT_FADE.curve, motion::EASE);
+        assert_eq!(motion::FOLD.duration_ms, 150);
+        assert_eq!(motion::FOLD.curve, motion::EASE_OUT);
     }
 }
 

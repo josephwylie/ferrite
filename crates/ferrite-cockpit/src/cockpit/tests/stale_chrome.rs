@@ -163,32 +163,28 @@ fn dragged_files_edge_the_pane_under_them(cx: &mut TestAppContext) {
     assert!(!b.pane(1).drop_target, "left: no edge");
 }
 
-/// The nav's tween: cmd-B folds the column over its ride, and the Panes
-/// follow the board's width every frame of it and land on the board's own
-/// width.
+/// cmd-B snaps the column to the rail (Claude's sidebar): the Panes take
+/// the board's new width on the next frame, with no width between.
 #[gpui::test]
-fn the_panes_ride_the_nav_fold(cx: &mut TestAppContext) {
+fn the_panes_take_the_nav_fold_at_once(cx: &mut TestAppContext) {
     let mut b = board("stale-nav-ride", &[], cx);
     let view = b.view.clone();
+    let before = b.pane(0).cell_width;
     view.update(b.cx, |view, cx| view.set_nav_collapsed(true, cx));
-    let mut widths = vec![b.pane(0).cell_width];
-    for _ in 0..6 {
-        frames(b.cx, 32);
-        widths.push(b.pane(0).cell_width);
-    }
-    widths.dedup();
-    assert!(
-        widths.len() > 3,
-        "the Pane redraws at the ride's widths: {widths:?}"
-    );
-    frames(b.cx, 400);
+    frames(b.cx, 32);
     let landed = b.pane(0).cell_width;
     let rect = b.rect(0);
     assert!(
+        landed > before,
+        "wider beside the rail: {before} -> {landed}"
+    );
+    assert!(
         (landed - rect.w).abs() < 0.5,
-        "and lands on the board's own width: {landed} vs {}",
+        "on the board's own width at once: {landed} vs {}",
         rect.w
     );
+    frames(b.cx, 400);
+    assert_eq!(b.pane(0).cell_width, landed, "and stays there");
 }
 
 /// The rename editor: opening it on a Pane's head draws it there; the name
@@ -244,8 +240,8 @@ fn leaving_and_returning_to_the_window_reaches_the_panes(cx: &mut TestAppContext
     assert!(b.pane(0).editing, "back: the focused line edits again");
 }
 
-/// Hover fades in the nav: a row under the pointer draws its wash in, and
-/// out once the pointer leaves.
+/// Hover in the nav: a row under the pointer draws its wash at once, and
+/// drops it once the pointer leaves.
 #[gpui::test]
 fn a_nav_rows_hover_fades_in_and_out(cx: &mut TestAppContext) {
     let b = board("stale-hover", &[], cx);

@@ -409,6 +409,7 @@ impl Render for Shortcuts {
                     gpui::SharedString::default(),
                 )),
             ferrite_ui::components::dialog_shadow,
+            ferrite_ui::motion::FROM_TOP,
         )
     }
 }

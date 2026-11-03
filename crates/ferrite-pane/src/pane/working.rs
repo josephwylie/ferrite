@@ -237,6 +237,8 @@ pub(crate) struct WorkingLine {
     tokens: Option<String>,
     /// The caption's selector and its words.
     caption: Option<(String, String)>,
+    /// The Thread whose line this is: the key its words roll under.
+    thread: u64,
     /// The plan the turn works to, its steps' words and states, drawn as
     /// the task list over the line (`task_list`).
     plan: Vec<(String, TaskState)>,
@@ -306,6 +308,7 @@ impl WorkingLine {
             tokens,
             caption,
             plan,
+            thread,
         }
     }
 
@@ -319,6 +322,7 @@ impl WorkingLine {
             tokens,
             caption,
             plan,
+            thread,
         } = self.clone();
         // The line stands at the Standard size: the reading keys scale the
         // transcript only.
@@ -334,18 +338,25 @@ impl WorkingLine {
             .text_size(px(grid.activity().size))
             .line_height(px(grid.line));
         if let Some((selector, caption)) = caption {
-            // The caption reads in the body's ink.
-            let caption = SharedString::from(caption);
-            let text = if live {
-                components::shimmer(caption, INK_STRONG)
-            } else {
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(INK_STRONG))
-                    .child(caption)
-                    .into_any_element()
+            // The caption reads in the body's ink. New words roll in over
+            // the old (Claude's `cds-morph`, `motion::morph`).
+            let face = move |caption: SharedString| {
+                if live {
+                    components::shimmer(caption, INK_STRONG)
+                } else {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(INK_STRONG))
+                        .child(caption)
+                        .into_any_element()
+                }
             };
+            let text = ferrite_ui::motion::morph(
+                ("working-caption", thread as usize),
+                SharedString::from(caption),
+                face,
+            );
             // The facts after the caption: the turn's clock, counting on its
             // own, then its tokens.
             let rest = tokens.map(|tokens| {

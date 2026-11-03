@@ -11,9 +11,13 @@
 //! the wash there is the selection itself, painted per character by
 //! select.rs.
 //!
-//! **One hover blend** (rule 2.10.2). Every role paints its ground through
-//! `motion::hover_blend` over 100ms (`MOTION_HOVER_FADE_MS`), driven by an
-//! `on_hover` listener on the same element, under a stable `key` the caller
+//! **Rows snap, controls blend** (Claude's split). A row picked whole —
+//! `hover_row`, `hover_float`, `hover_palette`, `hover_carried` — takes its
+//! hover on the frame the pointer arrives (`motion::hover_snap`); a control
+//! — `hover_control`, `hover_raised`, `hover_quick` — blends its ground
+//! through `motion::hover_blend` over 60ms (`MOTION_HOVER_FADE_MS`). Either
+//! way an `on_hover` listener on the same element drives it, under a
+//! stable `key` the caller
 //! derives from the element's id (unique across the window: add the Pane or
 //! Thread when the id alone repeats). The role owns the element's ground:
 //! the caller sets none after it. A press (`press_*`, gpui's `.active()`)
@@ -59,6 +63,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
             key.into(),
             rgba(TRANSPARENT).into(),
             row_face(),
+            Hover::Snap,
         )
     }
 
@@ -70,6 +75,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
             key.into(),
             rgba(TRANSPARENT).into(),
             control_face(),
+            Hover::Blend,
         )
     }
 
@@ -81,6 +87,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
             key.into(),
             rgba(TRANSPARENT).into(),
             raised_face(),
+            Hover::Blend,
         )
     }
 
@@ -93,7 +100,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
         let key = key.into();
         let ground = motion::hover_blend(&key, paint::SELECTED.into(), carried_face());
         let mut element = self.cursor_pointer().bg(ground);
-        listen(&mut element, key);
+        listen(&mut element, key, Hover::Snap);
         element
     }
 
@@ -106,6 +113,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
             key.into(),
             rgba(TRANSPARENT).into(),
             float_face(),
+            Hover::Snap,
         )
     }
 
@@ -116,7 +124,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
         let key = key.into();
         let ground = motion::hover_blend(&key, FLOAT_HOVER.into(), FLOAT_SEL.into());
         let mut element = self.cursor_pointer().bg(ground);
-        listen(&mut element, key);
+        listen(&mut element, key, Hover::Blend);
         element
     }
 
@@ -134,6 +142,7 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
             key.into(),
             rgba(TRANSPARENT).into(),
             FLOAT_HOVER.into(),
+            Hover::Snap,
         )
     }
 
@@ -150,27 +159,37 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
     }
 }
 
-/// Paint `rest → hover` at `key`'s blend progress: nothing is painted at
-/// rest (the element keeps its own resting ground), the blended face while
-/// the blend is off zero.
+/// How a role's hover arrives: a row's at once, a control's blended.
+#[derive(Clone, Copy)]
+enum Hover {
+    Snap,
+    Blend,
+}
+
+/// Paint `rest → hover` at `key`'s hover progress: nothing is painted at
+/// rest (the element keeps its own resting ground), the face while the
+/// hover is off zero.
 fn blended<E: Styled + InteractiveElement>(
     mut element: E,
     key: SharedString,
     rest: Hsla,
     hover: Hsla,
+    how: Hover,
 ) -> E {
     let t = motion::hover_t(&key);
     if t > 0.0 {
         element = element.bg(motion::mix(rest, hover, t));
     }
-    listen(&mut element, key);
+    listen(&mut element, key, how);
     element
 }
 
-fn listen<E: InteractiveElement>(element: &mut E, key: SharedString) {
-    element
-        .interactivity()
-        .on_hover(motion::hover_listener(key));
+fn listen<E: InteractiveElement>(element: &mut E, key: SharedString, how: Hover) {
+    let listener = element.interactivity();
+    match how {
+        Hover::Snap => listener.on_hover(motion::hover_snap(key)),
+        Hover::Blend => listener.on_hover(motion::hover_listener(key)),
+    }
 }
 
 impl<E: Styled + InteractiveElement> Pointer for E {}

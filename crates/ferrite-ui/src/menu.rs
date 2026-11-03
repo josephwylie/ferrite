@@ -421,12 +421,13 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
 /// `TOOLTIP_PAD_Y` in, at most `TOOLTIP_MAX_W` wide (a long path wraps), on
 /// the float's ground and ring at `R_CONTROL` with the float shadow.
 /// It is also how a label that truncates keeps its full value reachable.
+/// It comes in over `motion::TOOLTIP_IN` (`entering`).
 pub fn tooltip(
     text: impl Into<SharedString>,
 ) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
     let text = text.into();
     move |window, cx| {
-        gpui::component::tooltip::Tooltip::new(text.clone())
+        let tip = gpui::component::tooltip::Tooltip::new(text.clone())
             .font_family(FONT_UI)
             .text_size(px(FS_META))
             .line_height(px(LH_META))
@@ -436,7 +437,8 @@ pub fn tooltip(
             .rounded(px(R_CONTROL))
             .border_color(paint::FLOAT_EDGE)
             .shadow(components::float_shadow())
-            .build(window, cx)
+            .build(window, cx);
+        entering(tip, window, cx)
     }
 }
 
@@ -454,7 +456,7 @@ pub fn tooltip_with_key(
     let key: Option<SharedString> = key.map(Into::into);
     move |window, cx| {
         let (label, key) = (label.clone(), key.clone());
-        gpui::component::tooltip::Tooltip::element(move |_, _| {
+        let tip = gpui::component::tooltip::Tooltip::element(move |_, _| {
             // The label comes first: it wraps whole rather than cut, and
             // the key beside it never gives way either (a rail item's
             // tooltip is the one place its Thread's title is read).
@@ -477,7 +479,38 @@ pub fn tooltip_with_key(
         .rounded(px(R_CONTROL))
         .border_color(paint::FLOAT_EDGE)
         .shadow(components::float_shadow())
-        .build(window, cx)
+        .build(window, cx);
+        entering(tip, window, cx)
+    }
+}
+
+/// A tooltip `tip` as it comes in: fading and growing from its top left
+/// over `motion::TOOLTIP_IN` (Claude's 120ms), unless one was up within
+/// `gpui::TOOLTIP_HANDOFF` — then, as Claude's do once one has shown, it is
+/// there at once. A tooltip has no exit: gpui drops it on the frame the
+/// pointer leaves.
+fn entering(tip: gpui::AnyView, window: &gpui::Window, cx: &mut gpui::App) -> gpui::AnyView {
+    let handoff = window.tooltip_shown_within(gpui::TOOLTIP_HANDOFF, cx);
+    cx.new(|_| Entering { tip, handoff }).into()
+}
+
+struct Entering {
+    tip: gpui::AnyView,
+    handoff: bool,
+}
+
+impl gpui::Render for Entering {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let tip = gpui::div().child(self.tip.clone());
+        if self.handoff {
+            tip.into_any_element()
+        } else {
+            crate::motion::tooltip_in("tooltip-in", tip).into_any_element()
+        }
     }
 }
 

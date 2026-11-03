@@ -306,6 +306,11 @@ pub struct Style {
     /// box (Ferrite's patch, `Window::with_element_scale`).
     pub scale: Option<f32>,
 
+    /// Where `scale` scales about, as fractions of the element's box
+    /// (`(1, 0.5)` its right edge's middle): a CSS `transform-origin`. The
+    /// centre when unset (Ferrite's patch).
+    pub scale_origin: Option<Point<f32>>,
+
     /// The grid columns of this element
     /// Roughly equivalent to the Tailwind `grid-cols-<number>`
     pub grid_cols: Option<GridTemplate>,
@@ -622,6 +627,18 @@ impl Hash for HighlightStyle {
 }
 
 impl Style {
+    /// The point `scale` scales about in `bounds`: `scale_origin`'s
+    /// fractions of the box, else its centre (Ferrite's patch).
+    pub fn scale_at(&self, bounds: Bounds<Pixels>) -> Point<Pixels> {
+        match self.scale_origin {
+            Some(at) => point(
+                bounds.origin.x + bounds.size.width * at.x,
+                bounds.origin.y + bounds.size.height * at.y,
+            ),
+            None => bounds.center(),
+        }
+    }
+
     /// Returns true if the style is visible and the background is opaque.
     pub fn has_opaque_background(&self) -> bool {
         self.background
@@ -815,6 +832,7 @@ impl Default for Style {
             mouse_cursor: None,
             opacity: None,
             scale: None,
+            scale_origin: None,
             grid_rows: None,
             grid_cols: None,
             grid_location: None,

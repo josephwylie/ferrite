@@ -458,61 +458,6 @@ fn the_board_starts_at_the_nav_edge(cx: &mut TestAppContext) {
     });
 }
 
-/// N-15: folding fades the content 1 → 0 over 150ms (CSS `ease`) while the
-/// width still rides its 200ms, and opening fades it 0 → 1 the same way.
-/// Test-clock samples.
-#[gpui::test]
-fn the_content_fades_on_its_own_clock_while_the_width_rides(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (core, _fake) = cockpit("nav-content-fade", 2);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let sample = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| {
-            let now = cx.background_executor().now();
-            let reduced = ferrite_ui::motion::reduced_motion(cx);
-            (
-                view.nav_content_opacity(now, reduced),
-                view.nav_ride_now(cx).unwrap_or_else(|| view.nav_width()),
-            )
-        })
-    };
-    assert_eq!(sample(&view, cx), (1.0, nav::WIDTH), "at rest, open");
-
-    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
-    cx.executor().advance_clock(Duration::from_millis(75));
-    let (fade, width) = sample(&view, cx);
-    let eased = ferrite_ui::motion::EASE.eval(0.5);
-    assert!(
-        (fade - (1.0 - eased)).abs() < 0.02,
-        "folding, half-way through its 150ms on CSS ease: {fade}"
-    );
-    assert!(width > nav::FOLDED_WIDTH && width < nav::WIDTH, "{width}");
-
-    cx.executor().advance_clock(Duration::from_millis(100));
-    let (fade, width) = sample(&view, cx);
-    assert_eq!(fade, 0.0, "the content is gone at 150ms…");
-    assert!(
-        width > nav::FOLDED_WIDTH,
-        "…while the width still rides: {width}"
-    );
-
-    cx.executor().advance_clock(Duration::from_millis(100));
-    assert_eq!(sample(&view, cx).1, nav::FOLDED_WIDTH, "folded at rest");
-
-    view.update(cx, |view, cx| view.set_nav_collapsed(false, cx));
-    cx.executor().advance_clock(Duration::from_millis(75));
-    let (fade, _) = sample(&view, cx);
-    assert!(
-        (fade - eased).abs() < 0.02,
-        "opening, 0 → 1 on the same clock: {fade}"
-    );
-
-    cx.executor().advance_clock(Duration::from_millis(200));
-    assert_eq!(sample(&view, cx), (1.0, nav::WIDTH), "open at rest");
-}
-
 /// `sort: attention` (persisted) lifts what needs the operator: a Thread
 /// waiting on a Decision, then one that finished unseen, then the rest in
 /// creation order; the Project heading rolls its rows up to the most

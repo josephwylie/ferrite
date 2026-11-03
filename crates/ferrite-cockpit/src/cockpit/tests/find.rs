@@ -262,9 +262,7 @@ fn read_beside(
 ) {
     cx.update(|window, cx| view.update(cx, |view, cx| view.open_preview(file, None, window, cx)));
     tick(cx);
-    cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_RESIZE_MS + 50,
-    ));
+    cx.executor().advance_clock(Duration::from_millis(250));
     tick(cx);
     // Under the preview's head: its body.
     let head = cx.debug_bounds("reader-head").expect("the reader is open");

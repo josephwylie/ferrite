@@ -40,8 +40,11 @@ fn settings_head(close: impl IntoElement) -> Div {
 /// overlays. A press on the veil or the close button closes it; ↑/↓ step
 /// the sidebar's pages while the sheet itself holds focus (a field or a
 /// control keeps its own arrows).
+/// A sheet that closed (`leaving`) fades out as a face no pointer finds,
+/// over its veil lifting.
 pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement {
     let SettingsSheet {
+        leaving,
         pages,
         selected,
         search,
@@ -78,17 +81,26 @@ pub fn draw(sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyEleme
             }),
         ))
         .child(body);
-    deferred(ferrite_ui::motion::veil_in(
-        "settings-veil",
-        veil()
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                cx.stop_propagation();
-                close(window, cx);
-            })
-            .child(ferrite_ui::motion::dialog_in("settings-card-in", card)),
-    ))
-    .with_priority(3)
-    .into_any_element()
+    let sheet = match leaving {
+        Some(left) => ferrite_ui::motion::veil_out(
+            left,
+            ferrite_ui::motion::VEIL,
+            ferrite_ui::sheet::leaving_veil().child(ferrite_ui::motion::dialog_out(left, card)),
+        )
+        .into_any_element(),
+        None => ferrite_ui::motion::veil_in(
+            "settings-veil",
+            ferrite_ui::motion::VEIL,
+            veil()
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    cx.stop_propagation();
+                    close(window, cx);
+                })
+                .child(ferrite_ui::motion::dialog_in("settings-card-in", card)),
+        )
+        .into_any_element(),
+    };
+    deferred(sheet).with_priority(3).into_any_element()
 }
 
 /// What the content column shows: the selected page, or, while the search

@@ -22,6 +22,8 @@ pub(super) struct Floats {
     pub beside: bool,
     pub shortcuts: Option<Entity<Shortcuts>>,
     pub notice_focus: FocusHandle,
+    /// The palette or the shortcuts sheet on its way out (`sheet_floats`).
+    pub exit: std::cell::RefCell<ferrite_ui::motion::Exits<gpui::AnyView>>,
 }
 
 impl Floats {
@@ -31,6 +33,7 @@ impl Floats {
             beside: false,
             shortcuts: None,
             notice_focus: cx.focus_handle(),
+            exit: Default::default(),
         }
     }
 }
@@ -1366,7 +1369,9 @@ impl CockpitView {
     /// the bottom bar stay as they are) and the palette or the shortcuts
     /// sheet over it, at the palette's geometry: `PALETTE_W` wide, centred on the
     /// board, 56px under its top. A press on the veil closes the float and
-    /// nothing else.
+    /// nothing else. Closed, the float shrinks away toward its top over
+    /// `PALETTE_OUT` (Claude's 120ms) as a face no pointer finds, its veil
+    /// lifting over `PALETTE_VEIL`.
     pub(super) fn sheet_floats(
         &self,
         window: &mut Window,
@@ -1378,21 +1383,62 @@ impl CockpitView {
             .clone()
             .map(Into::into)
             .or_else(|| self.floats.shortcuts.clone().map(Into::into));
-        let Some(view) = view else {
-            return Vec::new();
-        };
+        let leaving = self.floats.exit.borrow_mut().stage(
+            view.as_ref(),
+            |was, next| was.entity_id() == next.entity_id(),
+            ferrite_ui::motion::PALETTE_OUT,
+            cx.background_executor().now(),
+            ferrite_ui::motion::reduced_motion(cx),
+        );
         let board = self.board_bounds(window);
-        // The veil darkens in under the sheet's own entrance, as Settings'
-        // does; a press on it takes effect from its first frame.
-        let veil = deferred(ferrite_ui::motion::veil_in(
-            "palette-veil-in",
+        let anchor = gpui::Bounds::new(
+            gpui::point(px(board.x), px(board.y)),
+            gpui::size(px(board.w), px(board.h)),
+        );
+        let place = FloatPlace::BoardTop {
+            top: ferrite_ui::theme::PALETTE_TOP,
+            width: ferrite_ui::theme::PALETTE_W,
+        };
+        let veil_box = || {
             div()
-                .debug_selector(|| "palette-veil".into())
                 .absolute()
                 .left(px(board.x))
                 .top(px(board.y))
                 .w(px(board.w))
                 .h(px(board.h))
+        };
+        let Some(view) = view else {
+            return leaving
+                .map(|(gone, left)| {
+                    let veil = deferred(ferrite_ui::motion::veil_out(
+                        left,
+                        ferrite_ui::motion::PALETTE_VEIL,
+                        veil_box(),
+                    ))
+                    .with_priority(float::VEIL_PRIORITY)
+                    .into_any_element();
+                    let float = float::hang_element(
+                        ferrite_ui::motion::float_out(
+                            left,
+                            ferrite_ui::motion::PALETTE_OUT,
+                            gone,
+                            ferrite_ui::motion::FROM_TOP,
+                        )
+                        .into_any_element(),
+                        anchor,
+                        place,
+                    );
+                    vec![veil, float]
+                })
+                .unwrap_or_default();
+        };
+        // The veil darkens in under the sheet's own entrance, as Settings'
+        // does; a press on it takes effect from its first frame.
+        let veil = deferred(ferrite_ui::motion::veil_in(
+            "palette-veil-in",
+            ferrite_ui::motion::PALETTE_VEIL,
+            veil_box()
+                .debug_selector(|| "palette-veil".into())
                 .bg(rgba(ferrite_ui::theme::VEIL))
                 .occlude()
                 .on_mouse_down(
@@ -1406,21 +1452,7 @@ impl CockpitView {
         ))
         .with_priority(float::VEIL_PRIORITY)
         .into_any_element();
-        let anchor = gpui::Bounds::new(
-            gpui::point(px(board.x), px(board.y)),
-            gpui::size(px(board.w), px(board.h)),
-        );
-        let float = float::hang(
-            view,
-            anchor,
-            FloatPlace::BoardTop {
-                top: ferrite_ui::theme::PALETTE_TOP,
-                width: ferrite_ui::theme::PALETTE_W,
-            },
-            window,
-            cx,
-        );
-        vec![veil, float]
+        vec![veil, float::hang(view, anchor, place, window, cx)]
     }
 
     /// The newest standing toast (FL-18), top right where it covers the

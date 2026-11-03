@@ -649,8 +649,9 @@ impl Render for Palette {
             .selected()
             .and_then(|row| row.detail.clone())
             .unwrap_or_else(|| SharedString::from(results_word(self.shown.len())));
-        // It comes in as every sheet does (`dialog-in`), over its veil
-        // darkening in (`cockpit::palette`); it closes at once.
+        // It comes in as every sheet does (`dialog-in`), growing from its
+        // top over its veil darkening in; it leaves as `cockpit::palette`
+        // draws it (`float_out`).
         ferrite_ui::motion::dialog_in_casting(
             "palette-in",
             dialog()
@@ -670,6 +671,7 @@ impl Render for Palette {
                 .child(list)
                 .child(footer_row(hint_line(&hints), detail)),
             components::dialog_shadow,
+            ferrite_ui::motion::FROM_TOP,
         )
     }
 }

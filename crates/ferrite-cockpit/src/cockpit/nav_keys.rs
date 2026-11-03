@@ -141,10 +141,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if let Some(old) = self.nav_cursor.take() {
-            motion::hover_listener(old.key)(&false, window, cx);
+            motion::hover_snap(old.key)(&false, window, cx);
         }
         if let Some(next) = &next {
-            motion::hover_listener(next.key.clone())(&true, window, cx);
+            motion::hover_snap(next.key.clone())(&true, window, cx);
             self.nav_reveal.set(true);
         }
         self.nav_cursor = next;

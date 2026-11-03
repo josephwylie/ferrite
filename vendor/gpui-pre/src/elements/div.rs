@@ -50,7 +50,12 @@ type StackSafe<T> = stacksafe::StackSafe<T>;
 type StackSafe<T> = T;
 
 const DRAG_THRESHOLD: f64 = 2.;
-const DEFAULT_TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
+// Ferrite's patch: Claude's tooltip delay (300ms, not gpui's 500), and
+// its hand-off: within `TOOLTIP_HANDOFF` of a tooltip drawn, the next one
+// shows at once (`Window::tooltip_shown_within`).
+const DEFAULT_TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(300);
+/// How soon after one tooltip another shows without its delay.
+pub const TOOLTIP_HANDOFF: Duration = Duration::from_millis(200);
 const HOVERABLE_TOOLTIP_HIDE_DELAY: Duration = Duration::from_millis(500);
 
 /// The styling information for a given group.
@@ -2341,7 +2346,7 @@ impl Interactivity {
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
                             let result = window.with_element_opacity(style.opacity, |window| {
-                                window.with_element_scale(bounds.center(), style.scale, |window| {
+                                window.with_element_scale(style.scale_at(bounds), style.scale, |window| {
                                     f(&style, scroll_offset, hitbox, window, cx)
                                 })
                             });
@@ -2495,7 +2500,7 @@ impl Interactivity {
                 }
 
                 window.with_element_opacity(style.opacity, |window| {
-                    window.with_element_scale(bounds.center(), style.scale, |window| {
+                    window.with_element_scale(style.scale_at(bounds), style.scale, |window| {
                         style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
                             window.with_text_style(style.text_style().cloned(), |window| {
                                 window.with_content_mask(
@@ -3793,6 +3798,11 @@ fn handle_tooltip_mouse_move(
             active_tooltip.borrow_mut().take();
         }
         Action::ScheduleShow => {
+            let show_delay = if window.tooltip_shown_within(TOOLTIP_HANDOFF, cx) {
+                Duration::ZERO
+            } else {
+                show_delay
+            };
             let delayed_show_task = window.spawn(cx, {
                 let weak_active_tooltip = Rc::downgrade(active_tooltip);
                 let build_tooltip = build_tooltip.clone();

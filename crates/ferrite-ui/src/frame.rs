@@ -102,6 +102,8 @@ pub struct SettingsSheet {
     pub step: Box<dyn Fn(isize, &mut Window, &mut App)>,
     /// The close button and a press on the veil.
     pub close: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
+    /// When the sheet closed, while it fades out (`motion::dialog_out`).
+    pub leaving: Option<std::time::Instant>,
 }
 
 #[cfg(test)]

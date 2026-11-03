@@ -815,10 +815,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
 /// under whatever stands next. One the operator answers from the toast goes
 /// at once (`dismiss`). Under reduced motion nothing lingers.
 #[derive(Default)]
-pub struct ToastStage {
-    standing: Option<Row>,
-    leaving: Option<(Row, Instant)>,
-}
+pub struct ToastStage(ferrite_ui::motion::Exits<Row>);
 
 impl ToastStage {
     /// This frame's standing toast, at `now`: the toast leaving, and when it
@@ -829,31 +826,20 @@ impl ToastStage {
         now: Instant,
         reduced: bool,
     ) -> Option<(Row, Instant)> {
-        let same = |a: &Row, b: &Row| toast_key(a) == toast_key(b);
-        let went = match (self.standing.take(), standing) {
-            (Some(shown), Some(next)) if same(&shown, next) => None,
-            (shown, _) => shown,
-        };
-        if let Some(went) = went.filter(|_| !reduced) {
-            self.leaving = Some((went, now));
-        }
-        self.standing = standing.cloned();
-        let fading = |left: Instant| {
-            !reduced
-                && now.saturating_duration_since(left) < ferrite_ui::motion::TOAST_OUT.duration()
-        };
-        if !self.leaving.as_ref().is_some_and(|(_, left)| fading(*left)) {
-            self.leaving = None;
-        }
-        self.leaving.clone()
+        self.0.stage(
+            standing,
+            |a, b| toast_key(a) == toast_key(b),
+            ferrite_ui::motion::TOAST_OUT,
+            now,
+            reduced,
+        )
     }
 
     /// The operator answered or opened the standing toast: it goes at once,
     /// as everything they dismiss does — only a toast that leaves on its own
     /// fades.
     pub fn dismiss(&mut self) {
-        self.standing = None;
-        self.leaving = None;
+        self.0.dismiss();
     }
 }
 

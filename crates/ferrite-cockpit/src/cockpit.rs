@@ -395,19 +395,13 @@ pub struct CockpitView {
     nav_drag_live: std::cell::Cell<bool>,
     /// The order the nav last drew, held while the pointer is inside.
     nav_snapshot: std::cell::RefCell<Option<NavSnapshot>>,
-    /// The column's width on its way between its two (`motion::RESIZE`).
-    /// None on launch so a restored preference never performs entrance
-    /// choreography; once the operator acts, a flip mid-flight retargets
-    /// from the width on screen. `nav_collapsed` stays authoritative.
-    nav_tween: Option<ferrite_ui::motion::Tween>,
-    /// The column's content opacity on its way between 1 and 0
-    /// (`nav::CONTENT_FADE`, 150ms CSS ease), on its own clock apart from the
-    /// width's ride. None on launch, like `nav_tween`.
-    nav_fade: Option<ferrite_ui::motion::Tween>,
     /// What the nav's folds hold shut (N-4) besides the Projects (saved
     /// with the settings): the Pinned and Groups sections and Groups. In
     /// memory only.
     nav_folds: std::collections::HashSet<NavFold>,
+    /// The folds opening or shutting now (`motion::FOLD`, Claude's 150ms
+    /// `ease-out`), dropped once they come to rest.
+    nav_fold_moves: std::collections::HashMap<NavFold, ferrite_ui::motion::Reveal>,
     /// The sections whose `Show more` was pressed (`None` is Recents): all
     /// their loose rows drawn. In memory only.
     nav_more: std::collections::HashSet<Option<ProjectId>>,
@@ -543,6 +537,8 @@ pub struct CockpitView {
     prefs: Preferences,
     /// The Settings panel is up.
     settings_open: bool,
+    /// The Settings sheet on its way out (`settings_element`).
+    settings_exit: ferrite_ui::motion::Exits<()>,
     /// The Settings page the sidebar has selected; each opening starts on
     /// the first.
     settings_page: settings::PageKey,
@@ -555,6 +551,9 @@ pub struct CockpitView {
     /// The Project card: creating a Project, or editing the one the nav
     /// filter names. `None` is closed.
     project_editor: Option<ProjectEditor>,
+    /// The card the operator closed, and when, drawn from while it fades
+    /// out (`close_project_editor`).
+    project_editor_leaving: Option<(ProjectEditor, std::time::Instant)>,
     project_editor_focus: FocusHandle,
     settings_focus: FocusHandle,
     /// Whether the window is maximized, read once per frame in `render`.
@@ -615,14 +614,9 @@ pub struct CockpitView {
     /// rules option 2 made (`cockpit::decisions`).
     decisions: decisions::DecisionState,
     // ---- the frame's (F-12 … F-15)
-    /// The sidebar column's width this frame while cmd-B rides it (F-12):
-    /// the board's left edge reads it every frame. `None` at rest.
-    nav_ride: std::cell::Cell<Option<f32>>,
-    /// Measuring at the ride's destination (`board_level`), so a Level never
-    /// flaps mid-ride — the nav's or the panel's (`board_right`).
+    /// Measuring at every reader's slide's destination (`board_level`), so
+    /// a Level never flaps mid-slide.
     nav_measure_rest: std::cell::Cell<bool>,
-    /// A scene holding the ride at a progress (`fixture_hold_nav`).
-    nav_hold: Option<f32>,
     /// The empty board shown while Threads stay open (`show_empty_board`).
     empty_shown: bool,
     /// The empty board's selected row, and the list's own focus.
@@ -1538,6 +1532,7 @@ impl CockpitView {
             native_copy: None,
             nav_filter: None,
             nav_folds: std::collections::HashSet::new(),
+            nav_fold_moves: std::collections::HashMap::new(),
             nav_more: std::collections::HashSet::new(),
             nav_scroll: ScrollHandle::new(),
             nav_view: nav::NavView::Tree,
@@ -1581,8 +1576,6 @@ impl CockpitView {
             nav_hovered: false,
             nav_drag_live: std::cell::Cell::new(false),
             nav_snapshot: std::cell::RefCell::new(None),
-            nav_tween: None,
-            nav_fade: None,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
@@ -1595,10 +1588,12 @@ impl CockpitView {
             nav_dragging: None,
             prefs,
             settings_open: false,
+            settings_exit: Default::default(),
             settings_page: settings::PageKey::default(),
             settings_search: None,
             settings_copied: None,
             project_editor: None,
+            project_editor_leaving: None,
             project_editor_focus: cx.focus_handle(),
             settings_focus: cx.focus_handle(),
             maximized: false,
@@ -1624,9 +1619,7 @@ impl CockpitView {
             floats: palette::Floats::new(cx),
             transcript_entities: Default::default(),
             decisions: decisions::DecisionState::new(cx.weak_entity()),
-            nav_ride: std::cell::Cell::new(None),
             nav_measure_rest: std::cell::Cell::new(false),
-            nav_hold: None,
             empty_shown: false,
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
@@ -2717,36 +2710,6 @@ impl CockpitView {
         }
     }
 
-    /// The column's width mid-ride (F-12): the cmd-B tween's value this
-    /// frame, or a scene's held progress (`fixture_hold_nav`) along the
-    /// same curve; `None` at rest.
-    fn nav_ride_now(&self, cx: &gpui::App) -> Option<f32> {
-        if let Some(progress) = self.nav_hold {
-            let (from, to) = match self.nav_tween {
-                Some(tween) => (tween.from, tween.to),
-                None if self.nav_railed() => (nav::WIDTH, nav::FOLDED_WIDTH),
-                None => (nav::FOLDED_WIDTH, nav::WIDTH),
-            };
-            return Some(ferrite_ui::motion::lerp(
-                from,
-                to,
-                ferrite_ui::motion::RESIZE.progress(progress.clamp(0.0, 1.0)),
-            ));
-        }
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        self.nav_tween
-            .filter(|tween| tween.running(now, reduced))
-            .map(|tween| tween.value(now, reduced))
-    }
-
-    /// Hold the sidebar's ride at `progress` (0 → 1 along `motion::RESIZE`)
-    /// so a scene can capture the board mid-ride; `None` lets it go.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn fixture_hold_nav(&mut self, progress: Option<f32>) {
-        self.nav_hold = progress;
-    }
-
     /// Whether the nav draws as the rail: the operator folded it, or the
     /// window is too narrow for the column and cmd-B has not overridden it.
     fn nav_railed(&self) -> bool {
@@ -2818,10 +2781,9 @@ impl CockpitView {
         if self.cockpit.roster().fullscreen().is_some() {
             return Level::Transcript;
         }
-        // Mid-ride the board is measured where the ride ends (F-12) — the
-        // sidebar's, and every reader's slide: the Level is the
-        // destination's from the first frame, never flapping as a width
-        // sweeps through a threshold.
+        // Mid-slide the board is measured where every reader's slide ends:
+        // the Level is the destination's from the first frame, never
+        // flapping as a width sweeps through a threshold.
         self.nav_measure_rest.set(true);
         let rects = self.pane_rects(window);
         self.nav_measure_rest.set(false);
@@ -2876,16 +2838,13 @@ impl CockpitView {
         }
     }
 
-    /// Where the board's left edge sits: the nav's width this frame (no
-    /// seam: the card's edge separates). While cmd-B rides the column the
-    /// board rides with it, every frame (F-12).
+    /// Where the board's left edge sits: the nav's width (no seam: the
+    /// card's edge separates). cmd-B moves it at once.
     fn board_left(&self) -> f32 {
         if self.nav_measure_full.get() {
             nav::WIDTH
-        } else if self.nav_measure_rest.get() {
-            self.nav_width()
         } else {
-            self.nav_ride.get().unwrap_or_else(|| self.nav_width())
+            self.nav_width()
         }
     }
 
@@ -4949,7 +4908,18 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.settings_open {
+        // Closed, it fades out over `DIALOG_OUT`, drawn from the same state.
+        let leaving = self
+            .settings_exit
+            .stage(
+                self.settings_open.then_some(&()),
+                |_, _| true,
+                ferrite_ui::motion::DIALOG_OUT,
+                cx.background_executor().now(),
+                ferrite_ui::motion::reduced_motion(cx),
+            )
+            .map(|((), left)| left);
+        if !self.settings_open && leaving.is_none() {
             return None;
         }
         let search = self
@@ -5330,6 +5300,7 @@ impl CockpitView {
                 select: std::rc::Rc::new(select),
                 step: Box::new(step),
                 close: std::rc::Rc::new(close),
+                leaving,
             },
             window,
             cx,
@@ -5452,6 +5423,7 @@ impl CockpitView {
                 }
                 self.group_error = None;
                 self.refresh_names();
+                self.leave_project_editor(editor, cx);
             }
             Err(error) => {
                 self.project_editor = Some(ProjectEditor {
@@ -5550,7 +5522,20 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let editor = self.project_editor.as_ref()?;
+        // The open card, or the one that closed while it fades out.
+        let (editor, leaving) = match (&self.project_editor, &self.project_editor_leaving) {
+            (Some(editor), _) => (editor, None),
+            (None, Some((editor, left)))
+                if cx
+                    .background_executor()
+                    .now()
+                    .saturating_duration_since(*left)
+                    < ferrite_ui::motion::DIALOG_OUT.duration() =>
+            {
+                (editor, Some(*left))
+            }
+            _ => return None,
+        };
         let project = editor
             .target
             .and_then(|project| self.cockpit.registry().project(project));
@@ -5575,8 +5560,7 @@ impl CockpitView {
         let close = project_editor::close_button(cx).on_click(cx.listener(
             |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                view.project_editor = None;
-                cx.notify();
+                view.close_project_editor(cx);
             },
         ));
         let mut body = project_editor::body()
@@ -5685,7 +5669,7 @@ impl CockpitView {
                                     view.nav_filter = None;
                                 }
                                 view.group_error = None;
-                                view.project_editor = None;
+                                view.close_project_editor(cx);
                             }
                         }
                         cx.notify();
@@ -5736,26 +5720,50 @@ impl CockpitView {
                     )),
             )
             .child(footer);
-        Some(
-            deferred(ferrite_ui::motion::veil_in(
+        let sheet = match leaving {
+            Some(left) => ferrite_ui::motion::veil_out(
+                left,
+                ferrite_ui::motion::VEIL,
+                ferrite_ui::sheet::leaving_veil().child(ferrite_ui::motion::dialog_out(left, card)),
+            )
+            .into_any_element(),
+            None => ferrite_ui::motion::veil_in(
                 "project-editor-veil",
+                ferrite_ui::motion::VEIL,
                 project_editor::veil()
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|view, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            view.project_editor = None;
-                            cx.notify();
+                            view.close_project_editor(cx);
                         }),
                     )
                     .child(ferrite_ui::motion::dialog_in(
                         "project-editor-card-in",
                         card,
                     )),
-            ))
-            .with_priority(3)
+            )
             .into_any_element(),
-        )
+        };
+        Some(deferred(sheet).with_priority(3).into_any_element())
+    }
+
+    /// Close the Project card, if it is open; whether it was. It fades out
+    /// over `motion::DIALOG_OUT` (Claude's dialog exit), drawn from the card
+    /// as it stood.
+    fn close_project_editor(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(editor) = self.project_editor.take() else {
+            return false;
+        };
+        self.leave_project_editor(editor, cx);
+        true
+    }
+
+    /// `editor` leaves now: kept for its exit, unless motion is reduced.
+    fn leave_project_editor(&mut self, editor: ProjectEditor, cx: &mut Context<Self>) {
+        self.project_editor_leaving = (!ferrite_ui::motion::reduced_motion(cx))
+            .then(|| (editor, cx.background_executor().now()));
+        cx.notify();
     }
 
     /// The Pane head's title: the live editor while this Thread is being
@@ -6062,8 +6070,7 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        if self.project_editor.take().is_some() {
-            cx.notify();
+        if self.close_project_editor(cx) {
             return;
         }
         if self.rename.is_some() {
@@ -6532,60 +6539,21 @@ impl CockpitView {
     /// is shown and never saved; otherwise it folds or opens the column.
     fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
         if !self.nav_collapsed && self.nav_auto_rail.get() {
-            let was = self.nav_railed();
             self.nav_forced_open = !self.nav_forced_open;
-            self.tween_nav(was, cx);
+            cx.notify();
             return;
         }
         self.set_nav_collapsed(!self.nav_collapsed, cx);
     }
 
-    /// cmd-B rides the column's width between open and folded over
-    /// `motion::RESIZE` (Zeron's sidebar), the content fading.
+    /// cmd-B folds the column to the rail or opens it, at once: Claude's
+    /// sidebar snaps, and a ride would lay the whole board out again every
+    /// frame.
     fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
         if self.nav_collapsed == collapsed {
             return;
         }
-        let was = self.nav_railed();
         self.nav_collapsed = collapsed;
-        self.tween_nav(was, cx);
-    }
-
-    /// Ride the column's width from what was drawn to what is drawn now —
-    /// and, on its own clock, its content's opacity (1 → 0 folding, 0 → 1
-    /// opening, `nav::CONTENT_FADE`). A flip mid-flight turns both around
-    /// from where they are on screen.
-    fn tween_nav(&mut self, was_railed: bool, cx: &mut Context<Self>) {
-        let railed = self.nav_railed();
-        if was_railed == railed {
-            cx.notify();
-            return;
-        }
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        let (from, to) = if railed {
-            (nav::WIDTH, nav::FOLDED_WIDTH)
-        } else {
-            (nav::FOLDED_WIDTH, nav::WIDTH)
-        };
-        self.nav_tween = Some(ferrite_ui::motion::Tween::retarget(
-            self.nav_tween,
-            from,
-            to,
-            ferrite_ui::motion::RESIZE,
-            now,
-            reduced,
-        ));
-        // Opacity of the content.
-        let (from, to) = if railed { (1.0, 0.0) } else { (0.0, 1.0) };
-        self.nav_fade = Some(ferrite_ui::motion::Tween::retarget(
-            self.nav_fade,
-            from,
-            to,
-            nav::CONTENT_FADE,
-            now,
-            reduced,
-        ));
         cx.notify();
     }
 
@@ -7595,13 +7563,28 @@ impl CockpitView {
     }
 
     /// Fold or unfold what one of the nav's folds holds (N-4) — a Project
-    /// section, the Pinned or Groups section, a Group — at once. A
-    /// Project's fold is saved with the settings; the others are held in
-    /// memory: the fold survives re-renders and view switches, and opening
-    /// a folded Group leaves it folded.
+    /// section, the Pinned or Groups section, a Group. Its rows slide open
+    /// or shut over `motion::FOLD` (`nav_fold_body`). A Project's fold is
+    /// saved with the settings; the others are held in memory: the fold
+    /// survives re-renders and view switches, and opening a folded Group
+    /// leaves it folded.
     pub(crate) fn set_nav_fold(&mut self, fold: NavFold, folded: bool, cx: &mut Context<Self>) {
         if self.nav_folded(fold) == folded {
             return;
+        }
+        let now = cx.background_executor().now();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        let spec = ferrite_ui::motion::FOLD;
+        self.nav_fold_moves
+            .retain(|_, fold| fold.running(now, reduced));
+        if !reduced {
+            self.nav_fold_moves
+                .entry(fold)
+                .or_insert_with(|| match folded {
+                    true => ferrite_ui::motion::Reveal::open(spec, spec, now),
+                    false => ferrite_ui::motion::Reveal::closed(spec, spec, now),
+                })
+                .set(!folded, now, reduced);
         }
         match fold {
             NavFold::Project(project) => self.change_settings(
@@ -7621,6 +7604,44 @@ impl CockpitView {
             }
         }
         cx.notify();
+    }
+
+    /// How far open `fold` is while it opens or shuts; `None` at rest.
+    fn nav_fold_shown(&self, fold: NavFold, cx: &gpui::App) -> Option<f32> {
+        let now = cx.background_executor().now();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        self.nav_fold_moves
+            .get(&fold)
+            .filter(|move_| move_.running(now, reduced))
+            .map(|move_| move_.value(now, reduced))
+    }
+
+    /// Whether any of the nav's folds is moving: the nav asks for frames.
+    fn nav_folds_moving(&self, cx: &gpui::App) -> bool {
+        let now = cx.background_executor().now();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        self.nav_fold_moves
+            .values()
+            .any(|move_| move_.running(now, reduced))
+    }
+
+    /// Whether `fold`'s rows are drawn: open, or still shutting.
+    fn nav_fold_drawn(&self, fold: NavFold, folded: bool, cx: &gpui::App) -> bool {
+        !folded || self.nav_fold_shown(fold, cx).is_some()
+    }
+
+    /// `body`, the rows `fold` holds, clipped to how far open it is while
+    /// it moves (`motion::fold_body`); itself at rest.
+    fn nav_fold_body(&self, fold: NavFold, body: impl IntoElement, cx: &gpui::App) -> AnyElement {
+        match self.nav_fold_shown(fold, cx) {
+            Some(shown) => ferrite_ui::motion::fold_body(
+                SharedString::from(format!("nav-fold-{fold:?}")),
+                shown,
+                body,
+            )
+            .into_any_element(),
+            None => body.into_any_element(),
+        }
     }
 
     /// Whether one of the nav's folds is shut (`set_nav_fold`).
@@ -10344,20 +10365,14 @@ impl Render for CockpitView {
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
-        // hover blend, a column's width (the nav's, the panel's) or a
-        // reader's slide mid-flight keeps frames coming; with none, nothing
-        // is scheduled (the pulse clock drives loops).
-        // Each reads what this frame drew, never the clock again: a ride
-        // that ended between the draw and here still asks for the one frame
-        // that lands it at rest. A scene's held ride asks for none.
-        let column_moving = self.nav_ride.get().is_some() && self.nav_hold.is_none();
+        // hover blend, a press or a reader's slide mid-flight keeps frames
+        // coming; with none, nothing is scheduled (the pulse clock drives
+        // loops). Each reads what this frame drew, never the clock again: a
+        // slide that ended between the draw and here still asks for the one
+        // frame that lands it at rest.
         let sliding = self.reader_slides.moving();
         let fading = ferrite_ui::motion::hover_fades_active();
-        if column_moving {
-            // The nav's width moves the whole board, and the nav with it:
-            // every part redraws.
-            window.request_animation_frame();
-        } else if fading || sliding {
+        if fading || sliding {
             // A blend is drawn again by the view that paints it alone: a
             // part (a nav row, a Pane's control, a transcript's link), or,
             // for the frame's own controls, the frame around the parts
@@ -10477,10 +10492,7 @@ impl CockpitView {
         self.measure();
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
-        // The board rides the sidebar's width every frame of a cmd-B fold
-        // (F-12), and the panel's as it comes and goes; a Solo pair lasts
-        // while focus stays on one of its Panes.
-        self.nav_ride.set(self.nav_ride_now(cx));
+        // A Solo pair lasts while focus stays on one of its Panes.
         self.tend_panel(window);
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
@@ -13697,6 +13709,10 @@ impl CockpitView {
     fn nav_content(&self, state: &nav::NavState, window: &Window, cx: &mut Context<Self>) -> Div {
         #[cfg(test)]
         drawn::built_nav();
+        // A fold mid-move: the nav (its part alone) draws again next frame.
+        if self.nav_folds_moving(cx) {
+            ferrite_ui::motion::request_frame(window);
+        }
         let list = match self.nav_view {
             nav::NavView::Tree => self.nav_tree(state, cx),
             nav::NavView::Inbox => self.needs_you_list(window, cx),
@@ -14056,40 +14072,25 @@ impl CockpitView {
     }
 
     /// The nav column (§5.1): the head, the views, the tree and the foot
-    /// on the frame, from the window's top. cmd-B rides its width down to
-    /// the rail over `motion::RESIZE` (the render tail keeps frames coming
-    /// while it moves) while its content fades on its own clock (N-15): 1 →
-    /// 0 over 150ms folding, 0 → 1 opening, the rail cross-fading the other
-    /// way. At rest folded, the column is the rail. The rail and the
-    /// uncached rows share one `nav_state` a frame.
+    /// on the frame, from the window's top. cmd-B folds it to the rail at
+    /// once (Claude's sidebar snaps). The rail and the uncached rows share
+    /// one `nav_state` a frame.
     fn nav(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.nav_railed();
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        // The width the board reads this frame (F-12): the ride's, or a
-        // scene's held one.
-        let ride = self.nav_ride_now(cx);
-        let width = ride.unwrap_or(if collapsed {
+        let width = if collapsed {
             nav::FOLDED_WIDTH
         } else {
             nav::WIDTH
-        });
+        };
         let frame = div().flex().flex_row().flex_shrink_0().h_full();
         let shell = nav::shell(width).child(nav::body());
-        let content = if collapsed && ride.is_none() {
-            0.0
-        } else {
-            self.nav_content_opacity(now, reduced)
-        };
         let state = std::cell::OnceCell::new();
-        let shell = shell
-            .when(content > 0.0, |shell| {
-                shell.child(self.nav_rows(content, &state, window, cx))
-            })
-            .when(content < 1.0, |shell| {
-                let state = state.get_or_init(|| self.nav_state());
-                shell.child(self.nav_rail(state, window, cx).opacity(1.0 - content))
-            });
+        let shell = if collapsed {
+            let state = state.get_or_init(|| self.nav_state());
+            shell.child(self.nav_rail(state, window, cx))
+        } else {
+            shell.child(self.nav_rows(&state, window, cx))
+        };
         frame.child(shell).into_any_element()
     }
 
@@ -14149,31 +14150,6 @@ impl CockpitView {
         rail
     }
 
-    /// The nav content's opacity this frame (N-15): wherever its own fade
-    /// has it while the column rides — a fade that has finished holds its
-    /// end — and fully shown at rest.
-    fn nav_content_opacity(&self, now: std::time::Instant, reduced: bool) -> f32 {
-        // A scene holding the ride (`fixture_hold_nav`) holds the fade where
-        // its own clock would be that far into the ride.
-        if let Some(progress) = self.nav_hold {
-            let elapsed = ferrite_ui::motion::RESIZE
-                .duration()
-                .mul_f32(progress.clamp(0.0, 1.0));
-            let faded = nav::CONTENT_FADE.progress(
-                (elapsed.as_secs_f32() / nav::CONTENT_FADE.duration().as_secs_f32()).min(1.0),
-            );
-            return if self.nav_railed() {
-                1.0 - faded
-            } else {
-                faded
-            };
-        }
-        match (self.nav_tween, self.nav_fade) {
-            (Some(ride), Some(fade)) if ride.running(now, reduced) => fade.value(now, reduced),
-            _ => 1.0,
-        }
-    }
-
     /// The scrolling tree: one section per Project (`nav_state`), each its heading, its
     /// loose rows — a `LooseZone`, a place to drop a row to get it out of
     /// its Group — and its Groups, then the ground, which is a `LooseZone`
@@ -14231,7 +14207,13 @@ impl CockpitView {
                 block.child(self.project_heading(index, section, cx))
             };
             first = false;
-            if !section.folded {
+            let fold = match section.project {
+                _ if section.mixed => Some(NavFold::Groups),
+                project => project.map(NavFold::Project),
+            };
+            if fold.map_or(!section.folded, |fold| {
+                self.nav_fold_drawn(fold, section.folded, cx)
+            }) {
                 // Every section's rows start on its heading's label.
                 let mut rows: Vec<AnyElement> = Vec::new();
                 if !section.drawn.is_empty() {
@@ -14261,10 +14243,14 @@ impl CockpitView {
                 for group in &section.groups {
                     rows.push(self.group_element(&state.groups[*group], origin, cx));
                 }
-                block = if section.mixed || recents {
-                    block.children(rows)
+                let rows = if section.mixed || recents {
+                    div().flex().flex_col().flex_shrink_0().children(rows)
                 } else {
-                    block.child(nav::project_rows(rows))
+                    nav::project_rows(rows)
+                };
+                block = match fold {
+                    Some(fold) => block.child(self.nav_fold_body(fold, rows, cx)),
+                    None => block.child(rows),
                 };
             }
             own.push(block.into_any_element());
@@ -14335,15 +14321,14 @@ impl CockpitView {
                     view.set_nav_fold(NavFold::Pinned, !folded, cx);
                 }),
             );
-        let rows: Vec<AnyElement> = if folded {
-            Vec::new()
-        } else {
-            state
+        let rows = self.nav_fold_drawn(NavFold::Pinned, folded, cx).then(|| {
+            let rows = state
                 .pinned
                 .iter()
-                .map(|row| self.thread_element(row, None, nav::RowPlace::ROOT, cx))
-                .collect()
-        };
+                .map(|row| self.thread_element(row, None, nav::RowPlace::ROOT, cx));
+            let rows = div().flex().flex_col().flex_shrink_0().children(rows);
+            self.nav_fold_body(NavFold::Pinned, rows, cx)
+        });
         nav::section(true)
             .child(heading)
             .children(rows)
@@ -14522,7 +14507,7 @@ impl CockpitView {
                     }),
                 ),
             );
-        if !folded && !group.members.is_empty() {
+        if self.nav_fold_drawn(NavFold::Group(id), folded, cx) && !group.members.is_empty() {
             // The shown Group's members are one-line rows, the focused
             // Pane's title strong (§5.1.6); any other Group's are two-line
             // rows, nested under it.
@@ -14563,7 +14548,7 @@ impl CockpitView {
                         })),
                 );
             }
-            block = block.child(members);
+            block = block.child(self.nav_fold_body(NavFold::Group(id), members, cx));
         }
         block
             .child(

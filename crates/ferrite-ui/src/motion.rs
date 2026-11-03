@@ -1,55 +1,64 @@
-//! The motion kit: Zeron's animation catalog as one-shot elements on the
-//! executor's clock ([`Played`]), plus the clocks gpui does not give us — a
-//! throttled, shared pulse for loops, a hover blend for colour, and
+//! The motion kit: Claude Desktop's motion, read from its source
+//! (`docs/research/craft/motion-claude-source.md`), as one-shot elements on
+//! the executor's clock ([`Played`]), plus the clocks gpui does not give
+//! us — a throttled, shared pulse for loops, a hover blend for colour, and
 //! interruptible tweens. Every clock asks for its frames through the view
-//! that redraws it most cheaply ([`frames_through`]). Ported from Zeron
-//! (MIT, (c) 2026 Wing). The numbers are tokens in `theme.rs` (the motion
-//! section), which also holds the rules; this module is the machinery.
+//! that redraws it most cheaply ([`frames_through`]). The machinery was
+//! ported from Zeron (MIT, (c) 2026 Wing). The numbers are tokens in
+//! `theme.rs` (the motion section), which also holds the rules; this module
+//! is the machinery.
 //!
 //! # Catalog
 //!
-//! Each Zeron animation and the Ferrite surface it applies to.
+//! Each animation, its spec, and the Ferrite surface it applies to.
 //!
-//! | Zeron | Spec | Ferrite surface |
+//! | Motion | Spec | Ferrite surface |
 //! | --- | --- | --- |
-//! | `transition-colors` hover | [`HOVER_FADE`] 100ms | every pointer hover, the one hover duration (`pointer.rs`'s roles, `components::faded_button`, the nav's rows and buttons, a board seam's strong line): the face blends in and out; a press and every keyboard change land on their frame |
-//! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
-//! | toasts | [`TOAST_IN`] 180ms, 4px drop / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18), hung top right under the window's head, drops into place from 0.3 ([`toast_in`]); one that goes on its own fades away lifting 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server and update toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
+//! | button hover | [`HOVER_FADE`] 60ms, the quart | a button's ground (`components::faded_button`, the pointer roles' controls, a board seam's line, the transcript's links and jump button): it blends in and out ([`hover_listener`]) |
+//! | button press | [`PRESS_IN`] 60ms quart to 0.975 / [`PRESS_OUT`] 450ms overshoot | a kit button (`components::faded_button`) squishes while held and springs back ([`pressable`]) |
+//! | row hover | [`HOVER_SNAP`], at once | a nav row, the sidebar's own buttons and headings, a menu row, a float or palette row ([`hover_snap`]), as Claude's rows do |
+//! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate |
+//! | toasts | [`TOAST_IN`] 200ms quart, its own height / [`TOAST_OUT`] 200ms quart to 0.85 | the Needs-you toast (FL-18), hung top right under the window's head, slides out from under it ([`toast_in`]); one that goes on its own fades away shrinking, drawn as a face that answers no pointer ([`toast_out`], [`Exits`]). The kit's toast stack (the Server and update toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock / display | the working line's shimmer and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; the working marks (the working line, nav, Pane heads, plan steps), whose orbs move at every instant, ride [`frame_loop`]: the display's rate, one request a frame for the window, only while one can be seen; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 0ms: a snap, as both reference apps open their menus | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
-//! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
-//! | `dialog-in` | [`DIALOG_IN`] 180ms, 0.96 → 1 scale | the Settings and Project sheets via [`dialog_in`]; the palette and the shortcuts sheet with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
-//! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. |
-//! | right panel | none | the Panel (`cockpit/panel.rs`) snaps open and shut and between its own width and a preview's, as Claude's does: no ride, no fade, no per-frame relayout of the board |
-//! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
+//! | menus, popovers | [`MENU_IN`] 0ms: a snap | every Ferrite-drawn menu and popover, open and shut ([`menu_in`]), as Claude's `Menu`, `ContextMenu` and `Popover` |
+//! | dialog | [`DIALOG_IN`] / [`DIALOG_OUT`] 200ms quart, 0.98 ↔ 1 | the Settings and Project sheets, in ([`dialog_in`]) and out ([`dialog_out`]), over their veil fading both ways over [`VEIL`] ([`veil_in`], [`veil_out`]) |
+//! | palette | [`DIALOG_IN`] in from its top, [`PALETTE_OUT`] 120ms out | the palette and the shortcuts sheet ([`dialog_in_casting`], [`float_out`]), their veil fading over [`PALETTE_VEIL`] 50ms both ways |
+//! | tooltip | [`TOOLTIP_IN`] 120ms ease-snap, 0.98 → 1 | every tooltip (`menu::tooltip`, [`tooltip_in`]) after gpui's 300ms delay; the next one within 200ms shows at once, with no entrance. No exit: gpui drops a tooltip on its frame |
+//! | sidebar (cmd-B) | none | the column snaps between its width and the rail: no ride, no fade, no per-frame relayout of the board |
+//! | nav folds | [`FOLD`] 150ms `ease-out`, height and opacity | a Project section, a Group's members and Pinned open and shut ([`fold_body`], one [`Reveal`] per fold); only the nav part redraws |
+//! | right panel | none | the Panel (`cockpit/panel.rs`) snaps open and shut and between its own width and a preview's, as Claude's does |
+//! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SNAP`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
-//! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
-//! | chevron rotate | none | every disclosure chevron (the transcript's, the nav's, the Panel's folds) turns its quarter on the frame its fold flips, as Claude's does (`motion-measured.md`, "Tool group expand / collapse") |
-//! | switch | [`FADE_QUICK`] 150ms | a Settings on/off switch (`components::switch`): its knob slides to the other end and its track blends between off and on ([`settled`]) |
-//! | stream fade | [`STREAM_FADE`] 300ms CSS `ease-out`, opacity only | every transcript row appended at the tail while the operator watches, and each run of words streaming into an answer (`TextView::fresh`); never first paint, a history window growing at its head, or scroll-back |
-//! | bubble fade | [`BUBBLE_FADE`] 250ms CSS `ease-out`, opacity only | the operator's prompt bubble appended at the tail |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
-//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 100ms, and widens 4 → 6px under the pointer over [`HOVER_FADE`] (`scrollbar::step_widen`); idle, nothing is drawn |
+//! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it (opacity only) |
+//! | chevron rotate | [`CHEVRON`] 60ms | every disclosure chevron (the transcript's, the nav's, the Panel's folds) turns its quarter as its fold flips ([`settled`]); the folds themselves snap, as Claude's tool steps do |
+//! | switch | [`SWITCH`] 120ms overshoot | a Settings on/off switch (`components::switch`): its knob slides, its track snaps |
+//! | stream fade | [`STREAM_FADE`] 400ms linear, opacity only | every transcript row appended at the tail while the operator watches, and each run of words streaming into an answer (`TextView::fresh`); at turn end a run with more than [`STREAM_LAND`] left lands within it; never first paint, a history window growing at its head, or scroll-back |
+//! | bubble pop | [`BUBBLE_IN`] 450ms overshoot | the operator's prompt bubble appended at the tail: opacity, scale 0.92 → 1 from its right edge, a 6px rise ([`bubble_face`]) |
+//! | approval promote | [`PROMOTE_IN`] 220ms ease-out cubic | the approval card: from 0.75, 6px above, scale 0.97 from its top ([`promote_in`]) |
+//! | label roll | [`MORPH`] 180ms | the working line's words when they change ([`morph`]) |
+//! | message actions | [`ACTIONS_IN`] 120ms after 100ms / [`ACTIONS_OUT`] 60ms, ease-snap | a message's actions under the pointer ([`hover_listener_with`]) |
+//! | jump to latest | [`JUMP_FADE`] 200ms | the transcript's jump button fades in and out, answering no pointer while it goes |
+//! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) |
+//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`SCROLLBAR_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades, and widens 4 → 6px under the pointer (`scrollbar::step_widen`); idle, nothing is drawn |
 //!
-//! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
-//! keep the kit's own behaviour. A tool group's disclosure in the transcript
-//! opens without a height tween: its rows are one item of a virtualized
-//! list inside a kit `Collapsible`, and an item mid-reveal would clip rows
-//! the pointer can already reach. The hover card (`hover_card.rs`) hangs at
-//! once: the transcript hosting it would draw every frame of an entrance
-//! again, rebuilding its native text (15 text renders for one `menu-in`).
+//! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs) keep the kit's
+//! own behaviour. A tool group's disclosure in the transcript opens without
+//! a height tween, as Claude's tool steps do: its rows are one item of a
+//! virtualized list inside a kit `Collapsible`, and an item mid-reveal
+//! would clip rows the pointer can already reach. The hover card
+//! (`hover_card.rs`) hangs at once: the transcript hosting it would draw
+//! every frame of an entrance again, rebuilding its native text.
 //!
 //! **What a frame costs.** gpui asks for an animation's next frame by
 //! notifying the view drawing it, and redraws that view's ancestors with
 //! it. A one-shot, a settled flip and a hover blend in the Cockpit's own
 //! tree (its floats, the frame's controls) notify its `FrameTick` instead
 //! ([`draw_frames_through`]), so they rebuild no cached part; one inside a
-//! part (a Pane's Composer menu) rebuilds that part alone. A loop draws in
-//! the loops overlay (ADR 0011). The nav's ride rebuilds every part on each
-//! frame: the board's width moves under them, and the nav's own. The
-//! Panel's ride and a Review's slide redraw the frame around the parts
-//! instead, so only the parts whose cells move are built again (the
-//! Panel's ride still builds the nav once a frame).
+//! part (a Pane's Composer menu, a nav fold) rebuilds that part alone. A
+//! loop draws in the loops overlay (ADR 0011). The Panel's ride and a
+//! Review's slide redraw the frame around the parts instead, so only the
+//! parts whose cells move are built again.
 //!
 //! # What gpui here cannot do, and what stands in
 //!
@@ -58,11 +67,13 @@
 //!
 //! - **Scale is painted only.** `Styled::scale` (Ferrite's gpui patch,
 //!   `Window::with_element_scale`) scales what an element paints about its
-//!   centre: `menu-in` and `dialog-in` grow 0.96 → 1 with their fade and
-//!   2px shift. Its layout and hit area stay at rest, and a `deferred`
-//!   draw or a loop hosted in the loops overlay inside it is not scaled.
+//!   centre, or about `Styled::scale_origin` (a CSS `transform-origin`).
+//!   Its layout and hit area stay at rest, and a `deferred` draw or a loop
+//!   hosted in the loops overlay inside it is not scaled.
 //! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
 //!   dropped; opacity and scale carry it.
+//! - **Springs.** Claude's button release (`--cds-btn-spring`, a
+//!   piecewise-linear spring) rides `EASE_OVERSHOOT` over 450ms.
 //! - **Frost.** A fork-only paint effect; not ported. An edge fade is a
 //!   `linear_gradient` overlay in the surface's own fill (the transcript's
 //!   top fade, `EDGE_FADE`).
@@ -77,19 +88,22 @@
 //!
 //! gpui's `App::reduce_motion` flag snaps every `with_animation` element (a
 //! one-shot to its end state, a loop to its start) and every kit spring. The
-//! clocks here follow the same rule: a [`Played`] one-shot lands on its
-//! first frame (an exit is not drawn at all), [`loop_phase`] returns 0 and
-//! declares nothing, a [`Tween`] reads its target, and a hover snaps.
-//! [`init`] sets the flag from the system setting at launch.
+//! clocks here follow the same rule, as Claude's `prefers-reduced-motion`
+//! does: a [`Played`] one-shot lands on its first frame (an exit is not
+//! drawn at all), [`loop_phase`] returns 0 and declares nothing, a [`Tween`]
+//! reads its target, a hover snaps, a press does not squish and a label
+//! swaps its words at once. [`init`] sets the flag from the system setting
+//! at launch.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use ferrite_core::cadence;
 use gpui::{
-    px, AnyElement, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba, SharedString,
-    Styled, Window,
+    div, prelude::FluentBuilder, px, AnyElement, App, ElementId, EntityId, Global, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Rgba, SharedString, Styled, Window,
 };
 
 use crate::theme;
@@ -167,9 +181,13 @@ impl CubicBezier {
         (lo + hi) / 2.0
     }
 
-    /// Eased output for input progress `x`, clamped to `[0, 1]` at both
-    /// ends: f32 rounding can land a hair past 1.0 near the tail, and gpui
-    /// asserts on an animation delta outside the unit interval.
+    /// Eased output for input progress `x`, `0` and `1` at the ends. Between
+    /// them it is clamped to the curve's own reach: `[0, 1]` for a curve
+    /// that stays inside it (f32 rounding can land a hair past 1.0 near the
+    /// tail), past 1 for one that overshoots (`EASE_OVERSHOOT`, whose y
+    /// rises over 1 before it settles). No caller hands an overshooting
+    /// curve to gpui's `with_animation`, which asserts on a delta outside
+    /// the unit interval.
     pub fn eval(&self, x: f32) -> f32 {
         if x <= 0.0 {
             return 0.0;
@@ -177,7 +195,9 @@ impl CubicBezier {
         if x >= 1.0 {
             return 1.0;
         }
-        self.sample_y(self.solve_t_for_x(x)).clamp(0.0, 1.0)
+        let low = self.y1.min(self.y2).min(0.0);
+        let high = self.y1.max(self.y2).max(1.0);
+        self.sample_y(self.solve_t_for_x(x)).clamp(low, high)
     }
 }
 
@@ -185,29 +205,48 @@ pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EA
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
-pub const EASE_SLIDE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_SLIDE);
+pub const EASE_OUT_QUART: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_QUART);
+pub const EASE_SNAP: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_SNAP);
+pub const EASE_OVERSHOOT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OVERSHOOT);
+pub const EASE_MORPH: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_MORPH);
+pub const EASE_OUT_CUBIC: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_CUBIC);
+pub const LINEAR: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_LINEAR);
 
 // ---------------------------------------------------------------------------
 // The catalog
 // ---------------------------------------------------------------------------
 
-/// One catalog entry: a duration and its curve.
+/// One catalog entry: a duration and its curve, after an optional delay.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionSpec {
     pub duration_ms: u64,
     pub curve: CubicBezier,
+    /// How long it holds at its start before it moves (a message's actions
+    /// wait under the pointer before they show).
+    pub delay_ms: u64,
 }
 
 impl MotionSpec {
     pub const fn new(duration_ms: u64, curve: CubicBezier) -> Self {
-        Self { duration_ms, curve }
+        Self {
+            duration_ms,
+            curve,
+            delay_ms: 0,
+        }
     }
 
+    /// The same, held at its start for `delay_ms` first.
+    pub const fn after(self, delay_ms: u64) -> Self {
+        Self { delay_ms, ..self }
+    }
+
+    /// How long it takes to land, its delay included.
     pub fn duration(&self) -> Duration {
-        Duration::from_millis(self.duration_ms)
+        Duration::from_millis(self.delay_ms + self.duration_ms)
     }
 
-    /// Eased progress for a raw timeline fraction. Pure.
+    /// Eased progress for a raw timeline fraction (of the move, after the
+    /// delay). Pure.
     pub fn progress(&self, raw: f32) -> f32 {
         if self.duration_ms == 0 {
             return 1.0;
@@ -215,44 +254,99 @@ impl MotionSpec {
         self.curve.eval(raw)
     }
 
-    /// Eased progress `elapsed` into the timeline.
+    /// Eased progress `elapsed` into the timeline, its delay first.
     pub fn progress_at(&self, elapsed: Duration) -> f32 {
         if self.duration_ms == 0 {
-            return 1.0;
+            return if elapsed >= self.duration() { 1.0 } else { 0.0 };
         }
-        self.progress(elapsed.as_secs_f32() / self.duration().as_secs_f32())
+        let moving = elapsed.saturating_sub(Duration::from_millis(self.delay_ms));
+        self.progress(moving.as_secs_f32() / (self.duration_ms as f32 / 1000.0))
     }
 }
 
-pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
-pub const STREAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_STREAM_FADE_MS, EASE_OUT);
-pub const BUBBLE_FADE: MotionSpec = MotionSpec::new(theme::MOTION_BUBBLE_FADE_MS, EASE_OUT);
-/// The sidebar's ride (cmd-B) and the board riding with it: the
-/// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
-/// (`cubic-bezier(.25,.1,.25,1)`), not `ease-out`.
-pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
-pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
-pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
-pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
+const fn spec(duration_ms: u64, curve: CubicBezier) -> MotionSpec {
+    MotionSpec::new(duration_ms, curve)
+}
+
+pub const ROW_IN: MotionSpec = spec(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
+/// Streamed text, by the run: Claude's 400ms linear `delta-fade`.
+pub const STREAM_FADE: MotionSpec = spec(theme::MOTION_STREAM_FADE_MS, LINEAR);
+/// How soon a run still fading lands once its turn ends.
+pub const STREAM_LAND: Duration = Duration::from_millis(theme::MOTION_STREAM_LAND_MS);
+/// The sent bubble's pop (`bubble_face`).
+pub const BUBBLE_IN: MotionSpec = spec(theme::MOTION_BUBBLE_FADE_MS, EASE_OVERSHOOT);
+pub const FADE_QUICK: MotionSpec = spec(theme::MOTION_FADE_QUICK_MS, EASE);
+pub const MENU_IN: MotionSpec = spec(theme::MOTION_MENU_IN_MS, EASE);
+pub const DIALOG_IN: MotionSpec = spec(theme::MOTION_DIALOG_IN_MS, EASE_OUT_QUART);
+pub const DIALOG_OUT: MotionSpec = spec(theme::MOTION_DIALOG_OUT_MS, EASE_OUT_QUART);
+/// A sheet's veil, darkening in and lifting out with it.
+pub const VEIL: MotionSpec = spec(theme::MOTION_DIALOG_IN_MS, EASE_OUT_QUART);
+/// The palette's exit, quicker than its entrance, and its veil both ways.
+pub const PALETTE_OUT: MotionSpec = spec(theme::MOTION_PALETTE_OUT_MS, EASE_OUT_QUART);
+pub const PALETTE_VEIL: MotionSpec = spec(theme::MOTION_PALETTE_VEIL_MS, EASE_OUT_QUART);
+pub const TOOLTIP_IN: MotionSpec = spec(theme::MOTION_TOOLTIP_IN_MS, EASE_SNAP);
+/// The approval card settling into place (`promote_in`).
+pub const PROMOTE_IN: MotionSpec = spec(theme::MOTION_PROMOTE_MS, EASE_OUT_CUBIC);
+/// The working line's label roll (`morph`).
+pub const MORPH: MotionSpec = spec(theme::MOTION_MORPH_MS, EASE_MORPH);
 /// The image viewer's zoom, tweened on the scale's logarithm so every
 /// step of it reads as the same zoom.
-pub const IMAGE_ZOOM: MotionSpec = MotionSpec::new(theme::MOTION_IMAGE_ZOOM_MS, EASE_OUT_EXPO);
-pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
+pub const IMAGE_ZOOM: MotionSpec = spec(theme::MOTION_IMAGE_ZOOM_MS, EASE_OUT_EXPO);
+/// A button's hover blend (`hover_listener`).
+pub const HOVER_FADE: MotionSpec = spec(theme::MOTION_HOVER_FADE_MS, EASE_OUT_QUART);
+/// A row's hover: at once (`hover_snap`).
+pub const HOVER_SNAP: MotionSpec = spec(0, EASE_OUT_QUART);
+/// A button's press and release (`pressable`).
+pub const PRESS_IN: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_OUT_QUART);
+pub const PRESS_OUT: MotionSpec = spec(theme::MOTION_DUR_SLOW_MS, EASE_OVERSHOOT);
+/// A message's actions under the pointer: in after a beat, out at once.
+pub const ACTIONS_IN: MotionSpec =
+    spec(theme::MOTION_DUR_SNAP_MS, EASE_SNAP).after(theme::MOTION_ACTIONS_DELAY_MS);
+pub const ACTIONS_OUT: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_SNAP);
+/// A disclosure chevron's quarter turn.
+pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
+/// A nav fold opening and shutting (`fold_body`).
+pub const FOLD: MotionSpec = spec(theme::MOTION_FOLD_MS, EASE_OUT);
+/// Jump to latest showing and going.
+pub const JUMP_FADE: MotionSpec = spec(theme::MOTION_JUMP_FADE_MS, EASE_STANDARD);
+/// The usage ring's arc and ink moving to a new reading.
+pub const USAGE_ARC: MotionSpec = spec(theme::MOTION_USAGE_ARC_MS, EASE_OUT_QUART);
+pub const USAGE_INK: MotionSpec = spec(theme::MOTION_USAGE_INK_MS, EASE_OUT_QUART);
+/// A switch's knob.
+pub const SWITCH: MotionSpec = spec(theme::MOTION_SWITCH_MS, EASE_OVERSHOOT);
+/// A scrollbar thumb fading out and widening.
+pub const SCROLLBAR_FADE: MotionSpec = spec(theme::MOTION_SCROLLBAR_FADE_MS, EASE_STANDARD);
 /// A board slot sliding in beside its owner, and out again a little
 /// quicker (a [`Reveal`]): the Review beside its Pane.
-pub const SLOT_OPEN: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_OPEN_MS, EASE_SLIDE);
-pub const SLOT_CLOSE: MotionSpec = MotionSpec::new(theme::MOTION_SLOT_CLOSE_MS, EASE_SLIDE);
-// An exit is quicker than its entrance (the rules in `theme.rs`).
+pub const SLOT_OPEN: MotionSpec = spec(theme::MOTION_SLOT_OPEN_MS, EASE_SNAP);
+pub const SLOT_CLOSE: MotionSpec = spec(theme::MOTION_SLOT_CLOSE_MS, EASE_SNAP);
+// A slot's exit is quicker than its entrance.
 const _: () = assert!(theme::MOTION_SLOT_CLOSE_MS < theme::MOTION_SLOT_OPEN_MS);
 
-/// A toast rising in over the bottom bar, and fading away when it goes on
-/// its own: the toast tokens, on the menus' curve.
-pub const TOAST_IN: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_IN_MS, EASE);
-pub const TOAST_OUT: MotionSpec = MotionSpec::new(theme::MOTION_TOAST_OUT_MS, EASE);
+/// A toast coming in under the window's head, and going when it goes on
+/// its own: the toast tokens, on the quart.
+pub const TOAST_IN: MotionSpec = spec(theme::MOTION_TOAST_IN_MS, EASE_OUT_QUART);
+pub const TOAST_OUT: MotionSpec = spec(theme::MOTION_TOAST_OUT_MS, EASE_OUT_QUART);
 
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
     from + (to - from) * t
+}
+
+/// Where a scale is about, as fractions of the element's box (gpui's
+/// `scale_origin`, Ferrite's patch).
+pub type ScaleFrom = (f32, f32);
+pub const FROM_CENTRE: ScaleFrom = (0.5, 0.5);
+pub const FROM_TOP: ScaleFrom = (0.5, 0.0);
+pub const FROM_TOP_LEFT: ScaleFrom = (0.0, 0.0);
+pub const FROM_RIGHT: ScaleFrom = (1.0, 0.5);
+
+/// `el` painted at `scale` about `from`; nothing at 1.
+fn scaled<E: Styled>(el: E, scale: f32, from: ScaleFrom) -> E {
+    if scale == 1.0 {
+        return el;
+    }
+    el.scale(scale).scale_origin(from.0, from.1)
 }
 
 // ---------------------------------------------------------------------------
@@ -260,13 +354,14 @@ pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
 // ---------------------------------------------------------------------------
 //
 // A rise or drop is a relative `top` inset: taffy applies relative insets
-// after layout, so, like a CSS transform, siblings never move. The entrances
-// play once when their element id first mounts, so a caller mounts one only
-// for a change the operator watched. A surface the operator dismisses (a
-// menu, a sheet, the palette) has no exit: it is gone at once, because an
-// exit costs a wait on every dismissal, its hit area would outlive it, and
-// the closed state says it all. A surface that leaves on its own (a toast)
-// fades out instead, drawn as a face that answers no pointer.
+// after layout, so, like a CSS transform, siblings never move. A scale is
+// painted only (Ferrite's gpui patch). The entrances play once when their
+// element id first mounts, so a caller mounts one only for a change the
+// operator watched. A menu or a popover has no exit: it is gone at once, as
+// Claude's are. A sheet, the palette and a toast leave as a face that
+// answers no pointer ([`float_out`], [`dialog_out`], [`toast_out`]), drawn
+// from the instant they went until their exit has run; the caller stops
+// drawing it then ([`Exits`]).
 //
 // Each plays on the executor's clock ([`Played`]), not gpui's wall-clock
 // `with_animation`, so a test steps it like every other clock here, and it
@@ -275,9 +370,9 @@ pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
 //
 // gpui paints a surface's shadow under it and has no group compositing, so
 // a surface still fading in would show its own shadow through it as a dark
-// slab. The float entrances ramp the shadow's ink by the square of the
-// fade, which the element's own opacity takes to the cube (the kit's
-// toasts do the same).
+// slab. The float faces ramp the shadow's ink by the square of the fade,
+// which the element's own opacity takes to the cube (the kit's toasts do
+// the same).
 
 /// Which way a floating surface opens from its opener: it starts
 /// `MOTION_MENU_SHIFT` back toward the opener and settles away from it.
@@ -312,16 +407,17 @@ fn float_face<E: Styled>(el: E, opacity: f32) -> E {
 /// A surface at `opacity` casting `shadow`, the shadow's ink ramped by the
 /// square of the fade.
 fn faded<E: Styled>(el: E, opacity: f32, shadow: Vec<gpui::BoxShadow>) -> E {
+    let opacity = opacity.clamp(0.0, 1.0);
     el.opacity(opacity)
         .shadow(crate::components::shadow_faded(shadow, opacity * opacity))
 }
 
 /// A floating surface `t` of the way through growing to its size from
-/// `MOTION_FLOAT_FROM_SCALE`, about its centre. The scale is painted only,
+/// `MOTION_FLOAT_FROM_SCALE`, about `from`. The scale is painted only,
 /// so a float that places itself by its own box (`Opens::InPlace`) holds
 /// still, and it answers the pointer where it rests.
-fn grown<E: Styled>(el: E, t: f32) -> E {
-    el.scale(lerp(theme::MOTION_FLOAT_FROM_SCALE, 1.0, t))
+fn grown<E: Styled>(el: E, t: f32, from: ScaleFrom) -> E {
+    scaled(el, lerp(theme::MOTION_FLOAT_FROM_SCALE, 1.0, t), from)
 }
 
 /// `menu-in` for a floating surface in flow (inside `anchored` or a
@@ -340,6 +436,7 @@ where
         grown(
             float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)),
             t,
+            FROM_CENTRE,
         )
         .relative()
         .top(px(opens.shift(t)))
@@ -348,33 +445,79 @@ where
 }
 
 /// `dialog-in` for a sheet: opacity 0 → 1, growing from
-/// `MOTION_FLOAT_FROM_SCALE` and rising `MOTION_DIALOG_RISE`.
+/// `MOTION_FLOAT_FROM_SCALE` about its centre, over `DIALOG_IN`.
 pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
     entrance(id, DIALOG_IN, element, |el, t| {
-        grown(float_face(el, t), t)
+        grown(float_face(el, t), t, FROM_CENTRE)
             .relative()
             .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })
 }
 
 /// `dialog_in` for a sheet that casts its own `shadow` rather than the
-/// float's (the palette's dialog, `components::dialog_shadow`).
+/// float's and grows from `from` (the palette's dialog, from its top,
+/// `components::dialog_shadow`).
 pub fn dialog_in_casting<E>(
     id: impl Into<ElementId>,
     element: E,
     shadow: fn() -> Vec<gpui::BoxShadow>,
+    from: ScaleFrom,
 ) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
     entrance(id, DIALOG_IN, element, move |el, t| {
-        grown(faded(el, t, shadow()), t)
+        grown(faded(el, t, shadow()), t, from)
             .relative()
             .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })
+}
+
+/// `dialog-out` for a sheet that went at `left`: it fades to 0 and shrinks
+/// to `MOTION_FLOAT_FROM_SCALE` about its centre over `DIALOG_OUT`, its
+/// float shadow ramped with it, under a cover that takes every press — a
+/// face no pointer finds. The caller stops drawing it once `DIALOG_OUT`
+/// has passed ([`Exits`]).
+pub fn dialog_out<E>(left: Instant, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    unreachable_face(Played {
+        origin: Origin::At(left),
+        spec: DIALOG_OUT,
+        element,
+        face: |el: E, t: f32| grown(float_face(el, 1.0 - t), 1.0 - t, FROM_CENTRE),
+    })
+}
+
+/// A whole floating view that went at `left` (the palette, the shortcuts
+/// sheet): it fades to 0 and shrinks to `MOTION_FLOAT_FROM_SCALE` about
+/// `from` over `spec`, under a cover that takes every press. Its own
+/// shadow fades with it.
+pub fn float_out(
+    left: Instant,
+    spec: MotionSpec,
+    element: impl IntoElement,
+    from: ScaleFrom,
+) -> impl IntoElement {
+    unreachable_face(Played {
+        origin: Origin::At(left),
+        spec,
+        element: div().child(element),
+        face: move |el: gpui::Div, t: f32| grown(el.opacity(1.0 - t), 1.0 - t, from),
+    })
+}
+
+/// `face` under a cover laid over it last, so the topmost hitbox there is
+/// the cover's: a press on a leaving face lands nowhere.
+fn unreachable_face(face: impl IntoElement) -> impl IntoElement {
+    div()
+        .relative()
+        .child(face)
+        .child(div().absolute().inset_0().occlude())
 }
 
 /// `row-in` for content arriving in a place already open (a preview in the
@@ -390,24 +533,53 @@ where
     })
 }
 
-/// `toast-in` for a toast hung under the window's head: fades up from
-/// `MOTION_MENU_FROM_OPACITY` while dropping `MOTION_TOAST_DROP` into
-/// place, over `TOAST_IN`.
+/// `toast-in` for a toast hung under the window's head: it fades up from
+/// 0 while sliding its own height down out from under the edge it hangs
+/// on, over `TOAST_IN` (Claude's toasts rise their own height from the
+/// foot; Ferrite's hang at the head, so they drop). While it moves it is
+/// clipped to its resting box, so it never draws over the head.
 pub fn toast_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    entrance(id, TOAST_IN, element, |el, t| {
-        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
-            .relative()
-            .top(px(-theme::MOTION_TOAST_DROP * (1.0 - t)))
-    })
+    ToastIn {
+        id: id.into(),
+        element,
+    }
 }
 
-/// `toast-out` for a toast that went on its own at `left`: fades away over
-/// `TOAST_OUT`, lifting half its drop — shorter and softer than it came.
-/// The caller draws it as a face that answers no pointer, and stops once
-/// [`TOAST_OUT`] has passed.
+struct ToastIn<E> {
+    id: ElementId,
+    element: E,
+}
+
+impl<E: Styled + IntoElement + 'static> IntoElement for ToastIn<E> {
+    type Element = gpui::ViewElement<Self>;
+
+    #[track_caller]
+    fn into_element(self) -> Self::Element {
+        gpui::ViewElement::new(self)
+    }
+}
+
+impl<E: Styled + IntoElement + 'static> gpui::RenderOnce for ToastIn<E> {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = play(Origin::Mount(self.id), TOAST_IN, window, cx);
+        // A relative inset resolves against the wrapper, which is the
+        // toast's own height: -100% is one toast up.
+        let toast = float_face(self.element, t)
+            .relative()
+            .top(gpui::relative(-(1.0 - t)));
+        div()
+            .when(t < 1.0, |clip| clip.overflow_hidden())
+            .child(toast)
+    }
+}
+
+/// `toast-out` for a toast that went on its own at `left`: it fades away
+/// shrinking to `MOTION_TOAST_OUT_SCALE` over `TOAST_OUT`. The caller draws
+/// it as a face that answers no pointer, and stops once [`TOAST_OUT`] has
+/// passed.
 pub fn toast_out<E>(left: Instant, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
@@ -417,9 +589,11 @@ where
         spec: TOAST_OUT,
         element,
         face: |el: E, t: f32| {
-            float_face(el, 1.0 - t)
-                .relative()
-                .top(px(-theme::MOTION_TOAST_DROP / 2.0 * t))
+            scaled(
+                float_face(el, 1.0 - t),
+                lerp(1.0, theme::MOTION_TOAST_OUT_SCALE, t),
+                FROM_CENTRE,
+            )
         },
     }
 }
@@ -438,19 +612,73 @@ where
     entrance(id, spec, element, move |el, t| el.opacity(lerp(0.0, to, t)))
 }
 
-/// A sheet's veil darkening in over `FADE_QUICK`: only its ground fades, so
-/// the sheet on it keeps its own entrance.
-pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
+/// `code-approval-promote` for the approval card: from
+/// `MOTION_PROMOTE_FROM_OPACITY`, `MOTION_PROMOTE_DROP` above its place
+/// and `MOTION_PROMOTE_FROM_SCALE` about its top, it settles over
+/// `PROMOTE_IN`.
+pub fn promote_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    entrance(id, FADE_QUICK, element, |el, t| {
-        el.bg(mix(
-            gpui::transparent_black(),
-            gpui::rgba(theme::VEIL).into(),
-            t,
-        ))
+    entrance(id, PROMOTE_IN, element, |el, t| {
+        scaled(
+            el.opacity(lerp(theme::MOTION_PROMOTE_FROM_OPACITY, 1.0, t)),
+            lerp(theme::MOTION_PROMOTE_FROM_SCALE, 1.0, t),
+            FROM_TOP,
+        )
+        .relative()
+        .top(px(-theme::MOTION_PROMOTE_DROP * (1.0 - t)))
     })
+}
+
+/// `code-user-bubble-enter`: the sent bubble `t` along `BUBBLE_IN` (an
+/// overshoot, so `t` passes 1 before it settles) — opacity up to 1,
+/// scale from `MOTION_BUBBLE_FROM_SCALE` about its right edge, rising
+/// `MOTION_BUBBLE_RISE`. The caller holds the clock (the transcript's
+/// arrivals) and draws its frames.
+pub fn bubble_face<E: Styled>(el: E, t: f32) -> E {
+    scaled(
+        el.opacity(t.clamp(0.0, 1.0)),
+        lerp(theme::MOTION_BUBBLE_FROM_SCALE, 1.0, t),
+        FROM_RIGHT,
+    )
+    .relative()
+    .top(px(theme::MOTION_BUBBLE_RISE * (1.0 - t)))
+}
+
+/// A tooltip fading and growing in from `MOTION_FLOAT_FROM_SCALE` about
+/// its top left (where the pointer stands) over `TOOLTIP_IN`.
+pub fn tooltip_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, TOOLTIP_IN, element, |el, t| {
+        grown(el.opacity(t), t, FROM_TOP_LEFT)
+    })
+}
+
+/// A sheet's veil darkening in over `spec`: only its ground fades, so the
+/// sheet on it keeps its own entrance.
+pub fn veil_in<E>(id: impl Into<ElementId>, spec: MotionSpec, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, spec, element, |el, t| el.bg(veil_at(t)))
+}
+
+/// The veil of a sheet that went at `left`, lifting over `spec`: a ground
+/// alone, answering no pointer, laid where the veil stood.
+pub fn veil_out(left: Instant, spec: MotionSpec, element: gpui::Div) -> impl IntoElement {
+    Played {
+        origin: Origin::At(left),
+        spec,
+        element,
+        face: |el: gpui::Div, t: f32| el.bg(veil_at(1.0 - t)),
+    }
+}
+
+fn veil_at(t: f32) -> Hsla {
+    mix(gpui::transparent_black(), gpui::rgba(theme::VEIL).into(), t)
 }
 
 fn entrance<E, F>(id: impl Into<ElementId>, spec: MotionSpec, element: E, face: F) -> Played<E, F>
@@ -566,7 +794,7 @@ pub fn frames_through(view: EntityId) -> EntityId {
 
 /// Ask for the next frame for an animation the current view is drawing,
 /// through the view that redraws it most cheaply.
-pub fn request_frame(window: &mut Window) {
+pub fn request_frame(window: &Window) {
     let view = frames_through(window.current_view());
     window.on_next_frame(move |_, cx| cx.notify(view));
 }
@@ -670,6 +898,16 @@ impl Reveal {
         }
     }
 
+    /// A slot shut, at rest.
+    pub fn closed(enter: MotionSpec, exit: MotionSpec, now: Instant) -> Self {
+        Self {
+            open: false,
+            tween: Tween::new(0.0, 0.0, exit, now),
+            enter,
+            exit,
+        }
+    }
+
     /// Open or close it, from wherever it is on screen; no change is a
     /// no-op.
     pub fn set(&mut self, open: bool, now: Instant, reduced: bool) {
@@ -726,6 +964,20 @@ impl Reveal {
 struct SettleState {
     target: f32,
     tween: Option<Tween>,
+}
+
+/// The value `id` draws this frame on its way to `target` along `spec`: a
+/// change of `target` eases from wherever it is on screen, and the first
+/// draw lands on `target` (a reading first shown arrives in place). It
+/// asks for frames while it moves. The usage ring's arc and ink ride it.
+pub fn settle(
+    id: impl Into<ElementId>,
+    target: f32,
+    spec: MotionSpec,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    settle_with(id, target, spec, false, window, cx)
 }
 
 /// `settle`, where `reveal_only` snaps any move toward 0 (a fold that
@@ -827,6 +1079,203 @@ where
     #[track_caller]
     fn into_element(self) -> Self::Element {
         gpui::ViewElement::new(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Folds, label rolls and exits
+// ---------------------------------------------------------------------------
+
+/// A fold's body `shown` of the way open (0 shut, 1 open at rest): its
+/// height clipped to that share of what it measures, at that opacity — a
+/// CSS `grid-template-rows: 0fr → 1fr` with its fade. The body keeps its
+/// own height inside the clip, so nothing in it re-wraps; it is measured
+/// on every draw, so a fold that starts to shut knows how far it has to
+/// go. The owner holds the clock (a [`Reveal`] per fold) and draws the body
+/// until it is shut.
+pub fn fold_body(id: impl Into<ElementId>, shown: f32, body: impl IntoElement) -> impl IntoElement {
+    FoldBody {
+        id: id.into(),
+        shown,
+        body: body.into_any_element(),
+    }
+}
+
+#[derive(IntoElement)]
+struct FoldBody {
+    id: ElementId,
+    shown: f32,
+    body: AnyElement,
+}
+
+impl gpui::RenderOnce for FoldBody {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+        let natural = window.with_global_id(self.id, |id, window| {
+            window.with_element_state(id, |cell: Option<Rc<Cell<gpui::Pixels>>>, _| {
+                let cell = cell.unwrap_or_default();
+                (cell.clone(), cell)
+            })
+        });
+        let measured = natural.clone();
+        let shown = self.shown.clamp(0.0, 1.0);
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .when(shown < 1.0, |clip| {
+                clip.h(natural.get() * shown)
+                    .overflow_hidden()
+                    .opacity(shown)
+            })
+            .on_children_prepainted(move |bounds, _, _| {
+                if let Some(body) = bounds.first() {
+                    measured.set(body.size.height);
+                }
+            })
+            .child(div().flex().flex_col().flex_shrink_0().child(self.body))
+    }
+}
+
+/// A label that rolls when its words change (Claude's `cds-morph`): the
+/// old face leaves to opacity 0 and `MOTION_MORPH_SHIFT` up while the new
+/// one comes in from as far below, each over `MORPH`. `build` draws a face
+/// for its words. Its first draw lands in place; reduced motion swaps the
+/// words at once. Frames are asked for only while a roll plays.
+pub fn morph(
+    id: impl Into<ElementId>,
+    face: SharedString,
+    build: impl Fn(SharedString) -> AnyElement + 'static,
+) -> impl IntoElement {
+    Morph {
+        id: id.into(),
+        face,
+        build: Box::new(build),
+    }
+}
+
+#[derive(IntoElement)]
+struct Morph {
+    id: ElementId,
+    face: SharedString,
+    build: Box<dyn Fn(SharedString) -> AnyElement>,
+}
+
+/// What a [`Morph`] drew last, and the face leaving since when.
+#[derive(Clone)]
+struct MorphState {
+    face: SharedString,
+    leaving: Option<(SharedString, Instant)>,
+}
+
+impl gpui::RenderOnce for Morph {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let now = cx.background_executor().now();
+        let reduced = reduced_motion(cx);
+        let face = self.face.clone();
+        let leaving = window.with_global_id(self.id, |id, window| {
+            window.with_element_state(id, |state: Option<MorphState>, _| {
+                let mut state = state.unwrap_or(MorphState {
+                    face: face.clone(),
+                    leaving: None,
+                });
+                if state.face != face {
+                    let old = std::mem::replace(&mut state.face, face.clone());
+                    state.leaving = (!reduced).then_some((old, now));
+                }
+                state.leaving = state
+                    .leaving
+                    .take()
+                    .filter(|(_, at)| now.saturating_duration_since(*at) < MORPH.duration());
+                (state.leaving.clone(), state)
+            })
+        });
+        let Some((old, at)) = leaving else {
+            return div().flex().min_w_0().child((self.build)(self.face));
+        };
+        request_frame(window);
+        let t = MORPH.progress_at(now.saturating_duration_since(at));
+        let shift = theme::MOTION_MORPH_SHIFT;
+        div()
+            .relative()
+            .flex()
+            .min_w_0()
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .min_w_0()
+                    .opacity(t)
+                    .top(px(shift * (1.0 - t)))
+                    .child((self.build)(self.face)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(-shift * t))
+                    .flex()
+                    .min_w_0()
+                    .opacity(1.0 - t)
+                    .child((self.build)(old)),
+            )
+    }
+}
+
+/// What a surface that leaves with an exit (a toast, a sheet, the palette)
+/// showed, and the one leaving since when: each frame the owner says what
+/// stands now, and gets back what is still on its way out.
+pub struct Exits<T> {
+    shown: Option<T>,
+    leaving: Option<(T, Instant)>,
+}
+
+impl<T> Default for Exits<T> {
+    fn default() -> Self {
+        Self {
+            shown: None,
+            leaving: None,
+        }
+    }
+}
+
+impl<T: Clone> Exits<T> {
+    /// This frame's `shown`, at `now`: one that went since the last frame
+    /// (gone, or replaced by one not `same`) leaves now, and is returned
+    /// with when it went while its `exit` runs. Under reduced motion
+    /// nothing leaves.
+    pub fn stage(
+        &mut self,
+        shown: Option<&T>,
+        same: impl Fn(&T, &T) -> bool,
+        exit: MotionSpec,
+        now: Instant,
+        reduced: bool,
+    ) -> Option<(T, Instant)> {
+        let went = match (self.shown.take(), shown) {
+            (Some(was), Some(next)) if same(&was, next) => None,
+            (was, _) => was,
+        };
+        if let Some(went) = went.filter(|_| !reduced) {
+            self.leaving = Some((went, now));
+        }
+        self.shown = shown.cloned();
+        let leaving =
+            |left: Instant| !reduced && now.saturating_duration_since(left) < exit.duration();
+        if !self
+            .leaving
+            .as_ref()
+            .is_some_and(|(_, left)| leaving(*left))
+        {
+            self.leaving = None;
+        }
+        self.leaving.clone()
+    }
+
+    /// What stood goes at once, with no exit (the operator answered it).
+    pub fn dismiss(&mut self) {
+        self.shown = None;
+        self.leaving = None;
     }
 }
 
@@ -1165,7 +1614,9 @@ pub fn pulse_parked(cx: &App) -> bool {
 // ---------------------------------------------------------------------------
 //
 // gpui's `.hover()` style applies the frame the pointer enters. The blend
-// fades it over `HOVER_FADE` instead: a per-key progress, advanced from wall
+// fades it over its spec instead (a button's `HOVER_FADE`; a row's
+// `HOVER_SNAP` lands at once, but rides the same store so it notifies only
+// the view that painted it): a per-key progress, advanced from wall
 // time wherever it is read, flipped by an `on_hover` listener, re-anchored at
 // its current value when the pointer reverses mid-flight. The pressed face
 // stays a gpui `.active()` refinement, which overrides the blended ground
@@ -1226,7 +1677,7 @@ pub struct HoverFades {
 }
 
 impl HoverFades {
-    /// `set_with` on the one 100ms blend, from no view.
+    /// `set_with` on a button's blend, from no view.
     #[cfg(test)]
     pub fn set_at(&mut self, key: &SharedString, hovered: bool, reduced: bool, now: Instant) {
         self.set_with(key, hovered, reduced, now, HOVER_FADE, None);
@@ -1342,17 +1793,36 @@ pub fn hover_t(key: &str) -> f32 {
 }
 
 /// An `on_hover` listener driving the blend for `key`: pair it with a
-/// [`hover_blend`] read of the same key on the same element.
-/// Every hover blends over the one `HOVER_FADE`.
+/// [`hover_blend`] read of the same key on the same element. A button's
+/// blend: `HOVER_FADE`, both ways.
 pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    hover_listener_with(key, HOVER_FADE, HOVER_FADE)
+}
+
+/// [`hover_listener`] for a row (a nav row, a menu row, the sidebar's own
+/// buttons): the hover lands on the frame the pointer arrives
+/// (`HOVER_SNAP`), as Claude's rows do. It still notifies only the view
+/// that painted it.
+pub fn hover_snap(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    hover_listener_with(key, HOVER_SNAP, HOVER_SNAP)
+}
+
+/// [`hover_listener`] blending in over `enter` and out over `leave` (a
+/// message's actions: in after a beat, out at once).
+pub fn hover_listener_with(
+    key: SharedString,
+    enter: MotionSpec,
+    leave: MotionSpec,
+) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     move |hovered, window, cx| {
         let reduced = reduced_motion(cx);
         let now = cx.background_executor().now();
         let view = window.hover_listener_view();
+        let spec = if *hovered { enter } else { leave };
         HOVER_FADES.with(|fades| {
             fades
                 .borrow_mut()
-                .set_with(&key, *hovered, reduced, now, HOVER_FADE, view)
+                .set_with(&key, *hovered, reduced, now, spec, view)
         });
         // Only the view that painted the blend draws it: notifying that
         // view (through the one that redraws it most cheaply) redraws it
@@ -1364,6 +1834,68 @@ pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App
             Some(view) => cx.notify(frames_through(view)),
             None => window.refresh(),
         }
+    }
+}
+
+/// The press blend of the element whose hover blend is `key`.
+fn press_key(key: &str) -> SharedString {
+    format!("press:{key}").into()
+}
+
+/// A button's press (Claude's `.cds-btn-squish`): `element`, whose hover
+/// blend is `key`, squishes to `MOTION_PRESS_SCALE` about its centre over
+/// `PRESS_IN` while the primary button is down on it, and springs back
+/// over `PRESS_OUT` when it comes up, wherever. The scale is painted only,
+/// so the press lands where it rests. Its frames ride the hover blends'
+/// (the view that painted the hover draws them). Reduced motion: no squish.
+pub fn pressable<E: InteractiveElement + Styled>(element: E, key: SharedString) -> E {
+    let pressed = hover_t(&press_key(&key));
+    let mut element = scaled(
+        element,
+        lerp(1.0, theme::MOTION_PRESS_SCALE, pressed),
+        FROM_CENTRE,
+    );
+    let (down, up, away) = (key.clone(), key.clone(), key);
+    let listeners = element.interactivity();
+    listeners.on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+        press(&down, true, window, cx)
+    });
+    listeners.on_mouse_up(gpui::MouseButton::Left, move |_, window, cx| {
+        press(&up, false, window, cx)
+    });
+    listeners.on_mouse_up_out(gpui::MouseButton::Left, move |_, window, cx| {
+        press(&away, false, window, cx)
+    });
+    element
+}
+
+/// The button behind `key` went down or came up: its press blend turns,
+/// drawn by the view that painted its hover. A release of a button never
+/// pressed (every button hears a release anywhere) does nothing.
+fn press(key: &SharedString, down: bool, window: &mut Window, cx: &mut App) {
+    if reduced_motion(cx) {
+        return;
+    }
+    let now = cx.background_executor().now();
+    let turned = HOVER_FADES.with(|fades| {
+        let mut fades = fades.borrow_mut();
+        let pressed = press_key(key);
+        let was = fades
+            .entries
+            .get(&pressed)
+            .is_some_and(|entry| entry.target == 1.0);
+        if was == down {
+            return None;
+        }
+        let view = fades.entries.get(key).and_then(|entry| entry.view);
+        let spec = if down { PRESS_IN } else { PRESS_OUT };
+        fades.set_with(&pressed, down, false, now, spec, view);
+        Some(view)
+    });
+    match turned {
+        Some(Some(view)) => cx.notify(frames_through(view)),
+        Some(None) => window.refresh(),
+        None => {}
     }
 }
 
@@ -1605,24 +2137,131 @@ mod tests {
         }
     }
 
+    /// Claude Desktop's numbers, read from its source
+    /// (docs/research/craft/motion-claude-source.md).
     #[test]
-    fn the_catalog_keeps_zerons_numbers() {
-        assert_eq!(ROW_IN.duration_ms, 180);
-        assert_eq!(ROW_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
-        assert_eq!(STREAM_FADE.duration_ms, 300);
-        assert_eq!(STREAM_FADE.curve, CubicBezier::new(0.0, 0.0, 0.58, 1.0));
-        assert_eq!(BUBBLE_FADE.duration_ms, 250);
-        assert_eq!(BUBBLE_FADE.curve, CubicBezier::new(0.0, 0.0, 0.58, 1.0));
-        assert_eq!(RESIZE.duration_ms, 200);
-        assert_eq!(RESIZE.curve, CubicBezier::new(0.25, 0.1, 0.25, 1.0));
-        assert_eq!(FADE_QUICK.duration_ms, 150);
+    fn the_catalog_keeps_claudes_numbers() {
+        let quart = CubicBezier::new(0.165, 0.84, 0.44, 1.0);
+        let snap = CubicBezier::new(0.32, 0.72, 0.0, 1.0);
+        let overshoot = CubicBezier::new(0.34, 1.3, 0.64, 1.0);
+        let cases: [(&str, MotionSpec, u64, CubicBezier); 20] = [
+            ("stream", STREAM_FADE, 400, LINEAR),
+            ("bubble", BUBBLE_IN, 450, overshoot),
+            ("dialog in", DIALOG_IN, 200, quart),
+            ("dialog out", DIALOG_OUT, 200, quart),
+            ("veil", VEIL, 200, quart),
+            ("palette out", PALETTE_OUT, 120, quart),
+            ("palette veil", PALETTE_VEIL, 50, quart),
+            ("tooltip", TOOLTIP_IN, 120, snap),
+            (
+                "promote",
+                PROMOTE_IN,
+                220,
+                CubicBezier::new(0.215, 0.61, 0.355, 1.0),
+            ),
+            ("morph", MORPH, 180, CubicBezier::new(0.2, 0.0, 0.0, 1.0)),
+            ("hover", HOVER_FADE, 60, quart),
+            ("press", PRESS_IN, 60, quart),
+            ("release", PRESS_OUT, 450, overshoot),
+            ("actions out", ACTIONS_OUT, 60, snap),
+            ("chevron", CHEVRON, 60, EASE_STANDARD),
+            ("fold", FOLD, 150, CubicBezier::new(0.0, 0.0, 0.58, 1.0)),
+            ("jump", JUMP_FADE, 200, EASE_STANDARD),
+            ("usage arc", USAGE_ARC, 300, quart),
+            ("switch", SWITCH, 120, overshoot),
+            ("toast", TOAST_OUT, 200, quart),
+        ];
+        for (name, spec, ms, curve) in cases {
+            assert_eq!((spec.duration_ms, spec.curve), (ms, curve), "{name}");
+        }
+        assert_eq!((ACTIONS_IN.delay_ms, ACTIONS_IN.duration_ms), (100, 120));
+        assert_eq!(STREAM_LAND, Duration::from_millis(120));
+        assert_eq!(USAGE_INK.duration_ms, 200);
+        assert_eq!(TOAST_IN.duration_ms, 200);
+        assert_eq!(HOVER_SNAP.duration_ms, 0, "rows snap");
         assert_eq!(MENU_IN.duration_ms, 0, "menus snap open");
-        assert_eq!(DIALOG_IN.duration_ms, 180);
-        assert_eq!(theme::MOTION_TOAST_IN_MS, 180);
-        assert_eq!(theme::MOTION_TOAST_OUT_MS, 100);
+        assert_eq!(theme::MOTION_PRESS_SCALE, 0.975);
+        assert_eq!(theme::MOTION_TOAST_OUT_SCALE, 0.85);
+        assert_eq!(theme::MOTION_BUBBLE_FROM_SCALE, 0.92);
         assert_eq!(theme::MOTION_SCROLLBAR_LINGER_MS, 1_400);
-        assert_eq!(HOVER_FADE.duration_ms, 100);
-        assert_eq!(HOVER_FADE.curve, CubicBezier::new(0.4, 0.0, 0.2, 1.0));
+        assert_eq!(
+            SCROLLBAR_FADE.duration_ms, 100,
+            "the thumb keeps its own fade"
+        );
+        // Ferrite's own, with no Claude counterpart.
+        assert_eq!(ROW_IN.duration_ms, 180);
+        assert_eq!(FADE_QUICK.duration_ms, 150);
+    }
+
+    /// The overshoot curves pass their end and come back (a spring's
+    /// settle): `eval` lets them, and still lands on 1.
+    #[test]
+    fn an_overshoot_passes_its_end_and_settles() {
+        let peak = (0..=100)
+            .map(|i| EASE_OVERSHOOT.eval(i as f32 / 100.0))
+            .fold(0.0f32, f32::max);
+        assert!(peak > 1.0 && peak < 1.2, "peak {peak}");
+        assert_eq!(EASE_OVERSHOOT.eval(1.0), 1.0);
+        assert_eq!(EASE_OVERSHOOT.eval(0.0), 0.0);
+    }
+
+    /// A delayed spec holds at its start, then moves over its own time;
+    /// a 0ms spec lands the instant it starts.
+    #[test]
+    fn a_delay_holds_then_moves() {
+        let ms = Duration::from_millis;
+        assert_eq!(ACTIONS_IN.duration(), ms(220));
+        assert_eq!(ACTIONS_IN.progress_at(ms(0)), 0.0);
+        assert_eq!(ACTIONS_IN.progress_at(ms(100)), 0.0, "still waiting");
+        let mid = ACTIONS_IN.progress_at(ms(160));
+        assert!(mid > 0.0 && mid < 1.0, "moving {mid}");
+        assert_eq!(ACTIONS_IN.progress_at(ms(220)), 1.0);
+        assert_eq!(HOVER_SNAP.progress_at(ms(0)), 1.0, "a snap lands at once");
+    }
+
+    /// What stood leaves as it goes, for its exit and no longer; the same
+    /// one standing on never leaves; a dismissal and reduced motion leave
+    /// nothing behind.
+    #[test]
+    fn an_exit_plays_for_its_spec_and_no_longer() {
+        let t0 = Instant::now();
+        let ms = |m: u64| t0 + Duration::from_millis(m);
+        let same = |a: &u32, b: &u32| a == b;
+        let mut exits = Exits::default();
+        assert!(exits
+            .stage(Some(&1), same, PALETTE_OUT, t0, false)
+            .is_none());
+        assert!(exits
+            .stage(Some(&1), same, PALETTE_OUT, ms(50), false)
+            .is_none());
+        assert_eq!(
+            exits.stage(None, same, PALETTE_OUT, ms(100), false),
+            Some((1, ms(100)))
+        );
+        assert!(exits
+            .stage(None, same, PALETTE_OUT, ms(219), false)
+            .is_some());
+        assert!(
+            exits
+                .stage(None, same, PALETTE_OUT, ms(220), false)
+                .is_none(),
+            "done"
+        );
+        // Replaced: the old one leaves under the new.
+        exits.stage(Some(&2), same, PALETTE_OUT, ms(300), false);
+        assert_eq!(
+            exits.stage(Some(&3), same, PALETTE_OUT, ms(310), false),
+            Some((2, ms(310)))
+        );
+        exits.dismiss();
+        assert!(exits
+            .stage(None, same, PALETTE_OUT, ms(320), false)
+            .is_none());
+        let mut reduced = Exits::default();
+        reduced.stage(Some(&1), same, PALETTE_OUT, t0, true);
+        assert!(reduced
+            .stage(None, same, PALETTE_OUT, ms(1), true)
+            .is_none());
     }
 
     #[test]
@@ -1713,27 +2352,30 @@ mod tests {
 
         fades.set_at(&key, true, false, t0);
         assert_eq!(fades.value_at("row", t0), 0.0);
-        let rising = fades.value_at("row", ms(75));
+        let rising = fades.value_at("row", ms(20));
         assert!(rising > 0.0 && rising < 1.0, "mid-flight {rising}");
-        assert_eq!(fades.value_at("row", ms(150)), 1.0);
+        assert_eq!(fades.value_at("row", ms(60)), 1.0, "Claude's 60ms");
 
         fades.set_at(&key, true, false, t0);
-        let at_flip = fades.value_at("row", ms(75));
-        fades.set_at(&key, false, false, ms(75));
-        close(fades.value_at("row", ms(75)), at_flip, 1e-4, "continuity");
-        assert!(fades.value_at("row", ms(140)) < at_flip, "falls back");
-        assert_eq!(fades.value_at("row", ms(225)), 0.0, "lands at rest");
+        let at_flip = fades.value_at("row", ms(20));
+        fades.set_at(&key, false, false, ms(20));
+        close(fades.value_at("row", ms(20)), at_flip, 1e-4, "continuity");
+        assert!(fades.value_at("row", ms(40)) < at_flip, "falls back");
+        assert_eq!(fades.value_at("row", ms(80)), 0.0, "lands at rest");
     }
 
-    /// F-12: the sidebar ride is CSS `ease` — at half its time it is 80% of
-    /// the way, not ease-out's 68%.
+    /// A row's hover lands the frame the pointer arrives, and leaves as
+    /// quickly, asking for no frame of its own.
     #[test]
-    fn the_sidebar_ride_is_css_ease() {
-        close(RESIZE.progress(0.5), 0.80, 0.01, "ease at half time");
+    fn a_snapped_hover_lands_at_once() {
+        let mut fades = HoverFades::default();
+        let key = SharedString::from("row");
         let t0 = Instant::now();
-        let ride = Tween::new(280.8, 0.0, RESIZE, t0);
-        let half = t0 + Duration::from_millis(100);
-        close(ride.value(half, false), 280.8 * 0.1976, 0.5, "mid-ride");
+        fades.set_with(&key, true, false, t0, HOVER_SNAP, None);
+        assert_eq!(fades.value_at("row", t0), 1.0);
+        assert!(!fades.tick_at(t0), "no frame");
+        fades.set_with(&key, false, false, t0, HOVER_SNAP, None);
+        assert_eq!(fades.value_at("row", t0), 0.0);
     }
 
     #[test]
@@ -2064,7 +2706,7 @@ mod tests {
         let left = cx.executor().now() - Duration::from_millis(50);
         let (_view, drawn, cx) = entering(cx, Some(left));
         let at = drawn.get();
-        assert!(at > 0.0 && at < 1.0, "50ms into its 100ms: {at}");
+        assert!(at > 0.0 && at < 1.0, "50ms into its 200ms: {at}");
         cx.executor()
             .advance_clock(Duration::from_millis(theme::MOTION_TOAST_OUT_MS));
         assert!(next_frame(cx) > 0);
@@ -2107,6 +2749,153 @@ mod tests {
         assert_eq!(drawn.get(), before, "and did not redraw the drawing view");
         draw_frames_through(view.entity_id(), None);
         assert_eq!(frames_through(view.entity_id()), view.entity_id());
+    }
+
+    struct Rolling {
+        face: SharedString,
+        built: std::rc::Rc<std::cell::RefCell<Vec<SharedString>>>,
+    }
+
+    impl Render for Rolling {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let built = self.built.clone();
+            built.borrow_mut().clear();
+            div().child(morph("roll", self.face.clone(), move |face| {
+                built.borrow_mut().push(face.clone());
+                div().child(face).into_any_element()
+            }))
+        }
+    }
+
+    fn rolling(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<Rolling>,
+        std::rc::Rc<std::cell::RefCell<Vec<SharedString>>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let built = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = built.clone();
+        let (view, cx) = cx.add_window_view(move |_, _| Rolling {
+            face: "Reading".into(),
+            built: seen,
+        });
+        cx.run_until_parked();
+        (view, built, cx)
+    }
+
+    fn reword(view: &gpui::Entity<Rolling>, face: &str, cx: &mut gpui::VisualTestContext) {
+        let face = SharedString::from(face.to_owned());
+        view.update(cx, |view, cx| {
+            view.face = face;
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    /// A label lands in place on its first draw; new words roll in over the
+    /// old for `MORPH`, asking for frames only while they do.
+    #[gpui::test]
+    fn a_label_rolls_its_new_words_in_over_the_old(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, built, cx) = rolling(cx);
+        assert_eq!(*built.borrow(), ["Reading"], "first draw: one face");
+        assert_eq!(next_frame(cx), 0, "and no frame");
+        reword(&view, "Writing", cx);
+        assert_eq!(*built.borrow(), ["Writing", "Reading"], "both faces");
+        cx.executor().advance_clock(Duration::from_millis(90));
+        assert!(next_frame(cx) > 0, "mid-roll asks for frames");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_MORPH_MS));
+        next_frame(cx);
+        assert_eq!(*built.borrow(), ["Writing"], "the old face is gone");
+        assert_eq!(next_frame(cx), 0, "at rest: no frame");
+    }
+
+    /// Reduced motion swaps the words at once.
+    #[gpui::test]
+    fn reduced_motion_swaps_a_label_at_once(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (view, built, cx) = rolling(cx);
+        reword(&view, "Writing", cx);
+        assert_eq!(*built.borrow(), ["Writing"]);
+        assert_eq!(next_frame(cx), 0);
+    }
+
+    struct Folding {
+        shown: f32,
+        height: std::rc::Rc<std::cell::Cell<f32>>,
+    }
+
+    impl Render for Folding {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let height = self.height.clone();
+            div()
+                .flex()
+                .flex_col()
+                .on_children_prepainted(move |bounds, _, _| {
+                    height.set(f32::from(bounds[0].size.height));
+                })
+                .child(fold_body("fold", self.shown, div().w(px(10.)).h(px(40.))))
+        }
+    }
+
+    /// A fold's body is clipped to its share of what it measures: whole at
+    /// rest, half at half, nothing shut. It asks for no frame of its own
+    /// (its owner holds the clock).
+    #[gpui::test]
+    fn a_fold_clips_its_body_to_how_far_open_it_is(cx: &mut TestAppContext) {
+        testing::drive();
+        let height = std::rc::Rc::new(std::cell::Cell::new(-1.0));
+        let seen = height.clone();
+        let (view, cx) = cx.add_window_view(move |_, _| Folding {
+            shown: 1.0,
+            height: seen,
+        });
+        cx.run_until_parked();
+        assert_eq!(height.get(), 40.0, "open at rest");
+        for (shown, want) in [(0.5, 20.0), (0.0, 0.0), (1.0, 40.0)] {
+            view.update(cx, |view, cx| {
+                view.shown = shown;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            assert_eq!(height.get(), want, "at {shown}");
+            assert_eq!(next_frame(cx), 0, "no frame of its own");
+        }
+    }
+
+    /// A press squishes over `PRESS_IN` and springs back over `PRESS_OUT`;
+    /// a release of a button never pressed does nothing, and reduced motion
+    /// never squishes.
+    #[gpui::test]
+    fn a_press_squishes_and_springs_back(cx: &mut TestAppContext) {
+        testing::drive();
+        let (_view, _drawn, cx) = switch(cx, true);
+        let key = SharedString::from("press-test");
+        let read = |cx: &mut gpui::VisualTestContext| {
+            let now = cx.executor().now();
+            HOVER_FADES.with(|fades| fades.borrow_mut().value_at(&press_key(&key), now))
+        };
+        cx.update(|window, cx| press(&key, true, window, cx));
+        assert_eq!(read(cx), 0.0, "it starts at rest");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_DUR_FAST_MS));
+        assert_eq!(read(cx), 1.0, "squished");
+        cx.update(|window, cx| press(&key, false, window, cx));
+        cx.executor().advance_clock(Duration::from_millis(100));
+        let back = read(cx);
+        assert!(back < 1.0, "springing back: {back}");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_DUR_SLOW_MS));
+        assert_eq!(read(cx), 0.0, "at rest");
+        cx.update(|window, cx| press(&key, false, window, cx));
+        assert_eq!(read(cx), 0.0, "a stray release turns nothing");
+
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        cx.update(|window, cx| press(&key, true, window, cx));
+        assert_eq!(read(cx), 0.0, "reduced motion: no squish");
     }
 
     /// Reduced motion holds a loop at its start and leases nothing.

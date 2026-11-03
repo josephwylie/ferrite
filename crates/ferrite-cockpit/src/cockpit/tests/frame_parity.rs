@@ -315,73 +315,6 @@ fn a_parked_member_is_its_tile_until_enter_wakes_it(cx: &mut TestAppContext) {
     });
 }
 
-/// F-12: the board rides cmd-B with the column, every frame: mid-ride its
-/// left edge is the column's width this frame, and the Pane
-/// widths change from frame to frame — in Solo and on a 4-up board.
-#[gpui::test]
-fn the_board_rides_the_sidebar_every_frame(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    for count in [1usize, 4] {
-        let (mut core, _fake) = cockpit(&format!("frame-ride-{count}"), count);
-        if count > 1 {
-            let group = group_all(&mut core);
-            core.enter_group(group).unwrap();
-        }
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        hold_nav_open(&view, cx);
-        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-        tick(cx);
-        view.update(cx, |view, cx| {
-            view.nav_forced_open = false;
-            view.set_nav_collapsed(true, cx);
-        });
-        let mut widths = Vec::new();
-        for _ in 0..6 {
-            cx.executor().advance_clock(Duration::from_millis(25));
-            let (left, column, width) = view.update_in(cx, |view, window, cx| {
-                view.nav_ride.set(view.nav_ride_now(cx));
-                let left = view.board_bounds(window).x;
-                let column = view.nav_ride_now(cx).unwrap_or_else(|| view.nav_width());
-                let width = view.pane_rects(window)[0].1.w;
-                (left, column, width)
-            });
-            assert!(
-                (left - column).abs() < 0.01,
-                "{count}: the board starts at the column: {left} / {column}"
-            );
-            widths.push(width);
-        }
-        assert!(
-            widths.windows(2).all(|pair| pair[1] > pair[0]),
-            "{count}: the Panes widen every frame of the fold: {widths:?}"
-        );
-    }
-}
-
-/// F-12: a held ride (`fixture_hold_nav`) sits on the `RESIZE` curve.
-#[gpui::test]
-fn a_held_ride_sits_on_the_resize_curve(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("frame-ride-held", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let column = view.update(cx, |view, cx| {
-        view.fixture_hold_nav(Some(0.5));
-        view.nav_ride_now(cx).unwrap()
-    });
-    let expected = ferrite_ui::motion::lerp(
-        nav::FOLDED_WIDTH,
-        nav::WIDTH,
-        ferrite_ui::motion::RESIZE.progress(0.5),
-    );
-    assert!((column - expected).abs() < 0.01, "{column} / {expected}");
-    view.update(cx, |view, cx| {
-        view.fixture_hold_nav(None);
-        assert_eq!(view.nav_ride_now(cx), None);
-    });
-}
-
 /// F-13: the empty board offers only what would do something (no parked
 /// Thread to reopen, no Group to open here), its rows walk with `Next` /
 /// `Previous`, wrapping, and its recent list stops at four.
@@ -481,9 +414,7 @@ fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
         })
     });
     tick(cx);
-    cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_RESIZE_MS + 50,
-    ));
+    cx.executor().advance_clock(Duration::from_millis(250));
     tick(cx);
     let (line, narrowed) = cx.update(|window, cx| {
         let view = view.read(cx);
@@ -504,9 +435,7 @@ fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel-preview").is_some());
     view.update(cx, |view, cx| view.close_preview(0, cx));
     tick(cx);
-    cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_RESIZE_MS + 50,
-    ));
+    cx.executor().advance_clock(Duration::from_millis(250));
     tick(cx);
     let back = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1.w);
     assert!(

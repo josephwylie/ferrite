@@ -15,7 +15,7 @@ mod utils;
 
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
 pub use find::{FindReport, TextFind, find_matches};
-pub use fresh::TextFresh;
+pub use fresh::{TextFresh, fade_progress};
 pub use markdown_ext::*;
 pub use node::{CodeBlock, TableData};
 pub use state::*;

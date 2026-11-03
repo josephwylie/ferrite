@@ -2704,3 +2704,401 @@ fn loops_frames(
     hosted.dedup();
     hosted
 }
+
+/// The motion preview's frames (`--motion-preview`): Claude's motions as
+/// Ferrite draws them, each through the kit's own motion (`motion::*`), on
+/// the executor's clock at 60fps, the pointer driven through the window's
+/// real event path: the sent bubble's pop, a tooltip after its delay, the
+/// approval card's settle, the palette in and out, a nav fold, a button's
+/// press and release. Joined, they are `docs/research/craft/motion-preview.mp4`.
+pub fn motion_preview(output: String) {
+    use ferrite_ui::{components, motion, theme};
+    use gpui::{
+        div, px, rgb, InteractiveElement, IntoElement, ParentElement, PlatformInput,
+        StatefulInteractiveElement, Styled,
+    };
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Scene {
+        Bubble,
+        Tooltip,
+        Approval,
+        Palette,
+        Fold,
+        Press,
+    }
+
+    struct Stage {
+        scene: Scene,
+        /// When this scene's subject came (the bubble sent, the card or the
+        /// palette shown).
+        at: Option<Instant>,
+        /// When the palette went.
+        left: Option<Instant>,
+        folded: bool,
+        fold: Option<motion::Reveal>,
+    }
+
+    impl gpui::Render for Stage {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            motion::hover_frame_start(cx);
+            let now = cx.background_executor().now();
+            let reduced = motion::reduced_motion(cx);
+            let (name, body): (&str, gpui::AnyElement) = match self.scene {
+                Scene::Bubble => {
+                    let bubble = div()
+                        .max_w(px(420.))
+                        .px(px(theme::PROMPT_BUBBLE_PAD_X))
+                        .py(px(theme::PROMPT_BUBBLE_PAD_Y))
+                        .rounded(px(theme::R_CARD))
+                        .bg(theme::paint::PROMPT_BUBBLE)
+                        .child("Make the sidebar fold the way Claude's does");
+                    let column = div().w(px(560.)).flex().justify_end();
+                    let body = match self.at {
+                        Some(sent) => motion::bubble_face(
+                            column.child(bubble),
+                            motion::BUBBLE_IN.progress_at(now.saturating_duration_since(sent)),
+                        ),
+                        None => column,
+                    };
+                    (
+                        "Sent message: 450ms overshoot, 0.92 from its right edge, 6px rise",
+                        body.into_any_element(),
+                    )
+                }
+                Scene::Tooltip => (
+                    "Tooltip: 300ms delay, then 120ms in from 0.98",
+                    div()
+                        .id("preview-tip")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(theme::JUMP_LATEST))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(theme::paint::LINE)
+                        .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
+                        .child(ferrite_ui::icons::icon(
+                            ferrite_ui::icons::ARROW_DOWN,
+                            theme::ICON_BUTTON_GLYPH,
+                            theme::INK_STRONG,
+                        ))
+                        .into_any_element(),
+                ),
+                Scene::Approval => {
+                    let allow = components::faded_button(
+                        "preview-allow",
+                        theme::paint::SECONDARY.into(),
+                        theme::paint::SECONDARY_HOVER.into(),
+                        theme::paint::SECONDARY_HOVER.into(),
+                        rgb(theme::INK_STRONG).into(),
+                        cx,
+                    )
+                    .h(px(theme::CONTROL_H))
+                    .px(px(theme::CONTROL_PAD_X))
+                    .child("Allow once");
+                    let card = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(theme::DECISION_GAP))
+                        .w(px(theme::DECISION_CARD_W))
+                        .p(px(theme::DECISION_PAD))
+                        .border_1()
+                        .border_color(theme::paint::CARD_RING)
+                        .rounded(px(theme::R_CARD))
+                        .child("Allow Bash to run cargo test?")
+                        .child(div().flex().child(allow));
+                    let body = match self.at {
+                        Some(_) => motion::promote_in("preview-card", card).into_any_element(),
+                        None => div().into_any_element(),
+                    };
+                    (
+                        "Approval card: 220ms from 0.75, 6px above, 0.97 from its top",
+                        body,
+                    )
+                }
+                Scene::Palette => {
+                    let rows = [
+                        "Search threads and commands",
+                        "New thread",
+                        "Toggle sidebar",
+                        "Open settings",
+                        "Shortcuts",
+                    ];
+                    let dialog = crate::palette::dialog().children(rows.iter().enumerate().map(
+                        |(at, row)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .h(px(if at == 0 {
+                                    theme::PALETTE_INPUT_H
+                                } else {
+                                    theme::PALETTE_ROW_H
+                                }))
+                                .px(px(theme::SPACE_4))
+                                .text_color(rgb(if at == 0 {
+                                    theme::INK_SUBTLE
+                                } else {
+                                    theme::INK_STRONG
+                                }))
+                                .child(*row)
+                        },
+                    ));
+                    let hung = |float: gpui::AnyElement| {
+                        div()
+                            .absolute()
+                            .top(px(60.))
+                            .left_0()
+                            .right_0()
+                            .flex()
+                            .justify_center()
+                            .child(float)
+                    };
+                    let body = match (self.at, self.left) {
+                        (_, Some(left)) => div()
+                            .absolute()
+                            .inset_0()
+                            .child(motion::veil_out(
+                                left,
+                                motion::PALETTE_VEIL,
+                                components::veil_frame(),
+                            ))
+                            .child(hung(
+                                motion::float_out(
+                                    left,
+                                    motion::PALETTE_OUT,
+                                    dialog,
+                                    motion::FROM_TOP,
+                                )
+                                .into_any_element(),
+                            )),
+                        (Some(_), None) => div()
+                            .absolute()
+                            .inset_0()
+                            .child(motion::veil_in(
+                                "preview-veil",
+                                motion::PALETTE_VEIL,
+                                components::veil(),
+                            ))
+                            .child(hung(
+                                motion::dialog_in_casting(
+                                    "preview-palette",
+                                    dialog,
+                                    components::dialog_shadow,
+                                    motion::FROM_TOP,
+                                )
+                                .into_any_element(),
+                            )),
+                        (None, None) => div(),
+                    };
+                    (
+                        "Palette: 200ms in from its top; 120ms out, its veil 50ms",
+                        body.into_any_element(),
+                    )
+                }
+                Scene::Fold => {
+                    let shown = self
+                        .fold
+                        .filter(|fold| fold.running(now, reduced))
+                        .map(|fold| fold.value(now, reduced));
+                    let rows = (!self.folded || shown.is_some()).then(|| {
+                        let rows = div().flex().flex_col().children(
+                            [
+                                "Motion from Claude's source",
+                                "Sidebar snaps",
+                                "Toasts slide in",
+                            ]
+                            .map(|title| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .h(px(theme::NAV_ROW_H))
+                                    .px(px(theme::SPACE_3))
+                                    .text_size(px(theme::FS_NAV))
+                                    .child(title)
+                            }),
+                        );
+                        match shown {
+                            Some(shown) => motion::fold_body("preview-fold-body", shown, rows)
+                                .into_any_element(),
+                            None => rows.into_any_element(),
+                        }
+                    });
+                    (
+                        "Sidebar fold: 150ms ease-out; chevron 60ms",
+                        div()
+                            .w(px(260.))
+                            .flex()
+                            .flex_col()
+                            .child(crate::nav::fold_heading(
+                                "preview-fold",
+                                "ferrite",
+                                self.folded,
+                            ))
+                            .children(rows)
+                            .into_any_element(),
+                    )
+                }
+                Scene::Press => (
+                    "Button press: 60ms to 0.975, 450ms spring back; hover 60ms",
+                    components::faded_button(
+                        "preview-press",
+                        theme::paint::SECONDARY.into(),
+                        theme::paint::SECONDARY_HOVER.into(),
+                        theme::paint::SECONDARY_HOVER.into(),
+                        rgb(theme::INK_STRONG).into(),
+                        cx,
+                    )
+                    .h(px(56.))
+                    .px(px(32.))
+                    .text_size(px(20.))
+                    .child("Allow once")
+                    .into_any_element(),
+                ),
+            };
+            let stage = div()
+                .relative()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::paint::CARD)
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_UI))
+                .text_color(rgb(theme::INK_STRONG))
+                .child(body)
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(20.))
+                        .bottom(px(16.))
+                        .text_size(px(theme::FS_META))
+                        .text_color(rgb(theme::INK_SUBTLE))
+                        .child(name),
+                );
+            let _ = motion::hover_fades_active();
+            stage
+        }
+    }
+
+    let output = PathBuf::from(output);
+    std::fs::create_dir_all(&output).expect("create artifact directory");
+    let platform = gpui::platform::current_platform(true);
+    let mut cx = HeadlessAppContext::with_platform(
+        platform.text_system(),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
+        gpui::platform::current_headless_renderer,
+    );
+    cx.update(|cx| {
+        ferrite_pane::pane::init_components(cx);
+        ferrite_ui::register_fonts(cx);
+    });
+    let (w, h) = (720., 400.);
+    let window = cx
+        .open_window(gpui::size(px(w), px(h)), |_, cx| {
+            cx.new(|_| Stage {
+                scene: Scene::Bubble,
+                at: None,
+                left: None,
+                folded: false,
+                fold: None,
+            })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let centre = gpui::point(px(w / 2.), px(h / 2.));
+    let corner = gpui::point(px(4.), px(4.));
+    let pointer = |cx: &mut HeadlessAppContext, event: PlatformInput| {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.dispatch_event(event, cx);
+        })
+        .unwrap();
+    };
+    let moved = |position| {
+        PlatformInput::MouseMove(gpui::MouseMoveEvent {
+            position,
+            ..Default::default()
+        })
+    };
+    let frame = Duration::from_micros(1_000_000 / 60);
+    let scenes = [
+        (Scene::Bubble, 50),
+        (Scene::Tooltip, 50),
+        (Scene::Approval, 36),
+        (Scene::Palette, 48),
+        (Scene::Fold, 48),
+        (Scene::Press, 54),
+    ];
+    let mut shot = 0;
+    for (scene, frames) in scenes {
+        pointer(&mut cx, moved(corner));
+        cx.update(|cx| {
+            window.update(cx, |stage, _, cx| {
+                *stage = Stage {
+                    scene,
+                    at: None,
+                    left: None,
+                    folded: false,
+                    fold: None,
+                };
+                cx.notify();
+            })
+        })
+        .unwrap();
+        cx.run_until_parked();
+        for at in 0..frames {
+            let now = cx.background_executor().now();
+            let event = match (scene, at) {
+                (Scene::Tooltip, 2) | (Scene::Press, 2) => Some(moved(centre)),
+                (Scene::Press, 14) => Some(PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    button: gpui::MouseButton::Left,
+                    position: centre,
+                    click_count: 1,
+                    ..Default::default()
+                })),
+                (Scene::Press, 26) => Some(PlatformInput::MouseUp(gpui::MouseUpEvent {
+                    button: gpui::MouseButton::Left,
+                    position: centre,
+                    click_count: 1,
+                    ..Default::default()
+                })),
+                _ => None,
+            };
+            if let Some(event) = event {
+                pointer(&mut cx, event);
+            }
+            cx.update(|cx| {
+                window.update(cx, |stage, _, _| match (scene, at) {
+                    (Scene::Bubble, 8) | (Scene::Approval, 6) | (Scene::Palette, 4) => {
+                        stage.at = Some(now)
+                    }
+                    (Scene::Palette, 30) => stage.left = Some(now),
+                    (Scene::Fold, 6) | (Scene::Fold, 28) => {
+                        let spec = motion::FOLD;
+                        let mut fold = stage
+                            .fold
+                            .unwrap_or_else(|| motion::Reveal::open(spec, spec, now));
+                        stage.folded = !stage.folded;
+                        fold.set(!stage.folded, now, false);
+                        stage.fold = Some(fold);
+                    }
+                    _ => {}
+                })
+            })
+            .unwrap();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.refresh();
+                let _ = window.draw(cx);
+            })
+            .unwrap();
+            cx.capture_screenshot(window.into())
+                .unwrap()
+                .save(output.join(format!("motion-{shot:04}.png")))
+                .unwrap();
+            shot += 1;
+            cx.advance_clock(frame);
+            cx.run_until_parked();
+        }
+    }
+}

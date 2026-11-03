@@ -36,7 +36,10 @@ pub fn plan_usage_ring(
         .flex_shrink_0()
         .px(px((theme::FOOTER_CHIP_H - theme::CONTEXT_RING) / 2.))
         .tip(tip)
-        .child(usage_ring(used));
+        .child(UsageRing {
+            id: gpui::ElementId::NamedChild(std::sync::Arc::new(id.clone()), "ring".into()),
+            fraction: used,
+        });
     let popover = gpui::component::popover::Popover::new(gpui::ElementId::NamedChild(
         std::sync::Arc::new(id),
         "popover".into(),
@@ -155,9 +158,36 @@ fn plan_usage_card(limits: RateLimits, plan: Option<SharedString>, now: SystemTi
 /// `CONTEXT_RING` circle, its track `USAGE_POP_TRACK`, `fraction` drawn
 /// round it from the top in the popover bar's ink (`usage_bar_ink`: accent
 /// blue, `ATTENTION` once the window runs tight). `fraction` is clamped.
-fn usage_ring(fraction: f32) -> Div {
-    let fraction = fraction.clamp(0., 1.);
-    let ink: gpui::Hsla = rgb(usage_bar_ink(fraction)).into();
+/// A new reading sweeps the arc there over `motion::USAGE_ARC` and moves
+/// the ink over `motion::USAGE_INK`, as Claude's `UsageRing` does; the
+/// first draw lands (`motion::settle`).
+#[derive(IntoElement)]
+struct UsageRing {
+    id: gpui::ElementId,
+    fraction: f32,
+}
+
+impl RenderOnce for UsageRing {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        use ferrite_ui::motion;
+        let target = self.fraction.clamp(0., 1.);
+        let at = |part: &'static str| {
+            gpui::ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), part.into())
+        };
+        let fraction = motion::settle(at("arc"), target, motion::USAGE_ARC, window, cx);
+        let tight = (usage_bar_ink(target) == ATTENTION) as u8 as f32;
+        let tight = motion::settle(at("ink"), tight, motion::USAGE_INK, window, cx);
+        let ink = motion::mix(
+            rgb(theme::USAGE_POP_BAR).into(),
+            rgb(ATTENTION).into(),
+            tight,
+        );
+        ring(fraction, ink)
+    }
+}
+
+/// The ring drawn `fraction` round in `ink`.
+fn ring(fraction: f32, ink: gpui::Hsla) -> Div {
     let track: gpui::Hsla = rgb(theme::USAGE_POP_TRACK).into();
     div().flex_shrink_0().size(px(theme::CONTEXT_RING)).child(
         gpui::canvas(
@@ -663,6 +693,7 @@ impl RenderOnce for ContextList {
                     .flex_shrink_0()
                     .w(px(theme::USAGE_LEGEND_TEXT_X))
                     .child(components::fold_chevron(
+                        "usage-legend-chevron",
                         unfolded,
                         theme::ICON_CHEVRON,
                         INK_SUBTLE,

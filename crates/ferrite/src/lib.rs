@@ -99,6 +99,16 @@ pub fn launch() {
         );
         return;
     }
+    // The motion preview's frames (`visual_reference::motion_preview`).
+    #[cfg(feature = "visual-reference")]
+    if std::env::args().nth(1).as_deref() == Some("--motion-preview") {
+        cockpit::visual_reference::motion_preview(
+            std::env::args()
+                .nth(2)
+                .expect("an output directory is required"),
+        );
+        return;
+    }
     // Visuals' agent screenshots (`visual::shots::snapshots`).
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--visual-snapshots") {

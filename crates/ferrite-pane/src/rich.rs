@@ -307,6 +307,9 @@ pub struct Markdown {
     /// The answer is streaming: each run of words that arrives fades in
     /// (`motion::STREAM_FADE`, `TextView::fresh`).
     streaming: bool,
+    /// The stream ended at this instant: what still fades lands within
+    /// `motion::STREAM_LAND`.
+    landing: Option<std::time::Instant>,
 }
 
 impl Markdown {
@@ -327,6 +330,14 @@ impl Markdown {
     /// transcript's ground; off, any fade still running lands at once.
     pub fn streaming(mut self, streaming: bool) -> Self {
         self.streaming = streaming;
+        self
+    }
+
+    /// The stream ended at `ended`: the runs still fading speed up to land
+    /// within `motion::STREAM_LAND` (Claude's fast finish at turn end),
+    /// rather than at once.
+    pub fn landing(mut self, ended: Option<std::time::Instant>) -> Self {
+        self.landing = ended;
         self
     }
 
@@ -387,6 +398,7 @@ impl Markdown {
             document: None,
             find: None,
             streaming: false,
+            landing: None,
         }
     }
 }
@@ -522,10 +534,15 @@ impl gpui::RenderOnce for Markdown {
                 view.selection_document(document, self.id)
             })
             .find(self.find)
-            .fresh(self.streaming.then(|| gpui::base::text::TextFresh {
-                fade: ferrite_ui::motion::STREAM_FADE.duration(),
-                ease: Rc::new(|t| ferrite_ui::motion::STREAM_FADE.progress(t)),
-                ground: theme::paint::CARD.hsla(),
+            .fresh((self.streaming || self.landing.is_some()).then(|| {
+                gpui::base::text::TextFresh {
+                    fade: ferrite_ui::motion::STREAM_FADE.duration(),
+                    ease: Rc::new(|t| ferrite_ui::motion::STREAM_FADE.progress(t)),
+                    ground: theme::paint::CARD.hsla(),
+                    land: self
+                        .landing
+                        .map(|ended| (ended, ferrite_ui::motion::STREAM_LAND)),
+                }
             }))
             .font_family(face)
             // A line's trailing space hangs past its edge, as CSS lets it:

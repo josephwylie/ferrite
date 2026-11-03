@@ -1413,11 +1413,11 @@ fn nav_column_width(cx: &mut gpui::VisualTestContext) -> f32 {
     )
 }
 
-/// cmd-b tweens the column's width over `motion::RESIZE` and asks for frames
-/// only while it moves; flipped back mid-flight it turns around from the
-/// width on screen instead of jumping to an end; settled, it asks for none.
+/// cmd-b snaps the column between its width and the rail, as Claude's
+/// sidebar does: the new width is there on the next frame, and nothing asks
+/// for a frame after it (no ride lays the board out again every frame).
 #[gpui::test]
-fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestAppContext) {
+fn the_nav_collapse_snaps_without_frames(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (core, _fake) = cockpit("motion-nav", 2);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -1425,37 +1425,16 @@ fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestApp
     tick(cx);
     settle(cx);
     // Layout snaps to whole pixels: 36 cells (280.8) lays out at 281.
-    assert!(
-        (nav_column_width(cx) - nav::WIDTH).abs() <= 0.5,
-        "first paint: no tween"
-    );
-
-    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
-    cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(100));
-    assert!(display_frames(cx) > 0, "a moving column asks for frames");
-    let mid = nav_column_width(cx);
-    assert!(
-        mid < nav::WIDTH && mid > nav::FOLDED_WIDTH,
-        "mid-flight at 100ms: {mid}"
-    );
-
-    view.update(cx, |view, cx| view.set_nav_collapsed(false, cx));
-    cx.run_until_parked();
-    let turned = nav_column_width(cx);
-    assert!(
-        (turned - mid).abs() < 1.0,
-        "the flip starts from the width on screen: {mid} -> {turned}"
-    );
-
-    cx.executor()
-        .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_RESIZE_MS));
-    display_frames(cx);
-    assert!(
-        (nav_column_width(cx) - nav::WIDTH).abs() <= 0.5,
-        "settled on its target"
-    );
-    assert_eq!(display_frames(cx), 0, "and asks for nothing more");
+    assert!((nav_column_width(cx) - nav::WIDTH).abs() <= 0.5, "open");
+    for (collapsed, width) in [(true, nav::FOLDED_WIDTH), (false, nav::WIDTH)] {
+        view.update(cx, |view, cx| view.set_nav_collapsed(collapsed, cx));
+        cx.run_until_parked();
+        assert!(
+            (nav_column_width(cx) - width).abs() <= 0.5,
+            "collapsed {collapsed}: at its width at once"
+        );
+        assert_eq!(display_frames(cx), 0, "and asks for nothing");
+    }
 }
 
 /// Reduced motion: the column lands at its new width at once.
@@ -1733,11 +1712,11 @@ fn a_review_slide_builds_only_the_pane_beside_it(cx: &mut TestAppContext) {
     measure("close", cx);
 }
 
-/// A nav row's hover blends in over `motion::HOVER_FADE`: frames while it
-/// fades, none once it has landed or once the pointer has left and the
-/// blend has returned to rest.
+/// A nav row's hover lands at once (`motion::HOVER_SNAP`, as Claude's
+/// rows): drawn on the frame the pointer arrives, and no frame after it,
+/// coming or going.
 #[gpui::test]
-fn a_nav_row_hover_fades_and_then_asks_for_no_frames(cx: &mut TestAppContext) {
+fn a_nav_row_hover_snaps_and_asks_for_no_frames(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (core, _fake) = cockpit("motion-hover", 2);
     let thread = core.threads()[1];
@@ -1748,11 +1727,11 @@ fn a_nav_row_hover_fades_and_then_asks_for_no_frames(cx: &mut TestAppContext) {
     let row = debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("the row");
     cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(50));
-    assert!(display_frames(cx) > 0, "the blend is mid-flight");
-    cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_HOVER_FADE_MS,
-    ));
+    let hovered = cx
+        .update(|_, _| ferrite_ui::motion::testing::hover_values())
+        .into_iter()
+        .any(|(key, value)| key.starts_with("nav-thread-") && value == 1.0);
+    assert!(hovered, "hovered at once");
     display_frames(cx);
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 
@@ -1762,9 +1741,6 @@ fn a_nav_row_hover_fades_and_then_asks_for_no_frames(cx: &mut TestAppContext) {
         gpui::Modifiers::none(),
     );
     cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_HOVER_FADE_MS,
-    ));
     display_frames(cx);
     assert_eq!(display_frames(cx), 0, "back at rest: no more frames");
 }
@@ -2745,7 +2721,7 @@ fn a_minimap_click_lands_in_one_frame(cx: &mut TestAppContext) {
     };
     let landed = offset(cx);
     // Past the scrollbar thumb's linger and fade, which any scroll shows.
-    let thumb = theme::MOTION_SCROLLBAR_LINGER_MS + theme::MOTION_HOVER_FADE_MS;
+    let thumb = theme::MOTION_SCROLLBAR_LINGER_MS + theme::MOTION_SCROLLBAR_FADE_MS;
     frames_over(cx, thumb + 32);
     assert_eq!(offset(cx), landed, "the first frame was the last: no glide");
     assert_eq!(display_frames(cx), 0, "and nothing eases on");

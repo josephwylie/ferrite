@@ -4345,15 +4345,18 @@ pub fn tool_disclosure_control(
 /// box always reserved so nothing moves when it shows. It shows while the
 /// pointer is on the row (lifting to `INK_SUBTLE`) or while the keyboard
 /// targets the row (or always, for a group's), and it is turned a quarter
-/// when open. The turn snaps, as the group and its folds do
-/// (motion-measured.md, "Tool group expand / collapse").
-pub fn disclosure_chevron(expanded: bool, targeted: bool) -> AnyElement {
-    let turn = if expanded { 1. } else { 0. };
-    let mark = icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_FAINT)
-        .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_SUBTLE)))
-        .with_transformation(gpui::Transformation::rotate(gpui::radians(
-            std::f32::consts::FRAC_PI_2 * turn,
-        )));
+/// when open. The turn eases over `motion::CHEVRON` (Claude's 60ms
+/// `TurnStatus` caret) when the fold flips under it, keyed by `id`; the
+/// group and its folds themselves snap, as Claude's tool steps do.
+pub fn disclosure_chevron(
+    id: impl Into<gpui::ElementId>,
+    expanded: bool,
+    targeted: bool,
+) -> AnyElement {
+    let mark = ferrite_ui::motion::settled(id, expanded, ferrite_ui::motion::CHEVRON, |turn| {
+        components::chevron_at(turn, theme::ICON_CHEVRON, TEXT_FAINT)
+            .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_SUBTLE)))
+    });
     div()
         .debug_selector(|| "disclosure-chevron".into())
         .flex()

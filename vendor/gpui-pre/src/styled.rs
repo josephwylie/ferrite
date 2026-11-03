@@ -756,6 +756,13 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Scales about `(x, y)`, fractions of the element's box, rather than
+    /// its centre: a CSS `transform-origin` (Ferrite's patch).
+    fn scale_origin(mut self, x: f32, y: f32) -> Self {
+        self.style().scale_origin = Some(crate::point(x, y));
+        self
+    }
+
     /// Sets the grid columns of this element.
     fn grid_cols(mut self, cols: u16) -> Self {
         self.style().grid_cols = Some(GridTemplate {

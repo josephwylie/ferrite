@@ -68,10 +68,12 @@ pub fn focused<E: Styled>(mut element: E, focused: bool) -> E {
 }
 
 /// One hover blend for a kit `Button` (rule 2.10.2): its ground blends
-/// `rest → hover` over 150ms under a key derived from its id, the kit's own
-/// hover is held at that ground (`pointer::button_variant`) so it never
-/// snaps over the blend, and the press lands at once on `press`. The caller
-/// sets no ground of its own after it.
+/// `rest → hover` over `motion::HOVER_FADE` (Claude's 60ms) under a key
+/// derived from its id, the kit's own hover is held at that ground
+/// (`pointer::button_variant`) so it never snaps over the blend, and the
+/// press lands at once on `press` while the button squishes and springs
+/// back (`motion::pressable`). The caller sets no ground of its own after
+/// it.
 pub fn faded_button(
     id: impl Into<ElementId>,
     rest: Hsla,
@@ -87,10 +89,11 @@ pub fn faded_button(
     // variant's rest a fifth toward transparent, and replays this layer in
     // its selected state, so the blended face is exactly what shows.
     // A clear ground paints nothing of its own.
-    button(id)
+    let button = button(id)
         .custom(crate::pointer::button_variant(ground, ink, press, cx))
         .when(ground.a > 0.0, |button| button.bg(ground))
-        .on_hover(motion::hover_listener(key))
+        .on_hover(motion::hover_listener(key.clone()));
+    motion::pressable(button, key)
 }
 
 /// A text tooltip on a faded kit `Button`, in the floating vocabulary
@@ -421,14 +424,19 @@ pub fn float_ground() -> Div {
 
 /// The modal veil: covers its parent, takes every press, centres its child.
 pub fn veil() -> Div {
+    veil_frame().occlude().bg(rgba(theme::VEIL))
+}
+
+/// The veil's box alone — covering its parent, centring its child — with no
+/// ground and no hit area: where a sheet that went fades out
+/// (`motion::veil_out`), letting presses through.
+pub fn veil_frame() -> Div {
     div()
         .absolute()
         .inset_0()
-        .occlude()
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgba(theme::VEIL))
 }
 
 // ------------------------------------------------------------- the line
@@ -877,21 +885,26 @@ pub fn prompt_mark(ink: u32) -> AnyElement {
 
 /// An on/off switch's face (theme `SWITCH_*`): a pill track, `PRIMARY` on
 /// and `SWITCH_OFF` off, its round knob at the end that says which —
-/// `ON_PRIMARY` on, `INK_SUBTLE` off. A flip slides the knob and blends the
-/// track over `FADE_QUICK` (`motion::settled`); under reduced motion it
-/// lands at once. The caller makes it a control (a tab stop that flips on
-/// a press, Enter or Space).
+/// `ON_PRIMARY` on, `INK_SUBTLE` off. A flip slides the knob over
+/// `motion::SWITCH` (a slight overshoot, `motion::settled`) while the track
+/// and the knob's ink take the new state at once, as Claude's do; under
+/// reduced motion the knob lands at once too. The caller makes it a control
+/// (a tab stop that flips on a press, Enter or Space).
 pub fn switch(id: impl Into<ElementId>, on: bool) -> impl IntoElement {
-    motion::settled(id, on, motion::FADE_QUICK, move |t| {
-        let off: Hsla = theme::SWITCH_OFF.into();
+    motion::settled(id, on, motion::SWITCH, move |t| {
         let knob = theme::SWITCH_H - 2.0 * theme::SWITCH_INSET;
+        let (track, ink): (Hsla, u32) = if on {
+            (rgb(theme::PRIMARY).into(), theme::ON_PRIMARY)
+        } else {
+            (theme::SWITCH_OFF.into(), theme::INK_SUBTLE)
+        };
         div()
             .relative()
             .flex_shrink_0()
             .w(px(theme::SWITCH_W))
             .h(px(theme::SWITCH_H))
             .rounded_full()
-            .bg(motion::mix(off, rgb(theme::PRIMARY).into(), t))
+            .bg(track)
             .child(
                 div()
                     .absolute()
@@ -901,11 +914,7 @@ pub fn switch(id: impl Into<ElementId>, on: bool) -> impl IntoElement {
                     ))
                     .size(px(knob))
                     .rounded_full()
-                    .bg(motion::mix(
-                        rgb(theme::INK_SUBTLE).into(),
-                        rgb(theme::ON_PRIMARY).into(),
-                        t,
-                    )),
+                    .bg(rgb(ink)),
             )
     })
 }
@@ -1478,11 +1487,17 @@ pub fn home_relative(path: &std::path::Path) -> String {
 
 /// A fold's chevron, every surface's (the nav's sections and Groups, the
 /// panel's file blocks, the usage card's folds): `chevron-right` while
-/// folded, a quarter turn down while open. The turn snaps, as the folds
-/// themselves do (motion-measured.md, "Tool group expand / collapse":
-/// snap everything, the chevron included).
-pub fn fold_chevron(open: bool, size: f32, ink: u32) -> impl IntoElement {
-    let turn = if open { 1.0 } else { 0.0 };
+/// folded, a quarter turn down while open. The turn eases over
+/// `motion::CHEVRON` (Claude's 60ms) when the fold flips under it, keyed
+/// by `id`; first paint lands (`motion::settled`).
+pub fn fold_chevron(id: impl Into<ElementId>, open: bool, size: f32, ink: u32) -> impl IntoElement {
+    motion::settled(id, open, motion::CHEVRON, move |turn| {
+        chevron_at(turn, size, ink)
+    })
+}
+
+/// `chevron-right` `turn` of a quarter turn down (0 folded, 1 open).
+pub fn chevron_at(turn: f32, size: f32, ink: u32) -> gpui::Svg {
     icons::icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
         gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
     ))

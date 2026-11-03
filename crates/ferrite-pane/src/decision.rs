@@ -670,9 +670,9 @@ pub fn approval_card(serial: u64, children: impl IntoIterator<Item = AnyElement>
     frame(serial, Some(theme::DECISION_CARD_W), children)
 }
 
-/// The box, fading in once as it mounts (`FADE_QUICK`: 150ms on `ease`,
-/// opacity only, nothing moves): it arrives on its own, so it is the one
-/// entrance on the transcript's tail.
+/// The box, settling in once as it mounts (`motion::promote_in`, Claude's
+/// `code-approval-promote`: 220ms ease-out cubic from 0.75, 6px above and
+/// 0.97 about its top; painted only, so its row's height never moves).
 fn frame(
     serial: u64,
     max_w: Option<f32>,
@@ -712,13 +712,7 @@ fn frame(
                 .p(px(theme::DECISION_PAD - 1.0))
                 .children(children),
         );
-    ferrite_ui::motion::fade_in(
-        ("decision-in", serial as usize),
-        card,
-        ferrite_ui::motion::FADE_QUICK,
-        1.0,
-    )
-    .into_any_element()
+    ferrite_ui::motion::promote_in(("decision-in", serial as usize), card).into_any_element()
 }
 
 /// A section of the box: the box's gap spaces it.

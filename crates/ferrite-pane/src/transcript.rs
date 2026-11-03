@@ -277,14 +277,17 @@ pub struct TranscriptView {
     input: TranscriptInput,
     rows: TranscriptRows,
     /// Rows appended at the tail while the operator watched, and when: they
-    /// fade in over their fade, opacity only (`arrival_fade`). First paint,
-    /// a history window growing at its head and a row scrolled back into
-    /// view never do.
+    /// come in over their motion (`arrival_fade`). First paint, a history
+    /// window growing at its head and a row scrolled back into view never
+    /// do.
     arrivals: HashMap<RowId, (Instant, ferrite_ui::motion::MotionSpec)>,
     /// When the streaming answer last grew: its new words fade in by the
     /// run (`rich::Markdown::streaming`), and this transcript asks for the
     /// frames until the last has landed.
     streamed_at: Option<Instant>,
+    /// When the turn last ended: every streamed fade still running lands
+    /// within `motion::STREAM_LAND` of it (Claude's fast finish).
+    landed_at: Option<Instant>,
     /// When each turn's answer finished (its turn end's `completed_at`), by
     /// the turn's last prose block: the time among the answer's actions.
     answer_times: HashMap<BlockId, String>,
@@ -432,6 +435,7 @@ impl TranscriptView {
             rows,
             arrivals: HashMap::new(),
             streamed_at: None,
+            landed_at: None,
             answer_times: times,
             scroll,
             rich,
@@ -538,10 +542,9 @@ impl TranscriptView {
         if content_changed {
             self.answer_times = answer_times(&self.input.blocks);
         }
-        // The turn ended (or another began): a fade still running lands.
-        if working_toggled {
-            self.arrivals.clear();
-            self.streamed_at = None;
+        // The turn ended: what still fades lands quickly from here.
+        if working_toggled && after.working.is_none() {
+            self.landed_at = Some(cx.background_executor().now());
         }
         // The gap table is part of the rows: a reading-size change
         // re-projects them, re-spacing every row whose gap scales; a diff
@@ -622,17 +625,55 @@ impl TranscriptView {
         self.arrivals.len()
     }
 
-    /// How far a live-appended row is into its fade, while it is.
+    /// How far a live-appended row is into its motion, while it moves: a
+    /// streamed row's fade lands early once the turn ends (`landed_at`).
     fn arrival(&self, row: &RowId, cx: &App) -> Option<f32> {
         if ferrite_ui::motion::reduced_motion(cx) {
             return None;
         }
         let (at, fade) = self.arrivals.get(row)?;
-        let elapsed = cx
-            .background_executor()
-            .now()
-            .saturating_duration_since(*at);
-        (elapsed < fade.duration()).then(|| fade.progress_at(elapsed))
+        let now = cx.background_executor().now();
+        self.moving(*at, *fade, now)
+            .then(|| match *fade == ferrite_ui::motion::STREAM_FADE {
+                true => fade.progress(self.streamed_progress(*at, now)),
+                false => fade.progress_at(now.saturating_duration_since(*at)),
+            })
+    }
+
+    /// A streamed fade's linear progress, landing with the turn's end.
+    fn streamed_progress(&self, at: Instant, now: Instant) -> f32 {
+        gpui::base::text::fade_progress(
+            at,
+            now,
+            ferrite_ui::motion::STREAM_FADE.duration(),
+            self.landing(),
+        )
+    }
+
+    /// The turn's end, and how quickly what still fades lands from it.
+    fn landing(&self) -> Option<(Instant, std::time::Duration)> {
+        self.landed_at
+            .map(|ended| (ended, ferrite_ui::motion::STREAM_LAND))
+    }
+
+    /// Whether a motion that began `at` still moves at `now`.
+    fn moving(&self, at: Instant, spec: ferrite_ui::motion::MotionSpec, now: Instant) -> bool {
+        if spec == ferrite_ui::motion::STREAM_FADE {
+            self.streamed_progress(at, now) < 1.
+        } else {
+            now.saturating_duration_since(at) < spec.duration()
+        }
+    }
+
+    /// When the turn ended, while the newest answer's words still land.
+    fn answer_landing(&self, cx: &App) -> Option<Instant> {
+        let now = cx.background_executor().now();
+        self.landed_at.filter(|_| {
+            self.input.working.is_none()
+                && self
+                    .streamed_at
+                    .is_some_and(|at| self.moving(at, ferrite_ui::motion::STREAM_FADE, now))
+        })
     }
 
     /// Whether a fade is still running (a row arriving, the streaming
@@ -643,12 +684,12 @@ impl TranscriptView {
             return false;
         }
         let now = cx.background_executor().now();
-        let running = |at: Instant, fade: ferrite_ui::motion::MotionSpec| {
-            now.saturating_duration_since(at) < fade.duration()
-        };
         self.streamed_at
-            .is_some_and(|at| running(at, ferrite_ui::motion::STREAM_FADE))
-            || self.arrivals.values().any(|(at, fade)| running(*at, *fade))
+            .is_some_and(|at| self.moving(at, ferrite_ui::motion::STREAM_FADE, now))
+            || self
+                .arrivals
+                .values()
+                .any(|(at, fade)| self.moving(*at, *fade, now))
     }
 
     /// The newest content row: the working row and the Decision stand
@@ -989,12 +1030,15 @@ impl TranscriptView {
             // still streaming above the working row has none, so the
             // working line stands right under its words.
             let narration = row.kind() == RowKind::Answer { narration: true };
-            let streaming = self.input.working.is_some()
-                && self
-                    .newest_content()
-                    .is_some_and(|last| last.id() == row.id());
+            let newest = self
+                .newest_content()
+                .is_some_and(|last| last.id() == row.id());
+            let streaming = self.input.working.is_some() && newest;
+            let landing = self.answer_landing(cx).filter(|_| newest);
+            let id = SharedString::from(format!("answer-{}-{first:?}", self.input.namespace));
+            let shown = self.actions_shown(&id);
             let actions = (!narration && !streaming).then(|| {
-                message_actions()
+                message_actions(shown)
                     .debug_selector(|| "answer-actions".into())
                     // The first icon's ink, not its box, on the prose's
                     // edge (one left edge).
@@ -1010,16 +1054,17 @@ impl TranscriptView {
                     )
             });
             return div()
-                .id(SharedString::from(format!(
-                    "answer-{}-{first:?}",
-                    self.input.namespace
-                )))
+                .id(id.clone())
                 .flex()
                 .items_start()
                 .min_w_0()
                 .w_full()
                 .flex_shrink_0()
-                .when(actions.is_some(), |row| row.flex_col().group(MESSAGE_GROUP))
+                .when(actions.is_some(), |row| {
+                    row.flex_col()
+                        .group(MESSAGE_GROUP)
+                        .on_hover(actions_listener(&id))
+                })
                 .child(
                     // The prose alone, its actions under it apart.
                     div()
@@ -1030,7 +1075,8 @@ impl TranscriptView {
                         .child(
                             selection
                                 .answer(first, self.linked(source))
-                                .streaming(streaming && !ferrite_ui::motion::reduced_motion(cx)),
+                                .streaming(streaming && !ferrite_ui::motion::reduced_motion(cx))
+                                .landing(landing),
                         ),
                 )
                 .children(actions.map(|actions| actions.mt(px(theme::MESSAGE_ACTIONS_GAP))))
@@ -1065,7 +1111,8 @@ impl TranscriptView {
                 .as_ref()
                 .zip(self.input.rewind.as_ref())
                 .zip(view.as_ref());
-            let actions = message_actions()
+            let id = SharedString::from(format!("prompt-{}-{:?}", self.input.namespace, block.id));
+            let actions = message_actions(self.actions_shown(&id))
                 .children(
                     block
                         .sent_at
@@ -1083,7 +1130,9 @@ impl TranscriptView {
                     self.copy_action(row.id(), ferrite_core::prompt_files::split(line.clone()).0),
                 );
             return div()
+                .id(id.clone())
                 .group(MESSAGE_GROUP)
+                .on_hover(actions_listener(&id))
                 .w_full()
                 .min_w_0()
                 .child(pane::prompt_row(
@@ -1347,7 +1396,11 @@ impl TranscriptView {
         };
         pane::Disclosure {
             overlay: Some(control.into_any_element()),
-            chevron: Some(pane::disclosure_chevron(expanded, targeted || shown)),
+            chevron: Some(pane::disclosure_chevron(
+                SharedString::from(format!("chevron-{call:?}")),
+                expanded,
+                targeted || shown,
+            )),
             targeted,
             focus: None,
         }
@@ -1574,21 +1627,35 @@ impl TranscriptView {
         below - px(theme::body_pad_b(self.input.solo) + self.runway.get().room)
     }
 
+    /// How far a message's actions are shown: under the pointer, or (a
+    /// scene's) held there.
+    fn actions_shown(&self, message: &SharedString) -> f32 {
+        ferrite_ui::motion::hover_t(&actions_key(message))
+    }
+
     /// Jump to latest: while the reader is scrolled away from the tail, a
     /// flat round button over the transcript's foot snaps back to it, as
-    /// both reference apps' do (`JUMP_LATEST`).
-    fn jump_to_latest(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.scroll.is_following_tail() {
-            return None;
-        }
+    /// both reference apps' do (`JUMP_LATEST`). It fades in and out over
+    /// `motion::JUMP_FADE` (Claude's 200ms), answering no pointer while it
+    /// goes.
+    fn jump_to_latest(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Within a couple of lines of the end there is nothing to jump to.
-        if self.rows_below() < px(2. * self.grid().line) {
-            return None;
-        }
+        let wanted =
+            !self.scroll.is_following_tail() && self.rows_below() >= px(2. * self.grid().line);
         let id = gpui::ElementId::from(SharedString::from(format!(
             "transcript-latest-{}",
             self.input.namespace
         )));
+        let shown = ferrite_ui::motion::settle(
+            gpui::ElementId::NamedChild(std::sync::Arc::new(id.clone()), "fade".into()),
+            wanted as u8 as f32,
+            ferrite_ui::motion::JUMP_FADE,
+            window,
+            cx,
+        );
+        if shown <= 0. {
+            return None;
+        }
         let key = ferrite_ui::pointer::hover_key(&id);
         let t = ferrite_ui::motion::hover_t(&key);
         if t > 0. && t < 1. {
@@ -1603,6 +1670,7 @@ impl TranscriptView {
                 .bottom(px(theme::JUMP_LATEST_INSET))
                 .flex()
                 .justify_center()
+                .opacity(shown)
                 .child(
                     div()
                         .id(id)
@@ -1619,12 +1687,15 @@ impl TranscriptView {
                         ))
                         .border_1()
                         .border_color(theme::paint::LINE)
-                        .cursor_pointer()
-                        .on_hover(ferrite_ui::motion::hover_listener(key))
-                        .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
-                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                            cx.stop_propagation();
-                            let _ = weak.update(cx, |view, cx| view.scroll_to_bottom(cx));
+                        .when(wanted, |button| {
+                            button
+                                .cursor_pointer()
+                                .on_hover(ferrite_ui::motion::hover_listener(key))
+                                .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = weak.update(cx, |view, cx| view.scroll_to_bottom(cx));
+                                })
                         })
                         .child(ferrite_ui::icons::icon(
                             ferrite_ui::icons::ARROW_DOWN,
@@ -1637,11 +1708,12 @@ impl TranscriptView {
     }
 }
 
-/// How a row appended live fades in: the operator's bubble over
-/// `BUBBLE_FADE`, what the agent streams over `STREAM_FADE`; opacity only.
+/// How a row appended live comes in: the operator's bubble pops in over
+/// `BUBBLE_IN` (`motion::bubble_face`), what the agent streams fades in
+/// over `STREAM_FADE`, opacity only.
 fn arrival_fade(kind: RowKind) -> ferrite_ui::motion::MotionSpec {
     if kind == RowKind::Prompt {
-        ferrite_ui::motion::BUBBLE_FADE
+        ferrite_ui::motion::BUBBLE_IN
     } else {
         ferrite_ui::motion::STREAM_FADE
     }
@@ -1653,16 +1725,32 @@ const MESSAGE_GROUP: &str = "transcript-message";
 
 /// A message's actions (`MESSAGE_ACTION`s in a row), laid out at rest but
 /// shown only under the pointer anywhere on the message, the latest
-/// answer's too (Claude's: actions, not content, never stand at rest).
-fn message_actions() -> gpui::Div {
+/// answer's too (Claude's: actions, not content, never stand at rest), at
+/// `shown` (`actions_listener`).
+fn message_actions(shown: f32) -> gpui::Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::SPACE_0_5))
         .h(px(theme::MESSAGE_ACTION))
-        .opacity(0.)
-        .group_hover(MESSAGE_GROUP, |style| style.opacity(1.))
+        .opacity(shown)
+}
+
+/// The hover key a message's actions blend under.
+fn actions_key(message: &SharedString) -> SharedString {
+    format!("actions:{message}").into()
+}
+
+/// The pointer on a message: its actions come in after
+/// `motion::ACTIONS_IN`'s 100ms wait, over 120ms, and go over 60ms
+/// (Claude's message actions).
+fn actions_listener(message: &SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    ferrite_ui::motion::hover_listener_with(
+        actions_key(message),
+        ferrite_ui::motion::ACTIONS_IN,
+        ferrite_ui::motion::ACTIONS_OUT,
+    )
 }
 
 /// A message's time among its actions (`7:31 pm`, as core stamps it): meta
@@ -2045,6 +2133,7 @@ impl Render for TranscriptView {
                     }
                     (element, view.arrival(row.id(), cx))
                 });
+                let bubble = row.kind() == RowKind::Prompt;
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
                 // resolve against and shrinks to its text. The wrapper holds
@@ -2054,18 +2143,20 @@ impl Render for TranscriptView {
                 // padding: the list's own top padding flickers mid-scroll).
                 let gap = row.gap();
                 let wrapper = div().w_full().pt(px(gap)).px(px(theme::tx_inset(solo)));
-                // A row appended live fades in where it stands (its frames
-                // come from the transcript's render, `fading`).
-                let wrapper = wrapper.when_some(arrival, |wrapper, t| wrapper.opacity(t));
-                wrapper
-                    .child(
-                        div()
-                            .w_full()
-                            .max_w(px(theme::TX_COLUMN_MAX_W))
-                            .mx_auto()
-                            .child(element),
-                    )
-                    .into_any_element()
+                // A row appended live comes in where it stands (its frames
+                // come from the transcript's render, `fading`): the sent
+                // bubble pops from its right edge, the rest fade.
+                let column = div()
+                    .w_full()
+                    .max_w(px(theme::TX_COLUMN_MAX_W))
+                    .mx_auto()
+                    .child(element);
+                match arrival {
+                    Some(t) if bubble => wrapper.child(ferrite_ui::motion::bubble_face(column, t)),
+                    Some(t) => wrapper.opacity(t).child(column),
+                    None => wrapper.child(column),
+                }
+                .into_any_element()
             },
         )
         // The bottom padding is the list's own: it counts in the scroll
@@ -2282,7 +2373,7 @@ impl Render for TranscriptView {
         // A row runs on under the foot: it fades into the Composer, as
         // Codex's do, rather than ending on a hard cut.
         let cut_below = self.rows_below() > px(0.);
-        let latest = self.jump_to_latest(cx);
+        let latest = self.jump_to_latest(window, cx);
         let minimap = self.minimap(cx);
         if crate::file_links::take_fading() {
             cx.notify();

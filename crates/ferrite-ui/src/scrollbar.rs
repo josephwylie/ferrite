@@ -39,12 +39,12 @@ const THUMB_ACTIVE_WIDTH: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER);
 const THUMB_ACTIVE_RADIUS: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER / 2.);
 
 /// C26: a thumb holds `MOTION_SCROLLBAR_LINGER_MS` (1.4s) after the last
-/// scroll frame, then fades over the one hover blend (100ms): gone by 1.5s.
+/// scroll frame, then fades over `MOTION_SCROLLBAR_FADE_MS` (100ms): gone by 1.5s.
 const FADE_OUT_DELAY: f32 = theme::MOTION_SCROLLBAR_LINGER_MS as f32 / 1000.0;
-const FADE_OUT_DURATION: f32 = FADE_OUT_DELAY + theme::MOTION_HOVER_FADE_MS as f32 / 1000.0;
+const FADE_OUT_DURATION: f32 = FADE_OUT_DELAY + theme::MOTION_SCROLLBAR_FADE_MS as f32 / 1000.0;
 
 /// The idle thumb's opacity `elapsed` seconds after the last scroll: full
-/// through the linger, then `1 − HOVER_FADE` over the fade, and `None` —
+/// through the linger, then `1 − SCROLLBAR_FADE` over the fade, and `None` —
 /// nothing drawn, no frame asked for — once it reaches 0. Reduced motion
 /// skips the fade: the thumb goes at the end of the linger.
 fn idle_thumb_opacity(elapsed: f32, reduced: bool) -> Option<f32> {
@@ -55,19 +55,19 @@ fn idle_thumb_opacity(elapsed: f32, reduced: bool) -> Option<f32> {
         return None;
     }
     let fade = Duration::from_secs_f32(elapsed - FADE_OUT_DELAY);
-    let opacity = 1.0 - crate::motion::HOVER_FADE.progress_at(fade);
+    let opacity = 1.0 - crate::motion::SCROLLBAR_FADE.progress_at(fade);
     (opacity > 1e-3).then_some(opacity)
 }
 
 /// The thumb's widen (0 thin, 1 wide) a frame `dt` on: it rides toward
-/// `active` over the hover blend, as a native thumb swells under the
+/// `active` over `SCROLLBAR_FADE`, as a native thumb swells under the
 /// pointer, rather than snapping 4→6px. Reduced motion lands at once.
 fn step_widen(widen: f32, active: bool, dt: Duration, reduced: bool) -> f32 {
     let target = if active { 1.0 } else { 0.0 };
     if reduced {
         return target;
     }
-    let step = dt.as_secs_f32() / crate::motion::HOVER_FADE.duration().as_secs_f32();
+    let step = dt.as_secs_f32() / crate::motion::SCROLLBAR_FADE.duration().as_secs_f32();
     if active {
         (widen + step).min(1.0)
     } else {
@@ -684,7 +684,7 @@ impl Element for Scrollbar {
                 if widen != f32::from(u8::from(active)) {
                     window.request_animation_frame();
                 }
-                let t = crate::motion::HOVER_FADE.progress(widen);
+                let t = crate::motion::SCROLLBAR_FADE.progress(widen);
                 let width = px(crate::motion::lerp(
                     theme::SCROLLBAR_THUMB_W,
                     theme::SCROLLBAR_THUMB_W_HOVER,
@@ -1114,8 +1114,9 @@ mod tests {
         );
     }
 
-    /// C26: after a scroll the thumb holds for 1.4s at full ink, fades on
-    /// the hover blend, and is gone (nothing drawn, no frame) by 1.5s.
+    /// C26: after a scroll the thumb holds for 1.4s at full ink, fades over
+    /// its own 100ms (`SCROLLBAR_FADE`), and is gone (nothing drawn, no
+    /// frame) by 1.5s.
     #[test]
     fn the_idle_thumb_lingers_then_fades_and_is_gone() {
         assert_eq!(idle_thumb_opacity(0.0, false), Some(1.0));
@@ -1125,9 +1126,9 @@ mod tests {
         assert_eq!(idle_thumb_opacity(1.55, false), None);
         assert_eq!(idle_thumb_opacity(3.0, false), None);
         assert_eq!(idle_thumb_opacity(1.45, true), None, "reduced: no fade");
-        // The widen rides over the hover blend, both ways, and lands at
+        // The widen rides over its fade, both ways, and lands at
         // once under reduced motion.
-        let half = Duration::from_millis(theme::MOTION_HOVER_FADE_MS / 2);
+        let half = Duration::from_millis(theme::MOTION_SCROLLBAR_FADE_MS / 2);
         assert!((step_widen(0.0, true, half, false) - 0.5).abs() < 1e-3);
         assert_eq!(step_widen(0.9, true, half, false), 1.0);
         assert_eq!(step_widen(0.2, false, half, false), 0.0);

@@ -146,7 +146,7 @@ pub(crate) fn render_agent(
                 )),
         )
         .children(verdict)
-        .children(opens.then(|| disclosure_chevron(false, false)))
+        .children(opens.then(|| disclosure_chevron("agent-chevron", false, false)))
         .child(div().flex_1())
         .children(running.then(|| {
             div()

@@ -8,7 +8,9 @@
 //! so the view needs nothing from its host but the curve. The first frame
 //! only learns where the text ends: nothing fades on first paint. A view
 //! drawn without a `TextFresh` forgets what it saw, so its next one starts
-//! afresh and any fade still running lands at once.
+//! afresh and any fade still running lands at once. A stream that ended
+//! (`land`) speeds what is still fading up to land within a short while,
+//! as Claude's streaming text does at turn end ([`fade_progress`]).
 
 use std::{collections::HashMap, ops::Range, rc::Rc, time::Duration, time::Instant};
 
@@ -25,6 +27,36 @@ pub struct TextFresh {
     pub ease: Rc<dyn Fn(f32) -> f32>,
     /// What the text fades in from: the ground under the view.
     pub ground: Hsla,
+    /// The stream ended at this instant: every run still fading lands
+    /// within the duration from it (see [`fade_progress`]).
+    pub land: Option<(Instant, Duration)>,
+}
+
+/// How far (linear, `0..=1`) a fade of `fade` that began at `appeared` is
+/// at `now`. Once the stream ends (`land`: when, and within how long), a
+/// fade with more left than that speeds up to finish in it — Claude's
+/// `playbackRate = remaining / within` — and one with less runs on as it
+/// was.
+pub fn fade_progress(
+    appeared: Instant,
+    now: Instant,
+    fade: Duration,
+    land: Option<(Instant, Duration)>,
+) -> f32 {
+    let fade = fade.as_secs_f32().max(f32::EPSILON);
+    let at = |when: Instant| (when.saturating_duration_since(appeared).as_secs_f32() / fade).clamp(0., 1.);
+    let plain = at(now);
+    let Some((ended, within)) = land.filter(|(ended, _)| *ended < now && *ended > appeared) else {
+        return plain;
+    };
+    let then = at(ended);
+    let left = (1. - then) * fade;
+    let within = within.as_secs_f32();
+    if left <= within {
+        return plain;
+    }
+    let since = now.saturating_duration_since(ended).as_secs_f32();
+    (then + (1. - then) * since / within.max(f32::EPSILON)).clamp(0., 1.)
 }
 
 /// Where this frame's runs fall in the view's text, and the runs still
@@ -122,8 +154,7 @@ pub(super) fn paint_veil(
         if from >= to {
             continue;
         }
-        let elapsed = now.saturating_duration_since(at).as_secs_f32();
-        let t = (elapsed / fresh.fade.as_secs_f32().max(f32::EPSILON)).clamp(0., 1.);
+        let t = fade_progress(at, now, fresh.fade, fresh.land);
         let veil = 1. - (fresh.ease)(t);
         if veil <= 0. {
             continue;
@@ -154,7 +185,28 @@ mod tests {
             fade: Duration::from_millis(300),
             ease: Rc::new(|t| t),
             ground: Hsla::default(),
+            land: None,
         }
+    }
+
+    /// A fade runs linear to its end; once the stream ends, one with more
+    /// than the landing left finishes within it, one with less runs on.
+    #[test]
+    fn a_fade_lands_within_the_landing_once_the_stream_ends() {
+        let ms = Duration::from_millis;
+        let start = Instant::now();
+        let fade = ms(400);
+        assert_eq!(fade_progress(start, start, fade, None), 0.);
+        assert!((fade_progress(start, start + ms(100), fade, None) - 0.25).abs() < 1e-4);
+        assert_eq!(fade_progress(start, start + ms(500), fade, None), 1.);
+        // Ended at 100ms (a quarter in): 300ms left squeezes into 120.
+        let land = Some((start + ms(100), ms(120)));
+        assert!((fade_progress(start, start + ms(100), fade, land) - 0.25).abs() < 1e-4);
+        assert!((fade_progress(start, start + ms(160), fade, land) - 0.625).abs() < 1e-3);
+        assert_eq!(fade_progress(start, start + ms(220), fade, land), 1.);
+        // Ended at 350ms: 50ms left runs on at its own pace.
+        let late = Some((start + ms(350), ms(120)));
+        assert!((fade_progress(start, start + ms(375), fade, late) - 0.9375).abs() < 1e-4);
     }
 
     #[test]

@@ -98,6 +98,7 @@ impl CockpitView {
                     .left(px(PANEL_ROW_ICON_X))
                     .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
                     .child(ferrite_ui::components::fold_chevron(
+                        "panel-files-chevron",
                         all,
                         PANEL_ROW_ICON,
                         INK_SUBTLE,
@@ -193,6 +194,7 @@ impl CockpitView {
                     .invisible()
                     .group_hover(group.clone(), |style| style.visible())
                     .child(ferrite_ui::components::fold_chevron(
+                        ("panel-file-chevron", index),
                         unfolded,
                         PANEL_ROW_ICON,
                         INK_SUBTLE,

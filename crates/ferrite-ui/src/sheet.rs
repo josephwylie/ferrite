@@ -25,6 +25,12 @@ pub fn veil() -> Div {
     components::veil().cursor_default()
 }
 
+/// Where a sheet that went fades out with its veil (`motion::veil_out`,
+/// `motion::dialog_out`): the veil's box, answering no pointer.
+pub fn leaving_veil() -> Div {
+    components::veil_frame()
+}
+
 /// A modal sheet, `width` × `height` at most `MODAL_VIEWPORT_FRACTION` of
 /// the window: the float at sheet size. Its definite height is what lets
 /// the body scroll.

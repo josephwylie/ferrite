@@ -126,8 +126,7 @@
 //!    plan's current step and a running check; the working
 //!    caption's shimmer (`components::shimmer`), on the focused Pane only;
 //!    the caret blinking in the focused Composer (`components::caret_blink`);
-//!    the nav and the panel riding their width (`MOTION_RESIZE_MS`); hover
-//!    fills blending in. No dot pulses: a status dot never breathes, and
+//!    a button's hover fill blending in and its press squishing it. No dot pulses: a status dot never breathes, and
 //!    unread is ink (`INK_STRONG` title), not motion. The motion section below holds
 //!    the rest of the catalog, and reduced motion holds every loop on a
 //!    static end state that says the same thing.
@@ -1312,7 +1311,7 @@ pub fn init_components(cx: &mut gpui::App) {
         gpui::base::ScrollbarMotion::default()
             .with_enter(std::time::Duration::ZERO)
             .with_idle(std::time::Duration::from_millis(MOTION_SCROLLBAR_LINGER_MS))
-            .with_exit(std::time::Duration::from_millis(MOTION_HOVER_FADE_MS)),
+            .with_exit(std::time::Duration::from_millis(MOTION_SCROLLBAR_FADE_MS)),
     );
 }
 
@@ -1775,8 +1774,8 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // **One plane** (theme rule 2, SPEC §4). The window is the nav and the
 // board column under the head row (`WIN_CHROME_H`), all the plane's grey,
 // parted by the Cockpit's seams (`plane_seams`). The board column starts at the
-// nav's seam; its left edge rides the nav's width every frame while cmd-B
-// folds it (`motion::RESIZE`). A Solo Pane fills it flush, square and
+// nav's seam; its left edge moves with the nav's width when cmd-B folds
+// it, at once. A Solo Pane fills it flush, square and
 // unringed; a Group's cells stand `BOARD_PAD` in from the bar and the
 // window's edge (`board_pad`), each at `R_CARD` with its ring. Cells on a
 // board are `BOARD_SEAM` apart; a seam is the gutter's centre line and its
@@ -2671,7 +2670,7 @@ pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 //
 // Chrome is SF Pro; numbers from the terminal world (diffstats, spinners)
 // are Geist Mono. Rows are rounded (`R_CONTROL`), wear `paint::RAISED`
-// under the pointer (`MOTION_HOVER_FADE_MS`) and `paint::SELECTED` with an
+// under the pointer (at once, as Claude's rows do) and `paint::SELECTED` with an
 // inset `LINE` ring when they stand for what the board shows. Colour is
 // state only: the mark (§6), a blocked or failed row's line 2, a Group's
 // roll-up word, the needs-you pill.
@@ -2681,11 +2680,10 @@ pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // truncating box is pinned to what its row leaves it, measured from the
 // face's own advances (`nav::Measure`).
 //
-// **Folding (cmd-B).** The column rides its width from `NAV_WIDTH` to
-// the rail (`NAV_FOLDED_W`) over `motion::RESIZE` (200ms) while its
-// content fades independently (`MOTION_NAV_FADE_MS`, CSS `ease`: 1 → 0
-// folding, 0 → 1 opening). The rail is one `NAV_RAIL_CELL` per open
-// Thread, its mark and its ⌘ digit.
+// **Folding (cmd-B).** The column snaps between `NAV_WIDTH` and the rail
+// (`NAV_FOLDED_W`), as Claude's sidebar does: no ride, no fade, no
+// per-frame relayout of the board. The rail is one `NAV_RAIL_CELL` per
+// open Thread, its mark and its ⌘ digit.
 
 /// 8px — the column's padding at its sides and foot (`padding: 0 8 8`).
 pub const NAV_COL_PAD: f32 = SPACE_2;
@@ -2817,51 +2815,50 @@ const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLB
 /// way.
 pub const NAV_AUTO_RAIL_BOARD_W: f32 = 560.0;
 pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
-/// 150ms — the column's content fading out as it folds and in as it
-/// opens, on CSS `ease`, apart from the width's 200ms ride.
-pub const MOTION_NAV_FADE_MS: u64 = 150;
 // (end WP-G) — append above this line only
 
 // ======================================== motion
 // Owner: the motion kit (motion.rs, and the call sites that ride it).
 // Edit values and append tokens only inside this section.
 //
-// **Motion is a budget, not a garnish.** The catalog is Zeron's, ported
-// with its numbers (`motion.rs` maps each entry to the Ferrite surface
-// that wears it). The rules every animated surface follows:
+// **Motion is a budget, not a garnish.** The numbers are Claude Desktop's,
+// read from its source (`docs/research/craft/motion-claude-source.md`, the
+// authority wherever it and the recordings disagree): its duration scale
+// (`MOTION_DUR_*`, Claude's `--cds-dur-*`) and its curves
+// (`MOTION_EASE_*`, `--cds-ease-*`). `motion.rs` maps each entry to the
+// Ferrite surface that wears it. The rules every animated surface follows:
 //
-// - **Ease out, and exits softer than entrances.** Entrances rise or settle
-//   a few pixels into place. What the operator dismisses (a menu, a sheet,
-//   the palette) goes at once: dismissals are frequent, a fading surface
-//   would hold its hit area past its state, and the closed state says it
-//   all. What leaves on its own (a toast) fades out shorter and softer than
-//   it came (`MOTION_TOAST_OUT_MS`), as a face no pointer finds. The
-//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly; the
-//   panel snaps (⌥⌘B), as Claude's does. A
-//   board slot is no float: the Review slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
-//   `MOTION_SLOT_CLOSE_MS`), its Pane giving way and taking the room back,
-//   so the board never jumps.
-// - **Pointer hover gets one 100ms colour blend (`MOTION_HOVER_FADE_MS`)**,
-//   everywhere: a nav row, an icon button, a menu row, a seam's line.
-//   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
-//   changes, a Send becoming ready) and a press land on the same frame.
-//   What arrives on its own fades in, opacity only: streamed text by the
-//   run (`MOTION_STREAM_FADE_MS`), the operator's sent bubble
-//   (`MOTION_BUBBLE_FADE_MS`); first paint and scroll-back never animate.
-//   Nothing on a high-frequency interaction scales, slides or staggers.
+// - **Menus and popovers snap; dialogs, the palette and toasts fade out.**
+//   A menu, a popover, a fold of tool steps, the sidebar (cmd-B) and the
+//   panel land on their frame, open and shut, as Claude's do. A sheet, the
+//   palette and a toast leave as a face no pointer finds (`motion::float_out`,
+//   `toast_out`), their veil fading with them. A board slot is no float:
+//   the Review slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
+//   `MOTION_SLOT_CLOSE_MS`), its Pane giving way and taking the room back.
+// - **One hover blend for buttons (`MOTION_DUR_FAST_MS`, the quart); list
+//   rows and menu rows snap.** A button's ground blends over 60ms and its
+//   press squishes it (`MOTION_PRESS_SCALE`); a nav row, a menu row and the
+//   sidebar's own buttons take their hover on the frame the pointer
+//   arrives. A keyboard change (focus, cmd-] / cmd-D, menu selection, tier
+//   changes) lands on its frame.
+// - **What arrives on its own animates in**: streamed text by the run
+//   (`MOTION_STREAM_FADE_MS`, linear), the operator's sent bubble popping in
+//   (`MOTION_BUBBLE_*`), the approval card settling (`MOTION_PROMOTE_*`),
+//   the working line's words rolling (`MOTION_MORPH_*`); first paint and
+//   scroll-back never animate.
 // - **Little moves at once** (theme rule 8). The loops: the working mark
 //   (`MOTION_WORKING_MARK_MS`) in place of a working Thread's dot and as the
 //   working line's mark, its caption's shimmer (`MOTION_SHIMMER_MS`) on the
-//   focused Pane, and the focused
-//   Composer's caret blink (`MOTION_CARET_BLINK_MS`). A status dot never
-//   pulses or breathes.
+//   focused Pane, and the focused Composer's caret blink
+//   (`MOTION_CARET_BLINK_MS`). A status dot never pulses or breathes.
 // - **Interruptible.** A state the operator can flip back (a hover, a
-//   switch) retargets from where it is, never restarts.
+//   switch, a fold) retargets from where it is, never restarts.
 // - **No entrance on first paint.** Only a change the operator watched
 //   happen animates; a restored layout or scroll-back arrives in place.
 // - **Every animation has a static end state** that says the same thing
 //   without motion. Reduced motion (the system flag, `cx.reduce_motion()`)
-//   snaps a one-shot to its end and holds a loop at its start.
+//   snaps a one-shot to its end, draws no exit, and holds a loop at its
+//   start, as Claude's `prefers-reduced-motion` rule does.
 // - **A window with nothing animating schedules no frame.** Loops ride one
 //   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`): each declares
 //   when its picture next changes, and the clock wakes only the views due
@@ -2875,55 +2872,109 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   never every Pane. Nothing animates where its host would rebuild more
 //   than the animation shows.
 
-/// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
+/// Claude's duration scale (`--cds-dur-fast`, `-snap`, `-base`, `-sheet`,
+/// `-slow`): every duration below is one of these unless it says why.
+pub const MOTION_DUR_FAST_MS: u64 = 60;
+pub const MOTION_DUR_SNAP_MS: u64 = 120;
+pub const MOTION_DUR_BASE_MS: u64 = 200;
+pub const MOTION_DUR_SHEET_MS: u64 = 300;
+pub const MOTION_DUR_SLOW_MS: u64 = 450;
+
+/// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`:
+/// a Panel preview swapping in, the image viewer's zoom.
 pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
-/// CSS `ease`: quick fades, menu and sheet entrances.
+/// CSS `ease`: the quick fades (an image landing, the Reply pill).
 pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
-/// CSS `ease-out`: what arrives on its own (streamed text, the sent bubble).
+/// The CSS keyword `ease-out` (`cubic-bezier(0,0,.58,1)`), which Claude's
+/// keyframe shorthands use: the nav's folds.
 pub const MOTION_EASE_OUT: [f32; 4] = [0.0, 0.0, 0.58, 1.0];
-/// CSS `transition-colors`' default curve: every hover blend.
+/// Tailwind's default curve (a bare `transition-*`): the chevrons' turn,
+/// the jump button's fade.
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
-/// A drawer's ease-out (the iOS sheet's curve): it leaves at speed and
-/// spends its second half settling the last few pixels, so a slot sliding
-/// across half the board reads as one physical move rather than a jump.
-pub const MOTION_EASE_SLIDE: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
+/// Claude's `--cds-ease-out`, the ease-out quart: button hovers and
+/// presses, dialogs, toasts, the usage ring.
+pub const MOTION_EASE_OUT_QUART: [f32; 4] = [0.165, 0.84, 0.44, 1.0];
+/// Claude's `--cds-ease-snap` (the iOS sheet's curve): it leaves at speed
+/// and spends its second half settling. Tooltips, message actions, and a
+/// board slot sliding across half the board.
+pub const MOTION_EASE_SNAP: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
+/// Claude's `--cds-ease-overshoot`: past the end and back (y > 1). The sent
+/// bubble's pop, the switch's knob, a button's release.
+pub const MOTION_EASE_OVERSHOOT: [f32; 4] = [0.34, 1.3, 0.64, 1.0];
+/// The working line's label roll (Claude's `cds-morph`).
+pub const MOTION_EASE_MORPH: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
+/// The ease-out cubic: the approval card settling.
+pub const MOTION_EASE_OUT_CUBIC: [f32; 4] = [0.215, 0.61, 0.355, 1.0];
+/// Linear: streamed text (Claude's `delta-fade`).
+pub const MOTION_EASE_LINEAR: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a Panel preview or tab body swapping in (`motion::swap_in`).
 pub const MOTION_ROW_IN_MS: u64 = 180;
 /// Streamed text: each run the provider delivers (a row appended live, or
-/// words growing an answer) fades in over 300ms on `MOTION_EASE_OUT`,
-/// opacity only, nothing rising (Claude's measured 300-350ms per chunk,
-/// `docs/research/craft/motion-measured.md`). A run still fading when its
-/// turn ends lands at full.
-pub const MOTION_STREAM_FADE_MS: u64 = 300;
-/// The operator's sent bubble fades in over 250ms on `MOTION_EASE_OUT`,
-/// opacity only (Claude's measured ≈230ms, no slide).
-pub const MOTION_BUBBLE_FADE_MS: u64 = 250;
-/// The sidebar's width between column and rail (cmd-B) — the board's
-/// width rides it every frame.
-pub const MOTION_RESIZE_MS: u64 = 200;
+/// words growing an answer) fades in over 400ms, linear, opacity only
+/// (Claude's `delta-fade`). When the turn ends, a run with more than
+/// `MOTION_STREAM_LAND_MS` left is sped up to land within it.
+pub const MOTION_STREAM_FADE_MS: u64 = 400;
+pub const MOTION_STREAM_LAND_MS: u64 = MOTION_DUR_SNAP_MS;
+/// The operator's sent bubble pops in over `MOTION_DUR_SLOW_MS` on
+/// `MOTION_EASE_OVERSHOOT`: opacity 0 → 1, scale `MOTION_BUBBLE_FROM_SCALE`
+/// → 1 from its right edge, rising `MOTION_BUBBLE_RISE` (Claude's
+/// `code-user-bubble-enter`).
+pub const MOTION_BUBBLE_FADE_MS: u64 = MOTION_DUR_SLOW_MS;
+pub const MOTION_BUBBLE_FROM_SCALE: f32 = 0.92;
+pub const MOTION_BUBBLE_RISE: f32 = 6.0;
+/// The approval card settles in over 220ms on `MOTION_EASE_OUT_CUBIC`, from
+/// opacity `MOTION_PROMOTE_FROM_OPACITY`, `MOTION_PROMOTE_DROP` above its
+/// place and scale `MOTION_PROMOTE_FROM_SCALE` from its top (Claude's
+/// `code-approval-promote`).
+pub const MOTION_PROMOTE_MS: u64 = 220;
+pub const MOTION_PROMOTE_FROM_OPACITY: f32 = 0.75;
+pub const MOTION_PROMOTE_DROP: f32 = 6.0;
+pub const MOTION_PROMOTE_FROM_SCALE: f32 = 0.97;
+/// The working line's label rolls when its words change: the old face
+/// leaves to opacity 0 and `MOTION_MORPH_SHIFT` up as the new one comes in
+/// from as far below, each over 180ms on `MOTION_EASE_MORPH`.
+pub const MOTION_MORPH_MS: u64 = 180;
+pub const MOTION_MORPH_SHIFT: f32 = 3.0;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// The send circle's glyph swap (send ⇄ stop, `fade-quick`): the leaving
 /// glyph shrinks to this scale as it fades, the arriving one grows from it
 /// (an `svg` transform: the icon swap's scale without its blur).
 pub const MOTION_SEND_GLYPH_FROM: f32 = 0.5;
-/// `menu-in`: 0ms — a menu snaps open and shut, as both reference apps'
-/// list menus do (`docs/research/craft/motion-measured.md`). At 0 the
-/// entrance draws its element as it is (`motion::menu_in`); the shift, the
-/// opacity and the scale below are its face should it ever run again.
+/// `menu-in`: 0ms — a menu snaps open and shut, as Claude's `Menu`,
+/// `ContextMenu` and `Popover` do. At 0 the entrance draws its element as
+/// it is (`motion::menu_in`); the shift and opacity below are its face
+/// should it ever run again.
 pub const MOTION_MENU_IN_MS: u64 = 0;
 pub const MOTION_MENU_SHIFT: f32 = 2.0;
 /// The opacity a menu starts from: it is already legible on its first frame.
 pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
-/// `dialog-in`: 180ms, growing from `MOTION_FLOAT_FROM_SCALE` while rising 2px.
-pub const MOTION_DIALOG_IN_MS: u64 = 180;
-pub const MOTION_DIALOG_RISE: f32 = 2.0;
-/// The scale a menu or sheet grows from (Zeron's 0.96): a CSS `scale` on
-/// what it paints, its layout and hit area at rest.
-pub const MOTION_FLOAT_FROM_SCALE: f32 = 0.96;
+/// A dialog (the Settings and Project sheets) fades and grows in over
+/// `MOTION_DUR_BASE_MS` on the quart, and leaves the same way; its veil
+/// fades with it, both ways (Claude's `Dialog`).
+pub const MOTION_DIALOG_IN_MS: u64 = MOTION_DUR_BASE_MS;
+pub const MOTION_DIALOG_OUT_MS: u64 = MOTION_DUR_BASE_MS;
+pub const MOTION_DIALOG_RISE: f32 = 0.0;
+/// The palette (and the shortcuts sheet on it) comes in as a dialog does,
+/// from its top, and leaves quicker, over `MOTION_DUR_SNAP_MS`; its veil
+/// fades over 50ms both ways (Claude's command palette).
+pub const MOTION_PALETTE_OUT_MS: u64 = MOTION_DUR_SNAP_MS;
+pub const MOTION_PALETTE_VEIL_MS: u64 = 50;
+/// The scale a sheet grows from and shrinks to (Claude's 0.98): a CSS
+/// `scale` on what it paints, its layout and hit area at rest.
+pub const MOTION_FLOAT_FROM_SCALE: f32 = 0.98;
+/// A tooltip fades and grows in from `MOTION_FLOAT_FROM_SCALE` over
+/// `MOTION_DUR_SNAP_MS` on `MOTION_EASE_SNAP`, after gpui's 300ms delay
+/// (Claude's grouped tooltips; the next one within 200ms shows at once).
+pub const MOTION_TOOLTIP_IN_MS: u64 = MOTION_DUR_SNAP_MS;
+/// A message's actions show under the pointer over `MOTION_DUR_SNAP_MS`
+/// after `MOTION_ACTIONS_DELAY_MS`, and go over `MOTION_DUR_FAST_MS` at
+/// once, both on `MOTION_EASE_SNAP` (Claude's `--cds-message-actions-opacity`).
+pub const MOTION_ACTIONS_DELAY_MS: u64 = 100;
 /// A board slot opening beside its owner (the Review beside its Pane)
-/// slides in over 240ms on `MOTION_EASE_SLIDE`, the owner narrowing with
+/// slides in over 240ms on `MOTION_EASE_SNAP`, the owner narrowing with
 /// it, and slides out over a shorter 200ms before it is removed.
 pub const MOTION_SLOT_OPEN_MS: u64 = 240;
 pub const MOTION_SLOT_CLOSE_MS: u64 = 200;
@@ -2931,20 +2982,46 @@ pub const MOTION_SLOT_CLOSE_MS: u64 = 200;
 /// ⌘0): 240ms on `MOTION_EASE_OUT_EXPO`, so the picture answers the click
 /// at once and settles softly. A pinch or a pan follows the hand instead.
 pub const MOTION_IMAGE_ZOOM_MS: u64 = 240;
-/// The hover blend, the one hover duration: 100ms on
-/// `MOTION_EASE_STANDARD`.
-pub const MOTION_HOVER_FADE_MS: u64 = 100;
-/// A toast's timing: it drops in over 180ms and leaves over 100ms (the
-/// Needs-you toast, `motion::toast_in` / `toast_out`; the kit's toast
-/// stack settles on the same two).
-pub const MOTION_TOAST_IN_MS: u64 = 180;
-pub const MOTION_TOAST_OUT_MS: u64 = 100;
-/// How far a toast drops into place under the window's head (it settles
-/// away from the edge it hangs on); it lifts half that as it fades away.
-pub const MOTION_TOAST_DROP: f32 = 4.0;
+/// A button's hover blend: `MOTION_DUR_FAST_MS` on the quart (Claude's
+/// `Button` fill). Rows and menu rows snap instead.
+pub const MOTION_HOVER_FADE_MS: u64 = MOTION_DUR_FAST_MS;
+/// A button's press: it squishes to this scale over `MOTION_DUR_FAST_MS`
+/// on the quart, and springs back over `MOTION_DUR_SLOW_MS` on
+/// `MOTION_EASE_OVERSHOOT` (Claude's `.cds-btn-squish`).
+pub const MOTION_PRESS_SCALE: f32 = 0.975;
+/// A disclosure chevron turns its quarter over `MOTION_DUR_FAST_MS` on
+/// `MOTION_EASE_STANDARD` (Claude's `TurnStatus` caret).
+pub const MOTION_CHEVRON_MS: u64 = MOTION_DUR_FAST_MS;
+/// A nav fold (a Project, a Group, Pinned) opens and shuts over 150ms on
+/// the `ease-out` keyword, height and opacity (Claude's
+/// `sidebar-group-expand`).
+pub const MOTION_FOLD_MS: u64 = 150;
+/// Jump to latest fades in and out over `MOTION_DUR_BASE_MS` on
+/// `MOTION_EASE_STANDARD`, answering no pointer while it goes.
+pub const MOTION_JUMP_FADE_MS: u64 = MOTION_DUR_BASE_MS;
+/// A toast's timing: it comes in over `MOTION_DUR_BASE_MS` on the quart,
+/// sliding its own height out from under the edge it hangs on, and leaves
+/// over the same, shrinking to `MOTION_TOAST_OUT_SCALE` as it fades (the
+/// Needs-you toast, `motion::toast_in` / `toast_out`; the kit's toast stack
+/// settles on the same two).
+pub const MOTION_TOAST_IN_MS: u64 = MOTION_DUR_BASE_MS;
+pub const MOTION_TOAST_OUT_MS: u64 = MOTION_DUR_BASE_MS;
+pub const MOTION_TOAST_OUT_SCALE: f32 = 0.85;
+/// The usage ring's arc moves to a new reading over `MOTION_DUR_SHEET_MS`
+/// and its ink over `MOTION_DUR_BASE_MS`, both on the quart (Claude's
+/// `.urm`).
+pub const MOTION_USAGE_ARC_MS: u64 = MOTION_DUR_SHEET_MS;
+pub const MOTION_USAGE_INK_MS: u64 = MOTION_DUR_BASE_MS;
+/// A switch's knob slides over `MOTION_DUR_SNAP_MS` on
+/// `MOTION_EASE_OVERSHOOT`; its track snaps (Claude's `Switch`).
+pub const MOTION_SWITCH_MS: u64 = MOTION_DUR_SNAP_MS;
 /// 1.4s — how long a scrollbar thumb holds after the last scroll frame
-/// (C26) before it fades out over `MOTION_HOVER_FADE_MS`. Idle, no thumb.
+/// (C26) before it fades out over `MOTION_SCROLLBAR_FADE_MS`. Idle, no
+/// thumb.
 pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
+/// 100ms — a scrollbar thumb's fade out and its widening under the
+/// pointer, on `MOTION_EASE_STANDARD`.
+pub const MOTION_SCROLLBAR_FADE_MS: u64 = 100;
 /// The pulse clock's grid: one ~30fps tick shared by every loop in the
 /// window. A loop is drawn on the ticks where its picture changes; one that
 /// stops painting drops off after its last declared tick, and the clock
