@@ -18,7 +18,7 @@ use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
-use crate::providers::{Cut, FilesRestored, Forked, RewindRequest, Rewound};
+use crate::providers::{Cut, FilesRestored, ForkRequest, Forked, RewindRequest, Rewound};
 
 /// The rewind in flight.
 #[derive(Default)]
@@ -112,15 +112,20 @@ impl Rewinds {
     }
 }
 
-/// Where a fork before the prompt `request` names starts.
-pub(super) fn fork(request: &RewindRequest) -> io::Result<Forked> {
-    let session = session(request)?;
-    Ok(
-        match entry_parent(&projects_root(), &session, &request.prompt)? {
-            Some(at) => Forked::ResumeAt { session, at },
-            None => Forked::Fresh,
+/// Where a fork starts: before the prompt `request` names, or at the
+/// conversation's end (`--resume` with `--fork-session` alone).
+pub(super) fn fork(request: &ForkRequest) -> io::Result<Forked> {
+    let session = named(request.session.as_ref())?;
+    let Some(before) = &request.before else {
+        return Ok(Forked::ResumeAt { session, at: None });
+    };
+    Ok(match entry_parent(&projects_root(), &session, before)? {
+        Some(at) => Forked::ResumeAt {
+            session,
+            at: Some(at),
         },
-    )
+        None => Forked::Fresh,
+    })
 }
 
 /// What `rewind_conversation` answered.
@@ -152,9 +157,12 @@ fn cut(response: &Value, request: &RewindRequest) -> io::Result<Cut> {
 }
 
 fn session(request: &RewindRequest) -> io::Result<String> {
-    request
-        .session
-        .clone()
+    named(request.session.as_ref())
+}
+
+fn named(session: Option<&String>) -> io::Result<String> {
+    session
+        .cloned()
         .ok_or_else(|| io::Error::other("Claude has not named its session yet"))
 }
 
@@ -339,5 +347,25 @@ mod tests {
             .unwrap()
             .contains("Unsupported control request subtype"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A fork of the whole conversation resumes the Session at its end,
+    /// forked: no entry to find. It needs the Session.
+    #[test]
+    fn a_whole_fork_resumes_at_the_end() {
+        let whole = |session: Option<&str>| {
+            fork(&ForkRequest {
+                before: None,
+                session: session.map(str::to_string),
+            })
+        };
+        assert_eq!(
+            whole(Some("sess")).unwrap(),
+            Forked::ResumeAt {
+                session: "sess".into(),
+                at: None
+            }
+        );
+        assert!(whole(None).is_err());
     }
 }

@@ -501,7 +501,28 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 53,
                 Op::Fork {
                     thread,
-                    prompt: "0000beef-0003-4000-8001-000000000001".into(),
+                    prompt: Some("0000beef-0003-4000-8001-000000000001".into()),
+                    draft: None,
+                },
+            ),
+        ),
+        (
+            "command_fork_whole",
+            command(
+                53,
+                Op::Fork {
+                    thread,
+                    prompt: None,
+                    draft: Some("> a passage".into()),
+                },
+            ),
+        ),
+        (
+            "command_notice_unseen",
+            command(
+                22,
+                Op::Notice {
+                    action: NoticeAction::Unseen { thread },
                 },
             ),
         ),

@@ -710,6 +710,14 @@ impl CockpitView {
                 .iter()
                 .any(|block| matches!(block.body, ferrite_core::transcript::Body::Prompt(_)))
         });
+        // Rewind and Fork where the agent can cut now (`rewind_gate`), and
+        // a Rewind only to a prompt it knows by id.
+        let cuttable = open
+            .as_ref()
+            .and_then(super::transcript_glue::rewind_gate)
+            .is_some_and(|allowed| allowed.is_ok());
+        let rewindable =
+            cuttable && focused.is_some_and(|thread| self.last_prompt(thread).is_some());
         let ladder = open.is_some_and(|open| {
             !ferrite_core::providers::models::efforts_for(
                 open.provider(),
@@ -993,6 +1001,14 @@ impl CockpitView {
             Command::ResendPrompt,
         );
         add(
+            rewindable,
+            "Rewind to last message".into(),
+            "",
+            None,
+            Command::Rewind,
+        );
+        add(cuttable, "Fork thread".into(), "", None, Command::Fork);
+        add(
             open.is_some(),
             "Model".into(),
             "/model",
@@ -1101,7 +1117,12 @@ impl CockpitView {
     }
 
     /// Run one command of the table: what its key or its old chrome ran.
-    fn run_command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn run_command(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let thread = self.focused_thread();
         let generation = thread
             .and_then(|thread| self.cockpit.thread(thread))
@@ -1153,6 +1174,27 @@ impl CockpitView {
             Command::ResendPrompt => {
                 let index = self.focused();
                 self.resend_reading_prompt(index, cx);
+            }
+            // The prompt's own Rewind menu, as its ↶ opens it, over the
+            // middle of its Pane.
+            Command::Rewind => {
+                if let Some((thread, block)) =
+                    thread.and_then(|thread| Some((thread, self.last_prompt(thread)?)))
+                {
+                    let at = self
+                        .pane_rects(window)
+                        .into_iter()
+                        .find(|(index, _)| *index == self.focused())
+                        .map_or_else(gpui::Point::default, |(_, rect)| {
+                            gpui::point(px(rect.x + rect.w / 2.), px(rect.y + rect.h / 2.))
+                        });
+                    self.open_context_menu(MenuTarget::Prompt { thread, block }, at, cx);
+                }
+            }
+            Command::Fork => {
+                if let Some(thread) = thread {
+                    self.fork_thread(thread, None, None, cx);
+                }
             }
             Command::Model | Command::Effort => {
                 if let Some(thread) = thread {

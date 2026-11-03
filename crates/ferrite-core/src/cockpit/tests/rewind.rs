@@ -108,7 +108,7 @@ fn a_rewind_never_races_a_running_turn() {
 fn a_fork_opens_a_new_thread_with_the_conversation_before_its_prompt() {
     let (mut cockpit, _fake, thread) = two_turns("rewind-fork");
     let second = prompts(&cockpit, thread)[1].1.clone().unwrap();
-    cockpit.fork(thread, &second).unwrap();
+    cockpit.fork(thread, Some(&second), None).unwrap();
     cockpit.pump();
     let fork = cockpit
         .threads()
@@ -124,4 +124,44 @@ fn a_fork_opens_a_new_thread_with_the_conversation_before_its_prompt() {
     );
     // The source keeps everything.
     assert_eq!(prompts(&cockpit, thread).len(), 2);
+}
+
+/// A fork of the whole conversation (an answer's latest Fork, the Thread's
+/// menu, a side chat) takes every prompt, asks the agent with no prompt to
+/// stop before, lands the windows on the new Thread and leaves its draft in
+/// the new Thread's Composer.
+#[test]
+fn a_whole_fork_opens_focused_with_its_draft() {
+    let (mut cockpit, fake, thread) = two_turns("rewind-fork-whole");
+    cockpit.take_asked();
+    cockpit
+        .fork(thread, None, Some("> the passage".into()))
+        .unwrap();
+    cockpit.pump();
+    let asked = fake.forks.borrow().last().unwrap().clone();
+    assert_eq!(asked.before, None);
+    assert_eq!(asked.session.as_deref(), Some("sess-1"));
+    let fork = cockpit
+        .threads()
+        .into_iter()
+        .find(|open| *open != thread)
+        .expect("the fork is open");
+    assert_eq!(
+        prompts(&cockpit, fork)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>(),
+        vec!["one".to_string(), "two".to_string()]
+    );
+    assert!(
+        cockpit
+            .take_asked()
+            .iter()
+            .any(|asked| matches!(asked, crate::cockpit::Asked::Focus(landed) if *landed == fork)),
+        "the windows land on the fork"
+    );
+    assert_eq!(
+        cockpit.take_retrieved_prompt(fork),
+        Some(("> the passage".into(), false))
+    );
 }

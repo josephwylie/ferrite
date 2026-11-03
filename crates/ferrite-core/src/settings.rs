@@ -348,6 +348,17 @@ impl Settings {
         }
     }
 
+    /// The permission mode in which `provider`'s agent goes on without
+    /// asking, short of bypassing every check: Claude's `auto`, Codex's
+    /// `never`. What an approval's `Allow and switch to …` moves a Thread
+    /// to.
+    pub fn auto_mode_for(provider: Provider) -> &'static str {
+        match provider {
+            Provider::Claude => "auto",
+            Provider::Codex => "never",
+        }
+    }
+
     /// The sandbox `provider`'s Sessions run in, for a provider that has
     /// one: Codex's (`read-only`, its own default, unless one is set).
     /// Claude runs in none.
@@ -822,5 +833,13 @@ mod tests {
         settings.set_effort_for(Provider::Claude, None);
         assert_eq!(settings.effort_for(Provider::Claude), None);
         assert_eq!(settings.effort_for(Provider::Codex), Some("ultra"));
+    }
+
+    /// Every provider names its own auto mode: the switch never branches on
+    /// a provider in the window.
+    #[test]
+    fn each_provider_has_an_auto_mode_among_its_modes() {
+        assert_eq!(Settings::auto_mode_for(Provider::Claude), "auto");
+        assert_eq!(Settings::auto_mode_for(Provider::Codex), "never");
     }
 }

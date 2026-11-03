@@ -87,11 +87,15 @@ pub(crate) fn is_agent(tool: &ToolBlock) -> bool {
 /// one's `Failed` tag, as any call's. No disclosure: `open`, laid over the
 /// whole row, opens the agent's own transcript, and the chevron that shows
 /// under the pointer says the row goes somewhere.
+/// `targeted`: the keyboard's walk has landed on the row (its focus,
+/// whose keys open the agent and stop it); it wears `paint::RAISED`, as a
+/// targeted disclosure does.
 pub(crate) fn render_agent(
     block: BlockId,
     tool: &ToolBlock,
     row_cx: &RowCx,
     open: Option<AnyElement>,
+    targeted: Option<&gpui::FocusHandle>,
 ) -> AnyElement {
     let grid = row_cx.grid();
     let small = grid.activity();
@@ -158,12 +162,25 @@ pub(crate) fn render_agent(
                 .child(components::working_mark(theme::TASK_ICON, INK_SUBTLE))
         }));
     let row_selector = format!("agent-row-{}", tool.call);
-    activity_line(grid, None, words)
+    let row = activity_line(grid, None, words)
         .id(SharedString::from(row_selector.clone()))
         .debug_selector(move || row_selector.clone())
         .group(DISCLOSURE_ROW)
-        .children(open)
-        .into_any_element()
+        .children(open);
+    match targeted {
+        Some(focus) => row
+            .bg(theme::paint::RAISED)
+            .child(
+                div()
+                    .debug_selector(|| "tool-disclosure-keyboard-target".into())
+                    .absolute()
+                    .inset_0(),
+            )
+            .track_focus(focus)
+            .key_context("ToolDisclosure")
+            .into_any_element(),
+        None => row.into_any_element(),
+    }
 }
 
 #[cfg(test)]

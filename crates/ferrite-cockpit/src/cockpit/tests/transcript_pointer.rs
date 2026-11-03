@@ -608,6 +608,62 @@ fn a_selections_reply_quotes_it_over_the_draft_and_sends_it(cx: &mut TestAppCont
     assert!(cx.debug_bounds("remove-quote-0").is_none(), "with no ×");
 }
 
+/// Claude's pill holds `Start a side chat` before `Reply`: a new Thread
+/// forked from this point, focused, the passage a Quote row over its
+/// Composer. An agent that cannot fork offers Reply alone.
+#[gpui::test]
+fn a_selections_side_chat_forks_with_the_passage_quoted(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("selection-side-chat", 1);
+    *fake.native_controls.borrow_mut() = true;
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "alpha\n\nbravo\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    drag(&view, cx, (0, 2), (0, 4));
+    let side = cx
+        .debug_bounds("selection-side-chat")
+        .expect("the pill offers a side chat");
+    let reply = cx.debug_bounds("selection-reply-quote").expect("and Reply");
+    assert!(side.right() <= reply.left(), "the side chat first");
+    let pill = cx.debug_bounds("selection-reply").unwrap();
+    assert!(pill.contains(&side.center()) && pill.contains(&reply.center()));
+    cx.simulate_click(side.center(), gpui::Modifiers::none());
+    tick(cx);
+    tick(cx);
+    assert_eq!(fake.forks.borrow().len(), 1);
+    assert_eq!(fake.forks.borrow()[0].before, None, "from this point");
+    view.read_with(cx, |view, cx| {
+        let threads = view.cockpit.threads();
+        assert_eq!(threads.len(), 2);
+        assert_eq!(view.focused_thread(), Some(threads[1]), "it opens focused");
+        let pane = &view.panes[view.focused()];
+        assert_eq!(pane.composer.read(cx).quotes(), ["ph"]);
+        assert!(pane.composer.read(cx).text().is_empty());
+    });
+
+    // Without a fork behind it, the pill is Reply alone.
+    *fake.native_controls.borrow_mut() = false;
+    view.update(cx, |view, cx| {
+        let first = view.cockpit.threads()[0];
+        view.focus_thread(first, cx);
+    });
+    tick(cx);
+    drag(&view, cx, (0, 2), (0, 4));
+    assert!(cx.debug_bounds("selection-reply-quote").is_some());
+    assert!(cx.debug_bounds("selection-side-chat").is_none());
+}
+
 /// The pill goes when its selection does (a press away), and fades out
 /// on a scroll. There is no esc:
 /// Claude's has none, and esc keeps its Interrupt.

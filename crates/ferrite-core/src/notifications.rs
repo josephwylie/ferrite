@@ -377,6 +377,32 @@ impl Notifications {
         changed
     }
 
+    /// Claude's `Mark as unread`: the Thread's newest Notice is unread
+    /// again, so the Thread asks for the operator's eye until it is next
+    /// seen. False when it holds no Notice, or already an unread one.
+    pub fn mark_unread(&mut self, thread: ThreadId) -> bool {
+        if self.attention(thread) {
+            return false;
+        }
+        match self
+            .notices
+            .iter_mut()
+            .rev()
+            .find(|notice| notice.thread == thread)
+        {
+            Some(notice) => {
+                notice.read = false;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether `mark_unread` would mark anything.
+    pub fn can_mark_unread(&self, thread: ThreadId) -> bool {
+        !self.attention(thread) && self.notices.iter().any(|notice| notice.thread == thread)
+    }
+
     pub fn dismiss(&mut self, id: NoticeId) -> bool {
         let before = self.notices.len();
         self.notices.retain(|notice| notice.id != id);
@@ -1029,5 +1055,27 @@ mod tests {
             b.notifications.newest().unwrap().get(),
             (CAPACITY + 5) as u64
         );
+    }
+
+    /// Mark as unread: the Thread's newest Notice is unread again, until it
+    /// is next seen; a Thread with none, or already unread, has nothing to
+    /// mark.
+    #[test]
+    fn mark_unread_brings_back_the_newest_notice() {
+        let mut notifications = Notifications::with_grace(Duration::ZERO);
+        let thread = ThreadId::new(4);
+        assert!(!notifications.can_mark_unread(thread), "no Notice yet");
+        assert!(!notifications.mark_unread(thread));
+        notifications.fixture_push(thread, TurnOutcome::Completed);
+        let newest = notifications.fixture_push(thread, TurnOutcome::Completed);
+        assert!(!notifications.can_mark_unread(thread), "already unread");
+        notifications.acknowledge(thread);
+        assert!(notifications.can_mark_unread(thread));
+        assert!(notifications.mark_unread(thread));
+        assert!(notifications.attention(thread));
+        assert!(!notifications.get(newest).unwrap().read);
+        assert_eq!(notifications.unread(), 1, "only the newest");
+        notifications.acknowledge(thread);
+        assert!(!notifications.attention(thread), "seen again, read again");
     }
 }

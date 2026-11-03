@@ -5,7 +5,7 @@ use super::*;
 /// A menu row names the key that does the same thing: a chord the
 /// keymap binds, never one it has moved (⌘F is find, not fullscreen). A
 /// Thread row's menu keys are Claude's one-letter mnemonics instead, each
-/// its own letter.
+/// its own letter; a parent row (`Open in ›`) has its chevron instead.
 #[gpui::test]
 fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("menu-shortcuts", 1);
@@ -21,6 +21,7 @@ fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
             .context_rows(MenuTarget::Thread(thread))
             .into_iter()
             .flatten()
+            .filter(|(_, verb)| !matches!(verb, MenuVerb::Submenu(_)))
             .map(|(item, _)| item.shortcut.expect("every row has its letter").to_string())
             .collect();
         assert!(letters

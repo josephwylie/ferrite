@@ -94,9 +94,15 @@ impl Engine {
                     .map(|()| None)
                     .map_err(failed)
             }
-            Op::Fork { thread, prompt } => {
+            Op::Fork {
+                thread,
+                prompt,
+                draft,
+            } => {
                 self.open_thread(thread)?;
-                self.fork(*thread, prompt).map(|()| None).map_err(failed)
+                self.fork(*thread, prompt.as_deref(), draft.clone())
+                    .map(|()| None)
+                    .map_err(failed)
             }
             Op::TakeRecovered { thread } => Ok(self
                 .take_retrieved_prompt(*thread)
@@ -408,6 +414,9 @@ impl Engine {
             NoticeAction::Clear => self.clear_notices(),
             NoticeAction::Seen { thread } => {
                 self.acknowledge_seen(&[*thread]);
+            }
+            NoticeAction::Unseen { thread } => {
+                self.mark_unread(*thread);
             }
             NoticeAction::Unknown => {}
         }

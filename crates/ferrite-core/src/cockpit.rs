@@ -1519,16 +1519,22 @@ impl Cockpit {
     }
 
     /// A new Thread from `thread`'s conversation before the prompt `prompt`
-    /// names (`Engine::fork`).
-    pub fn fork(&mut self, thread: ThreadId, prompt: &str) -> Result<(), String> {
+    /// names, or all of it, `draft` in its Composer (`Engine::fork`).
+    pub fn fork(
+        &mut self,
+        thread: ThreadId,
+        prompt: Option<&str>,
+        draft: Option<String>,
+    ) -> Result<(), String> {
         self.act(
-            |engine| engine.fork(thread, prompt),
+            |engine| engine.fork(thread, prompt, draft.clone()),
             |server| {
                 run(
                     server,
                     Op::Fork {
                         thread,
-                        prompt: prompt.to_string(),
+                        prompt: prompt.map(str::to_string),
+                        draft: draft.clone(),
                     },
                 )
                 .map_err(|error| error.to_string())
@@ -2320,6 +2326,16 @@ impl Cockpit {
         self.act(Engine::mark_notices_read, |server| {
             notice(server, NoticeAction::Read)
         });
+    }
+
+    /// Claude's `Mark as unread` (`Notifications::mark_unread`).
+    pub fn mark_unread(&mut self, thread: ThreadId) {
+        self.act(
+            |engine| {
+                engine.mark_unread(thread);
+            },
+            |server| notice(server, NoticeAction::Unseen { thread }),
+        );
     }
 
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {

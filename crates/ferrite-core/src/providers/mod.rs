@@ -155,8 +155,9 @@ pub trait Session {
         ))
     }
     /// Where a new conversation holding this one up to the prompt
-    /// `request.prompt` names, without it, comes from (`Forked`).
-    fn fork(&mut self, _request: RewindRequest) -> io::Result<ForkAck> {
+    /// `request.before` names, without it — or the whole of it — comes
+    /// from (`Forked`).
+    fn fork(&mut self, _request: ForkRequest) -> io::Result<ForkAck> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "this agent cannot fork its conversation",
@@ -250,6 +251,16 @@ pub struct RewindRequest {
     pub session: Option<String>,
 }
 
+/// A fork the provider is asked where to start (`Session::fork`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForkRequest {
+    /// The prompt the fork stops before, by the id it was sent under;
+    /// `None` takes the whole conversation.
+    pub before: Option<String>,
+    /// The provider's id of the conversation, as its Init named it.
+    pub session: Option<String>,
+}
+
 /// What the provider made of a rewind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rewound {
@@ -286,9 +297,9 @@ pub type RewindAck = Receiver<io::Result<Rewound>>;
 pub enum Forked {
     /// A new provider conversation already made, by its id.
     Thread(String),
-    /// Made by the next Session: `session` resumed at its entry `at`,
-    /// forked (`ResumePoint`).
-    ResumeAt { session: String, at: String },
+    /// Made by the next Session: `session` resumed at its entry `at` (at
+    /// its end for `None`), forked (`ResumePoint`).
+    ResumeAt { session: String, at: Option<String> },
     /// Nothing before the prompt: the fork starts a conversation afresh.
     Fresh,
 }
@@ -356,7 +367,7 @@ impl Session for ClaudeSession {
     fn rewind(&mut self, request: RewindRequest) -> io::Result<RewindAck> {
         ClaudeSession::rewind(self, request)
     }
-    fn fork(&mut self, request: RewindRequest) -> io::Result<ForkAck> {
+    fn fork(&mut self, request: ForkRequest) -> io::Result<ForkAck> {
         ClaudeSession::fork(self, request)
     }
 

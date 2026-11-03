@@ -192,11 +192,15 @@ pub enum Op {
         edit: bool,
     },
     /// A new Thread holding this one's conversation up to the prompt
-    /// `prompt` names, without it. The reply says only whether the fork was
-    /// asked for: the new Thread opens once the agent answers.
+    /// `prompt` names, without it — all of it when there is none — and
+    /// `draft` in its Composer. The reply says only whether the fork was
+    /// asked for: the new Thread opens, focused, once the agent answers.
     Fork {
         thread: ThreadId,
-        prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft: Option<String>,
     },
     /// Up or Down through the Thread's sent prompts.
     Recall {
@@ -716,6 +720,10 @@ pub enum NoticeAction {
     Clear,
     /// A focused window has this Thread on screen.
     Seen {
+        thread: ThreadId,
+    },
+    /// The operator marked this Thread unread (`Notifications::mark_unread`).
+    Unseen {
         thread: ThreadId,
     },
     #[serde(other)]

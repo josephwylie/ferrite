@@ -1,10 +1,13 @@
 //! Rewind, Edit and Fork (docs/research/edit-rewind.md): back to before a
-//! prompt, in place or as a new Thread. The agent is asked; its answer,
-//! read on the pump, cuts the transcript and the log, hands an Edit's
-//! prompt back to the Composer, or opens the fork.
+//! prompt, in place, or as a new Thread — which may also take the whole
+//! conversation. The agent is asked; its answer, read on the pump, cuts the
+//! transcript and the log, hands an Edit's prompt back to the Composer, or
+//! opens the fork, focused, with its draft in its Composer.
 
 use super::*;
-use crate::providers::{Cut, FilesRestored, ForkAck, Forked, RewindAck, RewindRequest, Rewound};
+use crate::providers::{
+    Cut, FilesRestored, ForkAck, ForkRequest, Forked, RewindAck, RewindRequest, Rewound,
+};
 use crate::store::ResumePoint;
 
 /// How long an agent has to answer a rewind or a fork.
@@ -12,16 +15,26 @@ const REWIND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A rewind or fork waiting on its agent.
 pub(super) struct Rewinding {
-    request: RewindRequest,
+    ask: Ask,
     /// The prompt's words: an Edit's Composer text, and how a Notice
-    /// names it.
-    text: String,
+    /// names it; `None` for a fork of the whole conversation.
+    text: Option<String>,
     /// How many prompts the cut takes, it among them.
     dropped: u64,
-    fork: bool,
     edit: bool,
     /// What the agent was asked, once it could be.
     asked: Option<(Answer, Instant)>,
+}
+
+/// What the agent is to be asked.
+#[derive(Clone)]
+enum Ask {
+    Rewind(RewindRequest),
+    /// A fork, with the words its Composer opens holding.
+    Fork {
+        request: ForkRequest,
+        draft: Option<String>,
+    },
 }
 
 enum Answer {
@@ -47,31 +60,7 @@ impl Engine {
         files: bool,
         edit: bool,
     ) -> Result<(), String> {
-        self.ask_rewind(thread, prompt, files, edit, false)
-    }
-
-    /// A new Thread holding `thread`'s conversation up to the prompt
-    /// `prompt` names, without it; it opens once the agent says where its
-    /// conversation comes from.
-    pub fn fork(&mut self, thread: ThreadId, prompt: &str) -> Result<(), String> {
-        self.ask_rewind(thread, prompt, false, false, true)
-    }
-
-    fn ask_rewind(
-        &mut self,
-        thread: ThreadId,
-        prompt: &str,
-        files: bool,
-        edit: bool,
-        fork: bool,
-    ) -> Result<(), String> {
-        let state = self
-            .threads
-            .get(&thread)
-            .ok_or_else(|| "that Thread is not open".to_string())?;
-        if let Some(why) = refusal(state) {
-            return Err(why.into());
-        }
+        let state = self.cuttable(thread)?;
         let (text, dropped, latest) = target(state.transcript(), prompt)?;
         let request = RewindRequest {
             prompt: prompt.into(),
@@ -79,18 +68,71 @@ impl Engine {
             files,
             session: state.resume.clone(),
         };
-        if !self.start_or_say(thread, if fork { "fork failed" } else { "rewind failed" }) {
+        self.ask(
+            thread,
+            Rewinding {
+                ask: Ask::Rewind(request),
+                text: Some(text),
+                dropped,
+                edit,
+                asked: None,
+            },
+        )
+    }
+
+    /// A new Thread holding `thread`'s conversation up to the prompt
+    /// `prompt` names, without it — the whole of it for `None`; it opens,
+    /// focused, once the agent says where its conversation comes from,
+    /// `draft` waiting in its Composer.
+    pub fn fork(
+        &mut self,
+        thread: ThreadId,
+        prompt: Option<&str>,
+        draft: Option<String>,
+    ) -> Result<(), String> {
+        let state = self.cuttable(thread)?;
+        let (text, dropped) = match prompt {
+            Some(prompt) => {
+                let (text, dropped, _) = target(state.transcript(), prompt)?;
+                (Some(text), dropped)
+            }
+            None => (None, 0),
+        };
+        let request = ForkRequest {
+            before: prompt.map(str::to_string),
+            session: state.resume.clone(),
+        };
+        self.ask(
+            thread,
+            Rewinding {
+                ask: Ask::Fork { request, draft },
+                text,
+                dropped,
+                edit: false,
+                asked: None,
+            },
+        )
+    }
+
+    /// `thread`, when a rewind or a fork can be asked of it now.
+    fn cuttable(&self, thread: ThreadId) -> Result<&Thread, String> {
+        let state = self
+            .threads
+            .get(&thread)
+            .ok_or_else(|| "that Thread is not open".to_string())?;
+        match refusal(state) {
+            Some(why) => Err(why.into()),
+            None => Ok(state),
+        }
+    }
+
+    /// Start `thread`'s agent if it must, and leave `pending` for the pump.
+    fn ask(&mut self, thread: ThreadId, pending: Rewinding) -> Result<(), String> {
+        if !self.start_or_say(thread, &format!("{} failed", pending.noun())) {
             return Err("its agent could not start".into());
         }
         let state = self.threads.get_mut(&thread).expect("checked");
-        state.rewinding = Some(Rewinding {
-            request,
-            text,
-            dropped,
-            fork,
-            edit,
-            asked: None,
-        });
+        state.rewinding = Some(pending);
         Ok(())
     }
 
@@ -112,10 +154,9 @@ impl Engine {
             update.activity_changed = true;
             let state = self.threads.get_mut(&id).expect("listed above");
             let pending = state.rewinding.take().expect("listed above");
-            let noun = if pending.fork { "fork" } else { "rewind" };
             match outcome {
                 Err(error) => {
-                    state.apply(Input::Notice(format!("{noun} failed: {error}")));
+                    state.apply(Input::Notice(format!("{} failed: {error}", pending.noun())));
                 }
                 Ok(Outcome::Rewound(rewound)) => {
                     self.finish_rewind(id, pending, rewound, &mut update)
@@ -136,12 +177,11 @@ impl Engine {
             if state.session.is_none() && state.replacement.is_none() {
                 return Some(Err(io::Error::other("its agent stopped")));
             }
-            let (request, fork) = (pending.request.clone(), pending.fork);
+            let ask = pending.ask.clone();
             let session = state.ready_session()?;
-            let asked = if fork {
-                session.fork(request).map(Answer::Fork)
-            } else {
-                session.rewind(request).map(Answer::Rewind)
+            let asked = match ask {
+                Ask::Fork { request, .. } => session.fork(request).map(Answer::Fork),
+                Ask::Rewind(request) => session.rewind(request).map(Answer::Rewind),
             };
             match asked {
                 Ok(answer) => {
@@ -178,6 +218,9 @@ impl Engine {
         rewound: Rewound,
         update: &mut PaneUpdate,
     ) {
+        let Ask::Rewind(request) = &pending.ask else {
+            unreachable!("a rewind's answer");
+        };
         let state = self.threads.get_mut(&thread).expect("checked by caller");
         let files = rewound.files.as_ref().map(files_restored);
         match rewound.cut {
@@ -206,38 +249,37 @@ impl Engine {
                 state.end_session();
             }
         }
-        if let Err(error) = state
-            .writer
-            .record_rewind(&pending.request.prompt, pending.dropped)
-        {
+        if let Err(error) = state.writer.record_rewind(&request.prompt, pending.dropped) {
             state.report_store_error(error);
         }
         let cut = state.apply(Input::Rewind {
-            prompt: pending.request.prompt.clone(),
+            prompt: request.prompt.clone(),
             dropped: pending.dropped,
         });
         update.dirty.extend(cut.dirty);
         update.evicted.extend(cut.evicted);
         state.prompt_history.forget_latest(pending.dropped as usize);
         state.invalidate_suggestion();
+        let text = pending.text.unwrap_or_default();
         if pending.edit {
-            state
-                .native_queue
-                .recovered
-                .push((pending.text.clone(), false));
+            state.native_queue.recovered.push((text.clone(), false));
         }
         let restored = files
             .map(|files| format!(" · {files} restored"))
             .unwrap_or_default();
         state.apply(Input::Notice(format!(
             "rewound to before \u{201c}{}\u{201d}{restored}",
-            title_from_prompt(&pending.text)
+            title_from_prompt(&text)
         )));
     }
 
     /// The agent said where the fork's conversation comes from: the new
-    /// Thread is written from this one's log and opened.
+    /// Thread is written from this one's log and opened, its draft in its
+    /// Composer, and the windows land on it (Claude opens a fork).
     fn finish_fork(&mut self, thread: ThreadId, pending: Rewinding, forked: Forked) {
+        let Ask::Fork { request, draft } = pending.ask else {
+            unreachable!("a fork's answer");
+        };
         let native = match forked {
             Forked::Thread(session) => Some(ResumePoint {
                 session,
@@ -246,7 +288,7 @@ impl Engine {
             }),
             Forked::ResumeAt { session, at } => Some(ResumePoint {
                 session,
-                at: Some(at),
+                at,
                 fork: true,
             }),
             Forked::Fresh => None,
@@ -261,17 +303,34 @@ impl Engine {
             .map_err(LoadError::Io)
             .and_then(|()| {
                 self.store
-                    .fork(thread, &pending.request.prompt, native.as_ref())
+                    .fork(thread, request.before.as_deref(), native.as_ref())
             })
-            .and_then(|fork| self.revive(fork));
+            .and_then(|fork| self.revive(fork).map(|()| fork));
+        if let Ok(fork) = made {
+            if let (Some(draft), Some(state)) = (draft, self.threads.get_mut(&fork)) {
+                state.native_queue.recovered.push((draft, false));
+            }
+            self.outbox.push(ServerMessage::Focus { thread: fork });
+        }
         let state = self.threads.get_mut(&thread).expect("checked by caller");
-        state.apply(Input::Notice(match made {
-            Ok(()) => format!(
+        state.apply(Input::Notice(match (made, &pending.text) {
+            (Ok(_), Some(text)) => format!(
                 "forked into a new Thread before \u{201c}{}\u{201d}",
-                title_from_prompt(&pending.text)
+                title_from_prompt(text)
             ),
-            Err(error) => format!("fork failed: {error}"),
+            (Ok(_), None) => "forked into a new Thread".to_string(),
+            (Err(error), _) => format!("fork failed: {error}"),
         }));
+    }
+}
+
+impl Rewinding {
+    /// How a Notice names this ask.
+    fn noun(&self) -> &'static str {
+        match self.ask {
+            Ask::Rewind(_) => "rewind",
+            Ask::Fork { .. } => "fork",
+        }
     }
 }
 

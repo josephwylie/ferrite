@@ -3,6 +3,7 @@
 //! Cockpit owns roster and cross-pane commands. This module owns the expensive
 //! per-Subject row snapshot, native text, selection document and viewport.
 
+mod answer;
 mod find;
 mod outputs;
 mod reply;
@@ -245,6 +246,14 @@ pub enum TranscriptEvent {
     /// A press on a selection's Reply: quote this passage into the Pane's
     /// Composer (`Composer::quote`) and give it the keyboard.
     Quote(String),
+    /// An answer's Fork: a new Thread holding the conversation through
+    /// the answer whose last block is `after`.
+    Fork {
+        after: BlockId,
+    },
+    /// A selection's `Start a side chat`: a new Thread from this point,
+    /// the passage quoted in its Composer.
+    SideChat(String),
 }
 
 /// What a sent prompt's actions ask of its Thread
@@ -346,6 +355,8 @@ pub struct TranscriptView {
     pressed_at: Option<gpui::Point<gpui::Pixels>>,
     /// A turn card's menu, while open (`outputs`).
     output_menu: Option<outputs::OutputMenu>,
+    /// An answer's `⋯` menu, while open (`answer`).
+    answer_menu: Option<answer::AnswerMenu>,
 }
 
 /// The scroll room a band jump adds under the last row: the jump's row and
@@ -474,6 +485,7 @@ impl TranscriptView {
             reply: None,
             pressed_at: None,
             output_menu: None,
+            answer_menu: None,
         };
         view.register_scope(cx);
         view.sync_members(cx);
@@ -913,6 +925,24 @@ impl TranscriptView {
         self.input.namespace.clone()
     }
 
+    /// The hover key the newest answer's actions blend under: a headless
+    /// driver rests the pointer on it.
+    #[cfg(feature = "visual-reference")]
+    pub fn newest_answer_hover(&self) -> Option<SharedString> {
+        let row = self
+            .rows
+            .rows()
+            .iter()
+            .rev()
+            .find(|row| row.kind() == RowKind::Answer { narration: false })?;
+        Some(actions_key(&self.answer_id(answer_first(row.blocks()))))
+    }
+
+    /// An answer row's id, by its first block.
+    fn answer_id(&self, first: BlockId) -> SharedString {
+        SharedString::from(format!("answer-{}-{first:?}", self.input.namespace))
+    }
+
     fn text_runs(&self) -> TextRuns {
         self.selection_source
             .clone()
@@ -1054,11 +1084,7 @@ impl TranscriptView {
             return date_divider(&blocks[0]).into_any_element();
         }
         if let Some(source) = row.source() {
-            let first = blocks
-                .first()
-                .expect("markdown row has a block")
-                .markdown_run
-                .unwrap_or(blocks[0].id);
+            let first = answer_first(blocks);
             // Prose on the column's edge, narration (more work follows it
             // in its turn) at the answer's full ink, as both reference apps
             // draw it: it is the content, not a footnote to the work. A
@@ -1072,7 +1098,7 @@ impl TranscriptView {
                 .is_some_and(|last| last.id() == row.id());
             let streaming = self.input.working.is_some() && newest;
             let landing = self.answer_landing(cx).filter(|_| newest);
-            let id = SharedString::from(format!("answer-{}-{first:?}", self.input.namespace));
+            let id = self.answer_id(first);
             let shown = self.actions_shown(&id);
             let time = blocks
                 .iter()
@@ -1080,6 +1106,7 @@ impl TranscriptView {
                 .map(|at| {
                     message_time(SharedString::from(format!("{id}-time")), "answer-time", at)
                 });
+            let last = blocks.last().map_or(first, |block| block.id);
             let actions = (!narration && !streaming).then(|| {
                 message_actions(shown)
                     .debug_selector(|| "answer-actions".into())
@@ -1089,6 +1116,30 @@ impl TranscriptView {
                         -(theme::MESSAGE_ACTION - theme::MESSAGE_ACTION_GLYPH) / 2.
                     ))
                     .child(self.copy_action(row.id(), source.to_owned()))
+                    .children(view.as_ref().and_then(|view| {
+                        let allowed = self.input.rewind.as_ref()?;
+                        Some(self.message_door(
+                            row.id(),
+                            ("answer-fork", ferrite_ui::icons::BRANCH, "Fork from here"),
+                            allowed,
+                            view.clone(),
+                            move |_, _, cx| cx.emit(TranscriptEvent::Fork { after: last }),
+                        ))
+                    }))
+                    .children(view.as_ref().map(|view| {
+                        let text = source.to_owned();
+                        self.message_door(
+                            row.id(),
+                            (
+                                "answer-more",
+                                ferrite_ui::icons::ELLIPSIS,
+                                answer::MORE_LABEL,
+                            ),
+                            &Ok(()),
+                            view.clone(),
+                            move |view, at, cx| view.open_answer_menu(last, text.clone(), at, cx),
+                        )
+                    }))
                     .children(time)
             });
             return div()
@@ -1249,7 +1300,10 @@ impl TranscriptView {
             let open = view
                 .filter(|_| self.input.agents.get(&tool.call).is_some())
                 .map(|view| agent_opener(&tool.call, view.clone()));
-            return pane::render_agent(block, tool, row_cx, open);
+            let targeted = self
+                .tool_targeted(DisclosureId::Tool(tool.call.clone()))
+                .then_some(&self.input.disclosure_focus);
+            return pane::render_agent(block, tool, row_cx, open, targeted);
         }
         let call = DisclosureId::Tool(tool.call.clone());
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
@@ -1338,8 +1392,14 @@ impl TranscriptView {
         let mut stops = Vec::new();
         let call = |stops: &mut Vec<DisclosureId>, block: &ferrite_core::transcript::Block| {
             if let Body::Tool(tool) = &block.body {
-                // An agent's row opens its agent: it has no details.
-                if pane::tool_has_details(tool) && !pane::is_agent(tool) {
+                // An agent's row has no details: it is a stop while it
+                // opens its agent (↵), which the keyboard can stop too.
+                let stop = if pane::is_agent(tool) {
+                    self.input.agents.get(&tool.call).is_some()
+                } else {
+                    pane::tool_has_details(tool)
+                };
+                if stop {
                     stops.push(DisclosureId::Tool(tool.call.clone()));
                 }
             }
@@ -1512,10 +1572,8 @@ impl TranscriptView {
             .into_any_element()
     }
 
-    /// One of a sent prompt's Edit, Rewind and Fork: a message action's
-    /// door asking the cockpit for it (`TranscriptEvent::Prompt`), or,
-    /// while it cannot be asked (`allowed`), its glyph faded and its
-    /// tooltip saying why.
+    /// One of a sent prompt's Edit, Rewind and Fork, asking the cockpit
+    /// for it (`TranscriptEvent::Prompt`).
     fn prompt_action(
         &self,
         row: &RowId,
@@ -1524,11 +1582,27 @@ impl TranscriptView {
         allowed: &Result<(), SharedString>,
         view: Entity<Self>,
     ) -> AnyElement {
-        let (glyph, label, selector) = match action {
-            PromptAction::Edit => (ferrite_ui::icons::PENCIL, "Edit", "message-edit"),
-            PromptAction::Rewind => (ferrite_ui::icons::BACK, "Rewind to here", "message-rewind"),
-            PromptAction::Fork => (ferrite_ui::icons::BRANCH, "Fork from here", "message-fork"),
+        let face = match action {
+            PromptAction::Edit => ("message-edit", ferrite_ui::icons::PENCIL, "Edit"),
+            PromptAction::Rewind => ("message-rewind", ferrite_ui::icons::BACK, "Rewind to here"),
+            PromptAction::Fork => ("message-fork", ferrite_ui::icons::BRANCH, "Fork from here"),
         };
+        self.message_door(row, face, allowed, view, move |_, at, cx| {
+            cx.emit(TranscriptEvent::Prompt { block, action, at })
+        })
+    }
+
+    /// A message action's door — its selector, glyph and label — doing
+    /// `press` at the press's point, or, while it cannot be asked
+    /// (`allowed`), its glyph faded and its tooltip saying why.
+    fn message_door(
+        &self,
+        row: &RowId,
+        (selector, glyph, label): (&'static str, &'static str, &'static str),
+        allowed: &Result<(), SharedString>,
+        view: Entity<Self>,
+        press: impl Fn(&mut Self, gpui::Point<gpui::Pixels>, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
         let id = gpui::ElementId::from(SharedString::from(format!(
             "{selector}-{}-{row:?}",
             self.input.namespace
@@ -1566,9 +1640,7 @@ impl TranscriptView {
                     .on_click(move |event, _, cx| {
                         cx.stop_propagation();
                         let at = event.position();
-                        view.update(cx, |_, cx| {
-                            cx.emit(TranscriptEvent::Prompt { block, action, at })
-                        });
+                        view.update(cx, |view, cx| press(view, at, cx));
                     })
                     .child(face(1.))
             }
@@ -1759,6 +1831,23 @@ fn arrival_fade(kind: RowKind) -> ferrite_ui::motion::MotionSpec {
     }
 }
 
+/// A transcript menu (a card's, an answer's), hung at the press that
+/// opened it, kept inside the window, over everything after it.
+fn hang_menu(id: &'static str, at: gpui::Point<gpui::Pixels>, shell: gpui::Div) -> AnyElement {
+    gpui::deferred(
+        gpui::anchored()
+            .position(at)
+            .snap_to_window_with_margin(px(theme::GRID_PAD))
+            .child(ferrite_ui::motion::menu_in(
+                id,
+                shell,
+                ferrite_ui::motion::Opens::Down,
+            )),
+    )
+    .with_priority(2)
+    .into_any_element()
+}
+
 /// The group a message row names: its actions show under the pointer
 /// anywhere on it.
 const MESSAGE_GROUP: &str = "transcript-message";
@@ -1775,6 +1864,12 @@ fn message_actions(shown: f32) -> gpui::Div {
         .gap(px(theme::SPACE_0_5))
         .h(px(theme::MESSAGE_ACTION))
         .opacity(shown)
+}
+
+/// The block an answer row is known by: its Markdown run's first.
+fn answer_first(blocks: &[ferrite_core::transcript::Block]) -> BlockId {
+    let first = blocks.first().expect("markdown row has a block");
+    first.markdown_run.unwrap_or(first.id)
 }
 
 /// The hover key a message's actions blend under.
@@ -2475,6 +2570,7 @@ impl Render for TranscriptView {
         let card = self.hover_card(window, cx);
         let reply = self.reply_float(window, cx);
         let output_menu = self.output_menu_float(cx);
+        let answer_menu = self.answer_menu_float(cx);
         let find_bar = self.find_bar();
         div()
             .relative()
@@ -2519,6 +2615,7 @@ impl Render for TranscriptView {
             .children(card)
             .children(reply)
             .children(output_menu)
+            .children(answer_menu)
             .children(find_bar)
             .on_action(cx.listener(|view, _: &crate::find::Next, _, cx| view.find_step(true, cx)))
             .on_action(

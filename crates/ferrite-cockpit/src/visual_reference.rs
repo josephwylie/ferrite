@@ -107,13 +107,14 @@ impl Session for FixtureSession {
             })
             .collect()
     }
-    /// MCP sign-in and reconnect, as both CLIs answer them, and a mode
-    /// switch (the Composer's mode menu, an approval's `Allow and switch`).
+    /// MCP sign-in and reconnect, as both CLIs answer them, a mode switch
+    /// (the Composer's mode menu, an approval's `Allow and switch`), and
+    /// Claude's rewind and fork (a message's Fork, the row menu's).
     fn supports_control(&self, kind: ControlKind) -> bool {
         matches!(
             kind,
             ControlKind::LoginMcp | ControlKind::ReconnectMcp | ControlKind::SetPermissionMode
-        )
+        ) || (kind == ControlKind::Rewind && self.provider == Provider::Claude)
     }
     fn interrupt(&mut self) -> io::Result<()> {
         Ok(())
@@ -437,6 +438,8 @@ const STATES: &[(&str, &[&str])] = &[
     ("menu", &["app"]),
     ("modelpicker", &["app"]),
     ("contextmenu", &["app"]),
+    ("row-menu", &["app"]),
+    ("answer-hover", &["app"]),
     ("settings", &["app"]),
     ("draft", &["app"]),
     ("projecteditor", &["app"]),
@@ -751,6 +754,22 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "conversation" => (conversation(label), none),
         "running" => (running_turn(false), none),
         "answer" => (running_turn(true), none),
+        // The pointer resting on the finished answer, as on
+        // claude/hover-assistant.png: Copy, Fork and `⋯` under it.
+        "answer-hover" => {
+            let setup: Setup = Box::new(|view, window, cx| {
+                let Some(transcript) = view.panes[0].transcript() else {
+                    return;
+                };
+                match transcript.read(cx).newest_answer_hover() {
+                    // Snapped: the still shows where the fade-in ends.
+                    Some(key) => ferrite_ui::motion::hover_snap(key)(&true, window, cx),
+                    None => eprintln!("ferrite: answer-hover: no answer row"),
+                }
+                transcript.update(cx, |_, cx| cx.notify());
+            });
+            (running_turn(true), setup)
+        }
         "toolgroups" => (tool_groups(label), none),
         "toolgroups-open" => {
             let scene = tool_groups(label);
@@ -825,7 +844,19 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
                     &true, window, cx,
                 );
-                press_more_when_drawn(thread, 8, window, cx);
+                press_more_when_drawn(thread, 8, false, window, cx);
+            });
+            (scene, setup)
+        }
+        // The row menu with its `Open in ›` submenu open beside it.
+        "row-menu" => {
+            let (scene, _) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                let thread = view.cockpit.roster().focused_thread().expect("focus");
+                ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
+                    &true, window, cx,
+                );
+                press_more_when_drawn(thread, 8, true, window, cx);
             });
             (scene, setup)
         }
@@ -1321,17 +1352,24 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
 }
 
 /// Open `thread`'s row menu from its `⋯` as a press does, on the first
-/// frame (of `frames`) that has drawn the button.
+/// frame (of `frames`) that has drawn the button; `submenu`, with its
+/// first row's submenu open.
 fn press_more_when_drawn(
     thread: ThreadId,
     frames: usize,
+    submenu: bool,
     window: &mut Window,
     cx: &mut Context<CockpitView>,
 ) {
     cx.on_next_frame(window, move |view, window, cx| {
         match window.debug_bounds(&format!("nav-more-0-{}", thread.get())) {
-            Some(button) => view.open_context_menu_under(MenuTarget::Thread(thread), button, cx),
-            None if frames > 0 => press_more_when_drawn(thread, frames - 1, window, cx),
+            Some(button) => {
+                view.open_context_menu_under(MenuTarget::Thread(thread), button, cx);
+                if submenu {
+                    view.open_submenu(0, super::context_menu::Submenu::OpenIn, cx);
+                }
+            }
+            None if frames > 0 => press_more_when_drawn(thread, frames - 1, submenu, window, cx),
             None => eprintln!("ferrite: contextmenu: the row's `⋯` never drew"),
         }
     });

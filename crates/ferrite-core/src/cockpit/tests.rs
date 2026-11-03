@@ -38,6 +38,7 @@ struct Scripted {
     answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
     native_suggestion: Rc<RefCell<Option<String>>>,
     rewinds: Rc<RefCell<Vec<crate::providers::RewindRequest>>>,
+    forks: Rc<RefCell<Vec<crate::providers::ForkRequest>>>,
     rewindable: Rc<RefCell<bool>>,
     steers: Rc<RefCell<bool>>,
     interrupts: Rc<RefCell<usize>>,
@@ -73,9 +74,9 @@ impl crate::providers::Session for Scripted {
     /// Forks afresh: the new Thread's agent starts a conversation of its own.
     fn fork(
         &mut self,
-        request: crate::providers::RewindRequest,
+        request: crate::providers::ForkRequest,
     ) -> io::Result<crate::providers::ForkAck> {
-        self.rewinds.borrow_mut().push(request);
+        self.forks.borrow_mut().push(request);
         let (answer, ack) = mpsc::sync_channel(1);
         answer.send(Ok(crate::providers::Forked::Fresh)).unwrap();
         Ok(ack)
@@ -191,6 +192,7 @@ struct Fake {
     native_suggestion: Rc<RefCell<Option<String>>>,
     /// Every rewind and fork a Session was asked for.
     rewinds: Rc<RefCell<Vec<crate::providers::RewindRequest>>>,
+    forks: Rc<RefCell<Vec<crate::providers::ForkRequest>>>,
     /// While set, Sessions offer rewind (`ControlKind::Rewind`): off, the
     /// controls they announce stay what other tests pin.
     rewindable: Rc<RefCell<bool>>,
@@ -271,6 +273,7 @@ impl Spawner for Fake {
             answers: self.answers.clone(),
             native_suggestion: self.native_suggestion.clone(),
             rewinds: self.rewinds.clone(),
+            forks: self.forks.clone(),
             rewindable: self.rewindable.clone(),
             steers: self.steers.clone(),
             interrupts: self.interrupts.clone(),

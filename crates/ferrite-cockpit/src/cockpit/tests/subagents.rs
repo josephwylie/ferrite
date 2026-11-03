@@ -766,3 +766,46 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.panes[0].is_main()));
     assert!(cx.debug_bounds("agent-running").is_none(), "settled");
 }
+
+/// The keyboard reaches an agent's row: Tab lands on it, ↵ opens its
+/// agent, and ⌫ stops it while it runs — the stop-agent op Escape uses on
+/// an opened agent. The shortcuts sheet lists it.
+#[gpui::test]
+fn the_keyboard_opens_and_stops_an_agents_row(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-row-keys", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    agent_call(&fake, "Atlas");
+    child(&fake, "Atlas", AgentStatus::Working);
+    tick(cx);
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.panes[0].targeted_tool().cloned()),
+        Some(ferrite_pane::pane::DisclosureId::Tool("Atlas".into())),
+        "the agent's row is a stop"
+    );
+    assert!(cx.debug_bounds("tool-disclosure-keyboard-target").is_some());
+    cx.simulate_keystrokes("backspace");
+    tick(cx);
+    assert_eq!(*fake.stopped.borrow(), [key("Atlas")]);
+    assert!(
+        view.read_with(cx, |view, _| view.panes[0].is_main()),
+        "stopping leaves the Pane on Main"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.panes[0].selected.clone()),
+        Subject::Subagent(key("Atlas")),
+        "↵ opens it"
+    );
+    assert_eq!(
+        crate::shortcuts::label("cockpit::StopAgent", Some("ToolDisclosure")),
+        Some(crate::shortcuts::Entry::Row(
+            crate::shortcuts::Place::Transcript,
+            "Stop the agent"
+        ))
+    );
+}

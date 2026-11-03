@@ -2575,28 +2575,34 @@ impl Store {
     }
 
     /// A new Thread holding `source`'s conversation since its last reset
-    /// up to the prompt `prompt` names, without it: `source`'s facts but
+    /// up to the prompt `prompt` names, without it (all of it for `None`):
+    /// `source`'s facts but
     /// its title, and its records but the provider conversation ids they
     /// name — the fork takes up `native` instead, or starts afresh. The
     /// source's writer must have flushed what the fork is to hold.
     pub fn fork(
         &self,
         source: ThreadId,
-        prompt: &str,
+        prompt: Option<&str>,
         native: Option<&ResumePoint>,
     ) -> Result<ThreadId, LoadError> {
         let snapshot = self.load(source)?;
         let records = &snapshot.records;
-        let observed = records
-            .iter()
-            .rposition(|record| {
-                matches!(record, Record::PromptObservation { prompt_id: Some(id), .. } if id == prompt)
-            })
-            .ok_or_else(|| io::Error::other("that prompt is not in the Thread's log"))?;
-        let cut = records[..observed]
-            .iter()
-            .rposition(|record| matches!(record, Record::Prompt { .. }))
-            .unwrap_or(observed);
+        let cut = match prompt {
+            None => records.len(),
+            Some(prompt) => {
+                let observed = records
+                    .iter()
+                    .rposition(|record| {
+                        matches!(record, Record::PromptObservation { prompt_id: Some(id), .. } if id == prompt)
+                    })
+                    .ok_or_else(|| io::Error::other("that prompt is not in the Thread's log"))?;
+                records[..observed]
+                    .iter()
+                    .rposition(|record| matches!(record, Record::Prompt { .. }))
+                    .unwrap_or(observed)
+            }
+        };
         let start = records[..cut]
             .iter()
             .rposition(|record| {
@@ -4141,14 +4147,14 @@ impl ThreadSnapshot {
         let mut started = false;
         for record in self.records.iter().rev() {
             match record {
-                Record::ResumeAt {
-                    session,
-                    at: Some(at),
-                    fork,
-                } if !(started && *fork) => {
+                // A fork resumes at its entry or at the end; an in-place
+                // point names its entry.
+                Record::ResumeAt { session, at, fork }
+                    if (at.is_some() || *fork) && !(started && *fork) =>
+                {
                     return Some(ResumePoint {
                         session: session.clone(),
-                        at: Some(at.clone()),
+                        at: at.clone(),
                         fork: *fork,
                     })
                 }

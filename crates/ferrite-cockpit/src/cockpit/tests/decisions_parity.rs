@@ -504,3 +504,37 @@ fn the_tail_key_follows_the_cursor(cx: &mut TestAppContext) {
         "an answered Decision leaves the transcript"
     );
 }
+
+/// Claude's `Allow and switch to Auto`: the split menu offers the
+/// provider's own auto mode (`Settings::auto_mode_for`), named as the
+/// Session names it, and only while the Session is not in it already.
+#[gpui::test]
+fn the_split_offers_the_providers_auto_mode(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("parity-switch-auto", 1);
+    *fake.native_controls.borrow_mut() = true;
+    *fake.modes.borrow_mut() = Some(
+        [
+            ("default", "Ask permissions"),
+            ("acceptEdits", "Accept edits"),
+            ("auto", "Auto"),
+        ]
+        .map(|(value, label)| ferrite_core::PermissionModeChoice {
+            value: value.into(),
+            label: label.into(),
+        })
+        .to_vec(),
+    );
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    fake.streams.borrow()[0]
+        .send(ask(bash("switch", "ls")))
+        .unwrap();
+    tick(cx);
+    let switch = view.read_with(cx, |view, _| {
+        view.decision_cards(0, false, false)
+            .and_then(|cards| cards.switch)
+            .map(|(mode, label, _)| (mode, label.to_string()))
+    });
+    assert_eq!(switch, Some(("auto".into(), "Auto".into())));
+}

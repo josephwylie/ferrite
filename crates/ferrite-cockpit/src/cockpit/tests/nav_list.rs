@@ -1397,7 +1397,11 @@ fn a_pinned_thread_heads_the_tree_until_unpinned(cx: &mut TestAppContext) {
             .map(|(item, _)| item.label.to_string())
             .collect()
     };
-    assert_eq!(view.read_with(cx, |view, _| menu(view))[0], "Pin");
+    // Claude's order: where it opens, then its pin.
+    assert_eq!(
+        view.read_with(cx, |view, _| menu(view))[..2],
+        ["Open in", "Pin"]
+    );
     assert!(
         cx.debug_bounds("nav-pinned-heading").is_none(),
         "nothing pinned"
@@ -1422,7 +1426,7 @@ fn a_pinned_thread_heads_the_tree_until_unpinned(cx: &mut TestAppContext) {
             state.solos.iter().all(|row| row.thread != threads[2]),
             "listed once"
         );
-        assert_eq!(menu(view)[0], "Unpin");
+        assert_eq!(menu(view)[1], "Unpin");
     });
     let heading = cx.debug_bounds("nav-pinned-heading").expect("Pinned");
     let row = cx

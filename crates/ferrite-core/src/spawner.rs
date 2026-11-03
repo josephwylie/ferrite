@@ -329,7 +329,7 @@ impl Session for SessionWithDefaults {
 
     fn fork(
         &mut self,
-        request: crate::providers::RewindRequest,
+        request: crate::providers::ForkRequest,
     ) -> io::Result<crate::providers::ForkAck> {
         self.inner.fork(request)
     }

@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::{FileSearchReply, ForkAck, RewindAck, RewindRequest, SettingAck};
+use super::{FileSearchReply, ForkAck, ForkRequest, RewindAck, RewindRequest, SettingAck};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -688,9 +688,9 @@ impl ClaudeSession {
         Ok(ack)
     }
 
-    /// Where a fork before the prompt `request` names starts: its session
-    /// resumed at the entry before it, forked; answered at once.
-    pub fn fork(&mut self, request: RewindRequest) -> io::Result<ForkAck> {
+    /// Where a fork starts: its session resumed at the entry before the
+    /// prompt `request` names, or at its end, forked; answered at once.
+    pub fn fork(&mut self, request: ForkRequest) -> io::Result<ForkAck> {
         let forked = rewind::fork(&request)?;
         let (reply, ack) = sync_channel(1);
         let _ = reply.send(Ok(forked));

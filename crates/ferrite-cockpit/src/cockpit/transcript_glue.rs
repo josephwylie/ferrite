@@ -310,17 +310,62 @@ impl CockpitView {
         let asked = match action {
             PromptAction::Edit => self.cockpit.rewind(thread, &prompt, false, true),
             PromptAction::Rewind => self.cockpit.rewind(thread, &prompt, files, false),
-            PromptAction::Fork => self.cockpit.fork(thread, &prompt),
+            PromptAction::Fork => return self.fork_thread(thread, Some(prompt), None, cx),
         };
         if let Err(why) = asked {
-            let noun = if action == PromptAction::Fork {
-                "fork"
-            } else {
-                "rewind"
-            };
-            self.cockpit.say(thread, format!("{noun} refused: {why}"));
+            self.cockpit.say(thread, format!("rewind refused: {why}"));
         }
         cx.notify();
+    }
+
+    /// A new Thread from `thread`'s conversation before the prompt `before`
+    /// names, or all of it, `draft` in its Composer; it opens focused once
+    /// the agent answers (`Engine::fork`). A refusal is said in `thread`.
+    pub(super) fn fork_thread(
+        &mut self,
+        thread: ThreadId,
+        before: Option<String>,
+        draft: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(why) = self.cockpit.fork(thread, before.as_deref(), draft) {
+            self.cockpit.say(thread, format!("fork refused: {why}"));
+        }
+        cx.notify();
+    }
+
+    /// An answer's Fork: the conversation through the answer ending at
+    /// `after` — before the next prompt, or all of it when the answer is
+    /// the latest.
+    pub(super) fn fork_after(&mut self, thread: ThreadId, after: BlockId, cx: &mut Context<Self>) {
+        let next = self.cockpit.thread(thread).and_then(|open| {
+            open.transcript()
+                .blocks()
+                .iter()
+                .skip_while(|shown| shown.id != after)
+                .skip(1)
+                .find_map(|shown| shown.prompt_id.clone())
+        });
+        self.fork_thread(thread, next, None, cx);
+    }
+
+    /// `thread`'s latest prompt a rewind can name.
+    pub(super) fn last_prompt(&self, thread: ThreadId) -> Option<BlockId> {
+        self.cockpit
+            .thread(thread)?
+            .transcript()
+            .blocks()
+            .iter()
+            .rev()
+            .find(|shown| shown.prompt_id.is_some())
+            .map(|shown| shown.id)
+    }
+
+    /// A selection's `Start a side chat`: a new Thread holding the whole
+    /// conversation, the passage a Quote row over its Composer.
+    pub(super) fn side_chat(&mut self, thread: ThreadId, passage: String, cx: &mut Context<Self>) {
+        let draft = ferrite_pane::quote::compose(&[passage], "");
+        self.fork_thread(thread, None, Some(draft), cx);
     }
 
     /// Send `prompt` to Pane `index`'s Thread again, queued behind a

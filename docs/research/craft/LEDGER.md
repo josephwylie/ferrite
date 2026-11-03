@@ -66,13 +66,13 @@ These are kept as they are:
 
 ## Lane A — actions and menus
 
-- [ ] Actions under each answer: Copy, Fork and ⋯, as Claude has.
-- [ ] The thread ▾ menu gains Copy link and Fork.
-- [ ] The sidebar row menu gains Claude's items: Open in ›, Mark as unread, Fork, Move to section ›, Archive.
-- [ ] The approval split button gains "Allow and switch to Auto".
-- [ ] Stop a subagent row from the keyboard.
-- [ ] Palette commands for rewind and fork.
-- [ ] "Start a side chat" from a selection, beside Reply.
+- [x] Actions under each answer: Copy, Fork and ⋯, as Claude has (`transcript/answer.rs`). Fork takes the conversation through that answer (before the next prompt, or all of it for the latest) and opens the new thread focused. ⋯ holds Copy message, Reply (Claude's "Attach message as context", as a Quote row) and Fork from here. Pin and Read aloud are left out because nothing backs them. Copy as Markdown is left out because Copy already copies the Markdown. Scene: `answer-hover`.
+- [x] The thread ▾ menu gains Copy link and Fork. The ▾ opens the same menu as the sidebar row. There is no `ferrite://` scheme, so Copy link copies `ferrite thread focus <id>`, the CLI command that lands every window on the thread. Fork forks the whole conversation.
+- [x] The sidebar row menu gains Claude's items, in Claude's order with rules and letter keys (`cockpit/context_menu.rs`): Open in › (Finder, Terminal; Ferrite knows no editors), Pin P, Mark as unread U, Rename R, Fork F, Toggle fullscreen T (it moved off F), Copy link K, Move to group › (Claude's "Move to section"; projects are checkouts and can't be moved between), and Park thread A as Claude's Archive. Submenus open beside the menu, on hover or on a press. Scenes: `contextmenu`, `row-menu`.
+- [x] The approval split button gains "Allow and switch to Auto": the provider's own mode from `Settings::auto_mode_for` (Claude `auto`, Codex `never`), with no list hard-coded in the UI.
+- [x] Stop a subagent row from the keyboard. An agent's row is now a Tab stop: ↵ opens the agent and ⌫ stops it (`cockpit::StopAgent`, the same stop op Escape uses). It is listed in the shortcuts sheet.
+- [x] Palette commands for rewind and fork: "Rewind to last message" opens the last prompt's Rewind menu, and "Fork thread" forks the whole conversation.
+- [x] "Start a side chat" from a selection, beside Reply. It forks the whole thread into a new focused thread, with the passage as a Quote row in its Composer. **Difference:** Claude's side chat is a floating, ephemeral panel that shares the session (`/btw`, ⌘;, tabs, "Clear side chat"). Ferrite has no place for that, so its side chat is an ordinary forked thread.
 
 ## Lane P — the panel, preview and sidebar
 

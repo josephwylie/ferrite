@@ -153,20 +153,7 @@ impl TranscriptView {
                     ),
             );
         }
-        Some(
-            gpui::deferred(
-                gpui::anchored()
-                    .position(open.at)
-                    .snap_to_window_with_margin(px(theme::GRID_PAD))
-                    .child(ferrite_ui::motion::menu_in(
-                        "output-menu-in",
-                        shell,
-                        ferrite_ui::motion::Opens::Down,
-                    )),
-            )
-            .with_priority(2)
-            .into_any_element(),
-        )
+        Some(super::hang_menu("output-menu-in", open.at, shell))
     }
 }
 

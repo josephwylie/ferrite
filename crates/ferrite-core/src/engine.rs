@@ -4379,6 +4379,11 @@ impl Engine {
         self.notifications.mark_all_read();
     }
 
+    /// `Notifications::mark_unread`.
+    pub fn mark_unread(&mut self, thread: ThreadId) -> bool {
+        self.notifications.mark_unread(thread)
+    }
+
     /// Fixtures only (the parity scenes): date a Thread's notification
     /// records (`Notifications::fixture_backdate`).
     pub fn fixture_backdate_notices(&mut self, thread: ThreadId, at: std::time::SystemTime) {

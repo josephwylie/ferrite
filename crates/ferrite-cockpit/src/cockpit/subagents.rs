@@ -771,27 +771,22 @@ impl CockpitView {
             })
             .collect();
         let (provider, context) = self.decision_context(thread);
-        // Claude's `Allow and switch to Auto`: the most trusting mode short
-        // of bypass this Session offers, when it is not in force already.
+        // Claude's `Allow and switch to Auto`: the provider's own auto mode
+        // (`Settings::auto_mode_for`), when this Session offers it and it
+        // is not in force already.
+        let auto = ferrite_core::settings::Settings::auto_mode_for(open.provider());
         let switch = open
             .supports_control(ferrite_core::ControlKind::SetPermissionMode)
-            .then(|| {
-                let modes = open.permission_modes();
-                ["auto", "acceptEdits"].into_iter().find_map(|value| {
-                    modes
-                        .iter()
-                        .find(|mode| mode.value == value)
-                        .filter(|_| open.permission_mode() != Some(value))
-                        .map(|mode| {
-                            (
-                                mode.value.clone(),
-                                SharedString::from(mode.label.clone()),
-                                open.generation(),
-                            )
-                        })
-                })
-            })
-            .flatten();
+            .then(|| open.permission_modes())
+            .and_then(|modes| modes.into_iter().find(|mode| mode.value == auto))
+            .filter(|_| open.permission_mode() != Some(auto))
+            .map(|mode| {
+                (
+                    mode.value,
+                    SharedString::from(mode.label),
+                    open.generation(),
+                )
+            });
         Some(Cards {
             switch,
             owner: self.decisions.owner(),

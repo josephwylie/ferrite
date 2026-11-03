@@ -173,6 +173,10 @@ pub(crate) enum Command {
     NextRequest,
     CopyPrompt,
     ResendPrompt,
+    /// The focused Thread's Rewind menu on its latest prompt.
+    Rewind,
+    /// A new Thread holding the focused Thread's whole conversation.
+    Fork,
     Model,
     Effort,
     PermissionMode,
@@ -225,6 +229,8 @@ impl Command {
             Command::Notifications => BELL,
             Command::CopyPrompt => COPY,
             Command::ResendPrompt => RESEND,
+            Command::Rewind => BACK,
+            Command::Fork => BRANCH,
             Command::PermissionMode => SHIELD,
             Command::ShowChanges | Command::ReviewChanges => FILE,
             Command::RefreshPr | Command::RefreshMcp | Command::ReconnectMcp => REFRESH,

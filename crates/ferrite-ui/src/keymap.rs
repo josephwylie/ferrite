@@ -491,6 +491,12 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::ToggleTool",
             Some("ToolDisclosure"),
         ),
+        // On an agent's row, ⌫ stops it (Claude's Delete on a row).
+        (
+            "backspace".into(),
+            "cockpit::StopAgent",
+            Some("ToolDisclosure"),
+        ),
         (
             "escape".into(),
             "cockpit::MenuDismiss",
@@ -1073,6 +1079,11 @@ mod tests {
             assert!(table.contains(&(
                 "enter".into(),
                 "cockpit::ToggleTool",
+                Some("ToolDisclosure")
+            )));
+            assert!(table.contains(&(
+                "backspace".into(),
+                "cockpit::StopAgent",
                 Some("ToolDisclosure")
             )));
         }

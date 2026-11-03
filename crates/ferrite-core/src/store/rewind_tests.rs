@@ -115,7 +115,7 @@ fn a_fork_copies_the_conversation_before_its_prompt() {
         at: Some("a1".into()),
         fork: true,
     };
-    let fork = store.fork(id, "p2", Some(&point)).unwrap();
+    let fork = store.fork(id, Some("p2"), Some(&point)).unwrap();
     assert_ne!(fork, id);
     let snapshot = store.load(fork).unwrap();
     assert_eq!(snapshot.prompt_texts(), vec!["one"]);
@@ -126,7 +126,29 @@ fn a_fork_copies_the_conversation_before_its_prompt() {
         store.load(id).unwrap().prompt_texts(),
         vec!["one", "two", "three"]
     );
-    assert!(store.fork(id, "p9", None).is_err());
+    assert!(store.fork(id, Some("p9"), None).is_err());
+    drop(writer);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A fork of the whole conversation copies every prompt and resumes the
+/// provider's conversation at its end, forked: the point names no entry,
+/// and still stands until the fork's own Init takes it.
+#[test]
+fn a_whole_fork_copies_everything_and_resumes_at_the_end() {
+    let dir = scratch("rewind-fork-whole");
+    let store = Store::open(&dir).unwrap();
+    let (id, writer) = three_prompts(&store);
+    let point = ResumePoint {
+        session: "sess".into(),
+        at: None,
+        fork: true,
+    };
+    let fork = store.fork(id, None, Some(&point)).unwrap();
+    let snapshot = store.load(fork).unwrap();
+    assert_eq!(snapshot.prompt_texts(), vec!["one", "two", "three"]);
+    assert_eq!(snapshot.resume_at(), Some(point));
+    assert_eq!(snapshot.resume_target(), Some("sess"));
     drop(writer);
     let _ = fs::remove_dir_all(&dir);
 }

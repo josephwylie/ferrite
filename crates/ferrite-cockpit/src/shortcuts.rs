@@ -177,6 +177,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // The transcript.
         "cockpit::CopySelection" => Row(Transcript, "Copy selection"),
         "cockpit::ToggleTool" => Row(Transcript, "Open or fold a tool call"),
+        "cockpit::StopAgent" => Row(Transcript, "Stop the agent"),
         "cockpit::ToolCyclePrevious" => Row(Transcript, "Previous tool call"),
         "cockpit::TranscriptPageUp" => Row(Transcript, "Page up"),
         "cockpit::TranscriptPageDown" => Row(Transcript, "Page down"),

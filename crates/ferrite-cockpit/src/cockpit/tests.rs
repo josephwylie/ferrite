@@ -11,6 +11,7 @@ mod decisions_parity;
 mod diagnostics;
 mod find;
 mod floats_parity;
+mod forks;
 mod frame_parity;
 mod fullscreen;
 mod image_viewer;
@@ -39,6 +40,7 @@ mod reader_motion;
 mod render_performance;
 mod retention;
 mod review;
+mod row_menu;
 mod session_import;
 mod settings_window;
 mod stab;
@@ -88,11 +90,13 @@ struct Scripted {
     rx: Receiver<SessionEvent>,
     interrupts: Rc<RefCell<usize>>,
     stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
+    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
     fail_send: Rc<RefCell<bool>>,
     sent: Rc<RefCell<Vec<String>>>,
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
     native_controls: Rc<RefCell<bool>>,
+    modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
@@ -116,6 +120,9 @@ impl Session for Scripted {
     }
 
     fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
+        if let Some(modes) = self.modes.borrow().clone() {
+            return modes;
+        }
         if *self.native_controls.borrow() {
             vec![ferrite_core::PermissionModeChoice {
                 value: "native-mode".into(),
@@ -186,6 +193,18 @@ impl Session for Scripted {
         self.stopped.borrow_mut().push(key.clone());
         Ok(())
     }
+    /// Forks afresh, at once: the new Thread's agent starts its own.
+    fn fork(
+        &mut self,
+        request: ferrite_core::providers::ForkRequest,
+    ) -> std::io::Result<ferrite_core::providers::ForkAck> {
+        self.forks.borrow_mut().push(request);
+        let (answer, ack) = mpsc::sync_channel(1);
+        answer
+            .send(Ok(ferrite_core::providers::Forked::Fresh))
+            .unwrap();
+        Ok(ack)
+    }
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> std::io::Result<()> {
         self.answered.borrow_mut().push((id.to_string(), answer));
         Ok(())
@@ -196,6 +215,8 @@ impl Session for Scripted {
 struct Fake {
     interrupts: Rc<RefCell<usize>>,
     stopped: Rc<RefCell<Vec<ferrite_core::activity::AgentKey>>>,
+    /// Every fork a Session was asked for.
+    forks: Rc<RefCell<Vec<ferrite_core::providers::ForkRequest>>>,
     model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
     session_discovery:
         Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>>>>,
@@ -213,6 +234,8 @@ struct Fake {
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
     native_controls: Rc<RefCell<bool>>,
+    /// When set, the permission modes every Session offers.
+    modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
@@ -259,11 +282,13 @@ impl Spawner for Fake {
             rx,
             interrupts: self.interrupts.clone(),
             stopped: self.stopped.clone(),
+            forks: self.forks.clone(),
             fail_send: self.fail_send.clone(),
             sent: self.sent.clone(),
             answered: self.answered.clone(),
             controls: self.controls.clone(),
             native_controls: self.native_controls.clone(),
+            modes: self.modes.clone(),
             file_searches: self.file_searches.clone(),
             native_files: self.native_files.clone(),
             effort_answers: self.effort_answers.clone(),
