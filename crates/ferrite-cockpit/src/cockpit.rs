@@ -8,6 +8,7 @@ pub(crate) mod decisions;
 pub(crate) mod empty_board;
 mod history;
 mod leaving;
+mod lightbox;
 mod machines;
 mod nav_keys;
 mod palette;
@@ -9796,8 +9797,12 @@ impl CockpitView {
     /// Close the focused Pane — cmd-w. The core decides what that means
     /// (park, leave, defer onto a draft, discard); the mirror follows.
     fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
-        // ⌘W in the focused Pane's preview or Review closes that, not the
-        // Pane (F-14).
+        // ⌘W over the lightbox closes it; in the focused Pane's preview or
+        // Review it closes that, not the Pane (F-14).
+        if let Some((index, _)) = self.lightbox() {
+            self.close_lightbox(index, cx);
+            return;
+        }
         let index = self.focused();
         if let Some(pane) = self.panes.get(index) {
             if self.preview_shown(index) && pane.preview.focused(window, cx) {
@@ -10663,17 +10668,18 @@ impl CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
-            // A review beside the focused Pane, or an image in its preview
-            // while the Panel shows it, keeps the keyboard it took, from its
+            // The lightbox, over everything, keeps the keyboard its image
+            // took; a review beside the focused Pane keeps its own, from its
             // first frame (a review's comment field's too).
             .or_else(|| {
-                let index = self.focused();
-                let pane = self.panes.get(index)?;
-                pane.review.held_focus(window, cx).or_else(|| {
-                    self.preview_shown(index)
-                        .then(|| pane.preview.held_focus(window, cx))
-                        .flatten()
-                })
+                let (index, _) = self.lightbox()?;
+                self.panes[index].preview.held_focus(window, cx)
+            })
+            .or_else(|| {
+                self.panes
+                    .get(self.focused())?
+                    .review
+                    .held_focus(window, cx)
             })
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
@@ -11160,6 +11166,7 @@ impl CockpitView {
             .children(self.project_editor_element(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
+            .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx))
     }

@@ -1,9 +1,9 @@
 //! The Panel's Preview tab (SPEC §5.6.3): a Pane's preview
 //! (`ferrite_pane::preview`) read in the right Panel — a file at a line (numbered
 //! lines, the target marked and centred, in syntax colour), rendered
-//! Markdown, a command's output, an image in the image viewer (fit and
-//! actual size, zoom, pinch, pan, ← → through the images it was opened
-//! among), or a note for a file it cannot show, its original a click away.
+//! Markdown, a command's output, or a note for a file it cannot show, its
+//! original a click away. An image opens in the lightbox instead
+//! (`cockpit/lightbox.rs`).
 //!
 //! Whatever opens a file in a Pane goes through `Preview::open` — the
 //! cockpit's own entry points (a file link, a ⌘-clicked path, a changed
@@ -12,9 +12,8 @@
 //! grows a Preview tab, the file's name cut from its start, and selects it;
 //! a line opened at is scrolled to the middle of the list. A Panel that was
 //! hidden shows for it, and hides again when it closes. Another file opening
-//! over it replaces it in place, its body fading in (`motion::swap_in`); an
-//! image stepping to the next does not, the viewer crossfading the two
-//! itself. Escape in it (the `Reader` key context, deeper than the Cockpit's
+//! over it replaces it in place, its body fading in (`motion::swap_in`).
+//! Escape in it (the `Reader` key context, deeper than the Cockpit's
 //! interrupt), its × or ⌘W while it holds the keyboard closes it, and the
 //! Panel goes back to its sections. ⌘F finds in it
 //! (`PreviewFind`, the transcript's bar).
@@ -44,8 +43,7 @@ pub(crate) struct PreviewTab {
     /// The Preview tab is the one the Panel shows for its Pane.
     selected: bool,
     /// The document shown opened after the first frame: its body fades in
-    /// under this key (`Preview::opened`'s), so an image stepping to the
-    /// next, one document to the viewer, does not fade again.
+    /// under this key (`Preview::opened`'s).
     fade: Option<u64>,
     /// The numbered lines' own scroll, kept so a line opened at can be
     /// scrolled into view.
@@ -269,8 +267,8 @@ impl CockpitView {
     /// the board's cards' twin (`R_CARD` on `CARD`, ringed), its top and
     /// foot level with theirs and its head level with the Pane head beside
     /// it. The head (`reading_head`) reads the file's path from the
-    /// Thread's workspace in `LINK_INK` and its `:line` dim — an image its
-    /// place among its gallery's, `· 2/3` — then, for a file, copy its path
+    /// Thread's workspace in `LINK_INK` and its `:line` dim — then, for a
+    /// file, copy its path
     /// and open it in its app, and the ×. A press lands on the Pane that
     /// opened it; escape closes it.
     pub(in crate::cockpit) fn panel_preview(
@@ -289,7 +287,6 @@ impl CockpitView {
         let tab = &pane.preview_tab;
         let find = tab.find.as_ref();
         let body = match &document.body {
-            Body::Image { viewer, .. } => viewer.clone().into_any_element(),
             Body::Text { text, .. } if document.renders_markdown() => {
                 tab.rich.file_context(document.path.parent(), &pane.preview);
                 let marks = find.and_then(|find| find.bar.marks(0));
@@ -339,22 +336,8 @@ impl CockpitView {
             None => body.into_any_element(),
         };
         let title = self.preview_title(pane, &document);
-        let label = match &document.body {
-            Body::Image { gallery, at, .. } => {
-                head_title(title.clone()).children((gallery.len() > 1).then(|| {
-                    head_suffix(format!(" \u{b7} {}/{}", at + 1, gallery.len()))
-                        .id("reader-image-count")
-                        .tooltip(|window, cx| {
-                            gpui::component::tooltip::Tooltip::new(
-                                "Step through them with \u{2190} \u{2192}",
-                            )
-                            .build(window, cx)
-                        })
-                }))
-            }
-            _ => head_title(title.clone())
-                .children(document.line().map(|line| head_suffix(format!(":{line}")))),
-        };
+        let label = head_title(title.clone())
+            .children(document.line().map(|line| head_suffix(format!(":{line}"))));
         // A file (not a command's output, which no file holds) can have its
         // path copied, as the head reads it, and open in its own app.
         let file = document
@@ -444,16 +427,6 @@ impl CockpitView {
                     view.close_preview_find(owner, window, cx)
                 }),
             )
-            .on_action(
-                cx.listener(move |view, _: &ferrite_pane::image_viewer::Next, _, cx| {
-                    view.step_image(owner, 1, cx)
-                }),
-            )
-            .on_action(cx.listener(
-                move |view, _: &ferrite_pane::image_viewer::Previous, _, cx| {
-                    view.step_image(owner, -1, cx)
-                },
-            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -468,8 +441,8 @@ impl CockpitView {
     }
 
     /// What the head reads for `document`: a command's name, else the
-    /// path from the Thread's workspace, else from `~` — an image's too:
-    /// the tab above already reads its name.
+    /// path from the Thread's workspace, else from `~`: the tab above
+    /// already reads its name.
     fn preview_title(&self, pane: &PaneView, document: &ferrite_pane::preview::Document) -> String {
         if let Some(name) = &document.name {
             return name.clone();
@@ -484,16 +457,6 @@ impl CockpitView {
                     .map(|relative| relative.display().to_string())
             })
             .unwrap_or_else(|| home_relative(&document.path))
-    }
-
-    /// ← → in an image in `owner`'s preview: the next or the previous of
-    /// the images it was opened among.
-    fn step_image(&mut self, owner: PaneIdentity, by: isize, cx: &mut Context<Self>) {
-        if let Some(index) = self.index_of(owner) {
-            if self.panes[index].preview.step_image(by, cx) {
-                cx.notify();
-            }
-        }
     }
 
     /// ⌘F in Pane `index`'s preview: the bar over it (or the keyboard back

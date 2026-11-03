@@ -427,6 +427,8 @@ pub const SCROLLBAR: u32 = 0x5e5e5e;
 pub const SCROLLBAR_HOVER: u32 = 0x6d6d6d;
 /// Black at 35% — the veil behind a modal sheet.
 pub const VEIL: u32 = 0x00000059;
+/// Black at 85% — the lightbox's dim, under which the window all but goes.
+pub const LIGHTBOX_VEIL: u32 = 0x000000d9;
 
 // -------------------------------------------------------------------- ink
 
@@ -1644,6 +1646,19 @@ pub const COPIED_HOLD_MS: u64 = 1_500;
 /// (`components::edge_fade`).
 pub const EDGE_FADE: f32 = SPACE_6;
 pub const EDGE_FADE_KNEE: f32 = 0.85;
+/// **The lightbox** (Claude's): an image over the whole window on
+/// `LIGHTBOX_VEIL`, darkening in over `FADE_QUICK`. A bar
+/// `LIGHTBOX_BAR_H` tall along its top holds the file's name at the left
+/// and its doors at the right — zoom, save, open in its app, × —
+/// `ICON_BUTTON` squares in `INK_STRONG`. With more than one image, ← →
+/// stand `LIGHTBOX_ARROW` round in `LIGHTBOX_SIDE` gutters, and `1 of N`
+/// in `INK_SUBTLE` meta type in a `LIGHTBOX_FOOT_H` foot. The stage is
+/// what the bar, the gutters and the foot leave; a press on the dim
+/// around it closes the lightbox.
+pub const LIGHTBOX_BAR_H: f32 = SPACE_6 * 2.;
+pub const LIGHTBOX_SIDE: f32 = SPACE_6 * 2. + SPACE_4;
+pub const LIGHTBOX_FOOT_H: f32 = SPACE_6 + SPACE_4;
+pub const LIGHTBOX_ARROW: f32 = SPACE_6 + SPACE_3;
 /// **The line-end fade** (Claude's sidebar titles): a line too long for its
 /// box fades into the ground over its last `LINE_FADE`, where it would
 /// otherwise end in "…" (`components::line_fade`).

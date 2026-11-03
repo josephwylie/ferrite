@@ -484,6 +484,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // A preview's own text (a selection in it) or the Review's slot
         // holding the keyboard: esc closes it, not the Pane's turn.
         ("escape".into(), "reader::Close", Some(READER)),
+        ("escape".into(), "lightbox::Close", Some(LIGHTBOX)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
         (
             "escape".into(),
@@ -556,6 +557,8 @@ const REVIEW: &str = "Review && !Composer";
 /// binds its own keys deeper; this context's esc beats the Cockpit's
 /// interrupt.
 pub const READER: &str = "Reader";
+/// The lightbox around the image viewer (`cockpit/lightbox.rs`).
+pub const LIGHTBOX: &str = "Lightbox";
 /// The image viewer's key context (`image_viewer::KEY_CONTEXT`).
 pub const IMAGE_VIEWER: &str = "ImageViewer";
 

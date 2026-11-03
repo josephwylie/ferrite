@@ -444,10 +444,18 @@ pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    entrance(id, FADE_QUICK, element, |el, t| {
+    dim_in(id, element, theme::VEIL)
+}
+
+/// `veil_in` to a dim of the caller's (`theme::LIGHTBOX_VEIL`).
+pub fn dim_in<E>(id: impl Into<ElementId>, element: E, dim: u32) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, FADE_QUICK, element, move |el, t| {
         el.bg(mix(
             gpui::transparent_black(),
-            gpui::rgba(theme::VEIL).into(),
+            gpui::rgba(dim).into(),
             t,
         ))
     })

@@ -1,8 +1,10 @@
-//! The image viewer in the Panel's Preview tab (`image_viewer.rs`): an
-//! image opens there from anywhere, swaps in place without ever blanking
-//! the preview, replaces a text preview and is replaced by one, closes on esc with the keyboard back on the
-//! Pane, and zooms between fit and actual size — easing, asking for frames
-//! only while it moves, and never rebuilding the Panes beside it.
+//! The lightbox (`cockpit/lightbox.rs`) and its image viewer
+//! (`image_viewer.rs`): an image opens over the window from anywhere,
+//! swaps in place without ever blanking, steps with ← → and its doors,
+//! says `1 of N`, leaves a text preview where it was, closes on esc, the ×
+//! or a press on the dim with the keyboard back on the Pane, and zooms
+//! between fit and actual size — easing, asking for frames only while it
+//! moves, and never rebuilding the Panes under it.
 use super::*;
 use ferrite_pane::preview::Body;
 
@@ -59,7 +61,7 @@ fn step_to(
     });
 }
 
-/// The open document's path and the viewer showing it, if it is an image.
+/// The image the lightbox shows and its viewer, while it is open.
 fn shown(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -68,11 +70,8 @@ fn shown(
     Entity<ferrite_pane::image_viewer::ImageViewer>,
 )> {
     view.read_with(cx, |view, _| {
-        let document = view.panes[0].preview.document()?;
-        match document.body {
-            Body::Image { viewer, .. } => Some((document.path, viewer)),
-            _ => None,
-        }
+        let lightbox = view.panes[0].preview.lightbox()?;
+        Some((lightbox.path().to_path_buf(), lightbox.viewer))
     })
 }
 
@@ -85,12 +84,13 @@ fn picture(
         .expect("the picture is drawn")
 }
 
-/// A prompt's image, clicked under its band, opens in the Panel's Preview
-/// tab — the Panel wide, the board giving it up, the picture fitted inside
-/// the card's inset, never past its own size — and the viewer holds the
-/// keyboard. Nothing dims the window.
+/// A prompt's image, clicked under its band, opens in the lightbox: over
+/// the whole window on its dim, the Panel left as it was, its bar naming
+/// the file with zoom, save, the original and ×, `1 of 2` under it, the
+/// picture fitted inside the stage's inset and never past its own size;
+/// the viewer holds the keyboard.
 #[gpui::test]
-fn a_sent_image_opens_in_the_panels_preview(cx: &mut TestAppContext) {
+fn a_sent_image_opens_in_the_lightbox(cx: &mut TestAppContext) {
     let dir = scratch("viewer-sent-files");
     let (wide, small) = (dir.join("wide.png"), dir.join("small.png"));
     png(&wide, 1600, 1000);
@@ -107,36 +107,40 @@ fn a_sent_image_opens_in_the_panels_preview(cx: &mut TestAppContext) {
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let whole = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    let panel = view.read_with(cx, |view, _| view.board_right());
     let sent = cx.debug_bounds("sent-image").expect("a sent image");
     cx.simulate_click(sent.center(), gpui::Modifiers::none());
     tick(cx);
     let (path, viewer) = shown(&view, cx).expect("an image opened");
     assert!(path == wide || path == small, "{path:?}");
-    let gallery = view.read_with(cx, |view, _| match view.panes[0].preview.document() {
-        Some(ferrite_pane::preview::Document {
-            body: Body::Image { gallery, .. },
-            ..
-        }) => gallery.len(),
-        _ => 0,
+    let gallery = view.read_with(cx, |view, _| {
+        view.panes[0].preview.lightbox().map(|lightbox| lightbox.gallery.len())
     });
-    assert_eq!(gallery, 2, "it steps among the prompt's images");
+    assert_eq!(gallery, Some(2), "it steps among the prompt's images");
     settle(cx);
-    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    let panel = view.read_with(cx, |view, _| view.board_right());
-    assert!(
-        panel > ferrite_ui::theme::PANEL_W,
-        "the Panel is wide: {panel}"
+    assert_eq!(
+        view.read_with(cx, |view, _| view.board_right()),
+        panel,
+        "the Panel is left as it was"
     );
-    assert!(
-        (pane.w - (whole.w - (panel - ferrite_ui::theme::PANEL_W))).abs() <= 1.,
-        "the board gives the width up: {pane:?} from {whole:?}"
-    );
-    assert!(cx.debug_bounds("panel-tab-Preview").is_some());
+    assert!(cx.debug_bounds("panel-tab-Preview").is_none(), "no preview");
+    let window = cx.update(|window, _| window.viewport_size());
+    let lightbox = cx.debug_bounds("lightbox").expect("the lightbox");
+    assert_eq!(lightbox.size, window, "over the whole window");
+    for door in [
+        "lightbox-zoom",
+        "lightbox-save",
+        "lightbox-original",
+        "lightbox-close",
+        "lightbox-previous",
+        "lightbox-next",
+        "lightbox-count",
+    ] {
+        assert!(cx.debug_bounds(door).is_some(), "{door}");
+    }
     let stage = cx.debug_bounds("image-viewer").expect("the viewer");
-    assert!(stage.left() >= px(pane.x + pane.w), "beside the Pane");
-    assert!(cx.debug_bounds("reader-head").is_some());
-    assert!(cx.debug_bounds("open-original-image").is_some());
+    let bar = cx.debug_bounds("lightbox-bar").unwrap();
+    assert!(stage.top() >= bar.bottom(), "under the bar");
     assert!(cx
         .update(|window, cx| viewer.read(cx).held_focus(window))
         .is_some());
@@ -202,12 +206,11 @@ fn a_second_image_swaps_in_place_and_arrows_step(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("left left left");
     tick(cx);
     assert_eq!(shown(&view, cx).unwrap().0, images[0]);
-    let title = view.read_with(cx, |view, _| view.preview_tab_label(view.panes[0].identity));
-    assert_eq!(
-        title.as_deref(),
-        Some("one.png"),
-        "the tab names the image shown"
-    );
+    let next = cx.debug_bounds("lightbox-next").expect("the → door");
+    cx.simulate_click(next.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(shown(&view, cx).unwrap().0, images[1], "the door steps");
+    assert!(shown(&view, cx).is_some(), "and the lightbox stays open");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -270,7 +273,7 @@ fn esc_closes_the_image_and_the_pane_takes_the_keyboard_back(cx: &mut TestAppCon
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(cx.debug_bounds("image-viewer").is_none());
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
+    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_none()));
     assert_eq!(*fake.interrupts.borrow(), 0, "esc closed the image only");
     let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
     assert!(cx.update(|window, cx| {
@@ -291,14 +294,28 @@ fn esc_closes_the_image_and_the_pane_takes_the_keyboard_back(cx: &mut TestAppCon
         1,
         "its Pane stays"
     );
+    // The ×, and a press on the dim beside the bar's name, close it too.
+    open_image(&view, &image, &[], cx);
+    let close = cx.debug_bounds("lightbox-close").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(shown(&view, cx).is_none(), "the ×");
+    open_image(&view, &image, &[], cx);
+    let bar = cx.debug_bounds("lightbox-bar").unwrap();
+    cx.simulate_click(
+        gpui::point(bar.center().x, bar.center().y),
+        gpui::Modifiers::none(),
+    );
+    tick(cx);
+    assert!(shown(&view, cx).is_none(), "a press on the dim");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An image opening while a file is open replaces it in the same card,
-/// as another file would — ⌘-clicking an image's path goes there too —
-/// and a file opening over an image replaces it back.
+/// An image opening while a file is open in the Panel shows over it in
+/// the lightbox and leaves it where it was: closing the lightbox finds the
+/// file's preview as it was.
 #[gpui::test]
-fn an_image_and_a_text_reader_replace_each_other(cx: &mut TestAppContext) {
+fn an_image_opens_over_a_files_preview_and_leaves_it(cx: &mut TestAppContext) {
     let dir = scratch("viewer-replace-files");
     let (file, image) = (dir.join("notes.rs"), dir.join("shot.png"));
     png(&image, 300, 200);
@@ -318,15 +335,12 @@ fn an_image_and_a_text_reader_replace_each_other(cx: &mut TestAppContext) {
         .expect("the file's preview");
     open(&image, cx);
     assert_eq!(shown(&view, cx).map(|(path, _)| path), Some(image.clone()));
-    assert_eq!(
-        cx.debug_bounds("panel-preview").unwrap(),
-        slot,
-        "the same card"
-    );
-    open(&file, cx);
     let document = view.read_with(cx, |view, _| view.panes[0].preview.document().unwrap());
-    assert!(matches!(document.body, Body::Text { .. }));
+    assert!(matches!(document.body, Body::Text { .. }), "the file stays");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
     assert!(cx.debug_bounds("image-viewer").is_none());
+    assert_eq!(cx.debug_bounds("panel-preview"), Some(slot), "as it was");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

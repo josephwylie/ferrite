@@ -1,13 +1,12 @@
-//! The image viewer: an image in the Panel's Preview tab
-//! (`preview::Body::Image`; the preview's card, `cockpit/panel/preview.rs`,
-//! gives it its head, the file's name, the original a click away and the
-//! ×). Every way an image opens comes through `Preview::open`: a sent
-//! image under its prompt or the prompt's chip, a chip on the Composer's
-//! shelf, a file link in an answer, a ⌘-clicked path. Another image swaps
-//! in place; ← → step among the images it was opened with (a prompt's);
-//! esc closes the preview.
+//! The image viewer: the lightbox's stage (`preview::Lightbox`; the
+//! lightbox, `cockpit/lightbox.rs`, gives it its dim, the file's name, the
+//! ← → doors, `1 of N`, zoom, save and the ×). Every way an image opens
+//! comes through `Preview::open`: a sent image under its prompt or the
+//! prompt's chip, a chip on the Composer's shelf, a file link in an answer,
+//! a ⌘-clicked path. Another image swaps in place; ← → step among the
+//! images it was opened with (a prompt's); esc closes the lightbox.
 //!
-//! The image lies centred on the card's ground, fitted inside
+//! The image lies centred on the stage, fitted inside
 //! `IMAGE_INSET` and never drawn past its own size (an image pixel to a
 //! point), at `R_CONTROL` with a 1px white-at-10% ring
 //! (`paint::LINE`) for its edge on the dark ground. A click
@@ -247,6 +246,14 @@ impl ImageViewer {
     fn zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
         self.zoom_with(cx, |zoom, frame, now, reduced| {
             zoom.step(false, frame, now, reduced)
+        });
+    }
+
+    /// The lightbox's zoom door: a click's toggle between fit and actual
+    /// size, around the stage's centre.
+    pub fn toggle_zoom(&mut self, cx: &mut Context<Self>) {
+        self.zoom_with(cx, |zoom, frame, now, reduced| {
+            zoom.toggle(point(0., 0.), frame, now, reduced)
         });
     }
 
