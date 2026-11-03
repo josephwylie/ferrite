@@ -11,6 +11,7 @@ use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
 mod markdown;
+pub mod outputs;
 pub mod tools;
 pub use highlight::{language_for_path, tokens as highlight_tokens, Lexer};
 use markdown::OpenSection;

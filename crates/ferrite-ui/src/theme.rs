@@ -1646,6 +1646,22 @@ pub const COPIED_HOLD_MS: u64 = 1_500;
 /// (`components::edge_fade`).
 pub const EDGE_FADE: f32 = SPACE_6;
 pub const EDGE_FADE_KNEE: f32 = 0.85;
+/// **A turn's cards** (Claude's file and preview cards): under a finished
+/// turn's answer, one card for each page it wrote or named and each other
+/// file it wrote, `OUTPUT_CARD_GAP` apart, each at most `OUTPUT_CARD_W`
+/// wide and `OUTPUT_CARD_H` tall at `R_CARD` on `paint::RAISED` in a 1px
+/// `paint::LINE` ring, `OUTPUT_CARD_PAD` in. A page's leads with its
+/// thumbnail (`OUTPUT_THUMB_W` by the card's inner height, the globe in
+/// `INK_SUBTLE` on `CARD`), a file's with its mark in an
+/// `OUTPUT_ICON_TILE` square; then the name in `INK_STRONG` at `W_LABEL`
+/// over what it is in `INK_SUBTLE` meta type, and at the right a page's
+/// `Open` and `⋯`, a file's `Open in ›`. Its menu is a context menu's.
+pub const OUTPUT_CARD_W: f32 = 400.0;
+pub const OUTPUT_CARD_H: f32 = 56.0;
+pub const OUTPUT_CARD_PAD: f32 = SPACE_2;
+pub const OUTPUT_CARD_GAP: f32 = SPACE_2;
+pub const OUTPUT_ICON_TILE: f32 = 40.0;
+pub const OUTPUT_THUMB_W: f32 = 64.0;
 /// **The lightbox** (Claude's): an image over the whole window on
 /// `LIGHTBOX_VEIL`, darkening in over `FADE_QUICK`. A bar
 /// `LIGHTBOX_BAR_H` tall along its top holds the file's name at the left

@@ -4,6 +4,7 @@
 //! per-Subject row snapshot, native text, selection document and viewport.
 
 mod find;
+mod outputs;
 mod reply;
 #[cfg(any(test, feature = "test-support"))]
 pub use find::FindState;
@@ -330,6 +331,8 @@ pub struct TranscriptView {
     /// the left press that may be selecting landed.
     reply: Option<reply::SelectionReply>,
     pressed_at: Option<gpui::Point<gpui::Pixels>>,
+    /// A turn card's menu, while open (`outputs`).
+    output_menu: Option<outputs::OutputMenu>,
 }
 
 /// The scroll room a band jump adds under the last row: the jump's row and
@@ -456,6 +459,7 @@ impl TranscriptView {
             find: None,
             reply: None,
             pressed_at: None,
+            output_menu: None,
         };
         view.register_scope(cx);
         view.sync_members(cx);
@@ -961,6 +965,9 @@ impl TranscriptView {
                 (Some(working), Some(window)) => (working.render)(window, cx),
                 _ => div().into_any_element(),
             };
+        }
+        if row.kind() == RowKind::Outputs {
+            return self.render_outputs(row, cx);
         }
         if row.kind() == RowKind::Tail {
             return match (&self.input.tail, window) {
@@ -2289,6 +2296,7 @@ impl Render for TranscriptView {
         }
         let card = self.hover_card(window, cx);
         let reply = self.reply_float(window, cx);
+        let output_menu = self.output_menu_float(cx);
         let find_bar = self.find_bar();
         div()
             .relative()
@@ -2332,6 +2340,7 @@ impl Render for TranscriptView {
             .children(minimap)
             .children(card)
             .children(reply)
+            .children(output_menu)
             .children(find_bar)
             .on_action(cx.listener(|view, _: &crate::find::Next, _, cx| view.find_step(true, cx)))
             .on_action(
