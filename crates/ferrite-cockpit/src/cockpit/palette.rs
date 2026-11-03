@@ -1494,7 +1494,7 @@ impl CockpitView {
     /// Keep the kit's toast stack (`theme.notification`) on the
     /// transcript's column: its right margin follows the panel, written
     /// only when it moves.
-    fn toast_margins(&self, cx: &mut App) {
+    fn toast_margins(&self, cx: &mut gpui::App) {
         let right = px(self.panel_column_w() + ferrite_ui::theme::TOAST_BOX_RIGHT);
         if gpui::component::Theme::global(cx).notification.margins.right != right {
             gpui::component::Theme::global_mut(cx).notification.margins.right = right;
