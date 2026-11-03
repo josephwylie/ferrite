@@ -1644,6 +1644,10 @@ pub const COPIED_HOLD_MS: u64 = 1_500;
 /// (`components::edge_fade`).
 pub const EDGE_FADE: f32 = SPACE_6;
 pub const EDGE_FADE_KNEE: f32 = 0.85;
+/// **The line-end fade** (Claude's sidebar titles): a line too long for its
+/// box fades into the ground over its last `LINE_FADE`, where it would
+/// otherwise end in "…" (`components::line_fade`).
+pub const LINE_FADE: f32 = SPACE_6;
 /// The pinned prompt keeps at most this many of its lines, its plane
 /// `PINNED_PROMPT_PAD_Y` above and below the bubble.
 pub const PINNED_PROMPT_LINES: usize = 2;

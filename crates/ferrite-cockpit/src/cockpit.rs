@@ -1101,7 +1101,13 @@ impl NavChip {
                 false,
             ),
             NavChip::Group(group) => {
-                nav::group_row_with_title(group, group.title.clone(), nav::group_fold(group), 0)
+                nav::group_row_with_title(
+                    group,
+                    group.title.clone(),
+                    nav::group_fold(group),
+                    0,
+                    false,
+                )
             }
         })
     }
@@ -13990,6 +13996,7 @@ impl CockpitView {
                         group.title.clone(),
                         self.group_fold(group, cx),
                         0,
+                        false,
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -14474,7 +14481,8 @@ impl CockpitView {
         let folded = group.folded;
         let fold = self.group_fold(group, cx);
         let title = self.editable_group_title(id, group.title.clone(), cx);
-        let head = nav::group_row_with_title(group, title, fold, 0)
+        let editing = matches!(&self.rename, Some((RenameTarget::Group(editing), _)) if *editing == id);
+        let head = nav::group_row_with_title(group, title, fold, 0, editing)
             .children(self.cursor_reveal(nav::NavItem::Group(id)));
         let chip = NavChip::Group(group.clone());
         let lifted = self.nav_dragging == Some(Drag::Group(id));
