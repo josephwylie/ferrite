@@ -206,6 +206,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("y".into(), "cockpit::Allow", Some("Decision")),
         ("n".into(), "cockpit::Deny", Some("Decision")),
         ("a".into(), "cockpit::Always", Some("Decision")),
+        // The approval card's buttons (Claude's): ⌘⏎ allows once, ⇧⌘⏎
+        // always allows — they act with text on the line too.
+        (with_primary("enter"), "cockpit::AllowOnce", Some("Decision")),
+        (with_primary("shift-enter"), "cockpit::AlwaysAllow", Some("Decision")),
         // A question Decision's options, by number — digits again with
         // text on the line, the y/n/a rule.
         ("1".into(), "cockpit::PickOption1", Some("Decision")),
@@ -227,6 +231,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("]"), "cockpit::NextPane", None),
         (with_primary("["), "cockpit::PreviousPane", None),
         (with_primary("d"), "cockpit::NextDecision", None),
+        // The Composer's `+` menu's first verb: attach files or photos.
+        (with_primary("u"), "cockpit::AttachFiles", None),
         // The board's ordinals: ⌘1…⌘9 focus the shown board's Panes in head
         // order (Solo: ⌘1 is the Solo Pane).
         (with_primary("1"), "cockpit::FocusThread1", None),
@@ -374,6 +380,11 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("enter".into(), "palette::Confirm", Some("Palette")),
         ("tab".into(), "palette::Preview", Some("Palette")),
         ("escape".into(), "palette::Dismiss", Some("Palette")),
+        // ← → change ⌘K's type tab on an empty line; with text they move
+        // the caret (`Palette::step_tab` hands them on). After the
+        // Composer's own arrows, so they win on the palette's line.
+        ("left".into(), "palette::PreviousType", Some("Palette")),
+        ("right".into(), "palette::NextType", Some("Palette")),
         (
             "up".into(),
             "notifications::SelectPrevious",
@@ -933,6 +944,8 @@ mod tests {
                 ("enter", "palette::Confirm", "Palette"),
                 ("tab", "palette::Preview", "Palette"),
                 ("escape", "palette::Dismiss", "Palette"),
+                ("left", "palette::PreviousType", "Palette"),
+                ("right", "palette::NextType", "Palette"),
                 ("up", "notifications::SelectPrevious", "Notifications"),
                 ("down", "notifications::SelectNext", "Notifications"),
                 ("enter", "notifications::Open", "Notifications"),

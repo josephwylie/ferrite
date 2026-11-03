@@ -20,7 +20,9 @@ use std::path::Path;
 use ferrite_core::store::Provider;
 use ferrite_core::{Decision, DecisionKind, ThreadId};
 use gpui::prelude::*;
-use gpui::{actions, div, px, rgb, rgba, AnyElement, App, Div, ElementId, SharedString, Stateful};
+use gpui::{
+    actions, deferred, div, px, rgb, rgba, AnyElement, App, Div, ElementId, SharedString, Stateful,
+};
 
 use ferrite_ui::components;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
@@ -146,13 +148,32 @@ pub fn context_label(
     }
 }
 
-/// An approval head's lead: `<Tool> needs approval`, the tool as the
-/// transcript names it.
-pub fn approval_lead(decision: &Decision) -> SharedString {
-    match tool_word(&decision.tool_name) {
-        "" => theme::words::APPROVAL.into(),
-        tool => format!("{tool} needs approval").into(),
-    }
+/// An approval head's ask, as Claude's card words it: `Allow Claude to run
+/// this command?`, `…to edit notes.md?`, `…to fetch <url>?`, else `…to use
+/// <Tool>?` — the provider named (`the agent` when none is known), the tool
+/// as the transcript names it.
+pub fn approval_lead(decision: &Decision, provider: Option<Provider>) -> SharedString {
+    let who = provider.map_or("the agent", provider_name);
+    let url = ["url", "uri"]
+        .iter()
+        .find_map(|key| decision.input.get(*key)?.as_str())
+        .filter(|url| !url.is_empty());
+    let what = if shell_source(decision).is_some() || decision.tool_name == "Bash" {
+        "run this command".to_string()
+    } else if let Some(path) = edit_path(decision) {
+        let name = Path::new(path)
+            .file_name()
+            .map_or(Cow::Borrowed(path), |name| name.to_string_lossy());
+        format!("edit {name}")
+    } else if let Some(url) = url {
+        format!("fetch {url}")
+    } else {
+        match tool_word(&decision.tool_name) {
+            "" => return format!("Allow {who} to go ahead?").into(),
+            tool => format!("use {tool}"),
+        }
+    };
+    format!("Allow {who} to {what}?").into()
 }
 
 /// A head's details after its lead, `·`-joined (`codex · read-only
@@ -185,14 +206,6 @@ pub fn split_recommended(label: &str) -> (&str, bool) {
         _ => (label, false),
     }
 }
-
-/// The approval hint, every word `TEXT_DIM`.
-pub const APPROVAL_HINTS: [&str; 4] = [
-    "\u{2191}\u{2193} select",
-    "1\u{2013}3 pick",
-    "esc deny",
-    "tab amend",
-];
 
 /// A question's hint: its digits reach `keys` rows.
 pub fn question_hints(keys: usize) -> Vec<String> {
@@ -683,11 +696,15 @@ pub fn step_cursor(enabled: &[bool], at: usize, step: isize) -> usize {
 
 // ------------------------------------------------------------------ frame
 
-/// The Decision box (SPEC §5.9 item 3): `DECISION` ground at `R_BLOCK`
-/// inside a 1px `DECISION_RING`, padded `DECISION_PAD`, its sections
-/// `DECISION_GAP` apart, in Geist 13/20, across the transcript column. It
-/// keeps the `question-island` selector every kind has always answered to.
+/// The Decision box (SPEC §5.9 item 3, Claude's card): `DECISION` ground at
+/// `R_BLOCK` inside a 1px `DECISION_RING`, in Geist 13/20, across the
+/// transcript column. Its first child is its head (`head`,
+/// `question_head`), laid as a band across the top; the rest are its body,
+/// padded `DECISION_PAD`, `DECISION_GAP` apart. It keeps the
+/// `question-island` selector every kind has always answered to.
 pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stateful<Div> {
+    let mut children = children.into_iter();
+    let head = children.next();
     div()
         .id(("question-island", serial as usize))
         .debug_selector(|| "question-island".into())
@@ -695,12 +712,9 @@ pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stat
         .flex()
         .flex_col()
         .flex_shrink_0()
-        .gap(px(theme::DECISION_GAP))
         .w_full()
         .min_w_0()
         .cursor_default()
-        // The ring is inset: its pixel is the padding's first.
-        .p(px(theme::DECISION_PAD - 1.0))
         .border_1()
         .border_color(rgba(theme::DECISION_RING))
         .rounded(px(theme::R_BLOCK))
@@ -710,14 +724,19 @@ pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stat
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(theme::TEXT))
-        .children(children)
-}
-
-/// The box with its hint line as its last section: the keys, said only
-/// where the keyboard is, inside the box as a question's footer says them,
-/// so every kind of Decision is one component with one shape.
-pub fn with_hint(card: Stateful<Div>, hint: Option<Div>) -> Stateful<Div> {
-    card.children(hint.map(section))
+        .children(head)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .gap(px(theme::DECISION_GAP))
+                // The ring is inset: its pixel is the padding's first.
+                .p(px(theme::DECISION_PAD - 1.0))
+                .children(children),
+        )
 }
 
 /// A section of the box: the box's gap spaces it.
@@ -731,77 +750,58 @@ pub fn section(element: impl IntoElement) -> Div {
         .child(element)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mark {
-    Shield,
-    Question,
-}
-
-/// The approval head (`Bash needs approval   codex · read-only sandbox`):
-/// the `shield` in `ATTENTION`, the lead 13 at `W_LABEL` in `TEXT_STRONG`,
-/// and at the right the context in 12 `TEXT_DIM`, then a status. One line;
-/// a long context ends in an ellipsis.
+/// The approval head (`Allow Claude to run this command?`): the ask in
+/// `TEXT_STRONG` at `W_LABEL`, and at the right the context in 12
+/// `TEXT_DIM`, then a status, on the card's head band (`head_line`). One
+/// line; a long context ends in an ellipsis.
 pub fn head(
     lead: impl Into<SharedString>,
     detail: Option<SharedString>,
     status: Option<AnyElement>,
 ) -> Div {
-    head_line(Mark::Shield, lead.into(), detail, status)
+    head_line(lead.into(), false, detail, status)
 }
 
-/// A question's head: a `?` in `ATTENTION` where the shield stands, the
-/// question in the lead's type, wrapping.
+/// A question's head: the question in the lead's type, wrapping.
 pub fn question_head(
     text: impl Into<SharedString>,
     detail: Option<SharedString>,
     status: Option<AnyElement>,
 ) -> Div {
-    head_line(Mark::Question, text.into(), detail, status)
+    head_line(text.into(), true, detail, status)
 }
 
+/// The card's head band (Claude's): a `DECISION_HEAD` fill across the
+/// card's top, its own `DECISION_PAD` of air, the card's body under it. It
+/// carries no mark: the `Needs your input` pill over the card says the
+/// card waits (`needs_input`). `card` lays it across its top.
 fn head_line(
-    mark: Mark,
     lead: SharedString,
+    wraps: bool,
     detail: Option<SharedString>,
     status: Option<AnyElement>,
 ) -> Div {
-    let question = mark == Mark::Question;
-    let glyph = match mark {
-        Mark::Shield => ferrite_ui::icons::icon(
-            ferrite_ui::icons::SHIELD,
-            theme::DECISION_HEAD_ICON,
-            theme::ATTENTION,
-        )
-        .into_any_element(),
-        Mark::Question => components::glyph("?", theme::ATTENTION).into_any_element(),
-    };
     div()
         .debug_selector(|| "decision-head".into())
         .flex()
         .flex_shrink_0()
         .items_start()
         .gap(px(theme::SPACE_2))
-        .w_full()
         .min_w_0()
         .min_h(px(theme::LH_UI))
-        .child(
-            div()
-                .debug_selector(|| "decision-mark".into())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .w(px(theme::DECISION_HEAD_ICON))
-                .h(px(theme::LH_UI))
-                .child(glyph),
-        )
+        // A band across the card (inside its 1px ring), its words on the
+        // body's text edge.
+        .px(px(theme::DECISION_PAD - 1.0))
+        .py(px(theme::DECISION_HEAD_PAD_Y))
+        .rounded_t(px(theme::R_BLOCK - 1.0))
+        .bg(gpui::rgba(theme::DECISION_HEAD))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .font_weight(theme::W_LABEL)
                 .text_color(rgb(theme::TEXT_STRONG))
-                .when(!question, |line| line.truncate())
+                .when(!wraps, |line| line.truncate())
                 .child(lead),
         )
         .children(detail.map(|detail| {
@@ -814,6 +814,30 @@ fn head_line(
                 .child(detail)
         }))
         .children(status.map(|status| div().flex_shrink_0().child(status)))
+}
+
+/// The attention marker over a waiting card (Claude's `Needs your
+/// input`): a dot and the words in `ATTENTION`, in a pill outlined at
+/// `NEEDS_INPUT_RING` — the one place the card's state takes a hue.
+pub fn needs_input() -> Div {
+    div().flex().flex_shrink_0().child(
+        div()
+            .debug_selector(|| "decision-needs-input".into())
+            .flex()
+            .items_center()
+            .gap(px(theme::SPACE_1_5))
+            .h(px(theme::NEEDS_INPUT_H))
+            .px(px(theme::SPACE_2))
+            .rounded_full()
+            .border_1()
+            .border_color(gpui::rgba(theme::NEEDS_INPUT_RING))
+            .font_family(theme::FONT_UI)
+            .text_size(px(theme::FS_META))
+            .line_height(px(theme::LH_META))
+            .text_color(rgb(theme::ATTENTION))
+            .child(components::status_dot(theme::ATTENTION))
+            .child(theme::words::NEEDS_INPUT),
+    )
 }
 
 /// A head's right-hand status (`answer when ready`, `work continues`).
@@ -872,7 +896,7 @@ pub fn note(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// The command well (SPEC §5.9): the exact input in Geist Mono 12.5
+/// The command well (SPEC §5.9): the exact input in `FONT_CODE` `FS_LABEL`
 /// `TEXT_STRONG` on `SUNKEN` at `R_TAB`, padded `DECISION_WELL_PAD_X` /
 /// `_Y`. A shell command reads `$ gh issue close 212`: the `$ ` is
 /// `TEXT_DIM` and outside the selectable text, so a copy gives the command
@@ -1211,6 +1235,185 @@ pub fn send_button(
         )
 }
 
+// --------------------------------------------------------- approval actions
+
+/// The chord bound to a Decision act, as a button prints it (`⌘⇧⏎`); none
+/// when nothing binds it, so a button never names a key that would not act.
+pub fn decision_chord(action: &str) -> Option<SharedString> {
+    components::bound_chord_in(action, Some("Decision"))
+        .map(|keys| components::chord_text(&keys).into())
+}
+
+/// A button's label and its key: the key in the code face at
+/// `SEND_KEY_INK` on the primary, `TEXT_DIM` elsewhere.
+fn labelled(label: SharedString, key: Option<SharedString>, primary: bool) -> Div {
+    components::text_ui()
+        .text_color(rgb(if primary {
+            theme::ON_PRIMARY
+        } else {
+            theme::TEXT_STRONG
+        }))
+        .flex()
+        .items_center()
+        .gap(px(theme::SPACE_1_5))
+        .whitespace_nowrap()
+        .child(label)
+        .children(key.map(|key| {
+            div()
+                .text_size(px(theme::FS_META))
+                .map(|key| {
+                    if primary {
+                        key.text_color(rgba(theme::SEND_KEY_INK))
+                    } else {
+                        key.text_color(rgb(theme::TEXT_DIM))
+                    }
+                })
+                .child(key)
+        }))
+}
+
+/// `Deny` (Claude's): a secondary on `paint::RAISED`, `TEXT_STRONG`, its
+/// key (`esc`) after the word. Full width when the actions stack.
+pub fn deny_button(
+    id: impl Into<ElementId>,
+    stacked: bool,
+    disabled: bool,
+    cx: &App,
+) -> gpui::component::button::Button {
+    use gpui::component::Disableable as _;
+    components::faded_button(
+        id,
+        theme::paint::RAISED.into(),
+        theme::paint::SELECTED.into(),
+        theme::paint::PRESS.into(),
+        rgb(theme::TEXT_STRONG).into(),
+        cx,
+    )
+    .tab_stop(true)
+    .disabled(disabled)
+    .h(px(theme::CONTROL_H))
+    .px(px(theme::CONTROL_PAD_X))
+    .rounded(px(theme::R_CONTROL))
+    .when(stacked, |button| button.w_full())
+    .child(labelled("Deny".into(), None, false).text_color(rgb(theme::TEXT_STRONG)))
+}
+
+/// The split primary's face: `Always allow` and its chord on `PRIMARY`,
+/// rounded at the left; its `▾` half (`more_button`) closes the right.
+pub fn always_button(
+    id: impl Into<ElementId>,
+    stacked: bool,
+    disabled: bool,
+    cx: &App,
+) -> gpui::component::button::Button {
+    components::primary_button(id, disabled, cx)
+        .h(px(theme::CONTROL_H))
+        .px(px(theme::CONTROL_PAD_X))
+        .rounded_l(px(theme::R_CONTROL))
+        .rounded_r(px(0.))
+        .when(stacked, |button| button.flex_1())
+        .child(labelled(
+            "Always allow".into(),
+            decision_chord("cockpit::AlwaysAllow"),
+            true,
+        ))
+}
+
+/// The split primary's `▾` half: it opens the menu of the other allows.
+pub fn more_button(
+    id: impl Into<ElementId>,
+    disabled: bool,
+    cx: &App,
+) -> gpui::component::button::Button {
+    components::primary_button(id, disabled, cx)
+        .h(px(theme::CONTROL_H))
+        .w(px(theme::CONTROL_H))
+        .p_0()
+        .rounded_r(px(theme::R_CONTROL))
+        .rounded_l(px(0.))
+        .border_l_1()
+        .border_color(rgba(theme::PRIMARY_SEAM))
+        .child(ferrite_ui::icons::icon(
+            ferrite_ui::icons::CHEVRON_DOWN,
+            theme::TOOL_CHIP_CHEVRON,
+            theme::ON_PRIMARY,
+        ))
+}
+
+/// The approval's answer row: `deny`, then the split primary (`always`,
+/// `more`) — inline at the card's right, or `stacked` full width (a narrow
+/// column, Claude's), Deny over the primary. `menu` hangs under the split
+/// button while it is open, deferred so it escapes the card's clip.
+pub fn approval_actions(
+    deny: AnyElement,
+    always: AnyElement,
+    more: AnyElement,
+    menu: Option<AnyElement>,
+    stacked: bool,
+) -> Div {
+    let split = div()
+        .relative()
+        .flex()
+        .flex_shrink_0()
+        .when(stacked, |split| split.w_full())
+        .child(always)
+        .child(more)
+        .children(menu.map(|menu| {
+            deferred(
+                div()
+                    .absolute()
+                    .top(gpui::relative(1.))
+                    .right_0()
+                    .mt(px(theme::FLOAT_OFFSET))
+                    .child(menu),
+            )
+            .with_priority(1)
+        }));
+    div()
+        .debug_selector(|| "decision-actions".into())
+        .flex()
+        .flex_shrink_0()
+        .w_full()
+        .min_w_0()
+        .gap(px(theme::DECISION_ACTION_GAP))
+        .map(|row| {
+            if stacked {
+                row.flex_col()
+            } else {
+                row.items_center().justify_end()
+            }
+        })
+        .child(deny)
+        .child(split)
+}
+
+/// The split button's menu (Claude's): a float `DECISION_MENU_W` wide of
+/// `rows` (`allow_menu_row`).
+pub fn allow_menu(rows: Vec<AnyElement>) -> Div {
+    ferrite_ui::menu::float()
+        .debug_selector(|| "decision-allow-menu".into())
+        .w(px(theme::DECISION_MENU_W))
+        .py(px(theme::FLOAT_PAD))
+        .children(rows)
+}
+
+/// One row of the allow menu: its verb, its chord at the right, and a
+/// one-line note under it when the verb needs one (`Allow and switch to
+/// Accept edits` — what the switch does).
+pub fn allow_menu_row(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    key: Option<SharedString>,
+    note: Option<SharedString>,
+) -> Stateful<Div> {
+    let mut item = ferrite_ui::menu::Item::new(label);
+    if let Some(key) = key {
+        item = item.shortcut(key);
+    }
+    item.note = note;
+    ferrite_ui::menu::item_row(id, &item, false, false)
+}
+
 /// The declining action (`Skip`, `Cancel`): a ghost with no key.
 pub fn skip_button(
     id: impl Into<ElementId>,
@@ -1515,7 +1718,10 @@ mod tests {
         let command = shell_source(&decision).unwrap();
         assert_eq!(command, "printf 'ok' > ferrite-perm.txt");
         assert!(prose_repeats_command(&decision.description, Some(&command)));
-        assert_eq!(approval_lead(&decision), "Bash needs approval");
+        assert_eq!(
+            approval_lead(&decision, Some(Provider::Codex)),
+            "Allow Codex to run this command?"
+        );
         // Claude's Bash reads the same, untouched.
         let claude = bash(r#"gh issue close 212 --reason "not planned""#);
         assert!(crate::pane::shell_command(&claude));
@@ -1537,10 +1743,19 @@ mod tests {
         assert_eq!(
             format!(
                 "{} \u{b7} {}",
-                approval_lead(&decision),
+                approval_lead(&decision, Some(Provider::Codex)),
                 head_detail([provider_word(Provider::Codex), context.as_ref()]).unwrap()
             ),
-            "Bash needs approval \u{b7} codex \u{b7} read-only sandbox"
+            "Allow Codex to run this command? \u{b7} codex \u{b7} read-only sandbox"
+        );
+        let edit = approval(
+            "Edit",
+            serde_json::json!({ "file_path": "/repo/notes.md" }),
+            vec![],
+        );
+        assert_eq!(
+            approval_lead(&edit, Some(Provider::Claude)),
+            "Allow Claude to edit notes.md?"
         );
         assert_eq!(
             context_label(Provider::Codex, None, None),
@@ -1566,13 +1781,10 @@ mod tests {
         assert_eq!(context_label(Provider::Claude, Some("plan"), None), "plan");
     }
 
-    /// D-5: the hint, exactly.
+    /// D-5: a question's hint, exactly (an approval's keys are on its
+    /// buttons).
     #[test]
     fn the_hints_read_as_the_prototype() {
-        assert_eq!(
-            hint_text(&APPROVAL_HINTS),
-            "\u{2191}\u{2193} select \u{b7} 1\u{2013}3 pick \u{b7} esc deny \u{b7} tab amend"
-        );
         assert_eq!(
             hint_text(&question_hints(4)),
             "\u{2191}\u{2193} select \u{b7} 1\u{2013}4 pick \u{b7} esc dismiss \u{b7} tab amend"

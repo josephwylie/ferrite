@@ -177,12 +177,54 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
             components::match_highlights(&item.matched, item.disabled),
         )
     };
+    let label = div()
+        .min_w_0()
+        .truncate()
+        .map(|cell| match item.label_w {
+            // An aligned column holds names that are code.
+            Some(width) => cell.w(px(width)).flex_shrink_0().font_family(FONT_CODE),
+            None => cell,
+        })
+        .child(gpui::StyledText::new(label).with_highlights(highlights));
+    // A badge rides the label's line; a note takes a line of its own under
+    // it, and the row grows to hold both.
+    let label = match (&item.badge, &item.note) {
+        (None, None) => label.into_any_element(),
+        (badge, note) => div()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .flex_shrink(1.)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1_5))
+                    .min_w_0()
+                    .child(label)
+                    .children(badge.clone().map(badge_face)),
+            )
+            .children(note.clone().map(|note| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(FS_META))
+                    .line_height(px(LH_META))
+                    .text_color(rgb(dim))
+                    .child(note)
+            }))
+            .into_any_element(),
+    };
     components::text_ui()
         .flex()
         .items_center()
         .gap(px(MENU_ROW_GAP))
         .min_w_0()
-        .h(px(FLOAT_ROW_H))
+        .h(px(if item.note.is_some() {
+            FLOAT_ROW_NOTE_H
+        } else {
+            FLOAT_ROW_H
+        }))
         .mx(px(FLOAT_PAD))
         .px(px(MENU_ROW_PAD_X))
         .rounded(px(R_MENU_ROW))
@@ -198,17 +240,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
                     .child(icons::icon(path, ROW_ICON, mark)),
             )
         })
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .map(|cell| match item.label_w {
-                    // An aligned column holds names that are code.
-                    Some(width) => cell.w(px(width)).flex_shrink_0().font_family(FONT_CODE),
-                    None => cell,
-                })
-                .child(gpui::StyledText::new(label).with_highlights(highlights)),
-        )
+        .child(label)
         .map(|row| match item.detail.clone() {
             Some(detail) => {
                 let cell = div().flex_1().min_w_0().truncate().text_color(rgb(dim));
@@ -234,6 +266,20 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
                     .child(components::glyph("\u{2713}", TEXT_STRONG)),
             )
         })
+}
+
+/// A row's tag (`Recommended`, `Default`): the badge size in `TEXT_DIM` on
+/// a hairline fill at `R_SMALL` — a word set apart, not a button.
+fn badge_face(text: SharedString) -> Div {
+    div()
+        .flex_shrink_0()
+        .px(px(SPACE_1_5))
+        .rounded(px(R_SMALL))
+        .bg(gpui::rgba(BADGE_FILL))
+        .text_size(px(FS_BADGE))
+        .line_height(px(LH_META))
+        .text_color(rgb(TEXT_DIM))
+        .child(text)
 }
 
 /// A row with its pointer role: `FLOAT_HOVER` under the pointer and the
@@ -669,6 +715,24 @@ impl ChoiceContent {
             .on_mouse_down_out({
                 let menu = self.clone();
                 move |_, window, cx| (menu.on_open)(false, window, cx)
+            })
+            // A row that shows a key (`1`…`5` on the modes) is picked by it.
+            .on_key_down({
+                let menu = self.clone();
+                move |event: &gpui::KeyDownEvent, window, cx| {
+                    let stroke = &event.keystroke;
+                    if stroke.modifiers.modified() {
+                        return;
+                    }
+                    let at = menu.choices.iter().position(|choice| {
+                        !choice.disabled
+                            && choice.shortcut.as_deref() == Some(stroke.key.as_str())
+                    });
+                    if let Some(at) = at {
+                        cx.stop_propagation();
+                        menu.pick(at, window, cx);
+                    }
+                }
             });
         if let Some((title, command)) = &self.head {
             surface = surface.child(head(title.clone()).child(command.clone()));
@@ -699,6 +763,9 @@ impl ChoiceContent {
             if let Some(detail) = &choice.detail {
                 item = item.detail(detail.clone());
             }
+            item.note = choice.note.clone();
+            item.badge = choice.badge.clone();
+            item.shortcut = choice.shortcut.clone();
             if let (true, Some((path, ink))) = (marked, choice.icon) {
                 item = item.leading(path, ink);
             }

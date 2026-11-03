@@ -107,9 +107,13 @@ impl Session for FixtureSession {
             })
             .collect()
     }
-    /// MCP sign-in and reconnect, as both CLIs answer them.
+    /// MCP sign-in and reconnect, as both CLIs answer them, and a mode
+    /// switch (the Composer's mode menu, an approval's `Allow and switch`).
     fn supports_control(&self, kind: ControlKind) -> bool {
-        matches!(kind, ControlKind::LoginMcp | ControlKind::ReconnectMcp)
+        matches!(
+            kind,
+            ControlKind::LoginMcp | ControlKind::ReconnectMcp | ControlKind::SetPermissionMode
+        )
     }
     fn interrupt(&mut self) -> io::Result<()> {
         Ok(())
@@ -417,6 +421,8 @@ const STATES: &[(&str, &[&str])] = &[
     // ---- WP-D states (append above the end line)
     ("sessioncard", &["app"]),
     ("preview", &["app"]),
+    ("modemenu", &["app"]),
+    ("plusmenu", &["app"]),
     // (end WP-D)
 
     // ---- WP-E states (append above the end line)
@@ -1006,6 +1012,23 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
+        // The Composer footer's mode menu and the box's `+` menu, open.
+        "modemenu" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, _, _| {
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                let generation = view.cockpit.thread(thread).expect("open").generation();
+                view.mode_picker = Some((thread, generation));
+            });
+            (scene, setup)
+        }
+        "plusmenu" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, _, _| {
+                view.attach_menu = Some(view.panes[0].identity);
+            });
+            (scene, setup)
+        }
         // (end WP-D)
 
         // ---- WP-E scene arms (append above the end line)
@@ -1024,12 +1047,63 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-E)
 
         // ---- WP-F scene arms (append above the end line)
-        // The Panel's Context tab, picked: the usage card and its legend.
+        // The Panel's Details tab, picked: environment, the context card
+        // with its category table open, connectors and a dev server left
+        // running.
         "panel-context" => {
             let scene = conversation(label);
+            {
+                let feeds = scene.feeds.borrow();
+                let feed = &feeds[0];
+                let server = |name: &str, status| McpServer {
+                    name: name.into(),
+                    status,
+                    error: None,
+                };
+                let category = |name: &str, tokens| ferrite_core::ContextCategory {
+                    name: name.into(),
+                    tokens,
+                };
+                for event in [
+                    SessionEvent::ContextDetails {
+                        details: ferrite_core::ContextDetails {
+                            usable_window: Some(167_000),
+                            auto_compact_threshold: Some(155_000),
+                            is_auto_compact_enabled: Some(true),
+                            categories: vec![
+                                category("Messages", 38_400),
+                                category("System tools", 14_200),
+                                category("MCP tools", 6_200),
+                                category("System prompt", 3_400),
+                                category("Memory files", 1_200),
+                                category("Free space", 103_600),
+                            ],
+                        },
+                    },
+                    SessionEvent::McpServers {
+                        servers: vec![
+                            server("github", McpStatus::Connected),
+                            server("linear", McpStatus::NeedsAuth),
+                        ],
+                    },
+                    SessionEvent::Progress {
+                        event: ferrite_core::progress::ProgressEvent::BackgroundSnapshot {
+                            tasks: vec![ferrite_core::progress::BackgroundTask {
+                                id: "task:1".into(),
+                                label: "npm run dev".into(),
+                                detail: "shell".into(),
+                                status: ferrite_core::progress::TaskStatus::Working,
+                            }],
+                        },
+                    },
+                ] {
+                    feed.send(event).expect("fixture Session is listening");
+                }
+            }
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
-                view.open_panel_tab(thread, crate::cockpit::panel::PanelTab::Context, cx);
+                view.open_panel_tab(thread, crate::cockpit::panel::PanelTab::Details, cx);
+                view.context_usage_expanded = true;
             });
             (scene, setup)
         }
@@ -1170,6 +1244,24 @@ fn legacy(state: &str) -> (Scene, Setup) {
                 snapshot: true,
                 text: "Checking the supplied spacing and tool results".into(),
             });
+            // The plan the turn works to: the task list over the line.
+            {
+                use ferrite_core::progress::{PlanStep, ProgressEvent, StepStatus};
+                let step = |text: &str, status| PlanStep {
+                    text: text.into(),
+                    status,
+                };
+                sender.ev(SessionEvent::Progress {
+                    event: ProgressEvent::Plan {
+                        steps: vec![
+                            step("Read formatting.md", StepStatus::Completed),
+                            step("Check the spacing in each block", StepStatus::InProgress),
+                            step("Report what changed", StepStatus::Pending),
+                        ],
+                        explanation: String::new(),
+                    },
+                });
+            }
         }
         "approval" => {
             sender.ev(SessionEvent::DecisionRequested {

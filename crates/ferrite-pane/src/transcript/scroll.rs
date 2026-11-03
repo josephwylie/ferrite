@@ -124,7 +124,7 @@ impl TranscriptScroll {
 
     /// How much of the viewport's top the pinned band covers (`band`, its
     /// foot below the viewport's top; `None` when no band is pinned). Rows
-    /// pass under it into its fade (`TX_TOP_FADE`), so nothing is cut on a
+    /// pass under it into its fade (`EDGE_FADE`), so nothing is cut on a
     /// line. Whether it changed, so the caller repaints once.
     pub(crate) fn set_top_mask(&self, band: Option<Pixels>) -> bool {
         let mask = band.map_or(px(0.), |band| band.max(px(0.)));

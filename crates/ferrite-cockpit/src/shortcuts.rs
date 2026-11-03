@@ -119,6 +119,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::Allow" => Row(Decision, "Allow"),
         "cockpit::Deny" => Row(Decision, "Deny"),
         "cockpit::Always" => Row(Decision, "Always allow"),
+        // The approval card's chorded buttons: they act with text on the
+        // line, where the letters type.
+        "cockpit::AllowOnce" => Row(Decision, "Allow once, from any line"),
+        "cockpit::AlwaysAllow" => Row(Decision, "Always allow, from any line"),
         "cockpit::PickOption1" => Row(Decision, "Pick 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" => Hidden,
         "cockpit::PickOption4" => Row(Decision, "Pick 4"),
@@ -129,6 +133,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "decision::Amend" => Row(Decision, "Amend (a note with the answer)"),
         // The Composer.
         "cockpit::Submit" => Row(Composer, "Send"),
+        "cockpit::AttachFiles" => Row(Composer, "Attach files or photos"),
         "composer::Newline" => Row(Composer, "New line"),
         "cockpit::Interrupt" => Row(Composer, "Interrupt"),
         "status::CycleMode" => Row(Composer, "Cycle permission mode"),
@@ -181,6 +186,8 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "palette::Confirm"
         | "palette::Preview"
         | "palette::Dismiss"
+        | "palette::NextType"
+        | "palette::PreviousType"
         | "notifications::SelectNext"
         | "notifications::SelectPrevious"
         | "notifications::Open"
@@ -329,7 +336,7 @@ impl Shortcuts {
 
 impl Render for Shortcuts {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = crate::palette::input_row("shortcuts-input", self.input.clone()).child(
+        let input = crate::palette::input_row("shortcuts-input", self.input.clone(), None, true).child(
             div()
                 .flex_shrink_0()
                 .text_size(px(FS_META))
@@ -392,7 +399,7 @@ impl Render for Shortcuts {
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(input)
                 .child(list)
-                .child(crate::palette::footer_row(FOOTER.into(), String::new())),
+                .child(crate::palette::footer_row(FOOTER, gpui::SharedString::default())),
             ferrite_ui::components::dialog_shadow,
         )
     }

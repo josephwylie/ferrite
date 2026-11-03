@@ -315,6 +315,8 @@ bar. Its tooltip reads `Toggle sidebar ⌘B`, from the keymap.
 
 **5.1.2 Views (30px rows, then a 14px gap).** Each row is a 15px icon,
 a 10px gap, a label in `TEXT_MUTED`, and a trailing item:
+- **`New thread`** (2026-11-03, Claude's `New`): trailing chord
+  (`cockpit::NewThread`, ⌘N). Opens a new Thread, as ⌘N does.
 - **`Search`**: trailing chord (`palette::Toggle`, ⌘K) in 12px
   `TEXT_DIM`. Opens the palette (§5.8).
 - **`Inbox`** (named `Needs you` until 2026-11-03, when it read as the
@@ -362,17 +364,11 @@ filtering's `Working` and `Done` views. Three sections, in this order:
   pointer.
 
 There is no idle section and no failed one: failed ranks as idle (ADR
-0015). Each section's head is in §5.1.3's grammar, with its row count at
-the right in tabular figures. A press on the head folds the section to
-that head and its count, a fold held as the tree's are. A section with no
-rows is not drawn. With none at all, the list and the gap under it are
-gone. Each row is one 30px line:
-- the tree row's mark (§6);
-- its title;
-- at the right, what its line 2 would say in a word, in line 2's ink and
-  tabular figures: the request's kind (`approval`), `failing`, the
-  working elapsed time, `background`, or for a finish how long ago it
-  was last used.
+0015). Each section's head is in §5.1.3's grammar, its caret after its
+label and no count. A press on the head folds the section to that head, a
+fold held as the tree's are. A section with no rows is not drawn. With
+none at all, the list and the gap under it are gone. Each row is the tree
+row (§5.1.5), its title under the section's heading.
 
 A row behaves as its tree row does: the same hover and selection, the
 Thread's context menu, and a drag from it is a drag of the tree row. A
@@ -393,7 +389,9 @@ finish's toast the frames of its fade-out (the toast test in
 A view (Needs you, Parked) shows its list in place of the Attention list
 and the tree. The folded rail (§5.1.7) is unchanged.
 
-**5.1.3 Section heading (26).** `Projects` in 12/500 `TEXT_DIM`, with a
+**5.1.3 Section heading (26).** Small and quiet, as Claude's: the label in
+12/400 `TEXT_DIM`; a foldable one then its 10px caret (`▸` shut, `▾`
+open, `NAV_HEADING_CARET`), always shown. `Projects` has a
 22px `+` icon button (new Project, the same act as today's) at the right.
 The existing `groups` section (Groups spanning Projects) keeps its own
 heading in this style, above `Projects`. The machine heading (ADR 0026)
@@ -419,76 +417,38 @@ operator's choice, `nav-full.html` variant 1):
 The Groups section (Groups spanning Projects) has no folder to hang
 from, so its Groups stay at the root, with no Project guide.
 
-**5.1.5 Thread row (44, two lines; 30 with no line 2).** Padding 0 10 0
-35 at the root, plus `NAV_TREE_INDENT` per level of the tree (§5.1.4),
-radius 7. It replaces today's one-line row with `├ └` leads. A row is
-only as tall as its content: with nothing for line 2 (no branch, no
-state words, no PR label, no task lines) it is one 30px line, its mark
-centred on it.
-- **Mark** at x 10–24, centred on line 1. The face (§6) comes from
-  `RowStatus`:
-
-  | State | Mark |
-  | --- | --- |
-  | working | braille spinner, Geist Mono 12, `RUNNING` |
-  | blocked | 7px `ATTENTION` dot with a 3px 15% halo |
-  | done (unseen) | `check-circle` 14 `TEXT_DIM` |
-  | failed | 7px `BLOCKED` dot |
-  | failing | spinner in `BLOCKED` |
-  | background | 7px `RUNNING` ring |
-  | idle | `terminal` 14 `TEXT_DIM` |
-  | parked | `terminal` at 50% |
-
-- **Line 1.** The title in 13 `TEXT`, ellipsised (`TEXT_STRONG` while
-  unseen-done, the existing unread rule). At the right, when
-  `facts.changed_files` is non-empty, its summed diffstat: `+N` in
-  `RUNNING` and `−N` in `BLOCKED`, Geist Mono 11.5; with no diffstat,
-  an idle or unseen-done Thread's last-used age (`3h`) in 12 `TEXT_DIM`
-  (2026-11-03: every list Codex and Claude draw dates its rows).
-- **Line 2.** 12 `TEXT_DIM`. Its content depends on state:
-  - blocked: `needs you · <reason>` in `ATTENTION`, using the existing
-    words (`approval`, `plan`, `question`; the mockup's `allow Bash?` is
-    illustrative);
-  - failed: `failed · <age>` in `BLOCKED`;
-  - failing: `failing N`;
-  - working: `<branch> · <elapsed>`;
-  - otherwise: `<branch>`, plus the row details `↑2↓1*`.
-
-  At the right of line 2 goes the PR label (`#123` and its mark, from
-  `facts.pr`; ADR 0026 keeps it on the row): the number in line 2's quiet
-  ink, then one drawn 12px icon — `check` passing (skipped checks pass),
-  `close` failing in `BLOCKED`, a 6px dot pending, `refresh` while a
-  reading is out, `git-merge` merged, `x-circle` closed — never a font
-  glyph, and never in the row's attention ink. The branch comes from `facts.branch`.
-  Truncation order (narrowest first): drop the details, then the age,
-  then ellipsise the branch, keeping the PR label. Port `row_words`'
-  priority.
+**5.1.5 Thread row (30, one quiet line).** (2026-11-03, the owner's big
+pass: Claude's own list.) Padding 0 10 0 35 at the root, plus
+`NAV_TREE_INDENT` per level of the tree (§5.1.4); an Attention list row's
+title sits under its heading, at 10. Radius 7. The row is its title and
+nothing else: where a Thread works (branch, PR, drift, diffstat, age)
+lives in its Pane and the panel, not the list.
+- **Title** in 13 `TEXT`, ellipsised (`TEXT_STRONG` while unseen-done,
+  the existing unread rule; a parked Thread's `TEXT_MUTED`).
+- **Right:** one mark when a state is worth saying, small (§6): the
+  `ATTENTION` dot with its halo when it needs you, the `BLOCKED` dot when
+  failed, the `RUNNING` ring for background work, the spinner while
+  working or failing. Idle, unseen-done and parked rows say nothing.
 - **Selected** (the focused Pane's Thread): `SELECTED` fill, inset 1px
-  `ROW_RING`, title `TEXT_STRONG` 500, line 2 `#9a9a9a`.
-- **Hover:** `RAISED` fill, at today's 80ms blend. An open Thread's row
-  (tree and Attention list) shows a 20px `archive` icon button at line
-  1's right in place of the diffstat, age or word: it parks the Thread,
-  the context menu's `Park thread`. A Project heading shows a `+` there
-  in place of its drift: a new Thread in that Project. The press stops
-  at the button.
+  `ROW_RING`, title `TEXT_STRONG` 500.
+- **Hover:** `RAISED` fill, at today's 80ms blend, and a 20px `ellipsis`
+  button (`⋯`) in place of the mark: it opens the row's context menu
+  (park, rename, delete, …). A Project heading shows a `+` there in
+  place of its drift: a new Thread in that Project. The press stops at
+  the button.
 
 **5.1.6 Group row (30) and members.**
 - **The row.** A chevron at x 11 (`chevron-right` folded,
   `chevron-down` open), then the Group title, both moved in a level
-  inside a Project. At the right, the roll-up:
-  the worst state's word in its ink (`1 failed`, `2 need you`), then
-  `· N threads` in `TEXT_DIM` (2026-11-03: a bare `· 4` read as part of
-  the word).
+  inside a Project. At the right, its members' roll-up as one mark, as a
+  Thread row's (§5.1.5); the words (`1 failed`) stay a folded Project's.
 - **Its members** nest one level further, with their own guide from under
   the Group's chevron (`NAV_GROUP_GUIDE_X`, 17 plus the Group's indent)
   to 8px short of the last member's foot.
 - **When the Group is the shown view.** The row takes the selected style
-  and lists its members as 30px one-line rows:
-  - padding-left 54, with the mark (5.1.5) at x 35, both plus the
-    Group's own indent (68 and 49 inside a Project);
-  - the title in `TEXT` (the focused Pane's in `TEXT_STRONG`);
-  - the state word right-aligned (`1m`, `needs you`, `failed`, `done`) in
-    its ink, or `TEXT_DIM`.
+  and lists its members as Thread rows (§5.1.5) at padding-left 54 plus
+  the Group's own indent, the title in `TEXT` (the focused Pane's in
+  `TEXT_STRONG`).
 - **When the Group is not shown.** Members are Thread rows (§5.1.5) one
   level, 14px, under the Group row.
 
@@ -501,9 +461,10 @@ centred on it.
 The head row still shows the traffic lights, and the toggle sits at the
 rail's top. The canvas doesn't draw the rail; build it from these rules.
 
-**5.1.8 Foot (36).** `ferrite` and the version in 12 `TEXT_DIM` (the
-wordmark moves here from the bar, without its accent), and the `gear`
-icon button. On macOS the gear stays in the app menu too. Elsewhere it
+**5.1.8 Foot (36).** Claude's account row (2026-11-03): the login at
+the machine — its initial on an 18px `SELECTED` disc, its name in 13
+`TEXT_MUTED` — with `Ferrite` and the version under the pointer, and the
+`gear` icon button. On macOS the gear stays in the app menu too. Elsewhere it
 moves here from the bar.
 
 **5.1.9 Scrollbar.** The tree's scrollbar is the overlay thumb, laid in

@@ -3,16 +3,18 @@
 //! operator types (FL-1…FL-5). Scoped, it is also ⌘G's Group list and the
 //! session import picker.
 //!
-//! The view holds what it shows — the rows, the filter's survivors and the
-//! cursor — and draws it as the command-search dialog (SPEC §5.8, theme's
-//! `PALETTE_*`): the input row (the `search` icon, the query in Geist
-//! `TEXT_STRONG`, `esc` or the status filter's name at the right), section
-//! headings (`Threads`, `Projects`, `Groups`, `Commands`, or `Sessions`),
-//! rows (a state mark or the command's icon, the name with its matches in
-//! `TEXT_STRONG` at `W_STRONG`, the context and the chord at the right, the
-//! cursor row `SELECTED` with its enter mark), and the footer — the cursor
-//! row's detail (a Thread's working directory) where it has one, else the
-//! keys, and the result count. The cockpit builds the rows
+//! The view holds what it shows — the rows, the type tab, the filter's
+//! survivors and the cursor — and draws it as the Claude app's search
+//! (theme's `PALETTE_*`): the input row (the `search` icon, the query or
+//! its `Search` placeholder, the status filter's name at the right while
+//! one is on), ⌘K's type tabs (`All`, then each type it holds; ← → on an
+//! empty line), section headings, rows (a state mark or the command's
+//! icon, the name with its matches lit, the context and the chord at the
+//! right, the cursor row `SELECTED`), and the footer — the keys' hints
+//! (`Close esc`, `Change type ← →`, `Open beside ⇥`) and the cursor row's
+//! working directory or the result count. At rest — `All`, nothing typed
+//! — it lists `Recents` (the Threads used last) and a few `Actions` that
+//! start work; a query or a tab reaches every row. The cockpit builds the rows
 //! (`cockpit::palette`) and runs them: every key the palette answers is a
 //! `palette::*` action bound in its `Palette` context, handled at the
 //! cockpit's root.
@@ -59,6 +61,9 @@ gpui::actions!(
         Confirm,
         Preview,
         Dismiss,
+        // ← / → on an empty line: the next or previous type tab.
+        NextType,
+        PreviousType,
     ]
 );
 
@@ -87,11 +92,38 @@ impl Section {
             Section::Threads => "Threads",
             Section::Projects => "Projects",
             Section::Groups => "Groups",
-            Section::Commands => "Commands",
+            Section::Commands => "Actions",
             Section::Sessions => "Sessions",
         }
     }
 }
+
+/// The ⌘K palette's type tabs: `All`, or one section alone. A tab shows
+/// only where the palette holds rows of its section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tab {
+    All,
+    Only(Section),
+}
+
+impl Tab {
+    fn title(self) -> &'static str {
+        match self {
+            Tab::All => "All",
+            Tab::Only(section) => section.title(),
+        }
+    }
+
+    fn keeps(self, section: Section) -> bool {
+        match self {
+            Tab::All => true,
+            Tab::Only(only) => only == section,
+        }
+    }
+}
+
+/// How many Threads `All` lists as `Recents` before a query.
+pub(crate) const RECENTS_MAX: usize = 8;
 
 /// The status filter's name, at the input row's right while it is on.
 fn filter_word(filter: Attention) -> &'static str {
@@ -162,6 +194,16 @@ pub(crate) enum Command {
 }
 
 impl Command {
+    /// The few acts `All` offers as `Actions` before a query (the Claude
+    /// app's `New session`): starting work. The rest wait for a query or
+    /// the `Actions` tab.
+    fn primary(&self) -> bool {
+        matches!(
+            self,
+            Command::NewThread | Command::NewWorktreeThread | Command::ImportSession
+        )
+    }
+
     /// The icon in the row's mark column, where the icon family has one
     /// that says the act (`command-search.png`: `plus`, `branch`, `board`);
     /// the rest hold the column empty.
@@ -227,6 +269,8 @@ pub(crate) struct Row {
     pub detail: Option<SharedString>,
     /// The key that does the same, as the key table spells it (`cmd-1`).
     pub keys: Option<String>,
+    /// When the operator last used it (a Thread): `All`'s `Recents` order.
+    pub used: Option<std::time::SystemTime>,
     pub act: Act,
 }
 
@@ -251,6 +295,8 @@ struct Shown {
 /// over them, and the input line.
 pub(crate) struct Palette {
     pub scope: PaletteScope,
+    /// The type tab (⌘K only; the other scopes are one type already).
+    pub tab: Tab,
     rows: Vec<Row>,
     shown: Vec<Shown>,
     cursor: usize,
@@ -286,6 +332,7 @@ impl Palette {
         });
         let mut palette = Self {
             scope,
+            tab: Tab::All,
             rows,
             shown: Vec::new(),
             cursor: 0,
@@ -316,10 +363,52 @@ impl Palette {
     /// cursor returns to the first.
     pub(crate) fn refilter(&mut self, cx: &mut Context<Self>) {
         let query = self.query(cx);
-        self.shown = filter(&self.rows, &query, self.scope);
+        self.shown = filter(&self.rows, &query, self.scope, self.tab);
         self.cursor = 0;
         self.scroll.scroll_to_item(0);
         cx.notify();
+    }
+
+    /// The type tabs offered: `All`, then each section the rows hold, in
+    /// draw order. None outside ⌘K.
+    pub(crate) fn tabs(&self) -> Vec<Tab> {
+        if self.scope != PaletteScope::All {
+            return Vec::new();
+        }
+        let mut tabs = vec![Tab::All];
+        for row in &self.rows {
+            let tab = Tab::Only(row.section);
+            if !tabs.contains(&tab) {
+                tabs.push(tab);
+            }
+        }
+        tabs
+    }
+
+    /// Show `tab`'s rows; the query stands and filters them.
+    pub(crate) fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        if tab != self.tab {
+            self.tab = tab;
+            self.refilter(cx);
+        }
+    }
+
+    /// ← / →: the next or previous tab, wrapping. With text on the line
+    /// the arrows move the caret instead, as a field's do.
+    fn step_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let tabs = self.tabs();
+        if tabs.is_empty() || !self.query(cx).is_empty() {
+            let caret: Box<dyn gpui::Action> = if delta < 0 {
+                Box::new(ferrite_pane::composer::Left)
+            } else {
+                Box::new(ferrite_pane::composer::Right)
+            };
+            window.dispatch_action(caret, cx);
+            return;
+        }
+        let at = tabs.iter().position(|tab| *tab == self.tab).unwrap_or(0) as isize;
+        let next = tabs[(at + delta).rem_euclid(tabs.len() as isize) as usize];
+        self.set_tab(next, cx);
     }
 
     /// ↑ / ↓: the cursor steps over the survivors, wrapping.
@@ -406,15 +495,41 @@ fn status_filter(scope: PaletteScope, query: &str) -> Option<Option<Attention>> 
     }
 }
 
-/// The rows the line keeps — a status filter's, or the search's — with
-/// their names' lit ranges.
-fn filter(rows: &[Row], query: &str, scope: PaletteScope) -> Vec<Shown> {
+/// Whether the palette shows its resting `All` view: ⌘K, the `All` tab,
+/// nothing typed — `Recents` and a few `Actions`, as the Claude app's
+/// search opens.
+fn resting(scope: PaletteScope, tab: Tab, query: &str) -> bool {
+    scope == PaletteScope::All && tab == Tab::All && query.is_empty()
+}
+
+/// The rows the line keeps — the tab's, then a status filter's or the
+/// search's — with their names' lit ranges. At rest `All` keeps the
+/// `RECENTS_MAX` Threads used last, newest first, then the primary
+/// commands.
+fn filter(rows: &[Row], query: &str, scope: PaletteScope, tab: Tab) -> Vec<Shown> {
+    let whole = |index: usize| Shown {
+        row: index,
+        lit: Vec::new(),
+    };
+    if resting(scope, tab, query) {
+        let mut recents: Vec<usize> = (0..rows.len())
+            .filter(|index| rows[*index].section == Section::Threads)
+            .collect();
+        // Stable: Threads never used keep their tree order, last.
+        recents.sort_by_key(|index| std::cmp::Reverse(rows[*index].used));
+        recents.truncate(RECENTS_MAX);
+        let actions = (0..rows.len()).filter(|index| {
+            matches!(&rows[*index].act, Act::Command(command) if command.primary())
+        });
+        return recents.into_iter().chain(actions).map(whole).collect();
+    }
     let (query, status) = match status_filter(scope, query) {
         Some(status) => ("", status),
         None => (query, None),
     };
     rows.iter()
         .enumerate()
+        .filter(|(_, row)| tab.keeps(row.section))
         .filter(|(_, row)| row.passes(status))
         .filter_map(|(index, row)| {
             crate::fuzzy::palette_match(query, &row.name, &row.context)
@@ -423,14 +538,6 @@ fn filter(rows: &[Row], query: &str, scope: PaletteScope) -> Vec<Shown> {
         .collect()
 }
 
-/// The palette's footer, word for word (`command-search.png`'s).
-pub(crate) const FOOTER: &str =
-    "\u{2191}\u{2193} select \u{b7} \u{23ce} open \u{b7} \u{21e5} preview in a pane \u{b7} esc";
-/// ⌘G's footer: a Group has no pane to preview in.
-pub(crate) const GROUPS_FOOTER: &str = "\u{2191}\u{2193} select \u{b7} \u{23ce} open \u{b7} esc";
-/// The import picker's footer: ⏎ imports the session and resumes it.
-pub(crate) const SESSIONS_FOOTER: &str =
-    "\u{2191}\u{2193} select \u{b7} \u{23ce} import \u{b7} esc";
 pub(crate) const NO_MATCHES: &str = "No matches";
 
 /// The footer's right: how many rows survive.
@@ -443,19 +550,46 @@ fn results_word(count: usize) -> String {
 
 impl Render for Palette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let trailing = match status_filter(self.scope, &self.query(cx)).flatten() {
-            Some(filter) => div()
-                .debug_selector(|| "palette-filter".into())
-                .text_color(rgb(filter_ink(filter)))
-                .child(filter_word(filter)),
-            None => div().text_color(rgb(TEXT_DIM)).child("esc"),
-        };
-        let input = input_row("palette-input", self.input.clone()).child(
-            trailing
-                .flex_shrink_0()
-                .text_size(px(FS_META))
-                .whitespace_nowrap(),
+        let query = self.query(cx);
+        let rest = resting(self.scope, self.tab, &query);
+        let tabs = self.tabs();
+        // The tabs carry the list's hairline when there are any.
+        let mut input = input_row(
+            "palette-input",
+            self.input.clone(),
+            query.is_empty().then_some("Search"),
+            tabs.is_empty(),
         );
+        if let Some(filter) = status_filter(self.scope, &query).flatten() {
+            input = input.child(
+                div()
+                    .debug_selector(|| "palette-filter".into())
+                    .flex_shrink_0()
+                    .text_size(px(FS_META))
+                    .whitespace_nowrap()
+                    .text_color(rgb(filter_ink(filter)))
+                    .child(filter_word(filter)),
+            );
+        }
+        let tab_row = (!tabs.is_empty()).then(|| {
+            tabs.iter().enumerate().fold(
+                div()
+                    .debug_selector(|| "palette-tabs".into())
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(PALETTE_TAB_GAP))
+                    .h(px(PALETTE_TABS_H + 1.0))
+                    .px(px(PALETTE_PAD_X - PALETTE_TAB_PAD_X))
+                    .pb(px(SPACE_1_5))
+                    .border_b_1()
+                    .border_color(gpui::rgba(HAIRLINE)),
+                |row, (at, tab)| {
+                    let tab = *tab;
+                    row.child(self.tab_element(at, tab, cx))
+                },
+            )
+        });
         let mut list = div()
             .id("palette-rows")
             .flex()
@@ -473,8 +607,13 @@ impl Render for Palette {
             if section != Some(row.section) {
                 let first = section.is_none();
                 section = Some(row.section);
+                // At rest the Threads are the ones used last.
+                let title = match row.section {
+                    Section::Threads if rest => "Recents",
+                    section => section.title(),
+                };
                 list = list.child(
-                    section_heading(row.section.title(), first)
+                    section_heading(title, first)
                         .debug_selector(move || format!("palette-section-{at}")),
                 );
             }
@@ -496,15 +635,21 @@ impl Render for Palette {
             };
             list = list.child(empty_note(note));
         }
-        let footer = match (
-            self.selected().and_then(|row| row.detail.clone()),
-            self.scope,
-        ) {
-            (Some(detail), _) => detail,
-            (None, PaletteScope::All) => FOOTER.into(),
-            (None, PaletteScope::Groups) => GROUPS_FOOTER.into(),
-            (None, PaletteScope::Sessions) => SESSIONS_FOOTER.into(),
-        };
+        // The footer's hints: what each key does here, as the Claude
+        // app's search says them; the cursor row's directory at the right.
+        let mut hints: Vec<(&'static str, &'static str)> = vec![("Close", "esc")];
+        if !tabs.is_empty() {
+            hints.push(("Change type", "\u{2190} \u{2192}"));
+        }
+        match self.scope {
+            PaletteScope::All => hints.push(("Open beside", "\u{21e5}")),
+            PaletteScope::Groups => {}
+            PaletteScope::Sessions => hints.push(("Import", "\u{23ce}")),
+        }
+        let detail = self
+            .selected()
+            .and_then(|row| row.detail.clone())
+            .unwrap_or_else(|| SharedString::from(results_word(self.shown.len())));
         // It comes in as every sheet does (`dialog-in`), over its veil
         // darkening in (`cockpit::palette`); it closes at once.
         ferrite_ui::motion::dialog_in_casting(
@@ -513,12 +658,72 @@ impl Render for Palette {
                 .debug_selector(|| "palette".into())
                 // A press inside never reaches the veil or the board under it.
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_action(cx.listener(|palette, _: &NextType, window, cx| {
+                    palette.step_tab(1, window, cx)
+                }))
+                .on_action(cx.listener(|palette, _: &PreviousType, window, cx| {
+                    palette.step_tab(-1, window, cx)
+                }))
                 .child(input)
+                .children(tab_row)
                 .child(list)
-                .child(footer_row(footer, results_word(self.shown.len()))),
+                .child(footer_row(hint_line(&hints), detail)),
             components::dialog_shadow,
         )
     }
+}
+
+impl Palette {
+    /// One type tab: its word on a `PALETTE_TAB_H` pill, the chosen one
+    /// `SELECTED`; a press picks it.
+    fn tab_element(&self, at: usize, tab: Tab, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let chosen = tab == self.tab;
+        let id = gpui::ElementId::from(("palette-tab", at));
+        let key = ferrite_ui::pointer::hover_key(&id);
+        let pill = div()
+            .id(id)
+            .debug_selector(move || format!("palette-tab-{at}"))
+            .flex()
+            .items_center()
+            .h(px(PALETTE_TAB_H))
+            .px(px(PALETTE_TAB_PAD_X))
+            .rounded(px(R_CONTROL))
+            .whitespace_nowrap()
+            .text_color(rgb(if chosen { TEXT_STRONG } else { TEXT_DIM }))
+            .when(chosen, |pill| pill.font_weight(W_LABEL))
+            .child(tab.title())
+            .on_click(cx.listener(move |palette, _: &gpui::ClickEvent, _, cx| {
+                cx.stop_propagation();
+                palette.set_tab(tab, cx);
+            }));
+        if chosen {
+            pill.bg(paint::SELECTED)
+        } else {
+            pill.hover_palette(key).press_float()
+        }
+    }
+}
+
+/// The footer's hints: each word in `TEXT_DIM`, its key after it in
+/// `TEXT_MUTED`, `PALETTE_HINT_GAP` apart — plain text, no keycaps.
+fn hint_line(hints: &[(&'static str, &'static str)]) -> gpui::Div {
+    hints.iter().fold(
+        div()
+            .debug_selector(|| "palette-hints".into())
+            .flex()
+            .items_center()
+            .gap(px(PALETTE_HINT_GAP)),
+        |line, (word, key)| {
+            line.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1_5))
+                    .child(*word)
+                    .child(components::glyph(*key, TEXT_MUTED)),
+            )
+        },
+    )
 }
 
 /// What a dialog's list says when it has nothing to show (the palette's,
@@ -566,22 +771,34 @@ pub(crate) fn dialog() -> gpui::Div {
 }
 
 /// The dialog's input row (the palette's, the shortcuts sheet's filter):
-/// `PALETTE_INPUT_H` over a `HAIRLINE`, the `search` icon in `TEXT_DIM`,
-/// then the line in Geist `FS_PALETTE` `TEXT_STRONG`. The caller adds
-/// what stands at its right.
-pub(crate) fn input_row(selector: &'static str, input: Entity<Composer>) -> gpui::Div {
+/// `PALETTE_INPUT_H`, the `search` icon in `TEXT_DIM`, then the line in
+/// `FS_PALETTE` `TEXT_STRONG`, its `placeholder` in `TEXT_DIM` while it is
+/// empty; over a `HAIRLINE` when `rule` (⌘K's tabs carry it instead). The
+/// caller adds what stands at its right.
+pub(crate) fn input_row(
+    selector: &'static str,
+    input: Entity<Composer>,
+    placeholder: Option<&'static str>,
+    rule: bool,
+) -> gpui::Div {
     div()
         .debug_selector(move || selector.into())
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(PALETTE_GAP))
+        .px(px(PALETTE_PAD_X))
         // The row, then its hairline under it (gpui's border sits inside
         // the box).
-        .h(px(PALETTE_INPUT_H + 1.0))
-        .px(px(PALETTE_PAD_X))
-        .border_b_1()
-        .border_color(gpui::rgba(HAIRLINE))
+        .map(|row| {
+            if rule {
+                row.h(px(PALETTE_INPUT_H + 1.0))
+                    .border_b_1()
+                    .border_color(gpui::rgba(HAIRLINE))
+            } else {
+                row.h(px(PALETTE_INPUT_H))
+            }
+        })
         .child(ferrite_ui::icons::icon(
             ferrite_ui::icons::SEARCH,
             PALETTE_SEARCH_ICON,
@@ -589,12 +806,22 @@ pub(crate) fn input_row(selector: &'static str, input: Entity<Composer>) -> gpui
         ))
         .child(
             div()
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .font_family(FONT_UI)
                 .text_size(px(FS_PALETTE))
                 .line_height(px(LH_UI))
                 .text_color(rgb(TEXT_STRONG))
+                // Behind the line, so the caret stands at its start.
+                .children(placeholder.map(|words| {
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(words)
+                }))
                 .child(input),
         )
 }
@@ -617,10 +844,10 @@ pub(crate) fn section_heading(title: &'static str, first: bool) -> gpui::Div {
         .child(title)
 }
 
-/// The footer: `PALETTE_FOOT_H` under a `HAIRLINE`, the cursor row's cwd or
-/// the keys at the left (cut with an ellipsis), the result count at the
-/// right, all 12 `TEXT_DIM`.
-pub(crate) fn footer_row(left: SharedString, right: String) -> gpui::Div {
+/// The footer: `PALETTE_FOOT_H` under a `HAIRLINE`, the key hints at the
+/// left, and at the right the cursor row's directory or the result count,
+/// cut from its start where it runs long; all 12 `TEXT_DIM`.
+pub(crate) fn footer_row(left: impl IntoElement, right: SharedString) -> gpui::Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -634,11 +861,15 @@ pub(crate) fn footer_row(left: SharedString, right: String) -> gpui::Div {
         .text_size(px(FS_META))
         .text_color(rgb(TEXT_DIM))
         .whitespace_nowrap()
-        .child(div().flex_1().min_w_0().truncate().child(left))
+        .child(div().flex_shrink_0().child(left))
         .child(
             div()
-                .flex_shrink_0()
                 .debug_selector(|| "palette-results".into())
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis_start()
+                .text_right()
                 .child(right),
         )
 }
@@ -743,6 +974,7 @@ mod tests {
             status: Some(status),
             detail: None,
             keys: None,
+            used: None,
             act: Act::Thread(ThreadId::new(id)),
         }
     }
@@ -755,6 +987,7 @@ mod tests {
             status: None,
             detail: None,
             keys: None,
+            used: None,
             act: Act::Command(command),
         }
     }
@@ -767,6 +1000,7 @@ mod tests {
             status: None,
             detail: None,
             keys: None,
+            used: None,
             act: Act::Adopt {
                 path: name.into(),
                 into: None,
@@ -799,7 +1033,7 @@ mod tests {
             ),
             command("open a group", "", Command::OpenGroup),
         ];
-        let shown = filter(&rows, "par", PaletteScope::All);
+        let shown = filter(&rows, "par", PaletteScope::All, Tab::All);
         assert_eq!(
             names(&rows, &shown),
             [
@@ -810,7 +1044,33 @@ mod tests {
                 "show parked",
             ]
         );
-        assert_eq!(filter(&rows, "", PaletteScope::All).len(), rows.len());
+        // Under a tab the same query keeps that type alone.
+        let commands = filter(&rows, "par", PaletteScope::All, Tab::Only(Section::Commands));
+        assert_eq!(names(&rows, &commands), ["park thread", "show parked"]);
+    }
+
+    /// At rest (`All`, nothing typed) the palette opens as the Claude app's
+    /// search does: the Threads used last as `Recents`, newest first and at
+    /// most `RECENTS_MAX`, then the few commands that start work. Every
+    /// other row waits for a query or its tab.
+    #[test]
+    fn at_rest_all_lists_recents_then_actions() {
+        let used = |thread: &mut Row, ago: u64| {
+            thread.used = Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000 - ago));
+        };
+        let mut rows: Vec<Row> = (1..=10)
+            .map(|id| thread(&format!("thread {id}"), "", id))
+            .collect();
+        used(&mut rows[9], 1);
+        used(&mut rows[0], 5);
+        rows.push(command("park thread", "", Command::ParkThread));
+        rows.push(command("new thread", "", Command::NewThread));
+        let shown = names(&rows, &filter(&rows, "", PaletteScope::All, Tab::All));
+        assert_eq!(shown.len(), RECENTS_MAX + 1);
+        assert_eq!(&shown[..2], ["thread 10", "thread 1"], "newest first");
+        assert_eq!(shown.last(), Some(&"new thread"), "only what starts work");
+        let threads = filter(&rows, "", PaletteScope::All, Tab::Only(Section::Threads));
+        assert_eq!(threads.len(), 10, "a tab lists its type whole");
     }
 
     /// A one-letter line keeps the rows in its one of the four states —
@@ -828,7 +1088,7 @@ mod tests {
             state_thread("shelved", "", 7, RowStatus::Parked),
             command("settings", "", Command::Settings),
         ];
-        let kept = |query| names(&rows, &filter(&rows, query, PaletteScope::All));
+        let kept = |query| names(&rows, &filter(&rows, query, PaletteScope::All, Tab::All));
         assert_eq!(kept("b"), ["waits", "settings"]);
         assert_eq!(kept("w"), ["runs", "behind", "settings"]);
         assert_eq!(kept("d"), ["finished", "settings"]);
@@ -844,7 +1104,7 @@ mod tests {
             state_thread("debug crash", "", 1, RowStatus::Idle),
             state_thread("wire up", "", 2, RowStatus::Done),
         ];
-        let kept = |query| names(&rows, &filter(&rows, query, PaletteScope::All));
+        let kept = |query| names(&rows, &filter(&rows, query, PaletteScope::All, Tab::All));
         assert_eq!(kept("d"), ["wire up"]);
         assert_eq!(kept("de"), ["debug crash"]);
         assert_eq!(kept("wi"), ["wire up"]);
@@ -858,7 +1118,7 @@ mod tests {
             session("deploy script", "ferrite"),
             session("fix the nav", "zeron"),
         ];
-        let shown = filter(&rows, "d", PaletteScope::Sessions);
+        let shown = filter(&rows, "d", PaletteScope::Sessions, Tab::All);
         assert_eq!(names(&rows, &shown), ["deploy script"]);
     }
 
@@ -870,12 +1130,12 @@ mod tests {
         assert_eq!(results_word(5), "5 results");
     }
 
-    /// The headings are sentence case, `Commands` (never `Actions`), and
-    /// the mockup's commands lead with its icons.
+    /// The headings are sentence case, commands are `Actions` (the Claude
+    /// app's word), and the mockup's commands lead with its icons.
     #[test]
     fn headings_and_command_icons_follow_the_mockup() {
         assert_eq!(Section::Threads.title(), "Threads");
-        assert_eq!(Section::Commands.title(), "Commands");
+        assert_eq!(Section::Commands.title(), "Actions");
         assert_eq!(Command::NewThread.icon(), Some(ferrite_ui::icons::PLUS));
         assert_eq!(
             Command::NewWorktreeThread.icon(),

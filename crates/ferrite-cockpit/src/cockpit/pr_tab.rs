@@ -505,7 +505,8 @@ impl CockpitView {
                     .find(|run| run.name == check.name)
                     .and_then(|run| run.url.clone())
             });
-            let (mark, word, word_ink) = check_face(check.status);
+            let (face, word) = check_face(check.status);
+            let (mark, word_ink) = (face.element(), face.word_ink());
             section = section.child(
                 flush_row(gpui::ElementId::from(("pr-check", index)))
                     .debug_selector(move || format!("pr-check-{index}"))
@@ -903,21 +904,11 @@ impl RenderOnce for RefreshSpin {
     }
 }
 
-/// A section's heading (30): its name in 12/500, its count, if it has
-/// one, at the right.
+/// A section's head: the Panel's one (`panel_section_head`), a section's
+/// gap under what is above it.
 fn section_head(selector: &'static str, name: &'static str, count: Option<String>) -> Div {
-    use ferrite_ui::theme::*;
-    div()
-        .debug_selector(move || selector.into())
-        .flex()
-        .items_center()
-        .h(px(PANEL_SECTION_H))
-        .mt(px(PR_SECTION_GAP))
-        .px(px(PANEL_ROW_ICON_X))
-        .text_size(px(FS_META))
-        .text_color(rgb(TEXT_DIM))
-        .child(div().flex_1().font_weight(W_LABEL).child(name))
-        .children(count.map(SharedString::from))
+    use ferrite_ui::theme::PR_SECTION_GAP;
+    super::panel::panel_section_head(selector, name, count).mt(px(PR_SECTION_GAP))
 }
 
 /// A 30px row a click opens or unfolds, its content on the Panel's one
@@ -1056,36 +1047,17 @@ impl RenderOnce for Description {
 fn mark(glyph: Option<&'static str>, ink: u32) -> AnyElement {
     use ferrite_ui::theme::*;
     match glyph {
-        Some(glyph) => icon(glyph, PR_MARK, ink).into_any_element(),
+        Some(glyph) => icon(glyph, CHECK_MARK, ink).into_any_element(),
         None => div()
             .flex()
             .flex_shrink_0()
             .justify_center()
-            .w(px(PR_MARK))
+            .w(px(CHECK_MARK))
             .font_family(FONT_CODE)
             .text_size(px(FS_META))
             .child(ferrite_ui::components::braille_spinner(ink))
             .into_any_element(),
     }
-}
-
-/// A pending or skipped check's hollow ring, in the 15px box.
-fn hollow_ring() -> AnyElement {
-    use ferrite_ui::theme::*;
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(PR_MARK))
-        .child(
-            div()
-                .size(px(PR_MARK_RING))
-                .rounded_full()
-                .border_1()
-                .border_color(rgb(TEXT_FAINT)),
-        )
-        .into_any_element()
 }
 
 /// The order checks list in: failed, running, pending, passed, skipped.
@@ -1099,15 +1071,16 @@ fn check_rank(status: WireCheckStatus) -> u8 {
     }
 }
 
-/// A check row's mark, status word and the word's ink.
-fn check_face(status: WireCheckStatus) -> (AnyElement, &'static str, u32) {
-    use ferrite_ui::theme::*;
+/// A check row's mark in the shared check vocabulary
+/// (`components::CheckMark`, the checks card's too) and its state word.
+fn check_face(status: WireCheckStatus) -> (ferrite_ui::components::CheckMark, &'static str) {
+    use ferrite_ui::components::CheckMark;
     match status {
-        WireCheckStatus::Failure => (mark(Some(icons::X_CIRCLE), BLOCKED), "failed", BLOCKED),
-        WireCheckStatus::Running => (mark(None, RUNNING), "running", TEXT_DIM),
-        WireCheckStatus::Success => (mark(Some(icons::CHECK_CIRCLE), RUNNING), "passed", TEXT_DIM),
-        WireCheckStatus::Pending | WireCheckStatus::Unknown => (hollow_ring(), "pending", TEXT_DIM),
-        WireCheckStatus::Skipped => (hollow_ring(), "skipped", TEXT_DIM),
+        WireCheckStatus::Failure => (CheckMark::Failed, "failed"),
+        WireCheckStatus::Running => (CheckMark::Running, "running"),
+        WireCheckStatus::Success => (CheckMark::Passed, "passed"),
+        WireCheckStatus::Pending | WireCheckStatus::Unknown => (CheckMark::Queued, "queued"),
+        WireCheckStatus::Skipped => (CheckMark::Skipped, "skipped"),
     }
 }
 
@@ -1171,8 +1144,11 @@ fn readiness(pr: &WirePr) -> Vec<Ready> {
     } else if passed > 0 {
         rows.push(Ready {
             key: "checks-passed",
+            // A pass is done, dim, as each passed check's mark is
+            // (`CheckMark::Passed`); the merge state's `No conflicts` is
+            // the readiness group's green.
             glyph: Some(icons::CHECK_CIRCLE),
-            ink: RUNNING,
+            ink: TEXT_DIM,
             text: "All checks passed".into(),
             meta: Some(format!("{passed} of {total}")),
         });
@@ -1356,7 +1332,7 @@ fn avatar(author: &str) -> Div {
         .child(SharedString::from(initial))
 }
 
-/// An author's name, 12.5/500 `TEXT_STRONG`.
+/// An author's name, `FS_LABEL` at `W_LABEL`, `TEXT_STRONG`.
 fn author(name: &str) -> Div {
     use ferrite_ui::theme::*;
     div()

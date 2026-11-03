@@ -12,8 +12,9 @@
 //! `stroke-linecap`/`linejoin` attributes on their root element. In the
 //! prototype those come from a `.stroke` class in the page's stylesheet;
 //! resvg parses a standalone file and never sees it, so an icon without
-//! them renders as a filled blob. `branch.svg` carries the 1.65 stroke both
-//! of its consumers override to. `codex.svg` and `claude.svg` are fill
+//! them renders as a filled blob. Every line icon strokes 1px at 16px
+//! (`theme::ICON_STROKE`), its `stroke-width` scaled to its viewBox.
+//! `codex.svg` and `claude.svg` are fill
 //! logomarks with no stroke at all, their path data copied verbatim from
 //! the prototype.
 //!
@@ -88,6 +89,8 @@ icons![
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
+    "laptop",
+    "plug",
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
@@ -115,6 +118,10 @@ icons![
     "refresh",
     "external",
     "maximize",
+    // A plan's pending step (the transcript's task list).
+    "circle-dashed",
+    // A row's more menu (the nav's `⋯`).
+    "ellipsis",
     // (end UI refresh)
 ];
 
@@ -181,6 +188,11 @@ pub const BOARD: &str = "icons/board.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)
+/// The machine a Thread runs on (the Panel's Details: Environment), Lucide's
+/// laptop on the 24 grid.
+pub const LAPTOP: &str = "icons/laptop.svg";
+/// An MCP server (the Panel's Details: Connectors), Lucide's plug.
+pub const PLUG: &str = "icons/plug.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
@@ -208,6 +220,10 @@ pub const SPLIT_DOWN: &str = "icons/split-down.svg";
 pub const CHECK_CIRCLE: &str = "icons/check-circle.svg";
 /// Failed: a cross in a ring.
 pub const X_CIRCLE: &str = "icons/x-circle.svg";
+/// A plan's step still to do: a dashed ring (the task list).
+pub const CIRCLE_DASHED: &str = "icons/circle-dashed.svg";
+/// A row's more menu: `⋯`, under the pointer.
+pub const ELLIPSIS: &str = "icons/ellipsis.svg";
 /// The permission mode.
 pub const SHIELD: &str = "icons/shield.svg";
 /// The send circle while a turn runs and nothing is typed.
@@ -470,30 +486,22 @@ mod tests {
     /// root, or resvg renders them as filled blobs; the logomarks must not.
     #[test]
     fn line_icons_bake_the_stroke_class_and_logomarks_do_not() {
-        // The sidebar toggle is the prototype's own drawing: a 20-unit box
-        // stroked 1.6, at the titlebar doors' 15px.
+        // The sidebar toggle is the prototype's own drawing: a 20-unit box,
+        // at the titlebar doors' 15px.
         let sidebar = Assets.load(SIDEBAR).unwrap().unwrap();
         let sidebar = std::str::from_utf8(&sidebar).unwrap();
         assert!(sidebar.contains(r#"fill="none""#));
         assert!(sidebar.contains(r#"stroke="currentColor""#));
         assert!(sidebar.contains(r#"viewBox="0 0 20 20""#));
-        assert!(sidebar.contains(r#"stroke-width="1.6""#));
         assert!(sidebar.contains(r#"<rect x="2.5" y="3" width="15" height="14" rx="2.5"/>"#));
         assert!(sidebar.contains(r#"<path d="M7.5 3v14"/>"#));
 
-        // The bell is the prototype's own too: a 16-unit box stroked 1.4.
-        let bell = Assets.load(BELL).unwrap().unwrap();
-        let bell = std::str::from_utf8(&bell).unwrap();
-        assert!(bell.contains(r#"stroke-width="1.4""#));
-        assert!(bell.contains(r#"viewBox="0 0 16 16""#));
-        // The check is the picker's `✓` as the prototype's face draws it: a
-        // 12-unit box stroked 1.15.
-        let check = Assets.load(CHECK).unwrap().unwrap();
-        let check = std::str::from_utf8(&check).unwrap();
-        assert!(check.contains(r#"viewBox="0 0 12 12""#));
-        assert!(check.contains(r#"stroke-width="1.15""#));
-
         for key in [
+            SIDEBAR,
+            BELL,
+            CHECK,
+            IMAGE,
+            BRANCH,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
             CLOSE,
@@ -512,28 +520,20 @@ mod tests {
             let svg = std::str::from_utf8(&bytes).unwrap();
             assert!(svg.contains(r#"fill="none""#), "{key} does not fill");
             assert!(svg.contains(r#"stroke="currentColor""#), "{key} strokes");
-            // One drawn weight whatever the viewBox: 1.5px at 16px.
+            // One drawn weight whatever the viewBox: 1px at 16px.
             assert!(
-                (effective_stroke(svg) - 1.5).abs() < 0.01,
-                "{key} draws {} at 16px, not 1.5",
-                effective_stroke(svg)
+                (effective_stroke(svg) - theme::ICON_STROKE).abs() < 0.01,
+                "{key} draws {} at 16px, not {}",
+                effective_stroke(svg),
+                theme::ICON_STROKE
             );
         }
 
-        // The image mark is the prototype's `#image` symbol as written: a
-        // 16-unit box stroked 1.3, square-ended, its sun filled.
+        // The image mark is the prototype's `#image` symbol as written:
+        // square-ended, its sun filled.
         let image = Assets.load(IMAGE).unwrap().unwrap();
         let image = std::str::from_utf8(&image).unwrap();
-        assert!(image.contains(r#"viewBox="0 0 16 16""#));
-        assert!(image.contains(r#"stroke-width="1.3""#));
         assert!(!image.contains("stroke-linecap"));
-
-        let branch = Assets.load(BRANCH).unwrap().unwrap();
-        let branch = std::str::from_utf8(&branch).unwrap();
-        assert!(
-            branch.contains(r#"stroke-width="1.65""#),
-            "both of branch.svg's consumers override the stroke to 1.65"
-        );
 
         for key in [CODEX, CLAUDE] {
             let bytes = Assets.load(key).unwrap().unwrap();
@@ -544,7 +544,7 @@ mod tests {
     }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 20] = [
+    const REFRESH_ICONS: [&str; 24] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -565,6 +565,10 @@ mod tests {
         REFRESH,
         EXTERNAL,
         MAXIMIZE,
+        CIRCLE_DASHED,
+        ELLIPSIS,
+        LAPTOP,
+        PLUG,
     ];
 
     /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.

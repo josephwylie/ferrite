@@ -65,7 +65,7 @@
 //!   dropped; opacity and scale carry it.
 //! - **Frost.** A fork-only paint effect; not ported. An edge fade is a
 //!   `linear_gradient` overlay in the surface's own fill (the transcript's
-//!   top fade, `TX_TOP_FADE`).
+//!   top fade, `EDGE_FADE`).
 //! - **The kit's toast card.** Ferrite sets the kit stack's timing
 //!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
 //!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px

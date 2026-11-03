@@ -304,6 +304,30 @@ fn selection_for_document_range(
     (start < end).then(|| (start..end).into())
 }
 
+/// Ferrite: the wash under an inline code run, one quad per wrapped line of
+/// it (`lines`, `code_line_bounds`). A line's box starts at its first glyph
+/// and ends where the next glyph starts — past the run's right room on its
+/// last line (`apply_padding_to_layout` moves the run's glyphs `pad` right
+/// and what follows `2 × pad`). So the wash reaches `pad` before the run's
+/// first glyph, on the line it starts on only (a continuation line has no
+/// room before it), and covers both rooms evenly, `overhang` past them.
+fn wash_bounds(lines: &[Bounds<Pixels>], wash: InlineCodeWash) -> Vec<Bounds<Pixels>> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let room = if index == 0 { wash.pad } else { px(0.) };
+            Bounds::from_corners(
+                point(
+                    line.left() - room - wash.overhang,
+                    line.top() + wash.inset_y,
+                ),
+                point(line.right() + wash.overhang, line.bottom() - wash.inset_y),
+            )
+        })
+        .collect()
+}
+
 /// The per-line boxes a byte range occupies in a wrapped layout.
 fn code_line_bounds(
     text: &str,
@@ -598,21 +622,8 @@ impl Inline {
             if highlight.fade_out != INLINE_CODE_MARK {
                 continue;
             }
-            for line in code_line_bounds(&self.text, text_layout, range.clone(), line_height) {
-                // Ferrite: the run's box, as the inline flow reports it,
-                // starts at its left room (`pad` before its first glyph) and
-                // ends at its last glyph, `pad` short of its right room. The
-                // wash covers both rooms, `overhang` past them.
-                let bounds = Bounds::from_corners(
-                    point(
-                        line.left() + wash.pad - wash.overhang,
-                        line.top() + wash.inset_y,
-                    ),
-                    point(
-                        line.right() + wash.overhang,
-                        line.bottom() - wash.inset_y,
-                    ),
-                );
+            let lines = code_line_bounds(&self.text, text_layout, range.clone(), line_height);
+            for bounds in wash_bounds(&lines, wash) {
                 window.paint_quad(quad(
                     bounds,
                     wash.radius,
@@ -1311,6 +1322,45 @@ mod tests {
     use crate::{TextSelectionContentKey, text_selection::TextSelectionDocumentRange};
     use gpui::{Bounds, point, px};
     use std::sync::{Arc, Mutex};
+
+    /// "a `code` b" laid out as `apply_padding_to_layout` lays it: each
+    /// glyph 10 wide, the run's glyphs `pad` right, what follows `2 × pad`.
+    /// The run's line box (`code_line_bounds`) runs from its first glyph to
+    /// the next glyph after it. The wash covers both rooms evenly: `pad`
+    /// before the first code glyph, `pad` after the last one's advance.
+    #[test]
+    fn a_code_wash_insets_its_run_evenly() {
+        use gpui::Pixels;
+        let pad = px(5.);
+        let advance = px(10.);
+        // "a " then the run "code" from index 2, then " b".
+        let x = |index: usize| -> Pixels {
+            let shift = if index >= 6 {
+                pad + pad
+            } else if index >= 2 {
+                pad
+            } else {
+                px(0.)
+            };
+            advance * index as f32 + shift
+        };
+        let line = Bounds::from_corners(point(x(2), px(0.)), point(x(6), px(20.)));
+        let wash = super::InlineCodeWash {
+            color: gpui::red(),
+            radius: px(4.),
+            overhang: px(0.),
+            pad,
+            inset_y: px(1.),
+        };
+        let bounds = super::wash_bounds(&[line], wash)[0];
+        let first_glyph = x(2);
+        let last_glyph_end = x(5) + advance;
+        assert_eq!(first_glyph - bounds.left(), pad, "the left room");
+        assert_eq!(bounds.right() - last_glyph_end, pad, "the right room");
+        // Wrapped: a continuation line has no room before it.
+        let next = Bounds::from_corners(point(px(0.), px(20.)), point(px(30.), px(40.)));
+        assert_eq!(super::wash_bounds(&[line, next], wash)[1].left(), px(0.));
+    }
 
     #[test]
     fn a_wrapped_underline_ends_at_its_last_non_space_glyph() {

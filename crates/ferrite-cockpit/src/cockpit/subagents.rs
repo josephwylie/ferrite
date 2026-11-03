@@ -31,6 +31,8 @@ pub(crate) struct RequestForms(
 pub(crate) struct DecisionCursor {
     pub(super) index: Option<usize>,
     pub(super) note: Option<Entity<ferrite_pane::composer::Composer>>,
+    /// The approval's split-button menu is open.
+    pub(super) menu: bool,
 }
 
 impl RequestForms {
@@ -41,6 +43,15 @@ impl RequestForms {
 
     pub(super) fn set_cursor(&self, handle: &DecisionHandle, index: Option<usize>) {
         self.1.borrow_mut().entry(handle.clone()).or_default().index = index;
+    }
+
+    /// Whether `handle`'s split-button menu is open.
+    pub(super) fn menu(&self, handle: &DecisionHandle) -> bool {
+        self.1.borrow().get(handle).is_some_and(|cursor| cursor.menu)
+    }
+
+    pub(super) fn set_menu(&self, handle: &DecisionHandle, open: bool) {
+        self.1.borrow_mut().entry(handle.clone()).or_default().menu = open;
     }
 
     /// `handle`'s amend note, while it is open.
@@ -235,6 +246,7 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool) -> Div {
             .min_h_0()
             .flex()
             .flex_col()
+            .gap(px(theme::DECISION_PILL_GAP))
             .overflow_hidden()
             .when(overlay, |frame| {
                 frame
@@ -243,6 +255,15 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool) -> Div {
                     // Pane's.
                     .px(px(theme::tx_inset(solo)))
                     .py(px(theme::DECISION_PAD_Y))
+            })
+            // Every card waits on the operator: Claude's pill says so over
+            // it, the one place its state takes a hue.
+            // Every card waits on the operator: Claude's pill says so over
+            // it, the one place its state takes a hue. In a Group Pane its
+            // head and ring say it already (rule 7), and the room is the
+            // card's.
+            .when(solo && !overlay, |frame| {
+                frame.child(decision::needs_input())
             })
             .child(card),
     )
@@ -1401,7 +1422,29 @@ impl CockpitView {
             })
             .collect();
         let (provider, context) = self.decision_context(thread);
+        // Claude's `Allow and switch to Auto`: the most trusting mode short
+        // of bypass this Session offers, when it is not in force already.
+        let switch = open
+            .supports_control(ferrite_core::ControlKind::SetPermissionMode)
+            .then(|| {
+                let modes = open.permission_modes();
+                ["auto", "acceptEdits"].into_iter().find_map(|value| {
+                    modes
+                        .iter()
+                        .find(|mode| mode.value == value)
+                        .filter(|_| open.permission_mode() != Some(value))
+                        .map(|mode| {
+                            (
+                                mode.value.clone(),
+                                SharedString::from(mode.label.clone()),
+                                open.generation(),
+                            )
+                        })
+                })
+            })
+            .flatten();
         Some(Cards {
+            switch,
             owner: self.decisions.owner(),
             asked,
             thread,
@@ -1763,6 +1806,10 @@ pub(super) struct Cards {
     pub(super) provider: Option<Provider>,
     /// The head's last detail: Codex's sandbox, Claude's permission mode.
     pub(super) context: Option<SharedString>,
+    /// The mode an approval's `Allow and switch to …` moves the Session to
+    /// (its value and label), with the Session generation it was read on;
+    /// None where the Session cannot switch or is there already.
+    pub(super) switch: Option<(String, SharedString, u64)>,
     pub(super) workspace: Option<std::path::PathBuf>,
     /// The transcript's reading size: an edit approval's diff is drawn at it.
     pub(super) reading: ferrite_core::settings::ReadingSize,
@@ -1796,6 +1843,7 @@ impl Cards {
         self.thread.hash(&mut hasher);
         self.provider.map(decision::provider_word).hash(&mut hasher);
         self.context.as_deref().hash(&mut hasher);
+        self.switch.hash(&mut hasher);
         self.reading.hash(&mut hasher);
         for (id, diff) in &self.asked {
             id.hash(&mut hasher);
@@ -1813,6 +1861,7 @@ impl Cards {
             working.hash(&mut hasher);
             if let Some(cursor) = cursors.get(&request.handle) {
                 cursor.index.hash(&mut hasher);
+                cursor.menu.hash(&mut hasher);
                 cursor
                     .note
                     .as_ref()
@@ -1904,7 +1953,7 @@ impl Cards {
             ferrite_core::DecisionKind::Form { .. } => self.form_card(request, window, cx),
             ferrite_core::DecisionKind::External { .. }
             | ferrite_core::DecisionKind::Unsupported { .. } => self.link_card(request, cx),
-            _ => self.approval_card(request),
+            _ => self.approval_card(request, cx),
         }
     }
 
@@ -1937,9 +1986,11 @@ impl Cards {
             .then(|| decision::sending().into_any_element());
         let unowned = request.subject.is_none();
         let head = if matches!(decision.kind, ferrite_core::DecisionKind::Approval) {
+            // The ask says who and what; the mode lives in the Composer's
+            // footer, so the head names only an owner it could not find.
             decision::head(
-                decision::approval_lead(decision),
-                self.detail(None, true, unowned),
+                decision::approval_lead(decision, self.provider),
+                unowned.then(|| SharedString::from("agent unknown")),
                 status,
             )
         } else {
@@ -1983,10 +2034,13 @@ impl Cards {
         (head, title, error)
     }
 
-    /// An approval (D-1…D-7): the head, the command band, the three options
-    /// with the cursor on one, the amend note while it is open, and the
-    /// hint.
-    fn approval_card(&self, request: PendingDecision) -> AnyElement {
+    /// An approval (D-1…D-7), as Claude's card: the ask on the head band,
+    /// the prose, the command band (or the edit's diff), what `Always allow`
+    /// covers, the amend note while it is open, then `Deny` and the split
+    /// `Always allow` whose menu holds `Allow once` and `Allow and switch
+    /// to …` — inline in Solo, stacked in a Group Pane's narrow column. The
+    /// keys are on the buttons (⌘⏎, ⇧⌘⏎, esc); 1–3, ↑↓ and ⏎ still act.
+    fn approval_card(&self, request: PendingDecision, cx: &gpui::App) -> AnyElement {
         let thread = self.thread;
         let handle = request.handle.clone();
         let serial = handle.serial;
@@ -2036,70 +2090,152 @@ impl Cards {
         }));
         let rows =
             decision::approval_rows(&request.decision, self.provider, self.workspace.as_deref());
-        let cursor = self
-            .forms
-            .cursor(&handle)
-            .filter(|at| *at < rows.len())
-            .unwrap_or_else(|| decision::first_enabled(&rows));
-        let mut options = div().flex().flex_col().flex_shrink_0().w_full().min_w_0();
-        for (at, row) in rows.into_iter().enumerate() {
-            let choice = row.choice;
-            let selector = match choice {
-                decision::ApprovalChoice::Allow => {
-                    format!("request-allow-{}-{serial}", thread.get())
-                }
-                decision::ApprovalChoice::AllowForThread => {
-                    format!("request-always-{}-{serial}", thread.get())
-                }
-                decision::ApprovalChoice::DenyAndSteer => {
-                    format!("request-deny-{}-{serial}", thread.get())
-                }
-            };
-            let pick = request.clone();
-            let mut button = decision::option_row(
-                SharedString::from(format!(
-                    "request-row-{}-{}-{serial}-{at}",
-                    u8::from(self.overlay),
-                    handle.generation
-                )),
-                decision::Row {
-                    key: Some(row.key),
-                    label: row.label,
-                    code: row.code,
-                    cursor: at == cursor,
-                    enabled: row.enabled && !request.submitting,
-                    ..Default::default()
-                },
-            )
-            .debug_selector(move || selector.clone())
-            .on_click(self.act(move |view, window, cx| {
-                let note = view.take_decision_note(thread, &pick.handle, cx);
-                view.answer_approval_request(thread, &pick, choice, note, Some(window), cx);
-            }));
-            if choice == decision::ApprovalChoice::DenyAndSteer {
-                // The deny row has always answered to this name.
-                button = button.relative().child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .debug_selector(|| "decision-deny".into()),
-                );
-            }
-            options = options.child(button);
+        let enabled = |choice: decision::ApprovalChoice| {
+            !request.submitting
+                && rows
+                    .iter()
+                    .any(|row| row.choice == choice && row.enabled)
+        };
+        // What `Always allow` covers, in one quiet line (Claude's card says
+        // what its standing answer does before you press it).
+        let pattern = decision::option_two_pattern(&request.decision, self.workspace.as_deref());
+        if !pattern.is_empty() && !self.short {
+            children.push(
+                decision::section(decision::note(format!(
+                    "\u{201c}Always allow\u{201d} allows {pattern} for the rest of this thread."
+                )))
+                .into_any_element(),
+            );
         }
-        children.push(decision::section(options).into_any_element());
         if let Some(note) = self.forms.note(&handle) {
             children.push(self.note_field(&handle, note));
         }
-        // The keys are said under the box in Solo, where they always act.
-        // A Group Pane says none: its keys act only while it holds the
-        // keyboard, and a line that came and went with focus would move
-        // the bottom-aligned box under the pointer pressing it.
-        let hint = self
-            .solo
-            .then(|| decision::hint_line(&decision::APPROVAL_HINTS[..]));
+        let answer = |choice: decision::ApprovalChoice| {
+            let pick = request.clone();
+            self.act(move |view: &mut CockpitView, window, cx| {
+                let note = view.take_decision_note(thread, &pick.handle, cx);
+                view.answer_approval_request(thread, &pick, choice, note, Some(window), cx);
+            })
+        };
+        let stacked = !self.solo;
+        let deny = decision::deny_button(
+            SharedString::from(format!("request-deny-{}-{serial}", thread.get())),
+            stacked,
+            !enabled(decision::ApprovalChoice::DenyAndSteer),
+            cx,
+        )
+        .debug_selector(move || format!("request-deny-{}-{serial}", thread.get()))
+        .on_click(answer(decision::ApprovalChoice::DenyAndSteer))
+        .relative()
+        // The deny control has always answered to this name.
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .debug_selector(|| "decision-deny".into()),
+        );
+        let always = decision::always_button(
+            SharedString::from(format!("request-always-{}-{serial}", thread.get())),
+            stacked,
+            !enabled(decision::ApprovalChoice::AllowForThread),
+            cx,
+        )
+        .debug_selector(move || format!("request-always-{}-{serial}", thread.get()))
+        .on_click(answer(decision::ApprovalChoice::AllowForThread));
+        let open = self.forms.menu(&handle);
+        let forms = self.forms.clone();
+        let toggled = handle.clone();
+        let owner = self.owner.clone();
+        let more = decision::more_button(
+            SharedString::from(format!("request-more-{}-{serial}", thread.get())),
+            request.submitting,
+            cx,
+        )
+        .debug_selector(move || format!("request-more-{}-{serial}", thread.get()))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            forms.set_menu(&toggled, !forms.menu(&toggled));
+            refresh(&owner, cx);
+        });
+        let menu = open.then(|| {
+            let mut rows = Vec::new();
+            if enabled(decision::ApprovalChoice::Allow) {
+                let forms = self.forms.clone();
+                let closing = handle.clone();
+                let allow = answer(decision::ApprovalChoice::Allow);
+                rows.push(
+                    decision::allow_menu_row(
+                        SharedString::from(format!("request-allow-{}-{serial}", thread.get())),
+                        "Allow once",
+                        decision::decision_chord("cockpit::AllowOnce"),
+                        None,
+                    )
+                    .debug_selector(move || format!("request-allow-{}-{serial}", thread.get()))
+                    .on_click(move |event, window, cx| {
+                        forms.set_menu(&closing, false);
+                        allow(event, window, cx);
+                    })
+                    .into_any_element(),
+                );
+            }
+            if let Some((mode, label, generation)) = self
+                .switch
+                .clone()
+                .filter(|_| enabled(decision::ApprovalChoice::Allow))
+            {
+                let pick = request.clone();
+                let forms = self.forms.clone();
+                let closing = handle.clone();
+                let what = ferrite_ui::theme::mode_note(&mode).map(SharedString::from);
+                rows.push(
+                    decision::allow_menu_row(
+                        SharedString::from(format!("request-switch-{}-{serial}", thread.get())),
+                        format!("Allow and switch to {label}"),
+                        None,
+                        what,
+                    )
+                    .debug_selector(move || format!("request-switch-{}-{serial}", thread.get()))
+                    .on_click({
+                        let act = self.act(move |view: &mut CockpitView, window, cx| {
+                            let note = view.take_decision_note(thread, &pick.handle, cx);
+                            view.answer_approval_request(
+                                thread,
+                                &pick,
+                                decision::ApprovalChoice::Allow,
+                                note,
+                                Some(window),
+                                cx,
+                            );
+                            view.run_session_control(
+                                thread,
+                                generation,
+                                ferrite_core::SessionControl::SetPermissionMode {
+                                    mode: mode.clone(),
+                                },
+                            );
+                        });
+                        move |event, window, cx| {
+                            forms.set_menu(&closing, false);
+                            act(event, window, cx);
+                        }
+                    })
+                    .into_any_element(),
+                );
+            }
+            decision::allow_menu(rows).into_any_element()
+        });
+        children.push(
+            decision::section(decision::approval_actions(
+                deny.into_any_element(),
+                always.into_any_element(),
+                more.into_any_element(),
+                menu,
+                stacked,
+            ))
+            .into_any_element(),
+        );
         request_frame(
-            decision::with_hint(decision::card(serial, children), hint),
+            decision::card(serial, children),
             self.overlay,
             self.solo,
         )

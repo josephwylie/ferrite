@@ -372,12 +372,7 @@ fn group_rows(
     let rows: Vec<AnyElement> = group
         .rows
         .iter()
-        .map(|row| {
-            setting_row(row, window, cx)
-                .border_t_1()
-                .border_color(FLOAT_RULE)
-                .into_any_element()
-        })
+        .map(|row| setting_row(row, window, cx).into_any_element())
         .collect();
     div()
         .flex()
@@ -394,6 +389,15 @@ fn group_rows(
                 .child(section_words(&label))
         }))
         .children(rows)
+        // What an empty list says, in a sentence, where its rows would be.
+        .children(group.note.clone().map(|note| {
+            components::text_ui()
+                .px(px(SETTINGS_ROW_PAD_X))
+                .text_size(px(FS_META))
+                .line_height(px(LH_META))
+                .text_color(rgb(TEXT_DIM))
+                .child(note)
+        }))
 }
 
 /// `Page · Group`, the `·` in structure ink.
@@ -415,16 +419,15 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
     let fact = row.is_fact();
     div()
         .flex()
-        .items_center()
+        .items_start()
         .justify_between()
-        .gap(px(2.0 * CH))
-        .min_h(px(if hinted {
-            SETTINGS_ROW_HINT_H
-        } else {
-            SETTINGS_ROW_H
-        }))
+        .gap(px(SETTINGS_ROW_GAP))
         .px(px(SETTINGS_ROW_PAD_X))
-        .py(px(HALF_ROW / 2.0))
+        .py(px(SETTINGS_ROW_PAD_Y))
+        // A dependent setting stands under its parent, indented.
+        .when(row.nested, |line| {
+            line.pl(px(SETTINGS_ROW_PAD_X + SETTINGS_NEST))
+        })
         .child(
             div()
                 .flex()
@@ -440,15 +443,20 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
                 .child(
                     components::text_ui()
                         .truncate()
-                        .text_color(rgb(TEXT))
+                        .text_size(px(FS_TITLE))
+                        .line_height(px(LH_UI))
+                        .text_color(rgb(TEXT_STRONG))
                         .child(row.title.clone()),
                 )
                 .when(hinted, |text| text.child(hint(row.hint.clone()))),
         )
         .child(
+            // The control stands on the label's line, at the right.
             div()
                 .flex()
+                .items_center()
                 .justify_end()
+                .min_h(px(LH_UI))
                 .map(|control| {
                     if fact {
                         control.flex_1().min_w_0()
@@ -460,14 +468,12 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
         )
 }
 
-/// A row's hint: `TEXT_DIM`, one line. One that opens with a key table's
-/// chord (`cmd-B toggles it any time`) draws the chord as keys (`⌘B`,
-/// `components::key_combo`): the face has no command glyph.
+/// A row's description: `TEXT_DIM` at 13, wrapping to a second line where
+/// it needs one. One that opens with a key table's chord (`cmd-B toggles it
+/// any time`) draws the chord as keys (`⌘B`, `components::key_combo`): the
+/// face has no command glyph.
 fn hint(detail: SharedString) -> Div {
-    let line = components::text_ui()
-        .min_w_0()
-        .truncate()
-        .text_color(rgb(TEXT_DIM));
+    let line = components::text_ui().min_w_0().text_color(rgb(TEXT_DIM));
     match detail.split_once(' ') {
         Some((chord, rest)) if chord.starts_with("cmd-") => line
             .flex()
@@ -484,16 +490,22 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
     let title = row.title.clone();
     match row.control.clone() {
         // Two options: a token each, the chosen one inverse.
+        // A short choice: a segmented control, the chosen segment lit.
         Control::Tokens { id, options, pick } => div()
             .flex()
             .items_center()
+            .p(px(SPACE_0_5))
+            .gap(px(SPACE_0_5))
+            .rounded(px(R_CONTROL))
+            .border_1()
+            .border_color(gpui::rgba(BORDER))
             .children(
                 options
                     .into_iter()
                     .enumerate()
                     .map(|(at, (label, selected))| {
                         let pick = pick.clone();
-                        chip((id, at), label, selected, cx).on_click(move |_, _, cx| {
+                        segment((id, at), label, selected, cx).on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             pick(at, cx);
                         })
@@ -511,9 +523,12 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
         } => components::form_button(id, cx)
             .debug_selector(move || id.into())
             .accessibility_label(format!("{title}: {selected}"))
-            .h(px(SETTINGS_CONTROL_H))
+            .h(px(SETTINGS_BUTTON_H))
             .max_w(px(SETTINGS_MENU_MAX_W))
-            .px(px(CH))
+            .px(px(SETTINGS_SEGMENT_PAD_X))
+            .rounded(px(R_CONTROL))
+            .border_1()
+            .border_color(gpui::rgba(BORDER))
             .child(
                 div()
                     .flex()
@@ -567,13 +582,13 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                 .tab_stop(true)
                 .selected(checked)
                 .debug_selector(move || id.into())
-                .accessibility_label(format!(
-                    "{title}: {}",
-                    if checked { "on" } else { "off" }
-                ))
+                .accessibility_label(format!("{title}: {}", if checked { "on" } else { "off" }))
                 .h(px(SETTINGS_CONTROL_H))
                 .px(px(SPACE_1))
-                .child(components::switch(SharedString::from(format!("{id}-switch")), checked))
+                .child(components::switch(
+                    SharedString::from(format!("{id}-switch")),
+                    checked,
+                ))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     change(!checked, cx);
@@ -636,14 +651,21 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             .min_w_0()
             .gap(px(CH))
             .child(fact_value(&title, value))
-            .child(div().flex().items_center().flex_shrink_0().children(
-                acts.into_iter().enumerate().map(|(at, (label, act))| {
-                    chip((id, at), label.into(), false, cx).on_click(move |_, _, cx| {
-                        cx.stop_propagation();
-                        act(cx);
-                    })
-                }),
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1_5))
+                    .flex_shrink_0()
+                    .children(acts.into_iter().enumerate().map(|(at, (label, act))| {
+                        quiet_button((id, at), label.into(), cx)
+                            .debug_selector(move || format!("{id}-{at}"))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                act(cx);
+                            })
+                    })),
+            )
             .into_any_element(),
         // The operator's own words, and a token per act.
         Control::Named { id, nth, acts } => {
@@ -651,12 +673,15 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             div()
                 .flex()
                 .items_center()
+                .gap(px(SPACE_1_5))
                 .flex_shrink_0()
                 .children(acts.into_iter().enumerate().map(|(at, (label, act))| {
-                    chip((id, nth * count + at), label, false, cx).on_click(move |_, _, cx| {
-                        cx.stop_propagation();
-                        act(cx);
-                    })
+                    quiet_button((id, nth * count + at), label, cx)
+                        .debug_selector(move || format!("{id}-{}", nth * count + at))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            act(cx);
+                        })
                 }))
                 .into_any_element()
         }
@@ -676,10 +701,12 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                     .child(Input::new(&field).small()),
             )
             .child(
-                chip((id, 0), label.into(), false, cx).on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    act(window, cx);
-                }),
+                quiet_button((id, 0usize), label.into(), cx)
+                    .debug_selector(move || format!("{id}-0"))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        act(window, cx);
+                    }),
             )
             .into_any_element(),
         // A read-only fact (About): its value at the right in `TEXT_DIM`
@@ -694,11 +721,8 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             button,
             act,
         } => match button {
-            Some(label) => components::primary_button(id, false, cx)
+            Some(label) => quiet_button(id, label, cx)
                 .debug_selector(move || id.into())
-                .h(px(SETTINGS_CONTROL_H))
-                .px(px(CH))
-                .child(components::form_label(label, ON_PRIMARY))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     act(cx);
@@ -760,13 +784,12 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
 /// What a chooser's `CLI default` row says about itself.
 const CLI_DEFAULT_NOTE: &str = "follows the CLI";
 
-/// One option of a short ladder (a two-way choice, a stepper's ends): a
-/// token one row high with a cell of padding. Chosen, it is inverse —
-/// `PRIMARY` with `ON_PRIMARY` at `W_STRONG`; the rest `TEXT_DIM`,
-/// `paint::HOVER` under the pointer. A tab stop.
-fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
+/// One segment of a short choice (theme `SETTINGS_SEGMENT_*`): chosen, it
+/// is lit — `paint::SELECTED` with `TEXT_STRONG` at `W_LABEL`; the rest
+/// `TEXT_DIM` on nothing, `paint::HOVER` under the pointer. A tab stop.
+fn segment(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (rest, hover, ink): (gpui::Hsla, gpui::Hsla, u32) = if selected {
-        (rgb(PRIMARY).into(), rgb(TEXT).into(), ON_PRIMARY)
+        (paint::SELECTED.into(), paint::SELECTED.into(), TEXT_STRONG)
     } else {
         (
             gpui::rgba(TRANSPARENT).into(),
@@ -779,14 +802,37 @@ fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App
         .selected(selected)
         .toggled(selected)
         .debug_selector(move || format!("{}-{}", id.0, id.1))
-        .h(px(SETTINGS_CONTROL_H))
-        .px(px(TOKEN_PAD_X))
+        .h(px(SETTINGS_SEGMENT_H))
+        .px(px(SETTINGS_SEGMENT_PAD_X))
+        .rounded(px(R_SMALL))
         .child(
             components::text_ui()
-                .font_weight(if selected { W_STRONG } else { W_BODY })
+                .font_weight(if selected { W_LABEL } else { W_BODY })
                 .text_color(rgb(ink))
                 .child(label),
         )
+}
+
+/// An action on a row (`Copy`, `Restart`, `Add`, `Remove`): the quiet
+/// bordered button — `TEXT` on nothing in a `BORDER` ring, radius
+/// `R_CONTROL`, `paint::HOVER` under the pointer. Settings has no filled
+/// button; what changes state is a switch or a segment.
+fn quiet_button(id: impl Into<gpui::ElementId>, label: SharedString, cx: &App) -> Button {
+    components::faded_button(
+        id,
+        gpui::rgba(TRANSPARENT).into(),
+        paint::HOVER.into(),
+        paint::PRESS.into(),
+        rgb(TEXT).into(),
+        cx,
+    )
+    .tab_stop(true)
+    .h(px(SETTINGS_BUTTON_H))
+    .px(px(SETTINGS_SEGMENT_PAD_X))
+    .rounded(px(R_CONTROL))
+    .border_1()
+    .border_color(gpui::rgba(BORDER))
+    .child(components::form_label(label, TEXT))
 }
 
 /// A path fact's hover reaches its copy mark through this group.
@@ -827,12 +873,8 @@ mod tests {
     fn rows_sit_on_the_grid_and_the_sheet_fits_its_pages() {
         assert_eq!(SETTINGS_NAV_ROW_H, FLOAT_ROW_H);
         assert_eq!(SETTINGS_CONTROL_H, ROW);
-        // A label and its hint are two rows; each row keeps a quarter row
-        // of air above and below.
-        assert_eq!(SETTINGS_ROW_H, ROW + HALF_ROW);
-        assert_eq!(SETTINGS_ROW_HINT_H, 2.0 * ROW + HALF_ROW);
-        // Checked at compile time: the rhythm and the size can never drift.
-        const _: () = assert!(SETTINGS_CONTROL_H <= SETTINGS_ROW_H - 2.0 * SPACE_1);
+        // Checked at compile time: a control never outgrows a row's air.
+        const _: () = assert!(SETTINGS_BUTTON_H <= LH_UI + 2.0 * SETTINGS_ROW_PAD_Y);
         const _: () = assert!(
             SETTINGS_W <= 800.0 && SETTINGS_H <= 600.0,
             "sized to content"
@@ -891,15 +933,15 @@ mod tests {
             .is_empty());
     }
 
-    /// The chosen token of a short ladder is inverse — `TEXT_STRONG` ground
-    /// with dark ink — and the rest lie on no ground at all.
+    /// The chosen segment of a short choice is lit — the selected fill —
+    /// and the rest lie on no ground at all.
     #[gpui::test]
-    fn a_chosen_token_is_inverse_and_the_rest_lie_flat(cx: &mut gpui::TestAppContext) {
+    fn a_chosen_segment_is_lit_and_the_rest_lie_flat(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             ferrite_pane::pane::init_components(cx);
-            let mut on = chip(("c", 0), "Claude".into(), true, cx);
-            let mut off = chip(("c", 1), "Codex".into(), false, cx);
-            assert_eq!(on.style().background, Some(rgb(PRIMARY).into()));
+            let mut on = segment(("c", 0), "Claude".into(), true, cx);
+            let mut off = segment(("c", 1), "Codex".into(), false, cx);
+            assert_eq!(on.style().background, Some(paint::SELECTED.into()));
             assert_eq!(off.style().background, None);
         });
     }

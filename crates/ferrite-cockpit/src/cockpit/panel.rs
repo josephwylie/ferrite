@@ -1,10 +1,11 @@
 //! The right panel (SPEC §5.6): a fixed column on the frame, right of the
 //! board and outside it. Its head sits in the head row over it: the
-//! `Changes`, `PR` and `Context` tabs, a `Preview` tab while a preview is
+//! `Changes`, `PR` and `Details` tabs, a `Preview` tab while a preview is
 //! open (`preview.rs`), and the toggle that hides it. Under the head, the
 //! shown tab's body; under `Changes` and `PR`, the foot's context meter
-//! (`Context` is that meter read whole, so it has none). The Review, which needs the board's width and takes line
-//! comments, still opens beside its Pane inside the board (ADR 0021).
+//! (`Details` reads that meter whole, so it has none). Every tab's
+//! sections open with the one section head (`panel_section_head`). The
+//! Review, which needs the board's width and takes line comments, still opens beside its Pane inside the board (ADR 0021).
 //!
 //! When it shows (`panel_pane`): for the focused Pane, in every view —
 //! Solo, a Group (the focused Pane), a fullscreen Pane, with a Review open
@@ -44,6 +45,7 @@
 //! Each Thread's tab keeps its own scroll. A tab with nothing to show yet
 //! says so in the Panel's one empty state (`panel_empty`).
 
+mod details;
 pub(crate) mod hunks;
 pub(crate) mod preview;
 
@@ -60,7 +62,7 @@ pub(crate) enum PanelTab {
     #[default]
     Changes,
     Pr,
-    Context,
+    Details,
     Preview,
 }
 
@@ -366,7 +368,7 @@ impl CockpitView {
     }
 
     /// The panel on `tab` for `thread`, shown if it was hidden. Opening
-    /// `Context` asks the Session for a fresh reading, as the bar's meter
+    /// `Details` asks the Session for a fresh reading, as the bar's meter
     /// did.
     pub(crate) fn open_panel_tab(
         &mut self,
@@ -436,7 +438,7 @@ impl CockpitView {
         }
         self.deselect_preview_tab(thread);
         let was = self.panel.tabs.insert(thread, tab);
-        if tab == PanelTab::Context && was != Some(PanelTab::Context) {
+        if tab == PanelTab::Details && was != Some(PanelTab::Details) {
             self.refresh_context(thread);
         }
         cx.notify();
@@ -508,7 +510,7 @@ impl CockpitView {
             (_, Some(thread)) => {
                 let body = match tab {
                     PanelTab::Pr => self.panel_pr(thread, window, cx),
-                    PanelTab::Context => self.panel_context(thread, window, cx),
+                    PanelTab::Details => self.panel_details(thread, window, cx),
                     _ => self.panel_changes(thread, cx),
                 };
                 let scroll = self
@@ -528,8 +530,8 @@ impl CockpitView {
                     }
                     _ => body.into_any_element(),
                 };
-                // The Context tab reads the same meter whole: no foot under it.
-                let foot = (tab != PanelTab::Context)
+                // The Details tab reads the same meter whole: no foot under it.
+                let foot = (tab != PanelTab::Details)
                     .then(|| self.panel_foot(thread))
                     .flatten();
                 content.child(body).children(foot)
@@ -593,7 +595,7 @@ impl CockpitView {
     }
 
     /// A Thread's tabs in the head: `Changes` with its count, `PR` with its
-    /// number, `Context`.
+    /// number, `Details`.
     fn thread_tabs(
         &self,
         thread: ThreadId,
@@ -660,7 +662,7 @@ impl CockpitView {
         [
             tab(PanelTab::Changes, "Changes", changes_count),
             tab(PanelTab::Pr, "PR", pr_number),
-            tab(PanelTab::Context, "Context", None),
+            tab(PanelTab::Details, "Details", None),
         ]
     }
 
@@ -966,58 +968,7 @@ impl CockpitView {
             .child(self.panel_hunks_element(thread, index, &file.path, unfolded))
     }
 
-    /// The Context tab: what fills the Thread's context window, by
-    /// category, and its account windows (`pane::context_usage`).
-    fn panel_context(
-        &self,
-        thread: ThreadId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let Some(open) = self.cockpit.thread(thread) else {
-            return div().into_any_element();
-        };
-        let Some(usage) = open.transcript().usage() else {
-            return panel_empty(
-                "panel-no-context",
-                None,
-                "No context reading yet",
-                "What fills the context window shows here once the provider reports it.",
-            )
-            .into_any_element();
-        };
-        // The tab scrolls inside the body, under the head and over the
-        // foot.
-        let room = f32::from(window.viewport_size().height) - WIN_CHROME_H - STATUS_BAR_H;
-        let error = self
-            .session_control_error
-            .as_ref()
-            .filter(|(shown, generation, _)| *shown == thread && *generation == open.generation())
-            .map(|(_, _, error)| error.clone());
-        div()
-            .debug_selector(|| "panel-context".into())
-            .flex()
-            .flex_col()
-            .pt(px(SPACE_2))
-            .child(pane::context_usage(
-                usage,
-                self.cockpit.account_limits(open.provider()),
-                open.transcript().context_details(),
-                open.transcript().usage_details(),
-                open.transcript().last_cost(),
-                self.context_usage_expanded,
-                room,
-                cx.listener(|view, _: &ClickEvent, _, cx| {
-                    view.context_usage_expanded = !view.context_usage_expanded;
-                    cx.notify();
-                }),
-            ))
-            .children(error.map(|error| pane::card_error(error).id("session-control-error")))
-            .into_any_element()
-    }
-
-    /// The foot under every tab but `Context` (which reads it whole): a hairline, `Context` with its
+    /// The foot under every tab but `Details` (which reads it whole): a hairline, `Context` with its
     /// `84k / 200k`, and the context meter. None until the Session reports
     /// its usage: no reading is invented.
     fn panel_foot(&self, thread: ThreadId) -> Option<Div> {
@@ -1088,6 +1039,29 @@ pub(super) fn panel_toggle_inset() -> f32 {
 /// it slides in and out with it.
 fn overhang(content_w: f32, width: f32) -> f32 {
     (content_w - width).clamp(0., content_w - ferrite_ui::theme::PANEL_W)
+}
+
+/// A section's head, the Panel's one (30): its name in 12/500 `TEXT_DIM`
+/// on the rows' content edge, its reading (a count, `3 connected`) at the
+/// right — the PR tab's sections, the Details tab's, and the Context
+/// card's own heading (`pane::context_usage`) alike.
+pub(super) fn panel_section_head(
+    selector: &'static str,
+    name: &'static str,
+    reading: Option<String>,
+) -> Div {
+    use ferrite_ui::theme::*;
+    div()
+        .debug_selector(move || selector.into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(PANEL_SECTION_H))
+        .px(px(PANEL_ROW_ICON_X))
+        .text_size(px(FS_META))
+        .text_color(rgb(TEXT_DIM))
+        .child(div().flex_1().font_weight(W_LABEL).child(name))
+        .children(reading.map(SharedString::from))
 }
 
 /// A tab's empty state, the Panel's one design for "nothing here yet" (no
@@ -1303,7 +1277,7 @@ fn diffstat(added: usize, removed: usize) -> Div {
         .child(pane::trail_diff_stat(added, removed))
 }
 
-/// The foot's meter: `pane::context_meter_segments` (the Context tab's bar
+/// The foot's meter: `pane::context_meter_segments` (the Details tab's bar
 /// draws the same), 2px apart with rounded ends, then the empty track.
 fn context_meter(total: u64, window: u64, details: Option<&ferrite_core::ContextDetails>) -> Div {
     use ferrite_ui::theme::*;

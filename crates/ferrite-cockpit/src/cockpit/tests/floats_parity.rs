@@ -81,8 +81,14 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     );
     let input = cx.debug_bounds("palette-input").expect("the input row");
     assert!(
-        (input.size.height - px(ferrite_ui::theme::PALETTE_INPUT_H + 1.)).abs() < px(0.5),
-        "50 and its hairline: {input:?}"
+        (input.size.height - px(ferrite_ui::theme::PALETTE_INPUT_H)).abs() < px(0.5),
+        "50, its hairline under the tabs: {input:?}"
+    );
+    let tabs = cx.debug_bounds("palette-tabs").expect("the type tabs");
+    assert!(
+        (tabs.top() - input.bottom()).abs() < px(0.5)
+            && (tabs.size.height - px(ferrite_ui::theme::PALETTE_TABS_H + 1.)).abs() < px(0.5),
+        "the tabs under the input, with the list's hairline: {tabs:?}"
     );
     let row = cx.debug_bounds("palette-row-0").expect("a row");
     assert!(
@@ -95,10 +101,10 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     );
     let section = cx.debug_bounds("palette-section-0").expect("a heading");
     assert!(
-        (section.top() - (input.bottom() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs()
+        (section.top() - (tabs.bottom() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs()
             < px(0.5)
             && (section.size.height - px(ferrite_ui::theme::PALETTE_SECTION_H)).abs() < px(0.5),
-        "the first heading 32 high, 6 under the input: {section:?}"
+        "the first heading 32 high, 6 under the tabs: {section:?}"
     );
     let results = cx
         .debug_bounds("palette-results")
@@ -819,7 +825,10 @@ fn a_one_letter_palette_line_filters_by_status(cx: &mut TestAppContext) {
     let (view, _project, threads, cx) = palette_states("palette-filters", cx);
     cx.simulate_keystrokes("cmd-k");
     tick(cx);
-    assert_eq!(palette_threads(&view, cx), threads);
+    // At rest every Thread is a recent one, in the order last used.
+    let mut recents = palette_threads(&view, cx);
+    recents.sort();
+    assert_eq!(recents, threads);
     for (key, kept) in [
         ("b", vec![threads[2]]),
         ("d", vec![threads[1]]),
@@ -864,15 +873,27 @@ fn the_palette_jumps_to_a_project_and_names_a_threads_directory(cx: &mut TestApp
     let (view, project, threads, cx) = palette_states("palette-jumps", cx);
     cx.simulate_keystrokes("cmd-k");
     tick(cx);
-    let (row, detail) = view.read_with(cx, |view, cx| {
+    // At rest the cursor is on a recent Thread: the footer names its cwd.
+    let detail = view.read_with(cx, |view, cx| {
         let palette = view.floats.palette.as_ref().unwrap().read(cx);
-        let row = palette
+        palette.selected().and_then(|row| row.detail.clone())
+    });
+    // Projects wait under their tab until a query (`All` rests on Recents).
+    view.update(cx, |view, cx| {
+        let palette = view.floats.palette.clone().expect("open");
+        palette.update(cx, |palette, cx| {
+            palette.set_tab(crate::palette::Tab::Only(Section::Projects), cx)
+        });
+    });
+    tick(cx);
+    let row = view.read_with(cx, |view, cx| {
+        let palette = view.floats.palette.as_ref().unwrap().read(cx);
+        palette
             .survivors()
             .into_iter()
             .find(|row| row.act == Act::Project(project))
             .cloned()
-            .expect("a row per Project with an open Thread");
-        (row, palette.selected().and_then(|row| row.detail.clone()))
+            .expect("a row per Project with an open Thread")
     });
     assert_eq!(row.section, Section::Projects);
     assert_eq!(row.status, Some(nav::RowStatus::NeedsYou), "its roll-up");

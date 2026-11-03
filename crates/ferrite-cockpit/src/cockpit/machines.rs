@@ -278,6 +278,7 @@ impl CockpitView {
                 .collect()
         };
         let unsaved = machines.read(cx).unsaved().cloned();
+        let none = listed.is_empty();
         let mut shown = Vec::new();
         for (row, machine) in listed {
             let target = machine.target.clone();
@@ -363,7 +364,12 @@ impl CockpitView {
                 typed.update(cx, |field, cx| field.set_value("", window, cx));
             },
         ));
-        Some(settings::Group::new(Some("Machines")).rows(shown))
+        let group = settings::Group::new(Some("Machines")).rows(shown);
+        Some(if none {
+            group.note("No machines yet. Add one by its ssh target to run its threads here.")
+        } else {
+            group
+        })
     }
 }
 

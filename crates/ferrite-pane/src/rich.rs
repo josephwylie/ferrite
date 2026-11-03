@@ -326,7 +326,7 @@ impl Markdown {
     }
 
     /// Set the body in `ink`, its bold and native links too — a link lifts
-    /// only by its underline under the pointer (headings keep their ink).
+    /// by its underline (headings keep their ink).
     pub fn ink(mut self, ink: u32) -> Self {
         self.ink = Some(ink);
         self
@@ -822,11 +822,11 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT_PROSE).into())
         .with_muted_foreground(rgb(theme::TEXT_DIM).into())
-        // Links and paths read `TEXT_STRONG`, with no underline at rest: a
-        // link underlines in its own ink only under the pointer.
+        // Links and paths read `LINK_INK`, underlined at rest, as the
+        // Claude app's are.
         .with_link(rgb(theme::LINK_INK).into())
         .with_link_underline(Some(rgb(theme::LINK_INK).into()))
-        .with_link_underline_on_hover(true)
+        .with_link_underline_on_hover(false)
         // A column of numbers reads right-aligned, as a terminal table does.
         .with_numeric_columns_right(true)
         // A table is as wide as its cells, its first column on the prose
@@ -887,6 +887,9 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
             // No box and no ground.
             let mut table = gpui::StyleRefinement::default()
                 .border_0()
+                // Auto, as the fence's: the vendor's scroll box is full
+                // width, so a margin alone would push it past the view.
+                .w_auto()
                 .mr(px(hang))
                 .bg(gpui::transparent_black());
             table.overflow.x = Some(gpui::Overflow::Scroll);
@@ -1681,6 +1684,34 @@ mod file_link_tests {
         assert!(cx.debug_bounds("mermaid-diagram").is_none());
     }
 
+    /// Laid out, a fence and a table wider than the column both end on the
+    /// column's edge (the view's own, less the hang cell its prose's
+    /// trailing space runs into), never a cell past it.
+    #[gpui::test]
+    fn wide_blocks_end_on_the_column_edge(cx: &mut TestAppContext) {
+        let wide = "X".repeat(120);
+        let source = format!(
+            "Before\n\n```rust\nlet a = 1;\n```\n\n| a | b |\n|---|---|\n| {wide} | 1 |\n\nAfter"
+        );
+        let (_view, cx) = fixture(cx, &source);
+        cx.simulate_resize(gpui::size(px(420.), px(520.)));
+        cx.run_until_parked();
+        let fence = cx.debug_bounds("code-overlay").expect("the fence");
+        let table = cx
+            .debug_bounds("horizontal-scroll-viewport")
+            .expect("the table's viewport");
+        assert!(
+            (fence.right() - px(420.)).abs() <= px(1.),
+            "the fence ends on the column: {fence:?}"
+        );
+        // The fence's overlay sits inside its 1px border; the table's
+        // viewport is the box itself.
+        assert!(
+            (table.right() - px(420.)).abs() <= px(1.),
+            "the table ends where the fence does: {table:?} / {fence:?}"
+        );
+    }
+
     #[gpui::test]
     fn fenced_code_copy_preserves_source_and_confirms_without_copying_chrome(
         cx: &mut TestAppContext,
@@ -1763,7 +1794,12 @@ let count = 2;
         let code_size = theme::FS_PROSE - theme::TX_BLOCK_STEP;
         assert_eq!(row.top() - block.top(), px(theme::BLOCK_PAD_Y));
         let inset = block.right() - row.right();
-        assert!((inset - px(theme::CODE_PAD_CELLS * theme::tx_cell(code_size))).abs() < px(0.01));
+        // Within a pixel's snap: the block's edge stands a hang cell short
+        // of the view's (`hung_style`), off the pixel grid.
+        assert!(
+            (inset - px(theme::CODE_PAD_CELLS * theme::tx_cell(code_size))).abs() < px(0.5),
+            "the actions sit the code's inset from the block's edge: {inset:?}"
+        );
         assert_eq!(language.right(), row.right());
         assert_eq!(
             (language.top(), language.size.height),
@@ -2629,20 +2665,18 @@ mod style_tests {
     }
 
     /// SPEC §5.4: prose `TEXT_PROSE`, strong `W_STRONG` `TEXT_STRONG`,
-    /// links and paths `TEXT_STRONG` with no underline at rest, inline code
+    /// links and paths `LINK_INK` underlined at rest, inline code
     /// a `RAISED` chip, a fence in the block box.
     #[test]
-    fn prose_is_prose_ink_with_semibold_strong_and_strong_links() {
+    fn prose_is_prose_ink_with_semibold_strong_and_link_blue_links() {
         let style = style(px(theme::FS_UI));
         assert_eq!(style.foreground(), solid(theme::TEXT_PROSE));
-        assert_eq!(theme::LINK_INK, theme::TEXT_STRONG);
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
         assert_eq!(style.strong().color, Some(solid(theme::TEXT_STRONG)));
         assert_eq!(style.link(), solid(theme::LINK_INK));
-        // The underline is the link's own ink, painted only under the
-        // pointer (`with_link_underline_on_hover`).
+        // The underline is the link's own ink, painted at rest.
         assert_eq!(style.link_underline(), Some(solid(theme::LINK_INK)));
-        assert!(style.link_underline_on_hover());
+        assert!(!style.link_underline_on_hover());
         assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
         assert_eq!(style.inline_code_wash(), Some(inline_code_wash()));
         assert_eq!(
@@ -2664,7 +2698,8 @@ mod style_tests {
     /// ink, on the reading size's own line.
     #[test]
     fn headings_follow_the_type_table_at_every_reading_size() {
-        for (base, h1_line) in [(14., 22.), (18., 29.)] {
+        for base in [theme::FS_PROSE, 18.] {
+            let h1_line = theme::prose_line_height(base);
             let style = style_at(px(theme::FS_UI), px(base));
             assert_eq!(style.heading_font_size(1), Some(px(base)));
             assert_eq!(style.heading_font_size(3), Some(px(base)));
@@ -2702,7 +2737,8 @@ mod style_tests {
         // Terminal-native: blocks sit one blank line apart at every
         // reading size, a heading too.
         let rem = px(theme::FS_UI);
-        for (base, gap) in [(14., 22.), (16., 26.), (18., 29.)] {
+        for base in [14., 16., 18.] {
+            let gap = theme::prose_line_height(base);
             let style = style_at(rem, px(base));
             let near = |value: gpui::Rems, want: f32| {
                 (f32::from(value.to_pixels(rem)) - want).abs() < 0.01

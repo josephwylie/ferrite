@@ -30,7 +30,7 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    let tab = cx.debug_bounds("panel-tab-Context").unwrap();
+    let tab = cx.debug_bounds("panel-tab-Details").unwrap();
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
@@ -245,7 +245,7 @@ fn contract_native_accounting_and_cost_are_visible(cx: &mut TestAppContext) {
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    let tab = cx.debug_bounds("panel-tab-Context").unwrap();
+    let tab = cx.debug_bounds("panel-tab-Details").unwrap();
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     for selector in [

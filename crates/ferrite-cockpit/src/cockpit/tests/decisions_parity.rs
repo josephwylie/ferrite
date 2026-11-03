@@ -58,11 +58,10 @@ fn near(a: gpui::Pixels, b: gpui::Pixels) -> bool {
     (a - b).abs() <= px(0.5)
 }
 
-/// D-1, D-3 (SPEC §5.9): the Decision box — the head one row with the
-/// `shield` at the box's content edge, 10px to the command well (a row and
-/// 6px above and below), 10px to the options (30px each, the first under
-/// the cursor), and the hint line 8px under the box; every section across
-/// the box's content column, 12px inside its edge.
+/// D-1, D-3 (Claude's card): `Needs your input` over the box; the ask on
+/// the head band across the box's top; the command well 10px under it on
+/// the body's 12px edge; then `Deny` and the split `Always allow`, inline
+/// at the body's right edge in Solo, the box's last section.
 #[gpui::test]
 fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     let (view, _fake, cx) = waiting(
@@ -75,57 +74,60 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
         (view.panes[0].thread().unwrap(), request.handle.serial)
     });
     let card = cx.debug_bounds("question-island").expect("the box");
+    let pill = cx
+        .debug_bounds("decision-needs-input")
+        .expect("the pill over the box");
     let head = cx.debug_bounds("decision-head").expect("the head");
-    let mark = cx.debug_bounds("decision-mark").expect("the shield");
     let well = cx.debug_bounds("approval-well").expect("the command well");
-    let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
     let always = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
+    let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
     let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
-    let hints = cx.debug_bounds("decision-hints").expect("the hint");
-    let line = px(ferrite_ui::theme::LH_UI);
     let gap = px(ferrite_ui::theme::DECISION_GAP);
     let pad = px(ferrite_ui::theme::DECISION_PAD);
-    assert!(near(head.top() - card.top(), pad), "{card:?} / {head:?}");
-    assert!(near(head.left() - card.left(), pad), "{card:?} / {head:?}");
+    assert!(pill.bottom() <= card.top(), "{pill:?} / {card:?}");
+    assert!(near(pill.left(), card.left()), "{pill:?} / {card:?}");
+    // The band spans the box inside its 1px ring.
+    assert!(near(head.top() - card.top(), px(1.)), "{card:?} / {head:?}");
+    assert!(near(head.left() - card.left(), px(1.)), "{card:?} / {head:?}");
+    assert!(near(card.right() - head.right(), px(1.)), "{card:?} / {head:?}");
     assert!(
-        near(head.size.height, line),
-        "the head is one row: {head:?}"
+        near(well.left() - card.left(), pad),
+        "the body keeps the box's 12px edge: {well:?} / {card:?}"
     );
-    assert!(near(mark.left(), head.left()), "the shield leads the head");
-    assert!(near(well.top() - head.bottom(), gap), "{head:?} / {well:?}");
+    assert!(
+        near(well.top() - head.bottom(), pad - px(1.)),
+        "the body's padding under the band: {head:?} / {well:?}"
+    );
     assert!(
         near(
             well.size.height,
-            line + px(2. * ferrite_ui::theme::DECISION_WELL_PAD_Y)
+            px(ferrite_ui::theme::LH_UI + 2. * ferrite_ui::theme::DECISION_WELL_PAD_Y)
         ),
         "the well is a row and 6px above and below: {well:?}"
     );
+    // Inline in Solo: Deny, then the split button, ending at the body's
+    // right edge, one row, the box's last section.
+    assert!(deny.right() <= always.left() && near(always.right(), more.left()));
+    assert!(near(more.right(), well.right()), "{more:?} / {well:?}");
+    assert!(near(deny.top(), always.top()) && near(always.top(), more.top()));
     assert!(
-        near(allow.top() - well.bottom(), gap),
-        "{well:?} / {allow:?}"
+        near(deny.size.height, px(ferrite_ui::theme::CONTROL_H)),
+        "{deny:?}"
     );
-    for row in [allow, always, deny] {
-        assert!(
-            near(row.size.height, px(ferrite_ui::theme::DECISION_OPTION_H)),
-            "an option is 30px: {row:?}"
-        );
-    }
-    assert!(near(always.top(), allow.bottom()) && near(deny.top(), always.bottom()));
+    assert!(deny.top() - well.bottom() >= gap - px(0.5));
+    assert!(near(card.bottom() - more.bottom(), pad), "{more:?} / {card:?}");
     assert!(
-        near(hints.top() - deny.bottom(), gap),
-        "the hint is the box's last section: {deny:?} / {hints:?}"
+        cx.debug_bounds("decision-hints").is_none(),
+        "the keys are on the buttons"
     );
-    assert!(
-        near(card.bottom() - hints.bottom(), pad),
-        "{hints:?} / {card:?}"
-    );
-    assert!(near(well.left(), head.left()) && near(allow.left(), well.left()));
-    assert!(near(allow.right(), well.right()));
-    let cursor = cx.debug_bounds("decision-cursor").expect("the cursor row");
-    assert!(
-        allow.contains(&cursor.center()),
-        "the first option is pre-selected: {cursor:?} in {allow:?}"
-    );
+    // Allow once waits in the split button's menu.
+    assert!(cx
+        .debug_bounds(format!("request-allow-{}-{serial}", thread.get()).leak())
+        .is_none());
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
+    assert!(allow.top() >= more.bottom(), "the menu hangs under the button");
 }
 
 /// D-2: the head's words — the tool as the transcript names it, the
@@ -238,16 +240,6 @@ fn the_cursor_moves_and_confirm_answers_its_option(cx: &mut TestAppContext) {
     cx.dispatch_action(ferrite_pane::decision::SelectNext);
     tick(cx);
     assert_eq!(cursor(&view, cx), Some(2));
-    let (thread, serial) = view.read_with(cx, |view, _| {
-        let request = view.shown_request(0).unwrap();
-        (view.panes[0].thread().unwrap(), request.handle.serial)
-    });
-    let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
-    let mark = cx.debug_bounds("decision-cursor").expect("the cursor row");
-    assert!(
-        deny.contains(&mark.center()),
-        "the cursor row follows the cursor"
-    );
     cx.dispatch_action(ferrite_pane::decision::SelectNext);
     tick(cx);
     assert_eq!(cursor(&view, cx), Some(0), "it wraps");

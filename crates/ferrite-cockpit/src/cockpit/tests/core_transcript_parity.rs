@@ -23,11 +23,11 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
     }
 }
 
-/// Standard reads at 13px on a 21px line in Solo, 12.5 on 20 in a Group
-/// Pane, its diffs and fences half a step smaller (SPEC §3.5); a cell is
-/// 7.8px, so an image's frame is 374.4px.
+/// Standard reads at 13px on an 18px line (the type table's 1.4), in Solo
+/// and in a Group Pane alike; its diffs and fences a step smaller, 12 on
+/// 17. A cell is 7.8px, so an image's frame is 374.4px.
 #[test]
-fn standard_reads_at_13_on_a_21px_line() {
+fn standard_reads_at_13_on_an_18px_line() {
     use ferrite_core::settings::ReadingSize;
     assert_eq!(
         ferrite_ui::theme::answer_text_size(ReadingSize::STANDARD),
@@ -35,17 +35,16 @@ fn standard_reads_at_13_on_a_21px_line() {
     );
     assert_eq!(
         ferrite_ui::theme::answer_line_height(ReadingSize::STANDARD),
-        21.
+        18.
     );
     let grid = pane::Grid::of(ReadingSize::STANDARD);
     assert!((grid.cell() - 7.8).abs() < 1e-4);
     assert!((ferrite_ui::theme::IMAGE_CELLS * grid.cell() - 374.4).abs() < 1e-3);
-    // Solo reads two pixels over the reading size (the Claude app's 15).
     let solo = pane::Grid::pane(ReadingSize::STANDARD, true);
-    assert_eq!((solo.size, solo.line), (15., 24.));
+    assert_eq!((solo.size, solo.line), (13., 18.));
     let group = pane::Grid::pane(ReadingSize::STANDARD, false);
-    assert_eq!((group.size, group.line), (12.5, 20.));
-    assert_eq!((grid.block().size, grid.block().line), (12.5, 20.));
+    assert_eq!((group.size, group.line), (13., 18.));
+    assert_eq!((grid.block().size, grid.block().line), (12., 17.));
 }
 
 /// `✻ 41s · 1.1k tokens`: no clock time.
@@ -224,12 +223,12 @@ fn the_hover_card_hangs_under_its_path_and_flips_above_near_the_foot() {
     );
 }
 
-/// Answers underline a link only under the pointer, right-align a column
-/// of numbers, and frame their images like a prompt's.
+/// Answers underline a link at rest (the Claude app's links), right-align
+/// a column of numbers, and frame their images like a prompt's.
 #[test]
-fn answers_underline_links_on_hover_align_numbers_and_frame_images() {
+fn answers_underline_links_align_numbers_and_frame_images() {
     let style = ferrite_pane::rich::style(px(ferrite_ui::theme::FS_UI));
-    assert!(style.link_underline_on_hover());
+    assert!(!style.link_underline_on_hover());
     assert!(style.numeric_columns_right());
     let cell = ferrite_ui::theme::tx_cell(ferrite_ui::theme::FS_PROSE);
     assert_eq!(

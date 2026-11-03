@@ -29,7 +29,7 @@ fn the_context_tab_shows_context_and_subscription_windows(cx: &mut TestAppContex
         cx.debug_bounds("panel-foot-64000").is_some(),
         "the foot reads the context on the Changes tab"
     );
-    let tab = cx.debug_bounds("panel-tab-Context").expect("the tab");
+    let tab = cx.debug_bounds("panel-tab-Details").expect("the tab");
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("context-usage-current-64000").is_some());
@@ -146,7 +146,7 @@ fn a_group_panes_composer_carries_no_chips(cx: &mut TestAppContext) {
     });
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
-    assert!(cx.debug_bounds("composer-toolbar").is_none());
+    assert!(cx.debug_bounds("composer-footer").is_none());
     assert!(debug_bounds(cx, format!("model-picker-{}", thread.get())).is_none());
 }
 

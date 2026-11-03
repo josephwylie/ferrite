@@ -1,6 +1,6 @@
 //! The compact Composer (SPEC §5.9 item 5): a Group Pane's input box.
 //!
-//! Solo's Composer (`box_composer`) carries the toolbar; a Group Pane's is
+//! Solo's Composer (`box_composer`) carries its controls; a Group Pane's is
 //! the input, and on the focused Pane the queued row. One 38px input row,
 //! `COMPACT_COMPOSER_INSET` in from the card's sides and foot, at `R_BLOCK`
 //! on `FIELD_COMPACT`, inside a 1px ring just outside it (`COMPACT_RING`,
@@ -107,7 +107,8 @@ pub(super) fn compact_composer(
         // The send circle, wired in the cockpit: the focused Pane's only.
         // It rides a row-high slot (overflowing it), so focus never
         // changes the box's height.
-        .children(toolbar.filter(|_| focused).map(|send| {
+        .children(toolbar.filter(|_| focused).map(|controls| {
+            let send = controls.send;
             div()
                 .flex()
                 .flex_shrink_0()

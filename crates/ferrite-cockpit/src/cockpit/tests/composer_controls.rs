@@ -576,12 +576,12 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
             tick(cx);
         }
         let toolbar = cx
-            .debug_bounds("composer-toolbar")
-            .expect("the Solo box draws its toolbar");
+            .debug_bounds("composer-footer")
+            .expect("the Solo box draws its footer");
         let chip = |name: &str, cx: &mut gpui::VisualTestContext| {
             let chip = debug_bounds(cx, format!("{name}-{}", thread.get()))
                 .unwrap_or_else(|| panic!("the {name} chip (live: {live})"));
-            assert!(toolbar.contains(&chip.center()), "{name} rides the toolbar");
+            assert!(toolbar.contains(&chip.center()), "{name} rides the footer");
             chip
         };
         // The mode: its menu is the Session's own list.
@@ -623,9 +623,8 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
 }
 
 /// SPEC §5.5: however narrow the box, send stands whole inside it, its
-/// toolbar padding from the box's end — the chips give way, never the
-/// circle — and the mode chip, the one that gives way first, never runs
-/// under the model chip.
+/// row's padding from the box's end, and under the box the model word
+/// never runs under the mode's.
 #[gpui::test]
 fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("toolbar-narrow", 1);
@@ -645,16 +644,58 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
         assert!(
             send.left() >= field.left()
                 && send.right()
-                    <= field.right() - px(ferrite_ui::theme::COMPOSER_TOOLBAR_PAD_X - 0.5),
+                    <= field.right() - px(ferrite_ui::theme::COMPOSER_ROW_PAD - 0.5),
             "at {width}px send stands inside the box: {send:?} / {field:?}"
         );
         let mode = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");
         let model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
         assert!(
-            mode.right() <= model.left(),
-            "at {width}px the mode gives way before the model: {mode:?} / {model:?}"
+            model.right() <= mode.left(),
+            "at {width}px the model never runs under the mode: {mode:?} / {model:?}"
         );
     }
+}
+
+/// In a narrow box the model's label (`Default · Opus 5.5 (1M)`) cuts
+/// before the permission mode's word does: the mode chip keeps its whole
+/// width while the model chip has any label left to give.
+#[gpui::test]
+fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("toolbar-priority", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    for event in [
+        SessionEvent::Init {
+            session_id: "priority".into(),
+            model: "claude-opus-5-5[1m]".into(),
+        },
+        SessionEvent::PermissionMode {
+            mode: "acceptEdits".into(),
+        },
+    ] {
+        fake.streams.borrow()[0].send(event).unwrap();
+    }
+    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
+    tick(cx);
+    let roomy = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");
+    let roomy_model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
+    // Narrow until the model has had to give some of its label.
+    let mut width = 1600.;
+    loop {
+        width -= 20.;
+        cx.simulate_resize(gpui::size(px(width), px(800.)));
+        tick(cx);
+        let model = debug_bounds(cx, format!("model-picker-{}", thread.get())).unwrap();
+        if model.size.width < roomy_model.size.width - px(40.) || width < 500. {
+            break;
+        }
+    }
+    let mode = debug_bounds(cx, format!("mode-picker-{}", thread.get())).unwrap();
+    assert!(width >= 500., "the model chip gave way at some width");
+    assert!(
+        (mode.size.width - roomy.size.width).abs() <= px(1.),
+        "at {width}px the mode keeps its word while the model cuts: {mode:?} / {roomy:?}"
+    );
 }
 
 /// SPEC §5.5: the queued row says what waits — the top of the pile, `+N`
@@ -798,4 +839,21 @@ fn the_focused_group_pane_shows_its_queue_and_backspace_drops_it(cx: &mut TestAp
     tick(cx);
     assert_eq!(queued(&view, cx), None, "⌫ on the empty line drops it");
     assert!(cx.debug_bounds("queued-0").is_none(), "and the row goes");
+}
+
+/// From the moment a prompt is sent — before the provider's first event —
+/// the send circle is stop (`turn_running`), so a way to stop the turn is
+/// in view while the working line already says the turn runs.
+#[gpui::test]
+fn a_sent_prompt_shows_stop_before_its_first_event(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("stop-on-send", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Go".into());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("composer-stop").is_some(),
+        "stop stands from the send"
+    );
 }

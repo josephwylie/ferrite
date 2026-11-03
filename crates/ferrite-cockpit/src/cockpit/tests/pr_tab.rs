@@ -204,8 +204,8 @@ fn the_tab_renders_each_state(cx: &mut TestAppContext) {
 }
 
 /// The cadence: a snapshot whose sync moved flips the readiness row on
-/// the next `AUTO_EVERY` tick, not before; its checks move the nav's
-/// label too.
+/// the next `AUTO_EVERY` tick, not before; its checks move the Thread's
+/// PR reading too.
 #[gpui::test]
 fn a_newer_snapshot_flips_the_readiness_row_on_the_next_tick(cx: &mut TestAppContext) {
     use CheckStatus::{Failure, Success};
@@ -214,13 +214,13 @@ fn a_newer_snapshot_flips_the_readiness_row_on_the_next_tick(cx: &mut TestAppCon
     open_tab(&view, thread, PanelTab::Pr, cx);
     settle(&view, thread, cx);
     assert!(shows(cx, "pr-ready-unpushed"));
+    let checks = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.facts.pr(thread).and_then(|pr| pr.checks))
+    };
     assert_eq!(
-        view.read_with(cx, |view, _| view.thread_row(thread).details.pr),
-        Some(crate::pr::PrLabel {
-            number: 146,
-            mark: Some(crate::pr::PrMark::Passing)
-        }),
-        "the snapshot gives the label"
+        checks(&view, cx),
+        Some(ferrite_core::workspace::CheckState::Passing),
+        "the snapshot gives the reading"
     );
 
     forge(
@@ -236,12 +236,9 @@ fn a_newer_snapshot_flips_the_readiness_row_on_the_next_tick(cx: &mut TestAppCon
     assert!(shows(cx, "pr-ready-in-sync"), "pushed: in sync");
     assert!(!shows(cx, "pr-ready-unpushed"));
     assert_eq!(
-        view.read_with(cx, |view, _| view.thread_row(thread).details.pr),
-        Some(crate::pr::PrLabel {
-            number: 146,
-            mark: Some(crate::pr::PrMark::Failing)
-        }),
-        "a check failing moves the label"
+        checks(&view, cx),
+        Some(ferrite_core::workspace::CheckState::Failing),
+        "a check failing moves the reading"
     );
 }
 

@@ -282,27 +282,85 @@ pub(crate) fn call_failure(tool: &ToolBlock) -> Option<String> {
 
 /// A group's summary line, as it reads and copies: what its calls did by
 /// kind, in the order the kinds first appear, the first phrase capitalised
-/// (`Ran 12 commands, read 1 file`), then what went wrong (`· 2 failed`,
-/// `· 1 without a result`). `failed` is the failure count's range, which
-/// wears the failure ink.
+/// (`Ran 12 commands, read 1 file`) — an edit or a write of one file names
+/// it (`edited notes.md`), and either says what its diffs changed (`+5 −1`)
+/// — then what went wrong (`· 2 failed`, `· 1 without a result`). `marks`
+/// are the ranges that wear their own ink: a named file, the counts, the
+/// failure count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GroupSummary {
     pub text: String,
-    pub failed: Option<std::ops::Range<usize>>,
+    pub marks: Vec<(std::ops::Range<usize>, SummaryMark)>,
+}
+
+/// What a marked range of a group's summary is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SummaryMark {
+    File,
+    Added,
+    Removed,
+    Failed,
+}
+
+impl GroupSummary {
+    #[cfg(test)]
+    pub(crate) fn failed(&self) -> Option<std::ops::Range<usize>> {
+        self.marks
+            .iter()
+            .find(|(_, mark)| *mark == SummaryMark::Failed)
+            .map(|(range, _)| range.clone())
+    }
+}
+
+/// One kind's share of a group: its calls, whether one runs, the files it
+/// touched (an edit's or a write's) and what their diffs added and removed.
+struct KindTally {
+    kind: WorkKind,
+    count: usize,
+    running: bool,
+    files: Vec<String>,
+    added: usize,
+    removed: usize,
 }
 
 pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
-    let mut kinds: Vec<(WorkKind, usize, bool)> = Vec::new();
+    let mut kinds: Vec<KindTally> = Vec::new();
     let (mut failed, mut unanswered) = (0, 0);
     for tool in group_tools(members) {
         let kind = WorkKind::of(tool);
         let running = tool.state == ToolState::Running;
-        match kinds.iter_mut().find(|(seen, ..)| *seen == kind) {
-            Some((_, count, live)) => {
-                *count += 1;
-                *live |= running;
+        let at = match kinds.iter().position(|tally| tally.kind == kind) {
+            Some(at) => at,
+            None => {
+                kinds.push(KindTally {
+                    kind,
+                    count: 0,
+                    running: false,
+                    files: Vec::new(),
+                    added: 0,
+                    removed: 0,
+                });
+                kinds.len() - 1
             }
-            None => kinds.push((kind, 1, running)),
+        };
+        let tally = &mut kinds[at];
+        tally.count += 1;
+        tally.running |= running;
+        if matches!(tally.kind, WorkKind::Edit | WorkKind::Write) {
+            let paths: Vec<&str> = if tool.diffs.is_empty() {
+                vec![tool.summary.as_str()]
+            } else {
+                tool.diffs.iter().map(|diff| diff.path.as_str()).collect()
+            };
+            for path in paths.into_iter().filter(|path| !path.is_empty()) {
+                if !tally.files.iter().any(|seen| seen == path) {
+                    tally.files.push(path.to_owned());
+                }
+            }
+            for diff in &tool.diffs {
+                tally.added += diff.added;
+                tally.removed += diff.removed;
+            }
         }
         if call_failed(tool) {
             failed += 1;
@@ -312,11 +370,23 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
         }
     }
     let mut text = String::new();
-    for (index, (kind, count, running)) in kinds.iter().enumerate() {
-        let phrase = kind.phrase(*count, *running);
-        if index == 0 {
-            text.push_str(&phrase);
-        } else {
+    let mut marks = Vec::new();
+    let mut mark = |text: &mut String, words: &str, kind: SummaryMark| {
+        let start = text.len();
+        text.push_str(words);
+        marks.push((start..text.len(), kind));
+    };
+    for (index, tally) in kinds.iter().enumerate() {
+        // One file edited or written is named, as the app's summary does.
+        let named = match (&tally.kind, tally.files.as_slice()) {
+            (WorkKind::Edit | WorkKind::Write, [file]) => Some(file_name(file)),
+            _ => None,
+        };
+        let phrase = match &named {
+            Some(_) => format!("{} ", tally.kind.verb(tally.running)),
+            None => tally.kind.phrase(tally.count, tally.running),
+        };
+        if index > 0 {
             // Only the verb lowers: a server's name keeps its case.
             text.push_str(", ");
             let mut chars = phrase.chars();
@@ -324,14 +394,32 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
                 text.extend(first.to_lowercase());
                 text.push_str(chars.as_str());
             }
+        } else {
+            text.push_str(&phrase);
+        }
+        if let Some(name) = named {
+            mark(&mut text, &name, SummaryMark::File);
+        }
+        if tally.added > 0 {
+            text.push(' ');
+            mark(&mut text, &format!("+{}", tally.added), SummaryMark::Added);
+        }
+        if tally.removed > 0 {
+            text.push(' ');
+            mark(
+                &mut text,
+                &format!("\u{2212}{}", tally.removed),
+                SummaryMark::Removed,
+            );
         }
     }
-    let mut failed_range = None;
     if failed > 0 {
         text.push_str(" \u{b7} ");
-        let start = text.len();
-        text.push_str(&format!("{failed} {}", theme::words::FAILED));
-        failed_range = Some(start..text.len());
+        mark(
+            &mut text,
+            &format!("{failed} {}", theme::words::FAILED),
+            SummaryMark::Failed,
+        );
     }
     if unanswered > 0 {
         text.push_str(&format!(
@@ -343,10 +431,14 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
             }
         ));
     }
-    GroupSummary {
-        text,
-        failed: failed_range,
-    }
+    GroupSummary { text, marks }
+}
+
+/// A path's last component (`src/notes.md` → `notes.md`).
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_owned(), |name| name.to_string_lossy().into_owned())
 }
 
 /// A group's calls, in order.

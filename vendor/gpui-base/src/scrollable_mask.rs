@@ -44,6 +44,8 @@ pub(crate) fn horizontal_scroll_area(
         .child(
             div()
                 .id(id.clone())
+                // Ferrite: the viewport a test measures (a wide table's).
+                .debug_selector(|| "horizontal-scroll-viewport".into())
                 .w_full()
                 .refine_style(style)
                 .overflow_hidden()

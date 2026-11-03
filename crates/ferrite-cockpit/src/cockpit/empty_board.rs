@@ -1,8 +1,7 @@
 //! The board with nothing on it (F-13): the home. One calm column, centred
-//! and lifted as a launching draft is: the greeting
-//! (`components::greeting`, the draft's own heading, so opening one keeps
-//! the picture), the provider CLIs Ferrite found, the ways to start as
-//! rows with their keys, and the four Threads used last.
+//! a touch above the middle: the greeting (`components::greeting`), the
+//! provider CLIs Ferrite found, the ways to start as rows with their keys,
+//! and the four Threads used last.
 //!
 //! In the chrome's grammar (theme `EMPTY_*`, SPEC §2, §5.8): sentence-case
 //! labels, an icon column, keys read from the key table in `TEXT_DIM`, the
@@ -384,10 +383,10 @@ impl CockpitView {
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
             .text_color(rgb(TEXT))
-            // Centred, a touch above the middle (the launching draft's
-            // lift), and pinned to the top once it no longer fits.
+            // Centred, a touch above the middle (`EMPTY_LIFT`), and pinned
+            // to the top once it no longer fits.
             .child(div().flex_1().min_h_0())
             .child(column)
-            .child(div().flex_1().min_h_0().pb(px(DRAFT_LAUNCH_LIFT)))
+            .child(div().flex_1().min_h_0().pb(px(EMPTY_LIFT)))
     }
 }

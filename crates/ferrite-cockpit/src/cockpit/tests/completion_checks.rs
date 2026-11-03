@@ -691,7 +691,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         tick(cx);
         let island = cx.debug_bounds("question-island").unwrap();
         let input = cx.debug_bounds("approval-input").unwrap();
-        let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
+        let allow = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
         let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
         let title = bounds(cx, format!("request-title-{}-{serial}", thread.get()));
         assert!(
@@ -719,9 +719,13 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             input.top() >= well.top() && well.bottom() <= input.bottom() + px(8.),
             "the command starts in its well: {well:?} / {input:?}"
         );
+        // Under the well: what `Always allow` covers, one line, then the
+        // buttons, each a section gap on.
         let gap = allow.top() - well.bottom();
+        // (The line may wrap once in a narrow column.)
+        let most = 2. * ferrite_ui::theme::DECISION_GAP + 2. * ferrite_ui::theme::LH_UI + 1.;
         assert!(
-            gap >= px(0.) && gap <= px(16.),
+            gap >= px(0.) && gap <= px(most),
             "the command-to-Allow gap must stay near the well's design gap: {gap:?}"
         );
         let row_h = ferrite_ui::theme::DECISION_OPTION_H;
@@ -729,11 +733,10 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             allow.size.height <= px(row_h + 1.),
             "an approval row is one line: {allow:?}"
         );
-        // Three options, flush: option 2 is the one row between them.
-        let step = deny.top() - allow.bottom();
+        // In Solo the answers share one row, Deny first.
         assert!(
-            step >= px(row_h - 1.) && step <= px(row_h + 1.),
-            "Deny sits one option under Allow: {step:?}"
+            (deny.top() - allow.top()).abs() <= px(1.) && deny.right() <= allow.left(),
+            "Deny stands beside Always allow: {deny:?} / {allow:?}"
         );
         if let Some((previous_width, previous_island)) = previous {
             let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;

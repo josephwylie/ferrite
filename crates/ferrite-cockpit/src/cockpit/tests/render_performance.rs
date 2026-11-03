@@ -1366,6 +1366,16 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
         cx.debug_bounds("braille-spinner").is_some(),
         "the premise: a working Thread's spinner turns in the nav"
     );
+    // The second starts on a tick of the shared grid, so it holds the
+    // grid's 30 slots whatever time the setup above took: started a few
+    // milliseconds before a slot, one second spans 31.
+    let (epoch, tick) = cx
+        .update(|_, cx| ferrite_ui::motion::testing::grid(cx))
+        .expect("the loops run on the grid");
+    let into = cx.executor().now().duration_since(epoch).as_nanos() % tick.as_nanos();
+    cx.executor()
+        .advance_clock(tick - Duration::from_nanos(into as u64));
+    cx.run_until_parked();
     let before = cx.update(|_, _| ferrite_ui::motion::testing::pulse_ticks());
     let step = Duration::from_millis(11);
     let mut elapsed = Duration::ZERO;
@@ -1496,7 +1506,7 @@ fn the_panel_rides_in_and_out_and_settles_without_frames(cx: &mut TestAppContext
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel", cx);
     assert_eq!(panel_width(cx), Some(PANEL_W), "first paint: no ride");
-    let tab = cx.debug_bounds("panel-tab-Context").expect("a tab");
+    let tab = cx.debug_bounds("panel-tab-Details").expect("a tab");
     let toggle = cx.debug_bounds("panel-toggle").expect("the toggle");
 
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
@@ -1510,7 +1520,7 @@ fn the_panel_rides_in_and_out_and_settles_without_frames(cx: &mut TestAppContext
         "the board takes the width back with it"
     );
     assert_eq!(
-        cx.debug_bounds("panel-tab-Context"),
+        cx.debug_bounds("panel-tab-Details"),
         Some(tab),
         "the content holds its layout against the window's edge"
     );

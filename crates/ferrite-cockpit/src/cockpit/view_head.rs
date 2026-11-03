@@ -62,16 +62,23 @@ impl CockpitView {
         )
     }
 
-    /// Solo: the focused Thread's title, its Project, and a spacer.
+    /// Solo: the focused Thread's title, then where it works — its
+    /// Project, and its branch when that is not the Project's default (a
+    /// worktree's): `ferrite · scheduled-work-crash`. The nav's rows are
+    /// titles alone, so this is where the branch is said — and a spacer.
     fn solo_head(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
         let thread = self.focused_thread()?;
         let mut parts = vec![self.view_title(thread, cx)];
-        parts.extend(
-            self.facts
-                .get(thread)
-                .and_then(|facts| facts.project_label.clone())
-                .map(head_meta),
-        );
+        let place = self.facts.get(thread).and_then(|facts| {
+            let parts: Vec<SharedString> = facts
+                .project_label
+                .clone()
+                .into_iter()
+                .chain(facts.off_default_branch())
+                .collect();
+            (!parts.is_empty()).then(|| SharedString::from(parts.join(" \u{b7} ")))
+        });
+        parts.extend(place.map(head_meta));
         parts.push(div().flex_1().into_any_element());
         Some(parts)
     }
@@ -169,7 +176,8 @@ impl CockpitView {
     }
 }
 
-/// The head's second word, `TEXT_DIM`: the Project, or a Group's tally.
+/// The head's second word, `TEXT_DIM`: where the Thread works, or a
+/// Group's tally.
 fn head_meta(text: SharedString) -> AnyElement {
     div()
         .flex_shrink_0()

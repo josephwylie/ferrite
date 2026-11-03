@@ -586,7 +586,7 @@ fn a_group_cell_decision_never_clips_its_deny_row(cx: &mut TestAppContext) {
             && deny.bottom() <= island.bottom()),
         "{deny:?} inside {island:?}"
     );
-    // Terminal-native: an option is one grid row.
+    // A button at least a line high.
     assert!(deny.size.height >= px(ferrite_ui::theme::LH_UI));
 }
 
@@ -650,15 +650,12 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
 
 /// A nav title truncates against what its row leaves it. At the nav's own
 /// width, a member of the shown Group on a long worktree branch that runs
-/// five subagents is one line: its mark, its title pinned to the row's
-/// text width less its word, and the word ending on the row's text edge.
-/// The branch and the count are never marks on the line, so a long branch
-/// can never squeeze the title.
+/// five subagents is one line: its title pinned to the row's text width
+/// less the room its mark needs, if it has one. The branch and the count
+/// are never on the line, so a long branch can never squeeze the title.
 #[gpui::test]
-fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{
-        FS_META, NAV_COL_PAD, NAV_MEMBER_X, NAV_ROW_H, NAV_ROW_PAD_X, NAV_WORD_GAP, W_BODY,
-    };
+fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{NAV_MEMBER_X, NAV_ROW_H};
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -715,31 +712,19 @@ fn a_nav_title_takes_what_its_cells_and_word_leave(cx: &mut TestAppContext) {
         let title = bounds(cx, format!("nav-title-{id}"));
         let whole_row = bounds(cx, format!("nav-thread-{id}"));
         assert_eq!(whole_row.size.height, px(NAV_ROW_H), "one line");
-        let word = row.tail.member_word().map(|(text, _)| text);
-        let word_w = cx.update(|_, cx| {
-            word.as_deref().map_or(0.0, |word| {
-                crate::nav::Measure::Text(cx).ui(word, FS_META, W_BODY) + NAV_WORD_GAP
-            })
-        });
-        // The shown Group hangs one level into its Project's tree.
+        // The shown Group hangs one level into its Project's tree; a
+        // member's title takes the line but for the room its mark needs.
         let member_x = NAV_MEMBER_X + ferrite_ui::theme::NAV_TREE_INDENT;
-        let expected = crate::nav::WIDTH - 2.0 * NAV_COL_PAD - member_x - NAV_ROW_PAD_X - word_w;
+        let marked = crate::nav::state_mark(row.status).is_some();
+        let expected = crate::nav::title_w(crate::nav::RowPlace::Member(1), marked);
         assert!(
             (title.size.width - px(expected)).abs() < px(0.5),
-            "the title takes what its word leaves: {title:?}, {expected}"
+            "the title takes what its mark leaves: {title:?}, {expected}"
         );
         assert!(
             (title.left() - (whole_row.left() + px(member_x))).abs() < px(0.5),
-            "the title starts after the mark"
+            "the title starts at the member's edge"
         );
-        if word.is_some() {
-            let word = bounds(cx, format!("nav-since-{id}"));
-            assert!(title.right() <= word.left() + px(0.5));
-            assert!(
-                (word.right() - (whole_row.right() - px(NAV_ROW_PAD_X))).abs() < px(0.5),
-                "the word ends on the row's text edge"
-            );
-        }
         for gone in ["nav-branch", "nav-subagents", "nav-mark"] {
             assert!(
                 debug_bounds(cx, format!("{gone}-{id}")).is_none(),

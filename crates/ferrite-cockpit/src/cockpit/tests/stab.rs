@@ -603,19 +603,19 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
         .expect("the draft Composer");
     let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
     let model = cx.debug_bounds("draft-model-picker").expect("model");
-    // SPEC §5.5: the pair rides the box's toolbar, left of send, inside
-    // the box.
+    // SPEC §5.5: the pair rides the footer under the box, within its
+    // edges.
     assert!(
         effort.right() <= block.right() + px(0.5),
         "effort {effort:?} stays inside the box {block:?}"
     );
     assert!(model.right() <= effort.left());
-    let toolbar = cx.debug_bounds("composer-toolbar").expect("the toolbar");
+    let toolbar = cx.debug_bounds("composer-footer").expect("the toolbar");
     for chip in ["band-chip-0", "band-chip-1"] {
         let chip = cx.debug_bounds(chip).expect("a setup chip");
         assert!(
             toolbar.contains(&chip.center()) && chip.right() <= model.left(),
-            "the setup chips ride the toolbar's left: {chip:?} / {toolbar:?}"
+            "the setup chips ride the footer's left: {chip:?} / {toolbar:?}"
         );
     }
     for chip in ["band-chip-0", "band-chip-1"] {
@@ -1146,9 +1146,9 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     );
 }
 
-/// SPEC §5.5: at rest the Solo Composer is a box of one input row over its
-/// toolbar, with no key hint; the bar carries no status line. Enter sends
-/// and Esc interrupts.
+/// SPEC §5.5 (Claude's): at rest the Solo Composer is a box of one row —
+/// `+`, the line, send — with no key hint; the bar carries no status line.
+/// Enter sends and Esc interrupts.
 #[gpui::test]
 fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);
@@ -1160,11 +1160,8 @@ fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
     let block = cx.debug_bounds("composer-block").unwrap();
     assert_eq!(
         block.size.height,
-        px(ferrite_ui::theme::COMPOSER_INPUT_PAD_T
-            + ferrite_ui::theme::COMPOSER_ROW_H
-            + ferrite_ui::theme::COMPOSER_INPUT_PAD_B
-            + ferrite_ui::theme::COMPOSER_TOOLBAR_H),
-        "one row over the toolbar"
+        px(2. * ferrite_ui::theme::COMPOSER_ROW_PAD + ferrite_ui::theme::COMPOSER_ATTACH),
+        "one row: the buttons' height in the row's padding"
     );
     assert!(cx.debug_bounds("composer-meta").is_none(), "no status line");
     assert!(

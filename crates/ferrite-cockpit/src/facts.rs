@@ -89,9 +89,8 @@ pub struct ThreadFacts {
     branch_asked: bool,
 }
 impl ThreadFacts {
-    /// Whether `branch` is the Project's default, which the nav row and the
-    /// titlebar crumb leave unsaid.
-    #[cfg(test)]
+    /// Whether `branch` is the Project's default, which the view head leaves
+    /// unsaid.
     pub fn is_default_branch(&self, branch: &str) -> bool {
         match &self.default_branch {
             Some(default) => branch == default.as_ref(),
@@ -101,7 +100,6 @@ impl ThreadFacts {
 
     /// The checkout's branch, only when it says something: not the
     /// Project's default. The live status's branch wins over the cached one.
-    #[cfg(test)]
     pub fn off_default_branch(&self) -> Option<SharedString> {
         self.status
             .as_ref()

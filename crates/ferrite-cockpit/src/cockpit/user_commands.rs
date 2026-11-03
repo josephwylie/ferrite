@@ -58,6 +58,7 @@ impl CockpitView {
                     status: None,
                     detail: None,
                     keys: None,
+                    used: None,
                     act: Act::Command(Command::User(index)),
                 }
             })

@@ -1006,13 +1006,15 @@ mod tests {
         use RowKind::*;
         let prose = Answer { narration: false };
         let call = Activity;
-        for (size, line) in [
-            (ReadingSize::STANDARD, 21.),
-            (ReadingSize::nearest(14), 22.),
-            (ReadingSize::nearest(16), 26.),
-            (ReadingSize::nearest(18), 29.),
+        for size in [
+            ReadingSize::STANDARD,
+            ReadingSize::nearest(14),
+            ReadingSize::nearest(16),
+            ReadingSize::nearest(18),
         ] {
             let reading = answer_text_size(size);
+            // The type table's line for the size (`TX_LINE_RATIO`).
+            let line = ferrite_ui::theme::prose_line_height(reading);
             let block = (line * 1.5f32).round();
             assert_eq!(gap_before(Some(prose), Prompt, reading), block, "{size:?}");
             assert_eq!(gap_before(Some(Prompt), prose, reading), block, "{size:?}");
@@ -1045,7 +1047,10 @@ mod tests {
             Rc::ptr_eq(&first, rows.get(0).unwrap()),
             "the body padding does not scale"
         );
-        assert_eq!(rows.get(2).unwrap().gap(), (29.0f32 * 1.5).round());
+        assert_eq!(
+            rows.get(2).unwrap().gap(),
+            (ferrite_ui::theme::prose_line_height(large) * 1.5).round()
+        );
     }
 
     #[test]

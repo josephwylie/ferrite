@@ -3,7 +3,7 @@
 //! `Inbox`, `Parked`, `Tasks`), the Attention list — the Threads that
 //! need the operator, finished unseen or work, one line each — the tree —
 //! one section per Project, its loose Threads and its Groups, each Group's
-//! members hanging under it — and the foot (`Ferrite 0.5` and the gear). A
+//! members hanging under it — and the foot (the account row and the gear). A
 //! view other than the tree shows its list in the place of the list and
 //! the tree; Esc or a click on the active view returns to them.
 //! It is a view, never the only door: everything a row does (focus,
@@ -19,14 +19,12 @@
 //! top. Rows are rounded, wear `paint::RAISED` under the pointer (80ms) and
 //! `paint::SELECTED` with an inset `ROW_RING` when they stand for what the
 //! board shows: the Solo Thread's row, or the shown Group's. A Thread row
-//! is two lines — what it is (its title, its diffstat at the right), then
-//! where it is (its branch, or its state's reason; its PR's label at the
-//! right) — with its mark (§6) in the column before the title; with
-//! nothing for line 2 it is one. With no diffstat, line 1's right says how
-//! long ago the Thread was last used. Under the pointer an open Thread's
-//! row (tree or Attention list) offers its park, and a Project heading a
-//! new Thread in it (`row_action`), standing in for what that place says:
-//! the hover doors Codex and Claude give their lists, beside the menus.
+//! is one quiet line, as Claude's list: its title, and at its right one
+//! mark when a state is worth saying (`state_mark`). Under the pointer a
+//! Thread row offers its menu at `⋯`, and a Project heading a new Thread
+//! in it (`row_action`), standing in for that mark: the hover doors Codex
+//! and Claude give their lists. Section headings are small and quiet, a
+//! caret after the label; the foot is the account row.
 //!
 //! **A tree with guides** (§5.1.4). Everything inside a Project hangs one
 //! `NAV_TREE_INDENT` under its heading and a Group's members one more
@@ -36,8 +34,8 @@
 //! width. The Parked view groups its rows the same way (`ViewSection`);
 //! the Inbox and the Attention list stay flat.
 //!
-//! Colour is state (ADR 0033): the mark, a blocked or failed row's line 2,
-//! a Group's roll-up word, the needs-you pill. One thing moves: a working
+//! Colour is state (ADR 0033): the mark, a folded Project's roll-up word,
+//! the needs-you pill. One thing moves: a working
 //! Thread's spinner.
 //!
 //! **Folding** (cmd-B) rides the column down to the 52px **rail** while its
@@ -60,7 +58,6 @@ use gpui::{
 use crate::cockpit::Attention;
 use crate::machines::{Connection, MachineRow};
 use crate::notifications::{Row as NoticeRow, State as NoticeState};
-use crate::pr::{PrLabel, PrMark};
 use ferrite_core::cockpit::StatusRow;
 pub use ferrite_pane::mark::{mark, NavTail, RowStatus};
 use ferrite_ui::components;
@@ -489,57 +486,8 @@ pub struct ThreadRow {
     /// The board shows this Thread (Solo), or it is the shown Group's
     /// focused member: the row carries the selection.
     pub selected: bool,
-    /// The branch its checkout is on (`facts.branch`, the live status's
-    /// first).
-    pub branch: Option<SharedString>,
-    /// The agent's edits summed over `facts.changed_files` (added,
-    /// removed): what this Thread changed, not a diff against the base.
-    pub diffstat: Option<(usize, usize)>,
-    /// Since it was last used (`facts::since_label`), which a failed row's
-    /// line 2 says.
-    pub age: SharedString,
-    /// Its checkout and its PR at a glance (`RowDetails`).
-    pub details: RowDetails,
     /// Its state's word (C10): what line 2 says for a state with a reason.
     pub tail: NavTail,
-}
-
-/// A row's checkout facts: commits ahead of and behind its upstream and a
-/// dirty working tree, from the slow branch-status cadence, and its PR's
-/// label (`pr::PrWatch::label`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RowDetails {
-    pub ahead: u32,
-    pub behind: u32,
-    pub dirty: bool,
-    pub pr: Option<PrLabel>,
-}
-
-impl RowDetails {
-    pub fn of(status: Option<&ferrite_core::workspace::BranchStatus>, pr: Option<PrLabel>) -> Self {
-        RowDetails {
-            ahead: status.map_or(0, |status| status.ahead),
-            behind: status.map_or(0, |status| status.behind),
-            dirty: status.is_some_and(|status| status.dirty > 0),
-            pr,
-        }
-    }
-
-    /// The checkout's facts as line 2 types them after the branch: `↑2↓1`
-    /// drift, `*` a dirty tree. `None` when there is nothing to say.
-    pub fn text(&self) -> Option<SharedString> {
-        let mut text = String::new();
-        if self.ahead > 0 {
-            text.push_str(&format!("\u{2191}{}", self.ahead));
-        }
-        if self.behind > 0 {
-            text.push_str(&format!("\u{2193}{}", self.behind));
-        }
-        if self.dirty {
-            text.push('*');
-        }
-        (!text.is_empty()).then(|| text.into())
-    }
 }
 
 /// A drift as a Project heading says it: `↑715`, `↑1 ↓5`; `None` when
@@ -551,37 +499,6 @@ pub fn drift_text(ahead: u32, behind: u32) -> Option<SharedString> {
         .map(|(count, arrow)| format!("{arrow}{count}"))
         .collect();
     (!parts.is_empty()).then(|| parts.join(" ").into())
-}
-
-/// What an Attention list row says at its right (`RowPlace::Line`): its
-/// line 2 in a word, the section's own word left unsaid — what a request
-/// waits for (`approval`), a failing suite, a working Thread's elapsed
-/// time, `background`, and for a finish (or a row the list holds while
-/// the operator is on it) how long ago it was last used — each in the ink
-/// line 2 gives it.
-pub fn line_word(row: &ThreadRow) -> Option<(SharedString, u32)> {
-    let ink = match row.tail {
-        NavTail::Waiting(_) => ATTENTION,
-        NavTail::Failing(_) | NavTail::Failed => BLOCKED,
-        _ => TEXT_DIM,
-    };
-    let text = match &row.tail {
-        NavTail::Done | NavTail::None => Some(row.age.clone()).filter(|age| !age.is_empty()),
-        tail => tail.text(),
-    };
-    text.map(|text| (text, ink))
-}
-
-/// How long ago an idle or unseen-done Thread was last used (`3h`), what a
-/// tree row says at line 1's right when it has no diffstat: a working
-/// Thread's elapsed and a failure's age are line 2's.
-fn meta_age(row: &ThreadRow) -> Option<SharedString> {
-    match &row.tail {
-        NavTail::Age(age) => Some(age.clone()),
-        NavTail::Done => Some(row.age.clone()),
-        _ => None,
-    }
-    .filter(|age| !age.is_empty())
 }
 
 /// What a set of rows rolls up to: the most urgent of them. `None` for
@@ -636,11 +553,14 @@ impl RowPlace {
             }
     }
 
-    /// Where its title starts.
+    /// Where its title starts: an Attention list row's under its section's
+    /// heading, as Claude's list sits under its; a tree row's where its
+    /// level puts it.
     fn title_x(self) -> f32 {
         self.indent()
             + match self {
-                RowPlace::Row(_) | RowPlace::Line => NAV_TITLE_X,
+                RowPlace::Line => NAV_ROW_PAD_X,
+                RowPlace::Row(_) => NAV_TITLE_X,
                 RowPlace::Member(_) => NAV_MEMBER_X,
             }
     }
@@ -672,11 +592,6 @@ impl Measure<'_> {
     /// `text` in Geist at `size` and `weight`.
     pub fn ui(&self, text: &str, size: f32, weight: FontWeight) -> f32 {
         self.width(FONT_UI, text, size, weight)
-    }
-
-    /// `text` in Geist Mono at `size`.
-    pub fn code(&self, text: &str, size: f32) -> f32 {
-        self.width(FONT_CODE, text, size, W_BODY)
     }
 
     fn width(&self, family: &'static str, text: &str, size: f32, weight: FontWeight) -> f32 {
@@ -822,12 +737,11 @@ fn line_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool)
 
 // ------------------------------------------------------------- the marks
 
-/// The row a mark sits in: on line 1 of a two-line row, or centred on a
-/// one-line row at its full size or (a member's) small.
+/// The row a mark sits in, in a view's list: on line 1 of a two-line
+/// Notice row, or small, centred on a machine's one-line row.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MarkSeat {
     TwoLine,
-    OneLine,
     Member,
 }
 
@@ -843,12 +757,10 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
     let (left, top) = match seat {
         MarkSeat::TwoLine if spinner => NAV_SPINNER_AT,
         MarkSeat::TwoLine if dot => NAV_DOT_AT,
-        MarkSeat::OneLine if spinner => NAV_SPINNER_AT_LINE,
-        MarkSeat::OneLine if dot => NAV_DOT_AT_LINE,
         MarkSeat::Member if spinner => NAV_SPINNER_AT_SMALL,
         MarkSeat::Member if dot => NAV_DOT_AT_SMALL,
         MarkSeat::TwoLine => NAV_ICON_AT,
-        MarkSeat::OneLine | MarkSeat::Member => NAV_ICON_AT_LINE,
+        MarkSeat::Member => NAV_ICON_AT_LINE,
     };
     let halo = if status == RowStatus::NeedsYou {
         NAV_HALO
@@ -860,186 +772,6 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
         .left(px(x + left - halo))
         .top(px(top - halo))
         .child(mark(status, small))
-}
-
-/// A diffstat as the terminal world types it, Geist Mono 11.5: `+N` in
-/// `RUNNING`, `−N` in `BLOCKED`, each only when it is not zero.
-fn diffstat_text((added, removed): (usize, usize)) -> Vec<(String, u32)> {
-    let mut parts = Vec::new();
-    if added > 0 {
-        parts.push((format!("+{added}"), RUNNING));
-    }
-    if removed > 0 {
-        parts.push((format!("\u{2212}{removed}"), BLOCKED));
-    }
-    parts
-}
-
-fn diffstat_width(diffstat: Option<(usize, usize)>, measure: &Measure) -> f32 {
-    let parts = diffstat.map(diffstat_text).unwrap_or_default();
-    if parts.is_empty() {
-        return 0.0;
-    }
-    let text = parts
-        .iter()
-        .map(|(text, _)| text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    measure.code(&text, FS_CHROME_CODE) + NAV_WORD_GAP
-}
-
-fn diffstat(stat: (usize, usize), thread: ThreadId) -> Div {
-    div()
-        .debug_selector(move || format!("nav-diffstat-{}", thread.get()))
-        .flex()
-        .flex_shrink_0()
-        .gap(px(measure_space()))
-        .pl(px(NAV_WORD_GAP))
-        .font_family(FONT_CODE)
-        .text_size(px(FS_CHROME_CODE))
-        .line_height(px(NAV_LINE))
-        .children(
-            diffstat_text(stat)
-                .into_iter()
-                .map(|(text, ink)| div().text_color(rgb(ink)).child(text)),
-        )
-}
-
-/// One Geist Mono space at the diffstat's size: between its `+N` and `−N`.
-fn measure_space() -> f32 {
-    FS_CHROME_CODE * 0.6
-}
-
-// ------------------------------------------------------------- line 2
-
-/// A row's PR label at line 2's right: `#N` in line 2's quiet ink (never a
-/// state's: the PR is not why the row waits), then its mark (`pr_mark`).
-fn pr_label(pr: &PrLabel, selected: bool) -> Div {
-    let ink = if selected { NAV_LINE2_SELECTED } else { TEXT_DIM };
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(SPACE_1))
-        .pl(px(NAV_WORD_GAP))
-        .child(components::tabular(
-            div()
-                .text_size(px(FS_META))
-                .line_height(px(NAV_LINE))
-                .text_color(rgb(ink))
-                .child(pr.number_text()),
-        ))
-        .children(pr.mark.map(|mark| pr_mark(mark, ink)))
-}
-
-/// How wide `pr_label` draws, its leading gap aside.
-fn pr_width(pr: &PrLabel, measure: &Measure) -> f32 {
-    measure.ui(&pr.number_text(), FS_META, W_BODY)
-        + pr.mark.map_or(0.0, |_| SPACE_1 + NAV_PR_MARK)
-}
-
-/// Where a PR stands, as one drawn icon at `NAV_PR_MARK`: passing a check,
-/// failing a cross in `BLOCKED` (the one mark with a hue: a failing PR is a
-/// failure, rule 6), pending a dot, a reading on its way the refresh glyph,
-/// merged the merge glyph, closed a crossed circle; the rest in `ink`.
-fn pr_mark(mark: PrMark, ink: u32) -> Div {
-    let glyph = |path: &'static str, ink: u32| icon(path, NAV_PR_MARK, ink).into_any_element();
-    let drawn = match mark {
-        PrMark::Passing => glyph(icons::CHECK, ink),
-        PrMark::Failing => glyph(icons::CLOSE, BLOCKED),
-        PrMark::Checking => glyph(icons::REFRESH, ink),
-        PrMark::Merged => glyph(icons::GIT_MERGE, ink),
-        PrMark::Closed => glyph(icons::X_CIRCLE, ink),
-        PrMark::Pending => div()
-            .size(px(NAV_PR_DOT))
-            .rounded_full()
-            .bg(rgb(ink))
-            .into_any_element(),
-    };
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(NAV_PR_MARK))
-        .child(drawn)
-}
-
-/// A Thread row's line 2 (§5.1.5), in the parts a short row gives up:
-/// its lead (the branch, or the state's words), its time (a working
-/// Thread's elapsed, a failure's age) and its details (`↑2↓1*`), and the
-/// ink the whole line takes.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LineTwo {
-    pub lead: String,
-    pub time: Option<String>,
-    pub details: Option<String>,
-    pub ink: u32,
-}
-
-impl LineTwo {
-    pub fn of(row: &ThreadRow) -> Self {
-        let branch = row.branch.as_deref().unwrap_or_default().to_string();
-        let plain = |lead: String| LineTwo {
-            lead,
-            time: None,
-            details: None,
-            ink: TEXT_DIM,
-        };
-        match &row.tail {
-            NavTail::Waiting(kind) => LineTwo {
-                ink: ATTENTION,
-                ..plain(format!("{} \u{b7} {kind}", words::NEEDS_YOU))
-            },
-            NavTail::Failed => LineTwo {
-                time: (!row.age.is_empty()).then(|| row.age.to_string()),
-                ink: BLOCKED,
-                ..plain(words::FAILED.to_string())
-            },
-            failing @ NavTail::Failing(_) => plain(failing.text().unwrap_or_default().to_string()),
-            NavTail::Working(elapsed) => LineTwo {
-                time: (!elapsed.is_empty()).then(|| elapsed.to_string()),
-                ..plain(branch)
-            },
-            _ => LineTwo {
-                details: row.details.text().map(|text| text.to_string()),
-                ..plain(branch)
-            },
-        }
-    }
-
-    /// The line at its fullest, then without its details, then without
-    /// its time: what a row too short for the whole gives up, in that
-    /// order. The lead is cut last, with an ellipsis.
-    pub fn candidates(&self) -> Vec<String> {
-        let join = |time: bool, details: bool| {
-            let mut text = self.lead.clone();
-            if let Some(time) = self.time.as_ref().filter(|_| time) {
-                if !text.is_empty() {
-                    text.push_str(" \u{b7} ");
-                }
-                text.push_str(time);
-            }
-            if let Some(details) = self.details.as_ref().filter(|_| details) {
-                if !text.is_empty() {
-                    text.push(' ');
-                }
-                text.push_str(details);
-            }
-            text
-        };
-        vec![join(true, true), join(true, false), join(false, false)]
-    }
-
-    /// The fullest candidate that fits, else the lead (which its box cuts).
-    pub fn fit(&self, fits: impl Fn(&str) -> bool) -> String {
-        let candidates = self.candidates();
-        candidates
-            .iter()
-            .find(|text| fits(text))
-            .unwrap_or_else(|| candidates.last().expect("three candidates"))
-            .clone()
-    }
 }
 
 // ------------------------------------------------------------- the column
@@ -1288,8 +1020,9 @@ fn chord_glyphs(keys: &str) -> String {
 
 // ------------------------------------------------------------- headings
 
-/// A section heading (§5.1.3): `Projects`, `Groups`, `Recent`, in 12/500
-/// `TEXT_DIM`, with its button (`heading_button`) at the right.
+/// A section heading (§5.1.3): `Projects`, `Groups`, `Recent`, small and
+/// quiet — 12/400 `TEXT_DIM` — with its button (`heading_button`) at the
+/// right.
 pub fn heading(key: &'static str, label: &'static str) -> Div {
     heading_frame(key)
         .text_color(rgb(TEXT_DIM))
@@ -1307,19 +1040,17 @@ fn heading_frame(key: &'static str) -> Div {
         .pl(px(NAV_ROW_PAD_X))
         .pr(px(NAV_HEADING_PAD_R))
         .text_size(px(FS_META))
-        .font_weight(W_LABEL)
+        .font_weight(W_BODY)
 }
 
 /// A heading whose press folds what it heads (an Attention list section,
 /// `Groups`): `heading`'s line, its label blending to `TEXT` under the
-/// pointer, and after the label the fold chevron
-/// (`components::fold_chevron`), turning as the fold flips. It shows under
-/// the pointer, and always while folded, so a shut section says so. The
-/// cockpit wires the press.
+/// pointer, and right after the label its caret (`components::fold_chevron`
+/// at `NAV_HEADING_CARET`): `▸` shut, `▾` open, turning as the fold flips.
+/// The cockpit wires the press.
 pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Stateful<Div> {
     let blend = SharedString::from(key);
     let t = motion::hover_t(&blend);
-    let shown = if folded { 1.0 } else { t };
     heading_frame(key)
         .id(key)
         .text_color(motion::mix(rgb(TEXT_DIM).into(), rgb(TEXT).into(), t))
@@ -1335,11 +1066,10 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
                     div()
                         .debug_selector(move || format!("{key}-chevron"))
                         .flex()
-                        .opacity(shown)
                         .child(components::fold_chevron(
                             format!("{key}-chevron"),
                             !folded,
-                            NAV_CHEVRON,
+                            NAV_HEADING_CARET,
                             TEXT_DIM,
                         )),
                 ),
@@ -1352,9 +1082,8 @@ pub fn heading_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
 }
 
 /// A row's hover action (§5.1.5): a line-high icon button that stands at
-/// the right of the row's first line while the pointer is over the row, in
-/// place of what that line says there (a Thread row's park, a Project
-/// heading's new Thread). The cockpit wires its press, which must stop at
+/// the right of the row while the pointer is over it, in place of what the
+/// row says there (a Thread row's `⋯`, a Project heading's new Thread). The cockpit wires its press, which must stop at
 /// the button: the row under it opens, folds or drags.
 pub fn row_action(key: impl Into<SharedString>, glyph: &'static str) -> Stateful<Div> {
     // Its glyph, not its box, meets the row's right padding, where the
@@ -1490,6 +1219,35 @@ pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
         )
 }
 
+/// the tree's edge fades (`EDGE_FADE`), in `paint::FRAME`: at the top once it
+/// has scrolled, at the foot while rows remain below, so no row is cut
+/// mid-glyph against the head or the foot. Siblings of the tree, laid before
+/// the scrollbar so they never cover its thumb.
+pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
+    let y = scroll.offset().y;
+    let below = scroll.max_offset().y + y > px(0.);
+    let fill = paint::FRAME.hsla();
+    let top = (y < px(0.)).then(|| {
+        div()
+            .debug_selector(|| "nav-fade-top".into())
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .child(components::edge_fade(fill, false))
+    });
+    let foot = below.then(|| {
+        div()
+            .debug_selector(|| "nav-fade-foot".into())
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .child(components::edge_fade(fill, true))
+    });
+    top.into_iter().chain(foot).collect()
+}
+
 /// One section, a Project's or the Attention list's: its heading, then
 /// everything under it, `NAV_SECTION_GAP` below the section above it.
 pub fn section(first: bool) -> Div {
@@ -1554,7 +1312,6 @@ pub fn group_row(row: &GroupBlock, depth: usize) -> Stateful<Div> {
         group_fold(row),
         depth,
         0,
-        &Measure::Cells(7.0),
     )
 }
 
@@ -1571,21 +1328,13 @@ pub fn group_row_with_title(
     fold: Stateful<Div>,
     depth: usize,
     ends: usize,
-    measure: &Measure,
 ) -> Stateful<Div> {
     let id = row.id;
     let key = SharedString::from(format!("nav-group-{}", id.get()));
-    let word = (!row.selected).then(|| RollUp::of(&row.members)).flatten();
-    let count = threads_count(row.members.len());
-    let count_text = if word.is_some() {
-        format!("\u{b7} {count}")
-    } else {
-        count
-    };
-    let right_w = word.as_ref().map_or(0.0, |word| {
-        measure.ui(&word.text, FS_META, W_BODY) + NAV_WORD_GAP
-    }) + measure.ui(&count_text, FS_META, W_BODY)
-        + NAV_WORD_GAP;
+    // What its members roll up to, as one mark (`state_mark`): the
+    // Group's row is as quiet as a Thread's.
+    let mark = roll_up(&row.members).and_then(state_mark);
+    let right_w = if mark.is_some() { RIGHT_ROOM } else { 0.0 };
     let (ink, weight) = if row.selected {
         (TEXT_STRONG, W_LABEL)
     } else {
@@ -1613,26 +1362,9 @@ pub fn group_row_with_title(
             weight,
             title,
         ))
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .justify_end()
-                .children(word.map(|word| trailing(word.text, FS_META, word.ink)))
-                .child(
-                    components::tabular(trailing(count_text, FS_META, TEXT_DIM))
-                        .debug_selector(move || format!("nav-group-count-{}", id.get())),
-                ),
-        )
-}
-
-/// How many Threads a Group holds, said as a count of them (`4 threads`):
-/// beside a roll-up's word a bare number read as part of it (`1 failed · 4`).
-fn threads_count(count: usize) -> String {
-    match count {
-        1 => "1 thread".to_string(),
-        count => format!("{count} threads"),
-    }
+        .children(mark.map(|mark| {
+            at_right(mark.debug_selector(move || format!("nav-group-state-{}", id.get())).into_any_element())
+        }))
 }
 
 /// A Group row's chevron, at x 11 from where its row's content starts:
@@ -1738,7 +1470,6 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
         None,
         false,
         0,
-        &Measure::Cells(7.0),
     )
 }
 
@@ -1757,19 +1488,19 @@ fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
     }
 }
 
-/// The one Thread row builder, with the title leaf supplied by the caller —
-/// see `group_row_with_title`. As a `RowPlace::Row`, two lines (§5.1.5):
-/// the mark, the title and the diffstat, then line 2 (`LineTwo`) and the
-/// PR's label. With nothing for line 2, one 30px line. Under the shown
-/// Group (`RowPlace::Member`), one line: the mark at 35, the title, and
-/// its state's word (`NavTail::member_word`). Line 1's right says the
-/// diffstat, else how long ago the Thread was last used (`meta_age`); under
-/// the pointer a two-line or Attention row's `action` (`row_action`, the
-/// cockpit's park) stands there instead. `group` scopes the row's blend
-/// when the Thread is listed under several Groups. `editing` is a rename in
-/// progress: the field takes the title's box. The row draws the guides of
-/// the levels it hangs under (`guides`), the innermost `ends` of them
-/// ending at it.
+/// The one Thread row builder, with the title leaf supplied by the caller
+/// — see `group_row_with_title`. Every row is one quiet line (§5.1.5),
+/// the title and nothing else, as Claude's and Codex's lists: where a
+/// Thread works and what its PR says live in its Pane and the panel. At
+/// its right one mark says what needs saying (`state_mark`: the needs-you
+/// dot, a failure's, the working spinner); under the pointer its `action`
+/// (`row_action`, the cockpit's `⋯`) stands there instead. An Attention
+/// list row (`RowPlace::Line`) keeps its own blend and selectors
+/// (`nav-list-row-N`) apart from its tree row's. `group` scopes the row's
+/// blend when the Thread is listed under several Groups. `editing` is a
+/// rename in progress: the field takes the title's box. A tree row draws
+/// the guides of the levels it hangs under (`guides`), the innermost
+/// `ends` of them ending at it.
 pub fn thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
@@ -1778,17 +1509,22 @@ pub fn thread_row_with_title(
     group: Option<GroupId>,
     editing: bool,
     ends: usize,
-    measure: &Measure,
 ) -> Stateful<Div> {
     let thread = row.thread;
-    if place == RowPlace::Line {
-        return line_row(row, title, action, measure);
-    }
-    let key = SharedString::from(format!(
-        "nav-thread-{}-{}",
-        group.map_or(0, GroupId::get),
-        thread.get()
-    ));
+    let line = place == RowPlace::Line;
+    let (id, key, title_id): (&'static str, SharedString, &'static str) = if line {
+        (
+            "nav-list-row",
+            format!("nav-list-row-{}", thread.get()).into(),
+            "nav-list-title",
+        )
+    } else {
+        (
+            "nav-thread",
+            format!("nav-thread-{}-{}", group.map_or(0, GroupId::get), thread.get()).into(),
+            "nav-title",
+        )
+    };
     // The shown Group's row carries the selection: its focused member
     // says so in its title's ink alone.
     let member = matches!(place, RowPlace::Member(_));
@@ -1797,179 +1533,83 @@ pub fn thread_row_with_title(
         (ink, _) if member => (ink, W_BODY),
         face => face,
     };
-    let text_w = place.text_w();
     let cover = if filled { 1.0 } else { motion::hover_t(&key) };
     let action = action.filter(|_| !editing && hovered(&key));
-    let guides = guides(
-        &format!("nav-guide-{}", thread.get()),
-        place.levels(),
-        ends,
-        cover,
-    );
-    let frame = row_frame(("nav-thread", thread.get() as usize), key, filled)
-        .debug_selector(move || format!("nav-thread-{}", thread.get()))
-        .pl(px(place.title_x()))
-        .pr(px(NAV_ROW_PAD_X))
-        .children(guides);
-    if let RowPlace::Member(_) = place {
-        let word = (!editing).then(|| row.tail.member_word()).flatten();
-        let word_w = word.as_ref().map_or(0.0, |(text, _)| {
-            measure.ui(text, FS_META, W_BODY) + NAV_WORD_GAP
-        });
-        return frame
-            .flex_row()
-            .items_center()
-            .h(px(NAV_ROW_H))
-            .child(mark_at(row.status, place.mark_x(), MarkSeat::Member))
-            .child(
-                fitted(text_w - word_w, FS_UI, ink, weight, title)
-                    .debug_selector(move || format!("nav-title-{}", thread.get())),
+    let mark = (!editing && action.is_none())
+        .then(|| state_mark(row.status))
+        .flatten();
+    let title_w = title_w(place, action.is_some() || mark.is_some());
+    let guides = (!line)
+        .then(|| {
+            guides(
+                &format!("nav-guide-{}", thread.get()),
+                place.levels(),
+                ends,
+                cover,
             )
-            .children(word.map(|(text, ink)| {
-                div()
-                    .flex()
-                    .flex_1()
-                    .justify_end()
-                    .debug_selector(move || format!("nav-since-{}", thread.get()))
-                    .child(trailing(text, FS_META, ink))
-            }));
-    }
-    let stat = row
-        .diffstat
-        .filter(|_| !editing && action.is_none())
-        .filter(|stat| !diffstat_text(*stat).is_empty());
-    let age = meta_age(row).filter(|_| !editing && action.is_none() && stat.is_none());
-    let right_w = if action.is_some() {
-        NAV_LINE + NAV_WORD_GAP
-    } else if let Some(age) = &age {
-        measure.ui(age, FS_META, W_BODY) + NAV_WORD_GAP
-    } else {
-        diffstat_width(stat, measure)
-    };
-    let line_one = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .h(px(NAV_LINE))
-        .child(
-            fitted(text_w - right_w, FS_UI, ink, weight, title)
-                .debug_selector(move || format!("nav-title-{}", thread.get())),
-        )
-        .children(stat.map(|stat| diffstat(stat, thread)))
-        .children(age.map(|age| {
-            div()
-                .flex()
-                .flex_1()
-                .justify_end()
-                .debug_selector(move || format!("nav-age-{}", thread.get()))
-                .child(components::tabular(trailing(age, FS_META, TEXT_DIM)))
-        }))
-        .children(action.map(at_right));
-    let two = LineTwo::of(row);
-    let pr = row.details.pr.clone();
-    let pr_w = pr.as_ref().map_or(0.0, |pr| pr_width(pr, measure) + NAV_WORD_GAP);
-    let room = text_w - pr_w;
-    let text = two.fit(|text| measure.ui(text, FS_META, W_BODY) <= room);
-    // Only as tall as its content: with nothing for line 2, one line.
-    if text.is_empty() && pr.is_none() {
-        return frame
-            .flex_row()
-            .items_center()
-            .h(px(NAV_ROW_H))
-            .child(mark_at(row.status, place.mark_x(), MarkSeat::OneLine))
-            .child(line_one);
-    }
-    let line_ink = if row.selected && two.ink == TEXT_DIM {
-        NAV_LINE2_SELECTED
-    } else {
-        two.ink
-    };
-    let line_two = div()
-        .debug_selector(move || format!("nav-line2-{}", thread.get()))
-        .flex()
-        .flex_row()
-        .items_center()
-        .h(px(NAV_LINE))
-        .child(fitted(
-            room,
-            FS_META,
-            line_ink,
-            W_BODY,
-            SharedString::from(text),
-        ))
-        .children(pr.map(|pr| {
-            div()
-                .flex()
-                .flex_1()
-                .justify_end()
-                .debug_selector(move || format!("nav-pr-{}", thread.get()))
-                .child(pr_label(&pr, row.selected))
-        }));
-    frame
-        .flex_col()
-        .justify_center()
-        .h(px(NAV_ROW2_H))
-        .child(mark_at(row.status, place.mark_x(), MarkSeat::TwoLine))
-        .child(line_one)
-        .child(line_two)
-}
-
-/// An Attention list row (`RowPlace::Line`): the tree row's frame, its
-/// mark and title on one line, and its `line_word` at the right in tabular
-/// figures, so a ticking elapsed time never shuffles. Its own blend and
-/// selectors (`nav-list-row-N`), apart from its tree row's.
-fn line_row(
-    row: &ThreadRow,
-    title: impl IntoElement,
-    action: Option<AnyElement>,
-    measure: &Measure,
-) -> Stateful<Div> {
-    let thread = row.thread;
-    let place = RowPlace::Line;
-    let key = SharedString::from(format!("nav-list-row-{}", thread.get()));
-    let (ink, weight) = title_face(row);
-    let action = action.filter(|_| hovered(&key));
-    let word = line_word(row).filter(|_| action.is_none());
-    let word_w = match (&word, &action) {
-        (_, Some(_)) => NAV_LINE + NAV_WORD_GAP,
-        (Some((text, _)), None) => measure.ui(text, FS_META, W_BODY) + NAV_WORD_GAP,
-        (None, None) => 0.0,
-    };
-    row_frame(("nav-list-row", thread.get() as usize), key, row.selected)
-        .debug_selector(move || format!("nav-list-row-{}", thread.get()))
+        })
+        .flatten();
+    row_frame((id, thread.get() as usize), key, filled)
+        .debug_selector(move || format!("{id}-{}", thread.get()))
         .flex_row()
         .items_center()
         .h(px(NAV_ROW_H))
         .pl(px(place.title_x()))
         .pr(px(NAV_ROW_PAD_X))
-        .child(mark_at(row.status, place.mark_x(), MarkSeat::OneLine))
+        .children(guides)
         .child(
-            fitted(place.text_w() - word_w, FS_UI, ink, weight, title)
-                .debug_selector(move || format!("nav-list-title-{}", thread.get())),
+            fitted(title_w, FS_UI, ink, weight, title)
+                .debug_selector(move || format!("{title_id}-{}", thread.get())),
         )
-        .children(word.map(|(text, ink)| {
-            div()
-                .flex()
-                .flex_1()
-                .justify_end()
-                .debug_selector(move || format!("nav-list-word-{}", thread.get()))
-                .child(components::tabular(trailing(text, FS_META, ink)))
+        .children(mark.map(|mark| {
+            at_right(mark.debug_selector(move || format!("nav-state-{}", thread.get())).into_any_element())
         }))
         .children(action.map(at_right))
 }
 
-/// An Attention list section's head (§5.1.3's grammar: `Projects`,
-/// `Recent`): its label, and at its right how many rows it holds, in
-/// tabular figures — kept while it is folded, the head then all there is
-/// (`fold_heading`). The cockpit wires its press to the fold.
-pub fn list_heading(section: ListSection, count: usize, folded: bool) -> Stateful<Div> {
-    let key = section.key();
-    fold_heading(key, section.label(), folded).child(
-        // At a row's right padding, under the counts and words beside it.
-        components::tabular(trailing(count.to_string(), FS_META, TEXT_DIM))
-            .pr(px(NAV_ROW_PAD_X - NAV_HEADING_PAD_R))
-            .debug_selector(move || format!("{key}-count")),
+/// What a row says at its right, where its `⋯` stands under the pointer:
+/// the needs-you dot (the one orange on the list), a failure's red dot,
+/// background work's dot, or the working spinner (the one thing that
+/// moves). Idle, unseen-done (its title says so, `title_face`) and parked
+/// rows say nothing.
+pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
+    matches!(
+        status,
+        RowStatus::NeedsYou
+            | RowStatus::Failed
+            | RowStatus::Background
+            | RowStatus::Working
+            | RowStatus::Failing
     )
+    .then(|| {
+        // The `⋯` glyph's box, so the two centre on one spot.
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(px(NAV_HEADING_GLYPH))
+            .child(mark(status, true))
+    })
+}
+
+/// What a row's title gives up while its right holds a mark or its `⋯`
+/// (`row_action`): the glyph's box, out to where the button's box meets
+/// the row's padding, and `NAV_MARK_GAP` before it. Nothing while it holds
+/// neither: the title takes the line.
+const RIGHT_ROOM: f32 = NAV_LINE - (NAV_LINE - NAV_HEADING_GLYPH) / 2.0 + NAV_MARK_GAP;
+
+/// How wide a Thread row's title box is at `place`, whether its right
+/// holds a mark or a `⋯`.
+pub fn title_w(place: RowPlace, marked: bool) -> f32 {
+    place.text_w() - if marked { RIGHT_ROOM } else { 0.0 }
+}
+
+/// An Attention list section's head (§5.1.3's grammar: `Projects`,
+/// `Recent`): its label and caret (`fold_heading`), no count — its rows
+/// say how many. The cockpit wires its press to the fold.
+pub fn list_heading(section: ListSection, folded: bool) -> Stateful<Div> {
+    fold_heading(section.key(), section.label(), folded)
 }
 
 /// The Attention list: its sections' heads and rows, flush, `NAV_SECTION_GAP`
@@ -2308,9 +1948,17 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
 
 // ------------------------------------------------------------- the foot
 
-/// The foot (§5.1.8): `Ferrite` and the version in 12 `TEXT_DIM`, and
-/// the gear.
-pub fn foot(version: &str, gear: impl IntoElement) -> Div {
+/// The foot (§5.1.8), Claude's account row: who is at the machine — their
+/// initial on a `NAV_AVATAR` disc and their name in 13 `TEXT_MUTED` — and
+/// the gear. The version shows under the pointer, as an app's About would.
+pub fn foot(user: &str, version: &str, gear: impl IntoElement) -> Div {
+    let initial: SharedString = user
+        .chars()
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>())
+        .unwrap_or_default()
+        .into();
+    let about = SharedString::from(format!("Ferrite {}", short_version(version)));
     div()
         .debug_selector(|| "nav-foot".into())
         .flex()
@@ -2322,14 +1970,37 @@ pub fn foot(version: &str, gear: impl IntoElement) -> Div {
         .pr(px(NAV_HEAD_PAD_R))
         .child(
             div()
-                .debug_selector(|| "nav-version".into())
+                .id("nav-account")
+                .debug_selector(|| "nav-account".into())
+                .flex()
                 .flex_1()
-                .text_size(px(FS_META))
-                .text_color(rgb(TEXT_DIM))
-                .child(SharedString::from(format!(
-                    "Ferrite {}",
-                    short_version(version)
-                ))),
+                .min_w_0()
+                .items_center()
+                .gap(px(NAV_ICON_GAP - (NAV_AVATAR - NAV_ICON)))
+                .tooltip(ferrite_ui::menu::tooltip(about))
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .size(px(NAV_AVATAR))
+                        .rounded_full()
+                        .bg(paint::SELECTED)
+                        .text_size(px(FS_AVATAR))
+                        .font_weight(W_LABEL)
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(initial),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(FS_UI))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(user.to_string())),
+                ),
         )
         .child(gear)
 }
@@ -2484,10 +2155,6 @@ mod tests {
             name: "thread-08".into(),
             project: Some("ferrite".into()),
             selected,
-            branch: Some("main".into()),
-            diffstat: None,
-            age: "2h".into(),
-            details: RowDetails::default(),
             tail: NavTail::Age("2h".into()),
         }
     }
@@ -2517,8 +2184,8 @@ mod tests {
         }
     }
 
-    /// The row grammar (§5.1): rounded rows, a Thread two lines at 44 with
-    /// its title at 35, a Group and a Project heading one line at 30, a
+    /// The row grammar (§5.1): rounded rows, a Thread one quiet line at 30
+    /// with its title at 35, a Group and a Project heading one line too, a
     /// Project section 6px below the one above it.
     #[test]
     fn nav_rows_are_rounded_two_line_and_one_line() {
@@ -2529,7 +2196,7 @@ mod tests {
             Some(px(R_CONTROL).into()),
             "radius 7"
         );
-        assert_eq!(style.size.height, Some(px(NAV_ROW2_H).into()));
+        assert_eq!(style.size.height, Some(px(NAV_ROW_H).into()));
         assert_eq!(style.padding.left, Some(px(NAV_TITLE_X).into()));
         assert_eq!(style.padding.right, Some(px(NAV_ROW_PAD_X).into()));
         let mut row = group_row(&group(false, false), 0);
@@ -2580,7 +2247,6 @@ mod tests {
                 Some(GroupId::new(1)),
                 false,
                 0,
-                &Measure::Cells(7.0)
             )),
             None,
             "an unfocused member carries no fill"
@@ -2617,39 +2283,6 @@ mod tests {
             cursor(project_section(0, &heading_of(false), None, &Measure::Cells(7.0))),
             None
         );
-    }
-
-    /// Line 2 by state (§5.1.5): what a blocked row waits for in
-    /// `ATTENTION`, a failure and its age in `BLOCKED`, red tests, a
-    /// working row's branch and elapsed, otherwise the branch and its
-    /// details.
-    #[test]
-    fn line_two_says_where_a_row_is_or_why_it_waits() {
-        let with = |tail: NavTail| LineTwo::of(&ThreadRow { tail, ..thread() });
-        let waiting = with(NavTail::Waiting(words::APPROVAL));
-        assert_eq!(waiting.candidates()[0], "needs you \u{b7} approval");
-        assert_eq!(waiting.ink, ATTENTION);
-        let failed = with(NavTail::Failed);
-        assert_eq!(failed.candidates()[0], "failed \u{b7} 2h");
-        assert_eq!(failed.ink, BLOCKED);
-        assert_eq!(with(NavTail::Failing(Some(3))).candidates()[0], "failing 3");
-        let working = with(NavTail::Working("5m22s".into()));
-        assert_eq!(working.candidates()[0], "main \u{b7} 5m22s");
-        assert_eq!(working.ink, TEXT_DIM);
-        let idle = LineTwo::of(&ThreadRow {
-            details: RowDetails {
-                ahead: 2,
-                behind: 1,
-                dirty: true,
-                pr: Some(PrLabel {
-                    number: 12,
-                    mark: Some(PrMark::Passing),
-                }),
-            },
-            ..thread()
-        });
-        assert_eq!(idle.candidates()[0], "main \u{2191}2\u{2193}1*");
-        assert_eq!(idle.candidates()[1], "main", "the details go first");
     }
 
     /// The Parked, Working and Done views group their rows as the tree
@@ -2711,120 +2344,45 @@ mod tests {
         );
     }
 
-    /// A row is only as tall as its content (§5.1.5): with nothing for
-    /// line 2 — no branch, no state's words, no PR — it is one 30px line,
-    /// its mark centred on it; anything for line 2 makes it two.
+    /// Every Thread row is the one 30px line whatever arrives (§5.1.5):
+    /// a word, a mark, a member's place. The rail keeps its cell.
     #[test]
-    fn a_row_with_nothing_for_line_two_is_one_line() {
+    fn every_row_is_one_line_whatever_its_facts() {
         let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
-        let bare = ThreadRow {
-            branch: None,
-            tail: NavTail::None,
-            diffstat: Some((695, 0)),
-            ..thread()
-        };
-        assert_eq!(height(thread_row(&bare)), Some(px(NAV_ROW_H).into()));
-        for status in [RowStatus::Idle, RowStatus::Working, RowStatus::NeedsYou] {
-            let row = ThreadRow {
-                status,
-                ..bare.clone()
-            };
-            assert_eq!(height(thread_row(&row)), Some(px(NAV_ROW_H).into()));
-        }
-        let two = Some(px(NAV_ROW2_H).into());
-        let with_pr = ThreadRow {
-            details: RowDetails {
-                pr: Some(PrLabel {
-                    number: 91,
-                    mark: None,
-                }),
-                ..Default::default()
-            },
-            ..bare.clone()
-        };
-        assert_eq!(height(thread_row(&with_pr)), two, "a PR is line 2");
-        let waiting = ThreadRow {
-            tail: NavTail::Waiting(words::APPROVAL),
-            ..bare.clone()
-        };
-        assert_eq!(height(thread_row(&waiting)), two, "a reason is line 2");
-        let on_branch = ThreadRow {
-            branch: Some("main".into()),
-            ..bare
-        };
-        assert_eq!(height(thread_row(&on_branch)), two, "a branch is line 2");
-    }
-
-    /// Truncation order (§5.1.5): the details go, then the time, then the
-    /// branch is cut — the PR's label stays.
-    #[test]
-    fn a_short_line_two_drops_details_then_time() {
-        let two = LineTwo {
-            lead: "scheduled-work-crash".into(),
-            time: Some("5m22s".into()),
-            details: Some("\u{2191}2*".into()),
-            ink: TEXT_DIM,
-        };
-        let fits = |room: usize| move |text: &str| text.chars().count() <= room;
-        assert_eq!(
-            two.fit(fits(40)),
-            "scheduled-work-crash \u{b7} 5m22s \u{2191}2*"
-        );
-        assert_eq!(two.fit(fits(28)), "scheduled-work-crash \u{b7} 5m22s");
-        assert_eq!(two.fit(fits(22)), "scheduled-work-crash");
-        assert_eq!(two.fit(fits(4)), "scheduled-work-crash", "its box cuts it");
-    }
-
-    /// Every Thread row with a line 2 is the one 44px pair of lines
-    /// whatever arrives: a word, a mark, its checkout's facts. A task row
-    /// adds its lines.
-    #[test]
-    fn every_row_keeps_its_height_whatever_its_facts() {
-        let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
-        let two = Some(px(NAV_ROW2_H).into());
-        let bare = ThreadRow {
-            tail: NavTail::None,
-            ..thread()
-        };
-        assert_eq!(height(thread_row(&bare)), two);
+        let one = Some(px(NAV_ROW_H).into());
         for tail in [
+            NavTail::None,
             NavTail::Waiting(words::APPROVAL),
             NavTail::Failing(Some(12)),
             NavTail::Failed,
             NavTail::Done,
             NavTail::Working("1m04s".into()),
         ] {
-            assert_eq!(
-                height(thread_row(&ThreadRow {
-                    tail: tail.clone(),
-                    ..bare.clone()
-                })),
-                two,
-                "{tail:?}"
-            );
+            let row = ThreadRow {
+                tail: tail.clone(),
+                ..thread()
+            };
+            assert_eq!(height(thread_row(&row)), one, "{tail:?}");
         }
-        for status in [RowStatus::Working, RowStatus::Done, RowStatus::Parked] {
-            assert_eq!(
-                height(thread_row(&ThreadRow {
-                    status,
-                    diffstat: Some((4, 1)),
-                    ..bare.clone()
-                })),
-                two,
-                "{status:?}"
-            );
+        for status in [
+            RowStatus::Working,
+            RowStatus::NeedsYou,
+            RowStatus::Done,
+            RowStatus::Parked,
+        ] {
+            let row = ThreadRow { status, ..thread() };
+            assert_eq!(height(thread_row(&row)), one, "{status:?}");
         }
-        let mut member = thread_row_with_title(
-            &bare,
+        let member = thread_row_with_title(
+            &thread(),
             "thread-08",
             None,
             RowPlace::Member(0),
             None,
             false,
             0,
-            &Measure::Cells(7.0),
         );
-        assert_eq!(member.style().size.height, Some(px(NAV_ROW_H).into()));
+        assert_eq!(height(member), one);
         let rail = RailRow {
             key: Some(9),
             thread: ThreadId::new(9),
@@ -2835,6 +2393,25 @@ mod tests {
             rail_row(&rail).style().size.height,
             Some(px(NAV_RAIL_CELL).into())
         );
+    }
+
+    /// A row's right says one thing (§5.1.5): the needs-you dot, a
+    /// failure's, the working spinner; idle, unseen-done and parked rows
+    /// say nothing there.
+    #[test]
+    fn only_a_state_worth_saying_marks_the_right() {
+        for status in [
+            RowStatus::NeedsYou,
+            RowStatus::Failed,
+            RowStatus::Background,
+            RowStatus::Working,
+            RowStatus::Failing,
+        ] {
+            assert!(state_mark(status).is_some(), "{status:?}");
+        }
+        for status in [RowStatus::Idle, RowStatus::Done, RowStatus::Parked] {
+            assert!(state_mark(status).is_none(), "{status:?}");
+        }
     }
 
     /// A Group's roll-up (§5.1.6): how many need the operator, else how
@@ -2954,24 +2531,6 @@ mod tests {
             let tail = NavTail::of(RowStatus::Idle, None, age);
             assert_eq!(tail.text(), None, "{secs}s says nothing");
         }
-    }
-
-    /// A row's checkout facts are terse and fixed in order — drift, then
-    /// dirt — and a clean, even checkout says nothing.
-    #[test]
-    fn the_checkout_facts_are_terse() {
-        let details = |ahead, behind, dirty| RowDetails {
-            ahead,
-            behind,
-            dirty,
-            pr: None,
-        };
-        assert_eq!(details(0, 0, false).text(), None);
-        assert_eq!(
-            details(2, 1, true).text(),
-            Some("\u{2191}2\u{2193}1*".into())
-        );
-        assert_eq!(details(0, 3, false).text(), Some("\u{2193}3".into()));
     }
 
     /// The marks (§6): a spinner for work, the blocked dot's halo, a red
@@ -3115,7 +2674,7 @@ mod tests {
 
     /// The foot names the app and its major and minor version.
     #[test]
-    fn the_foot_says_ferrite_and_its_version() {
+    fn the_foot_shortens_the_version_and_a_branch() {
         assert_eq!(short_version("0.5.0"), "0.5");
         assert_eq!(short_version("1.12.3-beta"), "1.12");
         assert_eq!(short_branch("dev").as_ref(), "dev");

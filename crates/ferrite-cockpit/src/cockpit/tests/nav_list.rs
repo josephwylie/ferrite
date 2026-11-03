@@ -2,11 +2,11 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// A Thread row is two lines (§5.1.5): the title at 35 on line 1 (one
-/// tree level further in, under its Project), line 2 under it on the
-/// same edge, 44 high together, and no provider logo.
+/// A Thread row is one quiet line (§5.1.5): the title at 35 (one tree
+/// level further in, under its Project), 30 high, nothing under it and no
+/// provider logo.
 #[gpui::test]
-fn a_thread_row_is_two_lines_on_one_edge(cx: &mut TestAppContext) {
+fn a_thread_row_is_one_quiet_line(cx: &mut TestAppContext) {
     let (core, _) = cockpit("nav-age-align", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
@@ -16,9 +16,8 @@ fn a_thread_row_is_two_lines_on_one_edge(cx: &mut TestAppContext) {
 
     let id = |name: &str| -> &'static str { format!("{name}-{}", thread.get()).leak() };
     let row = cx.debug_bounds(id("nav-thread")).expect("the row");
-    let title = cx.debug_bounds(id("nav-title")).expect("line 1");
-    let two = cx.debug_bounds(id("nav-line2")).expect("line 2");
-    assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_ROW2_H));
+    let title = cx.debug_bounds(id("nav-title")).expect("its title");
+    assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_ROW_H));
     assert!(
         (title.left()
             - (row.left()
@@ -27,8 +26,6 @@ fn a_thread_row_is_two_lines_on_one_edge(cx: &mut TestAppContext) {
             < px(0.5),
         "the title at 35, a level in: {title:?} in {row:?}"
     );
-    assert!((two.left() - title.left()).abs() < px(0.5), "one edge");
-    assert!(two.top() >= title.bottom() - px(0.5), "line 2 under line 1");
     assert!(
         cx.debug_bounds(id("nav-mark")).is_none(),
         "no provider logo on a nav row"
@@ -133,9 +130,9 @@ fn the_needs_you_view_lists_the_queue_in_the_trees_place(cx: &mut TestAppContext
     let second = cx.debug_bounds("notice-row-1").expect("then the next");
     assert!(first.top() < second.top());
     let row = |thread: ThreadId| -> &'static str { format!("nav-thread-{}", thread.get()).leak() };
-    let oldest = cx.debug_bounds(row(threads[2])).expect("a two-line row");
+    let oldest = cx.debug_bounds(row(threads[2])).expect("its row");
     assert!(first.contains(&oldest.center()), "oldest first");
-    assert_eq!(oldest.size.height, px(ferrite_ui::theme::NAV_ROW2_H));
+    assert_eq!(oldest.size.height, px(ferrite_ui::theme::NAV_ROW_H));
     // The queue stays flat: no Project heading, no guide, every row at
     // the root, so its order is the queue's.
     assert!(cx.debug_bounds("nav-view-project-0").is_none());
@@ -306,9 +303,7 @@ fn the_attention_list_lists_needs_you_then_done_then_working(cx: &mut TestAppCon
         at(cx, "nav-list".into()).bottom() <= projects.top(),
         "over Projects"
     );
-    let count = cx.debug_bounds("nav-list-done-count").expect("its count");
-    assert!(count.right() > heads[1].center().x, "at the head's right");
-    // One line each, its word at the right; its own row stays below.
+    // One line each; its own row stays below.
     for thread in [threads[4], threads[3], threads[5]] {
         let row = at(cx, format!("nav-list-row-{}", thread.get()));
         assert_eq!(
@@ -318,18 +313,13 @@ fn the_attention_list_lists_needs_you_then_done_then_working(cx: &mut TestAppCon
         );
         assert!(at(cx, format!("nav-thread-{}", thread.get())).top() >= projects.bottom());
     }
-    let word = at(cx, format!("nav-list-word-{}", threads[4].get()));
+    // A request's row says so at its right, in its dot.
+    let mark = at(cx, format!("nav-state-{}", threads[4].get()));
     let row = at(cx, format!("nav-list-row-{}", threads[4].get()));
-    assert!(word.right() <= row.right() && word.left() > row.center().x);
-    assert_eq!(
-        view.read_with(cx, |view, _| nav::line_word(&view.thread_row(threads[4])))
-            .map(|(word, _)| word),
-        Some("approval".into()),
-        "a request says what it waits for"
-    );
+    assert!(mark.right() <= row.right() && mark.left() > row.center().x);
 }
 
-/// Each section folds to its head and count, the fold held as the
+/// Each section folds to its head, the fold held as the
 /// nav's others are; the other sections stay open.
 #[gpui::test]
 fn an_attention_list_section_folds_to_its_head(cx: &mut TestAppContext) {
@@ -357,8 +347,8 @@ fn an_attention_list_section_folds_to_its_head(cx: &mut TestAppContext) {
         .contains(&NavFold::List(nav::ListSection::Working))));
     assert!(row(cx, threads[1]).is_none() && row(cx, threads[2]).is_none());
     assert!(
-        cx.debug_bounds("nav-list-working-count").is_some(),
-        "the count stays"
+        cx.debug_bounds("nav-list-working-chevron").is_some(),
+        "its caret stays"
     );
     // A request arriving opens a section of its own, unfolded.
     fake.streams.borrow()[1]
@@ -713,11 +703,11 @@ fn a_project_section_draws_one_row_grammar_and_no_filter_row(cx: &mut TestAppCon
         "the premise: the Thread runs a subagent"
     );
 
-    let line_id: &'static str = format!("nav-line2-{}", thread.get()).leak();
-    let line = cx.debug_bounds(line_id).expect("the row keeps its line 2");
     let title_id: &'static str = format!("nav-title-{}", thread.get()).leak();
-    let title = cx.debug_bounds(title_id).expect("the one row grammar");
-    assert!(title.bottom() <= line.top() + px(0.5));
+    assert!(
+        cx.debug_bounds(title_id).is_some(),
+        "the one row grammar"
+    );
     for gone in [
         format!("nav-subagents-{}", thread.get()),
         format!("nav-mark-{}", thread.get()),
@@ -1562,4 +1552,33 @@ fn left_on_a_loose_row_folds_its_project(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view
         .nav_folds
         .contains(&NavFold::Project(project))));
+}
+
+/// The tree fades at whichever edge has rows past it, never slicing a row
+/// against the head or the foot: the foot while rows remain below, the top
+/// once it has scrolled, and neither edge with nothing past it.
+#[gpui::test]
+fn the_tree_fades_at_the_edges_rows_pass(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("nav-edge-fades", 24);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(320.)));
+    cx.run_until_parked();
+    let shows = |cx: &mut gpui::VisualTestContext, id: &'static str| cx.debug_bounds(id).is_some();
+    assert!(shows(cx, "nav-fade-foot"), "rows below: the foot fades");
+    assert!(!shows(cx, "nav-fade-top"), "at the top: nothing above");
+    let wheel = |cx: &mut gpui::VisualTestContext, y: f32| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(px(100.), px(200.)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(y))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    };
+    wheel(cx, -40.);
+    assert!(shows(cx, "nav-fade-top"), "scrolled: the top fades");
+    assert!(shows(cx, "nav-fade-foot"));
+    wheel(cx, -40_000.);
+    assert!(shows(cx, "nav-fade-top"));
+    assert!(!shows(cx, "nav-fade-foot"), "at the end: nothing below");
 }

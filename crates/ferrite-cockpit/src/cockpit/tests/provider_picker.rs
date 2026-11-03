@@ -805,7 +805,7 @@ fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
 
-    let toolbar = cx.debug_bounds("composer-toolbar").unwrap();
+    let toolbar = cx.debug_bounds("composer-footer").unwrap();
     let row = toolbar.center().y;
     let right = f32::from(toolbar.right());
     let mut opened = false;

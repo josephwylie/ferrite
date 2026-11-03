@@ -364,6 +364,10 @@ fn hidden_child_requests_jump_and_reply_only_to_their_captured_handle(cx: &mut T
             .handle
             .serial
     });
+    // Allow once waits in the split button's menu.
+    let more = bounds(cx, format!("request-more-1-{serial}")).center();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    cx.run_until_parked();
     let allow = bounds(cx, format!("request-allow-1-{serial}")).center();
     cx.simulate_click(allow, gpui::Modifiers::none());
     cx.run_until_parked();

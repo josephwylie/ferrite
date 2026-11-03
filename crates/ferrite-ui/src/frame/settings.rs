@@ -145,6 +145,8 @@ pub struct Row {
     pub hint: SharedString,
     pub words: Vec<SharedString>,
     pub control: Control,
+    /// A dependent setting, drawn indented under the row before it.
+    pub nested: bool,
 }
 
 impl Row {
@@ -159,7 +161,14 @@ impl Row {
             hint: hint.into(),
             words,
             control,
+            nested: false,
         }
+    }
+
+    /// Stand under the row before it: a setting that depends on it.
+    pub fn nested(mut self) -> Self {
+        self.nested = true;
+        self
     }
 
     /// A fact's value gives way (wraps) rather than hold its width.
@@ -190,6 +199,8 @@ pub struct Group {
     pub title: Option<&'static str>,
     pub mark: Option<(&'static str, u32)>,
     pub rows: Vec<Row>,
+    /// What the group says under its rows when the list it holds is empty.
+    pub note: Option<SharedString>,
 }
 
 impl Group {
@@ -198,7 +209,14 @@ impl Group {
             title,
             mark: None,
             rows: Vec::new(),
+            note: None,
         }
+    }
+
+    /// The sentence an empty list says (`No machines yet`).
+    pub fn note(mut self, note: impl Into<SharedString>) -> Self {
+        self.note = Some(note.into());
+        self
     }
 
     pub fn mark(mut self, path: &'static str, ink: u32) -> Self {
@@ -236,8 +254,8 @@ fn erase<T: Clone + 'static>(
     (shown, pick)
 }
 
-/// Two options are a pair of tokens, the chosen one inverse; more are a
-/// chooser (the value and a chevron that opens a menu).
+/// Two or three options are a segmented control, the chosen segment lit;
+/// more are a chooser (the value and a chevron that opens a menu).
 pub fn choices<T: Clone + 'static>(
     id: &'static str,
     title: &'static str,
@@ -246,7 +264,7 @@ pub fn choices<T: Clone + 'static>(
     change: impl Fn(T, &mut App) + 'static,
 ) -> Row {
     // Long ladders are values to choose, not a second row of navigation.
-    if options.len() > 2 {
+    if options.len() > 3 {
         return chooser(id, title, detail, options, change);
     }
     let keywords: Vec<_> = options.iter().map(|(label, _, _)| label.clone()).collect();

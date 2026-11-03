@@ -106,6 +106,7 @@ fn session_row(
         status: None,
         detail: None,
         keys: None,
+        used: None,
         act: Act::Adopt {
             path: candidate.path,
             into,
@@ -581,6 +582,7 @@ impl CockpitView {
                         .thread_path(thread)
                         .map(|path| SharedString::from(home_relative(&path))),
                     keys,
+                    used: self.facts.last_used(thread),
                     act: Act::Thread(thread),
                 });
             }
@@ -608,6 +610,7 @@ impl CockpitView {
                     status: Some(status),
                     detail: None,
                     keys: None,
+                    used: None,
                     act: Act::Project(project.id),
                 })
             })
@@ -673,6 +676,7 @@ impl CockpitView {
                     status: nav::roll_up(&members),
                     detail: None,
                     keys: None,
+                    used: None,
                     act: Act::Group(group.id),
                 }
             })
@@ -730,6 +734,7 @@ impl CockpitView {
                         status: None,
                         detail: None,
                         keys,
+                        used: None,
                         act: Act::Command(command),
                     });
                 }

@@ -300,6 +300,37 @@ pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
     }
 }
 
+/// An edge fade, `EDGE_FADE` tall, in `fill` — the surface it lies on:
+/// solid over its first half (a line's cap height, so a row cut at the edge
+/// is hidden, not dimmed), then easing out: held near-solid
+/// (`EDGE_FADE_KNEE`) over the next quarter, where the rest of a cut line
+/// falls, and gone by the far edge. gpui's gradient has two stops, so the
+/// ease is two of them stacked. `rising` runs it up from the foot. It
+/// answers no pointer; the caller lays it absolute over the scroller's
+/// edge.
+pub fn edge_fade(fill: Hsla, rising: bool) -> Div {
+    let at = |a: f32| Hsla { a, ..fill };
+    let angle = if rising { 0. } else { 180. };
+    let quarter = (theme::EDGE_FADE / 4.).round();
+    let hold = div().w_full().h(px(2. * quarter)).bg(fill);
+    let knee = div().w_full().h(px(quarter)).bg(gpui::linear_gradient(
+        angle,
+        gpui::linear_color_stop(at(1.), 0.),
+        gpui::linear_color_stop(at(theme::EDGE_FADE_KNEE), 1.),
+    ));
+    let ease = div().w_full().flex_1().bg(gpui::linear_gradient(
+        angle,
+        gpui::linear_color_stop(at(theme::EDGE_FADE_KNEE), 0.),
+        gpui::linear_color_stop(at(0.), 1.),
+    ));
+    let fade = div().flex().flex_col().w_full().h(px(theme::EDGE_FADE));
+    if rising {
+        fade.child(ease).child(knee).child(hold)
+    } else {
+        fade.child(hold).child(knee).child(ease)
+    }
+}
+
 /// `shadow` with its ink scaled by `k` (0..1): a floating surface's shadow
 /// while it fades in or out (`motion::menu_in`).
 pub fn shadow_faded(shadow: Vec<BoxShadow>, k: f32) -> Vec<BoxShadow> {
@@ -518,6 +549,57 @@ mod loops {
             selector: "working-spinner",
         };
         crate::loops_overlay::hosted(move || spinner.into_any_element()).into_any_element()
+    }
+
+    /// The working dots (the Claude app's working line): three
+    /// `WORKING_DOT` dots in `ink`, a pulse running across them every
+    /// `MOTION_WORKING_DOTS_MS` — each lifts from `WORKING_DOT_REST` to full
+    /// and back, a third of a turn after the one before. A loop on the pulse
+    /// clock (the loops overlay draws it), stepping `WORKING_DOTS_STEPS`
+    /// times a turn; under reduced motion the three sit still, the middle
+    /// one lit.
+    pub fn working_dots(ink: u32) -> AnyElement {
+        let dots = Dots { ink };
+        crate::loops_overlay::hosted(move || dots.into_any_element()).into_any_element()
+    }
+
+    #[derive(IntoElement, Clone, Copy)]
+    struct Dots {
+        ink: u32,
+    }
+
+    impl RenderOnce for Dots {
+        fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+            let phase = (!motion::reduced_motion(cx)).then(|| {
+                let turn = Duration::from_millis(theme::MOTION_WORKING_DOTS_MS);
+                let steps = motion::Motion::Frames(theme::WORKING_DOTS_STEPS);
+                motion::script_phase(turn, steps, window.current_view(), cx)
+            });
+            let lift = |index: usize| -> f32 {
+                let Some(phase) = phase else {
+                    return if index == 1 { 1. } else { theme::WORKING_DOT_REST };
+                };
+                // A triangle pulse, a third of a turn wide, a third apart.
+                let at = (phase - index as f32 / 3.).rem_euclid(1.);
+                let pulse = (1. - (at * 3. - 0.5).abs() * 2.).max(0.);
+                theme::WORKING_DOT_REST + (1. - theme::WORKING_DOT_REST) * pulse
+            };
+            let ink: Hsla = rgb(self.ink).into();
+            div()
+                .debug_selector(|| "working-dots".into())
+                .flex()
+                .items_center()
+                .gap(px(theme::WORKING_DOT_GAP))
+                .children((0..3).map(|index| {
+                    div()
+                        .size(px(theme::WORKING_DOT))
+                        .rounded_full()
+                        .bg(Hsla {
+                            a: ink.a * lift(index),
+                            ..ink
+                        })
+                }))
+        }
     }
 
     #[derive(IntoElement, Clone, Copy)]
@@ -950,13 +1032,11 @@ pub fn switch(id: impl Into<ElementId>, on: bool) -> impl IntoElement {
     })
 }
 
-/// The words the home greets with: the empty board's and a launching
-/// draft's heading.
+/// The words the home greets with: the empty board's heading.
 pub const GREETING: &str = "What should we work on?";
 
 /// The home's heading (theme `HOME_*`): the steel mark over the greeting,
-/// centred. The empty board and a launching draft both stand on it, so
-/// opening a draft from the board keeps the picture.
+/// centred, on the empty board.
 pub fn greeting() -> Div {
     div()
         .debug_selector(|| "greeting".into())
@@ -1291,6 +1371,12 @@ pub struct MenuItem {
     pub mono: bool,
     /// The key that does the same thing, faint at the right edge.
     pub shortcut: Option<SharedString>,
+    /// A one-line description under the label (`TEXT_DIM`, the meta size):
+    /// the row grows to `FLOAT_ROW_NOTE_H` (a mode's "Always ask before
+    /// making changes").
+    pub note: Option<SharedString>,
+    /// A small outlined tag after the label (`Recommended`, `Default`).
+    pub badge: Option<SharedString>,
     pub checked: bool,
     /// Arms before it runs: at rest it reads like any row; armed, its label
     /// turns `BLOCKED` and asks for the second press.
@@ -1333,6 +1419,14 @@ impl MenuItem {
     }
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
+        self
+    }
+    pub fn note(mut self, text: impl Into<SharedString>) -> Self {
+        self.note = Some(text.into());
+        self
+    }
+    pub fn badge(mut self, text: impl Into<SharedString>) -> Self {
+        self.badge = Some(text.into());
         self
     }
     pub fn destructive(mut self) -> Self {
@@ -1755,6 +1849,12 @@ pub struct Choice {
     /// Why a disabled row is dead for now (`Available when this turn
     /// finishes`): its tooltip (SPEC §5.5).
     pub why: Option<SharedString>,
+    /// The row's one-line description under its label (`MenuItem::note`).
+    pub note: Option<SharedString>,
+    /// A tag after the label (`MenuItem::badge`).
+    pub badge: Option<SharedString>,
+    /// The key that picks it, at the right edge (a mode's `1`…`5`).
+    pub shortcut: Option<SharedString>,
 }
 
 impl Choice {
@@ -1766,6 +1866,9 @@ impl Choice {
         if let Some(detail) = &self.detail {
             item = item.detail(detail.clone());
         }
+        item.note = self.note.clone();
+        item.badge = self.badge.clone();
+        item.shortcut = self.shortcut.clone();
         if let (true, Some((path, ink))) = (marked, self.icon) {
             item = item.leading(path, ink);
         }
@@ -2025,6 +2128,81 @@ pub fn scrollbar_bar(
     crate::scrollbar::Scrollbar::vertical(scroll)
         .id(id)
         .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover)
+}
+
+/// A CI check's state, one vocabulary for every surface that lists checks
+/// (the Pane head's checks card, the PR tab's checks and its readiness
+/// row), so a state reads the same a click apart. Colour is state (rule 6):
+/// a failure is `BLOCKED`; a run still going the braille spinner in
+/// `RUNNING`; a pass is done, a shape (`check-circle`) in `TEXT_DIM`, never
+/// the green a running one wears; a queued run a hollow ring and a skipped
+/// one the ring crossed by a dash, both in `TEXT_FAINT` — they claim
+/// nothing. Only a failure colours its word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckMark {
+    Failed,
+    Running,
+    Queued,
+    Passed,
+    Skipped,
+}
+
+impl CheckMark {
+    /// The mark's ink.
+    pub fn ink(self) -> u32 {
+        match self {
+            CheckMark::Failed => theme::BLOCKED,
+            CheckMark::Running => theme::RUNNING,
+            CheckMark::Passed => theme::TEXT_DIM,
+            CheckMark::Queued | CheckMark::Skipped => theme::TEXT_FAINT,
+        }
+    }
+
+    /// The state word's ink: only a failure is coloured.
+    pub fn word_ink(self) -> u32 {
+        match self {
+            CheckMark::Failed => theme::BLOCKED,
+            _ => theme::TEXT_DIM,
+        }
+    }
+
+    /// The mark in its `CHECK_MARK` box.
+    pub fn element(self) -> AnyElement {
+        let ink = self.ink();
+        let ring = || {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(theme::CHECK_MARK_RING))
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(ink))
+        };
+        let drawn = match self {
+            CheckMark::Failed => icons::icon(icons::X_CIRCLE, theme::CHECK_MARK, ink)
+                .into_any_element(),
+            CheckMark::Passed => icons::icon(icons::CHECK_CIRCLE, theme::CHECK_MARK, ink)
+                .into_any_element(),
+            CheckMark::Running => div()
+                .font_family(theme::FONT_CODE)
+                .text_size(px(theme::FS_META))
+                .child(braille_spinner(ink))
+                .into_any_element(),
+            CheckMark::Queued => ring().into_any_element(),
+            CheckMark::Skipped => ring()
+                .child(div().w(px(theme::CHECK_SKIP_DASH)).h(px(1.)).bg(rgb(ink)))
+                .into_any_element(),
+        };
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(px(theme::CHECK_MARK))
+            .child(drawn)
+            .into_any_element()
+    }
 }
 
 /// The one copy button (a message's `Copy`, a changed file's `Copy path`,

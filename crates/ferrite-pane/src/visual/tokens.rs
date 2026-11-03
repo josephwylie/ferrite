@@ -146,7 +146,7 @@ pub(crate) fn value(name: &str, scheme: Scheme, reading: ReadingSize) -> Option<
         "font-mono" => {
             format!(
                 "\"{}\",ui-monospace,\"SF Mono\",Menlo,monospace",
-                theme::FONT_UI
+                theme::FONT_CODE
             )
         }
         "font-size" => format!("{}px", theme::answer_text_size(reading)),
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn the_dark_palette_is_the_app_theme() {
         let reading = ReadingSize::default();
-        assert_eq!(value("bg", Scheme::Dark, reading).unwrap(), "#181818");
+        assert_eq!(value("bg", Scheme::Dark, reading).unwrap(), hex(theme::CARD));
         assert_eq!(
             value("accent", Scheme::Dark, reading).unwrap(),
             hex(theme::TEXT_STRONG)
@@ -227,7 +227,7 @@ mod tests {
             let decl = format!("--ferrite-{name}:");
             assert_eq!(css.matches(&decl).count(), 3, "{name}: root, dark, light");
         }
-        assert!(css.starts_with(":root{--ferrite-bg:#181818;"));
+        assert!(css.starts_with(&format!(":root{{--ferrite-bg:{};", hex(theme::CARD))));
         assert!(!css.contains("url("), "the theme fetches nothing");
     }
 
@@ -235,14 +235,18 @@ mod tests {
     fn reading_size_restyles_the_text_tokens_only() {
         let small = theme_css(Scheme::Dark, ReadingSize::SMALLEST);
         let large = theme_css(Scheme::Dark, ReadingSize::LARGEST);
-        assert!(
-            small.contains("--ferrite-font-size:12px;--ferrite-line:19px;"),
-            "{small}"
-        );
-        assert!(
-            large.contains("--ferrite-font-size:24px;--ferrite-line:38px;"),
-            "{large}"
-        );
+        // Each carries its own reading size and line, as the type table
+        // sets them, and the two differ.
+        let text = |reading: ReadingSize| {
+            format!(
+                "--ferrite-font-size:{}px;--ferrite-line:{}px;",
+                theme::answer_text_size(reading),
+                theme::answer_line_height(reading)
+            )
+        };
+        assert!(small.contains(&text(ReadingSize::SMALLEST)), "{small}");
+        assert!(large.contains(&text(ReadingSize::LARGEST)), "{large}");
+        assert_ne!(text(ReadingSize::SMALLEST), text(ReadingSize::LARGEST));
         fn strip(css: &str) -> Vec<&str> {
             css.split(';')
                 .filter(|d| !d.contains("font-size") && !d.contains("-line:"))

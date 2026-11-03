@@ -4,7 +4,7 @@ use super::*;
 
 /// SPEC §5.5: Solo's Composer is a box in the reading column (at most
 /// `TX_COLUMN_MAX_W`, centred, `COMPOSER_INSET` from the card's sides at
-/// least), its editor `COMPOSER_INPUT_PAD_X` in from the box's edge; the bar
+/// least), its line after the `+`, the footer under it; the bar
 /// carries no status line.
 #[gpui::test]
 fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
@@ -29,13 +29,19 @@ fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
                 && (block.size.width - px(w)).abs() <= px(1.),
             "{block:?} / {pane:?}"
         );
+        // The footer (model, effort, mode) and its air stand under the box.
+        let foot =
+            ferrite_ui::theme::COMPOSER_FOOTER_H + ferrite_ui::theme::COMPOSER_FOOTER_PAD_B;
         assert!(
-            (block.bottom() - px(pane.y + pane.h - inset)).abs() <= px(1.),
+            (block.bottom() - px(pane.y + pane.h - foot)).abs() <= px(1.),
             "{block:?} / {pane:?}"
         );
+        // The line starts after the `+`.
+        let lead = ferrite_ui::theme::COMPOSER_ROW_PAD
+            + ferrite_ui::theme::COMPOSER_ATTACH
+            + ferrite_ui::theme::COMPOSER_ROW_GAP;
         assert!(
-            (editor.left() - block.left() - px(ferrite_ui::theme::COMPOSER_INPUT_PAD_X)).abs()
-                <= px(0.5),
+            (editor.left() - block.left() - px(lead)).abs() <= px(0.5),
             "{editor:?} / {block:?}"
         );
         assert!(cx.debug_bounds("composer-meta").is_none(), "no status line");

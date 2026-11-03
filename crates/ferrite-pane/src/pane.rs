@@ -621,10 +621,10 @@ pub struct PaneWiring {
     /// approval's verbs or the question's options, each a boxed word wired
     /// to its answer in the cockpit.
     pub quick_answers: Option<AnyElement>,
-    /// The Solo Composer's toolbar and its queued row's close button,
+    /// The Solo Composer's controls and its queued row's close button,
     /// wired in the cockpit (SPEC §5.5); on a board, the focused Pane's
     /// send circle alone.
-    pub toolbar: Option<AnyElement>,
+    pub toolbar: Option<ComposerControls>,
     pub unqueue: Option<AnyElement>,
     /// The Group head's fill button (`fill_button`), wired to fill the
     /// board with this Pane; None in Solo.
@@ -829,8 +829,8 @@ pub(crate) struct PaneCtx<'a> {
     pub activity_decisions: Option<AnyElement>,
     /// The docked Decision merges into this Pane's Composer (one block).
     pub decision_joined: bool,
-    /// `l1_composer`: the Solo box's toolbar and queued-row close button.
-    pub toolbar: Option<AnyElement>,
+    /// `l1_composer`: the Solo box's controls and queued-row close button.
+    pub toolbar: Option<ComposerControls>,
     pub unqueue: Option<AnyElement>,
 }
 
@@ -1087,7 +1087,10 @@ pub struct WorkingFacts<'a> {
     pub solo: bool,
     /// The Pane holds the keyboard: only its line animates.
     pub focused: bool,
-    /// Its Composer is empty (the send circle shows stop: `send_is_stop`).
+    /// A turn runs (the cockpit's `turn_running`, what the send circle
+    /// reads too) and its Composer is empty: together, whether the send
+    /// circle shows stop (`send_is_stop`).
+    pub running: bool,
     pub composer_empty: bool,
     pub reduce_motion: bool,
     /// The live reasoning caption's own row is in view.
@@ -1115,7 +1118,7 @@ enum Working {
 /// (the loops overlay), so they redraw nothing of the transcript.
 pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::TranscriptTail> {
     let working = if facts.transcript.status() == Status::Streaming {
-        let stop_shown = send_is_stop(true, facts.composer_empty, !facts.solo);
+        let stop_shown = send_is_stop(facts.running, facts.composer_empty, !facts.solo);
         Working::Line(WorkingLine::of(
             facts.transcript,
             false,
@@ -1401,8 +1404,8 @@ pub struct DraftState<'a> {
     pub drop_target: bool,
     /// More than one Pane is on the board (`PaneFacts::show_focus`).
     pub show_focus: bool,
-    /// The Solo box's toolbar (`PaneWiring::toolbar`).
-    pub toolbar: Option<AnyElement>,
+    /// The Solo box's controls (`PaneWiring::toolbar`).
+    pub toolbar: Option<ComposerControls>,
 }
 
 /// What a draft is called until its first send names the Thread — in its
@@ -1471,21 +1474,13 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             unqueue: None,
         },
     );
-    // The body says nothing — the Composer's placeholder says what to do,
-    // once (rule 2.11.4) — but it is not a void. A lone draft at L1 is a
-    // launch: the home's greeting (`components::greeting`, the empty
-    // board's own heading) over the Composer, the pair centred in the
-    // Pane, where the eye already is. The first send makes it a Thread,
-    // whose Composer sits at the foot. On a board the line keeps the
-    // grid's foot, and the mark alone, embossed, centres in the body above.
-    let launch = !show_focus && level == Level::Transcript;
-    let mark = (level == Level::Transcript).then(|| {
-        if launch {
-            components::greeting()
-        } else {
-            components::embossed_mark(theme::DRAFT_MARK, theme::EMBOSS_ON_PANE)
-        }
-    });
+    // A quiet start, as the Claude app's new session is: the body holds
+    // only the embossed mark at its centre — the Composer's placeholder
+    // says what to do, once (rule 2.11.4) — and the Composer stands at the
+    // foot, where the Thread it becomes keeps it, so the first send moves
+    // nothing.
+    let mark = (level == Level::Transcript)
+        .then(|| components::embossed_mark(theme::DRAFT_MARK, theme::EMBOSS_ON_PANE));
     let body = div()
         .debug_selector(|| "draft-empty".into())
         .flex_1()
@@ -1494,26 +1489,15 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         .flex()
         .flex_col()
         .items_center()
-        .map(|body| {
-            if launch {
-                body.justify_end().pb(px(theme::DRAFT_MARK_GAP))
-            } else {
-                body.justify_center()
-            }
-        })
+        .justify_center()
         .children(mark);
     pane_frame(
         shell
             .child(body)
             .children(drop_target.then(crate::prompt_drop::sheet))
             // The Composer holds itself to the reading column
-            // (`TX_COLUMN_MAX_W`, `in_column`), centred under the greeting.
-            .when(level != Level::Wall, |pane| pane.child(composer))
-            // The launch's lower half: a touch taller than the upper, so
-            // the pair sits just above the Pane's middle.
-            .when(launch, |pane| {
-                pane.child(div().flex_1().min_h_0().pb(px(theme::DRAFT_LAUNCH_LIFT)))
-            }),
+            // (`TX_COLUMN_MAX_W`, `in_column`).
+            .when(level != Level::Wall, |pane| pane.child(composer)),
         edge,
         u64::MAX - key,
     )
@@ -1545,8 +1529,8 @@ pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -
         .child(button)
 }
 
-/// A draft's Project or Workspace chip (SPEC §5.5), in the toolbar's chip
-/// style: the choice and a chevron, ringed by the one focus recipe
+/// A draft's Project or Workspace chip (SPEC §5.5), a footer word like the
+/// model's: the choice, plain, ringed by the one focus recipe
 /// (`components::focused`) while tab rests on it, because the popover
 /// opens on ↵ and the chip must say where ↵ will land. In a narrow Pane its
 /// label cuts first.
@@ -1564,13 +1548,13 @@ pub fn band_chip(slot: usize, label: SharedString, focused: bool) -> Stateful<Di
         .flex_shrink(1.)
         .min_w_0()
         .items_center()
-        .h(px(theme::TOOL_CHIP_H))
-        .px(px(theme::TOOL_CHIP_PAD_X))
+        .h(px(theme::FOOTER_CHIP_H))
+        .px(px(theme::FOOTER_CHIP_PAD_X))
         .rounded(px(theme::R_CHIP))
         .map(|chip| components::focused(chip, focused))
         .hover_raised(format!("band-chip-{slot}"))
         .press_raised()
-        .child(chip_face(None, label, TEXT_MUTED, theme::W_BODY))
+        .child(chip_face(label, TEXT_DIM))
 }
 
 /// A band chip's text: the choice itself (the chip draws its own chevron).
@@ -2092,11 +2076,11 @@ fn question_door(key: u64) -> AnyElement {
 /// The one Group head (SPEC §5.9), for a transcript Pane and a wall tile
 /// alike: one `PANE_HEAD_H` row (38px) closed by a `HAIRLINE`, padded
 /// `PANE_HEAD_PAD_L` / `PANE_HEAD_PAD_R`, its items `PANE_HEAD_GAP` apart.
-/// In order: the state mark (`mark::head_mark`), the title in 12.5 at
-/// `W_LABEL` — `TEXT_STRONG` on the focused Pane, `TEXT` elsewhere — kept
-/// to its `title_floor`, the state word in 12 and its ink, a spacer, the
-/// provider's 13px logo and the trailing control: the fill button, or a
-/// draft's ×. No band on the focused head: the ring says focus.
+/// In order: the state mark (`mark::head_mark`), the title in `FS_LABEL`
+/// at `W_LABEL` — `TEXT_STRONG` on the focused Pane, `TEXT` elsewhere —
+/// kept to its `title_floor`, the state word in `FS_META` and its ink, a
+/// spacer, the provider's 13px logo and the trailing control: the fill
+/// button, or a draft's ×. No band on the focused head: the ring says focus.
 ///
 /// Narrow, it gives way in order, never slicing a glyph: the title
 /// ellipsizes to its floor, then the word ellipsizes, and where even the
@@ -2452,35 +2436,26 @@ fn title_floor(name: &str) -> f32 {
         .min(theme::HEAD_TITLE_MIN_W)
 }
 
-/// A check's ink (rule 2.2.2 — colour means something needs you): a run
-/// still going is `RUNNING`, a failure `BLOCKED`, a pass settles to
-/// `TEXT_DIM` and a skip is the faintest ink (drawn as a ring,
-/// `check_dot`). Never the ochre that means an agent waits on you.
-pub fn check_ink(state: CheckState) -> u32 {
+/// A run's mark in the shared check vocabulary (`components::CheckMark`,
+/// the PR tab's too), from its rollup state and the forge's own detail:
+/// a pending run is running unless the forge says it waits.
+pub fn check_mark(state: CheckState, detail: &str) -> components::CheckMark {
+    use components::CheckMark;
     match state {
-        CheckState::Pending => RUNNING,
-        CheckState::Passing => TEXT_DIM,
-        CheckState::Failing => BLOCKED,
-        CheckState::Skipped => TEXT_FAINT,
+        CheckState::Failing => CheckMark::Failed,
+        CheckState::Pending if check_waits(detail) => CheckMark::Queued,
+        CheckState::Pending => CheckMark::Running,
+        CheckState::Passing => CheckMark::Passed,
+        CheckState::Skipped => CheckMark::Skipped,
     }
 }
 
-/// A check's dot: `check_ink` filled, or a hollow ring for a skipped run —
-/// it claims nothing.
-pub fn check_dot(state: CheckState) -> Div {
-    match state {
-        CheckState::Skipped => components::status_ring(check_ink(state)),
-        state => components::status_dot(check_ink(state)),
-    }
-}
-
-/// A run's state word ink: only a failure is coloured — the dot beside it
-/// already says pending, passed or skipped.
-pub fn check_detail_ink(state: CheckState) -> u32 {
-    match state {
-        CheckState::Failing => BLOCKED,
-        _ => TEXT_DIM,
-    }
+/// Whether the forge's detail says a pending run has not started.
+fn check_waits(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    ["queued", "waiting", "pending", "requested"]
+        .iter()
+        .any(|word| detail.contains(word))
 }
 
 /// A run's state in the lexicon's lowercase words — `failed`, `running`,
@@ -2494,13 +2469,7 @@ pub fn check_word(state: CheckState, detail: &str) -> &'static str {
     }
     match state {
         CheckState::Failing => theme::words::FAILED,
-        CheckState::Pending
-            if ["queued", "waiting", "pending", "requested"]
-                .iter()
-                .any(|word| detail.contains(word)) =>
-        {
-            "queued"
-        }
+        CheckState::Pending if check_waits(&detail) => "queued",
         CheckState::Pending => "running",
         CheckState::Passing => "passed",
         CheckState::Skipped => "skipped",
@@ -2643,7 +2612,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
             "{name} \u{b7} {}",
             run.detail
         ))))
-        .child(check_dot(run.state))
+        .child(check_mark(run.state, &run.detail).element())
         .child(
             div()
                 .min_w_0()
@@ -2655,7 +2624,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
         .child(
             div()
                 .flex_shrink_0()
-                .text_color(rgb(check_detail_ink(run.state)))
+                .text_color(rgb(check_mark(run.state, &run.detail).word_ink()))
                 .child(check_word(run.state, &run.detail)),
         )
         // The card is a raised surface: its rows take the raised faces.
@@ -2780,76 +2749,60 @@ pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
 
-/// The model chip's face (SPEC §5.5): the provider's logomark in its brand
-/// colour, the model's name as the picker names it, and a chevron.
-/// Render-only; the cockpit gives it its button and its menu.
-pub fn model_chip(provider: Option<Provider>, label: SharedString) -> Div {
-    let mark = provider.map(|provider| {
-        let (glyph, ink) = match provider {
-            Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
-            Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE),
-        };
-        icon(glyph, theme::TOOL_CHIP_LOGO, ink).into_any_element()
-    });
-    chip_face(mark, label, TEXT_MUTED, theme::W_BODY)
+/// The model's word under the box (SPEC §5.5, Claude's footer): the model
+/// as the picker names it, plain, in `TEXT_DIM`. Render-only; the cockpit
+/// gives it its button and its menu.
+pub fn model_chip(label: SharedString) -> Div {
+    chip_face(label, TEXT_DIM)
 }
 
-/// The effort chip's face: the level in force, sentence case, and a
-/// chevron.
+/// The effort's word under the box: the level in force, sentence case.
 pub fn effort_chip(label: SharedString) -> Div {
-    chip_face(None, label, TEXT_MUTED, theme::W_BODY)
+    chip_face(label, TEXT_DIM)
 }
 
-/// The permission mode chip's face: the `shield`, the mode's label and a
-/// chevron, in `theme::mode_ink`: `ATTENTION` for a mode that lets
-/// everything run, else `TEXT_MUTED`.
+/// The permission mode's word under the box: `TEXT_DIM` in the provider's
+/// default mode, else in `ATTENTION` — a mode that changes what runs
+/// without asking is worth seeing (`theme::mode_is_default`).
 pub fn mode_chip(label: SharedString, mode: &str) -> Div {
-    let ink = theme::mode_ink(mode);
-    chip_face(
-        Some(icon(icons::SHIELD, theme::TOOL_CHIP_ICON, ink).into_any_element()),
-        label,
-        ink,
-        theme::W_LABEL,
-    )
+    let ink = if theme::mode_is_default(mode) {
+        TEXT_DIM
+    } else {
+        theme::ATTENTION
+    };
+    chip_face(label, ink)
 }
 
-/// A toolbar chip's face: an optional lead mark, the label cut at its end
-/// in a narrow Pane, and the chevron that says it opens a menu.
-fn chip_face(
-    lead: Option<AnyElement>,
-    label: SharedString,
-    ink: u32,
-    weight: gpui::FontWeight,
-) -> Div {
+/// A footer word's face: the label, cut at its end in a narrow Pane. No
+/// chevron and no mark: the words are the controls (Claude's footer); the
+/// pointer's fill says they press.
+fn chip_face(label: SharedString, ink: u32) -> Div {
     div()
         .flex()
         .flex_shrink(1.)
         .min_w_0()
         .items_center()
-        .gap(px(theme::TOOL_CHIP_GAP))
         .whitespace_nowrap()
         .font_family(theme::FONT_UI)
-        .font_weight(weight)
-        .text_size(px(theme::FS_LABEL))
+        .font_weight(theme::W_BODY)
+        .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(ink))
-        .children(lead)
         .child(div().min_w_0().truncate().child(label))
-        .child(icon(icons::CHEVRON_DOWN, theme::TOOL_CHIP_CHEVRON, ink))
 }
 
-/// A toolbar chip's button (SPEC §5.5): `TOOL_CHIP_H` high at `R_CHIP`,
-/// `TOOL_CHIP_PAD_X` at each side, no ground at rest, `paint::RAISED`
+/// A footer word's button: `FOOTER_CHIP_H` high at `R_CHIP`,
+/// `FOOTER_CHIP_PAD_X` at each side, no ground at rest, `paint::RAISED`
 /// under the pointer. The cockpit gives it its face and its menu. It may
-/// narrow past its label, which then cuts (`composer_toolbar`).
+/// narrow past its label, which then cuts (`composer_footer`).
 pub fn toolbar_chip(
     id: impl Into<gpui::ElementId>,
     cx: &gpui::App,
 ) -> gpui::component::button::Button {
     chip_button(id, cx)
         .p_0()
-        .h(px(theme::TOOL_CHIP_H))
-        .px(px(theme::TOOL_CHIP_PAD_X))
+        .h(px(theme::FOOTER_CHIP_H))
+        .px(px(theme::FOOTER_CHIP_PAD_X))
         .min_w_0()
         .flex_shrink(1.)
         .rounded(px(theme::R_CHIP))
@@ -2890,14 +2843,10 @@ pub fn send_button(
     compact: bool,
     cx: &gpui::App,
 ) -> gpui::component::button::Button {
-    let (size, glyph, gap) = if compact {
-        (theme::SEND_CIRCLE_SM, theme::SEND_GLYPH_SM, 0.)
+    let (size, glyph) = if compact {
+        (theme::SEND_CIRCLE_SM, theme::SEND_GLYPH_SM)
     } else {
-        (
-            theme::COMPOSER_SEND,
-            theme::COMPOSER_SEND_ICON,
-            theme::COMPOSER_SEND_GAP,
-        )
+        (theme::COMPOSER_SEND, theme::COMPOSER_SEND_ICON)
     };
     let lit = !stop && !empty;
     let (rest, hover, press, ink): (gpui::Hsla, gpui::Hsla, gpui::Hsla, u32) = if lit {
@@ -2926,7 +2875,6 @@ pub fn send_button(
         })
         .p_0()
         .size(px(size))
-        .ml(px(gap))
         .flex_shrink_0()
         .rounded_full()
         .map(|button| {
@@ -2973,20 +2921,29 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
     )
 }
 
-/// The Solo box's toolbar (`COMPOSER_TOOLBAR_H`): the `+`, `lead` — a
-/// draft's chips, the mode — a spacer, `trail` — the model, the effort —
-/// and the send circle. In a narrow box the lead chips give way first,
-/// their labels cut at the end (the mode keeps its shield and its ink);
-/// the model and effort stay whole; narrower still, the chips clip at the
-/// row's end. The `+` and send always stand whole inside the box.
-pub fn composer_toolbar(
-    attach: AnyElement,
+/// The Composer's controls, wired in the cockpit: Solo's `+` and send
+/// circle on the box's row and its footer under the box; a board Pane's
+/// send circle alone.
+pub struct ComposerControls {
+    pub attach: Option<AnyElement>,
+    pub send: AnyElement,
+    pub footer: Option<AnyElement>,
+}
+
+/// The Solo box's footer (`COMPOSER_FOOTER_H`, under the box, Claude's):
+/// `lead` at the left — a draft's Project and Workspace — and at the right
+/// the model, the effort and the permission mode as plain words, then the
+/// context ring. In a narrow box what matters least gives way: the model's
+/// word cuts first (the picker says it whole). The rest never give way to
+/// it, the mode — the permission in force, which matters for safety —
+/// least of all; a long one cuts at its own `TOOLBAR_LEAD_MAX_W`. Narrower
+/// still, the words clip at the row's start.
+pub fn composer_footer(
     lead: Vec<AnyElement>,
-    trail: Vec<AnyElement>,
-    send: AnyElement,
+    model: Option<AnyElement>,
+    hold: Vec<AnyElement>,
+    ring: Option<AnyElement>,
 ) -> Div {
-    // A lead chip's slot may grow narrower than the chip: the chip, a
-    // block in it, takes the slot's width and cuts its label.
     let give = |chip: AnyElement| {
         div()
             .min_w_0()
@@ -2994,29 +2951,83 @@ pub fn composer_toolbar(
             .overflow_hidden()
             .child(chip)
     };
-    let keep = |chip: AnyElement| div().flex_shrink_0().child(chip);
-    let chips = div()
+    let held = |chip: AnyElement| {
+        div()
+            .flex_shrink_0()
+            .max_w(px(theme::TOOLBAR_LEAD_MAX_W))
+            .overflow_hidden()
+            .child(chip)
+    };
+    div()
         .flex()
         .flex_1()
         .min_w_0()
         .overflow_hidden()
         .items_center()
         .gap(px(theme::COMPOSER_TOOLBAR_GAP))
-        .children(lead.into_iter().map(give))
+        .children(lead.into_iter().map(held))
         .child(div().flex_1().min_w_0())
-        .children(trail.into_iter().map(keep));
+        .children(model.map(give))
+        .children(hold.into_iter().map(held))
+        .children(ring.map(|ring| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .pl(px(theme::SPACE_1_5))
+                .child(ring)
+        }))
+}
+
+/// The context ring (Claude's): a `CONTEXT_RING` circle, its track a
+/// hairline, the share of the window used drawn round it from the top in
+/// `ctx_meter_ink` — calm until the window fills. `fraction` is clamped.
+pub fn context_ring(fraction: f32) -> Div {
+    let fraction = fraction.clamp(0., 1.);
+    let ink: gpui::Hsla = rgb(if fraction < theme::CTX_METER_WARN {
+        TEXT_DIM
+    } else {
+        ctx_meter_ink(fraction)
+    })
+    .into();
+    let track: gpui::Hsla = rgba(theme::HAIRLINE_STRONG).into();
     div()
-        .debug_selector(|| "composer-toolbar".into())
-        .flex()
+        .debug_selector(|| "context-ring".into())
         .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::COMPOSER_TOOLBAR_GAP))
-        .h(px(theme::COMPOSER_TOOLBAR_H))
-        .min_w_0()
-        .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
-        .child(attach)
-        .child(chips)
-        .child(send)
+        .size(px(theme::CONTEXT_RING))
+        .child(
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let stroke = px(theme::CONTEXT_RING_STROKE);
+                    let r = (bounds.size.width.min(bounds.size.height) - stroke) / 2.;
+                    let c = bounds.center();
+                    let at = |turn: f32| {
+                        let a = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
+                        gpui::point(c.x + r * a.cos(), c.y + r * a.sin())
+                    };
+                    let arc = |from: f32, to: f32| {
+                        let mut path = gpui::PathBuilder::stroke(stroke);
+                        path.move_to(at(from));
+                        // Two halves at most, so no arc spans a full turn.
+                        let mid = (from + to) / 2.;
+                        for end in [mid, to] {
+                            path.arc_to(gpui::point(r, r), px(0.), false, true, at(end));
+                        }
+                        path.build().ok()
+                    };
+                    if let Some(path) = arc(0., 1.) {
+                        window.paint_path(path, track);
+                    }
+                    if fraction > 0.005 {
+                        if let Some(path) = arc(0., fraction) {
+                            window.paint_path(path, ink);
+                        }
+                    }
+                },
+            )
+            .size_full(),
+        )
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -3042,21 +3053,20 @@ pub fn tool_has_details(tool: &ToolBlock) -> bool {
 /// What a focused Group Pane's working line says at its right end.
 const INTERRUPT_HINT: &str = "esc to interrupt";
 
-/// The working line's mark (the prototype's `.spin`): the star spinner
-/// cycling `· ✢ ✳ ✶ ✻ ✽` in the provider's colour (`live`), the still `✻`
-/// under reduced motion. Its selector says which.
+/// The working line's mark: three dots in the provider's colour, a pulse
+/// running across them (`components::working_dots`, the Claude app's line);
+/// under reduced motion they sit still. Its selector says which.
 fn working_mark(ink: u32, live: bool) -> AnyElement {
-    // At the gutter's start, as the prototype's `.spin` sets its glyph.
-    if live {
-        div()
-            .debug_selector(|| "progress-mark-live".into())
-            .child(components::working_spinner(ink))
-            .into_any_element()
-    } else {
-        components::glyph(components::WORKED.to_string(), ink)
-            .debug_selector(|| "progress-mark-still".into())
-            .into_any_element()
-    }
+    div()
+        .debug_selector(move || {
+            if live {
+                "progress-mark-live".into()
+            } else {
+                "progress-mark-still".into()
+            }
+        })
+        .child(components::working_dots(ink))
+        .into_any_element()
 }
 
 /// The working line with no provider known: the spinner and caption in
@@ -3136,6 +3146,17 @@ pub(crate) struct WorkingLine {
     facts: Vec<String>,
     /// The caption's selector and its words.
     caption: Option<(String, String)>,
+    /// The plan the turn works to, its steps' words and states, drawn as
+    /// the task list over the line (`task_list`).
+    plan: Vec<(String, TaskState)>,
+}
+
+/// A plan step's state, as the task list marks it.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum TaskState {
+    Done,
+    Current,
+    ToDo,
 }
 
 impl WorkingLine {
@@ -3163,6 +3184,23 @@ impl WorkingLine {
             facts.push(format!("\u{2191} {} tokens", tokens_label(tokens)));
         }
         let progress = transcript.progress();
+        let plan = if progress.has_plan {
+            progress
+                .plan
+                .iter()
+                .map(|step| {
+                    use ferrite_core::progress::StepStatus;
+                    let state = match step.status {
+                        StepStatus::Completed => TaskState::Done,
+                        StepStatus::InProgress => TaskState::Current,
+                        StepStatus::Pending => TaskState::ToDo,
+                    };
+                    (step.text.clone(), state)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let generic = Phase::Working.label();
         let caption = progress
             .caption()
@@ -3202,6 +3240,7 @@ impl WorkingLine {
             solo,
             facts,
             caption,
+            plan,
         }
     }
 
@@ -3214,6 +3253,7 @@ impl WorkingLine {
             solo,
             facts,
             caption,
+            plan,
         } = self.clone();
         // The line stands at the Standard size: the reading keys scale the
         // transcript only.
@@ -3229,14 +3269,16 @@ impl WorkingLine {
             .text_size(px(grid.activity().size))
             .line_height(px(grid.line));
         if let Some((selector, caption)) = caption {
+            // The caption reads in the body's ink; the provider's colour is
+            // the dots' (a working glyph, rule 6).
             let caption = SharedString::from(caption);
             let text = if live {
-                components::shimmer(caption, ink)
+                components::shimmer(caption, TEXT)
             } else {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(ink))
+                    .text_color(rgb(TEXT))
                     .child(caption)
                     .into_any_element()
             };
@@ -3249,7 +3291,7 @@ impl WorkingLine {
                         .flex()
                         .flex_shrink_0()
                         .items_center()
-                        .w(px(grid.gutter()))
+                        .mr(px(theme::SPACE_2))
                         .h(px(grid.line))
                         .child(working_mark(ink, spinning)),
                 )
@@ -3284,8 +3326,71 @@ impl WorkingLine {
                     )
                 });
         }
-        div().w_full().min_w_0().flex_shrink_0().child(row)
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::SPACE_2))
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .children((!plan.is_empty()).then(|| task_list(&plan, grid)))
+            .child(row)
     }
+}
+
+/// The task list (`TASK_*`): the plan the turn works to, a card on a
+/// hairline ring, one row a step — done `check-circle` and its words
+/// dimmed, the step in hand the braille spinner (`RUNNING`) and its words
+/// strong, a step to do a dashed ring and its words in the body's ink.
+fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
+    div()
+        .debug_selector(|| "task-list".into())
+        .flex()
+        .flex_col()
+        .gap(px(theme::TASK_ROW_GAP))
+        .w_full()
+        .min_w_0()
+        .p(px(theme::TASK_CARD_PAD))
+        .rounded(px(theme::R_CONTROL))
+        .border_1()
+        .border_color(theme::paint::HAIRLINE)
+        .font_family(theme::FONT_UI)
+        .text_size(px(grid.activity().size))
+        .line_height(px(grid.line))
+        .children(plan.iter().map(|(words, state)| {
+            let (mark, ink) = match state {
+                TaskState::Done => (
+                    icon(icons::CHECK_CIRCLE, theme::TASK_ICON, TEXT_DIM).into_any_element(),
+                    TEXT_DIM,
+                ),
+                TaskState::Current => (components::braille_spinner(RUNNING), TEXT_STRONG),
+                TaskState::ToDo => (
+                    icon(icons::CIRCLE_DASHED, theme::TASK_ICON, TEXT_DIM).into_any_element(),
+                    TEXT,
+                ),
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SPACE_2))
+                .min_w_0()
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .size(px(theme::TASK_ICON))
+                        .child(mark),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(ink))
+                        .child(SharedString::from(words.clone())),
+                )
+        }))
 }
 
 /// `8.0k`, `12k`, `340` — the token count the way Claude Code prints it
@@ -3351,10 +3456,9 @@ struct ComposerStack<'a> {
     /// (no box to join); kept so the levels hand the Composer one shape.
     #[allow(dead_code)]
     joined: bool,
-    /// The Solo box's toolbar, wired in the cockpit (`+`, a draft's chips,
-    /// the mode, model and effort chips, send); on a board, the focused
-    /// Pane's send circle.
-    toolbar: Option<AnyElement>,
+    /// The Composer's controls, wired in the cockpit: Solo's `+`, send and
+    /// footer; on a board, the focused Pane's send circle.
+    toolbar: Option<ComposerControls>,
     /// The queued row's close button, wired to ⌫'s act in the cockpit.
     unqueue: Option<AnyElement>,
 }
@@ -3504,23 +3608,44 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
         line = line.child(ghost_row(ghost, 0.));
     }
+    // One row, as Claude's: the `+`, the line that grows, the send circle,
+    // the buttons standing at the row's foot as the line grows over them.
+    let (attach, send, footer) = match toolbar {
+        Some(controls) => (controls.attach, Some(controls.send), controls.footer),
+        None => (None, None, None),
+    };
+    let slot = |control: AnyElement| {
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(theme::COMPOSER_ATTACH))
+            .child(control)
+    };
     field = field.child(
         div()
-            .debug_selector(move || format!("composer-live-{namespace}"))
+            .debug_selector(|| "composer-row".into())
             .flex()
-            .items_start()
-            .min_h(px(theme::COMPOSER_ROW_H))
+            .items_end()
+            .gap(px(theme::COMPOSER_ROW_GAP))
             .min_w_0()
-            .pt(px(if attached {
-                theme::ATTACH_ROW_GAP
-            } else {
-                theme::COMPOSER_INPUT_PAD_T
-            }))
-            .px(px(theme::COMPOSER_INPUT_PAD_X))
-            .pb(px(theme::COMPOSER_INPUT_PAD_B))
-            .child(line),
+            .p(px(theme::COMPOSER_ROW_PAD))
+            .when(attached, |row| row.pt(px(theme::ATTACH_ROW_GAP)))
+            .children(attach.map(slot))
+            .child(
+                div()
+                    .debug_selector(move || format!("composer-live-{namespace}"))
+                    .flex()
+                    .items_start()
+                    .flex_1()
+                    .min_h(px(theme::COMPOSER_ROW_H))
+                    .min_w_0()
+                    .py(px(theme::COMPOSER_TEXT_PAD_Y))
+                    .child(line),
+            )
+            .children(send.map(slot)),
     );
-    field = field.children(toolbar).children(drop_hint);
+    field = field.children(drop_hint);
     // The `/` or `@` popover paints above the stack — deferred, so it
     // escapes the Pane's clip and draws over the transcript (#24) — from
     // the box's left edge, at most `SLASH_MENU_W` wide.
@@ -3536,8 +3661,20 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         ));
     }
     composer_stack(None, background, true)
-        .pb(px(theme::COMPOSER_INSET))
         .child(in_column(theme::COMPOSER_INSET, true, field))
+        // The model, effort and mode under the box, as plain words.
+        .child(in_column(
+            theme::COMPOSER_INSET,
+            true,
+            div()
+                .debug_selector(|| "composer-footer".into())
+                .flex()
+                .items_center()
+                .min_w_0()
+                .h(px(theme::COMPOSER_FOOTER_H))
+                .children(footer),
+        ))
+        .pb(px(theme::COMPOSER_FOOTER_PAD_B))
 }
 
 /// What stands over either Composer: `SHELF_GAP` over the box it belongs
@@ -3724,7 +3861,7 @@ fn placeholder(
     suggestion: Option<&str>,
 ) -> Ghost {
     if draft {
-        return Ghost::says("Start a thread");
+        return Ghost::says("Describe a task or ask a question");
     }
     let busy = transcript.is_some_and(|transcript| transcript.status() == Status::Streaming);
     match followup::suggest(pending, transcript, suggestion) {
@@ -3923,18 +4060,17 @@ pub(crate) fn composer_queue_height(_height: f32, grid: bool, count: usize) -> f
 }
 
 /// The Composer's height less its editor rows and queue, the same at every
-/// level, focused or not. Solo's box: the input's padding, the toolbar and
-/// the inset under it (its ring lies outside it). A board's compact box:
+/// level, focused or not. Solo's box: the row's padding around the line
+/// (its ring lies outside it), then the footer and the air under it. A board's compact box:
 /// the air around its row and the inset under it. The shelf and the
 /// working line stand above and are not part of it.
 fn composer_fixed_height(grid: bool) -> f32 {
     if grid {
         theme::COMPACT_COMPOSER_H - theme::COMPOSER_ROW_H + theme::COMPACT_COMPOSER_INSET
     } else {
-        theme::COMPOSER_INPUT_PAD_T
-            + theme::COMPOSER_INPUT_PAD_B
-            + theme::COMPOSER_TOOLBAR_H
-            + theme::COMPOSER_INSET
+        2.0 * (theme::COMPOSER_ROW_PAD + theme::COMPOSER_TEXT_PAD_Y)
+            + theme::COMPOSER_FOOTER_H
+            + theme::COMPOSER_FOOTER_PAD_B
     }
 }
 
@@ -4452,9 +4588,24 @@ pub fn context_usage(
     };
     // The context heading is the legend's door when there is one: the
     // whole line is the hit row, lifting to the hover face like a menu row,
-    // with the chevron after the reading.
-    let context_heading = heading(
-        "Context",
+    // with the chevron after the reading. It reads as every Panel section's
+    // head does (`panel::panel_section_head`: 30 high, 12/500 `TEXT_DIM`,
+    // its reading at the right), so the Details tab's sections read alike.
+    let context_heading = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(theme::SPACE_3))
+        .h(px(theme::PANEL_SECTION_H))
+        .text_size(px(theme::FS_META))
+        .text_color(rgb(TEXT_DIM))
+        .child(
+            div()
+                .flex_shrink_0()
+                .font_weight(theme::W_LABEL)
+                .child("Context"),
+        )
+        .child(
         div()
             .flex()
             .items_center()
@@ -4476,7 +4627,7 @@ pub fn context_usage(
                 ))
             })
             .into_any_element(),
-    );
+        );
     let context_heading = if expandable {
         let id = gpui::ElementId::from("context-window-toggle");
         let key = ferrite_ui::pointer::hover_key(&id);
@@ -6735,15 +6886,24 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
     };
     let summary = text::group_summary(members);
     let mut highlights = separators(&summary.text);
-    if let Some(failed) = summary.failed.clone() {
+    // A named file a step brighter, the counts in the diff's hues, the
+    // failure count in the failure ink.
+    for (range, mark) in &summary.marks {
+        let ink = match mark {
+            text::SummaryMark::File => TEXT,
+            text::SummaryMark::Added => RUNNING,
+            text::SummaryMark::Removed | text::SummaryMark::Failed => BLOCKED,
+        };
         highlights.push((
-            failed,
+            range.clone(),
             HighlightStyle {
-                color: Some(rgb(BLOCKED).into()),
+                color: Some(rgb(ink).into()),
                 ..Default::default()
             },
         ));
     }
+    // Highlights apply in order: the seams and the marks interleave.
+    highlights.sort_by_key(|(range, _)| range.start);
     let words = div()
         .child(
             div()
@@ -8243,7 +8403,7 @@ mod tests {
         );
         assert_eq!(
             placeholder(false, true, None, Some("Run the tests")).text(),
-            "Start a thread",
+            "Describe a task or ask a question",
             "a draft has no conversation to predict from"
         );
     }
@@ -9079,9 +9239,9 @@ mod tests {
         );
         let summary = text::group_summary(&blocks[..2]);
         assert_eq!(summary.text, "Searched for 1 pattern, read 1 file");
-        assert_eq!(summary.failed, None);
+        assert_eq!(summary.failed(), None);
         let failed = text::group_summary(&blocks[..3]);
-        assert_eq!(&failed.text[failed.failed.clone().unwrap()], "1 failed");
+        assert_eq!(&failed.text[failed.failed().unwrap()], "1 failed");
         assert_eq!(
             text::group_live(blocks).map(|block| block.id),
             Some(blocks[5].id)
@@ -9918,30 +10078,32 @@ mod tests {
         }
     }
 
-    /// A run's state word is coloured only when it failed; the dot beside
-    /// it carries pending, passing and skipped.
+    /// A run's state word is coloured only when it failed; the mark beside
+    /// it carries the rest, in the one check vocabulary: green only while a
+    /// run is going, a pass dim, never the ochre that means an agent waits.
     #[test]
     fn check_rows_colour_only_failure() {
-        assert_eq!(check_detail_ink(CheckState::Failing), BLOCKED);
-        for state in [
-            CheckState::Passing,
-            CheckState::Pending,
-            CheckState::Skipped,
+        use components::CheckMark;
+        for (state, detail, mark) in [
+            (CheckState::Failing, "failure", CheckMark::Failed),
+            (CheckState::Pending, "in_progress", CheckMark::Running),
+            (CheckState::Pending, "queued", CheckMark::Queued),
+            (CheckState::Passing, "success", CheckMark::Passed),
+            (CheckState::Skipped, "skipped", CheckMark::Skipped),
         ] {
-            assert_eq!(check_detail_ink(state), TEXT_DIM);
+            assert_eq!(check_mark(state, detail), mark, "{state:?} {detail}");
         }
-        // CI dots are never the ochre that means an agent waits on you.
-        assert_eq!(check_ink(CheckState::Pending), RUNNING);
-        assert_eq!(check_ink(CheckState::Passing), TEXT_DIM);
-        assert_eq!(check_ink(CheckState::Failing), BLOCKED);
-        assert_eq!(check_ink(CheckState::Skipped), TEXT_FAINT);
-        for state in [
-            CheckState::Passing,
-            CheckState::Pending,
-            CheckState::Failing,
-            CheckState::Skipped,
+        assert_eq!(CheckMark::Failed.word_ink(), BLOCKED);
+        assert_eq!(CheckMark::Running.ink(), RUNNING);
+        assert_eq!(CheckMark::Passed.ink(), TEXT_DIM);
+        for mark in [
+            CheckMark::Running,
+            CheckMark::Queued,
+            CheckMark::Passed,
+            CheckMark::Skipped,
         ] {
-            assert_ne!(check_ink(state), ATTENTION, "{state:?}");
+            assert_eq!(mark.word_ink(), TEXT_DIM, "{mark:?}");
+            assert_ne!(mark.ink(), ATTENTION, "{mark:?}");
         }
         // A run's word is the lexicon's, lowercase, whatever the forge said.
         for (state, detail, word) in [
@@ -10103,7 +10265,7 @@ mod tests {
         );
         assert_eq!(
             placeholder(false, true, None, None).text(),
-            "Start a thread"
+            "Describe a task or ask a question"
         );
 
         // A landed prediction is the line, verbatim and unadorned — it is a
@@ -10161,7 +10323,9 @@ mod tests {
     /// compact box — 9 above and below its one 20px row, 10 to the foot.
     #[test]
     fn the_fixed_height_follows_the_composer_tokens() {
-        assert_eq!(composer_fixed_height(false), 14. + 8. + 42. + 14.);
+        // Solo: the row's 6 + 5 of air above and below one line, then the
+        // 30px footer and its 6 under it.
+        assert_eq!(composer_fixed_height(false), 2. * (6. + 5.) + 30. + 6.);
         assert_eq!(composer_fixed_height(true), 9. + 9. + 10.);
         assert_eq!(
             theme::COMPACT_COMPOSER_H,

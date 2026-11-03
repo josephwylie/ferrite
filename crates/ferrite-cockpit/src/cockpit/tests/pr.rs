@@ -1,19 +1,19 @@
-//! A Thread row's PR label (`crate::pr`): what it says, when `gh` is
+//! A Thread's PR reading (`crate::pr`): what it holds, when `gh` is
 //! asked, and the two actions on it.
 use super::*;
 use crate::palette::{Act, Command};
-use crate::pr::{PrLabel, PrMark};
 
 fn asked(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<(ThreadId, bool)> {
     view.update(cx, |view, _| std::mem::take(&mut view.pr_asked))
 }
 
-fn label(
+/// The number of the PR the Thread's last reading names.
+fn reading(
     view: &Entity<CockpitView>,
     thread: ThreadId,
     cx: &mut gpui::VisualTestContext,
-) -> Option<PrLabel> {
-    view.read_with(cx, |view, _| view.thread_row(thread).details.pr)
+) -> Option<u64> {
+    view.read_with(cx, |view, _| view.facts.pr(thread).map(|pr| pr.number))
 }
 
 fn land(
@@ -33,26 +33,19 @@ fn run(view: &Entity<CockpitView>, command: Command, cx: &mut gpui::VisualTestCo
     });
 }
 
-/// Opening a Thread asks for its PR; the row then wears `#48 ✗` from the
-/// answer, `#48 ⟳` while the next one is out, and nothing once `gh` has
-/// nothing to say.
+/// Opening a Thread asks for its PR; the answer is its reading, kept while
+/// the next one is out, and gone once `gh` has nothing to say.
 #[gpui::test]
-fn a_threads_row_wears_its_prs_label(cx: &mut TestAppContext) {
+fn a_thread_keeps_its_prs_reading(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("pr-label", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     assert_eq!(asked(&view, cx), [(thread, false)], "opened, asked once");
-    assert_eq!(label(&view, thread, cx), None, "no PR known yet");
+    assert_eq!(reading(&view, thread, cx), None, "no PR known yet");
 
     land(&view, thread, Some(pr_with_checks()), cx);
-    assert_eq!(
-        label(&view, thread, cx),
-        Some(PrLabel {
-            number: 48,
-            mark: Some(PrMark::Failing)
-        })
-    );
+    assert_eq!(reading(&view, thread, cx), Some(48));
 
     run(&view, Command::RefreshPr, cx);
     assert_eq!(
@@ -60,16 +53,10 @@ fn a_threads_row_wears_its_prs_label(cx: &mut TestAppContext) {
         [(thread, true)],
         "a manual ask waits for nothing"
     );
-    assert_eq!(
-        label(&view, thread, cx),
-        Some(PrLabel {
-            number: 48,
-            mark: Some(PrMark::Checking)
-        })
-    );
+    assert_eq!(reading(&view, thread, cx), Some(48), "kept while asking");
 
     land(&view, thread, None, cx);
-    assert_eq!(label(&view, thread, cx), None, "no gh, no PR: no label");
+    assert_eq!(reading(&view, thread, cx), None, "no gh, no PR: no reading");
 }
 
 /// Focusing a Thread asks for its PR, at most once per thirty seconds.

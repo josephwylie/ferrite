@@ -1,18 +1,16 @@
-//! A Thread's pull request, as its nav row labels it: `#123` and a mark
-//! (`PrLabel`, drawn as an icon by the nav) — the PR of
-//! the branch its checkout is on, read by `gh` where the checkout is
-//! (`Cockpit::pull_request`). The behaviour matches herdr-plugin-gh-pr's
+//! A Thread's pull request: the PR of the branch its checkout is on, read
+//! by `gh` where the checkout is (`Cockpit::pull_request`), which the
+//! palette's PR actions open. The behaviour matches herdr-plugin-gh-pr's
 //! README; none of its code is used (it carries no license).
 //!
 //! A reading is asked for when the operator focuses a Thread and when a
 //! Thread's worktree opens, at most once per `AUTO_EVERY`; the `refresh PR
-//! status` action asks at once. While an answer is out the label's mark
-//! is `Checking`. With no `gh`, no login or no PR there is no label: a row never
-//! shows an error.
+//! status` action asks at once. With no `gh`, no login or no PR there is
+//! no reading, and never an error.
 
 use std::time::{Duration, Instant};
 
-use ferrite_core::workspace::{CheckState, PrState, PullRequest};
+use ferrite_core::workspace::PullRequest;
 
 /// The least time between two automatic readings of one Thread's PR.
 pub const AUTO_EVERY: Duration = Duration::from_secs(30);
@@ -42,7 +40,7 @@ impl PrWatch {
         true
     }
 
-    /// Adopt an answer. Whether the label moved.
+    /// Adopt an answer. Whether the reading moved.
     pub fn answered(&mut self, reading: Option<PullRequest>) -> bool {
         let moved = self.checking || self.reading != reading;
         self.checking = false;
@@ -51,10 +49,10 @@ impl PrWatch {
     }
 
     /// Adopt the panel's PR tab's fuller read of the same branch
-    /// (`PullRequest::of_wire`), so its checks and state move the label
+    /// (`PullRequest::of_wire`), so its checks and state move the reading
     /// too. The snapshot names no check's page: a run keeps the one `gh`
-    /// last gave it. An answer still on its way stays so. Whether the label
-    /// moved.
+    /// last gave it. An answer still on its way stays so. Whether the
+    /// reading moved.
     pub fn adopt(&mut self, mut reading: PullRequest) -> bool {
         if let Some(old) = &self.reading {
             for run in &mut reading.runs {
@@ -72,68 +70,12 @@ impl PrWatch {
         self.reading = Some(reading);
         moved
     }
-
-    /// The row's label (`#123` and its mark), or nothing without a PR.
-    pub fn label(&self) -> Option<PrLabel> {
-        let pr = self.reading.as_ref()?;
-        Some(PrLabel {
-            number: pr.number,
-            mark: if self.checking {
-                Some(PrMark::Checking)
-            } else {
-                PrMark::of(pr)
-            },
-        })
-    }
-}
-
-/// A row's PR label: its number, and one mark for where it stands.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrLabel {
-    pub number: u64,
-    pub mark: Option<PrMark>,
-}
-
-impl PrLabel {
-    /// The number as the row types it: `#123`.
-    pub fn number_text(&self) -> String {
-        format!("#{}", self.number)
-    }
-}
-
-/// Where a PR stands, one mark: the nav draws each as an icon of one size
-/// (`nav::pr_mark`), never a font's glyph.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrMark {
-    Passing,
-    Failing,
-    Pending,
-    /// A reading is on its way.
-    Checking,
-    Merged,
-    Closed,
-}
-
-impl PrMark {
-    /// Merged and closed first, else its CI — skipped checks pass — and
-    /// nothing for an open PR with no checks.
-    fn of(pr: &PullRequest) -> Option<Self> {
-        match (pr.state, pr.checks) {
-            (PrState::Merged, _) => Some(PrMark::Merged),
-            (PrState::Closed, _) => Some(PrMark::Closed),
-            (PrState::Open, Some(CheckState::Passing | CheckState::Skipped)) => {
-                Some(PrMark::Passing)
-            }
-            (PrState::Open, Some(CheckState::Failing)) => Some(PrMark::Failing),
-            (PrState::Open, Some(CheckState::Pending)) => Some(PrMark::Pending),
-            (PrState::Open, None) => None,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_core::workspace::{CheckState, PrState};
 
     fn pr(state: PrState, checks: Option<CheckState>) -> PullRequest {
         PullRequest {
@@ -146,55 +88,18 @@ mod tests {
         }
     }
 
-    fn label(reading: PullRequest) -> Option<PrLabel> {
-        PrWatch {
-            reading: Some(reading),
-            ..PrWatch::default()
-        }
-        .label()
-    }
-
-    /// The README's table: the number, then one mark for where the PR
-    /// stands.
+    /// A reading lands and moves the watch; one on its way still counts
+    /// as moved when `gh` then says nothing.
     #[test]
-    fn the_label_is_the_number_and_one_mark() {
-        let cases = [
-            (PrState::Open, Some(CheckState::Passing), Some(PrMark::Passing)),
-            (PrState::Open, Some(CheckState::Skipped), Some(PrMark::Passing)),
-            (PrState::Open, Some(CheckState::Failing), Some(PrMark::Failing)),
-            (PrState::Open, Some(CheckState::Pending), Some(PrMark::Pending)),
-            (PrState::Merged, Some(CheckState::Failing), Some(PrMark::Merged)),
-            (PrState::Closed, None, Some(PrMark::Closed)),
-            (PrState::Open, None, None),
-        ];
-        for (state, checks, mark) in cases {
-            assert_eq!(
-                label(pr(state, checks)),
-                Some(PrLabel { number: 123, mark })
-            );
-        }
-        assert_eq!(PrWatch::default().label(), None, "no PR, no label");
-    }
-
-    /// While an answer is out the mark says so; a Thread with no PR yet
-    /// still says nothing.
-    #[test]
-    fn a_reading_on_its_way_marks_the_label() {
+    fn an_answer_moves_the_watch() {
         let now = Instant::now();
         let mut watch = PrWatch::default();
         assert!(watch.ask(now, false));
-        assert_eq!(watch.label(), None);
         assert!(watch.answered(Some(pr(PrState::Open, Some(CheckState::Passing)))));
+        assert_eq!(watch.reading.as_ref().map(|pr| pr.number), Some(123));
         assert!(watch.ask(now + AUTO_EVERY, false));
-        assert_eq!(
-            watch.label(),
-            Some(PrLabel {
-                number: 123,
-                mark: Some(PrMark::Checking)
-            })
-        );
         assert!(watch.answered(None), "gh had nothing to say");
-        assert_eq!(watch.label(), None);
+        assert!(watch.reading.is_none());
     }
 
     /// Automatic readings wait out thirty seconds per Thread; a manual one

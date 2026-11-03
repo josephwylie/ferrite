@@ -626,9 +626,6 @@ impl TranscriptView {
         self.scroll.is_following_tail()
     }
 
-    /// Whether the received reasoning caption's own row is mounted in the
-    /// viewport. Cockpit uses this to keep the pinned live caption from
-    /// duplicating historical prose.
     /// After a layout: if the live reasoning's own row is in view where the
     /// working line was chosen as if it were not (or the other way round),
     /// ask for the line again.
@@ -640,6 +637,9 @@ impl TranscriptView {
         }
     }
 
+    /// Whether the received reasoning caption's own row is mounted in the
+    /// viewport. Cockpit uses this to keep the pinned live caption from
+    /// duplicating historical prose.
     pub fn received_reasoning_is_visible(&self, caption: &str) -> bool {
         // The newest content row: the working row and the Decision stand
         // after it.
@@ -1495,45 +1495,17 @@ fn message_actions() -> gpui::Div {
         .group_hover(MESSAGE_GROUP, |style| style.opacity(1.))
 }
 
-/// The top fade (`TX_TOP_FADE`): the card's fill fading to nothing, over
+/// The top fade (`EDGE_FADE`): the card's fill fading to nothing, over
 /// what scrolls under the top of the transcript or its pinned prompt.
 fn top_fade() -> gpui::Div {
-    edge_fade(false)
+    ferrite_ui::components::edge_fade(gpui::rgb(theme::CARD).into(), false)
 }
 
 /// The foot fade: the same fill rising from the transcript's foot while the
 /// reader is scrolled away from the tail, so a row cut there does not read
 /// as one with what stands under it.
 fn bottom_fade() -> gpui::Div {
-    edge_fade(true)
-}
-
-/// An edge fade, `TX_TOP_FADE` tall: the card's fill eased out, holding
-/// near-opaque at the edge (`TX_FADE_HOLD` of it over its first third) so a
-/// row cut there is hidden, then fading to nothing. gpui's gradient has two
-/// stops, so the ease is two of them stacked. `rising` runs it up from the
-/// foot. It answers no pointer.
-fn edge_fade(rising: bool) -> gpui::Div {
-    let card: gpui::Hsla = gpui::rgb(theme::CARD).into();
-    let at = |a: f32| gpui::Hsla { a, ..card };
-    let angle = if rising { 0. } else { 180. };
-    let edge = (theme::TX_TOP_FADE / 3.).round();
-    let hold = div().w_full().h(px(edge)).bg(gpui::linear_gradient(
-        angle,
-        gpui::linear_color_stop(at(1.), 0.),
-        gpui::linear_color_stop(at(theme::TX_FADE_HOLD), 1.),
-    ));
-    let ease = div().w_full().flex_1().bg(gpui::linear_gradient(
-        angle,
-        gpui::linear_color_stop(at(theme::TX_FADE_HOLD), 0.),
-        gpui::linear_color_stop(at(0.), 1.),
-    ));
-    let fade = div().flex().w_full().h(px(theme::TX_TOP_FADE));
-    if rising {
-        fade.flex_col().child(ease).child(hold)
-    } else {
-        fade.flex_col().child(hold).child(ease)
-    }
+    ferrite_ui::components::edge_fade(gpui::rgb(theme::CARD).into(), true)
 }
 
 /// What prose path targets resolve against: the checkout, and every path

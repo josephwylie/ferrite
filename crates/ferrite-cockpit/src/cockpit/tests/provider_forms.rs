@@ -395,14 +395,16 @@ fn contract_the_standing_native_choice_is_option_two(cx: &mut TestAppContext) {
             .serial;
         (thread, serial)
     });
-    let allow = debug_bounds(cx, format!("request-allow-{}-{serial}", thread.get()))
-        .expect("option 1 is always drawn");
-    cx.simulate_click(allow.center(), gpui::Modifiers::none());
+    // A forbidden plain Allow is not offered in the split button's menu.
+    let more = debug_bounds(cx, format!("request-more-{}-{serial}", thread.get()))
+        .expect("the split button's menu");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(
-        fake.answered.borrow().is_empty(),
+        debug_bounds(cx, format!("request-allow-{}-{serial}", thread.get())).is_none(),
         "a forbidden plain Allow cannot act"
     );
+    assert!(fake.answered.borrow().is_empty());
     let choice = debug_bounds(cx, format!("request-always-{}-{serial}", thread.get()))
         .expect("option 2 carries the standing answer");
     cx.simulate_click(choice.center(), gpui::Modifiers::none());
