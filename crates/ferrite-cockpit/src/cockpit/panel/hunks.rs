@@ -227,30 +227,21 @@ impl CockpitView {
     }
 
     /// The unfolded block's hunk area, once its read has landed; nothing
-    /// before, so a quick read never flashes an empty band. The area fades
-    /// in as it arrives under a block the operator just unfolded
-    /// (`motion::ROW_IN`, opacity only); a block drawn already unfolded
-    /// shows it at once, and folding takes it away at once.
+    /// before, so a quick read never flashes an empty band. It lands in
+    /// the frame it arrives and goes in the frame the block folds, as every
+    /// fold does (motion-measured.md, "Tool group expand / collapse":
+    /// snap everything).
     pub(super) fn panel_hunks_element(
         &self,
         thread: ThreadId,
         index: usize,
         path: &str,
         unfolded: bool,
-    ) -> impl IntoElement {
-        let area = unfolded
+    ) -> Option<Div> {
+        unfolded
             .then(|| self.panel.hunks.shown(&(thread, path.to_string())))
             .flatten()
-            .map(|shown| hunks_element(index, shown));
-        let id = SharedString::from(format!("panel-hunks-in-{}-{path}", thread.get()));
-        ferrite_ui::motion::settled(id, area.is_some(), ferrite_ui::motion::ROW_IN, move |t| {
-            match area {
-                Some(area) if t < 1.0 => area.opacity(t),
-                Some(area) => area,
-                None => div(),
-            }
-        })
-        .reveal_only()
+            .map(|shown| hunks_element(index, shown))
     }
 }
 

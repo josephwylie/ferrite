@@ -1344,7 +1344,7 @@ pub fn init_components(cx: &mut gpui::App) {
 //   right-aligned, clamped to `PINNED_PROMPT_LINES`, on a plane in the
 //   card's fill (`PINNED_PROMPT_PAD_Y` above and below), the rows passing
 //   under it into the top fade (`EDGE_FADE`); pushed up by the next
-//   turn's prompt. A click on it glides back to its turn.
+//   turn's prompt. A click on it jumps back to its turn.
 // - **Activity.** A call or a run of calls is one muted line in the app's
 //   words (`Edited 3 files ›`, `Ran cargo test · 954 passed ›`), a literal
 //   a step brighter on no chip; no icon, no time, its `›` when it opens.
@@ -1546,7 +1546,7 @@ pub const IMAGE_CELLS: f32 = 48.0;
 /// (`MINIMAP_BAND_HOVER`), `MINIMAP_BAND_R` corners, inset
 /// `MINIMAP_BAND_INSET`, never shorter than `MINIMAP_BAND_MIN_H`; the band
 /// hides while the whole transcript fits, the ticks stay. A click on a tick
-/// scrolls smoothly to its row; anywhere else centres the view on that
+/// jumps to its row in one frame; anywhere else centres the view on that
 /// point.
 pub const MINIMAP_W: f32 = 12.0;
 pub const MINIMAP_TICK_H: f32 = 2.0;
@@ -1557,8 +1557,6 @@ pub const MINIMAP_BAND_MIN_H: f32 = 12.0;
 pub const MINIMAP_BAND_R: f32 = 2.0;
 pub const MINIMAP_BAND: u32 = 0xffffff0f;
 pub const MINIMAP_BAND_HOVER: u32 = 0xffffff1c;
-/// A minimap jump's scroll: eased over this long (reduced motion jumps).
-pub const MINIMAP_SCROLL_MS: u64 = 300;
 
 /// The room over a transcript's first row: a Solo Pane's `TX_PAD_T`, a
 /// board Pane's `TX_PAD_T_BOARD`, so a first prompt's bubble never meets
@@ -2759,8 +2757,8 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   would hold its hit area past its state, and the closed state says it
 //   all. What leaves on its own (a toast) fades out shorter and softer than
 //   it came (`MOTION_TOAST_OUT_MS`), as a face no pointer finds. The
-//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly, and
-//   the panel's rides ⌥⌘B and a preview's wider width the same way. A
+//   sidebar's width rides cmd-B (`MOTION_RESIZE_MS`), interruptibly; the
+//   panel snaps (⌥⌘B), as Claude's does. A
 //   board slot is no float: the Review slides in and, a little quicker, out (`MOTION_SLOT_OPEN_MS` /
 //   `MOTION_SLOT_CLOSE_MS`), its Pane giving way and taking the room back,
 //   so the board never jumps.
@@ -2779,7 +2777,7 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   Composer's caret blink (`MOTION_CARET_BLINK_MS`). A status dot never
 //   pulses or breathes.
 // - **Interruptible.** A state the operator can flip back (a hover, a
-//   chevron) retargets from where it is, never restarts.
+//   switch) retargets from where it is, never restarts.
 // - **No entrance on first paint.** Only a change the operator watched
 //   happen animates; a restored layout or scroll-back arrives in place.
 // - **Every animation has a static end state** that says the same thing
@@ -2808,7 +2806,7 @@ pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 /// across half the board reads as one physical move rather than a jump.
 pub const MOTION_EASE_SLIDE: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
-/// a line arriving inside a card already open (the usage card's legend).
+/// a Panel preview or tab body swapping in (`motion::swap_in`).
 pub const MOTION_ROW_IN_MS: u64 = 180;
 /// Streamed text: each run the provider delivers (a row appended live, or
 /// words growing an answer) fades in over 300ms on `MOTION_EASE_OUT`,
@@ -2819,9 +2817,8 @@ pub const MOTION_STREAM_FADE_MS: u64 = 300;
 /// The operator's sent bubble fades in over 250ms on `MOTION_EASE_OUT`,
 /// opacity only (Claude's measured ≈230ms, no slide).
 pub const MOTION_BUBBLE_FADE_MS: u64 = 250;
-/// The sidebar's width between column and rail (cmd-B), and the panel's
-/// between shown and hidden (⌥⌘B) — the board's width rides it every
-/// frame.
+/// The sidebar's width between column and rail (cmd-B) — the board's
+/// width rides it every frame.
 pub const MOTION_RESIZE_MS: u64 = 200;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
@@ -2848,8 +2845,6 @@ pub const MOTION_FLOAT_FROM_SCALE: f32 = 0.96;
 /// it, and slides out over a shorter 200ms before it is removed.
 pub const MOTION_SLOT_OPEN_MS: u64 = 240;
 pub const MOTION_SLOT_CLOSE_MS: u64 = 200;
-/// A disclosure chevron turning: 150ms.
-pub const MOTION_CHEVRON_MS: u64 = 150;
 /// The image viewer's zoom (a click between fit and actual size, ⌘= ⌘-
 /// ⌘0): 240ms on `MOTION_EASE_OUT_EXPO`, so the picture answers the click
 /// at once and settles softly. A pinch or a pan follows the hand instead.

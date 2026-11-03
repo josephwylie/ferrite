@@ -1,0 +1,6 @@
+#!/bin/zsh
+# rec NAME SECONDS : record the primary display, stopped by wall clock; refuses below 5 GB free
+C=${0:A:h:h}; free=$(df -g / | awk 'NR==2{print $4}'); (( free < 5 )) && { echo "low disk: ${free}G"; exit 1; }
+pgrep -x ffmpeg >/dev/null && { echo "recorder already running"; exit 1; }
+ffmpeg -v error -y -f avfoundation -capture_cursor 1 -framerate 120 -pixel_format nv12 -i "Capture screen 0:none" -c:v h264_videotoolbox -b:v 20M "$C/mov/$1.mp4" 2>"$C/mov/$1.log" &
+pid=$!; sleep "$2"; kill -INT $pid 2>/dev/null; sleep 1; kill -9 $pid 2>/dev/null; ls -la "$C/mov/$1.mp4"

@@ -2693,26 +2693,27 @@ fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     );
 }
 
-/// A minimap glide is a scroll the operator asked for, and the wheel is
-/// one too: a turn of the wheel mid-glide takes the scroll back, rather
-/// than the glide overriding it to its end.
+/// A minimap click is a jump, and a jump lands in one frame, as both
+/// reference apps' do (motion-measured.md, "Send: what happens around
+/// it"): the view leaves the tail at once and asks for no frame after.
 #[gpui::test]
-fn the_wheel_takes_the_scroll_back_from_a_minimap_glide(cx: &mut TestAppContext) {
+fn a_minimap_click_lands_in_one_frame(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
-    let (core, fake) = cockpit("minimap-glide", 1);
+    let (core, fake) = cockpit("minimap-jump", 1);
     long_transcripts(&fake);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
     tick(cx);
     tick(cx);
     settle(cx);
-    let gliding = |cx: &mut gpui::VisualTestContext| {
+    let following = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
             view.panes[0]
                 .transcript()
-                .is_some_and(|transcript| transcript.read(cx).gliding())
+                .is_some_and(|transcript| transcript.read(cx).is_following_tail())
         })
     };
+    assert!(following(cx), "the premise: the view follows the tail");
     let rail = cx
         .debug_bounds("transcript-minimap")
         .expect("the transcript draws its minimap");
@@ -2721,17 +2722,23 @@ fn the_wheel_takes_the_scroll_back_from_a_minimap_glide(cx: &mut TestAppContext)
     cx.simulate_mouse_move(top, None, gpui::Modifiers::none());
     cx.simulate_mouse_down(top, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(top, MouseButton::Left, gpui::Modifiers::none());
-    cx.executor().advance_clock(Duration::from_millis(50));
-    display_frames(cx);
-    assert!(gliding(cx), "the premise: the click glides");
-    let body = gpui::point(rail.left() - px(200.), rail.center().y);
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: body,
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40.))),
-        ..Default::default()
-    });
     cx.run_until_parked();
-    assert!(!gliding(cx), "the wheel took the scroll back");
-    frames_over(cx, theme::MINIMAP_SCROLL_MS);
-    assert_eq!(display_frames(cx), 0, "and nothing glides on");
+    display_frames(cx);
+    assert!(!following(cx), "the click landed away from the tail");
+    let offset = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .map(|transcript| {
+                    let top = transcript.read(cx).scroll().list_state().logical_scroll_top();
+                    (top.item_ix, top.offset_in_item)
+                })
+        })
+    };
+    let landed = offset(cx);
+    // Past the scrollbar thumb's linger and fade, which any scroll shows.
+    let thumb = theme::MOTION_SCROLLBAR_LINGER_MS + theme::MOTION_HOVER_FADE_MS;
+    frames_over(cx, thumb + 32);
+    assert_eq!(offset(cx), landed, "the first frame was the last: no glide");
+    assert_eq!(display_frames(cx), 0, "and nothing eases on");
 }

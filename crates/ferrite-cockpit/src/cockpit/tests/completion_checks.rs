@@ -726,10 +726,10 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             input.top() >= well.top() && well.bottom() <= input.bottom() + px(8.),
             "the command starts in its well: {well:?} / {input:?}"
         );
-        // Under the well, one section gap on: the buttons (what `Always
-        // allow` covers is the menu row's note, not a body line).
+        // Under the well, the answer row's own gap on: the buttons (what
+        // `Always allow` covers is the menu row's note, not a body line).
         let gap = allow.top() - well.bottom();
-        let most = ferrite_ui::theme::DECISION_GAP + 1.;
+        let most = ferrite_ui::theme::DECISION_ACTIONS_GAP + 1.;
         assert!(
             gap >= px(0.) && gap <= px(most),
             "the command-to-Allow gap must stay near the well's design gap: {gap:?}"

@@ -24,11 +24,11 @@
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
 //! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
-//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
+//! | chevron rotate | none | every disclosure chevron (the transcript's, the nav's, the Panel's folds) turns its quarter on the frame its fold flips, as Claude's does (`motion-measured.md`, "Tool group expand / collapse") |
 //! | switch | [`FADE_QUICK`] 150ms | a Settings on/off switch (`components::switch`): its knob slides to the other end and its track blends between off and on ([`settled`]) |
 //! | stream fade | [`STREAM_FADE`] 300ms CSS `ease-out`, opacity only | every transcript row appended at the tail while the operator watches, and each run of words streaming into an answer (`TextView::fresh`); never first paint, a history window growing at its head, or scroll-back |
 //! | bubble fade | [`BUBBLE_FADE`] 250ms CSS `ease-out`, opacity only | the operator's prompt bubble appended at the tail |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 100ms, and widens 4 → 6px under the pointer over [`HOVER_FADE`] (`scrollbar::step_widen`); idle, nothing is drawn |
 //!
 //! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
@@ -234,7 +234,6 @@ pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
-pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 /// The image viewer's zoom, tweened on the scale's logarithm so every
 /// step of it reads as the same zoom.
 pub const IMAGE_ZOOM: MotionSpec = MotionSpec::new(theme::MOTION_IMAGE_ZOOM_MS, EASE_OUT_EXPO);
@@ -1818,7 +1817,7 @@ mod tests {
     impl Render for Switch {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let drawn = self.drawn.clone();
-            let fold = settled("switch", self.on, CHEVRON, move |value| {
+            let fold = settled("switch", self.on, FADE_QUICK, move |value| {
                 drawn.set(value);
                 div().size_4()
             });
@@ -1874,7 +1873,7 @@ mod tests {
         flip(&view, true, cx);
         close(drawn.get(), mid, 1e-3, "turns around from where it is");
         cx.executor()
-            .advance_clock(Duration::from_millis(theme::MOTION_CHEVRON_MS));
+            .advance_clock(Duration::from_millis(theme::MOTION_FADE_QUICK_MS));
         next_frame(cx);
         assert_eq!(drawn.get(), 1.0);
         assert_eq!(next_frame(cx), 0, "settled: no frames");

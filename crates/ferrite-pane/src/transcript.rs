@@ -263,14 +263,6 @@ fn agent_opener(call: &str, view: Entity<TranscriptView>) -> AnyElement {
         .into_any_element()
 }
 
-/// A minimap jump in flight: from one scroll position to another, eased.
-#[derive(Clone, Copy, Debug)]
-struct Glide {
-    from: f32,
-    to: f32,
-    started: Instant,
-}
-
 /// A stable GPUI entity for one Pane Subject's heavy transcript subtree.
 pub struct TranscriptView {
     input: TranscriptInput,
@@ -312,8 +304,6 @@ pub struct TranscriptView {
     targets: TargetContext,
     /// The hover card this transcript hosts, while a path of its is hovered.
     hover_card: Option<Entity<HoverCard>>,
-    /// A minimap jump easing in.
-    glide: Option<Glide>,
     /// Room past the last row so a band jump can put its band at the top
     /// of a transcript shorter than that (a board Pane with its first prompt
     /// scrolled away, R2): see `Runway`.
@@ -445,7 +435,6 @@ impl TranscriptView {
             disclosure_bounds: Default::default(),
             targets,
             hover_card: None,
-            glide: None,
             runway: Rc::default(),
             visuals,
             list_w: Rc::default(),
@@ -617,12 +606,6 @@ impl TranscriptView {
         self.arrivals.len()
     }
 
-    /// A minimap glide is in flight.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn gliding(&self) -> bool {
-        self.glide.is_some()
-    }
-
     /// How far a live-appended row is into its fade, while it is.
     fn arrival(&self, row: &RowId, cx: &App) -> Option<f32> {
         if ferrite_ui::motion::reduced_motion(cx) {
@@ -770,7 +753,6 @@ impl TranscriptView {
     }
 
     pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
-        self.glide = None;
         self.scroll.scroll_to_bottom();
         cx.notify();
     }
@@ -779,7 +761,6 @@ impl TranscriptView {
     /// the live tail, or a turn's band with its output scrolled under it.
     #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
-        self.glide = None;
         match target {
             ScrollTarget::Top => {
                 self.runway.set(Runway::default());
@@ -1486,7 +1467,7 @@ impl TranscriptView {
 
     /// The pinned prompt: its turn's bubble stuck to the top on a plane in
     /// the card's fill, the rows passing under it into the top fade. A
-    /// click glides back to its turn. Wheel gestures scroll the list.
+    /// click jumps back to its turn. Wheel gestures scroll the list.
     fn pinned_band(
         &self,
         index: usize,
@@ -1526,7 +1507,7 @@ impl TranscriptView {
             .tooltip(ferrite_ui::menu::tooltip("Back to this prompt"))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 cx.stop_propagation();
-                let _ = weak.update(cx, |view, cx| view.glide_to(goal, cx));
+                let _ = weak.update(cx, |view, cx| view.jump_to_goal(goal, cx));
             });
         Some(
             div()
@@ -1840,50 +1821,20 @@ impl TranscriptView {
         self.scroll.scroll_to(index, px((at - tops[index]).max(0.)));
     }
 
-    /// Scroll to `goal` (estimated tops' space), easing over
-    /// `MINIMAP_SCROLL_MS`; reduced motion jumps.
-    fn glide_to(&mut self, goal: f32, cx: &mut Context<Self>) {
+    /// Scroll to `goal` (estimated tops' space) in one frame: a jump the
+    /// operator asked for lands at once, as both reference apps' do
+    /// (motion-measured.md, "Send: what happens around it": jump-to-latest
+    /// is a snap).
+    fn jump_to_goal(&mut self, goal: f32, cx: &mut Context<Self>) {
         let (tops, total) = self.estimated_tops();
-        let goal = goal.clamp(0., total);
-        if ferrite_ui::motion::reduced_motion(cx) {
-            self.glide = None;
-            self.jump_to(goal, &tops);
-        } else {
-            self.glide = Some(Glide {
-                from: self.scroll_position(&tops, total),
-                to: goal,
-                started: cx.background_executor().now(),
-            });
-        }
+        self.jump_to(goal.clamp(0., total), &tops);
         cx.notify();
-    }
-
-    /// One frame of a glide in flight.
-    fn advance_glide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(glide) = self.glide else {
-            return;
-        };
-        let spec =
-            ferrite_ui::motion::MotionSpec::new(theme::MINIMAP_SCROLL_MS, ferrite_ui::motion::EASE);
-        let elapsed = cx
-            .background_executor()
-            .now()
-            .saturating_duration_since(glide.started);
-        let (tops, _) = self.estimated_tops();
-        if elapsed >= spec.duration() {
-            self.glide = None;
-            self.jump_to(glide.to, &tops);
-            return;
-        }
-        let at = ferrite_ui::motion::lerp(glide.from, glide.to, spec.progress_at(elapsed));
-        self.jump_to(at, &tops);
-        window.request_animation_frame();
     }
 
     /// The minimap (the WP-A minimap tokens): a tick per prompt, failure,
     /// Decision and pass, the viewport as a translucent band while the
     /// transcript overflows, shown while the pointer is on the Pane. A click
-    /// on a tick glides to its row; anywhere else on the rail centres the
+    /// on a tick jumps to its row; anywhere else on the rail centres the
     /// view on that point.
     fn minimap(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let rows = self.rows.rows();
@@ -1933,7 +1884,7 @@ impl TranscriptView {
                         )
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             cx.stop_propagation();
-                            let _ = entity.update(cx, |view, cx| view.glide_to(goal, cx));
+                            let _ = entity.update(cx, |view, cx| view.jump_to_goal(goal, cx));
                         }),
                 )
             })
@@ -1990,7 +1941,7 @@ impl TranscriptView {
                     let fraction =
                         (f32::from(event.position.y - viewport.top()) / height).clamp(0., 1.);
                     let goal = (fraction * total - view_h / 2.).max(0.);
-                    let _ = jump_entity.update(cx, |view, cx| view.glide_to(goal, cx));
+                    let _ = jump_entity.update(cx, |view, cx| view.jump_to_goal(goal, cx));
                 })
                 .into_any_element(),
         )
@@ -2044,7 +1995,6 @@ impl Render for TranscriptView {
         crate::file_links::begin_layout(&self.input.namespace, cx);
         // The answers' file links are this transcript's path targets.
         self.rich.set_path_scope(self.input.namespace.clone());
-        self.advance_glide(window, cx);
         self.settle_found(window);
         if self.fading(cx) {
             window.request_animation_frame();
@@ -2122,11 +2072,6 @@ impl Render for TranscriptView {
         let pad_b = theme::body_pad_b(solo);
         let check_reasoning = self.input.working_reasoning.is_some();
         let list = div()
-            // The wheel takes the scroll back from a minimap glide in
-            // flight, rather than the glide overriding it to its end.
-            .on_scroll_wheel(cx.listener(|view, _: &gpui::ScrollWheelEvent, _, _| {
-                view.glide = None;
-            }))
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
                 // A band jump's room: enough under the last row for the

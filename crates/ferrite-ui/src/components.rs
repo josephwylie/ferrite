@@ -1488,21 +1488,15 @@ pub fn home_relative(path: &std::path::Path) -> String {
 }
 
 /// A fold's chevron, every surface's (the nav's sections and Groups, the
-/// panel's file blocks): `chevron-right` while folded, a
-/// quarter turn down while open. The turn eases over `motion::CHEVRON`
-/// when the fold flips under it (`key` holds its clock); drawn first
-/// already open, it is simply turned.
-pub fn fold_chevron(
-    key: impl Into<SharedString>,
-    open: bool,
-    size: f32,
-    ink: u32,
-) -> impl IntoElement {
-    motion::settled(key.into(), open, motion::CHEVRON, move |turn| {
-        icons::icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(
-            gpui::Transformation::rotate(gpui::radians(std::f32::consts::FRAC_PI_2 * turn)),
-        )
-    })
+/// panel's file blocks, the usage card's folds): `chevron-right` while
+/// folded, a quarter turn down while open. The turn snaps, as the folds
+/// themselves do (motion-measured.md, "Tool group expand / collapse":
+/// snap everything, the chevron included).
+pub fn fold_chevron(open: bool, size: f32, ink: u32) -> impl IntoElement {
+    let turn = if open { 1.0 } else { 0.0 };
+    icons::icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(
+        gpui::Transformation::rotate(gpui::radians(std::f32::consts::FRAC_PI_2 * turn)),
+    )
 }
 
 /// A menu row. The only place a menu row takes its pointer role: the raised

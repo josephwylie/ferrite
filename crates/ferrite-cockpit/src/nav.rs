@@ -1033,7 +1033,6 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
                         .debug_selector(move || format!("{key}-chevron"))
                         .flex()
                         .child(components::fold_chevron(
-                            format!("{key}-chevron"),
                             !folded,
                             NAV_HEADING_CARET,
                             INK_SUBTLE,
@@ -1132,7 +1131,6 @@ fn project_row(
                     .flex()
                     .flex_shrink_0()
                     .child(components::fold_chevron(
-                        format!("{key}-{index}-chevron"),
                         !folded,
                         NAV_HEADING_CARET,
                         INK_SUBTLE,
@@ -1371,7 +1369,6 @@ pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .child(components::fold_chevron(
-            format!("nav-group-chevron-{}", id.get()),
             !row.folded,
             NAV_CHEVRON,
             if row.selected { INK_STRONG } else { INK_SUBTLE },
@@ -1895,7 +1892,6 @@ pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
         .debug_selector(move || format!("nav-machine-fold-{index}"))
         .flex_shrink_0()
         .child(components::fold_chevron(
-            format!("nav-machine-chevron-{index}"),
             !folded,
             NAV_CHEVRON,
             INK_SUBTLE,

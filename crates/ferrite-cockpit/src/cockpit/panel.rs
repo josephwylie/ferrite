@@ -453,14 +453,3 @@ fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
                 ),
         )
 }
-
-/// A fold's chevron in the panel (a file block's, the Changes line's): the
-/// shared one (`components::fold_chevron`).
-pub(super) fn fold_chevron(
-    key: impl Into<SharedString>,
-    unfolded: bool,
-    size: f32,
-    ink: u32,
-) -> impl IntoElement {
-    ferrite_ui::components::fold_chevron(key, unfolded, size, ink)
-}

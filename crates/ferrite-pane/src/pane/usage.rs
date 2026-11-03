@@ -657,7 +657,6 @@ impl RenderOnce for ContextList {
                     .flex_shrink_0()
                     .w(px(theme::USAGE_LEGEND_TEXT_X))
                     .child(components::fold_chevron(
-                        format!("{id}-turn"),
                         unfolded,
                         theme::ICON_CHEVRON,
                         INK_SUBTLE,

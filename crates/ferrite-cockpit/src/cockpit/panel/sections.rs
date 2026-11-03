@@ -261,7 +261,6 @@ fn connectors(servers: &[McpServer], window: &mut Window, cx: &mut gpui::App) ->
                 .text_color(rgb(INK_STRONG))
                 .child("Connectors")
                 .child(ferrite_ui::components::fold_chevron(
-                    "panel-connectors-turn",
                     unfolded,
                     NAV_HEADING_CARET,
                     INK_SUBTLE,

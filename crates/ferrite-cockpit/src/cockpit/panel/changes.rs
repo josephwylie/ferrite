@@ -97,8 +97,7 @@ impl CockpitView {
                     .absolute()
                     .left(px(PANEL_ROW_ICON_X))
                     .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
-                    .child(fold_chevron(
-                        format!("panel-fold-all-{}", thread.get()),
+                    .child(ferrite_ui::components::fold_chevron(
                         all,
                         PANEL_ROW_ICON,
                         INK_SUBTLE,
@@ -193,8 +192,7 @@ impl CockpitView {
                     .inset_0()
                     .invisible()
                     .group_hover(group.clone(), |style| style.visible())
-                    .child(fold_chevron(
-                        format!("panel-fold-turn-{}-{}", thread.get(), file.path),
+                    .child(ferrite_ui::components::fold_chevron(
                         unfolded,
                         PANEL_ROW_ICON,
                         INK_SUBTLE,
@@ -252,7 +250,7 @@ impl CockpitView {
             .rounded(px(R_CARD))
             .overflow_hidden()
             .child(head)
-            .child(self.panel_hunks_element(thread, index, &file.path, unfolded))
+            .children(self.panel_hunks_element(thread, index, &file.path, unfolded))
     }
 }
 
