@@ -120,6 +120,11 @@ impl Engine {
                 self.interrupt(*thread);
                 Ok(None)
             }
+            Op::SendQueuedNow { thread, item } => {
+                self.open_thread(thread)?;
+                self.send_queued_now(*thread, item);
+                Ok(None)
+            }
             Op::StopSubagent { thread, key } => {
                 self.open_thread(thread)?;
                 self.stop_subagent(*thread, &AgentKey::from_stored(key.clone()));

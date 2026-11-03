@@ -30,8 +30,8 @@ pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, env_strip, env_word, flat_facts_text,
     mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
-    queued_edit, queued_send_now, queued_takes_back, send_button, send_is_stop, toolbar_chip,
-    ComposerControls,
+    queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button, send_is_stop,
+    toolbar_chip, ComposerControls,
 };
 use composer::{
     composer_region, composer_stack, env_face, ghost_row, placeholder, queue_card, ComposerStack,
@@ -6622,12 +6622,21 @@ mod tests {
                     <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
             );
         }
-        // Solo's queue is one 44px strip and its 8 gap, however many wait;
-        // the compact box counts none (its Pane says `2 queued` unfocused).
+        // Solo's queue is a 44px row per message and its 8 gap; the
+        // compact box counts none (its Pane says `2 queued` unfocused).
         assert_eq!(composer_queue_height(900., false, 0), 0.);
+        // A row per message, up to the rows it shows; more scroll.
         assert_eq!(
-            composer_queue_height(900., false, 3),
+            composer_queue_height(900., false, 1),
             theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
+        );
+        assert_eq!(
+            composer_queue_height(900., false, 2),
+            2. * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
+        );
+        assert_eq!(
+            composer_queue_height(900., false, 9),
+            theme::QUEUE_ROWS_SHOWN as f32 * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
         );
         assert_eq!(composer_queue_height(900., true, 3), 0.);
     }

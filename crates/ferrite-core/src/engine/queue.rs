@@ -32,6 +32,25 @@ pub struct QueueItem {
     pub delivery: Delivery,
 }
 
+/// What becomes of a queued prompt once the provider confirms it took it
+/// back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Then {
+    /// It is gone.
+    Drop,
+    /// It goes back to the Composer, ahead of the draft when `prepend`.
+    Restore { prepend: bool },
+    /// It goes out again at once, the next to go: send now.
+    Resend,
+}
+
+/// A take-back the provider has not answered yet.
+struct Cancelling {
+    id: String,
+    text: String,
+    then: Then,
+}
+
 /// A prompt Ferrite holds until its Session can take it, under the
 /// client id it will be handed to the provider with.
 pub(super) struct Held {
@@ -52,8 +71,11 @@ pub(super) struct Queue {
     /// first.
     admitting: Vec<String>,
     path: PathBuf,
-    cancel: Option<(String, String, bool, bool)>,
+    cancel: Option<Cancelling>,
     pub recovered: Vec<(String, bool)>,
+    /// Prompts taken back to go out again at once (`Then::Resend`), for the
+    /// Engine to hand over first.
+    pub resend: Vec<String>,
     /// Native ids Ferrite let go of itself (an interrupt's resend); their
     /// late cancellation receipts are not the operator's news.
     dropped: HashSet<String>,
@@ -146,14 +168,10 @@ impl Queue {
         });
         held.chain(sending).chain(queued).collect()
     }
-    /// Ask to take back the queued prompt `target` names, else the latest.
-    /// Answers the provider's id to cancel it by.
-    pub fn cancellation(
-        &mut self,
-        target: Option<&str>,
-        restore: bool,
-        prepend: bool,
-    ) -> Option<String> {
+    /// Ask to take back the queued prompt `target` names, else the latest,
+    /// to become what `then` says once the provider confirms. Answers the
+    /// provider's id to cancel it by.
+    pub fn cancellation(&mut self, target: Option<&str>, then: Then) -> Option<String> {
         if self.cancel.is_some() {
             return None;
         }
@@ -161,7 +179,11 @@ impl Queue {
             Some(target) => self.items.iter().find(|item| stable_id(item) == target)?,
             None => self.items.last()?,
         };
-        self.cancel = Some((item.id.clone(), item.text.clone(), restore, prepend));
+        self.cancel = Some(Cancelling {
+            id: item.id.clone(),
+            text: item.text.clone(),
+            then,
+        });
         Some(item.id.clone())
     }
     pub fn cancel_failed(&mut self) {
@@ -281,17 +303,21 @@ impl Queue {
                 if self.dropped.remove(&id) {
                     return change;
                 }
-                if let Some((pending, text, restore, prepend)) = self.cancel.take() {
-                    if pending == id && cancelled {
-                        if restore {
-                            self.recovered.push((text, prepend));
+                if let Some(pending) = self.cancel.take() {
+                    if pending.id == id && cancelled {
+                        match pending.then {
+                            Then::Drop => {}
+                            Then::Restore { prepend } => {
+                                self.recovered.push((pending.text, prepend));
+                            }
+                            Then::Resend => self.resend.push(pending.text),
                         }
                         if let Some(item) = self.items.iter().find(|item| item.id == id) {
                             self.metadata.pending.remove(&item.client_id);
                         }
                         self.items.retain(|item| item.id != id);
-                    } else if pending != id {
-                        self.cancel = Some((pending, text, restore, prepend));
+                    } else if pending.id != id {
+                        self.cancel = Some(pending);
                     }
                 }
                 change.notice = error.or_else(|| (!cancelled).then(|| "Queued prompt already started or could not be cancelled; it was not restored.".into()));
@@ -381,12 +407,45 @@ mod tests {
             "acknowledged, it keeps its id"
         );
         assert_eq!(
-            queue.cancellation(Some("steered"), true, false).as_deref(),
+            queue
+                .cancellation(Some("steered"), Then::Restore { prepend: false })
+                .as_deref(),
             Some("steer:steered"),
             "cancel takes the prompt it names, not the latest"
         );
         let _ = std::fs::remove_file(path);
     }
+    /// A confirmed take-back becomes what was asked: dropped, back to the
+    /// Composer, or out again at once.
+    #[test]
+    fn a_confirmed_take_back_does_what_it_was_for() {
+        let path =
+            std::env::temp_dir().join(format!("ferrite-queue-then-{}.json", std::process::id()));
+        let mut queue = Queue::open(path.clone());
+        for (id, then) in [
+            ("dropped", Then::Drop),
+            ("restored", Then::Restore { prepend: true }),
+            ("resent", Then::Resend),
+        ] {
+            queue.prepare(id, id).unwrap();
+            queue.observe(QueueEvent::Accepted(QueuedPrompt {
+                id: id.into(),
+                client_id: id.into(),
+                text: id.into(),
+            }));
+            assert_eq!(queue.cancellation(Some(id), then).as_deref(), Some(id));
+            queue.observe(QueueEvent::Cancelled {
+                id: id.into(),
+                cancelled: true,
+                error: None,
+            });
+        }
+        assert_eq!(queue.recovered, [("restored".to_string(), true)]);
+        assert_eq!(queue.resend, ["resent"]);
+        assert!(queue.items.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn cancellation_race_never_restores_started_input_and_snapshot_owns_pending() {
         let path =
@@ -408,7 +467,9 @@ mod tests {
             text: "wire".into(),
         }));
         assert_eq!(
-            queue.cancellation(None, true, false).as_deref(),
+            queue
+                .cancellation(None, Then::Restore { prepend: false })
+                .as_deref(),
             Some("native")
         );
         queue.observe(QueueEvent::Snapshot(Vec::new()));

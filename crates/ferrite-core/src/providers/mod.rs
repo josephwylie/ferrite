@@ -168,6 +168,12 @@ pub trait Session {
             "native queuing is unavailable in this Session",
         ))
     }
+    /// Whether input enqueued while a turn runs steers that turn — folded
+    /// in at its next tool boundary — rather than waiting for the next
+    /// one: then a queued prompt sent now needs no interrupt.
+    fn steers(&self) -> bool {
+        false
+    }
     fn cancel_queued(&mut self, _id: &str) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -388,6 +394,10 @@ impl Session for CodexSession {
     }
     fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
         CodexSession::enqueue(self, client_id, text)
+    }
+    /// `turn/steer`: what is enqueued while a turn runs joins it.
+    fn steers(&self) -> bool {
+        true
     }
     fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
         CodexSession::cancel_queued(self, id)

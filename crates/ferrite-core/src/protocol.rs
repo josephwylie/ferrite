@@ -166,6 +166,12 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<String>,
     },
+    /// Send the queued prompt `item` names next (`QueueItem::id`):
+    /// `Engine::send_queued_now`.
+    SendQueuedNow {
+        thread: ThreadId,
+        item: String,
+    },
     /// Hand a prompt the provider gave back to the Composer
     /// (`ThreadState::recovered`): it leaves the Thread.
     TakeRecovered {
@@ -419,6 +425,7 @@ impl Op {
             | Op::Queue { thread, .. }
             | Op::Unqueue { thread, .. }
             | Op::CancelQueued { thread, .. }
+            | Op::SendQueuedNow { thread, .. }
             | Op::TakeRecovered { thread, .. }
             | Op::Rewind { thread, .. }
             | Op::Fork { thread, .. }

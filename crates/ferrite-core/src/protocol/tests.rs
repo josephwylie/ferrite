@@ -470,6 +470,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_send_queued_now",
+            command(
+                54,
+                Op::SendQueuedNow {
+                    thread,
+                    item: "0000beef-0003-4000-8001-000000000001".into(),
+                },
+            ),
+        ),
+        (
             "command_take_recovered",
             command(30, Op::TakeRecovered { thread }),
         ),

@@ -196,15 +196,16 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
 /// circle on the box's row, its footer under the box and, on an empty
 /// Thread or a draft, where the work runs on a strip over it (`env`,
 /// `env_strip`); a board Pane's send circle alone. Either's queue strip
-/// carries `queue`, its action buttons (`queued_send_now`, `queued_edit`,
-/// `queued_close`).
+/// carries `queue`, each queued message's action buttons
+/// (`queued_send_now`, `queued_edit`, `queued_close`), in the queue's
+/// listing order.
 pub struct ComposerControls {
     pub attach: Option<AnyElement>,
     /// The send circle; none while the box has nothing to send or stop.
     pub send: Option<AnyElement>,
     pub footer: Option<AnyElement>,
     pub env: Option<AnyElement>,
-    pub queue: Vec<AnyElement>,
+    pub queue: Vec<Vec<AnyElement>>,
 }
 
 /// Where an empty Thread's or a draft's work runs, Codex's strip over the
@@ -663,75 +664,108 @@ pub(super) fn in_column(inset: f32, column: bool, row: impl IntoElement) -> Div 
     )
 }
 
-/// The queue strip (Claude's): its own card over the box, `QUEUE_CARD_H`
-/// high at `R_CARD` on `paint::RAISED` — `N messages queued`, the latest
-/// on one cut line in `INK_SUBTLE`, then `actions` (send now, edit,
-/// remove), which the cockpit aims at the latest by its id, as ↑ and ⌫ do.
-/// A latest that Codex is already folding into the running turn says
-/// `Steering` there, and the cockpit offers no edit or remove for it
-/// (`queued_takes_back`). None with nothing queued. Snaps in and out
-/// (motion-measured: Claude's strip leaves in one frame).
+/// The queue strip (Claude's): its own card over the box at `R_CARD` on
+/// `paint::RAISED`, a `QUEUE_CARD_H` row for each queued message in the
+/// order they go — `queued` lists the latest first, so the strip reads
+/// it upwards — `N messages queued` leading the first. Each row is its
+/// message on one cut line in `INK_SUBTLE` (`Steering` after one Codex is
+/// already folding into the running turn) and its own `actions` (send
+/// now, edit, remove), the cockpit's, aimed at it by its id: `actions[i]`
+/// are `queued[i]`'s. Past `QUEUE_ROWS_SHOWN` rows the card scrolls. None
+/// with nothing queued. Snaps in and out (motion-measured: Claude's strip
+/// leaves in one frame).
 pub(super) fn queue_card(
     queued: &[QueueItem],
     namespace: &str,
-    actions: Vec<AnyElement>,
-) -> Option<Div> {
-    let latest = queued.first()?;
-    let steering = (latest.delivery == Delivery::Steering).then(|| {
-        div()
-            .debug_selector(|| "queued-steering".into())
-            .flex_shrink_0()
-            .text_color(rgb(INK_SUBTLE))
-            .child("Steering")
-    });
+    actions: Vec<Vec<AnyElement>>,
+) -> Option<gpui::Stateful<Div>> {
+    if queued.is_empty() {
+        return None;
+    }
     let count = queued.len();
+    let mut actions = actions.into_iter();
+    let rows: Vec<_> = queued
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (index, item, actions.next().unwrap_or_default()))
+        .collect();
+    let rows = rows
+        .into_iter()
+        .rev()
+        .enumerate()
+        .map(|(shown, (index, item, acts))| {
+            let steering = (item.delivery == Delivery::Steering).then(|| {
+                div()
+                    .debug_selector(move || format!("queued-steering-{index}"))
+                    .flex_shrink_0()
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("Steering")
+            });
+            let count_label = (shown == 0).then(|| {
+                components::tabular(
+                    div()
+                        .debug_selector(move || format!("queued-count-{count}"))
+                        .flex_shrink_0()
+                        .font_weight(theme::W_LABEL)
+                        .text_color(rgb(INK_STRONG))
+                        .child(queued_count(count)),
+                )
+            });
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(theme::QUEUED_GAP))
+                .h(px(theme::QUEUE_CARD_H))
+                .min_w_0()
+                .pl(px(theme::QUEUED_PAD_X))
+                .pr(px(
+                    theme::QUEUED_PAD_X - (theme::QUEUED_ACTION - theme::QUEUED_ICON) / 2.
+                ))
+                .children(count_label)
+                .child(
+                    div()
+                        .debug_selector(move || format!("queued-{index}"))
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(SharedString::from(queued_preview(&item.text))),
+                )
+                .children(steering)
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(theme::QUEUED_ACTION_GAP))
+                        .children(acts),
+                )
+        });
     let selector = format!("composer-queue-{namespace}");
     Some(
         div()
+            .id(SharedString::from(selector.clone()))
             .debug_selector(move || selector.clone())
             .flex()
+            .flex_col()
             .flex_shrink_0()
-            .items_center()
-            .gap(px(theme::QUEUED_GAP))
-            .h(px(theme::QUEUE_CARD_H))
             .min_w_0()
-            .pl(px(theme::QUEUED_PAD_X))
-            .pr(px(
-                theme::QUEUED_PAD_X - (theme::QUEUED_ACTION - theme::QUEUED_ICON) / 2.
-            ))
+            .max_h(px(queue_rows_shown(count) as f32 * theme::QUEUE_CARD_H))
+            .overflow_y_scroll()
             .rounded(px(theme::R_CARD))
             .bg(theme::paint::RAISED)
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
             .whitespace_nowrap()
-            .child(components::tabular(
-                div()
-                    .debug_selector(move || format!("queued-count-{count}"))
-                    .flex_shrink_0()
-                    .font_weight(theme::W_LABEL)
-                    .text_color(rgb(INK_STRONG))
-                    .child(queued_count(count)),
-            ))
-            .child(
-                div()
-                    .debug_selector(|| "queued-0".into())
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(queued_preview(&latest.text))),
-            )
-            .children(steering)
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(theme::QUEUED_ACTION_GAP))
-                    .children(actions),
-            ),
+            .children(rows),
     )
+}
+
+/// How many of `count` queued rows the strip shows before it scrolls.
+fn queue_rows_shown(count: usize) -> usize {
+    count.min(theme::QUEUE_ROWS_SHOWN)
 }
 
 /// Whether a queued prompt can still be edited or removed: not while the
@@ -739,6 +773,18 @@ pub(super) fn queue_card(
 /// once Codex is steering it into the running turn.
 pub fn queued_takes_back(item: &QueueItem) -> bool {
     !matches!(item.delivery, Delivery::Steering | Delivery::Sending)
+}
+
+/// Whether a queued prompt can be sent now: not while the provider has it
+/// unacknowledged, nor from a Server too old to say where it stands; one
+/// already steering only while its turn runs (stopping that turn sends
+/// what it has not yet taken).
+pub fn queued_sends_now(item: &QueueItem, running: bool) -> bool {
+    match item.delivery {
+        Delivery::Holding | Delivery::Queued => true,
+        Delivery::Steering => running,
+        Delivery::Sending | Delivery::Unknown => false,
+    }
 }
 
 /// The strip's count: `1 message queued`, `3 messages queued`.
@@ -749,34 +795,42 @@ pub fn queued_count(count: usize) -> String {
     )
 }
 
-/// The strip's send now (`corner-down-left`): stop the running turn so
-/// what is queued goes out now — Escape's own act with prompts held.
-pub fn queued_send_now(cx: &gpui::App) -> gpui::component::button::Button {
-    queued_action("queued-send-now", icons::CORNER_DOWN_LEFT, "Send now", cx)
+/// A row's send now (`corner-down-left`): its message goes next
+/// (`Cockpit::send_queued_now`). `index` is its place in the queue's
+/// listing, as `queue_card`'s `actions` are.
+pub fn queued_send_now(index: usize, cx: &gpui::App) -> gpui::component::button::Button {
+    queued_action(
+        "queued-send-now",
+        index,
+        icons::CORNER_DOWN_LEFT,
+        "Send now",
+        cx,
+    )
 }
 
-/// The strip's edit (`pencil`): the latest back into the Composer, ahead of
-/// any draft — ↑'s act.
-pub fn queued_edit(cx: &gpui::App) -> gpui::component::button::Button {
-    queued_action("queued-edit", icons::PENCIL, "Edit", cx)
+/// A row's edit (`pencil`): its message back into the Composer, ahead of
+/// any draft — ↑'s act on the latest.
+pub fn queued_edit(index: usize, cx: &gpui::App) -> gpui::component::button::Button {
+    queued_action("queued-edit", index, icons::PENCIL, "Edit", cx)
 }
 
-/// The strip's remove (`close`): the latest dropped — ⌫'s act.
-pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
-    queued_action("queued-close", icons::CLOSE, "Remove", cx)
+/// A row's remove (`close`): its message dropped — ⌫'s act on the latest.
+pub fn queued_close(index: usize, cx: &gpui::App) -> gpui::component::button::Button {
+    queued_action("queued-close", index, icons::CLOSE, "Remove", cx)
 }
 
-/// One of the strip's actions: a `QUEUED_ACTION` square at `R_CONTROL`, its
-/// icon in `INK_STRONG`, `paint::HOVER` under the pointer. The cockpit wires
-/// its click.
+/// One of a row's actions: a `QUEUED_ACTION` square at `R_CONTROL`, its
+/// icon in `INK_STRONG`, `paint::HOVER` under the pointer; selected as
+/// `{id}-{index}`. The cockpit wires its click.
 fn queued_action(
     id: &'static str,
+    index: usize,
     path: &'static str,
     tip: &'static str,
     cx: &gpui::App,
 ) -> gpui::component::button::Button {
-    chip_button(id, cx)
-        .debug_selector(move || id.into())
+    chip_button((id, index), cx)
+        .debug_selector(move || format!("{id}-{index}"))
         .p_0()
         .size(px(theme::QUEUED_ACTION))
         .flex_shrink_0()
@@ -953,14 +1007,14 @@ pub fn permission_mode_label(
     theme::mode_word(mode).map_or_else(|| "Default".into(), |word| sentence_case(&word).into())
 }
 
-/// The queue's share of the editor's pane-height budget: Solo's strip
-/// and its gap whenever anything is queued; nothing on a board, whose
-/// compact box is input only.
+/// The queue's share of the editor's pane-height budget: Solo's strip —
+/// the rows it shows — and its gap whenever anything is queued; nothing on
+/// a board, whose compact box is input only.
 pub(crate) fn composer_queue_height(_height: f32, grid: bool, count: usize) -> f32 {
     if grid || count == 0 {
         0.
     } else {
-        theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
+        queue_rows_shown(count) as f32 * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
     }
 }
 

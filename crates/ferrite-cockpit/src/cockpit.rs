@@ -255,7 +255,7 @@ fn turn_running(open: &ThreadView) -> bool {
 }
 
 /// The id of the latest queued prompt while it can still be taken back:
-/// what ↑, ⌫ and the queue strip's edit and remove act on.
+/// what ↑ and ⌫ act on (the strip's rows each act on their own).
 fn queued_to_take_back(open: &ThreadView) -> Option<String> {
     open.queue()
         .first()
@@ -8559,43 +8559,53 @@ impl CockpitView {
         if !pane.is_main() {
             return None;
         }
-        // The queue strip's acts, each a key's: send now is Escape's "stop,
-        // and do what I queued now" (offered only while a turn runs, which
-        // is what it stops); edit is ↑'s and remove ⌫'s, aimed at the
-        // latest by its id and gone while Codex steers it.
-        let queue: Vec<AnyElement> = pane.thread().map_or_else(Vec::new, |thread| {
-            let open = self.cockpit.thread(thread);
-            let running = open.as_ref().is_some_and(turn_running);
-            let take_back = open.as_ref().and_then(queued_to_take_back);
+        // The queue strip's acts, each row's own, aimed at its message by
+        // its id: send now sends it next (`send_queued_now`), edit is ↑'s
+        // act and remove ⌫'s — neither while Codex steers it.
+        let queue: Vec<Vec<AnyElement>> = pane.thread().map_or_else(Vec::new, |thread| {
+            let Some(open) = self.cockpit.thread(thread) else {
+                return Vec::new();
+            };
+            let running = turn_running(&open);
             type Act = fn(&mut Cockpit, ThreadId, &str);
-            let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
-                (
-                    running.then(|| pane::queued_send_now(cx)),
-                    |cockpit, thread, _| cockpit.interrupt(thread),
-                ),
-                (
-                    take_back.is_some().then(|| pane::queued_edit(cx)),
-                    |cockpit, thread, id| cockpit.edit_queued_item(thread, id),
-                ),
-                (
-                    take_back.is_some().then(|| pane::queued_close(cx)),
-                    |cockpit, thread, id| cockpit.remove_queued_item(thread, id, false),
-                ),
-            ];
-            acts.into_iter()
-                .filter_map(|(button, act)| {
-                    let id = take_back.clone().unwrap_or_default();
-                    let button =
-                        button?.on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            view.focus_pane(index);
-                            let focus = view.panes[index].composer.read(cx).focus_handle(cx);
-                            window.focus(&focus, cx);
-                            act(&mut view.cockpit, thread, &id);
-                            view.facts.acted(&view.cockpit, thread);
-                            cx.notify();
-                        }));
-                    Some(button.into_any_element())
+            open.queue()
+                .iter()
+                .enumerate()
+                .map(|(at, item)| {
+                    let takes_back = pane::queued_takes_back(item);
+                    let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
+                        (
+                            pane::queued_sends_now(item, running)
+                                .then(|| pane::queued_send_now(at, cx)),
+                            |cockpit, thread, id| cockpit.send_queued_now(thread, id),
+                        ),
+                        (
+                            takes_back.then(|| pane::queued_edit(at, cx)),
+                            |cockpit, thread, id| cockpit.edit_queued_item(thread, id),
+                        ),
+                        (
+                            takes_back.then(|| pane::queued_close(at, cx)),
+                            |cockpit, thread, id| cockpit.remove_queued_item(thread, id, false),
+                        ),
+                    ];
+                    acts.into_iter()
+                        .filter_map(|(button, act)| {
+                            let id = item.id.clone();
+                            let button = button?.on_click(cx.listener(
+                                move |view, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    view.focus_pane(index);
+                                    let focus =
+                                        view.panes[index].composer.read(cx).focus_handle(cx);
+                                    window.focus(&focus, cx);
+                                    act(&mut view.cockpit, thread, &id);
+                                    view.facts.acted(&view.cockpit, thread);
+                                    cx.notify();
+                                },
+                            ));
+                            Some(button.into_any_element())
+                        })
+                        .collect()
                 })
                 .collect()
         });

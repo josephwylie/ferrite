@@ -2074,10 +2074,12 @@ pub const ENV_CHIP_GAP: f32 = SPACE_3;
 ///   pending files at left, background tasks at right, chips
 ///   `SHELF_CHIP_H` high at `R_CONTROL` on `paint::RAISED`, `FS_META`.
 /// - **The queue strip** (Claude's, when anything is queued): its own card
-///   `QUEUE_CARD_H` high at `R_CARD` on `paint::RAISED`, as wide as the box
-///   and `QUEUE_CARD_GAP` over it. `N messages queued` at `W_LABEL`, the
-///   latest in `INK_SUBTLE` on one cut line, then `QUEUED_ACTION` icon
-///   buttons: send now, edit, remove. ↑ and ⌫ still act on it.
+///   at `R_CARD` on `paint::RAISED`, as wide as the box and
+///   `QUEUE_CARD_GAP` over it, a `QUEUE_CARD_H` row per message in the
+///   order they go. `N messages queued` at `W_LABEL` leads the first;
+///   each message in `INK_SUBTLE` on one cut line, then its own
+///   `QUEUED_ACTION` icon buttons: send now, edit, remove. ↑ and ⌫ act
+///   on the latest.
 /// - **The input** is SF Pro `FS_COMPOSER` on `COMPOSER_ROW_H`, padded
 ///   `COMPOSER_INPUT_PAD_T` / `COMPOSER_INPUT_PAD_X` / `COMPOSER_INPUT_PAD_B`,
 ///   growing to `composer::MAX_ROWS` rows. No `❯`: the box says "type
@@ -2239,11 +2241,13 @@ pub const COMPOSER_MAX_W: f32 = TX_COLUMN_MAX_W + 2.0 * COMPOSER_OUTSET;
 pub const COMPOSER_INSET: f32 = TX_INSET_SOLO - COMPOSER_OUTSET;
 /// A shelf chip: 24 high.
 pub const SHELF_CHIP_H: f32 = SPACE_6;
-/// The queue strip (Claude's `queued`): a 44 card, 8 over the box, its
-/// words `QUEUED_PAD_X` in, the count `QUEUED_GAP` before the message, its
-/// action buttons (`QUEUED_ACTION`, icons `QUEUED_ICON`) `QUEUED_ACTION_GAP`
-/// apart.
+/// The queue strip (Claude's `queued`): a card 8 over the box, a 44 row
+/// for each queued message (up to `QUEUE_ROWS_SHOWN`, then it scrolls),
+/// its words `QUEUED_PAD_X` in, the count `QUEUED_GAP` before the first
+/// message, each row's action buttons (`QUEUED_ACTION`, icons
+/// `QUEUED_ICON`) `QUEUED_ACTION_GAP` apart.
 pub const QUEUE_CARD_H: f32 = 44.0;
+pub const QUEUE_ROWS_SHOWN: usize = 3;
 pub const QUEUE_CARD_GAP: f32 = SPACE_2;
 pub const QUEUED_PAD_X: f32 = SPACE_4;
 pub const QUEUED_GAP: f32 = SPACE_1_5;
