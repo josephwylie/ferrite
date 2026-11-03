@@ -533,24 +533,6 @@ mod loops {
     /// (vendor/gpui-pre-macos's `postscript:` fallback).
     pub const BRAILLE_FACE: &str = "postscript:AppleBraille-Outline6Dot";
 
-    /// The working line's spinner (theme rule 8): `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`, one
-    /// frame per `MOTION_WORKING_FRAME_MS`, in `ink` (the provider's brand
-    /// colour: `PROVIDER_CLAUDE`, `PROVIDER_CODEX`), set as text — every
-    /// working line's gutter mark while a turn runs, on the one shared
-    /// clock. Under reduced motion it holds `✻` (`WORKED`), the mark a
-    /// finished turn wears.
-    pub fn working_spinner(ink: u32) -> AnyElement {
-        let spinner = Spinner {
-            frames: &WORKING_FRAMES,
-            frame_ms: theme::MOTION_WORKING_FRAME_MS,
-            still: WORKED,
-            ink,
-            weight: theme::W_BODY,
-            selector: "working-spinner",
-        };
-        crate::loops_overlay::hosted(move || spinner.into_any_element()).into_any_element()
-    }
-
     /// The working dots (the Claude app's working line): three
     /// `WORKING_DOT` dots in `ink`, a pulse running across them every
     /// `MOTION_WORKING_DOTS_MS` — each lifts from `WORKING_DOT_REST` to full
@@ -1781,9 +1763,8 @@ impl gpui::Element for Measured {
     }
 }
 
-/// The same menu is opened by a chip or a slash command. PopupMenu owns
-/// keyboard navigation, focus, scrolling and dismissal; every row draws in
-/// the one menu grammar (`menu_row_content`, `menu_section`).
+/// One row of a picker (`menu::ChoiceMenu`), opened by a chip or a slash
+/// command alike; it draws in the one menu grammar (`MenuItem`).
 #[derive(Clone, Default)]
 pub struct Choice {
     pub label: SharedString,
@@ -1809,7 +1790,7 @@ pub struct Choice {
 
 impl Choice {
     /// The row's content in the menu grammar.
-    fn item(&self, marked: bool) -> MenuItem {
+    pub(crate) fn item(&self, marked: bool) -> MenuItem {
         let mut item = MenuItem::new(self.label.clone())
             .checked(self.checked)
             .disabled(self.disabled);
@@ -1824,31 +1805,6 @@ impl Choice {
         }
         item
     }
-}
-
-type OpenChanged = std::rc::Rc<dyn Fn(bool, &mut gpui::Window, &mut gpui::App)>;
-type Picked = std::rc::Rc<dyn Fn(usize, &mut gpui::Window, &mut gpui::App)>;
-
-#[derive(IntoElement)]
-pub struct ChoiceMenu {
-    pub id: SharedString,
-    pub trigger: Button,
-    /// Which corner of the menu meets the trigger: `BottomLeft` for a
-    /// control at the left of its row, `BottomRight` at the right, so the
-    /// menu opens over its own Pane rather than across the next one.
-    pub anchor: gpui::Anchor,
-    pub choices: Vec<Choice>,
-    pub open: bool,
-    pub return_focus: gpui::FocusHandle,
-    pub on_open: OpenChanged,
-    pub on_pick: Picked,
-}
-
-#[derive(Default)]
-struct ChoiceMenuState {
-    menu: Option<gpui::Entity<gpui::component::menu::PopupMenu>>,
-    steps: usize,
-    initialized: bool,
 }
 
 /// The limits a summoned surface rests within (rule 2.4.3): `floor` is the
@@ -1881,152 +1837,6 @@ impl FloatPlace {
         };
         point(px(x), px(y))
     }
-}
-
-impl gpui::RenderOnce for ChoiceMenu {
-    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
-        use gpui::component::{
-            menu::{PopupMenu, PopupMenuItem},
-            popover::Popover,
-        };
-        use gpui::Focusable as _;
-        let retained =
-            window.use_keyed_state(self.id.clone(), cx, |_, _| ChoiceMenuState::default());
-        if !self.open {
-            retained.update(cx, |state, _| {
-                state.menu = None;
-                state.initialized = false;
-            });
-        } else if retained.read(cx).menu.is_none() {
-            let steps = cursor_steps(&self.choices);
-            let pick = self.on_pick.clone();
-            // A mark rides its section title; only a menu without sections
-            // marks its rows.
-            let marked = !self.choices.iter().any(|choice| choice.section);
-            let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
-                menu = menu
-                    .action_context(self.return_focus)
-                    .min_w(px(theme::CHOICE_MENU_MIN_W))
-                    .max_w(px(theme::CHOICE_MENU_MAX_W))
-                    .max_h(px(theme::MENU_MAX_H))
-                    .scrollable(true);
-                for (index, choice) in self.choices.into_iter().enumerate() {
-                    // Sections are disabled element items: the kit
-                    // skips them on the arrows, so `steps` still counts only
-                    // live rows.
-                    if choice.section {
-                        let (title, mark) = (choice.label.clone(), choice.icon);
-                        // A section after rows stands a group gap off them.
-                        let after = index > 0;
-                        menu = menu.item(
-                            PopupMenuItem::element(move |_, _| {
-                                kit_row(
-                                    menu_section(title.clone(), mark, None)
-                                        .when(after, |section| {
-                                            section.mt(px(theme::MENU_GROUP_GAP))
-                                        }),
-                                )
-                            })
-                            .disabled(true),
-                        );
-                        continue;
-                    }
-                    // Our strong check draws inside the row, so the kit's own
-                    // `.checked()` is never set and its check never doubles.
-                    let item = choice.item(marked);
-                    let why = choice.why.clone();
-                    let picked = pick.clone();
-                    menu = menu.item(
-                        PopupMenuItem::element(move |_, _| {
-                            // The kit item does not shrink its content, so
-                            // the row holds the menu's widest itself and a
-                            // long detail truncates inside it.
-                            kit_row(menu_row_content(&item, false, false))
-                                .max_w(px(theme::CHOICE_MENU_MAX_W - 2. * theme::FLOAT_PAD))
-                                .debug_selector(move || format!("choice-row-{index}"))
-                                .id(("choice-row", index))
-                                .when_some(why.clone(), |row, why| {
-                                    row.tooltip(crate::menu::tooltip(why))
-                                })
-                        })
-                        .disabled(choice.disabled)
-                        .on_click(move |_, window, cx| picked(index, window, cx)),
-                    );
-                }
-                menu
-            });
-            let on_open = self.on_open.clone();
-            window
-                .subscribe(&menu, cx, move |_, _: &gpui::DismissEvent, window, cx| {
-                    on_open(false, window, cx);
-                })
-                .detach();
-            retained.update(cx, |state, _| {
-                state.menu = Some(menu);
-                state.steps = steps;
-            });
-        }
-        let menu = retained.read(cx).menu.clone();
-        let on_open = self.on_open;
-        let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
-            .appearance(false)
-            .overlay_closable(false)
-            .anchor(self.anchor)
-            .trigger(self.trigger)
-            .open(self.open)
-            .on_open_change(move |open, window, cx| on_open(*open, window, cx));
-        if let Some(menu) = menu {
-            popover = popover
-                .track_focus(&menu.focus_handle(cx))
-                .content(move |_, _, _| {
-                    let retained = retained.clone();
-                    let menu = menu.clone();
-                    // The one floating recipe. The kit menu's own inset
-                    // (`p_1`, 4px) is the `FLOAT_PAD`, so the surface adds
-                    // none; its hairline ring and radius are clipped away
-                    // at its own edge, so the only edge is the surface's.
-                    let surface = floating_surface()
-                        .debug_selector(|| "choice-menu".into())
-                        .p(px(0.))
-                        .child(div().overflow_hidden().child(menu.clone()));
-                    on_bounds(surface, move |_, window, cx| {
-                        let steps = retained.update(cx, |state, _| {
-                            if state.initialized {
-                                return None;
-                            }
-                            state.initialized = true;
-                            Some(state.steps)
-                        });
-                        if let Some(steps) = steps {
-                            menu.focus_handle(cx).focus(window, cx);
-                            for _ in 0..steps {
-                                window
-                                    .dispatch_action(Box::new(gpui::base::actions::SelectDown), cx);
-                            }
-                        }
-                    })
-                });
-        }
-        popover
-    }
-}
-
-/// How many `SelectDown`s land the kit's cursor on the standing choice (or
-/// the first live row). Every choice is one kit item; the first press
-/// selects item 0 whatever it is, each later one the next live item.
-fn cursor_steps(choices: &[Choice]) -> usize {
-    let live = |choice: &Choice| !choice.section && !choice.disabled;
-    let target = choices
-        .iter()
-        .position(|choice| live(choice) && choice.checked)
-        .or_else(|| choices.iter().position(live))
-        .unwrap_or(0);
-    let lives = choices[..=target.min(choices.len().saturating_sub(1))]
-        .iter()
-        .filter(|choice| live(choice))
-        .count();
-    let dead_first = choices.first().is_some_and(|choice| !live(choice));
-    lives.max(1) + usize::from(dead_first && lives > 0)
 }
 
 /// A menu grammar row inside a kit `PopupMenuItem`: the kit item already
@@ -2468,34 +2278,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_cursor_opens_on_the_standing_choice_past_sections() {
-        let row = |label: &str, checked| Choice {
-            label: label.to_string().into(),
-            checked,
-            ..Default::default()
-        };
-        let section = |label: &str| Choice {
-            label: label.to_string().into(),
-            section: true,
-            ..Default::default()
-        };
-        // Items: Claude, Sonnet, Opus, Codex, GPT. First press → item 0.
-        let menu = [
-            section("Claude"),
-            row("Sonnet", false),
-            row("Opus", false),
-            section("Codex"),
-            row("GPT", false),
-        ];
-        assert_eq!(cursor_steps(&menu), 2, "0 → Sonnet");
-        let mut picked = menu.clone();
-        picked[4].checked = true;
-        assert_eq!(cursor_steps(&picked), 4, "0 → Sonnet → Opus → GPT");
-        assert_eq!(cursor_steps(&[row("a", false), row("b", true)]), 2);
-        assert_eq!(cursor_steps(&[row("a", false)]), 1);
-    }
-
     /// The loops' frame arithmetic: ten frames a turn, wrapping, never out
     /// of range.
     #[test]
@@ -2582,7 +2364,6 @@ mod tests {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
                 div()
                     .child(braille_spinner(theme::RUNNING))
-                    .child(working_spinner(theme::PROVIDER_CLAUDE))
                     .child(shimmer("Working", theme::PROVIDER_CLAUDE))
             }
         }

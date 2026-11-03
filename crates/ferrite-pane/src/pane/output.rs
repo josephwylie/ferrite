@@ -1,0 +1,1526 @@
+//! What a call printed: its folds and output box, a failed call's
+//! excerpt, a test run's elbow and bar, and its diffs.
+
+use super::*;
+
+/// A failed call's excerpt: the first non-blank line of its error, unless
+/// the result line already says exactly that.
+pub(super) fn failed_excerpt(tool: &ToolBlock) -> Option<&str> {
+    let ToolState::Failed(message) = &tool.state else {
+        return None;
+    };
+    let first = message
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    (!first.is_empty() && tool.result_line.as_deref() != Some(first)).then_some(first)
+}
+
+/// The output a call retained, line by line.
+fn output_text(tool: &ToolBlock) -> &str {
+    text::disclosed_output(tool).map_or("", |output| output.text.as_str())
+}
+
+/// A collapsed failed call's fold of its output (the prototype's `.out` and
+/// `.more`): up to `OUTPUT_PREVIEW_LINES` non-blank lines of what it printed
+/// after the line its failure line already shows, and how many non-blank lines
+/// that leaves out — the `+ N lines` sits directly under the last preview
+/// line. `None` when the call printed nothing worth a fold: only a
+/// command's output, or a failure's, folds.
+pub(super) fn output_fold(tool: &ToolBlock) -> Option<(String, usize)> {
+    let runs = ferrite_core::docview::is_command_run(&tool.name);
+    if !runs && !matches!(tool.state, ToolState::Failed(_)) {
+        return None;
+    }
+    text::disclosed_output(tool)?;
+    let mut lines = output_text(tool)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .peekable();
+    // The failure line already prints the first line (the result line, or
+    // a failure's first line): the fold continues after it.
+    let elbow = tool.result_line.as_deref().or_else(|| failed_excerpt(tool));
+    if let (Some(first), Some(shown)) = (lines.peek(), elbow) {
+        if first.trim() == shown.trim() {
+            lines.next();
+        }
+    }
+    let rest: Vec<&str> = lines.collect();
+    let shown: Vec<&str> = rest
+        .iter()
+        .copied()
+        .take(theme::OUTPUT_PREVIEW_LINES)
+        .collect();
+    if shown.is_empty() {
+        return None;
+    }
+    let hidden = rest.len() - shown.len();
+    Some((shown.join("\n"), hidden))
+}
+
+/// What a test run's elbow says, and the lines it previews (CT-14).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestElbow {
+    /// `ok` or `failed`: the lead word, in its state ink.
+    pub lead: &'static str,
+    /// The words after the lead's seam: `38 passed`, `running 38 tests`,
+    /// `357 passed; 2 failed`.
+    pub rest: String,
+    /// The lines shown under the elbow, verbatim.
+    pub preview: Vec<String>,
+    /// The non-blank retained lines a `+ N lines` fold holds.
+    pub hidden: usize,
+}
+
+impl TestElbow {
+    /// The elbow's one line: `ok · 38 passed`.
+    pub fn line(&self) -> String {
+        if self.rest.is_empty() {
+            self.lead.to_string()
+        } else {
+            format!("{} \u{b7} {}", self.lead, self.rest)
+        }
+    }
+}
+
+/// A settled test run's elbow (one rule for both pictures):
+///
+/// - passing: `ok · <N> passed`, no preview, no fold;
+/// - failing with every `FAILED` among its first three test lines: `failed ·
+///   <its first output line>` and those three test lines verbatim;
+/// - failing otherwise: `failed · <P> passed; <F> failed` (its `test
+///   result:` line, else counted) and its `FAILED` lines (at most three)
+///   without their leading `test `;
+///
+/// then `+ <N> lines` for the rest of its non-blank output. `None` for a
+/// call that is not a settled test run.
+pub fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
+    if !is_test_run(tool) {
+        return None;
+    }
+    let exited = match &tool.state {
+        ToolState::Ok => false,
+        ToolState::Failed(_) => true,
+        _ => return None,
+    };
+    let output = match tool.output.as_ref() {
+        Some(output) => output.text.as_str(),
+        None => match &tool.state {
+            ToolState::Failed(message) => message.as_str(),
+            _ => tool.result_line.as_deref().unwrap_or(""),
+        },
+    };
+    let lines: Vec<&str> = output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let tests: Vec<(usize, &str, &str)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            ferrite_core::transcript::test_result_line(line)
+                .map(|(name, verdict)| (at, name, verdict))
+        })
+        .collect();
+    let results: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.trim_start().starts_with("test result:"))
+        .collect();
+    let counted = |verdict: &str| tests.iter().filter(|(_, _, v)| *v == verdict).count();
+    let summary_of = |line: &str| -> Option<(usize, usize)> {
+        let passed = passed_count(line)?;
+        let failed = line
+            .split(';')
+            .find_map(|part| part.trim().strip_suffix(" failed")?.trim().parse().ok())
+            .unwrap_or(0);
+        Some((passed, failed))
+    };
+    // cargo prints one `test result:` per test binary (the crate's, each
+    // integration suite's, the doc tests'): the run's tally is their sum —
+    // unless the last one already accounts for every test the run announced
+    // (`running 359 tests`, a workspace tally closing the output).
+    let ignored_of = |line: &str| -> usize {
+        line.split(';')
+            .find_map(|part| part.trim().strip_suffix(" ignored")?.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    let announced: usize = lines
+        .iter()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("running ")?
+                .strip_suffix(" tests")
+                .or_else(|| line.trim().strip_prefix("running ")?.strip_suffix(" test"))?
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .sum();
+    let last = results
+        .last()
+        .and_then(|line| summary_of(line).map(|counts| (counts, ignored_of(line))));
+    let totals = match last {
+        Some(((passed, failed), ignored))
+            if announced > 0 && passed + failed + ignored == announced =>
+        {
+            Some((passed, failed))
+        }
+        _ => results
+            .iter()
+            .filter_map(|line| summary_of(line))
+            .reduce(|(p, f), (passed, failed)| (p + passed, f + failed)),
+    };
+    // A run is failed by its own report too: piped into `tail` or `grep`
+    // the command exits 0 while its suite failed.
+    let failed = exited
+        || results
+            .iter()
+            .any(|line| line.trim_start().starts_with("test result: FAILED"))
+        || tests.iter().any(|(_, _, verdict)| *verdict == "FAILED");
+    if !failed {
+        let passed = totals
+            .map(|(passed, _)| passed)
+            .or_else(|| (!tests.is_empty()).then(|| counted("ok")))
+            .or_else(|| tool.result_line.as_deref().and_then(passed_count));
+        return Some(TestElbow {
+            lead: "ok",
+            rest: passed.map_or_else(String::new, |passed| format!("{passed} passed")),
+            preview: Vec::new(),
+            hidden: 0,
+        });
+    }
+    let fails: Vec<&(usize, &str, &str)> = tests
+        .iter()
+        .filter(|(_, _, verdict)| *verdict == "FAILED")
+        .collect();
+    let early = !tests.is_empty()
+        && fails
+            .iter()
+            .all(|(at, _, _)| tests.iter().take(3).any(|(first, _, _)| first == at));
+    // The early form heads with the run's first line (`running 38 tests`);
+    // output a pipe cut to its test lines has no such line, and reads its
+    // tally instead.
+    let early = early && tests.first().is_some_and(|(at, _, _)| *at > 0);
+    if early {
+        let first = lines.first().map(|line| line.trim()).unwrap_or("");
+        let preview: Vec<String> = tests
+            .iter()
+            .take(3)
+            .map(|(at, _, _)| lines[*at].trim().to_string())
+            .collect();
+        let shown = 1 + preview.len();
+        return Some(TestElbow {
+            lead: theme::words::FAILED,
+            rest: first.to_string(),
+            hidden: lines.len().saturating_sub(shown),
+            preview,
+        });
+    }
+    let (passed, failed_count) = totals.unwrap_or_else(|| (counted("ok"), fails.len()));
+    let preview: Vec<String> = fails
+        .iter()
+        .take(3)
+        .map(|(at, _, _)| {
+            let line = lines[*at].trim();
+            line.strip_prefix("test ").unwrap_or(line).to_string()
+        })
+        .collect();
+    let shown = preview.len() + usize::from(!results.is_empty());
+    Some(TestElbow {
+        lead: theme::words::FAILED,
+        rest: format!("{passed} passed; {failed_count} failed"),
+        hidden: lines.len().saturating_sub(shown),
+        preview,
+    })
+}
+
+/// A successful command's output folded whole behind its elbow (CT-26):
+/// `└ 7 issues · + 7 lines` — its first non-blank line, and the non-blank
+/// lines after it. `None` when it printed one line or none, or is a test
+/// run (which reads its own elbow) or not a command.
+pub fn command_fold(tool: &ToolBlock) -> Option<(String, Vec<String>)> {
+    if tool.state != ToolState::Ok
+        || !ferrite_core::docview::is_command_run(&tool.name)
+        || is_test_run(tool)
+    {
+        return None;
+    }
+    let mut lines = output_text(tool)
+        .lines()
+        .filter(|line| !line.trim().is_empty());
+    let first = lines.next()?.trim_end().to_string();
+    let rest: Vec<String> = lines.map(|line| line.trim_end().to_string()).collect();
+    (!rest.is_empty()).then_some((first, rest))
+}
+
+/// An open command's well: all of its output, its first line too. The
+/// header's ` · first` result is cut with a long command, so the well never
+/// leaves it to the header. With the count of its lines.
+pub(crate) fn command_open(tool: &ToolBlock) -> Option<(String, usize)> {
+    command_fold(tool).map(|(first, rest)| {
+        let lines: Vec<String> = std::iter::once(first).chain(rest).collect();
+        (lines.join("\n"), lines.len())
+    })
+}
+
+/// The clickable words of a fold (`+ 7 lines`, `− fold`):
+/// dim, lifting to `TEXT` under the pointer; a click flips the call's
+/// disclosure.
+pub(super) fn fold_label(id: SharedString, label: String, toggle: Option<DisclosureToggle>) -> Stateful<Div> {
+    let group = id.clone();
+    div()
+        .id(id)
+        .group(group.clone())
+        .debug_selector(|| "tool-fold".into())
+        .flex_shrink_0()
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .text_color(rgb(TEXT_DIM))
+        .group_hover(group, |style| style.text_color(rgb(TEXT)))
+        .child(SharedString::from(label))
+        .when_some(toggle, |line, toggle| {
+            line.on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                toggle(window, cx);
+            })
+        })
+}
+
+/// `+ 1 line`, `+ 35 lines`.
+pub(super) fn more_lines(hidden: usize) -> String {
+    format!("+ {hidden} line{}", if hidden == 1 { "" } else { "s" })
+}
+
+/// A fold's content easing open over `FOLD_EASE_MS` (CT-26): the lines it
+/// holds grow in height from nothing, the rows above never move; a close
+/// lands at once, and reduced motion opens at once. Mounted shut too, so the
+/// next opening eases.
+pub(super) fn eased_fold(
+    id: SharedString,
+    open: bool,
+    lines: usize,
+    line: f32,
+    content: Option<AnyElement>,
+) -> AnyElement {
+    let spec = ferrite_ui::motion::MotionSpec::new(theme::FOLD_EASE_MS, ferrite_ui::motion::EASE);
+    match (open, content) {
+        (true, Some(content)) => ferrite_ui::motion::settled(id, true, spec, move |t| {
+            let full = lines as f32 * line;
+            div()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .when(t < 1., |fold| fold.h(px(full * t.max(0.))))
+                .child(content)
+        })
+        .reveal_only()
+        .into_any_element(),
+        _ => ferrite_ui::motion::settled(id, false, spec, |_| div())
+            .reveal_only()
+            .into_any_element(),
+    }
+}
+
+/// Lines of output in a call's output box (one non-wrapping run, cut at
+/// the box's edge like a terminal's), in `TEXT_DIM` with only their verdict
+/// words coloured.
+pub(super) fn output_lines_run(block: BlockId, text: String, selection: &TextRuns) -> Div {
+    div()
+        .debug_selector(|| "tool-fold-preview".into())
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_color(rgb(TEXT_DIM))
+        .child(selection.line(block, text.clone(), result_highlights(&text)))
+}
+
+/// What an open fold shows and how many lines it eases open over: the
+/// lines it held (`rest`) as one run; or, when the call's whole output is
+/// past `OUTPUT_INLINE_BYTES`, the whole output in one bounded, selectable
+/// native viewer (`OUTPUT_MAX_LINES` high) — a copy from it takes
+/// everything the call printed. `pane/text.rs` mirrors it (`collect_fold`).
+pub(super) fn fold_open(
+    block: BlockId,
+    tool: &ToolBlock,
+    rest: String,
+    selection: &TextRuns,
+) -> (AnyElement, usize) {
+    let full = output_text(tool);
+    if text::output_scrolls(full) {
+        let lines = text::output_lines(full).min(theme::OUTPUT_MAX_LINES);
+        let viewer = div()
+            .w_full()
+            .min_w_0()
+            .text_color(rgb(TEXT_DIM))
+            .child(selection.output(block, "result", full))
+            .into_any_element();
+        return (viewer, lines);
+    }
+    let lines = rest.lines().count();
+    (
+        output_lines_run(block, rest, selection).into_any_element(),
+        lines,
+    )
+}
+
+/// A running suite's line under its call (CT-25): `running 357 tests`, its
+/// bar, and `212/357` in tabular `TEXT_DIM`.
+pub(super) fn running_tests(call: &str, progress: ferrite_core::transcript::TestProgress, grid: Grid) -> Div {
+    let small = grid.activity();
+    let line = content_row(grid)
+        .debug_selector(|| "tool-test-progress".into())
+        .items_center()
+        .text_size(px(small.size))
+        .text_color(rgb(TEXT_DIM));
+    // The runner's total unheard (`TestProgress::known`): the count alone,
+    // where `212/357` would stand, and no bar to fill against nothing.
+    if !progress.known() {
+        return line
+            .gap(px(theme::SPACE_2))
+            .child(div().flex_shrink_0().whitespace_nowrap().child("running tests"))
+            .child(components::tabular(
+                div()
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .child(SharedString::from(progress.done.to_string())),
+            ));
+    }
+    let total = progress.total.max(1);
+    let fraction = (progress.done as f32 / total as f32).clamp(0., 1.);
+    line.child(
+        div()
+            .flex_shrink_0()
+            .whitespace_nowrap()
+            .child(SharedString::from(format!(
+                "running {} tests",
+                progress.total
+            ))),
+    )
+    .child(TestBar {
+        id: SharedString::from(format!("test-bar-{call}")),
+        fraction,
+        cell: small.cell(),
+    })
+    .child(components::tabular(
+        div()
+            .flex_shrink_0()
+            .whitespace_nowrap()
+            .child(SharedString::from(format!(
+                "{}/{}",
+                progress.done, progress.total
+            ))),
+    ))
+}
+
+/// A running test's bar (the prototype's `.bar`): `TEST_BAR_CELLS` wide and
+/// `TEST_BAR_H` tall on a `paint::LINE2` track, a cell's margin each side,
+/// its `RUNNING` fill at sub-pixel precision easing to each new count over
+/// `TEST_BAR_EASE_MS`.
+#[derive(IntoElement)]
+struct TestBar {
+    id: SharedString,
+    fraction: f32,
+    cell: f32,
+}
+
+impl gpui::RenderOnce for TestBar {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let spec =
+            ferrite_ui::motion::MotionSpec::new(theme::TEST_BAR_EASE_MS, ferrite_ui::motion::EASE);
+        let now = cx.background_executor().now();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        let target = self.fraction;
+        let (shown, running) = window.with_global_id(self.id.clone().into(), |id, window| {
+            window.with_element_state(id, |state: Option<(f32, ferrite_ui::motion::Tween)>, _| {
+                let (at, tween) = match state {
+                    Some((at, tween)) if at == target => (at, tween),
+                    Some((_, tween)) => (
+                        target,
+                        ferrite_ui::motion::Tween::retarget(
+                            Some(tween),
+                            target,
+                            target,
+                            spec,
+                            now,
+                            reduced,
+                        ),
+                    ),
+                    None => (
+                        target,
+                        ferrite_ui::motion::Tween::new(target, target, spec, now),
+                    ),
+                };
+                let value = tween.value(now, reduced);
+                ((value, tween.running(now, reduced)), (at, tween))
+            })
+        });
+        if running {
+            window.request_animation_frame();
+        }
+        let width = theme::TEST_BAR_CELLS * self.cell;
+        div()
+            .debug_selector(|| "test-bar".into())
+            .relative()
+            .flex_shrink_0()
+            .mx(px(self.cell))
+            .w(px(width))
+            .h(px(theme::TEST_BAR_H))
+            .rounded(px(theme::TEST_BAR_R))
+            .overflow_hidden()
+            .bg(theme::paint::LINE2)
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(width * shown.clamp(0., 1.)))
+                    .bg(rgb(RUNNING)),
+            )
+    }
+}
+
+/// Literal output under a call (the mockup's `.out`): one block box
+/// (`block_box`) on the content column, in Geist Mono a step under the
+/// prose, its lines `CODE_PAD_CELLS` in.
+pub(super) fn output_box(grid: Grid, lines: Vec<AnyElement>) -> Div {
+    let block = grid.block();
+    content_row(grid).pt(px(theme::BLOCK_MARGIN_T)).child(
+        on_cells(block_box(block))
+            .debug_selector(|| "tool-output".into())
+            .flex()
+            .flex_col()
+            .px(px(theme::CODE_PAD_CELLS * block.cell()))
+            .children(lines),
+    )
+}
+
+/// The non-blank output lines a failed test run's fold holds: everything
+/// its elbow and preview did not show, in order.
+pub(super) fn test_rest(tool: &ToolBlock, elbow: &TestElbow) -> String {
+    let lines: Vec<&str> = output_text(tool)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let shown: Vec<String> = std::iter::once(elbow.rest.clone())
+        .chain(elbow.preview.iter().cloned())
+        .collect();
+    let mut skipped = vec![false; lines.len()];
+    for shown in &shown {
+        if let Some(at) = lines.iter().enumerate().position(|(at, line)| {
+            !skipped[at] && {
+                let line = line.trim();
+                line == shown || line.strip_prefix("test ") == Some(shown.as_str())
+            }
+        }) {
+            skipped[at] = true;
+        }
+    }
+    // The summary line the elbow was read from counts as shown too.
+    if elbow.rest.contains("passed;") {
+        if let Some(at) = lines
+            .iter()
+            .rposition(|line| line.trim_start().starts_with("test result:"))
+        {
+            skipped[at] = true;
+        }
+    }
+    lines
+        .iter()
+        .zip(skipped)
+        .filter(|(_, skipped)| !skipped)
+        .map(|(line, _)| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The non-blank output lines a failed command's fold holds after its
+/// preview (`hidden` of them).
+pub(super) fn failed_rest(tool: &ToolBlock, hidden: usize) -> String {
+    let lines: Vec<&str> = output_text(tool)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(hidden)..]
+        .iter()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A call's disclosed details (keyboard-opened, not a command), for its
+/// output box: its input where the call line could not show it whole, its
+/// output, its structured result.
+pub(super) fn tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRuns) -> Vec<AnyElement> {
+    let mut details = Vec::new();
+    let mut part = |name: &str, text: &str, omitted: usize| {
+        details.push(output_block(block, name, text, selection).into_any_element());
+        if omitted > 0 {
+            details.push(omitted_line(omitted).into_any_element());
+        }
+    };
+    if text::shows_input(tool) {
+        part("command", &tool.summary, 0);
+    }
+    if let Some(output) = text::disclosed_output(tool) {
+        part("result", &output.text, output.omitted_bytes);
+    }
+    if let Some(structured) = tool.structured_preview.as_ref() {
+        part("details", &structured.text, structured.omitted_bytes);
+    }
+    details
+}
+
+/// A result's verdict words in their state ink, the rest in the line's
+/// `TEXT_DIM` (CT-15): a line's lead `ok` (`RUNNING`) or `failed`
+/// (`BLOCKED`); a test line's trailing `... ok` / `... FAILED`; and the
+/// verdict of a `test result:` line. `24 passed`, `357 passed; 2 failed`
+/// and every other `passed` or `failed` stay muted.
+pub(super) fn result_highlights(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    let ink = |range: std::ops::Range<usize>, ink: u32| {
+        (
+            range,
+            HighlightStyle {
+                color: Some(rgb(ink).into()),
+                ..Default::default()
+            },
+        )
+    };
+    let verdict_ink = |word: &str| match word {
+        "ok" => Some(RUNNING),
+        "FAILED" | "failed" => Some(BLOCKED),
+        _ => None,
+    };
+    let mut highlights = Vec::new();
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let indent = body.len() - body.trim_start().len();
+        let trimmed = &body[indent..];
+        // The lead state word: `ok · 38 passed`, `failed · …`.
+        for word in ["ok", "failed"] {
+            if trimmed == word
+                || trimmed.starts_with(&format!("{word} "))
+                || trimmed.starts_with(&format!("{word}\u{b7}"))
+            {
+                let start = offset + indent;
+                highlights.push(ink(
+                    start..start + word.len(),
+                    verdict_ink(word).unwrap_or(TEXT_DIM),
+                ));
+            }
+        }
+        // A test line's trailing verdict.
+        if let Some((_, verdict)) = trimmed.rsplit_once(" ... ") {
+            let verdict = verdict.trim_end();
+            if let Some(color) = verdict_ink(verdict).filter(|_| verdict != "failed") {
+                let start = offset + indent + trimmed.trim_end().len() - verdict.len();
+                highlights.push(ink(start..start + verdict.len(), color));
+            }
+        }
+        // `test result: FAILED. 37 passed; …`.
+        if let Some(rest) = trimmed.strip_prefix("test result: ") {
+            for word in ["ok", "FAILED"] {
+                if rest.starts_with(word) {
+                    let start = offset + indent + "test result: ".len();
+                    highlights.push(ink(
+                        start..start + word.len(),
+                        verdict_ink(word).unwrap_or(TEXT_DIM),
+                    ));
+                }
+            }
+        }
+        offset += line.len();
+    }
+    highlights.sort_by_key(|(range, _)| range.start);
+    highlights.dedup_by(|a, b| a.0 == b.0);
+    highlights
+}
+
+/// A disclosed block of text in a call's output box — its input, output, a
+/// structured result. Text draws inline, keeping its whitespace; text past
+/// `OUTPUT_INLINE_BYTES` scrolls in one bounded, selectable native control
+/// `OUTPUT_MAX_LINES` high, and `… +N lines` under it says how much is out
+/// of view.
+pub(crate) fn output_block(block: BlockId, part: &str, text: &str, selection: &TextRuns) -> Div {
+    let rows = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .text_color(rgb(TEXT_DIM));
+    if text::output_scrolls(text) {
+        let hidden = text::output_lines(text).saturating_sub(theme::OUTPUT_MAX_LINES);
+        return rows
+            .child(selection.output(block, part, text))
+            .when(hidden > 0, |rows| {
+                rows.child(SharedString::from(format!("\u{2026} +{hidden} lines")))
+            });
+    }
+    rows.child(selection.line(block, text.to_string(), result_highlights(text)))
+}
+
+// ------------------------------------------------------------------ diffs
+
+/// One side of a diff row: its line number, its kind, its code and the
+/// changed tokens' range in it (a removed line paired with an added one).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DiffSide {
+    pub kind: DiffKind,
+    pub number: u32,
+    pub body: String,
+    pub words: Option<std::ops::Range<usize>>,
+}
+
+/// A unified diff as rows: a hunk's header, or one line numbered by the
+/// file it is in (the old file's for a removed line, the new file's else).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum DiffRow {
+    /// `@@ -208,7 +208,11 @@ fn thread_row`: drawn only where the hunk
+    /// names a section.
+    Hunk(String),
+    Line(DiffSide),
+}
+
+/// A line's tokens for word marks (CT-22): identifier runs
+/// (`[A-Za-z0-9_]+`, so `0x7fbf95` is one), whitespace runs, and every
+/// other character alone.
+fn diff_tokens(line: &str) -> Vec<std::ops::Range<usize>> {
+    let mut tokens = Vec::new();
+    let mut chars = line.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        let word = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
+        let mut end = start + ch.len_utf8();
+        if word(ch) {
+            while let Some(&(at, next)) = chars.peek() {
+                if !word(next) {
+                    break;
+                }
+                end = at + next.len_utf8();
+                chars.next();
+            }
+        } else if ch.is_whitespace() {
+            while let Some(&(at, next)) = chars.peek() {
+                if !next.is_whitespace() {
+                    break;
+                }
+                end = at + next.len_utf8();
+                chars.next();
+            }
+        }
+        tokens.push(start..end);
+    }
+    tokens
+}
+
+/// The changed tokens between a removed line and the added line it became:
+/// what is left of each once their common leading and trailing characters
+/// go, snapped to whole tokens — the tokens wholly inside what changed, or,
+/// where no whole token is (`0x7fbf95` → `0x93cf8c` past their common `0x`;
+/// `live` past `if l`), the tokens it touches — and trimmed of whitespace
+/// at its edges. `None` when nothing is common (the whole line changed) or
+/// nothing differs.
+pub(super) fn changed_words(old: &str, new: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    // Common leading and trailing characters, in bytes, never splitting a
+    // character and never overlapping.
+    let prefix = old
+        .char_indices()
+        .zip(new.chars())
+        .take_while(|((_, x), y)| x == y)
+        .last()
+        .map_or(0, |((at, ch), _)| at + ch.len_utf8());
+    let suffix = old[prefix..]
+        .chars()
+        .rev()
+        .zip(new[prefix..].chars().rev())
+        .take_while(|(x, y)| x == y)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+    if prefix == 0 && suffix == 0 {
+        return None;
+    }
+    let span = |line: &str| -> std::ops::Range<usize> {
+        let tokens = diff_tokens(line);
+        let (start, end) = (prefix, line.len() - suffix);
+        let solid = |token: &&std::ops::Range<usize>| !line[(*token).clone()].trim().is_empty();
+        // The tokens wholly inside the change, else those it touches.
+        let inside: Vec<&std::ops::Range<usize>> = tokens
+            .iter()
+            .filter(|token| token.start >= start && token.end <= end)
+            .filter(solid)
+            .collect();
+        let picked = if inside.is_empty() {
+            tokens
+                .iter()
+                .filter(|token| token.start < end && token.end > start)
+                .filter(solid)
+                .collect()
+        } else {
+            inside
+        };
+        match (picked.first(), picked.last()) {
+            (Some(first), Some(last)) => first.start..last.end,
+            _ => start.min(line.len())..start.min(line.len()),
+        }
+    };
+    let (old_range, new_range) = (span(old), span(new));
+    if old_range.is_empty() && new_range.is_empty() {
+        return None;
+    }
+    Some((old_range, new_range))
+}
+
+/// How alike two changed lines are for pairing them (their word marks): the
+/// tokens their ends share (common leading plus trailing tokens, whitespace
+/// aside) over the longer line's tokens. Lines that begin or end alike —
+/// `if let Some(…) {` and `if live {` — pair; lines that share only words in
+/// the middle do not.
+fn line_affinity(old: &str, new: &str) -> f32 {
+    let words = |line: &str| -> Vec<String> {
+        diff_tokens(line)
+            .into_iter()
+            .map(|range| line[range].to_string())
+            .filter(|token| !token.trim().is_empty())
+            .collect()
+    };
+    let (a, b) = (words(old), words(new));
+    if a.is_empty() || b.is_empty() {
+        return 0.;
+    }
+    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suffix = a[prefix..]
+        .iter()
+        .rev()
+        .zip(b[prefix..].iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    (prefix + suffix) as f32 / a.len().max(b.len()) as f32
+}
+
+/// Which removed and added lines of one change pair up for their word
+/// marks: the alignment that keeps both sides in order and
+/// maximizes the pairs' affinity (`line_affinity`), unpaired lines on rows
+/// of their own. `(Some(i), Some(j))` pairs; `(Some(i), None)` and `(None,
+/// Some(j))` stand alone.
+fn pair_lines(removed: &[&str], added: &[&str]) -> Vec<(Option<usize>, Option<usize>)> {
+    let (n, m) = (removed.len(), added.len());
+    let affinity: Vec<Vec<f32>> = removed
+        .iter()
+        .map(|old| added.iter().map(|new| line_affinity(old, new)).collect())
+        .collect();
+    // best[i][j]: the most affinity pairing removed[i..] with added[j..].
+    let mut best = vec![vec![0f32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            let pair = if affinity[i][j] > 0. {
+                affinity[i][j] + best[i + 1][j + 1]
+            } else {
+                f32::MIN
+            };
+            best[i][j] = pair.max(best[i + 1][j]).max(best[i][j + 1]);
+        }
+    }
+    let mut rows = Vec::with_capacity(n.max(m));
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        let pair =
+            affinity[i][j] > 0. && (affinity[i][j] + best[i + 1][j + 1] - best[i][j]).abs() < 1e-6;
+        if pair {
+            rows.push((Some(i), Some(j)));
+            i += 1;
+            j += 1;
+        } else if (best[i][j + 1] - best[i][j]).abs() < 1e-6 && best[i][j + 1] >= best[i + 1][j] {
+            rows.push((None, Some(j)));
+            j += 1;
+        } else {
+            rows.push((Some(i), None));
+            i += 1;
+        }
+    }
+    rows.extend((i..n).map(|i| (Some(i), None)));
+    rows.extend((j..m).map(|j| (None, Some(j))));
+    rows
+}
+
+thread_local! {
+    /// Sections found by reading a post-edit file, once per file and hunk.
+    static FILE_SECTIONS: std::cell::RefCell<HashMap<(String, u32), Option<String>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// A hunk's section where its own context named none (a `structuredPatch`
+/// hunk deep in an item): git's default funcname rule over the post-edit
+/// file — the nearest line above the hunk that starts with a letter, `_` or
+/// `$` — read once per file and hunk. `None` for a path that is not an
+/// absolute file on disk.
+fn file_section(path: &str, hunk: &ferrite_core::Hunk) -> Option<String> {
+    if !std::path::Path::new(path).is_absolute() || hunk.new_start <= 1 {
+        return None;
+    }
+    FILE_SECTIONS.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry((path.to_string(), hunk.new_start))
+            .or_insert_with(|| {
+                let text = std::fs::read_to_string(path).ok()?;
+                text.lines()
+                    .take(hunk.new_start.saturating_sub(1) as usize)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .find(|line| ferrite_core::transcript::funcname_line(line))
+                    .and_then(ferrite_core::transcript::section_head)
+            })
+            .clone()
+    })
+}
+
+/// A diff's rows, at most `cap` code lines (`hunk_rows`): a header only
+/// where the hunk names a section; each change's removed lines, then its
+/// added lines, paired by likeness (`pair_lines`) and their changed tokens
+/// marked.
+pub(super) fn diff_rows(diff: &Diff, cap: usize) -> Vec<DiffRow> {
+    let mut rows = Vec::new();
+    let mut drawn = 0usize;
+    for hunk in &diff.hunks {
+        if drawn == cap {
+            break;
+        }
+        if let Some(section) = hunk
+            .section
+            .clone()
+            .or_else(|| file_section(&diff.path, hunk))
+        {
+            rows.push(DiffRow::Hunk(format!(
+                "@@ -{},{} +{},{} @@ {section}",
+                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
+            )));
+        }
+        let (mut old, mut new) = (hunk.old_start, hunk.new_start);
+        let lines: Vec<&str> = hunk
+            .lines
+            .iter()
+            .take(cap - drawn)
+            .map(String::as_str)
+            .collect();
+        drawn += lines.len();
+        let mut at = 0;
+        while at < lines.len() {
+            match DiffKind::of(lines[at]) {
+                DiffKind::Context => {
+                    rows.push(DiffRow::Line(DiffSide {
+                        kind: DiffKind::Context,
+                        number: new,
+                        body: text::diff_body(lines[at]).to_owned(),
+                        words: None,
+                    }));
+                    old += 1;
+                    new += 1;
+                    at += 1;
+                }
+                _ => {
+                    // A change: its removed run, then its added run, paired
+                    // by likeness for the word marks.
+                    let removed: Vec<&str> = lines[at..]
+                        .iter()
+                        .take_while(|line| DiffKind::of(line) == DiffKind::Removed)
+                        .map(|line| text::diff_body(line))
+                        .collect();
+                    at += removed.len();
+                    let added: Vec<&str> = lines[at..]
+                        .iter()
+                        .take_while(|line| DiffKind::of(line) == DiffKind::Added)
+                        .map(|line| text::diff_body(line))
+                        .collect();
+                    at += added.len();
+                    let mut left: Vec<DiffSide> = removed
+                        .iter()
+                        .enumerate()
+                        .map(|(index, body)| DiffSide {
+                            kind: DiffKind::Removed,
+                            number: old + index as u32,
+                            body: (*body).to_owned(),
+                            words: None,
+                        })
+                        .collect();
+                    let mut right: Vec<DiffSide> = added
+                        .iter()
+                        .enumerate()
+                        .map(|(index, body)| DiffSide {
+                            kind: DiffKind::Added,
+                            number: new + index as u32,
+                            body: (*body).to_owned(),
+                            words: None,
+                        })
+                        .collect();
+                    for pair in pair_lines(&removed, &added) {
+                        if let (Some(i), Some(j)) = pair {
+                            if let Some((was, became)) = changed_words(removed[i], added[j]) {
+                                left[i].words = Some(was);
+                                right[j].words = Some(became);
+                            }
+                        }
+                    }
+                    old += removed.len() as u32;
+                    new += added.len() as u32;
+                    rows.extend(left.into_iter().chain(right).map(DiffRow::Line));
+                }
+            }
+        }
+    }
+    rows
+}
+
+/// One styled run of a line.
+type Highlight = (std::ops::Range<usize>, HighlightStyle);
+/// A changed-token span and the deeper hue it is washed in.
+type WordWash = (std::ops::Range<usize>, gpui::Hsla);
+
+/// A diff line's syntax colours, and its changed tokens' wash: the range
+/// and the deeper hue `CellCut` paints under them as the prototype's inline
+/// `.wr` / `.wa` span boxes (the text's own content box, not the row).
+fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, Option<WordWash>) {
+    let syntax = language
+        .map(|language| {
+            let tokens = ferrite_core::transcript::highlight_tokens(Some(language), &side.body);
+            code(&side.body, Some(&tokens))
+        })
+        .unwrap_or_default();
+    let wash = match side.kind {
+        DiffKind::Added => Some((theme::DIFF_ADDED_WORD, theme::DIFF_ADDED_WORD_ALPHA)),
+        DiffKind::Removed => Some((theme::DIFF_REMOVED_WORD, theme::DIFF_REMOVED_WORD_ALPHA)),
+        DiffKind::Context => None,
+    };
+    let words = side
+        .words
+        .clone()
+        .filter(|words| !words.is_empty())
+        .zip(wash)
+        .map(|(words, (wash, alpha))| {
+            let wash: gpui::Hsla = rgb(wash >> 8).into();
+            (words, wash.opacity(alpha))
+        });
+    let syntax = match &words {
+        // The changed tokens are a span of their own: the runs break at
+        // its edges, as the prototype's `.wa` / `.wr` breaks its line.
+        Some((words, _)) => syntax
+            .into_iter()
+            .flat_map(|(range, style)| {
+                let mut cuts = vec![range.start];
+                cuts.extend(
+                    [words.start, words.end]
+                        .into_iter()
+                        .filter(|cut| range.start < *cut && *cut < range.end),
+                );
+                cuts.push(range.end);
+                cuts.windows(2)
+                    .map(|cut| (cut[0]..cut[1], style))
+                    .collect::<Vec<_>>()
+            })
+            .collect(),
+        None => syntax,
+    };
+    (syntax, words)
+}
+
+/// A diff under its call (SPEC §5.4; the mockup's `.diff`): one block box
+/// (`block_box`) on the content column — a header naming the file in the
+/// app's words with its size (`+4 −1`) hard right over a 1px `paint::LINE`,
+/// then the unified diff set `TX_BLOCK_STEP` under the transcript. A
+/// `TEXT_DIM` hunk header opens a hunk that names a section (none
+/// otherwise); each row is `[number][sign][code]`: the number
+/// right-aligned in `DIFF_NUMBER_CELLS` with `DIFF_NUMBER_PAD_CELLS` after
+/// it, in `TEXT_FAINT` or the add/delete number tint; the sign
+/// (`DIFF_SIGN_CELLS`) in its hue; the code in full syntax colour with its
+/// indentation intact, exactly one line tall, cut with `…` at the box's
+/// edge. Removed and added rows wear their soft washes the box's whole
+/// width, the changed tokens a deeper one.
+///
+/// The code cells route through the overlay — their lines copy honestly and
+/// whole, however they are cut; numbers, signs and headers are chrome and
+/// never do (#27). Without a selection (`None`) nothing registers.
+///
+/// The diff draws at most `HUNK_MAX_ROWS` lines and then names what it
+/// left out.
+pub(super) fn render_diff(
+    selection: Option<(&TextRuns, BlockId)>,
+    diff: &Diff,
+    grid: Grid,
+) -> impl IntoElement {
+    let content = grid;
+    let grid = grid.block();
+    let pad = theme::CODE_PAD_CELLS * grid.cell();
+    let total: usize = diff.hunks.iter().map(|hunk| hunk.lines.len()).sum();
+    let (cap, omitted) = hunk_rows(total);
+    let cells = diff_number_cells(diff_max_number(diff, cap));
+    let number_w = cells * grid.cell();
+    let sign_w = theme::DIFF_SIGN_CELLS * grid.cell();
+    let language = ferrite_core::transcript::language_for_path(std::path::Path::new(&diff.path));
+    let number = |number: u32, ink: u32| {
+        components::tabular(
+            div()
+                .flex_shrink_0()
+                .w(px(number_w))
+                .pr(px(theme::DIFF_NUMBER_PAD_CELLS * grid.cell()))
+                .text_right()
+                .whitespace_nowrap()
+                .text_color(rgb(ink))
+                .child(SharedString::from(number.to_string())),
+        )
+    };
+    // A line under the code column's edge: a hunk header, the omission.
+    let note = |selector: &'static str, text: String| {
+        div()
+            .debug_selector(move || selector.into())
+            .w_full()
+            .min_w_0()
+            .h(px(grid.line))
+            .pl(px(pad + number_w + sign_w))
+            .pr(px(pad))
+            .truncate()
+            .text_color(rgb(TEXT_DIM))
+            .child(SharedString::from(text))
+    };
+    let mut lines = div()
+        .debug_selector(|| "tool-diff".into())
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .py(px(theme::BLOCK_PAD_Y))
+        .text_color(rgb(TEXT));
+    for row in diff_rows(diff, cap) {
+        lines = lines.child(match &row {
+            DiffRow::Hunk(header) => note("diff-hunk", header.clone()),
+            DiffRow::Line(side) => {
+                let DiffPaint {
+                    sign,
+                    sign_color,
+                    number_color,
+                    code_color,
+                    wash,
+                } = side.kind.paint();
+                let (highlights, words) = diff_highlights(side, language);
+                let runs = highlights.iter().map(|(range, _)| range.clone()).collect();
+                let cut = CellCut::new(
+                    side.body.clone(),
+                    words,
+                    rgb(code_color).into(),
+                    grid.cell(),
+                )
+                .runs(runs);
+                let code = match selection {
+                    Some((selection, block)) => selection
+                        .line(block, side.body.clone(), highlights)
+                        .into_any_element(),
+                    None => StyledText::new(SharedString::from(side.body.clone()))
+                        .with_highlights(highlights)
+                        .into_any_element(),
+                };
+                div()
+                    .flex()
+                    .items_start()
+                    .w_full()
+                    .min_w_0()
+                    .h(px(grid.line))
+                    .px(px(pad))
+                    .overflow_hidden()
+                    .when_some(wash, |row, wash| row.bg(rgba(wash)))
+                    .child(number(side.number, number_color))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(px(sign_w))
+                            .whitespace_nowrap()
+                            .text_color(rgb(sign_color))
+                            .child(sign),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_color(rgb(code_color))
+                            .child(cut.child(code)),
+                    )
+            }
+        });
+    }
+    // What the cap left out, on the code column — never a silent truncation.
+    if omitted > 0 {
+        lines = lines.child(note("diff-omitted", format!("\u{2026} +{omitted} lines")));
+    }
+    let name = std::path::Path::new(&diff.path)
+        .file_name()
+        .map_or(diff.path.clone(), |name| name.to_string_lossy().into_owned());
+    let small = content.activity();
+    let header = div()
+        .debug_selector(|| "diff-header".into())
+        .flex()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .px(px(pad))
+        .py(px(theme::BLOCK_PAD_Y))
+        .border_b_1()
+        .border_color(theme::paint::LINE)
+        .font_family(theme::FONT_UI)
+        .text_size(px(small.size))
+        .text_color(rgb(TEXT))
+        .child(div().min_w_0().truncate().child(SharedString::from(name)))
+        .child(div().flex_1())
+        .child(
+            div()
+                .flex_shrink_0()
+                .pl(px(theme::SPACE_3))
+                .font_family(theme::FONT_CODE)
+                .child(trail_diff_stat(diff.added, diff.removed)),
+        );
+    content_row(content).pt(px(theme::BLOCK_MARGIN_T)).child(
+        on_cells(block_box(grid))
+            .debug_selector(|| "diff-box".into())
+            .py(px(0.))
+            .overflow_hidden()
+            .child(header)
+            .child(lines),
+    )
+}
+
+/// A one-line code run cut at its column's edge as the prototype's
+/// `text-overflow: ellipsis` cuts it: the whole cells that leave room for
+/// `…`, then `…` in the cell's own ink (the browser draws the ellipsis in
+/// the block's colour, whatever token it hides). gpui's own truncation
+/// trims trailing punctuation before its `…` (`clone…` where the browser
+/// draws `clone(…`), so a diff row draws its text whole and this clips it;
+/// the text itself — what a selection copies — is never cut.
+///
+/// It also paints the changed tokens' wash (`words`) the way the browser
+/// paints an inline span's background: over the face's content box —
+/// ascent plus descent, each rounded, a whole-pixel half-leading above —
+/// not the row (17px inside a 20px row at 13px), so washes on adjacent
+/// rows stay apart. A wash that runs past the cut keeps washing, unbroken
+/// under the `…`, to the column's edge.
+pub(crate) struct CellCut {
+    text: String,
+    words: Option<WordWash>,
+    ink: gpui::Hsla,
+    cell: f32,
+    /// Where the run's styled runs break, in cells: each run is laid out
+    /// from the last one's width rounded up to the layout unit (gpui's
+    /// text paint, vendor/gpui-pre), so a cell's x counts them.
+    breaks: Vec<usize>,
+    child: Option<AnyElement>,
+}
+
+impl CellCut {
+    fn new(text: String, words: Option<WordWash>, ink: gpui::Hsla, cell: f32) -> Self {
+        Self {
+            text,
+            words,
+            ink,
+            cell,
+            breaks: Vec::new(),
+            child: None,
+        }
+    }
+
+    /// The styled runs the cell's text is painted in (byte ranges).
+    fn runs(mut self, runs: Vec<std::ops::Range<usize>>) -> Self {
+        let cell_of = |at: usize| self.text[..at.min(self.text.len())].chars().count();
+        let total = self.text.chars().count();
+        let mut breaks: Vec<usize> = runs
+            .iter()
+            .flat_map(|run| [cell_of(run.start), cell_of(run.end)])
+            .filter(|at| *at > 0 && *at < total)
+            .collect();
+        breaks.sort_unstable();
+        breaks.dedup();
+        self.breaks = breaks;
+        self
+    }
+
+    /// The x of cell `at` from the run's start: its cells, each run before
+    /// it rounded up to the layout unit.
+    fn x_at(&self, at: usize) -> f32 {
+        let unit = |width: f32| (width * 64.0).ceil() / 64.0;
+        let mut x = 0.0;
+        let mut from = 0;
+        for &cut in self.breaks.iter().filter(|cut| **cut <= at) {
+            x += unit((cut - from) as f32 * self.cell);
+            from = cut;
+        }
+        x + (at - from) as f32 * self.cell
+    }
+
+    pub(crate) fn child(mut self, child: AnyElement) -> Self {
+        self.child = Some(child);
+        self
+    }
+
+    /// How many whole cells stay when `width` cannot hold the run: the
+    /// cells that leave one for `…`. `None` when the whole run fits.
+    fn kept(&self, width: f32) -> Option<usize> {
+        let whole = self.text.chars().count() as f32 * self.cell;
+        (whole > width + 0.01)
+            .then(|| ((width - self.cell) / self.cell + 0.001).floor().max(0.) as usize)
+    }
+
+    /// The cells the wash covers, `[from, to)`, and whether it reaches the
+    /// first hidden cell (then it runs on under the `…` to the edge).
+    fn wash_cells(&self, kept: Option<usize>) -> Option<(usize, usize, bool)> {
+        let (range, _) = self.words.as_ref()?;
+        let cell_of = |at: usize| self.text[..at.min(self.text.len())].chars().count();
+        let (from, to) = (cell_of(range.start), cell_of(range.end));
+        match kept {
+            Some(kept) if from > kept => None,
+            Some(kept) => Some((from, to.min(kept), to > kept)),
+            None => Some((from, to, false)),
+        }
+    }
+}
+
+/// The browser's inline content box in a line of `line_height`: its top
+/// below the line's and its height — the face's ascent plus descent,
+/// rounded to the pixel (17px at 13px), under a floored half-leading.
+fn inline_content_box(window: &gpui::Window) -> (f32, f32) {
+    let style = window.text_style();
+    let size = style.font_size.to_pixels(window.rem_size());
+    let line_height = f32::from(style.line_height_in_pixels(window.rem_size()));
+    let text_system = window.text_system();
+    let font = text_system.resolve_font(&style.font());
+    let ascent = f32::from(text_system.ascent(font, size)).abs();
+    let descent = f32::from(text_system.descent(font, size)).abs();
+    let height = (ascent + descent).round().min(line_height);
+    (((line_height - height) / 2.).floor().max(0.), height)
+}
+
+impl IntoElement for CellCut {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for CellCut {
+    /// The child's layout node: the cut and the wash measure from its
+    /// unrounded box, where the run's glyphs stand.
+    type RequestLayoutState = gpui::LayoutId;
+    type PrepaintState = gpui::Bounds<gpui::Pixels>;
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, gpui::LayoutId) {
+        let child = self.child.get_or_insert_with(|| div().into_any_element());
+        let layout_id = child.request_layout(window, cx);
+        (layout_id, layout_id)
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        layout_id: &mut gpui::LayoutId,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        let bounds = window.unsnapped_layout_bounds(*layout_id);
+        if let Some(child) = self.child.as_mut() {
+            child.prepaint(window, cx);
+        }
+        bounds
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut gpui::LayoutId,
+        bounds: &mut gpui::Bounds<gpui::Pixels>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        let bounds = *bounds;
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        // The run keeps its glyphs where they fall; the wash is a box, its
+        // edges on the whole pixel the browser rounds a span's background
+        // to (`components::css_px`).
+        let kept = self.kept(f32::from(bounds.size.width));
+        let left = f32::from(bounds.left());
+        let cut = kept.map(|kept| px(left + self.x_at(kept)));
+        if let (Some((from, to, runs_on)), Some((_, wash))) =
+            (self.wash_cells(kept), self.words.as_ref())
+        {
+            let (top, height) = inline_content_box(window);
+            let edge = |x: f32| px(ferrite_ui::components::css_px(x));
+            let x0 = edge(left + self.x_at(from));
+            let x1 = match (runs_on, cut) {
+                (true, _) => edge(f32::from(bounds.right())),
+                (false, Some(cut)) => edge(left + self.x_at(to)).min(edge(f32::from(cut))),
+                (false, None) => edge(left + self.x_at(to)),
+            };
+            if x1 > x0 {
+                let y0 = bounds.top() + px(top);
+                window.paint_quad(gpui::fill(
+                    gpui::Bounds::from_corners(
+                        gpui::point(x0, y0),
+                        gpui::point(x1, y0 + px(height)),
+                    ),
+                    *wash,
+                ));
+            }
+        }
+        let Some(cut) = cut else {
+            child.paint(window, cx);
+            return;
+        };
+        let shown = gpui::Bounds::from_corners(bounds.origin, gpui::point(cut, bounds.bottom()));
+        window.with_content_mask(Some(gpui::ContentMask { bounds: shown }), |window| {
+            child.paint(window, cx)
+        });
+        let style = window.text_style();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let line_height = style.line_height_in_pixels(window.rem_size());
+        let ellipsis = "\u{2026}";
+        let run = gpui::TextRun {
+            len: ellipsis.len(),
+            font: style.font(),
+            color: self.ink,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = window
+            .text_system()
+            .shape_line(ellipsis.into(), size, &[run], None);
+        let _ = line.paint(
+            gpui::point(cut, bounds.top()),
+            line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+}
+
+/// How many of a diff's rows the card draws, and how many are left for
+/// the omission line to account for. Split out so the arithmetic the card
+/// depends on is assertable without a window.
+pub(super) fn hunk_rows(total: usize) -> (usize, usize) {
+    let drawn = total.min(theme::HUNK_MAX_ROWS);
+    (drawn, total - drawn)
+}
+
+/// The largest line number the diff will draw.
+fn diff_max_number(diff: &Diff, cap: usize) -> usize {
+    let mut drawn = 0;
+    let mut max = 0usize;
+    for hunk in &diff.hunks {
+        let (mut old, mut new) = (hunk.old_start, hunk.new_start);
+        for line in &hunk.lines {
+            if drawn == cap {
+                return max;
+            }
+            drawn += 1;
+            match DiffKind::of(line) {
+                DiffKind::Added => new += 1,
+                DiffKind::Removed => old += 1,
+                DiffKind::Context => {
+                    old += 1;
+                    new += 1;
+                }
+            }
+            max = max
+                .max(old.saturating_sub(1) as usize)
+                .max(new.saturating_sub(1) as usize);
+        }
+    }
+    max
+}
+
+/// The number column in cells: `DIFF_NUMBER_CELLS` (three digits and the
+/// `DIFF_NUMBER_PAD_CELLS` after them), wider only for a longer number.
+pub fn diff_number_cells(max: usize) -> f32 {
+    let digits = max.max(1).ilog10() as f32 + 1.;
+    theme::DIFF_NUMBER_CELLS.max(digits + theme::DIFF_NUMBER_PAD_CELLS)
+}
+
+/// What a unified-diff line is, read from its first byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffKind {
+    Added,
+    Removed,
+    Context,
+}
+
+/// A diff row's colours: the sign column, the code, and the row's wash.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DiffPaint {
+    pub sign: &'static str,
+    pub sign_color: u32,
+    /// The line number's ink: the sign's hue dimmed, structure on a
+    /// context row.
+    pub number_color: u32,
+    pub code_color: u32,
+    pub wash: Option<u32>,
+}
+
+impl DiffKind {
+    pub fn of(line: &str) -> Self {
+        match line.chars().next() {
+            Some('+') => Self::Added,
+            Some('-') => Self::Removed,
+            _ => Self::Context,
+        }
+    }
+
+    /// Both CLIs sign a diff in ASCII, `+` and `-`. The sign carries the
+    /// hue (`DIFF_*_SIGN`); the code keeps body ink under its syntax
+    /// colours on the row's wash; a context line is the same code with no
+    /// wash.
+    pub fn paint(self) -> DiffPaint {
+        match self {
+            Self::Added => DiffPaint {
+                sign: "+",
+                sign_color: theme::DIFF_ADDED_SIGN,
+                number_color: theme::DIFF_ADDED_NUMBER,
+                code_color: DIFF_ADDED_INK,
+                wash: Some(DIFF_ADDED_WASH),
+            },
+            Self::Removed => DiffPaint {
+                sign: "-",
+                sign_color: theme::DIFF_REMOVED_SIGN,
+                number_color: theme::DIFF_REMOVED_NUMBER,
+                code_color: DIFF_REMOVED_INK,
+                wash: Some(DIFF_REMOVED_WASH),
+            },
+            Self::Context => DiffPaint {
+                sign: "",
+                sign_color: TEXT_DIM,
+                number_color: TEXT_FAINT,
+                code_color: theme::SYN_PLAIN,
+                wash: None,
+            },
+        }
+    }
+}

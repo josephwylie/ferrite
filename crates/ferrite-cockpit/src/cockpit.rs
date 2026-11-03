@@ -8625,13 +8625,13 @@ impl CockpitView {
                 });
             }),
             // Over the box, as the `/` menu stands: the `+` is in it.
-            place: match self.panes[index].geometry.get().composer {
+            place: Some(match self.panes[index].geometry.get().composer {
                 Some(field) => ferrite_ui::components::FloatPlace {
                     floor: f32::from(field.top()),
                     limit_right: f32::from(field.right()),
                 },
                 None => self.bar_place(),
-            },
+            }),
         }
         .into_any_element()
     }
@@ -11989,7 +11989,7 @@ impl CockpitView {
                         cx.notify();
                     });
                 }),
-                place: self.composer_place(index),
+                place: Some(self.composer_place(index)),
             }
             .into_any_element(),
         ))
@@ -12789,7 +12789,7 @@ impl CockpitView {
             on_pick: std::rc::Rc::new(move |at, window, cx| {
                 let _ = picker.update(cx, |view, cx| view.pick(at, window, cx));
             }),
-            place: self.composer_place(index),
+            place: Some(self.composer_place(index)),
         }
     }
 

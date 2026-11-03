@@ -894,7 +894,7 @@ impl CockpitView {
         children: &[ferrite_core::activity::AgentView<'_>],
         plan: &StripPlan,
         cx: &mut Context<Self>,
-    ) -> components::ChoiceMenu {
+    ) -> ferrite_ui::menu::ChoiceMenu {
         let pane = &self.panes[index];
         let mut choices = Vec::new();
         let mut subjects = Vec::new();
@@ -942,10 +942,16 @@ impl CockpitView {
         let label = plan.menu_label();
         let weak = cx.entity().downgrade();
         let picking = weak.clone();
-        components::ChoiceMenu {
+        ferrite_ui::menu::ChoiceMenu {
             id: format!("subject-overflow-{}", thread.get()).into(),
-            // The strip runs across the card's top: the list drops below it.
-            anchor: gpui::Anchor::TopLeft,
+            // The strip runs across the card's top: with no place, the list
+            // drops below it.
+            place: None,
+            lead: 0.,
+            head: None,
+            ladder: None,
+            hints: Vec::new(),
+            width: None,
             trigger: components::button(("subject-overflow", thread.get()))
                 .tab_stop(true)
                 .h(px(theme::SUBJECT_TAB_H))

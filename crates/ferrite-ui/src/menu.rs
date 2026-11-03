@@ -530,7 +530,8 @@ pub struct Ladder {
 /// act. The kit `Popover` hangs it off its trigger; the menu owns its
 /// keyboard (↑/↓ the cursor, ←/→ the ladder, ↵ picks, esc closes) in the
 /// kit's own `PopupMenu` key context, so its bindings beat the bare enter
-/// and escape. Rows keep the `choice-row-{index}` selectors.
+/// and escape. Rows keep the `choice-row-{index}` selectors. Every picker
+/// is one: the Composer toolbar's, and the Subagents strip's `N done ▾`.
 #[derive(IntoElement)]
 pub struct ChoiceMenu {
     pub id: SharedString,
@@ -540,9 +541,13 @@ pub struct ChoiceMenu {
     pub return_focus: gpui::FocusHandle,
     pub on_open: OpenChanged,
     pub on_pick: Picked,
-    /// Where the menu may rest: its foot `MODEL_PICKER_GAP` above the
-    /// floor (the window's bar, ADR 0014), its right edge inside the limit.
-    pub place: components::FloatPlace,
+    /// Where the menu may rest. Given one, the menu opens up from its
+    /// trigger (a Composer toolbar chip, below the room it opens into): its
+    /// foot `MODEL_PICKER_GAP` above the floor (the window's bar, ADR 0014),
+    /// its right edge inside the limit. Without one it drops below its
+    /// trigger (the Subagents strip, across the card's top), where the kit
+    /// hangs it.
+    pub place: Option<components::FloatPlace>,
     /// How far left of its trigger the menu's left edge stands: the model
     /// picker's `MODEL_PICKER_NUDGE`, so its section logo sits left of the
     /// status logo; 0 lines the menu up with its trigger.
@@ -623,7 +628,7 @@ struct ChoiceContent {
     on_pick: Picked,
     on_open: OpenChanged,
     return_focus: gpui::FocusHandle,
-    place: components::FloatPlace,
+    place: Option<components::FloatPlace>,
     lead: f32,
     state: gpui::Entity<ChoiceState>,
     focus: gpui::FocusHandle,
@@ -757,18 +762,7 @@ impl ChoiceContent {
                 ));
                 continue;
             }
-            let mut item = MenuItem::new(choice.label.clone())
-                .checked(choice.checked)
-                .disabled(choice.disabled);
-            if let Some(detail) = &choice.detail {
-                item = item.detail(detail.clone());
-            }
-            item.note = choice.note.clone();
-            item.badge = choice.badge.clone();
-            item.shortcut = choice.shortcut.clone();
-            if let (true, Some((path, ink))) = (marked, choice.icon) {
-                item = item.leading(path, ink);
-            }
+            let item = choice.item(marked);
             // The pointer paints its own row (`FLOAT_HOVER`) and leaves the
             // cursor where the arrows put it: only ↑↓ move it.
             let pick = self.clone();
@@ -825,35 +819,8 @@ impl ChoiceContent {
         // opacity, so the entrance is keyed on being placed.
         let entrance = ("choice-menu-in", self.state.read(cx).placed as usize);
         let surface = components::on_bounds(surface, move |bounds, window, cx| {
-            let place = menu.place;
-            // Inside the surface's 1px edge: add it back.
-            let bounds = bounds.dilate(px(1.));
-            let lead = menu.lead;
-            let moved = menu.state.update(cx, |state, _| {
-                // Undo the offsets in force to find where the kit laid it,
-                // then solve from there: the foot `MODEL_PICKER_GAP` over
-                // the floor, the left edge `lead` left of the trigger, the
-                // right edge inside the limit.
-                let natural_bottom = f32::from(bounds.bottom()) + state.lift;
-                let natural_right = f32::from(bounds.right()) + state.shift;
-                let lift = natural_bottom - (place.floor - MODEL_PICKER_GAP);
-                let shift = (natural_right - place.limit_right).max(0.).max(lead);
-                let moved = (lift - state.lift).abs() > 0.5
-                    || (shift - state.shift).abs() > 0.5
-                    || !state.placed;
-                state.placed = true;
-                if moved {
-                    state.lift = lift;
-                    state.shift = shift;
-                }
-                moved
-            });
-            if moved {
-                // Measured in prepaint, where a notify is lost with the
-                // frame being drawn: the owner draws the menu in its place
-                // on the next.
-                let owner = menu.owner;
-                window.defer(cx, move |_, cx| cx.notify(owner));
+            if let Some(place) = menu.place {
+                menu.settle(place, bounds, window, cx);
             }
             let first = menu.state.update(cx, |state, _| {
                 let first = !state.initialized;
@@ -865,6 +832,46 @@ impl ChoiceContent {
             }
         });
         crate::motion::menu_in(entrance, surface, crate::motion::Opens::InPlace).into_any_element()
+    }
+
+    /// Move the menu onto its place from where the kit laid it (`bounds`,
+    /// measured in prepaint).
+    fn settle(
+        self: &Rc<Self>,
+        place: components::FloatPlace,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        // Inside the surface's 1px edge: add it back.
+        let bounds = bounds.dilate(px(1.));
+        let lead = self.lead;
+        let moved = self.state.update(cx, |state, _| {
+            // Undo the offsets in force to find where the kit laid it,
+            // then solve from there: the foot `MODEL_PICKER_GAP` over
+            // the floor, the left edge `lead` left of the trigger, the
+            // right edge inside the limit.
+            let natural_bottom = f32::from(bounds.bottom()) + state.lift;
+            let natural_right = f32::from(bounds.right()) + state.shift;
+            let lift = natural_bottom - (place.floor - MODEL_PICKER_GAP);
+            let shift = (natural_right - place.limit_right).max(0.).max(lead);
+            let moved = (lift - state.lift).abs() > 0.5
+                || (shift - state.shift).abs() > 0.5
+                || !state.placed;
+            state.placed = true;
+            if moved {
+                state.lift = lift;
+                state.shift = shift;
+            }
+            moved
+        });
+        if moved {
+            // Measured in prepaint, where a notify is lost with the
+            // frame being drawn: the owner draws the menu in its place
+            // on the next.
+            let owner = self.owner;
+            window.defer(cx, move |_, cx| cx.notify(owner));
+        }
     }
 
     fn step_ladder(self: &Rc<Self>, delta: isize, window: &mut gpui::Window, cx: &mut gpui::App) {
@@ -936,18 +943,24 @@ impl RenderOnce for ChoiceMenu {
         let mut popover = Popover::new(SharedString::from(format!("choice:{}", self.id)))
             .appearance(false)
             .overlay_closable(false)
-            // Every trigger is a Composer toolbar chip, below the room it
-            // opens into: the menu hangs up and right from it.
-            .anchor(gpui::Anchor::BottomLeft)
+            // A menu with a place opens up and right from its trigger; one
+            // without drops below it.
+            .anchor(if self.place.is_some() {
+                gpui::Anchor::BottomLeft
+            } else {
+                gpui::Anchor::TopLeft
+            })
             .trigger(QuietTrigger(self.trigger))
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx));
         // The kit hangs the menu off the trigger; the measured offsets
         // move it onto its floor and inside its limit.
-        popover = popover
-            .bottom(px(lift))
-            .left(px(-shift))
-            .when(!placed, |popover| popover.opacity(0.));
+        if self.place.is_some() {
+            popover = popover
+                .bottom(px(lift))
+                .left(px(-shift))
+                .when(!placed, |popover| popover.opacity(0.));
+        }
         if self.open {
             let content = Rc::new(ChoiceContent {
                 choices: self.choices,
