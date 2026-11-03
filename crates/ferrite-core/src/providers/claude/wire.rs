@@ -240,8 +240,29 @@ pub(super) fn parse_value(value: &Value) -> Option<SessionEvent> {
         "user" => parse_user(value),
         "control_request" => parse_control_request(value),
         "result" => Some(parse_result(value)),
+        "tool_use_summary" => parse_tool_summary(value),
         _ => None,
     }
+}
+
+/// The CLI's one-line summary of the calls it names. The frame carries no
+/// child attribution: it is Main's, and one that ever names a parent is not.
+fn parse_tool_summary(value: &Value) -> Option<SessionEvent> {
+    if !matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
+        return None;
+    }
+    let summary = value.get("summary")?.as_str()?.trim();
+    let ids: Vec<String> = value
+        .get("preceding_tool_use_ids")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    (!summary.is_empty() && !ids.is_empty()).then(|| SessionEvent::ToolSummary {
+        ids,
+        summary: summary.into(),
+    })
 }
 
 /// The tools by which an agent schedules work it starts itself.
@@ -320,7 +341,6 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                         .map(|s| (s * 1000.) as u64),
                 },
             }),
-        "tool_use_summary" => Some(phase(Phase::Working, string("summary"))),
         "stream_event" => match value["event"]["type"].as_str() {
             Some("content_block_stop") => Some(SessionEvent::ContentBoundary),
             Some("content_block_start") => match value["event"]["content_block"]["type"].as_str() {
@@ -352,30 +372,45 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     format!("{error} · attempt {attempt}/{max}{delay}"),
                 ))
             }
-            Some("status") => value["status"].as_str().map(|status| {
-                phase(
-                    if status == "compacting" {
-                        Phase::Compacting
-                    } else {
-                        Phase::Working
-                    },
-                    string("message"),
-                )
-            }),
+            Some("status") => match value["status"].as_str() {
+                Some("compacting") => Some(phase(Phase::Compacting, string("message"))),
+                Some(_) => Some(phase(Phase::Working, string("message"))),
+                // `null` is the end of a state, not work: a bare one rides a
+                // permission-mode change, even at rest. Only a compaction's
+                // end says which state ended, with its `compact_result`.
+                None => value["compact_result"].as_str().map(|result| {
+                    phase(
+                        Phase::Working,
+                        match (result, value["compact_error"].as_str()) {
+                            ("failed", Some(error)) => format!("Compaction failed: {error}"),
+                            ("failed", None) => "Compaction failed".into(),
+                            _ => String::new(),
+                        },
+                    )
+                }),
+            },
             Some("compact_boundary") => Some(phase(Phase::Working, "Context compacted".into())),
             Some("thinking_tokens") => Some(phase(Phase::Thinking, String::new())),
             Some("task_started" | "task_progress" | "task_notification" | "task_updated") => {
+                // `task_updated` carries only what changed, in its `patch`;
+                // a field it leaves out is no news, so it stays empty here
+                // and `Unknown` for the status, which Progress keeps.
+                let patch = &value["patch"];
                 value["task_id"].as_str().map(|id| SessionEvent::Progress {
                     event: ProgressEvent::Background {
                         id: id.into(),
-                        label: string("description"),
-                        status: match value["status"]
+                        label: value["description"]
                             .as_str()
-                            .or(value["patch"]["status"].as_str())
-                        {
+                            .or(patch["description"].as_str())
+                            .unwrap_or("")
+                            .into(),
+                        status: match value["status"].as_str().or(patch["status"].as_str()) {
                             Some("completed") => TaskStatus::Completed,
                             Some("failed") => TaskStatus::Failed,
-                            Some("stopped") => TaskStatus::Stopped,
+                            // The update's `killed` is the notification's
+                            // `stopped`; a `paused` task runs no more until a
+                            // resume reports it running again.
+                            Some("stopped" | "killed" | "paused") => TaskStatus::Stopped,
                             Some("running" | "in_progress") => TaskStatus::Working,
                             _ if value["subtype"] == "task_started"
                                 || value["subtype"] == "task_progress" =>
@@ -854,9 +889,9 @@ fn parse_hunk(value: &Value) -> Option<Hunk> {
     })
 }
 
-/// The control protocol runs both ways down the same pipes. The CLI's only
-/// request against 2.1.243 is `can_use_tool`; anything else it grows later is
-/// ignored, which leaves the turn hanging but never corrupts the stream.
+/// The control protocol runs both ways down the same pipes. Ferrite answers
+/// `can_use_tool` and `elicitation` as Decisions; any other request the CLI
+/// sends gets `refusal`, so it is never left waiting on an answer.
 ///
 /// A request Ferrite cannot fully read is still a request the CLI is blocked
 /// on, so everything below `request_id` degrades to empty rather than dropping
@@ -870,6 +905,33 @@ fn parse_control_request(value: &Value) -> Option<SessionEvent> {
         "elicitation" => parse_elicitation_request(value, request),
         _ => None,
     }
+}
+
+/// The error answer to a control request of a subtype Ferrite does not read
+/// (a hook callback, a relay to an MCP server it does not run, whatever the
+/// CLI adds next): the CLI's own words for one, so the request it is blocked
+/// on fails at once instead of hanging the turn. `None` for any other line,
+/// and for a request with no id to answer.
+pub(super) fn refusal(value: &Value) -> Option<Value> {
+    if value["type"] != "control_request" {
+        return None;
+    }
+    let id = value["request_id"].as_str()?;
+    let subtype = value["request"]["subtype"].as_str();
+    if matches!(subtype, Some("can_use_tool" | "elicitation")) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "error",
+            "request_id": id,
+            "error": format!(
+                "Unsupported control request subtype: {}",
+                subtype.unwrap_or("(none)")
+            ),
+        },
+    }))
 }
 
 fn parse_tool_request(value: &Value, request: &Value) -> Option<SessionEvent> {
@@ -1590,6 +1652,9 @@ mod tests {
             SessionEvent::ToolCompleted { .. } => "ToolCompleted",
             SessionEvent::DecisionRequested { .. } => "DecisionRequested",
             SessionEvent::TurnEnded { .. } => "TurnEnded",
+            // No committed capture has one yet; proved through the public
+            // Session replay in tests/provider_progress.rs.
+            SessionEvent::ToolSummary { .. } => return None,
             // Not a wire line at all: the reader thread synthesises Closed when
             // the process exits, so no capture can contain it. Proved instead
             // by `stdout_eof_closes_the_session_with_the_exit_status`.
@@ -2136,9 +2201,9 @@ mod tests {
             r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":7}}}"#,
             r#"{"type":"control_response","response":{"subtype":"success"}}"#,
             r#"{"type":"brand_new_vendor_event","payload":{}}"#,
-            // Control traffic Ferrite does not answer: hooks, MCP relays, and
-            // whatever the vendor adds next. Ignoring one strands that request,
-            // but the stream keeps flowing.
+            // Control traffic Ferrite does not answer as an event: hooks, MCP
+            // relays, and whatever the vendor adds next. The reader refuses
+            // it instead (`refusal`, tested below).
             r#"{"type":"control_request","request_id":"1","request":{"subtype":"hook_callback"}}"#,
             // A `can_use_tool` with nothing else in it used to sit here. It is
             // not junk — it is a turn the CLI has stopped on — and it now
@@ -2153,6 +2218,32 @@ mod tests {
             r#"{"type":"user","message":{"content":"a plain string"}}"#,
         ] {
             assert_eq!(parse_line(line), None, "line should be ignored: {line}");
+        }
+    }
+
+    /// Fixture 27: a request Ferrite cannot answer is refused by id, never
+    /// left hanging and never approved; the two it answers are not refused.
+    #[test]
+    fn an_unknown_control_request_is_refused_by_its_id() {
+        let request = |body: &str| -> Value { serde_json::from_str(body).unwrap() };
+        let refused = refusal(&request(
+            r#"{"type":"control_request","request_id":"req_7","request":{"subtype":"hook_callback","callback_id":"h"}}"#,
+        ))
+        .expect("an unknown subtype is answered");
+        assert_eq!(refused["type"], "control_response");
+        assert_eq!(refused["response"]["subtype"], "error");
+        assert_eq!(refused["response"]["request_id"], "req_7");
+        assert!(refused["response"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("hook_callback"));
+        for line in [
+            r#"{"type":"control_request","request_id":"a","request":{"subtype":"can_use_tool"}}"#,
+            r#"{"type":"control_request","request_id":"b","request":{"subtype":"elicitation"}}"#,
+            r#"{"type":"control_request","request":{"subtype":"hook_callback"}}"#,
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"c"}}"#,
+        ] {
+            assert_eq!(refusal(&request(line)), None, "not refused: {line}");
         }
     }
 

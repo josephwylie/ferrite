@@ -1322,6 +1322,8 @@ mod tests {
             SessionEvent::TokenUsage { .. } => "TokenUsage",
             SessionEvent::RateLimits { .. } => "RateLimits",
             SessionEvent::TurnEnded { .. } => "TurnEnded",
+            // Claude's concept: Codex names no calls a summary belongs to.
+            SessionEvent::ToolSummary { .. } => return None,
             // The skills menu: a correlated response like Init, read by the
             // reader against its own request id, so it is chained into the
             // produced list from the SKILLS fixture the same way.

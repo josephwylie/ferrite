@@ -480,6 +480,44 @@ mod tests {
         assert_eq!(t.progress().background()[0].status, TaskStatus::Unknown);
     }
 
+    /// The provider's summary belongs to the calls it names (fixture 25's
+    /// feed): it arrives with their ids and never as the working caption.
+    #[test]
+    fn native_claude_tool_use_summary_keeps_the_calls_it_names() {
+        let events = replay(
+            "claude",
+            "tool-summary",
+            vec![
+                json!({"type":"assistant","session_id":"root","uuid":"calls","message":{"content":[
+                    {"type":"tool_use","id":"a","name":"Read","input":{"file_path":"a.rs"}},
+                    {"type":"tool_use","id":"b","name":"Read","input":{"file_path":"b.rs"}}
+                ]}}),
+                json!({"type":"tool_use_summary","session_id":"root","uuid":"summary","summary":"Read both modules","preceding_tool_use_ids":["a","b"]}),
+                json!({"type":"tool_use_summary","session_id":"root","uuid":"child","parent_tool_use_id":"spawn","summary":"A child's","preceding_tool_use_ids":["c"]}),
+                json!({"type":"tool_use_summary","session_id":"root","uuid":"empty","summary":"Names none","preceding_tool_use_ids":[]}),
+            ],
+        );
+        let summaries: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::ToolSummary { ids, summary } => Some((ids.clone(), summary.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            summaries,
+            [(
+                vec!["a".to_string(), "b".to_string()],
+                "Read both modules".to_string()
+            )]
+        );
+        assert_ne!(
+            fold(events).progress().caption().as_deref(),
+            Some("Read both modules"),
+            "a summary of named calls is not the working line"
+        );
+    }
+
     #[test]
     fn native_claude_parallel_tool_blocks_are_all_retained() {
         let events = replay(

@@ -346,6 +346,7 @@ pub use claude::{
 pub use codex::catalog::list as codex_models;
 pub use codex::discovery::list as codex_sessions;
 pub(crate) use codex::file_change_diffs;
+pub(crate) use codex::is_steer_id;
 pub(crate) use codex::launch as codex_launch;
 pub use codex::title as codex_title;
 pub use codex::{

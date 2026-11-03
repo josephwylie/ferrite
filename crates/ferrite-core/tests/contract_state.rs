@@ -38,6 +38,124 @@ fn claude_background_snapshots_replace_tasks_and_exclude_hidden_work() {
     );
 }
 
+/// Fixture 18: `task_updated` is a patch. A description alone renames the
+/// task and leaves its status and detail as they were; `killed` stops it.
+#[test]
+fn claude_task_update_patches_only_the_fields_it_names() {
+    use ferrite_core::progress::TaskStatus;
+    let started = json!({"type":"system","subtype":"task_started","session_id":"root","uuid":"started","task_id":"build","run_id":"r1","task_type":"local_bash","description":"Build"});
+    let renamed = json!({"type":"system","subtype":"task_updated","session_id":"root","uuid":"renamed","task_id":"build","run_id":"r1","patch":{"description":"Build release"}});
+    let a = fold(Replay::new("claude", vec![started.clone(), renamed.clone()]).drain());
+    let progress = a.view().main().transcript().progress();
+    let task = &progress.background()[0];
+    assert_eq!(task.label, "Build release");
+    assert_eq!(
+        task.detail, "Build",
+        "a patch that names no detail keeps it"
+    );
+    assert_eq!(
+        task.status,
+        TaskStatus::Working,
+        "nor does it stop the task"
+    );
+    assert_eq!(progress.working_background(), 1);
+
+    let killed = json!({"type":"system","subtype":"task_updated","session_id":"root","uuid":"killed","task_id":"build","run_id":"r1","patch":{"status":"killed"}});
+    let a = fold(Replay::new("claude", vec![started, renamed, killed]).drain());
+    let task = &a.view().main().transcript().progress().background()[0];
+    assert_eq!(task.status, TaskStatus::Stopped);
+    assert_eq!(task.label, "Build release");
+}
+
+/// Fixture 19: a resumed task keeps its id and gets a later `run_id`. What
+/// the earlier run still says is late, for a background task and an agent
+/// alike, while the new run's own events still apply.
+#[test]
+fn claude_late_events_of_an_earlier_run_change_nothing() {
+    use ferrite_core::activity::AgentStatus;
+    use ferrite_core::progress::TaskStatus;
+    let event = |uuid: &str, subtype: &str, task: &str, run: &str, extra: serde_json::Value| {
+        let mut frame = json!({"type":"system","subtype":subtype,"session_id":"root","uuid":uuid,"task_id":task,"run_id":run});
+        frame
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        frame
+    };
+    let shell = json!({"task_type":"local_bash","description":"Watch"});
+    let agent = json!({"task_type":"local_agent","tool_use_id":"spawn","description":"Review"});
+    let frames = vec![
+        json!({"type":"assistant","session_id":"root","uuid":"spawn","message":{"id":"m1","role":"assistant","content":[
+            {"type":"tool_use","id":"spawn","name":"Agent","input":{"prompt":"Review","run_in_background":true}}]}}),
+        event(
+            "s1",
+            "task_started",
+            "watch",
+            "2026-01-01T00:00:01Z-a",
+            shell.clone(),
+        ),
+        event(
+            "a1",
+            "task_started",
+            "agent",
+            "2026-01-01T00:00:01Z-a",
+            agent.clone(),
+        ),
+        event(
+            "s2",
+            "task_started",
+            "watch",
+            "2026-01-01T00:00:02Z-b",
+            shell,
+        ),
+        event(
+            "a2",
+            "task_started",
+            "agent",
+            "2026-01-01T00:00:02Z-b",
+            agent,
+        ),
+        event(
+            "s1-late",
+            "task_notification",
+            "watch",
+            "2026-01-01T00:00:01Z-a",
+            json!({"status":"failed","summary":"old run failed"}),
+        ),
+        event(
+            "a1-late",
+            "task_notification",
+            "agent",
+            "2026-01-01T00:00:01Z-a",
+            json!({"status":"failed","summary":"old run failed"}),
+        ),
+    ];
+    let a = fold(Replay::new("claude", frames.clone()).drain());
+    let task = &a.view().main().transcript().progress().background()[0];
+    assert_eq!(
+        task.status,
+        TaskStatus::Working,
+        "the new run is authoritative"
+    );
+    assert_ne!(task.detail, "old run failed");
+    assert_eq!(a.view().children()[0].status(), AgentStatus::Working);
+
+    let mut finished = frames;
+    finished.push(event(
+        "s2-done",
+        "task_updated",
+        "watch",
+        "2026-01-01T00:00:02Z-b",
+        json!({"patch":{"status":"completed"}}),
+    ));
+    let a = fold(Replay::new("claude", finished).drain());
+    assert_eq!(
+        a.view().main().transcript().progress().background()[0].status,
+        TaskStatus::Completed,
+        "the current run's own update still lands"
+    );
+}
+
 #[test]
 fn claude_background_snapshots_leave_agents_to_their_tabs() {
     let r = Replay::new(

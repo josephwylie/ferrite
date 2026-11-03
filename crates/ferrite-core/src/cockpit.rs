@@ -1980,32 +1980,42 @@ impl Cockpit {
     }
 
     pub fn cancel_queued(&mut self, thread: ThreadId, restore: bool) {
+        self.take_back_queued(thread, None, restore, false);
+    }
+
+    /// Up edits the visible queued prompt ahead of the current draft.
+    pub fn edit_queued(&mut self, thread: ThreadId) {
+        self.take_back_queued(thread, None, true, true);
+    }
+
+    /// Remove the queued prompt `id` names (`QueueItem::id`), back to the
+    /// Composer when `restore`.
+    pub fn remove_queued_item(&mut self, thread: ThreadId, id: &str, restore: bool) {
+        self.take_back_queued(thread, Some(id), restore, false);
+    }
+
+    /// Edit the queued prompt `id` names, ahead of the current draft.
+    pub fn edit_queued_item(&mut self, thread: ThreadId, id: &str) {
+        self.take_back_queued(thread, Some(id), true, true);
+    }
+
+    fn take_back_queued(&mut self, thread: ThreadId, id: Option<&str>, restore: bool, edit: bool) {
         self.act(
-            |engine| engine.cancel_queued(thread, restore),
+            |engine| {
+                if edit {
+                    engine.edit_queued(thread, id);
+                } else {
+                    engine.cancel_queued(thread, id, restore);
+                }
+            },
             |server| {
                 said(
                     server,
                     Op::CancelQueued {
                         thread,
                         restore,
-                        edit: false,
-                    },
-                )
-            },
-        );
-    }
-
-    /// Up edits the visible queued prompt ahead of the current draft.
-    pub fn edit_queued(&mut self, thread: ThreadId) {
-        self.act(
-            |engine| engine.edit_queued(thread),
-            |server| {
-                said(
-                    server,
-                    Op::CancelQueued {
-                        thread,
-                        restore: true,
-                        edit: true,
+                        edit,
+                        item: id.map(str::to_string),
                     },
                 )
             },

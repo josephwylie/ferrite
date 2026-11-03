@@ -1,8 +1,43 @@
 //! Acknowledged native queue view and raw-input correlation; no dispatch logic.
 use crate::{QueueEvent, QueuedPrompt};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
 use std::path::PathBuf;
+
+/// Where a prompt the operator queued stands on its way into a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// Ferrite holds it: no Session can take it yet.
+    Holding,
+    /// Handed to the provider, which has not acknowledged it yet.
+    Sending,
+    /// In the provider's queue, for after the running turn.
+    Queued,
+    /// Folded into the running turn at its next tool boundary (Codex).
+    Steering,
+    /// A state this build does not know, or a Server too old to say.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One queued prompt, as the Composer shows it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QueueItem {
+    /// Stable from the moment it is queued until a turn picks it up: the
+    /// client id it is held and handed to the provider under. What cancel
+    /// and edit name it by.
+    pub id: String,
+    pub text: String,
+    pub delivery: Delivery,
+}
+
+/// A prompt Ferrite holds until its Session can take it, under the
+/// client id it will be handed to the provider with.
+pub(super) struct Held {
+    pub id: String,
+    pub text: String,
+}
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Metadata {
@@ -13,7 +48,9 @@ struct Metadata {
 pub(super) struct Queue {
     pub items: Vec<QueuedPrompt>,
     metadata: Metadata,
-    admitting: HashSet<String>,
+    /// Client ids handed to the provider and not yet acknowledged, oldest
+    /// first.
+    admitting: Vec<String>,
     path: PathBuf,
     cancel: Option<(String, String, bool, bool)>,
     pub recovered: Vec<(String, bool)>,
@@ -67,20 +104,61 @@ impl Queue {
         !self.items.is_empty() || !self.admitting.is_empty()
     }
     pub fn prepare(&mut self, id: &str, text: &str) -> io::Result<()> {
-        self.admitting.insert(id.into());
+        self.admitting.push(id.into());
         self.metadata.pending.insert(id.into(), text.into());
         self.save()
     }
     pub fn refused(&mut self, id: &str) {
-        self.admitting.remove(id);
+        self.admitting.retain(|admitting| admitting != id);
         self.metadata.pending.remove(id);
         let _ = self.save();
     }
-    pub fn cancellation(&mut self, restore: bool, prepend: bool) -> Option<String> {
+    /// Every prompt not yet picked up, newest first: what Ferrite holds,
+    /// then what the provider is taking, then what it has queued.
+    pub fn listing(&self, held: &VecDeque<Held>) -> Vec<QueueItem> {
+        let held = held.iter().rev().map(|held| QueueItem {
+            id: held.id.clone(),
+            text: held.text.clone(),
+            delivery: Delivery::Holding,
+        });
+        let sending = self
+            .admitting
+            .iter()
+            .rev()
+            .filter(|id| !self.items.iter().any(|item| &item.client_id == *id))
+            .filter_map(|id| {
+                Some(QueueItem {
+                    id: id.clone(),
+                    text: self.metadata.pending.get(id)?.clone(),
+                    delivery: Delivery::Sending,
+                })
+            });
+        let queued = self.items.iter().rev().map(|item| QueueItem {
+            id: stable_id(item).into(),
+            text: item.text.clone(),
+            delivery: if crate::providers::is_steer_id(&item.id) {
+                Delivery::Steering
+            } else {
+                Delivery::Queued
+            },
+        });
+        held.chain(sending).chain(queued).collect()
+    }
+    /// Ask to take back the queued prompt `target` names, else the latest.
+    /// Answers the provider's id to cancel it by.
+    pub fn cancellation(
+        &mut self,
+        target: Option<&str>,
+        restore: bool,
+        prepend: bool,
+    ) -> Option<String> {
         if self.cancel.is_some() {
             return None;
         }
-        let item = self.items.last()?;
+        let item = match target {
+            Some(target) => self.items.iter().find(|item| stable_id(item) == target)?,
+            None => self.items.last()?,
+        };
         self.cancel = Some((item.id.clone(), item.text.clone(), restore, prepend));
         Some(item.id.clone())
     }
@@ -145,7 +223,7 @@ impl Queue {
                 self.items = items;
             }
             QueueEvent::Accepted(mut item) => {
-                self.admitting.remove(&item.client_id);
+                self.admitting.retain(|id| *id != item.client_id);
                 if !self.metadata.consumed.contains(&item.client_id) {
                     self.raw(&mut item);
                     if let Some(old) = self.items.iter_mut().find(|old| old.id == item.id) {
@@ -164,7 +242,7 @@ impl Queue {
                     return change;
                 }
                 change.historical = historical;
-                self.admitting.remove(&client_id);
+                self.admitting.retain(|id| *id != client_id);
                 if !self.metadata.consumed.contains(&client_id) {
                     change.prompt = self
                         .metadata
@@ -215,7 +293,7 @@ impl Queue {
                 change.notice = error.or_else(|| (!cancelled).then(|| "Queued prompt already started or could not be cancelled; it was not restored.".into()));
             }
             QueueEvent::Failed { client_id, error } => {
-                self.admitting.remove(&client_id);
+                self.admitting.retain(|id| *id != client_id);
                 let text = self.metadata.pending.remove(&client_id).unwrap_or_default();
                 self.items.retain(|item| item.client_id != client_id);
                 change.notice = Some(format!("native queue failed: {error}\n{text}"));
@@ -238,9 +316,73 @@ impl Queue {
     }
 }
 
+/// A provider-queued prompt's stable id: the client id it was handed over
+/// under, or the provider's own for one Ferrite never handed over.
+fn stable_id(item: &QueuedPrompt) -> &str {
+    if item.client_id.is_empty() {
+        &item.id
+    } else {
+        &item.client_id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One id from held to queued; each stage says where the prompt stands.
+    #[test]
+    fn listing_names_each_prompt_by_one_id_and_its_delivery() {
+        let path =
+            std::env::temp_dir().join(format!("ferrite-queue-listing-{}.json", std::process::id()));
+        let mut queue = Queue::open(path.clone());
+        let held = VecDeque::from([Held {
+            id: "held".into(),
+            text: "later".into(),
+        }]);
+        queue.prepare("sending", "soon").unwrap();
+        queue.prepare("steered", "now").unwrap();
+        queue.observe(QueueEvent::Accepted(QueuedPrompt {
+            id: "steer:steered".into(),
+            client_id: "steered".into(),
+            text: "now".into(),
+        }));
+        let delivery = |queue: &Queue| {
+            queue
+                .listing(&held)
+                .into_iter()
+                .map(|item| (item.id, item.delivery))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            delivery(&queue),
+            [
+                ("held".into(), Delivery::Holding),
+                ("sending".into(), Delivery::Sending),
+                ("steered".into(), Delivery::Steering),
+            ]
+        );
+        queue.observe(QueueEvent::Accepted(QueuedPrompt {
+            id: "native".into(),
+            client_id: "sending".into(),
+            text: "soon".into(),
+        }));
+        assert_eq!(
+            delivery(&queue),
+            [
+                ("held".into(), Delivery::Holding),
+                ("sending".into(), Delivery::Queued),
+                ("steered".into(), Delivery::Steering),
+            ],
+            "acknowledged, it keeps its id"
+        );
+        assert_eq!(
+            queue.cancellation(Some("steered"), true, false).as_deref(),
+            Some("steer:steered"),
+            "cancel takes the prompt it names, not the latest"
+        );
+        let _ = std::fs::remove_file(path);
+    }
     #[test]
     fn cancellation_race_never_restores_started_input_and_snapshot_owns_pending() {
         let path =
@@ -261,7 +403,10 @@ mod tests {
             client_id: "client".into(),
             text: "wire".into(),
         }));
-        assert_eq!(queue.cancellation(true, false).as_deref(), Some("native"));
+        assert_eq!(
+            queue.cancellation(None, true, false).as_deref(),
+            Some("native")
+        );
         queue.observe(QueueEvent::Snapshot(Vec::new()));
         assert!(
             !queue.pending(),

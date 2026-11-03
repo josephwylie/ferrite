@@ -11,8 +11,11 @@ use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
 mod markdown;
+pub mod tools;
 pub use highlight::{language_for_path, tokens as highlight_tokens, Lexer};
 use markdown::OpenSection;
+pub use tools::display_tool_name;
+use tools::{result_summary, tool_summary};
 
 /// A Block's identity, stable for as long as the Block lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -133,6 +136,8 @@ impl TurnEnd {
     pub const INTERRUPTED: &'static str = "interrupted";
     /// The lead word of a turn that failed.
     pub const FAILED: &'static str = "failed";
+    /// Why a turn failed whose Session closed before its result.
+    pub const UNFINISHED: &'static str = "ended before the turn finished";
 }
 
 /// A tool call as one row: what ran, on what, how it went, and the bounded
@@ -165,6 +170,10 @@ pub struct ToolBlock {
     /// lines have arrived. `None` for anything that is not a test run, or a
     /// run whose output never said how many tests it holds.
     pub progress: Option<TestProgress>,
+    /// The provider's own summary of the calls up to this one
+    /// (`tool_use_summary`), on the last call it names. Its provenance is
+    /// the provider: it never stands in for a failure Ferrite knows of.
+    pub caption: Option<String>,
 }
 
 /// A running test suite's count, folded from its streamed output. `total`
@@ -186,6 +195,13 @@ impl TestProgress {
 }
 
 impl ToolBlock {
+    /// Whether the call draws a row at all: a [`tools::Grouping::StateOnly`]
+    /// call shows only when it failed, since what it did is drawn elsewhere.
+    pub fn draws_row(&self) -> bool {
+        tools::policy(&self.name).grouping != tools::Grouping::StateOnly
+            || matches!(self.state, ToolState::Failed(_))
+    }
+
     /// The call line as it reads: `Name(args)`, the name as Claude Code
     /// prints it (`Update`, `Bash`), a shell command out of its `bash -lc
     /// '…'` wrapper.
@@ -206,7 +222,7 @@ impl ToolBlock {
         // Code prints it, whatever purpose the model wrote beside it
         // (Claude's Bash `description`: "Run cargo test to identify failing
         // tests").
-        let summary = if crate::docview::is_command_run(&self.name) && !self.summary.is_empty() {
+        let summary = if tools::is_command_run(&self.name) && !self.summary.is_empty() {
             crate::providers::shell::unwrap_shell(&self.summary)
         } else {
             std::borrow::Cow::Borrowed(self.title.as_deref().unwrap_or(&self.summary))
@@ -220,17 +236,6 @@ impl ToolBlock {
         } else {
             summary
         }
-    }
-}
-
-/// The name a tool row shows, the way Claude Code prints it: a file edit is
-/// `Update` (Claude's `Edit` and `MultiEdit`, Codex's `fileChange`), a Codex
-/// shell call is `Bash`; `Write` and every other name stand as sent.
-pub fn display_tool_name(name: &str) -> &str {
-    match name {
-        "Edit" | "MultiEdit" | "fileChange" => "Update",
-        "commandExecution" => "Bash",
-        other => other,
     }
 }
 
@@ -734,6 +739,9 @@ pub struct Transcript {
     thought: Option<(BlockId, crate::progress::HeadingScan)>,
     latest_reasoning_part: Option<BlockId>,
     reasoning_parts: std::collections::BTreeMap<(String, u64), BlockId>,
+    /// Results that arrived before their call's row (a denial can), oldest
+    /// first, waiting for it within the turn.
+    orphan_results: Vec<(String, SessionEvent)>,
 }
 
 /// A test runner's progress, read off its output one complete line at a
@@ -1035,6 +1043,7 @@ impl Transcript {
             thought: None,
             latest_reasoning_part: None,
             reasoning_parts: Default::default(),
+            orphan_results: Vec::new(),
         }
     }
 
@@ -1344,7 +1353,14 @@ impl Transcript {
     }
 
     fn apply_inner(&mut self, input: Input) -> Update {
+        let started = match &input {
+            Input::Event(SessionEvent::ToolStarted { id, .. }) => Some(id.clone()),
+            _ => None,
+        };
         let mut update = self.fold(input);
+        if let Some(call) = started {
+            self.settle_orphan(&call, &mut update);
+        }
         update.evicted = self.evict();
         if !update.evicted.is_empty() {
             self.forget_evicted();
@@ -1843,6 +1859,19 @@ impl Transcript {
                 result,
             }) => {
                 self.progress.finish_tool(&id);
+                if self.tool(&id).is_none() {
+                    if self.orphan_results.len() == ORPHAN_RESULTS {
+                        self.orphan_results.remove(0);
+                    }
+                    let result = SessionEvent::ToolCompleted {
+                        id: id.clone(),
+                        output,
+                        is_error,
+                        result,
+                    };
+                    self.orphan_results.push((id, result));
+                    return Update::default();
+                }
                 let state = if is_error {
                     ToolState::Failed(trim(&output, ERROR_CHARS))
                 } else {
@@ -1970,6 +1999,7 @@ impl Transcript {
                     result_line: None,
                     output: None,
                     progress: None,
+                    caption: None,
                 }));
                 Update {
                     dirty: vec![block],
@@ -1992,6 +2022,7 @@ impl Transcript {
             Input::Event(SessionEvent::ConversationReset { .. }) => Update::default(),
             Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }) => {
                 self.progress.end_turn();
+                self.orphan_results.clear();
                 self.latest_reasoning_part = None;
                 self.status = Status::Idle;
                 self.last_cost = cost_usd;
@@ -2055,6 +2086,30 @@ impl Transcript {
                 | SessionEvent::Queue(_)
                 | SessionEvent::ScheduledWork { .. },
             ) => Update::default(),
+            // The summary captions the calls it names, on the last of them
+            // with a row; one naming no call here is not drawn.
+            Input::Event(SessionEvent::ToolSummary { ids, summary }) => {
+                let caption = Some(summary);
+                let block = self
+                    .blocks
+                    .iter_mut()
+                    .rev()
+                    .find_map(|block| match &mut block.body {
+                        Body::Tool(tool) if ids.contains(&tool.call) => Some((block.id, tool)),
+                        _ => None,
+                    });
+                Update {
+                    dirty: block
+                        .filter(|(_, tool)| tool.caption != caption)
+                        .map(|(id, tool)| {
+                            tool.caption = caption;
+                            id
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Update::default()
+                }
+            }
             Input::Event(SessionEvent::McpServers { servers }) => {
                 self.mcp_servers = servers;
                 Update::default()
@@ -2068,13 +2123,27 @@ impl Transcript {
                 Update::default()
             }
             Input::Event(SessionEvent::Closed { reason }) => {
+                self.orphan_results.clear();
                 self.mcp_servers.clear();
                 self.mcp_authorizations.clear();
                 self.progress.disconnected();
                 self.mcp_servers.clear();
                 self.latest_reasoning_part = None;
-                self.status = Status::Closed;
                 let mut dirty = self.retire_tools();
+                // The stream ended inside a turn with no result: that turn
+                // failed, and says so, before the Session says why it closed.
+                if matches!(self.status, Status::Streaming | Status::Blocked) {
+                    let outcome = TurnOutcome::Error(TurnEnd::UNFINISHED.into());
+                    self.turn_outcome = Some(outcome.clone());
+                    dirty.push(self.push(Body::TurnEnd(TurnEnd {
+                        outcome,
+                        elapsed_ms: None,
+                        completed_at: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                    })));
+                }
+                self.status = Status::Closed;
                 dirty.push(self.push(Body::Notice(reason)));
                 Update {
                     dirty,
@@ -2183,6 +2252,19 @@ impl Transcript {
         };
         *tokens = Some(answer);
         Some(id)
+    }
+
+    /// The result that came before call `call`'s row, now that it has one.
+    fn settle_orphan(&mut self, call: &str, update: &mut Update) {
+        let Some(at) = self.orphan_results.iter().position(|(id, _)| id == call) else {
+            return;
+        };
+        let (_, result) = self.orphan_results.remove(at);
+        for block in self.fold(Input::Event(result)).dirty {
+            if !update.dirty.contains(&block) {
+                update.dirty.push(block);
+            }
+        }
     }
 
     /// A result lands on the row that started the call — which is rarely the
@@ -2336,6 +2418,9 @@ fn next_id(last_id: &mut u64) -> BlockId {
     BlockId(*last_id)
 }
 
+/// How many early results wait for their rows; the oldest gives way.
+const ORPHAN_RESULTS: usize = 16;
+
 /// How much of a tool failure a row carries; the model got all of it.
 const ERROR_CHARS: usize = 200;
 
@@ -2378,92 +2463,6 @@ fn result_line(output: &str) -> Option<String> {
     Some(trim(line.trim_end(), RESULT_CHARS))
 }
 
-/// `1 line` / `412 lines`.
-fn counted(count: u64, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
-}
-
-/// What a read or a search found, as Claude Code's own rows summarize it:
-/// a Read's `412 lines` (its result's `file.numLines`, else the lines it
-/// printed); a Grep's `6 matches in 2 files` (content mode), `2 files`
-/// (files-with-matches) or `6 matches` (count). `None` for any other tool,
-/// which keeps its first output line.
-fn result_summary(
-    name: &str,
-    structured: Option<&serde_json::Value>,
-    output: &str,
-) -> Option<String> {
-    let number = |value: &serde_json::Value, key: &str| value.get(key).and_then(|v| v.as_u64());
-    match name {
-        "Read" | "read_file" => {
-            let lines = structured
-                .and_then(|value| value.get("file"))
-                .and_then(|file| number(file, "numLines"))
-                .or_else(|| {
-                    // Whitespace alone says nothing worth a row.
-                    let count = output.lines().count() as u64;
-                    (count > 0 && !output.trim().is_empty()).then_some(count)
-                })?;
-            Some(counted(lines, "line", "lines"))
-        }
-        "Grep" => {
-            let value = structured?;
-            let filenames = value
-                .get("filenames")
-                .and_then(|names| names.as_array())
-                .map(|names| names.len() as u64);
-            let content = value.get("content").and_then(|content| content.as_str());
-            let files = number(value, "numFiles")
-                .filter(|files| *files > 0)
-                .or(filenames.filter(|files| *files > 0))
-                .or_else(|| {
-                    // Content lines are `path:line:text`; distinct paths
-                    // are the files that matched.
-                    let paths: std::collections::BTreeSet<&str> = content?
-                        .lines()
-                        .filter_map(|line| line.split_once(':').map(|(path, _)| path))
-                        .collect();
-                    (!paths.is_empty()).then_some(paths.len() as u64)
-                })
-                .unwrap_or(0);
-            match value.get("mode").and_then(|mode| mode.as_str()) {
-                Some("files_with_matches") => Some(counted(files, "file", "files")),
-                Some("count") => {
-                    let matches = number(value, "numMatches").or_else(|| {
-                        content.map(|content| {
-                            content
-                                .lines()
-                                .filter_map(|line| line.rsplit_once(':'))
-                                .filter_map(|(_, count)| count.trim().parse::<u64>().ok())
-                                .sum()
-                        })
-                    })?;
-                    Some(counted(matches, "match", "matches"))
-                }
-                Some("content") | None => {
-                    let matches = number(value, "numMatches")
-                        .or_else(|| number(value, "numLines"))
-                        .or_else(|| {
-                            content.map(|content| {
-                                content
-                                    .lines()
-                                    .filter(|line| !line.trim().is_empty())
-                                    .count() as u64
-                            })
-                        })?;
-                    Some(format!(
-                        "{} in {}",
-                        counted(matches, "match", "matches"),
-                        counted(files.max(u64::from(matches > 0)), "file", "files")
-                    ))
-                }
-                Some(_) => None,
-            }
-        }
-        _ => None,
-    }
-}
-
 /// Whether two spellings of a path name one file: equal, or one is the
 /// other's tail at a path boundary (`crates/x.rs` and `/repo/crates/x.rs`).
 fn same_file(a: &str, b: &str) -> bool {
@@ -2484,57 +2483,6 @@ fn same_file(a: &str, b: &str) -> bool {
 fn first_changed_line(diff: &Diff) -> Option<u32> {
     let hunk = diff.hunks.first()?;
     Some(hunk.new_start.max(1))
-}
-
-/// The one line a collapsed tool row shows. Tool inputs are the vendor's own
-/// schema, so this reads the few keys that name a subject and gives up
-/// quietly on anything else rather than guessing. A search names what it
-/// looks for, then where: `Grep(status_line, crates/ferrite/src)`.
-fn tool_summary(name: &str, input: &serde_json::Value) -> String {
-    if matches!(name, "Grep" | "Glob") {
-        if let Some(pattern) = input.get("pattern").and_then(|v| v.as_str()) {
-            return match input.get("path").and_then(|v| v.as_str()) {
-                Some(path) if !path.is_empty() => format!("{pattern}, {path}"),
-                _ => pattern.to_string(),
-            };
-        }
-    }
-    tool_subject(input)
-}
-
-fn tool_subject(input: &serde_json::Value) -> String {
-    // A patch (Codex's `fileChange`) names its files in `changes`: the
-    // first, and how many more.
-    if let Some(changes) = input.get("changes").and_then(|v| v.as_array()) {
-        let paths: Vec<&str> = changes
-            .iter()
-            .filter_map(|change| change.get("path")?.as_str())
-            .collect();
-        match paths.as_slice() {
-            [] => {}
-            [one] => return (*one).to_string(),
-            [first, rest @ ..] => return format!("{first} +{}", rest.len()),
-        }
-    }
-    for key in [
-        "command",
-        "file_path",
-        "path",
-        "pattern",
-        "url",
-        "subject",
-        "query",
-        "description",
-        "prompt",
-    ] {
-        if let Some(value) = input.get(key).and_then(|v| v.as_str()) {
-            return value.to_string();
-        }
-    }
-    if let Some(args) = input.get("arguments").filter(|value| value.is_object()) {
-        return tool_subject(args);
-    }
-    String::new()
 }
 
 /// A transcript as plain text, the way the operator would paste it
@@ -3383,10 +3331,149 @@ mod tests {
 
         assert_eq!(transcript.status(), Status::Closed);
         assert_eq!(update.boundary, Some(Boundary::Closed));
-        let last = transcript.blocks().last().unwrap();
-        assert_eq!(update.dirty, vec![last.id]);
+        // #12: the stream ended with no result, so the turn failed.
+        let unfinished = TurnOutcome::Error(TurnEnd::UNFINISHED.into());
+        assert_eq!(transcript.turn_outcome(), Some(&unfinished));
+        let [.., end, last] = transcript.blocks() else {
+            panic!("a turn end and a notice");
+        };
+        assert!(matches!(&end.body, Body::TurnEnd(end) if end.outcome == unfinished));
+        assert_eq!(update.dirty, vec![end.id, last.id]);
         assert!(matches!(last.body, Body::Notice(_)));
         assert_eq!(body_text(last), "claude CLI exited with code 1");
+    }
+
+    /// A Session that closes between turns ends no turn: only the reason.
+    #[test]
+    fn a_session_closed_at_rest_fails_no_turn() {
+        let mut transcript = Transcript::default();
+        transcript.apply(text("answer"));
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+
+        transcript.apply(Input::Event(SessionEvent::Closed {
+            reason: "closed".into(),
+        }));
+
+        assert_eq!(transcript.turn_outcome(), Some(&TurnOutcome::Completed));
+        assert!(!transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block.body, Body::TurnEnd(_))));
+    }
+
+    /// Fixture 3: the end of a call's argument block is not its end.
+    #[test]
+    fn a_call_runs_past_the_end_of_its_arguments() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started("a", "Bash", serde_json::json!({"command": "ls"})));
+
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+
+        assert_eq!(transcript.tool("a").unwrap().state, ToolState::Running);
+    }
+
+    /// Fixture 4: parallel calls settle by id, whatever order they return.
+    #[test]
+    fn parallel_calls_returning_in_reverse_settle_their_own_rows() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started(
+            "a",
+            "Read",
+            serde_json::json!({"file_path": "a.rs"}),
+        ));
+        transcript.apply(started(
+            "b",
+            "Bash",
+            serde_json::json!({"command": "false"}),
+        ));
+
+        transcript.apply(completed("b", "boom", true));
+        transcript.apply(completed("a", "fn a() {}", false));
+
+        let calls: Vec<(&str, &ToolState)> = transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Tool(tool) => Some((tool.call.as_str(), &tool.state)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                ("a", &ToolState::Ok),
+                ("b", &ToolState::Failed("boom".into()))
+            ]
+        );
+    }
+
+    /// Fixture 7: a result that comes before its call's row (a denial)
+    /// waits for the row instead of being lost.
+    #[test]
+    fn an_early_result_settles_its_row_when_the_row_arrives() {
+        let mut transcript = Transcript::default();
+        transcript.apply(text("trying"));
+        let early = transcript.apply(completed("a", "permission denied", true));
+        assert!(early.dirty.is_empty());
+
+        let update = transcript.apply(started("a", "Bash", serde_json::json!({"command": "rm x"})));
+
+        let row = transcript.blocks().last().unwrap();
+        assert_eq!(update.dirty, vec![row.id]);
+        assert_eq!(
+            transcript.tool("a").unwrap().state,
+            ToolState::Failed("permission denied".into())
+        );
+
+        // Within its turn only: a row in a later turn starts clean.
+        transcript.apply(completed("b", "late", true));
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        transcript.apply(started("b", "Bash", serde_json::json!({"command": "ls"})));
+        assert_eq!(transcript.tool("b").unwrap().state, ToolState::Running);
+    }
+
+    /// Fixture 25: the provider's summary captions the last call it names,
+    /// and only that one.
+    #[test]
+    fn a_tool_summary_captions_the_last_call_it_names() {
+        let mut transcript = Transcript::default();
+        for id in ["a", "b", "c"] {
+            transcript.apply(started(id, "Read", serde_json::json!({"file_path": id})));
+        }
+
+        let update = transcript.apply(Input::Event(SessionEvent::ToolSummary {
+            ids: vec!["a".into(), "b".into(), "gone".into()],
+            summary: "Read the two configs".into(),
+        }));
+
+        let caption = |call| transcript.tool(call).unwrap().caption.as_deref();
+        assert_eq!(
+            [caption("a"), caption("b"), caption("c")],
+            [None, Some("Read the two configs"), None]
+        );
+        assert_eq!(update.dirty.len(), 1);
+    }
+
+    /// A checklist call draws no row of its own unless it failed.
+    #[test]
+    fn todo_calls_draw_a_row_only_when_they_fail() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started(
+            "t",
+            "TaskCreate",
+            serde_json::json!({"subject": "x"}),
+        ));
+        assert!(!transcript.tool("t").unwrap().draws_row());
+        transcript.apply(completed("t", "no such list", true));
+        assert!(transcript.tool("t").unwrap().draws_row());
+        transcript.apply(started("r", "Read", serde_json::json!({"file_path": "a"})));
+        assert!(transcript.tool("r").unwrap().draws_row());
     }
 
     /// The cost is data, never a row: `last_cost` records it and no dollar

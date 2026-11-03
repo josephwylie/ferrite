@@ -51,6 +51,7 @@ mod windows;
 
 use threads::Threads;
 
+pub use queue::{Delivery, QueueItem};
 pub use windows::WindowId;
 
 /// How a Thread's first Session starts, beyond its provider and checkout
@@ -411,7 +412,7 @@ struct Awaiting {
     /// or it cannot queue yet (Claude, before its first turn starts). Each
     /// goes out as a turn when none runs, or into the provider's queue once
     /// it takes them; anything written meanwhile waits behind them.
-    prompts: VecDeque<String>,
+    prompts: VecDeque<queue::Held>,
     /// Controls asked while it starts, in order: run once it is up.
     controls: Vec<crate::SessionControl>,
     /// The file search asked while it starts, the latest only: asked of it
@@ -804,7 +805,7 @@ impl Thread {
                 .prompts
                 .iter()
                 .rev()
-                .cloned()
+                .map(|held| held.text.clone())
                 .chain(
                     self.native_queue
                         .items
@@ -813,6 +814,7 @@ impl Thread {
                         .map(|item| item.text.clone()),
                 )
                 .collect(),
+            queue: self.native_queue.listing(&self.awaiting.prompts),
             suggestion: self.suggestion.clone(),
             commands: announced.commands().iter().map(Into::into).collect(),
             models: announced.models().to_vec(),
@@ -918,9 +920,16 @@ impl Thread {
 
     /// Its agent could not start: prompts that waited for it go back to the
     /// Composer; the controls and file search that did are dropped.
+    /// Hold `text` until the Session can take it, under the client id it
+    /// will be handed over with.
+    fn hold(&mut self, text: String) {
+        let id = client_id(self.generation);
+        self.awaiting.prompts.push_back(queue::Held { id, text });
+    }
+
     fn give_up_awaiting(&mut self) {
         let waited = std::mem::take(&mut self.awaiting);
-        let prompts = waited.prompts.into_iter().map(|text| (text, false));
+        let prompts = waited.prompts.into_iter().map(|held| (held.text, false));
         self.native_queue.recovered.extend(prompts);
     }
 
@@ -1805,8 +1814,8 @@ impl Engine {
             .get_mut(&thread)
             .map(|state| std::mem::take(&mut state.awaiting.prompts))
             .unwrap_or_default();
-        for text in awaiting {
-            self.send(thread, text);
+        for held in awaiting {
+            self.send(thread, held.text);
         }
         Ok(())
     }
@@ -2471,7 +2480,7 @@ impl Engine {
         }
         let state = self.threads.get_mut(&thread).expect("checked");
         if state.ready_session().is_none() || !state.awaiting.prompts.is_empty() {
-            state.awaiting.prompts.push_back(text);
+            state.hold(text);
             return;
         }
         if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
@@ -3568,11 +3577,12 @@ impl Engine {
             .and_then(SessionLifecycle::session_mut)
             .is_some();
         if !ready || !state.awaiting.prompts.is_empty() {
-            state.awaiting.prompts.push_back(text);
+            state.hold(text);
             state.invalidate_suggestion();
             return true;
         }
-        match self.enqueue(thread, &text) {
+        let id = client_id(state.generation);
+        match self.enqueue(thread, &id, &text) {
             Enqueued::Taken => true,
             Enqueued::NotYet(error) => {
                 let state = self.threads.get_mut(&thread).expect("checked");
@@ -3583,21 +3593,9 @@ impl Engine {
         }
     }
 
-    /// Hand `text` to the provider's queue.
-    fn enqueue(&mut self, thread: ThreadId, text: &str) -> Enqueued {
+    /// Hand `text` to the provider's queue under client id `id`.
+    fn enqueue(&mut self, thread: ThreadId, id: &str, text: &str) -> Enqueued {
         let state = self.threads.get_mut(&thread).expect("checked by caller");
-        let id = &format!(
-            "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
-            std::process::id(),
-            state.generation & 0xffff,
-            (state.generation >> 16) & 0xfff,
-            next_generation() & 0xfff,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-                & 0xffffffffffff
-        );
         if let Err(error) = state.native_queue.prepare(id, text) {
             state.native_queue.refused(id);
             state.apply(Input::Notice(format!(
@@ -3677,27 +3675,27 @@ impl Engine {
             if state.ready_session().is_none() {
                 return released;
             }
-            let Some(text) = state.awaiting.prompts.pop_front() else {
+            let Some(held) = state.awaiting.prompts.pop_front() else {
                 return released;
             };
             if !state.turn_ahead() {
-                if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-                    state.undelivered(text, error);
+                if let Err(error) = deliver(state, held.text.clone(), self.suggestions_enabled) {
+                    state.undelivered(held.text, error);
                 }
                 released = true;
                 continue;
             }
-            match self.enqueue(thread, &text) {
+            match self.enqueue(thread, &held.id, &held.text) {
                 Enqueued::Taken => released = true,
                 // Its draft is gone: it goes back to the Composer.
                 Enqueued::Failed => {
                     let state = self.threads.get_mut(&thread).expect("checked");
-                    state.native_queue.recovered.push((text, false));
+                    state.native_queue.recovered.push((held.text, false));
                     released = true;
                 }
                 Enqueued::NotYet(_) => {
                     let state = self.threads.get_mut(&thread).expect("checked");
-                    state.awaiting.prompts.push_front(text);
+                    state.awaiting.prompts.push_front(held);
                     return released;
                 }
             }
@@ -3707,37 +3705,55 @@ impl Engine {
     /// Empty-Composer Enter requests cancellation; retrieval arrives via the pump.
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
         if let Some(state) = self.threads.get_mut(&thread) {
-            if let Some(text) = state.awaiting.prompts.pop_back() {
-                return Some(text);
+            if let Some(held) = state.awaiting.prompts.pop_back() {
+                return Some(held.text);
             }
         }
-        self.cancel_queued(thread, true);
+        self.cancel_queued(thread, None, true);
         None
     }
 
-    pub fn cancel_queued(&mut self, thread: ThreadId, restore: bool) {
-        self.cancel_queue(thread, restore, false);
+    /// Take back the queued prompt `target` names (`QueueItem::id`), else
+    /// the latest.
+    pub fn cancel_queued(&mut self, thread: ThreadId, target: Option<&str>, restore: bool) {
+        self.cancel_queue(thread, target, restore, false);
     }
 
-    /// Up edits the visible queued prompt ahead of the current draft.
-    pub fn edit_queued(&mut self, thread: ThreadId) {
-        self.cancel_queue(thread, true, true);
+    /// Up edits a queued prompt — `target`'s, else the latest — ahead of
+    /// the current draft.
+    pub fn edit_queued(&mut self, thread: ThreadId, target: Option<&str>) {
+        self.cancel_queue(thread, target, true, true);
     }
 
-    fn cancel_queue(&mut self, thread: ThreadId, restore: bool, prepend: bool) {
+    fn cancel_queue(
+        &mut self,
+        thread: ThreadId,
+        target: Option<&str>,
+        restore: bool,
+        prepend: bool,
+    ) {
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
         state.prompt_history.reset();
         // Input still waiting for the Session never reached the provider
         // and can be taken back locally.
-        if let Some(text) = state.awaiting.prompts.pop_back() {
+        let held = match target {
+            Some(target) => state
+                .awaiting
+                .prompts
+                .iter()
+                .position(|held| held.id == target)
+                .and_then(|at| state.awaiting.prompts.remove(at)),
+            None => state.awaiting.prompts.pop_back(),
+        };
+        if let Some(held) = held {
             if restore {
-                state.native_queue.recovered.push((text, prepend));
+                state.native_queue.recovered.push((held.text, prepend));
             }
             return;
         }
-        let Some(id) = state.native_queue.cancellation(restore, prepend) else {
+        let Some(id) = state.native_queue.cancellation(target, restore, prepend) else {
             return;
         };
         let result = state
@@ -5128,13 +5144,21 @@ impl<'a> ThreadView<'a> {
             .awaiting
             .prompts
             .back()
-            .map(String::as_str)
+            .map(|held| held.text.as_str())
             .or(self
                 .state
                 .native_queue
                 .items
                 .last()
                 .map(|item| item.text.as_str()))
+    }
+
+    /// Every prompt not yet picked up, newest first, with where each
+    /// stands and the id that cancel and edit take.
+    pub fn queue(&self) -> Vec<QueueItem> {
+        self.state
+            .native_queue
+            .listing(&self.state.awaiting.prompts)
     }
 
     /// Every prompt held back, newest first: the latest sits on top of the
@@ -5145,7 +5169,7 @@ impl<'a> ThreadView<'a> {
             .prompts
             .iter()
             .rev()
-            .map(String::as_str)
+            .map(|held| held.text.as_str())
             .chain(
                 self.state
                     .native_queue
@@ -5296,6 +5320,23 @@ pub fn title_from_prompt(text: &str) -> String {
 }
 
 /// What became of a prompt handed to the provider's queue.
+/// A fresh client id, UUID-shaped as the providers expect: what a queued
+/// prompt is held, handed over and addressed under.
+fn client_id(generation: u64) -> String {
+    format!(
+        "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+        std::process::id(),
+        generation & 0xffff,
+        (generation >> 16) & 0xfff,
+        next_generation() & 0xfff,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            & 0xffffffffffff
+    )
+}
+
 enum Enqueued {
     /// The provider took it, or may have: never resent.
     Taken,

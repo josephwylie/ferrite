@@ -50,6 +50,10 @@ pub(super) struct Decoder {
     seen_child_frames: HashSet<String>,
     frame_order: VecDeque<String>,
     excluded_tasks: HashSet<String>,
+    /// The newest run of each task this connection has seen (`run_id`).
+    /// One task's runs sort, by plain string comparison, in the order they
+    /// opened, so a frame naming an earlier run than this is late.
+    runs: HashMap<String, String>,
     /// Shell tasks serving a foreground Bash call: the call's own row shows
     /// it running (`shell_output` streams its output there), so it is no
     /// background task. A task the CLI backgrounds later leaves the set.
@@ -257,6 +261,14 @@ impl Decoder {
                             },
                             &mut events,
                         );
+                    }
+                }
+                if string(&value, "subtype") == Some("background_tasks_changed") {
+                    // The runs the snapshot shows are the newest yet too.
+                    for task in value["tasks"].as_array().into_iter().flatten() {
+                        if let Some(id) = string(task, "task_id") {
+                            self.late_run(id, string(task, "run_id"));
+                        }
                     }
                 }
                 self.task(&value, &mut events);
@@ -1298,6 +1310,24 @@ impl Decoder {
         }
     }
 
+    /// Whether `run` of `task` is older than its newest run seen, which a
+    /// newer `run` becomes. A frame naming no run (an older CLI, a task this
+    /// process did not register) is never late.
+    fn late_run(&mut self, task: &str, run: Option<&str>) -> bool {
+        let Some(run) = run else {
+            return false;
+        };
+        if self
+            .runs
+            .get(task)
+            .is_some_and(|newest| run < newest.as_str())
+        {
+            return true;
+        }
+        self.runs.insert(task.to_owned(), run.to_owned());
+        false
+    }
+
     fn task(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
         let subtype = string(value, "subtype").unwrap_or("");
         if !matches!(
@@ -1312,6 +1342,10 @@ impl Decoder {
         let Some(task_id) = string(value, "task_id") else {
             return;
         };
+        // A resumed task's earlier run cannot overwrite the one now running.
+        if self.late_run(task_id, string(value, "run_id")) {
+            return;
+        }
         if wire::hidden_task(value) {
             self.excluded_tasks.insert(task_id.into());
             return;

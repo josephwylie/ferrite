@@ -15,7 +15,8 @@ fn steer_id(client_id: &str) -> String {
     format!("steer:{client_id}")
 }
 
-fn is_steer_id(id: &str) -> bool {
+/// Whether a mirror id names a steered prompt rather than a queued one.
+pub(crate) fn is_steer_id(id: &str) -> bool {
     id.starts_with("steer:")
 }
 

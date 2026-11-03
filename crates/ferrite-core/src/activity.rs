@@ -665,6 +665,7 @@ impl SubjectState {
             newest,
         );
         record.reach = record.reach.max(reach);
+        adopt_orphans(&mut self.records, at);
         self.bytes += bytes;
         match self.trim(limits) {
             Trimmed::Nothing => {}
@@ -785,7 +786,9 @@ impl SubjectState {
         self.transcript = Transcript::with_capacity(Arc::new(lexer), limits.blocks_per_subject);
         self.highlights = highlights; // drops answers for the old content revision
         self.authors.clear();
-        for (serial, record) in (0..).zip(self.records.iter_mut()) {
+        for at in 0..self.records.len() {
+            let serial = at as u64;
+            let record = &mut self.records[at];
             let newest = self.transcript.blocks().last().map(|block| block.id);
             let update = self.transcript.apply(record.input.clone());
             if !update.evicted.is_empty() {
@@ -800,6 +803,7 @@ impl SubjectState {
                 &update,
                 newest,
             );
+            adopt_orphans(&mut self.records, at);
         }
         self.serials = self.records.len() as u64;
         self.transcript.restore_runtime(runtime);
@@ -2474,6 +2478,33 @@ fn attribute(
         authors.insert(id, serial);
     }
     update.dirty.iter().copied().max().max(consulted)
+}
+
+/// A result that came before its call's row wrote nothing; the start that
+/// settles it writes the row for both. The result reaches that row too, so
+/// trimming it rebuilds instead of leaving the row settled by a record no
+/// longer retained. The transcript holds such a result for the turn only.
+fn adopt_orphans(records: &mut VecDeque<Record>, at: usize) {
+    let Record {
+        input: Input::Event(SessionEvent::ToolStarted { id: call, .. }),
+        reach: Some(reach),
+        ..
+    } = &records[at]
+    else {
+        return;
+    };
+    let (call, reach) = (call.clone(), *reach);
+    for record in records.range_mut(..at).rev() {
+        match &record.input {
+            Input::Event(SessionEvent::TurnEnded { .. } | SessionEvent::Closed { .. }) => break,
+            Input::Event(SessionEvent::ToolCompleted { id, .. })
+                if *id == call && record.reach.is_none() =>
+            {
+                record.reach = Some(reach);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// How many reports a streamed delta may fold past into its item's record.

@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::*;
 use crate::activity::{ActivityInput, AgentKey, ExecutionEvent};
+use crate::engine::{Delivery, QueueItem};
 
 fn fixtures(kind: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -257,6 +258,7 @@ fn state() -> ThreadState {
         tuning: false,
         native_queue_pending: false,
         queued: vec!["and then the tests".into()],
+        queue: vec![],
         suggestion: None,
         commands: vec![WireCommand {
             name: "review".into(),
@@ -438,6 +440,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     thread,
                     restore: true,
                     edit: false,
+                    item: None,
                 },
             ),
         ),
@@ -449,6 +452,19 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     thread,
                     restore: true,
                     edit: true,
+                    item: None,
+                },
+            ),
+        ),
+        (
+            "command_cancel_queued_item",
+            command(
+                31,
+                Op::CancelQueued {
+                    thread,
+                    restore: true,
+                    edit: false,
+                    item: Some("0000beef-0003-4000-8001-000000000001".into()),
                 },
             ),
         ),
@@ -1321,6 +1337,29 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "thread_queue",
+            Sample::Server(ServerMessage::Thread {
+                revision: 16,
+                state: ThreadState {
+                    queue: [
+                        Delivery::Holding,
+                        Delivery::Sending,
+                        Delivery::Steering,
+                        Delivery::Queued,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, delivery)| QueueItem {
+                        id: format!("0000beef-0003-4000-8001-00000000000{at}"),
+                        text: "and then the tests".into(),
+                        delivery,
+                    })
+                    .collect(),
+                    ..state()
+                },
+            }),
+        ),
+        (
             "allowance_warning",
             Sample::Server(ServerMessage::AllowanceWarning {
                 provider: Provider::Claude,
@@ -1587,6 +1626,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         },
                     },
                 )))),
+            ),
+        ),
+        (
+            "input_record_tool_summary",
+            input(
+                25,
+                WireInput::Record(record(Input::Event(SessionEvent::ToolSummary {
+                    ids: vec!["toolu_01".into(), "toolu_02".into()],
+                    summary: "Read the parser and its tests".into(),
+                }))),
             ),
         ),
         (

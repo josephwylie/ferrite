@@ -86,7 +86,10 @@ mod revive_tests;
 ///   instead of the whole log. The newest record carrying facts wins. A
 ///   v1–v12 log's header is its only facts record; its handovers carry
 ///   none, their effect already in the header rewritten with them.
-const SCHEMA_VERSION: u32 = 13;
+/// - **14** — `tool_summary` records (a provider's summary of the calls it
+///   names). A v1–v13 log loads with no summaries, which is what it
+///   recorded.
+const SCHEMA_VERSION: u32 = 14;
 
 /// How far apart the store's marks sit, at least: what a peek or a reopen
 /// reads back from the end of a log to find its facts.
@@ -453,6 +456,11 @@ enum Record {
         /// draws no duration, exactly as it did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
+    },
+    /// Schema 14: the provider's summary of the calls it names.
+    ToolSummary {
+        ids: Vec<String>,
+        summary: String,
     },
     TurnEnded {
         outcome: Outcome,
@@ -1184,6 +1192,10 @@ impl Record {
                 result: PersistedToolResult::from_live(result),
                 duration_ms: duration.map(|total| total.as_millis() as u64),
             },
+            SessionEvent::ToolSummary { ids, summary } => Record::ToolSummary {
+                ids: ids.clone(),
+                summary: summary.clone(),
+            },
             SessionEvent::TurnEnded { outcome, cost_usd } => Record::TurnEnded {
                 outcome: match outcome {
                     crate::TurnOutcome::Completed => Outcome::Completed,
@@ -1334,6 +1346,10 @@ impl Record {
                 output: output.clone(),
                 is_error: *is_error,
                 result: result.live(),
+            }),
+            Record::ToolSummary { ids, summary } => Input::Event(SessionEvent::ToolSummary {
+                ids: ids.clone(),
+                summary: summary.clone(),
             }),
             Record::TurnEnded { outcome, cost_usd } => Input::Event(SessionEvent::TurnEnded {
                 outcome: match outcome {

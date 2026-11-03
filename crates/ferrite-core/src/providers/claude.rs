@@ -766,6 +766,11 @@ fn read_stdout(
                 if server.observe(&value) {
                     continue;
                 }
+                if let Some(refusal) = wire::refusal(&value) {
+                    // A failed write means the CLI is gone, which EOF reports.
+                    let _ = write_stdin_line(&stdin, &refusal);
+                    continue;
+                }
                 let queue_events = lock(&queue).observe(&value);
                 for event in queue_events {
                     if sender.send(event).is_err() {

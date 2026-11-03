@@ -3271,6 +3271,41 @@ fn native_pending_prompts_survive_turn_end_without_client_dispatch() {
     );
 }
 
+/// Each queued prompt carries its delivery and a stable id, and removing
+/// one by that id takes back that one — not the latest.
+#[test]
+fn a_queued_prompt_is_removed_by_its_own_id() {
+    let (mut cockpit, _fake) = cockpit("queue-by-id");
+    let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
+    cockpit.send(thread, "start".into());
+    cockpit.pump();
+    for text in ["first", "second", "third"] {
+        assert!(cockpit.queue(thread, text.into()));
+    }
+    cockpit.pump();
+    let queue = cockpit.thread(thread).unwrap().queue().to_vec();
+    let texts: Vec<_> = queue.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(texts, ["third", "second", "first"], "newest first");
+    assert!(queue
+        .iter()
+        .all(|item| item.delivery == crate::engine::Delivery::Queued));
+
+    cockpit.remove_queued_item(thread, &queue[1].id, true);
+    cockpit.pump();
+    let left: Vec<_> = cockpit
+        .thread(thread)
+        .unwrap()
+        .queue()
+        .iter()
+        .map(|item| item.id.clone())
+        .collect();
+    assert_eq!(left, [queue[0].id.clone(), queue[2].id.clone()]);
+    assert_eq!(
+        cockpit.take_retrieved_prompt(thread),
+        Some(("second".into(), false))
+    );
+}
+
 /// Two prompts held at once both show, the latest on top; Escape on a
 /// Codex turn stops it and sends everything held as one prompt, oldest
 /// first — a late start notice for a resent id inserts nothing twice.

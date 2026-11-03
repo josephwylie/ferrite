@@ -68,6 +68,13 @@ pub enum SessionEvent {
         /// written for the model.
         result: ToolResult,
     },
+    /// The provider's one-line summary of the calls it names (Claude's
+    /// `tool_use_summary` and its `preceding_tool_use_ids`). It belongs to
+    /// those calls, never to whatever call happens to be on screen.
+    ToolSummary {
+        ids: Vec<String>,
+        summary: String,
+    },
     /// Operator input is requested. `Decision::blocks_execution` distinguishes
     /// tool approvals from questions delivered while execution continues. Answer
     /// with the provider's respond-to-Decision call, quoting the Decision's `id`.

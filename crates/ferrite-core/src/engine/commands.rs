@@ -74,11 +74,12 @@ impl Engine {
                 thread,
                 restore,
                 edit,
+                item,
             } => {
                 if *edit {
-                    self.edit_queued(*thread);
+                    self.edit_queued(*thread, item.as_deref());
                 } else {
-                    self.cancel_queued(*thread, *restore);
+                    self.cancel_queued(*thread, item.as_deref(), *restore);
                 }
                 Ok(None)
             }

@@ -93,6 +93,8 @@ pub enum ProgressEvent {
     TasksSnapshot {
         tasks: Vec<PlanTask>,
     },
+    /// A patch to one background task: an empty `label` or `detail`, or an
+    /// `Unknown` status, leaves a known task's own as it was.
     Background {
         id: String,
         label: String,
@@ -229,6 +231,8 @@ impl Progress {
                 status,
                 detail,
             } => {
+                // An event is a patch: what it leaves empty, or `Unknown`, it
+                // says nothing about, and the task keeps what it had.
                 if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
                     if !label.is_empty() {
                         task.label = one_line(label, MAX_TEXT);
@@ -236,7 +240,9 @@ impl Progress {
                     if !detail.is_empty() {
                         task.detail = one_line(detail, MAX_TEXT);
                     }
-                    task.status = *status;
+                    if *status != TaskStatus::Unknown {
+                        task.status = *status;
+                    }
                 } else {
                     if self.tasks.len() == MAX_ENTRIES {
                         // Retire settled history first; never evict a live task

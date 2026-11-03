@@ -12,7 +12,7 @@ use crate::activity::{
     Activity, ActivityInput, ActivityView, DecisionHandle, PendingDecision, Subject, ToolTiming,
 };
 use crate::digest::{Digest, Turn};
-use crate::engine::{event_changes_content, PaneUpdate};
+use crate::engine::{event_changes_content, Delivery, PaneUpdate, QueueItem};
 use crate::protocol::{self, ServerMessage, ThreadState, WireInput};
 use crate::store::Provider;
 use crate::transcript::{Input, Transcript};
@@ -56,6 +56,7 @@ struct Facts {
     tuning: bool,
     native_queue_pending: bool,
     queued: Vec<String>,
+    queue: Vec<QueueItem>,
     suggestion: Option<String>,
     commands: Vec<SessionCommand>,
     models: Vec<ModelInfo>,
@@ -67,6 +68,22 @@ struct Facts {
     recovered: usize,
     wants_listing: bool,
     history_errors: HashMap<String, String>,
+}
+
+/// The queue a Server sent; one older than `ThreadState::queue` sends only
+/// its texts, whose delivery and ids it never said.
+fn queue_of(queue: Vec<QueueItem>, queued: &[String]) -> Vec<QueueItem> {
+    if !queue.is_empty() {
+        return queue;
+    }
+    queued
+        .iter()
+        .map(|text| QueueItem {
+            id: String::new(),
+            text: text.clone(),
+            delivery: Delivery::Unknown,
+        })
+        .collect()
 }
 
 impl From<ThreadState> for Facts {
@@ -87,6 +104,7 @@ impl From<ThreadState> for Facts {
             starting: state.starting,
             tuning: state.tuning,
             native_queue_pending: state.native_queue_pending,
+            queue: queue_of(state.queue, &state.queued),
             queued: state.queued,
             suggestion: state.suggestion,
             commands: state.commands.iter().map(Into::into).collect(),
@@ -687,6 +705,13 @@ impl<'a> ThreadView<'a> {
     /// pile and what was said before it reads underneath.
     pub fn queued_all(&self) -> Vec<&'a str> {
         self.facts.queued.iter().map(String::as_str).collect()
+    }
+
+    /// Every prompt not yet picked up, newest first: where each stands on
+    /// its way into a turn, and the id `remove_queued_item` and
+    /// `edit_queued_item` take.
+    pub fn queue(&self) -> &'a [QueueItem] {
+        &self.facts.queue
     }
 
     /// Startup/replacement is pending; its choices and first prompt have

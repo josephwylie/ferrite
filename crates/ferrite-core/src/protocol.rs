@@ -162,6 +162,9 @@ pub enum Op {
         /// Up's edit: the prompt goes back ahead of the Composer's draft.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         edit: bool,
+        /// The prompt to take back (`QueueItem::id`); none takes the latest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<String>,
     },
     /// Hand a prompt the provider gave back to the Composer
     /// (`ThreadState::recovered`): it leaves the Thread.
@@ -1213,6 +1216,10 @@ pub struct ThreadState {
     /// Prompts held back, newest first.
     #[serde(default)]
     pub queued: Vec<String>,
+    /// Every prompt not yet picked up, newest first, with its delivery and
+    /// the id cancel takes. A Server older than this sends only `queued`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queue: Vec<crate::engine::QueueItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
     #[serde(default)]
@@ -1923,6 +1930,7 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             | SessionEvent::ThinkingDelta { .. }
             | SessionEvent::ToolStarted { .. }
             | SessionEvent::ToolCompleted { .. }
+            | SessionEvent::ToolSummary { .. }
             | SessionEvent::ReasoningSummaryPart { .. }
             | SessionEvent::ReasoningSummaryDelta { .. }
             | SessionEvent::Progress { .. }
