@@ -15,7 +15,8 @@
 //! the empty board has none at all.
 //!
 //! Its width: `PANEL_W`, or wide while a preview is the one shown
-//! (`preview_w`). It snaps between them, and open and shut, as Claude's
+//! (`preview_w`), or — the preview expanded from its head — all the
+//! board can give, down to `PANEL_PREVIEW_BOARD_MIN`. It snaps between them, and open and shut, as Claude's
 //! does: no ride, no fade, so nothing lays the board out again frame by
 //! frame (`motion-measured.md`).
 //!
@@ -50,19 +51,26 @@ pub(crate) struct Panel {
     /// The width a preview reads at in this window (`preview_w`), as of
     /// the last frame.
     wide: f32,
+    /// The preview is expanded (its head's expand door) until it closes.
+    pub(crate) expanded: bool,
     /// The first frame has been tended: a preview open by then is simply
     /// there (`tend_previews`).
     tended: bool,
 }
 
 /// How wide the Panel is while a preview shows, in a window `width` wide
-/// (the theme's `PANEL_PREVIEW_*`).
-fn preview_w(width: f32) -> f32 {
+/// (the theme's `PANEL_PREVIEW_*`); expanded, all but the board's least.
+fn preview_w(width: f32, expanded: bool) -> f32 {
     use ferrite_ui::theme::*;
-    (width * PANEL_PREVIEW_SHARE)
-        .clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
-        .min(width - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN)
-        .max(PANEL_W)
+    let most = width - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN;
+    let wide = if expanded {
+        most
+    } else {
+        (width * PANEL_PREVIEW_SHARE)
+            .clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
+            .min(most)
+    };
+    wide.max(PANEL_W)
 }
 
 impl CockpitView {
@@ -100,7 +108,10 @@ impl CockpitView {
     /// window, and make sure the shown Thread's sections have their scroll.
     pub(super) fn tend_panel(&mut self, window: &mut Window) {
         self.tend_previews(window);
-        self.panel.wide = preview_w(f32::from(window.viewport_size().width));
+        self.panel.wide = preview_w(
+            f32::from(window.viewport_size().width),
+            self.panel.expanded,
+        );
         if let Some(thread) = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())

@@ -21,6 +21,14 @@
 //! While the Preview tab is the one shown the Panel is wide (`preview_w`,
 //! the theme's `PANEL_PREVIEW_*`), snapping there and back with the board.
 //!
+//! A page (`ferrite_pane::page`: an `.html` file or a local address, opened
+//! from its card in the transcript) reads live in the same card: its head
+//! names it by its title, a press there opening its menu (reload, open in
+//! the browser, copy its path or address), then expand — the Panel takes
+//! all the board can give — and ×. Where the engine can't draw it (no
+//! Chromium in this build, or an address) the body is the "can't show"
+//! note, open in browser a click away.
+//!
 //! Each Pane keeps its own preview (`PaneView::preview_tab`), and the Panel
 //! shows the focused Pane's: focus moving to another Thread leaves the
 //! preview where it is, and coming back finds it as it was. A draft, which
@@ -28,6 +36,7 @@
 //! Preview tab, no other), and its first send keeps it as it was.
 
 use super::*;
+use ferrite_pane::page::Shown;
 use ferrite_pane::preview::{
     head_door, head_suffix, head_title, reading_head, Body, Text, Unshown,
 };
@@ -150,6 +159,7 @@ impl CockpitView {
     pub(in crate::cockpit) fn close_preview(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get(index) {
             pane.preview.close();
+            self.panel.expanded = false;
             self.focus_pane(index);
             cx.notify();
         }
@@ -317,6 +327,27 @@ impl CockpitView {
                 find.map(|find| &find.bar),
             ),
             Body::Unshown(why) => unshown(why, &document.path, cx),
+            Body::Page(page) => match page.shown(cx) {
+                Shown::Live(web) => div()
+                    .id("preview-page")
+                    .debug_selector(|| "preview-page".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(web)
+                    .into_any_element(),
+                Shown::Starting => div().flex_1().into_any_element(),
+                Shown::Unshown(why) => {
+                    let url = page.source().url();
+                    cant_show(
+                        "This page can't show here",
+                        Some(why),
+                        "open in browser",
+                        move |_, cx| cx.open_url(&url),
+                        cx,
+                    )
+                }
+            },
         };
         // The bar hangs over the body's top right.
         let body = div()
@@ -335,15 +366,22 @@ impl CockpitView {
             }
             None => body.into_any_element(),
         };
-        let title = self.preview_title(pane, &document);
-        let label = head_title(title.clone())
-            .children(document.line().map(|line| head_suffix(format!(":{line}"))));
-        // A file (not a command's output, which no file holds) can have its
-        // path copied, as the head reads it, and open in its own app.
-        let file = document
-            .name
-            .is_none()
+        let page = document.page().map(|page| page.source().clone());
+        let title = match &page {
+            Some(page) => page.title(),
+            None => self.preview_title(pane, &document),
+        };
+        let label = match page {
+            Some(_) => self.page_title_menu(owner, title.clone(), cx),
+            None => head_title(title.clone())
+                .children(document.line().map(|line| head_suffix(format!(":{line}")))),
+        };
+        // A file (not a command's output, which no file holds, nor a page,
+        // whose menu does it) can have its path copied, as the head reads
+        // it, and open in its own app.
+        let file = (document.name.is_none() && document.page().is_none())
             .then(|| (document.path.clone(), title.clone()));
+        let expand = document.page().is_some().then(|| self.expand_door(cx));
         let doors = file
             .map(|(original, shown)| {
                 [
@@ -370,6 +408,7 @@ impl CockpitView {
             })
             .into_iter()
             .flatten()
+            .chain(expand)
             .chain([head_door(
                 "preview-close",
                 "preview-close".into(),
@@ -438,6 +477,134 @@ impl CockpitView {
                 }),
             )
             .into_any_element()
+    }
+
+    /// The page Pane `owner`'s preview shows, if it shows one.
+    pub(in crate::cockpit) fn page_source(&self, owner: PaneIdentity) -> Option<PageSource> {
+        let pane = self.panes.get(self.index_of(owner)?)?;
+        Some(pane.preview.document()?.page()?.source().clone())
+    }
+
+    /// A page head's title: its name and a ▾, a press opening its menu
+    /// (`MenuTarget::Page`) under it.
+    fn page_title_menu(
+        &self,
+        owner: PaneIdentity,
+        title: String,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        use ferrite_ui::theme::*;
+        let id = gpui::ElementId::from("preview-page-title");
+        let key = ferrite_ui::pointer::hover_key(&id);
+        let drawn: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>> = Default::default();
+        let measured = drawn.clone();
+        div().flex().min_w_0().child(
+            div()
+                .id(id)
+                .debug_selector(|| "preview-page-title".into())
+                .flex()
+                .min_w_0()
+                .items_center()
+                .gap(px(SPACE_1))
+                .h(px(ICON_BUTTON))
+                .px(px(SPACE_1))
+                .rounded(px(R_CONTROL))
+                .relative()
+                .hover_raised(key)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    gpui::canvas(move |bounds, _, _| measured.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(W_LABEL)
+                        .text_color(rgb(INK_STRONG))
+                        .child(title),
+                )
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::CHEVRON_DOWN,
+                    FS_META,
+                    INK_SUBTLE,
+                ))
+                .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    // Under the title, its left edge on the title's.
+                    let at = drawn.get().map_or(event.position(), |title| {
+                        gpui::point(
+                            title.left(),
+                            title.bottom() + px(MENU_UNDER_GAP),
+                        )
+                    });
+                    view.open_context_menu_at(
+                        MenuTarget::Page(owner),
+                        at,
+                        gpui::Anchor::TopLeft,
+                        None,
+                        cx,
+                    );
+                })),
+        )
+    }
+
+    /// Expand the preview to all the board can give, or back.
+    fn expand_door(&self, cx: &mut Context<Self>) -> AnyElement {
+        let expanded = self.panel.expanded;
+        head_door(
+            "preview-expand",
+            "preview-expand".into(),
+            if expanded {
+                ferrite_ui::icons::MINIMIZE
+            } else {
+                ferrite_ui::icons::MAXIMIZE
+            },
+        )
+        .tooltip(ferrite_ui::menu::tooltip(if expanded {
+            "Collapse"
+        } else {
+            "Expand"
+        }))
+        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.panel.expanded = !view.panel.expanded;
+            cx.notify();
+        }))
+        .into_any_element()
+    }
+
+    /// A page's menu verbs (`MenuTarget::Page`).
+    pub(in crate::cockpit) fn run_page_verb(
+        &mut self,
+        owner: PaneIdentity,
+        verb: MenuVerb,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.index_of(owner) else {
+            return;
+        };
+        let Some(page) = self.panes[index]
+            .preview
+            .document()
+            .and_then(|document| document.page().cloned())
+        else {
+            return;
+        };
+        match verb {
+            MenuVerb::Reload => page.reload(cx),
+            MenuVerb::OpenInBrowser => cx.open_url(&page.source().url()),
+            MenuVerb::CopyPath => {
+                let copied = match page.source() {
+                    PageSource::File(path) => path.display().to_string(),
+                    PageSource::Address(address) => address.clone(),
+                };
+                cx.write_to_clipboard(ClipboardItem::new_string(copied));
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     /// What the head reads for `document`: a command's name, else the
@@ -667,12 +834,30 @@ fn numbered_lines(
 /// A file the preview cannot show: why, quietly, centred on the card, and
 /// its original a click away — the image viewer's own note's twin.
 fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElement {
-    use ferrite_ui::theme::*;
     let (note, detail) = match why {
         Unshown::Binary => ("This is not a text file", None),
         Unshown::Unreadable(error) => ("Could not read this file", Some(error.clone())),
     };
     let original = path.to_path_buf();
+    cant_show(
+        note,
+        detail,
+        "open original",
+        move |window, cx| ferrite_pane::preview::open_original(&original, window, cx),
+        cx,
+    )
+}
+
+/// The "can't show" note: what, why under it, and the one door that shows
+/// it elsewhere.
+fn cant_show(
+    note: &'static str,
+    detail: Option<SharedString>,
+    door: &'static str,
+    open: impl Fn(&mut Window, &mut gpui::App) + 'static,
+    cx: &mut Context<CockpitView>,
+) -> AnyElement {
+    use ferrite_ui::theme::*;
     div()
         .debug_selector(|| "preview-unshown".into())
         .flex_1()
@@ -697,13 +882,10 @@ fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElem
                 .debug_selector(|| "preview-open-original".into())
                 .h(px(ROW))
                 .px(px(CH))
-                .child(ferrite_ui::components::form_label(
-                    "open original",
-                    INK_SUBTLE,
-                ))
+                .child(ferrite_ui::components::form_label(door, INK_SUBTLE))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    ferrite_pane::preview::open_original(&original, window, cx);
+                    open(window, cx);
                 }),
         )
         .into_any_element()

@@ -2,8 +2,10 @@
 //! the Pane, shown in the Panel's Preview tab (`cockpit/panel/preview.rs`
 //! draws it; SPEC §5.6.3), and the image it opened in the lightbox. Its
 //! document is a text file (numbered lines with the target line marked, or
-//! Markdown rendered), or a file it cannot show (a binary file, one that
-//! could not be read), the original a click away. An image is no document:
+//! Markdown rendered), a page drawn live (`page.rs`: an `.html` file or a
+//! local address, opened from its transcript card by
+//! [`Preview::open_page`]), or a file it cannot show (a binary file, one
+//! that could not be read), the original a click away. An image is no document:
 //! it opens over the whole window in the lightbox (`cockpit/lightbox.rs`
 //! draws it, `image_viewer.rs` its stage), leaving the document as it was.
 //!
@@ -30,6 +32,7 @@ use gpui::{
 };
 
 use crate::image_viewer::ImageViewer;
+use crate::page::{PageSource, PageView};
 
 #[derive(Clone)]
 pub struct Document {
@@ -47,6 +50,8 @@ pub enum Body {
     /// opened at `line` (1-based): marked and scrolled into view (F-14).
     /// `None` opens at the top.
     Text { text: Arc<Text>, line: Option<u32> },
+    /// A page, drawn live where the engine can.
+    Page(Arc<PageView>),
     /// A file the preview cannot show, and why.
     Unshown(Unshown),
 }
@@ -188,6 +193,22 @@ impl Preview {
                 body,
             });
         }
+        window.refresh();
+    }
+
+    /// Open a page beside the transcript (its card's `Open`): a file under
+    /// its path, an address under its own name. Whatever was open gives
+    /// way.
+    pub fn open_page(&self, source: PageSource, window: &mut Window) {
+        let (path, name) = match &source {
+            PageSource::File(path) => (path.clone(), None),
+            PageSource::Address(address) => (PathBuf::from(address), Some(address.clone())),
+        };
+        self.set(Document {
+            path,
+            name,
+            body: Body::Page(PageView::new(source)),
+        });
         window.refresh();
     }
 
@@ -345,7 +366,15 @@ impl Document {
         matches!(self.body, Body::Text { line: None, .. }) && self.is_markdown()
     }
 
-    /// A text document's text; nothing for a file not shown.
+    /// The page it shows, if it is one.
+    pub fn page(&self) -> Option<&Arc<PageView>> {
+        match &self.body {
+            Body::Page(page) => Some(page),
+            _ => None,
+        }
+    }
+
+    /// A text document's text; nothing for a page or a file not shown.
     pub fn text(&self) -> Option<&Arc<Text>> {
         match &self.body {
             Body::Text { text, .. } => Some(text),

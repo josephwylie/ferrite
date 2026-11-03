@@ -41,6 +41,7 @@ use ferrite_core::followup;
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
+use ferrite_pane::page::PageSource;
 use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::sound::Sound;
 
@@ -979,6 +980,8 @@ enum MenuTarget {
         thread: ThreadId,
         block: ferrite_core::transcript::BlockId,
     },
+    /// The page a Pane's preview shows: its title's menu.
+    Page(PaneIdentity),
 }
 
 /// One thing a context-menu row does.
@@ -1019,6 +1022,9 @@ enum MenuVerb {
     /// alone, or its files too.
     Rewind,
     RewindCode,
+    /// A page's own verbs: read its file again, open it in the browser.
+    Reload,
+    OpenInBrowser,
 }
 
 #[derive(Clone, Copy)]
@@ -3689,6 +3695,22 @@ impl CockpitView {
                     MenuVerb::RewindCode,
                 )));
             }
+            MenuTarget::Page(owner) => {
+                let address = self
+                    .page_source(owner)
+                    .is_some_and(|page| matches!(page, PageSource::Address(_)));
+                if !address {
+                    rows.push(Some((menu::Item::new("Reload"), MenuVerb::Reload)));
+                }
+                rows.push(Some((
+                    menu::Item::new("Open in browser"),
+                    MenuVerb::OpenInBrowser,
+                )));
+                rows.push(Some((
+                    menu::Item::new(if address { "Copy address" } else { "Copy path" }),
+                    MenuVerb::CopyPath,
+                )));
+            }
         }
         rows
     }
@@ -3760,7 +3782,8 @@ impl CockpitView {
             MenuTarget::Group(_)
             | MenuTarget::Parked
             | MenuTarget::Review { .. }
-            | MenuTarget::Prompt { .. } => None,
+            | MenuTarget::Prompt { .. }
+            | MenuTarget::Page(_) => None,
         }
     }
 
@@ -3870,6 +3893,7 @@ impl CockpitView {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             }
+            (MenuTarget::Page(owner), verb) => self.run_page_verb(owner, verb, cx),
             (MenuTarget::Prompt { thread, block }, MenuVerb::Rewind | MenuVerb::RewindCode) => {
                 self.cut_at_prompt(
                     thread,
@@ -3955,9 +3979,10 @@ impl CockpitView {
                         .and_then(|group| group.members.first().copied())
                         .and_then(|thread| self.cockpit.project_id(thread)),
                     MenuTarget::Project(project) => Some(project),
-                    MenuTarget::Parked | MenuTarget::Review { .. } | MenuTarget::Prompt { .. } => {
-                        None
-                    }
+                    MenuTarget::Parked
+                    | MenuTarget::Review { .. }
+                    | MenuTarget::Prompt { .. }
+                    | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
                 if let (Some(project), Some(draft)) = (project, self.focused_draft_mut()) {
