@@ -2369,6 +2369,65 @@ fn prose() -> Scene {
 /// framebuffer; then again with the palette open over it, its caret
 /// blinking on the float. Writes `loops-parity.json` (the palette pass under
 /// `palette`) and, for any instant that differs, both shots.
+/// The working mark's preview (`docs/research/craft/working-orbs.mp4`):
+/// the real element at 16pt and 48pt on `#191919`, its loop held at each
+/// 60fps instant of two loops, one PNG a frame (`orbs-0000.png` …) for
+/// ffmpeg to join.
+pub fn working_orbs(output: String) {
+    use gpui::{div, px, rgb, IntoElement, ParentElement, Styled};
+    struct Orbs;
+    impl gpui::Render for Orbs {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let cell = |size: f32| {
+                div()
+                    .size(px(160.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(ferrite_ui::components::working_mark(
+                        size,
+                        ferrite_ui::theme::INK_STRONG,
+                    ))
+            };
+            div()
+                .size_full()
+                .flex()
+                .bg(rgb(0x191919))
+                .child(cell(16.))
+                .child(cell(48.))
+        }
+    }
+    let output = PathBuf::from(output);
+    std::fs::create_dir_all(&output).expect("create artifact directory");
+    let platform = gpui::platform::current_platform(true);
+    let mut cx = HeadlessAppContext::with_platform(
+        platform.text_system(),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
+        gpui::platform::current_headless_renderer,
+    );
+    let window = cx
+        .open_window(gpui::size(px(320.), px(160.)), |_, cx| cx.new(|_| Orbs))
+        .unwrap();
+    cx.run_until_parked();
+    let frames = 2 * ferrite_ui::theme::MOTION_WORKING_MARK_MS * 60 / 1000;
+    for frame in 0..frames {
+        let at = std::time::Duration::from_micros(frame * 1_000_000 / 60);
+        let _held = HeldLoops::hold(ferrite_ui::motion::HeldLoops {
+            css: at,
+            script: at,
+        });
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+        })
+        .unwrap();
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join(format!("orbs-{frame:04}.png")))
+            .unwrap();
+    }
+}
+
 pub fn loops_parity(output: String) {
     let output = PathBuf::from(output);
     std::fs::create_dir_all(&output).expect("create artifact directory");

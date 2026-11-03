@@ -276,3 +276,62 @@ fn a_frame_the_cockpit_did_not_ask_for_replays_it(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(renders(), before + 1);
 }
+
+// ------------------------------------------------------- the working marks
+
+/// A working Thread's marks — the working line's and its nav row's — draw
+/// in the overlay at the display's rate: each display frame asks once for
+/// the next and redraws the overlay, never the Cockpit. Their halos reach
+/// past their boxes, and nothing around a mark clips them.
+#[gpui::test]
+fn working_marks_draw_every_frame_in_the_overlay_unclipped(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, fake) = cockpit("overlay-working-marks", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|window, _| window.activate_window());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking marks**".into(),
+            summary_index: 0,
+        })
+        .unwrap();
+    tick(cx);
+    frames(cx, 500);
+    assert!(cx.debug_bounds("progress-mark-live").is_some(), "the premise");
+    let marks: Vec<_> = cx
+        .update(|window, _| ferrite_ui::loops_overlay::testing::hosted(window))
+        .into_iter()
+        .filter(|(mark, _)| mark.size.width == mark.size.height)
+        .collect();
+    assert!(
+        marks.len() >= 2,
+        "the working line's mark and the nav row's: {marks:?}"
+    );
+    for (mark, mask) in &marks {
+        // Past a quarter of the box the halo is under 1% light.
+        let halo = mark.dilate(mark.size.width * 0.25);
+        assert_eq!(mask.intersect(&halo), halo, "{mark:?} is clipped by {mask:?}");
+    }
+    let (cockpit, overlay) = (renders(), overlay_renders());
+    for _ in 0..30 {
+        cx.executor().advance_clock(Duration::from_millis(8));
+        cx.run_until_parked();
+        let asked = cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        assert!(asked >= 1, "every frame asks for the next");
+    }
+    assert!(
+        overlay_renders() - overlay >= 30,
+        "the overlay draws every frame: {}",
+        overlay_renders() - overlay
+    );
+    assert!(
+        renders() - cockpit <= 2,
+        "the Cockpit is not rebuilt for them: {}",
+        renders() - cockpit
+    );
+}

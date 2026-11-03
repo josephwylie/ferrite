@@ -119,10 +119,11 @@
 //!    a Group Pane's head speaks its state word. Nothing shows twice on one
 //!    surface.
 //! 8. **Little moves at once.** What moves: the working mark
-//!    (`components::working_mark`, Ferrite's two shards parting, twisting
-//!    and seating home every `MOTION_WORKING_MARK_MS`), the app's one running glyph — the working
-//!    line's mark in the provider's colour, and in `RUNNING` in place of the
-//!    mark of every working Thread and on a plan's current step; the working
+//!    (`components::working_mark`, four white orbs swapping corners in
+//!    pairs every `MOTION_WORKING_MARK_MS`), the app's one running glyph, its
+//!    orbs white (red on a Thread whose run is failing) — the working
+//!    line's mark, in place of the mark of every working Thread, and on a
+//!    plan's current step and a running check; the working
 //!    caption's shimmer (`components::shimmer`), on the focused Pane only;
 //!    the caret blinking in the focused Composer (`components::caret_blink`);
 //!    the nav and the panel riding their width (`MOTION_RESIZE_MS`); hover
@@ -2819,7 +2820,10 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 // - **A window with nothing animating schedules no frame.** Loops ride one
 //   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`): each declares
 //   when its picture next changes, and the clock wakes only the views due
-//   then, on its grid; it parks when nothing is declared.
+//   then, on its grid; it parks when nothing is declared. The working
+//   mark alone moves at every instant: it asks the display for its frames
+//   (`motion::frame_loop`), one request a frame for every mark in the
+//   window, and only while one can be seen.
 // - **A frame redraws only what moves.** Every animation asks for its next
 //   frame through the cheapest view that draws it (`motion::frames_through`):
 //   a float the Cockpit draws redraws the frame around its cached parts,
@@ -2901,26 +2905,11 @@ pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
 /// stops painting drops off after its last declared tick, and the clock
 /// parks.
 pub const MOTION_PULSE_TICK_MS: u64 = 33;
-/// 1.6s — one turn of the working mark (`components::working_mark`): the
-/// Ferrite mark rests, its shards part, twist together and seat home.
-/// About two and a half of Claude's 0.6s glyph breaths: calm across a board
-/// of working Threads, yet the 1.2s of motion inside it reads as alive at
-/// 12px. Its moves are continuous (drawn every pulse tick), never stepped.
-pub const MOTION_WORKING_MARK_MS: u64 = 1_600;
-/// The share of the turn the mark rests assembled, from its start (400ms):
-/// the clock draws nothing through it.
-pub const WORKING_MARK_REST: f32 = 0.25;
-/// The share of the motion the shards take to part, and again to seat
-/// (360ms each), sine in-out.
-pub const WORKING_MARK_PART: f32 = 0.3;
-/// Where in the motion the shards twist, out and back, sine in-out: begun
-/// once they have half parted, done before they touch again.
-pub const WORKING_MARK_TWIST: (f32, f32) = (0.15, 0.85);
-/// How far each shard moves off the seam at full part, in the mark's
-/// 1254-unit viewBox: about 1px at 14px, 3.6px at 48px.
-pub const WORKING_MARK_SPREAD: f32 = 95.0;
-/// How far the shards turn at the twist's height, clockwise, together.
-pub const WORKING_MARK_TWIST_DEG: f32 = 40.0;
+/// 2.5s — one loop of the working mark (`components::working_mark`):
+/// four orbs, one diagonal pair swapping corners every quarter, as Claude
+/// Desktop's four-dot glyph does (`docs/research/craft/working-glyph-claude.md`).
+/// Drawn at the display's rate, never stepped.
+pub const MOTION_WORKING_MARK_MS: u64 = 2_500;
 /// 2.4s — one sweep of the shimmer's crest across the working caption,
 /// left to right.
 pub const MOTION_SHIMMER_MS: u64 = 2_400;

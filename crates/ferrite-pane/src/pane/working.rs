@@ -7,7 +7,6 @@ use super::*;
 pub struct WorkingFacts<'a> {
     pub transcript: &'a Transcript,
     pub thread: ThreadId,
-    pub provider: Option<Provider>,
     /// The Session is starting, nothing streaming yet.
     pub starting: bool,
     pub solo: bool,
@@ -43,7 +42,6 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::Transcript
             facts.focused,
             facts.reasoning_visible,
             facts.reduce_motion,
-            facts.provider,
             facts.thread.get(),
         ))
     } else if facts.starting {
@@ -120,9 +118,9 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
 }
 
 /// The working line's mark: the app's one running glyph
-/// (`components::working_mark`) in the provider's colour; under reduced
-/// motion it holds still. Its selector says which.
-fn working_mark(ink: u32, live: bool) -> AnyElement {
+/// (`components::working_mark`), its orbs white; under reduced motion it
+/// holds still. Its selector says which.
+fn working_mark(live: bool) -> AnyElement {
     div()
         .debug_selector(move || {
             if live {
@@ -131,7 +129,7 @@ fn working_mark(ink: u32, live: bool) -> AnyElement {
                 "progress-mark-still".into()
             }
         })
-        .child(components::working_mark(theme::GLYPH_BOX, ink))
+        .child(components::working_mark(theme::GLYPH_BOX, INK_STRONG))
         .into_any_element()
 }
 
@@ -186,13 +184,12 @@ pub(super) fn working_row(
         focused,
         received_reasoning_is_visible,
         reduce_motion,
-        None,
         0,
     )
 }
 
 /// The working line (SPEC §5.4), the Claude app's one line: the working
-/// spinner in the provider's colour, then what the turn is doing, read off its
+/// mark, then what the turn is doing, read off its
 /// execution state (`caption_of`), then `1m04s · ↑ 4.1k tokens` in
 /// `INK_SUBTLE`. Every line's spinner turns on the one shared clock; only the
 /// focused Pane's caption shimmers. The seconds are whole
@@ -207,7 +204,6 @@ pub(super) fn working_line_for(
     focused: bool,
     received_reasoning_is_visible: bool,
     reduce_motion: bool,
-    provider: Option<Provider>,
     thread: u64,
 ) -> Div {
     WorkingLine::of(
@@ -217,7 +213,6 @@ pub(super) fn working_line_for(
         focused,
         received_reasoning_is_visible,
         reduce_motion,
-        provider,
         thread,
     )
     .render()
@@ -229,7 +224,6 @@ pub(super) fn working_line_for(
 /// the whole seconds do, never per frame.
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub(crate) struct WorkingLine {
-    ink: u32,
     live: bool,
     spinning: bool,
     solo: bool,
@@ -265,10 +259,8 @@ impl WorkingLine {
         focused: bool,
         received_reasoning_is_visible: bool,
         reduce_motion: bool,
-        provider: Option<Provider>,
         thread: u64,
     ) -> Self {
-        let ink = provider_ink(provider);
         let live = focused && !reduce_motion;
         let spinning = !reduce_motion;
         let started = transcript.turn_started();
@@ -303,7 +295,6 @@ impl WorkingLine {
             thread,
         );
         Self {
-            ink,
             live,
             spinning,
             solo,
@@ -317,7 +308,6 @@ impl WorkingLine {
 
     fn render(&self) -> Div {
         let Self {
-            ink,
             live,
             spinning,
             solo,
@@ -341,8 +331,7 @@ impl WorkingLine {
             .text_size(px(grid.activity().size))
             .line_height(px(grid.line));
         if let Some((selector, caption)) = caption {
-            // The caption reads in the body's ink; the provider's colour is
-            // the spinner's (a working glyph, rule 6).
+            // The caption reads in the body's ink.
             let caption = SharedString::from(caption);
             let text = if live {
                 components::shimmer(caption, INK_STRONG)
@@ -371,7 +360,7 @@ impl WorkingLine {
                         .items_center()
                         .mr(px(theme::SPACE_2))
                         .h(px(grid.line))
-                        .child(working_mark(ink, spinning)),
+                        .child(working_mark(spinning)),
                 )
                 .child(
                     div()
@@ -479,7 +468,7 @@ fn running_call(transcript: &Transcript) -> Option<&ToolBlock> {
 
 /// The task list (`TASK_*`): the plan the turn works to, a card on a
 /// hairline ring, one row a step — done `check-circle` and its words
-/// dimmed, the step in hand the working mark (`RUNNING`) and its words
+/// dimmed, the step in hand the working mark and its words
 /// strong, a step to do a dashed ring and its words in the body's ink.
 fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
     div()
@@ -504,7 +493,7 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
                     INK_SUBTLE,
                 ),
                 TaskState::Current => (
-                    components::working_mark(theme::TASK_ICON, RUNNING),
+                    components::working_mark(theme::TASK_ICON, INK_STRONG),
                     INK_STRONG,
                 ),
                 TaskState::ToDo => (
@@ -561,7 +550,7 @@ mod tests {
             summary_index: 0,
         }));
         let line = |transcript: &Transcript, heading_shown| {
-            WorkingLine::of(transcript, false, true, false, heading_shown, true, None, 7)
+            WorkingLine::of(transcript, false, true, false, heading_shown, true, 7)
                 .caption
                 .map(|(selector, _)| selector)
         };

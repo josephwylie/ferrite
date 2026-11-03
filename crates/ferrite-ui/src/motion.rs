@@ -15,7 +15,7 @@
 //! | `transition-colors` hover | [`HOVER_FADE`] 100ms | every pointer hover, the one hover duration (`pointer.rs`'s roles, `components::faded_button`, the nav's rows and buttons, a board seam's strong line): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | [`TOAST_IN`] 180ms, 4px drop / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18), hung top right under the window's head, drops into place from 0.3 ([`toast_in`]); one that goes on its own fades away lifting 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server and update toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
-//! | loops | pulse clock | the working line's mark and shimmer, the working marks (nav, Pane heads, plan steps) and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
+//! | loops | pulse clock / display | the working line's shimmer and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; the working marks (the working line, nav, Pane heads, plan steps), whose orbs move at every instant, ride [`frame_loop`]: the display's rate, one request a frame for the window, only while one can be seen; no dot breathes |
 //! | `menu-in` | [`MENU_IN`] 0ms: a snap, as both reference apps open their menus | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms, 0.96 → 1 scale | the Settings and Project sheets via [`dialog_in`]; the palette and the shortcuts sheet with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
@@ -1078,6 +1078,81 @@ pub fn script_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut A
     }
 }
 
+// ---------------------------------------------------------------------------
+// Frame loops: a loop drawn at the display's rate
+// ---------------------------------------------------------------------------
+//
+// The working mark's orbs move at every instant, and a 30fps tick shows as
+// steps. They read their phase on the pulse clock's epoch, so they stay in
+// step with every other loop, and ask the display for the next frame. Every
+// frame loop in a window shares one request: the first lease in a frame
+// asks, later ones join it, and the frame notifies each view that leased.
+// A loop that is not drawn, or is clipped out of sight, does not lease
+// again, so the window falls quiet a frame later. macOS stops the frames
+// of a window that cannot be seen.
+
+/// One draw of a frame loop: its phase `[0, 1)`, and whether the draw
+/// should lease the next frame ([`lease_frame`]). It does not when a
+/// capture holds the loops, or when it is laid out quietly for the loops
+/// overlay, which draws it itself.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameLoop {
+    pub phase: f32,
+    pub leases: bool,
+}
+
+/// A frame loop with this `period`, now, on the shared epoch; `None` under
+/// reduced motion, where the loop draws its still state.
+pub fn frame_loop(period: Duration, cx: &mut App) -> Option<FrameLoop> {
+    if reduced_motion(cx) {
+        return None;
+    }
+    if let Some(held) = held_loops() {
+        return Some(FrameLoop {
+            phase: phase_at(held.script, period),
+            leases: false,
+        });
+    }
+    let now = cx.background_executor().now();
+    let epoch = cx.default_global::<PulseClock>().grid(now).epoch;
+    Some(FrameLoop {
+        phase: phase_at(now.saturating_duration_since(epoch), period),
+        leases: !quiet(),
+    })
+}
+
+/// The views each window's frame loops redraw on its next frame; a window
+/// is listed while its one request is out.
+#[derive(Default)]
+struct FrameLeases(HashMap<gpui::WindowId, Vec<EntityId>>);
+
+impl Global for FrameLeases {}
+
+/// Draw the current view's frame loop again on the display's next frame,
+/// through the view that redraws it most cheaply. Call at prepaint, when
+/// the loop can be seen. All of a window's leases share one request.
+pub fn lease_frame(window: &mut Window, cx: &mut App) {
+    let view = frames_through(window.current_view());
+    let id = window.window_handle().window_id();
+    let leases = cx.default_global::<FrameLeases>().0.entry(id).or_default();
+    let ask = leases.is_empty();
+    if !leases.contains(&view) {
+        leases.push(view);
+    }
+    if ask {
+        window.on_next_frame(move |_, cx| {
+            let due = cx
+                .default_global::<FrameLeases>()
+                .0
+                .remove(&id)
+                .unwrap_or_default();
+            for view in due {
+                cx.notify(view);
+            }
+        });
+    }
+}
+
 /// The clock is parked: nothing is declared and no timer is armed.
 #[cfg(any(test, feature = "test-support"))]
 pub fn pulse_parked(cx: &App) -> bool {
@@ -1395,6 +1470,18 @@ pub mod testing {
                 .iter()
                 .map(|(key, entry)| (key.clone(), entry.value(now)))
                 .collect()
+        })
+    }
+
+    /// Whether `window`'s frame loops have their one request out
+    /// ([`super::lease_frame`]): the frame they ask for, among those the
+    /// window waits on.
+    pub fn frame_leased(window: &gpui::Window, cx: &gpui::App) -> bool {
+        cx.try_global::<super::FrameLeases>().is_some_and(|leases| {
+            leases
+                .0
+                .get(&window.window_handle().window_id())
+                .is_some_and(|views| !views.is_empty())
         })
     }
 

@@ -143,10 +143,8 @@ pub const CHECK: &str = "icons/check.svg";
 pub const BRANCH: &str = "icons/branch.svg";
 pub const CODEX: &str = "icons/codex.svg";
 pub const CLAUDE: &str = "icons/claude.svg";
-/// The mark's two shards, drawn apart so the working mark can move them
-/// (`working_mark`).
-pub(crate) const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
-pub(crate) const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
+const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
+const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
 /// A parent Agent branching to two children. (The nav no longer draws it:
@@ -305,8 +303,8 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
-/// Ferrite's mark at rest: the same two shards the working mark moves
-/// (`components::working_mark`), drawn assembled. A finished answer is not live, so its mark does not move.
+/// Ferrite's mark at rest: its two shards, drawn assembled. A finished
+/// answer is not live, so its mark does not move.
 pub fn ferrite_icon(size: f32) -> AnyElement {
     let shard = |path| {
         svg()

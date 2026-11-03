@@ -517,6 +517,26 @@ pub mod testing {
     pub fn overlay_renders() -> usize {
         OVERLAY_RENDERS.with(Cell::get)
     }
+
+    /// Each loop the overlay draws in `window` now: its box, and the
+    /// bounds of the content mask it is drawn under (what clips it).
+    pub fn hosted(
+        window: &gpui::Window,
+    ) -> Vec<(gpui::Bounds<gpui::Pixels>, gpui::Bounds<gpui::Pixels>)> {
+        super::WINDOWS.with(|windows| {
+            windows
+                .borrow()
+                .get(&window.window_handle().window_id())
+                .map_or_else(Vec::new, |marks| {
+                    marks
+                        .owners
+                        .iter()
+                        .filter(|(owner, _)| window.drew_view(**owner))
+                        .flat_map(|(_, loops)| loops.iter().map(|mark| (mark.bounds, mark.mask.bounds)))
+                        .collect()
+                })
+        })
+    }
 }
 
 #[cfg(test)]

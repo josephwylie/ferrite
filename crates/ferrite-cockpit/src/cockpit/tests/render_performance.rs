@@ -1106,11 +1106,20 @@ fn streaming_layout_probe(cx: &mut TestAppContext) {
 }
 
 /// Delivers the display frame the last draw asked for, and says how many
-/// animation-frame requests were waiting on it.
+/// animation-frame requests were waiting on it besides the frame loops'
+/// one (the working marks', which ask for every frame while they show).
 fn display_frames(cx: &mut gpui::VisualTestContext) -> usize {
-    let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+    let frames = cx.update(|window, cx| {
+        let loops = ferrite_ui::motion::testing::frame_leased(window, cx);
+        window.simulate_next_frame(cx) - usize::from(loops)
+    });
     cx.run_until_parked();
     frames
+}
+
+/// Whether the working marks asked the display for the next frame.
+fn loops_leased(cx: &mut gpui::VisualTestContext) -> bool {
+    cx.update(|window, cx| ferrite_ui::motion::testing::frame_leased(window, cx))
 }
 
 /// First paint settles (measurement passes, springs arriving at rest) over
@@ -1189,12 +1198,12 @@ fn a_focused_idle_window_does_not_render_the_cockpit_at_the_pulse_rate(cx: &mut 
     );
 }
 
-/// A working Thread's loops — the working line's mark, the nav's breathing
-/// dot — ride the shared pulse clock instead of asking for every display
-/// frame, and the clock parks once the turn ends and its lease lapses
-/// (unfocused, so the Composer's caret holds no lease of its own).
+/// A working Thread's marks — the working line's, the nav row's — ask the
+/// display for every frame, one request for them all, and stop once the
+/// turn ends; the pulse clock parks with nothing on it (unfocused, so the
+/// Composer's caret and the caption's shimmer hold no lease of their own).
 #[gpui::test]
-fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut TestAppContext) {
+fn a_working_thread_asks_for_frames_and_stops_when_it_ends(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-working", 1);
     let thread = core.threads()[0];
@@ -1209,16 +1218,12 @@ fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut Tes
         .unwrap();
     tick(cx);
     assert!(cx.debug_bounds("progress-mark-live").is_some());
-    assert!(!pulse_parked(cx), "the working mark leases the clock");
+    assert!(loops_leased(cx), "the working marks ask for the next frame");
     settle(cx);
     cx.executor().advance_clock(Duration::from_millis(100));
     cx.run_until_parked();
-    assert!(!pulse_parked(cx), "and keeps it while it is mounted");
-    assert_eq!(
-        display_frames(cx),
-        0,
-        "the loops ask the clock for ~30fps, never the display for every frame"
-    );
+    assert!(loops_leased(cx), "and keep asking while they show");
+    assert_eq!(display_frames(cx), 0, "nothing else asks");
 
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
@@ -1232,18 +1237,18 @@ fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut Tes
         ferrite_ui::theme::MOTION_WORKING_MARK_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
     ));
     cx.run_until_parked();
-    assert!(pulse_parked(cx), "the lapsed clock parks");
-    // The turn's completion toast arrives on its own springs; once they
-    // rest, the window is idle again.
+    // The completion toast arrives on its own springs; once they rest, the
+    // window is idle again.
     settle(cx);
+    assert!(!loops_leased(cx), "no mark, no frame");
     assert!(pulse_parked(cx));
 }
 
-/// A pulse tick repaints what paints the loop and nothing cached beside it:
-/// the working mark animates while the Pane's retained transcript — the
-/// expensive native text — is reused from its cache on every tick.
+/// A working mark's frame repaints what paints the loop and nothing cached
+/// beside it: the mark animates while the Pane's retained transcript — the
+/// expensive native text — is reused from its cache on every frame.
 #[gpui::test]
-fn a_pulse_tick_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) {
+fn a_loop_frame_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("motion-tick-isolation", 1);
     let thread = core.threads()[0];
@@ -1264,19 +1269,17 @@ fn a_pulse_tick_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) 
     );
 
     reset_native_text_renders(cx);
-    for _ in 0..10 {
-        cx.executor().advance_clock(Duration::from_millis(
-            ferrite_ui::theme::MOTION_PULSE_TICK_MS,
-        ));
+    for _ in 0..20 {
+        cx.executor().advance_clock(Duration::from_millis(16));
         cx.run_until_parked();
+        assert!(loops_leased(cx), "the mark asks for every frame");
+        assert_eq!(display_frames(cx), 0, "and nothing else does");
     }
-    assert!(!pulse_parked(cx), "the mark kept the clock running");
     assert_eq!(
         native_text_renders(&prefix, cx),
         0,
-        "ten ticks rebuilt none of the cached transcript's native text"
+        "twenty frames rebuilt none of the cached transcript's native text"
     );
-    assert_eq!(display_frames(cx), 0, "and asked the display for nothing");
 }
 
 /// A row appended while the operator watches fades in over
@@ -1319,7 +1322,7 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
 
 /// One clock, one breath (rule 2.10.8): N working Panes and N unread Panes
 /// on one board cost at most the pulse clock's 1000/33 ticks a second, and
-/// never a display frame of their own.
+/// no display frame but the working marks' one request.
 #[gpui::test]
 fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -1386,12 +1389,15 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
         assert_eq!(
             display_frames(cx),
             0,
-            "the loops never ask the display for a frame"
+            "only the working marks ask the display for a frame"
         );
         elapsed += step;
     }
     let ticks = cx.update(|_, _| ferrite_ui::motion::testing::pulse_ticks()) - before;
-    assert!(ticks > 0, "the loops are alive: {ticks}");
+    assert!(
+        ticks > 0 || loops_leased(cx),
+        "the loops are alive: {ticks}"
+    );
     assert!(
         ticks <= (1000 / ferrite_ui::theme::MOTION_PULSE_TICK_MS) as usize,
         "{ticks} ticks in one second: more than 1000/33"

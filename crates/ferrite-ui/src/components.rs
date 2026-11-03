@@ -489,8 +489,8 @@ mod loops {
         ferrite_core::cadence::frame_at(phase, frames)
     }
 
-    /// The app's one running glyph (theme rule 8): Ferrite's mark, its
-    /// shards parting, twisting and seating home (`working_mark`). It marks
+    /// The app's one running glyph (theme rule 8): four white orbs
+    /// swapping corners in pairs (`working_mark`). It marks
     /// a working Thread (the nav, Pane heads, subagent tabs), the working
     /// line, a plan's current step and a running check, so a board of them
     /// shares one clock.
@@ -1763,8 +1763,8 @@ pub fn scrollbar_bar(
 
 /// A CI check's state, one vocabulary for every surface that lists checks
 /// (the Pane head's checks card), so a state reads the same a click apart. Colour is state (rule 6):
-/// a failure is `BLOCKED`; a run still going the working mark in
-/// `RUNNING`; a pass is done, a shape (`check-circle`) in `INK_SUBTLE`, never
+/// a failure is `BLOCKED`; a run still going the working mark, its orbs
+/// white; a pass is done, a shape (`check-circle`) in `INK_SUBTLE`, never
 /// the green a running one wears; a queued run a hollow ring and a skipped
 /// one the ring crossed by a dash, both in `TEXT_FAINT` — they claim
 /// nothing. Only a failure colours its word.
@@ -1816,7 +1816,7 @@ impl CheckMark {
             CheckMark::Passed => {
                 icons::icon(icons::CHECK_CIRCLE, theme::CHECK_MARK, ink).into_any_element()
             }
-            CheckMark::Running => working_mark(theme::CHECK_MARK, ink),
+            CheckMark::Running => working_mark(theme::CHECK_MARK, theme::INK_STRONG),
             CheckMark::Queued => ring().into_any_element(),
             CheckMark::Skipped => ring()
                 .child(div().w(px(theme::CHECK_SKIP_DASH)).h(px(1.)).bg(rgb(ink)))

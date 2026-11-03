@@ -89,6 +89,16 @@ pub fn launch() {
         );
         return;
     }
+    // The working mark's preview frames (`visual_reference::working_orbs`).
+    #[cfg(feature = "visual-reference")]
+    if std::env::args().nth(1).as_deref() == Some("--working-orbs") {
+        cockpit::visual_reference::working_orbs(
+            std::env::args()
+                .nth(2)
+                .expect("an output directory is required"),
+        );
+        return;
+    }
     // Visuals' agent screenshots (`visual::shots::snapshots`).
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--visual-snapshots") {

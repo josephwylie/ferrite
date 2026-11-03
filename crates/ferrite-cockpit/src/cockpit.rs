@@ -1895,7 +1895,6 @@ impl CockpitView {
             pane::working_tail(pane::WorkingFacts {
                 transcript: subject_view.transcript(),
                 thread,
-                provider: Some(open.provider()),
                 starting: open.starting(),
                 solo,
                 focused,

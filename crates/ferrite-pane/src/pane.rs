@@ -2942,16 +2942,6 @@ impl Grid {
     }
 }
 
-/// A provider's brand colour, for its `✻` and its working spinner;
-/// `INK_SUBTLE` when the provider is not known.
-pub(crate) fn provider_ink(provider: Option<Provider>) -> u32 {
-    match provider {
-        Some(Provider::Claude) => theme::PROVIDER_CLAUDE,
-        Some(Provider::Codex) => theme::PROVIDER_CODEX,
-        None => INK_SUBTLE,
-    }
-}
-
 /// A row's leading mark (`❯ ✻`, typed; `∴`, drawn): centred on the row's
 /// first line, its words a small gap after it.
 pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
@@ -4643,7 +4633,7 @@ mod tests {
                 div().debug_selector(move || selector.into()).child(line)
             };
             let working =
-                |solo| working_line_for(&self.0, false, solo, false, false, true, None, 0);
+                |solo| working_line_for(&self.0, false, solo, false, false, true, 0);
             div()
                 .w_full()
                 .flex()
