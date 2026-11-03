@@ -163,7 +163,7 @@ pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
 
 /// The quiet text control under the list that adds a directory (`+ Add
 /// directory`, or `+ Add main directory` while there is none): `INK_SUBTLE`,
-/// `INK` on `paint::RAISED` under the pointer, on the text's own edge.
+/// `INK_STRONG` on `paint::RAISED` under the pointer, on the text's own edge.
 pub fn add_directory(label: &'static str, cx: &App) -> Button {
     components::form_button("add-project-directory", cx)
         .debug_selector(|| "project-add-directory".into())
@@ -174,7 +174,7 @@ pub fn add_directory(label: &'static str, cx: &App) -> Button {
         .child(
             components::text_ui()
                 .text_color(rgb(INK_SUBTLE))
-                .group_hover(ADD_GROUP, |style| style.text_color(rgb(INK)))
+                .group_hover(ADD_GROUP, |style| style.text_color(rgb(INK_STRONG)))
                 .child(label),
         )
 }
@@ -252,7 +252,7 @@ pub fn directory_row(
                             components::text_ui()
                                 .min_w_0()
                                 .truncate()
-                                .text_color(rgb(INK))
+                                .text_color(rgb(INK_STRONG))
                                 .child(name),
                         )
                         .when(main, |line| {
@@ -279,7 +279,7 @@ pub fn directory_row(
 }
 
 /// A destructive action: a word in a 1px `paint::FLOAT_EDGE` box (the
-/// prototype's quick buttons) — `INK_SUBTLE` at rest, `INK` on
+/// prototype's quick buttons) — `INK_SUBTLE` at rest, `INK_STRONG` on
 /// `paint::RAISED` under the pointer. No red and no wash: colour is state,
 /// and a verb is not one. Disabled, it stays `INK_SUBTLE` and takes no face.
 pub fn destructive_button(
@@ -308,7 +308,7 @@ pub fn destructive_button(
                 .font_weight(W_BODY)
                 .text_color(rgb(INK_SUBTLE))
                 .when(!disabled, |text| {
-                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(INK)))
+                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(INK_STRONG)))
                 })
                 .child(label),
         )

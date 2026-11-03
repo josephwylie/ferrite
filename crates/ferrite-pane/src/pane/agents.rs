@@ -81,7 +81,7 @@ pub(crate) fn is_agent(tool: &ToolBlock) -> bool {
 }
 
 /// An agent call's row, alone or in its card: `Ran agent` in `INK_SUBTLE`,
-/// its task (the provider's description) a step up in `INK`; while the
+/// its task (the provider's description) a step up in `INK_STRONG`; while the
 /// agent runs, `Running agent`, what it is doing after the seam
 /// (`text::agent_line`) and the running spinner at the row's end; a failed
 /// one's `Failed` tag, as any call's. No disclosure: `open`, laid over the
@@ -102,7 +102,7 @@ pub(crate) fn render_agent(
     highlights.push((
         task,
         HighlightStyle {
-            color: Some(rgb(INK).into()),
+            color: Some(rgb(INK_STRONG).into()),
             ..Default::default()
         },
     ));
@@ -135,7 +135,7 @@ pub(crate) fn render_agent(
                 .flex_shrink(1.)
                 .min_w_0()
                 .when(opens, |words| {
-                    words.group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK)))
+                    words.group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_STRONG)))
                 })
                 .child(edge_cut(
                     grid.line,

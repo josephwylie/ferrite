@@ -2,8 +2,8 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// A Thread row is one quiet line (§5.1.5): the title at 35 (on its
-/// Project's label, geometry.md), 30 high, nothing under it and no
+/// A Thread row is one quiet line (§5.1.5): the title on its Project's
+/// label (Claude's one left edge), 30 high, nothing under it and no
 /// provider logo.
 #[gpui::test]
 fn a_thread_row_is_one_quiet_line(cx: &mut TestAppContext) {
@@ -19,8 +19,8 @@ fn a_thread_row_is_one_quiet_line(cx: &mut TestAppContext) {
     let title = cx.debug_bounds(id("nav-title")).expect("its title");
     assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_ROW_H));
     assert!(
-        (title.left() - (row.left() + px(ferrite_ui::theme::NAV_TITLE_X))).abs() < px(0.5),
-        "the title at 35, on its Project's label: {title:?} in {row:?}"
+        (title.left() - (row.left() + px(ferrite_ui::theme::NAV_ROW_PAD_X))).abs() < px(0.5),
+        "the title on its Project's label: {title:?} in {row:?}"
     );
     assert!(
         cx.debug_bounds(id("nav-mark")).is_none(),
@@ -127,18 +127,15 @@ fn the_needs_you_view_lists_the_queue_in_the_trees_place(cx: &mut TestAppContext
     let oldest = cx.debug_bounds(row(threads[2])).expect("its row");
     assert!(first.contains(&oldest.center()), "oldest first");
     assert_eq!(oldest.size.height, px(ferrite_ui::theme::NAV_ROW_H));
-    // The queue stays flat: no Project heading, no guide, every row at
-    // the root, so its order is the queue's.
+    // The queue stays flat: no Project heading, every row on the Notices'
+    // column, so its order is the queue's.
     assert!(cx.debug_bounds("nav-view-project-0").is_none());
-    assert!(cx
-        .debug_bounds(format!("nav-guide-{}-0", threads[2].get()).leak())
-        .is_none());
     let title = cx
         .debug_bounds(format!("nav-title-{}", threads[2].get()).leak())
         .expect("its title");
     assert!(
         (title.left() - oldest.left() - px(ferrite_ui::theme::NAV_TITLE_X)).abs() < px(0.5),
-        "at the root"
+        "on the Notices' title column"
     );
     assert!(cx
         .debug_bounds(row(threads[0]))

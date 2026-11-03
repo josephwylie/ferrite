@@ -644,9 +644,10 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
     }
 }
 
-/// SPEC §5.5: however narrow the box, send stands whole inside it, its
-/// row's padding from the box's end, and under the box the model word
-/// never runs under the mode's.
+/// SPEC §5.5: however narrow the box, send (once there is text, Claude's:
+/// an empty box shows none) stands whole inside it, its row's padding from
+/// the box's end, and under the box the model word never runs under the
+/// mode's.
 #[gpui::test]
 fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("toolbar-narrow", 1);
@@ -658,6 +659,16 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
             mode: "a-long-native-permission-mode".into(),
         })
         .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("composer-send").is_none(),
+        "no send in an empty box"
+    );
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set("Typed".into(), cx));
+    });
     for width in [1200., 900., 720.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));
         tick(cx);
@@ -677,9 +688,10 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
     }
 }
 
-/// In a narrow box the model's label (`Opus 5.5 (1M) High`) cuts
-/// before the permission mode's word does: the mode chip keeps its whole
-/// width while the model chip has any label left to give.
+/// In a narrow box the model's label cuts before the permission mode's
+/// word does: the mode chip keeps its whole width while the model chip has
+/// any label left to give. (A long model name: Claude's own, `Opus 5.5`,
+/// is too short to have to cut before the box goes compact.)
 #[gpui::test]
 fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("toolbar-priority", 1);
@@ -688,7 +700,7 @@ fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
     for event in [
         SessionEvent::Init {
             session_id: "priority".into(),
-            model: "claude-opus-5-5[1m]".into(),
+            model: "research-preview-with-a-long-model-name".into(),
         },
         SessionEvent::PermissionMode {
             mode: "acceptEdits".into(),

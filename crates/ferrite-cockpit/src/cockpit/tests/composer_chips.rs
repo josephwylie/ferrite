@@ -277,8 +277,9 @@ fn plugins_are_read_off_their_commands_namespaces() {
     assert_eq!(plugin_names(&commands), ["superpowers", "figma"]);
 }
 
-/// The `+` menu's `Connectors ›` lists the Session's MCP servers: a pick
-/// signs in to one waiting on it; `Manage connectors` opens the panel.
+/// The `+` menu hangs from the `+`'s left edge, and its `Connectors ›`
+/// lists the Session's MCP servers: a pick signs in to one waiting on it;
+/// `Manage connectors` opens the panel.
 #[gpui::test]
 fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("plus-connectors", 1);
@@ -309,6 +310,12 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
         tick(cx);
     };
     open(&view, cx);
+    let plus = cx.debug_bounds("composer-attach").expect("the +");
+    let first = cx.debug_bounds("choice-row-0").expect("Add files or photos");
+    assert!(
+        first.left() >= plus.left() && first.left() < plus.right(),
+        "the menu hangs from the +, over the box, not the sidebar: {first:?} / {plus:?}"
+    );
     let server = cx.debug_bounds("choice-sub-0").expect("the server's row");
     cx.simulate_click(server.center(), gpui::Modifiers::none());
     tick(cx);

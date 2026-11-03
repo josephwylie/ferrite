@@ -56,7 +56,7 @@
 //!    labels. Only a floating surface casts, one shadow
 //!    (`components::float_shadow`); a modal adds `VEIL`.
 //! 3. **Neutral greys, steps over the plane.** Darkest first: `SUNKEN` (a
-//!    command well) < `CARD` = `FRAME` (the plane) < `DECISION` <
+//!    command well) < `CARD` = `FRAME` (the plane) <
 //!    `FIELD_COMPACT` < `RAISED` #242424 (an active tab or chip, secondary
 //!    buttons) < `BLOCK` #262626 (diff and fence blocks; `PROMPT_BUBBLE`) <
 //!    `SELECTED` #2a2a2a (**the one selected fill**: the selected row, tab,
@@ -81,13 +81,13 @@
 //!    an `0xRRGGBBAA` by mistake); the bare consts are the `0xRRGGBB`
 //!    values, for contrast math. **Never stack two region fills**: what
 //!    sits inside a region paints its own step or nothing.
-//! 5. **Three text tiers.** Every word is strong, default or subtle:
-//!    `INK_STRONG` #efefef (what is read — prose, titles, the nav's rows,
-//!    selected rows, the prompt, `**strong**`, `❯`, the caret, focus),
-//!    `INK` #cfcfcf (secondary — descriptions, tabs, buttons, chips — and
-//!    every icon, `ICON_INK`), `INK_SUBTLE` #9c9c9c (metadata, times,
-//!    section headings, tool rows and arguments, hints; **the floor for
-//!    readable text**: 4.5:1 on the plane and a float). A placeholder is
+//! 5. **Two text tiers** (Claude's): every word is content or meta.
+//!    `INK_STRONG` #efefef is content (what is read — prose, titles, row
+//!    names, menu items, buttons, chips, the prompt, `**strong**`, `❯`, the
+//!    caret, focus), and an icon wears its label's ink. `INK_SUBTLE` #9c9c9c
+//!    is meta (descriptions, times, section headings, tool rows and
+//!    arguments, hints; **the floor for readable text**: 4.5:1 on the plane
+//!    and a float). There is no tier between them. A placeholder is
 //!    `PLACEHOLDER_INK` #878787, under the floor: it is not read.
 //!    `TEXT_FAINT` is structure only (`└`, rails, diff line numbers):
 //!    **`TEXT_FAINT` is never text.** A row spends at
@@ -144,8 +144,8 @@
 //!     `CHROME_GLYPHS` lists the non-ASCII glyphs Geist Mono sets and
 //!     `FALLBACK_GLYPHS` the ones it lacks; a test checks each against the
 //!     face (the system UI font covers the chrome's own, `⇧ ↑ ↓ · ⌘`).
-//!     Icons are Ferrite's own line family (`icons.rs`), every stroke 1px
-//!     at 16 (`ICON_STROKE`).
+//!     Icons are Ferrite's own line family (`icons.rs`), every stroke 1.33
+//!     at 16 (`ICON_STROKE`), drawn at 14–16.
 //! 11. **Words.** Ferrite's own copy speaks one shared word list
 //!     (`theme::words`, beside the state inks and tested against the
 //!     notifications, the Decision card and the transcript): `needs you`,
@@ -245,11 +245,12 @@ pub const FRAME: u32 = CARD;
 /// the transcript `#191919`, the sidebar `#292428` under the window's
 /// vibrancy, ~14 levels over it; this is that grey without the wallpaper's
 /// tint), so the column reads as its own region and not by its hairline
-/// alone. Its rows step up from it: `SIDEBAR_HOVER` under the pointer,
-/// `SIDEBAR_SELECTED` selected.
+/// alone. Its rows step up from it: `SIDEBAR_HOVER` (+8) under the pointer,
+/// `SIDEBAR_SELECTED` (+32, Claude's `#494548` on `#292428`) selected, so a
+/// hovered row never reads as the selected one.
 pub const SIDEBAR: u32 = 0x272727;
 pub const SIDEBAR_HOVER: u32 = 0x2f2f2f;
-pub const SIDEBAR_SELECTED: u32 = 0x363636;
+pub const SIDEBAR_SELECTED: u32 = 0x474747;
 /// A chip whose menu is open: pressed, Claude's #363636 under its model and
 /// permission chips (claude/model-menu.png x1172, y1018–1041).
 pub const CHIP_OPEN: u32 = 0x363636;
@@ -260,18 +261,21 @@ pub const MENU_CHECK_INK: u32 = 0x237ddb;
 /// `#171717` — sunk below the plane: a Decision's command well, the
 /// palette scrim's base.
 pub const SUNKEN: u32 = 0x171717;
-/// `#1e1e1e` — the Decision box.
-pub const DECISION: u32 = 0x1e1e1e;
 /// `#1f1f1f` — the compact Composer in a Group Pane.
 pub const FIELD_COMPACT: u32 = 0x1f1f1f;
 /// `#242424` — raised a step: an active tab or chip, secondary buttons,
 /// the panel's file block.
 pub const RAISED: u32 = 0x242424;
+/// `#3b3b3b` — a secondary button on the plane that must read as one at a
+/// glance (an approval's `Deny`, Claude's: +34 over the plane), and its
+/// hover a step up.
+pub const SECONDARY: u32 = 0x3b3b3b;
+pub const SECONDARY_HOVER: u32 = 0x454545;
 /// `#262626` — the prompt's bubble, matching Claude (typecolour.md).
 pub const PROMPT_BUBBLE: u32 = 0x262626;
 /// `#2a2a2a` — the inline-code chip, matching Claude (typecolour.md).
 pub const INLINE_CODE_CHIP: u32 = 0x2a2a2a;
-/// `#262626` — diff and code-fence blocks, under a `BLOCK_RING`: a fence
+/// `#262626` — a code fence's block, under a `BLOCK_RING`: a fence
 /// reads as a block at a glance.
 pub const BLOCK: u32 = 0x262626;
 /// `#2a2a2a` — **the one selected fill**: the selected nav row, the active
@@ -291,14 +295,18 @@ pub const SEND: u32 = 0x404040;
 pub const FLOAT: u32 = 0x303030;
 /// `#343434` · `#3e3e3e` — a float's hover and cursor fills, opaque steps
 /// over its own ground. The cursor is the clear step; the hover is the
-/// hover wash's, and the cursor row lifts its subtle words to the default
-/// ink (`menu::row_face`), as the nav's selected row lifts its line 2.
+/// hover wash's, and the cursor row lifts its meta words to the content
+/// ink (`components::row_inks`), as the nav's selected row lifts its line 2:
+/// the meta ink falls under its floor on these steps.
 pub const FLOAT_HOVER: u32 = 0x343434;
 pub const FLOAT_SEL: u32 = 0x3e3e3e;
 /// `#efefef` / `#161616` — the primary button (`primary_button`, dialogs
 /// and settings) and its ink. No hue: the primary is the strongest ink.
 pub const PRIMARY: u32 = INK_STRONG;
 pub const ON_PRIMARY: u32 = 0x161616;
+/// `#cfcfcf` — the primary button under the pointer and pressed: a fill
+/// stepping down from `PRIMARY`, never an ink.
+pub const PRIMARY_HOVER: u32 = 0xcfcfcf;
 
 // ------------------------------------------------------------------ lines
 //
@@ -309,11 +317,13 @@ pub const ON_PRIMARY: u32 = 0x161616;
 /// 1px — every hairline's width (rule 2).
 pub const HAIRLINE_W: f32 = 1.0;
 /// `#303030` — **the line**: every region seam (the head row's foot, the
-/// nav's and the panel's edges, the bar's top), every divider in a card or
-/// panel, a table's rules, a code block's rail, an image's frame.
+/// nav's and the panel's edges, the bar's top), every divider in a panel,
+/// a table's rules, a code block's rail, an image's frame.
 pub const LINE: u32 = 0x303030;
-/// `#222222` — the 1px ring round a card: a Group's Pane, a tool or task
-/// card, a preview.
+/// `#222222` — **the one transcript ring**, Claude's: round a card (a
+/// Group's Pane, a tool or task card, a preview), round a hairline well (a
+/// command, a diff), and every divider inside one — never brighter than the
+/// card's edge. A ringed card has no fill.
 pub const CARD_RING: u32 = 0x222222;
 /// `#404040` — the 1px ring round the Composer and a form field.
 pub const FIELD_RING: u32 = 0x404040;
@@ -333,10 +343,6 @@ pub const FOCUS_RING: u32 = 0xffffff38;
 /// `ATTENTION` at 35% — the ring of a Pane whose Thread is blocked,
 /// focused or not.
 pub const WAIT_RING: u32 = 0xe6c47c59;
-/// `ATTENTION` at 14% — the Decision box's inset ring: enough hue to say
-/// "needs you" beside the yellow mark in its head, quiet enough that the
-/// box reads as part of the transcript, not an alarm.
-pub const DECISION_RING: u32 = 0xe6c47c24;
 /// The compact Composer's ring on the focused Pane, 12% white (at rest it
 /// is the `LINE`).
 pub const COMPACT_RING_FOCUSED: u32 = 0xffffff1f;
@@ -372,7 +378,8 @@ pub mod paint {
     pub const INLINE_CODE_CHIP: Paint = Paint::solid(super::INLINE_CODE_CHIP);
     pub const SELECTED: Paint = Paint::solid(super::SELECTED);
     pub const SUNKEN: Paint = Paint::solid(super::SUNKEN);
-    pub const DECISION: Paint = Paint::solid(super::DECISION);
+    pub const SECONDARY: Paint = Paint::solid(super::SECONDARY);
+    pub const SECONDARY_HOVER: Paint = Paint::solid(super::SECONDARY_HOVER);
     pub const FIELD_COMPACT: Paint = Paint::solid(super::FIELD_COMPACT);
     pub const SELECTION_HOVER: Paint = Paint::solid(super::SELECTION_HOVER);
     /// Every press: the selected row's hover face.
@@ -413,19 +420,16 @@ pub const VEIL: u32 = 0x00000059;
 
 // -------------------------------------------------------------------- ink
 
-/// **The three text tiers** (rule 5): every word is one of these.
-/// `#efefef` — strong: primary text — what is read (prose), titles, the
-/// nav's rows, selected rows, the prompt, `**strong**`, the caret, focus.
+/// **The two text tiers** (rule 5, Claude's): every word is one of these,
+/// and an icon wears its label's.
+/// `#efefef` — content: what is read (prose), titles, row names, menu
+/// items, buttons, chips, selected rows, the prompt, `**strong**`, the
+/// caret, focus.
 pub const INK_STRONG: u32 = 0xefefef;
-/// `#cfcfcf` — default: secondary text — descriptions, tabs, buttons,
-/// chips — and every icon (`ICON_INK`).
-pub const INK: u32 = 0xcfcfcf;
-/// `#9c9c9c` — subtle: metadata, times, section headings, tool rows and
-/// arguments, hints. **The floor for readable text**: 4.5:1 on the plane
-/// and on a float.
+/// `#9c9c9c` — meta: descriptions, metadata, times, section headings, tool
+/// rows and arguments, hints. **The floor for readable text**: 4.5:1 on the
+/// plane and on a float.
 pub const INK_SUBTLE: u32 = 0x9c9c9c;
-/// An icon's ink: the default tier (`#cfcfcf`).
-pub const ICON_INK: u32 = INK;
 /// `#878787` — a field's placeholder: under the subtle tier, because it is
 /// not read but replaced.
 pub const PLACEHOLDER_INK: u32 = 0x878787;
@@ -641,9 +645,10 @@ pub const SYN_NUMBER: u32 = ORANGE;
 /// Comments are read, not decoration: `INK_SUBTLE`, set italic.
 pub const SYN_COMMENT: u32 = INK_SUBTLE;
 /// Punctuation: the plain ink (the prototype leaves `::`, `(`, `;` unclassed).
-pub const SYN_PUNCT: u32 = INK;
-/// Everything the highlighter leaves unclassed.
-pub const SYN_PLAIN: u32 = INK;
+pub const SYN_PUNCT: u32 = SYN_PLAIN;
+/// Everything the highlighter leaves unclassed: the content ink, as
+/// Claude's and Codex's plain code.
+pub const SYN_PLAIN: u32 = INK_STRONG;
 /// A link or a path in prose, a file chip's name: the Claude app's link
 /// blue, a link in prose underlined at rest (the owner's spec, superseding
 /// ADR 0033's white links; a link is the one ink here that is not state).
@@ -741,9 +746,11 @@ pub const FS_PANEL_DIFF: f32 = 12.0;
 pub const LH_PANEL_DIFF: f32 = 18.0;
 /// 12 — a diffstat, a spinner or a `#N` set in Geist Mono inside chrome.
 pub const FS_CHROME_CODE: f32 = 12.0;
-/// 1px — every line icon's stroke as drawn at 16px, whatever its viewBox
-/// (rule 10).
-pub const ICON_STROKE: f32 = 1.0;
+/// 1.33px — every line icon's stroke as drawn at 16px, whatever its viewBox
+/// (rule 10): Lucide's 2 on 24, Claude's 1.25 against its 1.27 text stems.
+/// The stroke is baked into each SVG and scales with the drawn size (1.17
+/// at 14), so icons are drawn at 14–16 and never thinner than the text.
+pub const ICON_STROKE: f32 = 4.0 / 3.0;
 /// **The type scale** (rule 9): every chrome size is one of these.
 pub const TYPE_SCALE: [f32; 6] = [12.0, 13.0, 14.0, 16.0, 18.0, 24.0];
 
@@ -908,17 +915,17 @@ pub const VIEW_HEAD_PAD_X: f32 = 20.0;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
 /// The head's history arrows (Claude's `‹ ›`, claude/answer-done.png x 126
 /// and 153): `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
-/// `NAV_TOGGLE_GLYPH`. At an end the arrow is disabled in `TEXT_FAINT`:
+/// `NAV_TOGGLE_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
 /// Claude's disabled arrow is 0.6 of its live one (#7a777a by #ccc9cb), as
-/// `TEXT_FAINT` is of the doors' resting `INK_SUBTLE`.
-pub const HISTORY_ARROW_DISABLED_INK: u32 = TEXT_FAINT;
+/// `INK_SUBTLE` is of the doors' `INK_STRONG`.
+pub const HISTORY_ARROW_DISABLED_INK: u32 = INK_SUBTLE;
 /// The title-bar tools at the row's right end (Claude's panel, terminal,
 /// diff, preview, files, `⋯`): `ICON_BUTTON` doors 4 apart, Claude's 32pt
 /// pitch (claude/answer-done.png x 1738–1898), the panel toggle the last.
 pub const TITLE_TOOLS_GAP: f32 = SPACE_1;
 pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
 pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
-pub const CONTROL_CHIP_ICON: f32 = 13.0;
+pub const CONTROL_CHIP_ICON: f32 = 14.0;
 /// Where the host traffic-light group's close button sits: 13px in from the
 /// window's left edge, vertically centred for a 14px button in the band.
 pub const TRAFFIC_X: f32 = 13.0;
@@ -972,7 +979,7 @@ pub const PANEL_PREVIEW_BOARD_MIN: f32 = NAV_AUTO_RAIL_BOARD_W + NAV_AUTO_RAIL_H
 /// block's head is a two-line row (48), its icon at y 9, the whole row
 /// inset `PANEL_CARD_PAD_X` in its `RAISED` card.
 pub const PANEL_ROW_H: f32 = 48.0;
-pub const PANEL_ROW_ICON: f32 = 14.0;
+pub const PANEL_ROW_ICON: f32 = 16.0;
 pub const PANEL_ROW_ICON_X: f32 = 0.0;
 pub const PANEL_ROW_ICON_Y: f32 = 9.0;
 pub const PANEL_ROW_TEXT_X: f32 = 30.0;
@@ -994,7 +1001,7 @@ pub const PANEL_LINE_BUTTON_PAD_X: f32 = 10.0;
 /// nav heading's `+`) holding a 13px glyph, 2px apart, on the head's own
 /// `RAISED`, a door's hover a step up (`SELECTED`).
 pub const PANEL_FILE_ACTION: f32 = NAV_HEADING_BUTTON;
-pub const PANEL_FILE_ACTION_GLYPH: f32 = 13.0;
+pub const PANEL_FILE_ACTION_GLYPH: f32 = 14.0;
 /// A file block's hunk area (phase 7b): on `BLOCK`, padding 4 0 6, its lines
 /// in the panel's diff face (`FS_PANEL_DIFF`/`LH_PANEL_DIFF`), each on a
 /// 2.5-cell sign column inset 1 cell; no line numbers.
@@ -1069,8 +1076,8 @@ pub const FOCUS_RING_W: f32 = 1.0;
 /// 28px — an icon button's width (the prototype's `.ib`): the bottom
 /// bar's doors, the bar's full height.
 pub const ICON_BUTTON: f32 = 28.0;
-/// 15px — an icon button's glyph, centred in its door.
-pub const ICON_BUTTON_GLYPH: f32 = 15.0;
+/// 16px — an icon button's glyph, centred in its door (Claude's 16).
+pub const ICON_BUTTON_GLYPH: f32 = 16.0;
 /// 12px — the chevron beside a picker or a disclosure.
 pub const ICON_CHEVRON: f32 = 12.0;
 /// 28px — a text button in pane and nav chrome, decisions and footers, with
@@ -1078,19 +1085,21 @@ pub const ICON_CHEVRON: f32 = 12.0;
 pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
 /// **The float's shell** (SPEC §5.8 "Other floats": the palette's at a
-/// smaller scale): radius `R_FLOAT`, rows `FLOAT_ROW_H` (`LH_UI` and 5px
-/// above and below), each inset `MENU_ROW_INSET_X` from the float's sides
+/// smaller scale): radius `R_FLOAT`, rows `FLOAT_ROW_H` (`LH_UI` and 4px
+/// above and below, Claude's 28), each inset `MENU_ROW_INSET_X` from the float's sides
 /// (`FLOAT_PAD` above and below the rows) with its text `MENU_ROW_PAD_X`
 /// inside its fill, so a line without a fill (a head, a note, a footer, a
 /// divider's ends) sets its text `FLOAT_PAD_X` in: 16, Claude's model and
 /// permission menus (claude/model-menu.png: text x1053 in a menu at
 /// x1037; hover fill 6 in from the menu's side, claude/effort-menu.png).
-pub const FLOAT_ROW_H: f32 = 30.0;
+pub const FLOAT_ROW_H: f32 = 28.0;
 /// A row with a one-line note under its label (a mode's description): the
-/// label's line and the note's meta line in 6px of air above and below.
-pub const FLOAT_ROW_NOTE_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
-/// A row's tag (`Recommended`): white at 8%, a word set apart.
-pub const BADGE_FILL: u32 = 0xffffff14;
+/// label's line and the note's meta line in 5px of air above and below,
+/// Claude's 46.
+pub const FLOAT_ROW_NOTE_H: f32 = LH_UI + LH_META + 2.0 * 5.0;
+/// A row's tag (`Recommended`, `Default`): Claude's ring, no fill — a word
+/// set apart, not a button (claude/permission-menu.png).
+pub const TAG_RING: u32 = 0x595959;
 pub const FLOAT_PAD: f32 = SPACE_1;
 pub const FLOAT_PAD_X: f32 = MENU_ROW_INSET_X + MENU_ROW_PAD_X;
 /// The gap a float keeps from the control that opened it.
@@ -1111,12 +1120,9 @@ pub const FLOAT_SECTION_H: f32 = 28.0;
 /// 8px — what splits one group of rows from the next inside any floating
 /// surface. Space, never a rule.
 pub const MENU_GROUP_GAP: f32 = SPACE_2;
-/// An aligned name column (slash commands): clamped between these.
-pub const MENU_NAME_MIN_W: f32 = 96.0;
-pub const MENU_NAME_MAX_W: f32 = 220.0;
-/// The folder and branch marks on the Project and checkout lines (12px), and
-/// the 5px gap to their labels.
-pub const ROW_ICON: f32 = 12.0;
+/// 16px — a row's leading mark (a menu item's icon, a dragged Pane's file
+/// mark), Claude's: as big as the name beside it, in the name's ink.
+pub const ROW_ICON: f32 = 16.0;
 
 // ------------------------------------------------------- status and motion
 
@@ -1181,7 +1187,7 @@ pub fn init_components(cx: &mut gpui::App) {
     // The kit's ground is the card (the window Root's own ground is
     // `paint::WINDOW`, `lib.rs`).
     theme.background = rgb(CARD).into();
-    theme.foreground = rgb(INK).into();
+    theme.foreground = rgb(INK_STRONG).into();
     theme.border = paint::LINE.into();
     // Kit menu and completion rows sit on a float: their cursor face is
     // the float's cursor step, their hover its hover step.
@@ -1190,22 +1196,22 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.secondary = rgb(RAISED).into();
     theme.secondary_hover = rgb(SELECTED).into();
     theme.secondary_active = rgb(SELECTION_HOVER).into();
-    theme.secondary_foreground = rgb(INK).into();
-    // The primary has no hue: the strongest ink, stepping down to `INK`
+    theme.secondary_foreground = rgb(INK_STRONG).into();
+    // The primary has no hue: the strongest ink, stepping down to `PRIMARY_HOVER`
     // under the pointer and pressed.
     theme.primary = rgb(PRIMARY).into();
-    theme.primary_hover = rgb(INK).into();
-    theme.primary_active = rgb(INK).into();
+    theme.primary_hover = rgb(PRIMARY_HOVER).into();
+    theme.primary_active = rgb(PRIMARY_HOVER).into();
     theme.primary_foreground = rgb(ON_PRIMARY).into();
     // `Button::primary` reads its own fields, not `primary`.
     theme.button_primary = rgb(PRIMARY).into();
-    theme.button_primary_hover = rgb(INK).into();
-    theme.button_primary_active = rgb(INK).into();
+    theme.button_primary_hover = rgb(PRIMARY_HOVER).into();
+    theme.button_primary_active = rgb(PRIMARY_HOVER).into();
     theme.button_primary_foreground = rgb(ON_PRIMARY).into();
     theme.muted = rgb(RAISED).into();
     theme.muted_foreground = rgb(INK_SUBTLE).into();
     theme.popover = paint::FLOAT.into();
-    theme.popover_foreground = rgb(INK).into();
+    theme.popover_foreground = rgb(INK_STRONG).into();
     theme.ring = rgb(CONTROL_FOCUS).into();
     theme.caret = rgb(CARET).into();
     // The reader's line numbers sit on the plane itself. The gutter is
@@ -1233,7 +1239,7 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.drag_border = rgba(DROP_EDGE).into();
     theme.drop_target = rgba(DROP_WASH).into();
     theme.sidebar = rgb(SIDEBAR).into();
-    theme.sidebar_foreground = rgb(INK).into();
+    theme.sidebar_foreground = rgb(INK_STRONG).into();
     // The selected Settings page is the selection row.
     theme.sidebar_accent = rgb(SELECTED).into();
     theme.sidebar_accent_foreground = rgb(INK_STRONG).into();
@@ -1357,8 +1363,8 @@ pub fn init_components(cx: &mut gpui::App) {
 // - **Failure** is a word: a failed call's line stays in the work's ink and
 //   its verdict (`· failed`) follows the cut, `failed` in `BLOCKED`; what
 //   it printed reads as output does.
-// - **Diffs** sit in the block box (`BLOCK_*`: `paint::BLOCK`, `R_CONTROL`,
-//   an inset `BLOCK_RING`), `BLOCK_MARGIN_T` under their call: a `INK_SUBTLE`
+// - **Diffs** sit in a hairline well (`pane::diff_well`: no fill, `R_CONTROL`,
+//   an inset `CARD_RING`), `BLOCK_MARGIN_T` under their call: a `INK_SUBTLE`
 //   hunk header naming its section (none when it has none), line numbers
 //   right-aligned in `DIFF_NUMBER_CELLS` (`TEXT_FAINT`, or
 //   `DIFF_*_NUMBER` on a changed row), a `DIFF_SIGN_CELLS` sign carrying
@@ -1389,10 +1395,6 @@ pub use ferrite_core::progress::DURATION_MIN_MS;
 pub const OUTPUT_MAX_LINES: usize = 12;
 pub const OUTPUT_INLINE_BYTES: usize = 8 * 1024;
 
-/// A diff line's code ink when it carries no syntax colour: body ink on
-/// its wash (the sign, `DIFF_*_SIGN`, carries the hue; rule 6).
-pub const DIFF_ADDED_INK: u32 = INK;
-pub const DIFF_REMOVED_INK: u32 = INK;
 /// A diff row's wash: green and red at 9% (SPEC §3.4, the mockups'
 /// add and delete rows); the changed words wash deeper (`DIFF_*_WORD`, in the head).
 /// (`BLOCKED_WASH` is for one-line uses only.)
@@ -1410,11 +1412,14 @@ pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
 /// **The tool group's card** (`pane::render_tool_group`, Claude's measured
 /// card, geometry.md "Tool group (open)"): each call's row
 /// `TOOL_CARD_ROW_H` for its line, its words `TOOL_CARD_INSET` in from the
-/// card's edges, the card hanging `TOOL_CARD_OUTSET` past the column's left
+/// card's edges, the card hanging `CARD_OUTSET` past the column's left
 /// edge so its rows' words sit a step inside the prose.
 pub const TOOL_CARD_ROW_H: f32 = 36.0;
 pub const TOOL_CARD_INSET: f32 = SPACE_3;
-pub const TOOL_CARD_OUTSET: f32 = SPACE_1;
+/// 4px — **one left edge** (Claude's): text sits on the transcript column
+/// and every card's ring hangs this far outside it — the tool group, the
+/// task list, a fence, a Decision.
+pub const CARD_OUTSET: f32 = SPACE_1;
 /// One cell of the transcript grid at reading size `size`: Geist Mono's
 /// advance (`CODE_ADVANCE`), 7.8px at Standard.
 pub fn tx_cell(size: f32) -> f32 {
@@ -1509,8 +1514,8 @@ pub const THUMB_MAX_W: f32 = 480.0;
 pub const THUMB_MAX_H: f32 = 320.0;
 pub const PROMPT_IMAGE_GAP: f32 = 10.0;
 
-/// **The block box** — a diff's or a code fence's (SPEC §5.4): `paint::BLOCK`
-/// ground, `R_CONTROL` corners, an inset 1px `BLOCK_RING`, `BLOCK_PAD_Y`
+/// **The block box** — a code fence's (SPEC §5.4; a diff's is a hairline well):
+/// `paint::BLOCK` ground, `R_CONTROL` corners, an inset 1px `BLOCK_RING`, `BLOCK_PAD_Y`
 /// above its first line and below its last, `BLOCK_MARGIN_T` under the row
 /// it hangs from.
 pub const BLOCK_PAD_Y: f32 = SPACE_1_5;
@@ -1838,11 +1843,10 @@ pub const HEAD_PAD_X: f32 = CH;
 pub const PANE_HEAD_PAD_L: f32 = 14.0;
 pub const PANE_HEAD_PAD_R: f32 = SPACE_1_5;
 pub const PANE_HEAD_GAP: f32 = SPACE_2;
-/// 13px — the provider's logo and a mark's icon in the Group head.
-pub const PANE_HEAD_ICON: f32 = 13.0;
+/// 14px — the provider's logo and a mark's icon in the Group head.
+pub const PANE_HEAD_ICON: f32 = 14.0;
 /// The width a dot mark lays out at in the Group head: the dot and a pixel
-/// each side, as the mockup's box (a halo overflows it, as a CSS
-/// `box-shadow` does).
+/// each side, as the mockup's box.
 pub const PANE_HEAD_DOT_W: f32 = NAV_DOT + 2.0;
 /// 14px — the fill button's `maximize` glyph.
 pub const PANE_HEAD_FILL_GLYPH: f32 = 14.0;
@@ -2158,7 +2162,7 @@ pub const QUEUED_PAD_X: f32 = SPACE_4;
 pub const QUEUED_GAP: f32 = SPACE_1_5;
 pub const QUEUED_ACTION: f32 = SPACE_6;
 pub const QUEUED_ACTION_GAP: f32 = SPACE_2;
-pub const QUEUED_ICON: f32 = 14.0;
+pub const QUEUED_ICON: f32 = 16.0;
 /// The input's padding: 14 above and at the sides, 8 under.
 pub const COMPOSER_INPUT_PAD_T: f32 = 14.0;
 pub const COMPOSER_INPUT_PAD_X: f32 = 14.0;
@@ -2167,9 +2171,10 @@ pub const COMPOSER_INPUT_PAD_B: f32 = SPACE_2;
 /// box's sides.
 pub const COMPOSER_TOOLBAR_H: f32 = 42.0;
 pub const COMPOSER_TOOLBAR_PAD_X: f32 = SPACE_2;
-/// The `+` attach button (30, off the scale: the mockup's) and its icon.
+/// The `+` attach button (30, off the scale: the mockup's) and its 18px
+/// icon (Lucide's `+` fills 14 of 24: Claude's 14pt cross at a 1.5 stroke).
 pub const COMPOSER_ATTACH: f32 = 30.0;
-pub const COMPOSER_ATTACH_ICON: f32 = SPACE_4;
+pub const COMPOSER_ATTACH_ICON: f32 = 18.0;
 /// A toolbar chip: 28 high, 9 in at each side (the mockup's), its parts 6
 /// apart; its chevron 11, the mode's shield 14, the provider's logo 13.
 pub const TOOL_CHIP_H: f32 = 28.0;
@@ -2243,10 +2248,11 @@ pub const CONTEXT_RING_STROKE: f32 = 1.75;
 ///   12/500 `INK_SUBTLE`, `FLOAT_SECTION_GAP` above it, a provider's
 ///   logomark leading in its brand colour.
 /// - **A row** (`menu::row`): `FLOAT_ROW_H`, inset `FLOAT_PAD`, radius
-///   `R_CONTROL`; a leading mark, the name in `INK`, its description
-///   `INK_SUBTLE` after it, a key in `INK_SUBTLE` hard right, a `✓` on the
-///   standing choice. The cursor row is `FLOAT_SEL` with its name
-///   `INK_STRONG`, a row under the pointer `FLOAT_HOVER`.
+///   `R_CONTROL`; a leading mark in its name's ink, the name in `INK_STRONG`, its
+///   description `INK_SUBTLE` after it, a key in `INK_SUBTLE` hard right, an
+///   accent `✓` on the standing choice. No row is lit at rest; the cursor
+///   row is `FLOAT_SEL`, its meta lifted to `INK_STRONG`, a row under the
+///   pointer `FLOAT_HOVER`.
 /// - **A footer** (`menu::footer`): a `FLOAT_EDGE` rule, then one row
 ///   of key hints in 12 `INK_SUBTLE` (its `·` too): `↑↓ select · ⏎ open ·
 ///   esc`.
@@ -2404,7 +2410,7 @@ pub const MENU_PATH_TAIL: usize = 48;
 //   `search` icon, then the field), a `FLOAT_EDGE` rule under it, then one
 //   `SETTINGS_NAV_ROW_H` row per page, inset `FLOAT_PAD` like a menu's,
 //   radius `R_CONTROL` — `FLOAT_SEL` and `INK_STRONG` on the page shown,
-//   `INK` on the rest — and `About` at the foot. ↑/↓ step pages while the
+//   `INK_STRONG` on the rest — and `About` at the foot. ↑/↓ step pages while the
 //   sheet holds focus.
 // - **Content:** the page title in `INK_STRONG` `W_LABEL`, then groups
 //   `SETTINGS_GROUP_GAP` apart: a group's label is a `INK_SUBTLE` row (a
@@ -2473,9 +2479,10 @@ pub const SWITCH_OFF: Paint = Paint::solid(0x4a4a4a);
 /// The Decision (approvals, questions, forms, links — Main's and a
 /// Subagent's alike, rule 2.8) is the transcript's tail row, drawn as a box
 /// (SPEC §5.9 item 3) across the transcript column, Solo's and a Group
-/// Pane's alike: `DECISION` ground at `R_CARD`, an inset 1px
-/// `DECISION_RING`, padded `DECISION_PAD`, its sections `DECISION_GAP`
-/// apart, in SF Pro. The head (`DECISION_HEAD_ICON` `shield` in
+/// Pane's alike: on the plane at `R_CARD`, an inset 1px `CARD_RING` (the
+/// transcript cards' one ring), padded `DECISION_PAD`, its sections
+/// `DECISION_GAP` apart, its answer row `DECISION_ACTIONS_GAP` under the
+/// rest, in SF Pro. The head (`DECISION_HEAD_ICON` `shield` in
 /// `ATTENTION`, a question's `?`; the lead 13 at `W_LABEL` `INK_STRONG`;
 /// the context at the right in 12 `INK_SUBTLE`), the command well (`SUNKEN`
 /// at `R_CONTROL`, Geist Mono 12.5, a `INK_SUBTLE` `$ `), then the options:
@@ -2510,6 +2517,8 @@ pub const PRIMARY_SEAM: u32 = 0x16161626;
 pub const DECISION_MENU_W: f32 = 300.0;
 pub const DECISION_PAD: f32 = SPACE_4;
 pub const DECISION_GAP: f32 = 10.0;
+/// 24px — the well to the answer row (Claude's approval).
+pub const DECISION_ACTIONS_GAP: f32 = SPACE_6;
 pub const DECISION_HEAD_ICON: f32 = 14.0;
 pub const DECISION_OPTION_H: f32 = 30.0;
 pub const DECISION_OPTION_PAD_X: f32 = 10.0;
@@ -2558,7 +2567,7 @@ pub const SEND_KEY_INK: u32 = 0x111214b3;
 pub const SUBAGENT_HEAD_H: f32 = 38.0;
 pub const SUBAGENT_HEAD_PAD_X: f32 = SPACE_1_5;
 pub const SUBAGENT_CRUMB_H: f32 = 28.0;
-pub const SUBAGENT_CRUMB_ICON: f32 = 13.0;
+pub const SUBAGENT_CRUMB_ICON: f32 = 14.0;
 pub const SUBAGENT_MARK_W: f32 = NAV_MARK_ICON;
 pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // (end WP-F) — append above this line only
@@ -2621,8 +2630,9 @@ pub const NAV_ROW_GAP: f32 = SPACE_0_5;
 pub const NAV_ROW2_H: f32 = 44.0;
 /// 20px — one line of a row (line 1, line 2, a task's extra lines).
 pub const NAV_LINE: f32 = ROW;
-/// 15px — a view's or a Project's icon, `NAV_ICON_GAP` before its label.
-pub const NAV_ICON: f32 = 15.0;
+/// 16px — a view's or a Project's icon (Claude's 16), `NAV_ICON_GAP` before
+/// its label, in the label's ink.
+pub const NAV_ICON: f32 = 16.0;
 pub const NAV_ICON_GAP: f32 = 10.0;
 /// 14px — under the views, before the tree.
 pub const NAV_VIEWS_GAP: f32 = 14.0;
@@ -2631,46 +2641,31 @@ pub const NAV_VIEWS_GAP: f32 = 14.0;
 pub const NAV_HEADING_H: f32 = 26.0;
 pub const NAV_HEADING_PAD_R: f32 = SPACE_1_5;
 pub const NAV_HEADING_BUTTON: f32 = 22.0;
-pub const NAV_HEADING_GLYPH: f32 = 13.0;
+pub const NAV_HEADING_GLYPH: f32 = 14.0;
 /// 16px — the sidebar toggle's and the gear's glyph, in an `ICON_BUTTON`;
 /// the panel toggle, the sidebar toggle's twin, shares it.
 pub const NAV_TOGGLE_GLYPH: f32 = 16.0;
-/// 35px — where a Thread row's title starts: on a Project heading's label
-/// (`NAV_ROW_PAD_X` + `NAV_ICON` + `NAV_ICON_GAP`), as Codex aligns its
-/// threads (geometry.md "Thread title x within the row"), at the root and
-/// one level in alike. A Notice's mark sits in the 10–24 column before it.
+/// 35px — where an Inbox Notice's title starts, past its mark column
+/// (`NAV_ROW_PAD_X` + `NAV_ICON` + `NAV_ICON_GAP`, on the view rows'
+/// labels); a Notice's mark sits in the 10–24 column before it. Rows under
+/// a heading start on its label (`NAV_ROW_PAD_X`, Claude's 18 from the
+/// column's edge).
 pub const NAV_TITLE_X: f32 = NAV_ROW_PAD_X + NAV_ICON + NAV_ICON_GAP;
-/// 8px — one level of the tree past the first (§5.1.4): a Group's members
-/// sit one step right of the Group, whose chevron (`NAV_CHEVRON_X` past the
-/// level) stays clear of the title column. Only a row's content moves in;
-/// its hover and selected fills keep the full width.
-pub const NAV_TREE_INDENT: f32 = SPACE_2;
-/// A tree guide (`paint::LINE`) down a Project's (or a Group's) children
-/// is `NAV_GUIDE_W` wide: structure, not state, so a hairline (rule 2).
-pub const NAV_GUIDE_W: f32 = 1.0;
-/// 8px — how far short of its last row's foot a guide stops, so the tree
-/// reads as ending at that row rather than running into the next heading.
-pub const NAV_GUIDE_TAIL: f32 = SPACE_2;
-/// 17px — a Project's guide, under the middle of its folder icon.
-pub const NAV_PROJECT_GUIDE_X: f32 = NAV_ROW_PAD_X + NAV_ICON / 2.0 - NAV_GUIDE_W / 2.0;
-/// 17px — a Group's guide, under the middle of its chevron (at 17, so on
-/// the whole pixel layout snaps it to), at the tree's root; a Group one
-/// level in has it `NAV_TREE_INDENT` further.
-pub const NAV_GROUP_GUIDE_X: f32 = NAV_CHEVRON_X + NAV_CHEVRON / 2.0;
+/// 18px — one Group level of the tree (§5.1.4): a Group's chevron sits on
+/// its row's title column and its title this far past it, where its
+/// members' titles start. No guides: the indent says the nesting. Only a
+/// row's content moves in; its hover and selected fills keep the full
+/// width.
+pub const NAV_TREE_INDENT: f32 = NAV_CHEVRON + SPACE_1_5;
 /// 8px — between a row's title and what sits at its right.
 pub const NAV_WORD_GAP: f32 = SPACE_2;
 /// 6px — between two Project sections.
 pub const NAV_SECTION_GAP: f32 = SPACE_1_5;
-/// A Thread row's marks (§6): 7px dots (6 on a member row) with the
-/// blocked one's 3px halo, 14px icons (13 on a member row) — the running
-/// spinner among them.
-pub const NAV_DOT: f32 = 7.0;
+/// A Thread row's marks (§6): 8px solid dots, no halo (Claude's; 6 on a
+/// member row), 14px icons (13 on a member row) — the running spinner
+/// among them.
+pub const NAV_DOT: f32 = 8.0;
 pub const NAV_DOT_SMALL: f32 = 6.0;
-pub const NAV_HALO: f32 = 3.0;
-/// The blocked dot's halo box: the dot and `NAV_HALO` out on each side.
-pub fn nav_halo_box(dot: f32) -> f32 {
-    dot + 2.0 * NAV_HALO
-}
 /// The middle of a two-line row's line 1 (its two lines centred in the
 /// row): where its mark centres, on the title's own middle (§5.1.5
 /// "centred on line 1"; the mockups' marks sit 3–5px under it, on the
@@ -2678,10 +2673,9 @@ pub fn nav_halo_box(dot: f32) -> f32 {
 pub const NAV_LINE1_MID: f32 = (NAV_ROW2_H - 2.0 * NAV_LINE) / 2.0 + NAV_LINE / 2.0;
 /// Where a mark sits, `(x, y)` from its mark column's left and its row's
 /// top: centred on line 1 of a two-line row, centred on a one-line row (`_LINE`) and on a shown
-/// Group's member (`_SMALL`). The x are the mockups' (measured, so off the
-/// scale). The blocked dot sits where a dot does, its halo `NAV_HALO` out
-/// round it.
-pub const NAV_DOT_AT: (f32, f32) = (4.0, NAV_LINE1_MID - NAV_DOT / 2.0);
+/// Group's member (`_SMALL`). A dot centres where an icon
+/// does (x 7 on a two-line row).
+pub const NAV_DOT_AT: (f32, f32) = (3.0, NAV_LINE1_MID - NAV_DOT / 2.0);
 pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
 pub const NAV_ICON_AT: (f32, f32) = (0.0, NAV_LINE1_MID - NAV_MARK_ICON / 2.0);
 /// An icon on a one-line row, a shown Group's member's included.
@@ -2690,19 +2684,14 @@ pub const NAV_MARK_ICON: f32 = 14.0;
 pub const NAV_MARK_ICON_SMALL: f32 = 13.0;
 /// The parked mark's `terminal`, at half ink.
 pub const NAV_PARKED_OPACITY: f32 = 0.5;
-/// `#a6a6a6` — line 2 of the selected row, a step over `INK_SUBTLE`.
-pub const NAV_LINE2_SELECTED: u32 = 0xa6a6a6;
-/// The blocked dot's halo: `ATTENTION` at 15%.
-pub const NAV_HALO_FILL: u32 = 0xe6c47c26;
-/// 12px — a Group row's chevron, at x 11 (`NAV_CHEVRON_X`).
+/// 12px — a Group row's chevron, on its row's title column.
 pub const NAV_CHEVRON: f32 = 12.0;
-pub const NAV_CHEVRON_X: f32 = 11.0;
 /// 10px — a section heading's caret after its label (`nav::fold_heading`),
 /// a step under the Group row's chevron: the heading is the quieter line.
 pub const NAV_HEADING_CARET: f32 = 10.0;
 /// 6px — between a row's title and the mark (or `⋯`) at its right.
 pub const NAV_MARK_GAP: f32 = SPACE_1_5;
-/// 5px — an unseen finish's dot at a row's right, in the default ink: a
+/// 5px — an unseen finish's dot at a row's right, in the content ink: a
 /// step under the needs-you dot (`NAV_DOT_SMALL`), never orange.
 pub const NAV_UNREAD_DOT: f32 = 5.0;
 /// 18px — the foot's account disc, its initial at `FS_AVATAR` 500.
@@ -2714,12 +2703,6 @@ pub const NAV_PR_MARK: f32 = 12.0;
 pub const NAV_PR_DOT: f32 = 6.0;
 /// 36px — the foot: `Ferrite 0.5` and the gear, 8px under the tree.
 pub const NAV_FOOT_PAD_T: f32 = SPACE_2;
-/// The foot's view switcher (the bottom bar's tabs, moved): `Solo` and a
-/// tab per Group, `NAV_VIEW_TAB_H` high, `NAV_VIEW_TAB_PAD_X` in, at
-/// `R_CONTROL`, `NAV_VIEW_TAB_GAP` apart and wrapping, over the account row.
-pub const NAV_VIEW_TAB_H: f32 = 22.0;
-pub const NAV_VIEW_TAB_PAD_X: f32 = SPACE_2;
-pub const NAV_VIEW_TAB_GAP: f32 = SPACE_0_5;
 /// The Activity view's row (Codex's): the title on `NAV_LINE` with its
 /// mark at the right, then the Project and `NAV_ACTIVITY_PREVIEW_LINES` of
 /// the last message on `LH_META`, all `FS_META` `INK_SUBTLE`, padded
@@ -3031,7 +3014,6 @@ mod tests {
         ("BLOCK", BLOCK),
         ("FIELD", FIELD),
         ("FIELD_COMPACT", FIELD_COMPACT),
-        ("DECISION", DECISION),
         ("SUNKEN", SUNKEN),
     ];
     /// The raised grounds: a chip, a float, the selected row.
@@ -3040,23 +3022,24 @@ mod tests {
 
     #[test]
     fn ink_clears_its_floor_on_every_ground() {
-        // The strong and default tiers: AA on every ground, raised ones
-        // included.
-        let readable = &[("INK_STRONG", INK_STRONG), ("INK", INK)];
+        // The content tier: AA on every ground, raised ones and the
+        // sidebar's selected row included.
+        let readable = &[("INK_STRONG", INK_STRONG)];
         floor(readable, GROUNDS, 4.5);
         floor(readable, RAISED_GROUNDS, 4.5);
+        floor(readable, &[("SIDEBAR_SELECTED", SIDEBAR_SELECTED)], 4.5);
         // The subtle tier is the floor: AA on the plane, the grounds rows
         // sit on and the raised ones.
         floor(&[("INK_SUBTLE", INK_SUBTLE)], GROUNDS, 4.5);
         floor(&[("INK_SUBTLE", INK_SUBTLE)], RAISED_GROUNDS, 4.5);
-        // A float's rows: its subtle words under the pointer, and lifted to
-        // the default tier on the cursor row.
+        // A float's rows: its meta words under the pointer, and lifted to
+        // the content tier on the cursor row, where meta falls short.
         floor(
             &[("INK_SUBTLE", INK_SUBTLE)],
             &[("FLOAT_HOVER", FLOAT_HOVER)],
             4.5,
         );
-        floor(&[("INK", INK)], &[("FLOAT_SEL", FLOAT_SEL)], 4.5);
+        assert!(contrast(INK_SUBTLE, FLOAT_SEL) < 4.5);
         // Each step reads over the one under it.
         const { assert!(FLOAT_HOVER > FLOAT && FLOAT_SEL > FLOAT_HOVER) };
         assert!(contrast(INK_SUBTLE, CARD) >= 4.5);
@@ -3088,8 +3071,6 @@ mod tests {
                 ("SYN_PLAIN", SYN_PLAIN),
                 ("INLINE_CODE_INK", INLINE_CODE_INK),
                 ("LINK_INK", LINK_INK),
-                ("DIFF_ADDED_INK", DIFF_ADDED_INK),
-                ("DIFF_REMOVED_INK", DIFF_REMOVED_INK),
             ],
             &[
                 ("CARD", CARD),
@@ -3107,7 +3088,7 @@ mod tests {
             DIFF_REMOVED_WORD,
         ] {
             floor(
-                &[("INK", INK), ("SYN_FUNCTION", SYN_FUNCTION)],
+                &[("SYN_PLAIN", SYN_PLAIN), ("SYN_FUNCTION", SYN_FUNCTION)],
                 &[("a diff wash on CARD", over(wash, CARD))],
                 4.5,
             );
@@ -3115,7 +3096,7 @@ mod tests {
         // A primary button's label, at rest and under the pointer.
         floor(
             &[("ON_PRIMARY", ON_PRIMARY)],
-            &[("PRIMARY", PRIMARY), ("INK", INK)],
+            &[("PRIMARY", PRIMARY), ("PRIMARY_HOVER", PRIMARY_HOVER)],
             4.5,
         );
         // Control boundaries, keyboard focus and a provider's mark: 3:1.
@@ -3142,7 +3123,7 @@ mod tests {
             4.5,
         );
         floor(
-            &[("INK", INK)],
+            &[("INK_STRONG", INK_STRONG)],
             &[(
                 "TEXT_SELECTION_WASH on CARD",
                 over(TEXT_SELECTION_WASH, CARD),
@@ -3157,16 +3138,15 @@ mod tests {
         assert_ne!(find, selected);
     }
 
-    /// Rule 5: three text tiers, brightest first, the placeholder and
-    /// structure under the lot.
+    /// Rule 5: two text tiers (Claude's content and meta), brightest
+    /// first, the placeholder and structure under the lot.
     #[test]
-    fn the_ink_ladder_is_three_tiers() {
+    fn the_ink_ladder_is_two_tiers() {
         assert_eq!(
-            [INK_STRONG, INK, INK_SUBTLE, PLACEHOLDER_INK],
-            [0xefefef, 0xcfcfcf, 0x9c9c9c, 0x878787]
+            [INK_STRONG, INK_SUBTLE, PLACEHOLDER_INK],
+            [0xefefef, 0x9c9c9c, 0x878787]
         );
-        assert_eq!(ICON_INK, INK, "icons read at the default tier");
-        let ladder = [INK_STRONG, INK, INK_SUBTLE, PLACEHOLDER_INK, TEXT_FAINT];
+        let ladder = [INK_STRONG, INK_SUBTLE, PLACEHOLDER_INK, TEXT_FAINT];
         for pair in ladder.windows(2) {
             assert!(luminance(pair[0]) > luminance(pair[1]), "{pair:06x?}");
         }
@@ -3179,7 +3159,6 @@ mod tests {
         let ladder = [
             ("SUNKEN", SUNKEN),
             ("CARD", CARD),
-            ("DECISION", DECISION),
             ("FIELD_COMPACT", FIELD_COMPACT),
             ("RAISED", RAISED),
             ("BLOCK", BLOCK),
@@ -3415,7 +3394,7 @@ mod tests {
             // The resolved tokens, which kit widgets actually paint from.
             let tokens = &theme.tokens;
             assert_eq!(tokens.button_primary.color, solid(PRIMARY));
-            assert_eq!(tokens.button_primary_hover.color, solid(INK));
+            assert_eq!(tokens.button_primary_hover.color, solid(PRIMARY_HOVER));
             assert_eq!(tokens.button_primary_foreground.color, solid(ON_PRIMARY));
             assert_eq!(tokens.primary.color, solid(PRIMARY));
             assert_eq!(tokens.accent.color, paint::FLOAT_SEL.hsla());

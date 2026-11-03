@@ -50,7 +50,7 @@ pub use working::{working_tail, WorkingFacts};
 use {
     composer::{composer_fixed_height, composer_queue_height, queued_preview},
     output::{changed_words, result_highlights},
-    usage::{category_ink, cost_label, reset_label},
+    usage::{category_ink, reset_label},
     working::{starting_line, tokens_label, working_line_for, working_row},
 };
 
@@ -1445,7 +1445,7 @@ pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
         .h(px(theme::ICON_BUTTON))
         .p_0()
         .accessibility_label("Discard draft")
-        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, ICON_INK))
+        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, INK_STRONG))
 }
 
 /// The × with its tooltip: `Discard draft`, and the key after it only where
@@ -1731,9 +1731,9 @@ pub fn quick_answers(buttons: Vec<AnyElement>) -> Div {
 /// One quick answer (F-7): `1 allow` as a secondary button, no edge
 /// (theme rule: no grey borders) — a `paint::RAISED` face, radius
 /// `R_CONTROL`, `QUICK_ANSWER_H` (22px) tall, 1ch in from each side. The digit
-/// is `INK_SUBTLE` on every waiting tile, the word `INK`; under the pointer
-/// the face blends to `paint::SELECTED` and the word to `INK_STRONG` over
-/// the one 150ms hover blend, the digit staying dim. A label wider than
+/// is `INK_SUBTLE` on every waiting tile, the word `INK_STRONG`; under the
+/// pointer the face blends to `paint::SELECTED` over the one 150ms hover
+/// blend, the digit staying dim. A label wider than
 /// the tile ends in `…` inside the button, the digit kept, and reads whole
 /// in its tooltip.
 pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) -> Stateful<Div> {
@@ -1743,7 +1743,6 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
         theme::paint::RAISED.hsla(),
         theme::paint::SELECTED.hsla(),
     );
-    let word = ferrite_ui::motion::hover_blend(&hover, rgb(INK).into(), rgb(INK_STRONG).into());
     let selector = id.clone();
     // Its two runs and a cell of padding each side, capped at the tile.
     let key = format!("{key} ");
@@ -1775,7 +1774,7 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(word)
+                .text_color(rgb(INK_STRONG))
                 .child(label),
         )
 }
@@ -2011,7 +2010,7 @@ fn question_door(key: u64) -> AnyElement {
 /// alike: one `PANE_HEAD_H` row (38px) closed by a `LINE`, padded
 /// `PANE_HEAD_PAD_L` / `PANE_HEAD_PAD_R`, its items `PANE_HEAD_GAP` apart.
 /// In order: the state mark (`mark::head_mark`), the title in `FS_LABEL`
-/// at `W_LABEL` — `INK_STRONG` on the focused Pane, `INK` elsewhere —
+/// at `W_LABEL` — `INK_STRONG` on the focused Pane, `INK_SUBTLE` elsewhere —
 /// kept to its `title_floor`, the state word in `FS_META` and its ink, a
 /// spacer, the provider's 13px logo and the trailing control: the fill
 /// button, or a draft's ×. No band on the focused head: the ring says focus.
@@ -2053,6 +2052,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
         action,
         width,
     } = head;
+    let title_ink = if focused { INK_STRONG } else { INK_SUBTLE };
     let fit = HeadFit::of(
         width,
         mark.is_some(),
@@ -2064,7 +2064,6 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
     let word = word.filter(|_| fit.word);
     let provider = provider.filter(|_| fit.provider);
     let floor = fit.floor;
-    let title_ink = if focused { INK_STRONG } else { INK };
     div()
         .debug_selector(move || format!("pane-head-{key}"))
         .flex()
@@ -2236,13 +2235,13 @@ pub fn fill_button(key: u64) -> Stateful<Div> {
             "Fill the board",
             "cockpit::ToggleFullscreen",
         ))
-        .child(icon(icons::MAXIMIZE, theme::PANE_HEAD_FILL_GLYPH, ICON_INK))
+        .child(icon(icons::MAXIMIZE, theme::PANE_HEAD_FILL_GLYPH, INK_STRONG))
 }
 
 /// The failure strip (SPEC §5.9 item 4), the transcript's tail row under
 /// a failed turn's failure line, Solo's and a Group Pane's alike:
 /// `FAILURE_STRIP_H` at `R_CARD` on `FAILURE_WASH`, an `x-circle` in
-/// `BLOCKED`, why it failed (`API Error: 529 overloaded`) in `INK`, cut to
+/// `BLOCKED`, why it failed (`API Error: 529 overloaded`) in `INK_STRONG`, cut to
 /// one line, and at the right the wired `Retry` (`retry_button`), which a
 /// closed Session goes without.
 pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -> Div {
@@ -2264,7 +2263,7 @@ pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -
         .line_height(px(theme::LH_UI))
         .whitespace_nowrap()
         .child(icon(icons::X_CIRCLE, theme::FAILURE_STRIP_ICON, BLOCKED))
-        .child(div().min_w_0().truncate().text_color(rgb(INK)).child(words))
+        .child(div().min_w_0().truncate().text_color(rgb(INK_STRONG)).child(words))
         .child(div().flex_1())
         .children(retry)
 }
@@ -2530,7 +2529,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .text_color(rgb(if openable { INK } else { INK_SUBTLE }))
+                .text_color(rgb(if openable { INK_STRONG } else { INK_SUBTLE }))
                 .child(name),
         )
         .child(
@@ -2733,7 +2732,7 @@ pub fn questions_of(decision: &Decision) -> Option<&[ferrite_core::questions::Qu
 // ------------------------------------------------------------ shared bits
 
 /// A card's refusal, the one line grammar (rule 2.11.3): `failed` in
-/// `BLOCKED`, the `·` in structure ink, then the message in `INK`, all
+/// `BLOCKED`, the `·` in structure ink, then the message in `INK_STRONG`, all
 /// the grid's type as one run that wraps, on the rows' inset.
 pub fn card_error(message: impl Into<SharedString>) -> Div {
     let message = message.into();
@@ -2752,7 +2751,7 @@ pub fn card_error(message: impl Into<SharedString>) -> Div {
         .flex_shrink_0()
         .px(px(theme::MENU_ROW_PAD_X))
         .py(px(theme::SPACE_1))
-        .text_color(rgb(INK))
+        .text_color(rgb(INK_STRONG))
         .whitespace_normal()
         .child(StyledText::new(text).with_highlights(runs))
 }
@@ -3024,7 +3023,7 @@ pub(crate) fn render_block(
         // answer does, on the content column.
         Body::Paragraph { spans } => row
             .child(
-                content_row(grid).text_color(rgb(INK)).child(
+                content_row(grid).text_color(rgb(INK_STRONG)).child(
                     div()
                         .flex_1()
                         .min_w_0()
@@ -3050,7 +3049,7 @@ pub(crate) fn render_block(
         Body::Bullet { spans } => row
             .child(
                 content_row(grid)
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -3181,7 +3180,7 @@ pub(crate) fn render_block(
                         .border_l_1()
                         .border_color(theme::paint::LINE)
                         .font_family(theme::FONT_CODE)
-                        .text_color(rgb(INK))
+                        .text_color(rgb(INK_STRONG))
                         .children(code_lines(
                             block.id,
                             source,
@@ -3981,7 +3980,7 @@ pub(crate) fn activity_note(grid: Grid) -> Div {
 /// well (a command's `$ cmd`), a failed command's `Exit code N`, what it
 /// printed as plain mono — `SPACE_3` under its line and `SPACE_1` over the
 /// card's next seam in a group's card; alone, in a card of its own, the
-/// group card's (`CARD_RING` at `R_CARD`, `TOOL_CARD_OUTSET` past the
+/// group card's (`CARD_RING` at `R_CARD`, `CARD_OUTSET` past the
 /// column, its body `TOOL_CARD_INSET` in, `SPACE_3` top and bottom) — then
 /// its diffs. Opening and shutting snap. The whole
 /// line is the pointer's toggle; the keyboard's disclosure target wears
@@ -4067,7 +4066,7 @@ pub(crate) fn render_tool(
                 div()
                     .debug_selector(|| "tool-card".into())
                     .mt(px(theme::SPACE_1))
-                    .ml(px(-theme::TOOL_CARD_OUTSET))
+                    .ml(px(-theme::CARD_OUTSET))
                     .px(px(theme::TOOL_CARD_INSET))
                     .py(px(theme::SPACE_3))
                     .rounded(px(theme::R_CARD))
@@ -4100,14 +4099,14 @@ pub(crate) struct GroupCx<'a> {
 
 /// A run of calls under one summary (`text::group_summary`), an activity
 /// line as a call's is (`activity_line`): `Ran 2 commands (1 failed) ▸`,
-/// all in `INK_SUBTLE` — only a named file (`INK`) and its diff counts wear
+/// all in `INK_SUBTLE` — only a named file (`INK_STRONG`) and its diff counts wear
 /// their own ink; the failure is red on its call's row, not here. The whole
-/// line is the pointer's toggle — it lifts to `INK` under the pointer, its
+/// line is the pointer's toggle — it lifts to `INK_STRONG` under the pointer, its
 /// chevron always shown, a quarter turned when open — and the keyboard's
 /// (`ToolDisclosure`), wearing `paint::RAISED` when targeted.
 ///
 /// Under it, the calls stand in one card (Claude's): a `CARD_RING`
-/// hairline at `R_CARD`, no fill, hanging `TOOL_CARD_OUTSET` past the
+/// hairline at `R_CARD`, no fill, hanging `CARD_OUTSET` past the
 /// column; each call the row it would be alone, its words `TOOL_CARD_INSET`
 /// in, `TOOL_CARD_ROW_H` for its line, a `LINE` hairline between rows. Open,
 /// every call; shut, a working call alone, so a live suite's bar stays in
@@ -4139,7 +4138,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
     let mut highlights = separators(&summary.text);
     for (range, mark) in &summary.marks {
         let ink = match mark {
-            text::SummaryMark::File => INK,
+            text::SummaryMark::File => INK_STRONG,
             text::SummaryMark::Added => RUNNING,
             text::SummaryMark::Removed => BLOCKED,
         };
@@ -4159,7 +4158,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                 .debug_selector(|| "tool-group-summary".into())
                 .flex_shrink(1.)
                 .min_w_0()
-                .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK)))
+                .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_STRONG)))
                 .child(edge_cut(
                     grid.line,
                     INK_SUBTLE,
@@ -4195,7 +4194,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
             .flex_col()
             .min_w_0()
             .mt(px(theme::SPACE_1))
-            .ml(px(-theme::TOOL_CARD_OUTSET))
+            .ml(px(-theme::CARD_OUTSET))
             .rounded(px(theme::R_CARD))
             .border_1()
             .border_color(theme::paint::CARD_RING)
@@ -4207,7 +4206,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                     .px(px(theme::TOOL_CARD_INSET))
                     .py(px(pad_y))
                     .when(at > 0, |row| {
-                        row.border_t_1().border_color(theme::paint::LINE)
+                        row.border_t_1().border_color(theme::paint::CARD_RING)
                     })
                     .child(member)
             }))
@@ -4354,18 +4353,18 @@ pub fn disclosure_chevron(expanded: bool, targeted: bool) -> AnyElement {
         .into_any_element()
 }
 
-/// The box a diff or a code fence sits in (SPEC §5.4): `paint::BLOCK`,
-/// `R_CONTROL` corners, `BLOCK_PAD_Y` above and below its lines, and an
-/// inset 1px `BLOCK_RING` laid over it (so it moves nothing), set at the
-/// block's grid (`Grid::block`).
-pub(crate) fn block_box(grid: Grid) -> Div {
+/// The hairline well a diff sits in, as Claude's (the command's well in
+/// `output.rs` is the same): no fill, `R_CONTROL` corners, `BLOCK_PAD_Y`
+/// above and below its lines, and an inset 1px `CARD_RING` laid over it (so
+/// it moves nothing), set at the block's grid (`Grid::block`). Inside an
+/// open tool group it is a well in the card, never a filled box in a box.
+pub(crate) fn diff_well(grid: Grid) -> Div {
     div()
         .relative()
         .w_full()
         .min_w_0()
         .py(px(theme::BLOCK_PAD_Y))
         .rounded(px(theme::R_CONTROL))
-        .bg(theme::paint::BLOCK)
         .text_size(px(grid.size))
         .line_height(px(grid.line))
         .child(
@@ -4374,7 +4373,7 @@ pub(crate) fn block_box(grid: Grid) -> Div {
                 .inset_0()
                 .rounded(px(theme::R_CONTROL))
                 .border_1()
-                .border_color(theme::paint::BLOCK_RING),
+                .border_color(theme::paint::CARD_RING),
         )
 }
 
@@ -4903,7 +4902,7 @@ mod tests {
         }
         let offer = MenuRow {
             insert: "/import".into(),
-            name: "/import".into(),
+            name: "import".into(),
             matched: vec![],
             detail: "adopt a CLI session".into(),
             prose_detail: true,
@@ -4928,17 +4927,15 @@ mod tests {
         };
         assert_eq!(cursor(menu_row(("r", 1usize), &inert, false, None)), None);
         assert_eq!(cursor(menu_row(("r", 1usize), &inert, true, None)), None);
-        // ↵ rides the cursor row only, and never an inert one.
-        assert_eq!(menu_item(&offer, true, None).shortcut.as_deref(), Some("↵"));
-        assert_eq!(menu_item(&offer, false, None).shortcut, None);
-        assert_eq!(menu_item(&inert, true, None).shortcut, None);
+        // No ↵, not even on the cursor row (Claude's).
+        assert_eq!(menu_item(&offer, None).shortcut, None);
         // A long directory keeps its tail.
         let deep = MenuRow {
             detail: "crates/ferrite/src/some/very/deeply/nested/module/tree/of/files".into(),
             prose_detail: false,
             ..inert
         };
-        let detail = menu_item(&deep, false, None).detail.unwrap();
+        let detail = menu_item(&deep, None).detail.unwrap();
         assert!(detail.starts_with("…/") && detail.ends_with("tree/of/files"));
         assert!(detail.chars().count() <= theme::MENU_PATH_TAIL + 2);
 
@@ -5288,13 +5285,13 @@ mod tests {
         }
         // A shut call previews nothing it printed.
         assert!(!open.contains("12 matched"), "{open}");
-        // The calls stand in a card hanging `TOOL_CARD_OUTSET` past the
+        // The calls stand in a card hanging `CARD_OUTSET` past the
         // column, their words `TOOL_CARD_INSET` in from its edge.
         let summary = cx.debug_bounds("tool-group-g1").unwrap();
         let card = cx.debug_bounds("tool-group-members").unwrap();
         let member = cx.debug_bounds("tool-row-g1").unwrap();
         assert!(
-            ((summary.left() - card.left()) - px(theme::TOOL_CARD_OUTSET)).abs() <= px(1.0),
+            ((summary.left() - card.left()) - px(theme::CARD_OUTSET)).abs() <= px(1.0),
             "{card:?} {summary:?}"
         );
         assert!(
@@ -5364,7 +5361,7 @@ mod tests {
         let exit = cx.debug_bounds("tool-exit").unwrap();
         let output = cx.debug_bounds("tool-output").unwrap();
         assert!(
-            ((line.left() - card.left()) - px(theme::TOOL_CARD_OUTSET)).abs() <= px(1.0),
+            ((line.left() - card.left()) - px(theme::CARD_OUTSET)).abs() <= px(1.0),
             "{line:?} {card:?}"
         );
         assert!(card.top() >= line.bottom(), "{line:?} {card:?}");
@@ -5808,7 +5805,7 @@ mod tests {
                 sign: "+",
                 sign_color: theme::DIFF_ADDED_SIGN,
                 number_color: theme::DIFF_ADDED_NUMBER,
-                code_color: DIFF_ADDED_INK,
+                code_color: SYN_PLAIN,
                 wash: Some(DIFF_ADDED_WASH),
             }
         );
@@ -5818,7 +5815,7 @@ mod tests {
                 sign: "-",
                 sign_color: theme::DIFF_REMOVED_SIGN,
                 number_color: theme::DIFF_REMOVED_NUMBER,
-                code_color: DIFF_REMOVED_INK,
+                code_color: SYN_PLAIN,
                 wash: Some(DIFF_REMOVED_WASH),
             }
         );
@@ -6268,7 +6265,7 @@ mod tests {
 
     /// The card's numbers are only as precise as they need to be.
     #[test]
-    fn card_counts_and_costs_read_compactly() {
+    fn card_counts_read_compactly() {
         assert_eq!(compact_count(640), "640");
         assert_eq!(compact_count(1_500), "1.5k");
         assert_eq!(compact_count(2_000), "2k");
@@ -6277,9 +6274,6 @@ mod tests {
         assert_eq!(compact_count(200_000), "200k");
         assert_eq!(compact_count(1_000_000), "1M");
         assert_eq!(compact_count(1_200_000), "1.2M");
-        assert_eq!(cost_label(0.42), "$0.42");
-        assert_eq!(cost_label(0.004), "<$0.01");
-        assert_eq!(cost_label(1.5), "$1.50");
     }
 
     /// F-2: one attention edge. A waiting Pane draws `WAIT_RING` on a
@@ -6635,8 +6629,8 @@ mod tests {
     /// Usage is neutral until it runs tight: colour is state.
     #[test]
     fn usage_reads_neutral_until_it_runs_tight() {
-        assert_eq!(usage_ink(0.62), INK);
-        assert_eq!(usage_ink(0.79), INK);
+        assert_eq!(usage_ink(0.62), INK_STRONG);
+        assert_eq!(usage_ink(0.79), INK_STRONG);
         assert_eq!(usage_ink(theme::USAGE_TIGHT), ATTENTION);
         assert_eq!(usage_ink(0.9), ATTENTION);
         assert_eq!(usage_ink(0.95), ATTENTION);

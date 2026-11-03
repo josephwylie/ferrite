@@ -835,7 +835,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
                 &[gpui::TextRun {
                     len: text.len(),
                     font: gpui::font(ferrite_ui::theme::FONT_UI),
-                    color: gpui::rgb(ferrite_ui::theme::INK).into(),
+                    color: gpui::rgb(ferrite_ui::theme::INK_STRONG).into(),
                     background_color: None,
                     underline: None,
                     strikethrough: None,
@@ -1059,7 +1059,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
             "keys",
             ui(ferrite_ui::components::key_combo(
                 "cmd-F",
-                ferrite_ui::theme::INK,
+                ferrite_ui::theme::INK_STRONG,
             )),
         ),
         (

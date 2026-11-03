@@ -378,7 +378,7 @@ impl Render for Shortcuts {
                     .px(px(PALETTE_ROW_PAD_X))
                     .whitespace_nowrap()
                     .child(
-                        div().min_w_0().truncate().text_color(rgb(INK)).child(
+                        div().min_w_0().truncate().text_color(rgb(INK_STRONG)).child(
                             StyledText::new(row.label)
                                 .with_highlights(components::match_highlights(lit, false)),
                         ),

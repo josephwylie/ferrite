@@ -28,7 +28,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.popover.as_ref().unwrap().rows[0].name.as_ref(),
-            "/code-review"
+            "code-review"
         );
         assert!(view.panes[0].draft().is_some());
     });
@@ -70,7 +70,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.popover.as_ref().unwrap().rows[0].name.as_ref(),
-            "/code-codex"
+            "code-codex"
         );
     });
     assert_eq!(fake.command_requests.borrow()[1].0, Provider::Codex);
@@ -521,7 +521,7 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         let row = &view.popover.as_ref().expect("open").rows[0];
-        assert_eq!(row.name.as_ref(), "/model");
+        assert_eq!(row.name.as_ref(), "model");
         assert!(!row.inert);
         assert_eq!(
             row.detail.as_ref(),
@@ -695,7 +695,7 @@ fn the_effort_picker_lists_the_models_ladder_and_a_pick_reaims_it(cx: &mut TestA
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         let menu = view.popover.as_ref().expect("the / menu");
-        assert_eq!(menu.rows[0].name.as_ref(), "/effort");
+        assert_eq!(menu.rows[0].name.as_ref(), "effort");
     });
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -736,7 +736,7 @@ fn ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured(
     view.read_with(cx, |view, _| {
         let menu = view.popover.as_ref().expect("the / menu");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-        assert_eq!(names, ["/effort"], "one row, Ferrite's");
+        assert_eq!(names, ["effort"], "one row, Ferrite's");
         assert!(matches!(
             menu.rows[0].consequence,
             Consequence::OpenEffortPicker

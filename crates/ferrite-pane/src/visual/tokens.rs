@@ -61,7 +61,7 @@ fn colour(name: &str, scheme: Scheme) -> Option<String> {
         ("bg", Dark) => theme::CARD,
         ("band", Dark) => theme::FRAME,
         ("band2", Dark) => theme::FIELD,
-        ("fg", Dark) => theme::INK,
+        ("fg", Dark) => theme::INK_STRONG,
         ("strong", Dark) => theme::INK_STRONG,
         ("muted", Dark) => theme::INK_SUBTLE,
         ("faint", Dark) => theme::TEXT_FAINT,
@@ -212,7 +212,7 @@ mod tests {
             value("accent", Scheme::Dark, reading).unwrap(),
             hex(theme::INK_STRONG)
         );
-        assert_eq!(value("fg", Scheme::Dark, reading).unwrap(), hex(theme::INK));
+        assert_eq!(value("fg", Scheme::Dark, reading).unwrap(), hex(theme::INK_STRONG));
         assert_eq!(
             value("font-size", Scheme::Dark, reading).unwrap(),
             format!("{}px", theme::answer_text_size(reading))

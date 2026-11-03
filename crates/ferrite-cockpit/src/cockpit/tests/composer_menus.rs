@@ -270,10 +270,10 @@ fn command_rows_filter_and_highlight_by_fuzzy_match() {
     let names: Vec<&str> = rows.iter().map(|row| row.name.as_ref()).collect();
     assert_eq!(
         names,
-        ["/code-review", "/commit", "/compact"],
+        ["code-review", "commit", "compact"],
         "to-tickets has no `co` subsequence"
     );
-    assert_eq!(rows[0].matched, [1..3], "highlights sit past the drawn /");
+    assert_eq!(rows[0].matched, [0..2], "the bare name, no drawn /");
     assert_eq!(rows[0].insert.as_ref(), "code-review");
     assert!(rows[0].prose_detail);
     assert!(command_rows(&commands, "zzz").is_empty());
@@ -345,7 +345,7 @@ fn typing_slash_opens_the_command_menu_and_enter_inserts_the_pick(cx: &mut TestA
     view.read_with(cx, |view, _| {
         let menu = view.popover.as_ref().expect("still open while filtering");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-        assert_eq!(names, ["/code-review", "/commit", "/compact"]);
+        assert_eq!(names, ["code-review", "commit", "compact"]);
     });
 
     cx.simulate_keystrokes("down");
@@ -379,7 +379,7 @@ fn skill_picker_opens_after_prose_and_preserves_it_when_picking(cx: &mut TestApp
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         let menu = view.popover.as_ref().expect("/co after prose opens skills");
-        assert_eq!(menu.rows[menu.selected].name.as_ref(), "/code-review");
+        assert_eq!(menu.rows[menu.selected].name.as_ref(), "code-review");
     });
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();

@@ -734,7 +734,7 @@ impl CockpitView {
                 div()
                     .flex_shrink_0()
                     .font_weight(W_LABEL)
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child("Review"),
             )
             .child(

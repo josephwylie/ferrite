@@ -135,14 +135,14 @@ pub fn form_button_on(id: impl Into<ElementId>, rest: theme::Paint, cx: &App) ->
         rest.into(),
         hover.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::INK).into(),
+        rgb(theme::INK_STRONG).into(),
         cx,
     )
     .tab_stop(true)
 }
 
 /// The completing action: the strongest ink as a fill (`PRIMARY`) with
-/// dark `ON_PRIMARY` ink, stepping down to `INK` under the pointer and
+/// dark `ON_PRIMARY` ink, stepping down to `PRIMARY_HOVER` under the pointer and
 /// pressed; disabled is `SELECTION` with `INK_SUBTLE` ink. On the filled face
 /// the focus outline is `INK_STRONG`.
 pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> Button {
@@ -151,7 +151,7 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
     let (hover, press) = if disabled {
         (face, face)
     } else {
-        (rgb(theme::INK).into(), rgb(theme::INK).into())
+        (rgb(theme::PRIMARY_HOVER).into(), rgb(theme::PRIMARY_HOVER).into())
     };
     faded_button(
         id,
@@ -204,13 +204,13 @@ pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
 // ------------------------------------------------------------------- type
 
 /// A line of the grid: Geist Mono (`FONT_UI`) · `FS_UI` 13 on `LH_UI` 20 ·
-/// `INK`.
+/// `INK_STRONG`.
 pub fn text_ui() -> Div {
     div()
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::INK))
+        .text_color(rgb(theme::INK_STRONG))
 }
 
 /// Metadata: the same grid line in `INK_SUBTLE` (one size per surface:
@@ -1170,7 +1170,7 @@ pub fn key_word(key: &str) -> String {
     }
 }
 
-/// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `INK`;
+/// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `INK_STRONG`;
 /// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
 /// row, so it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
@@ -1179,7 +1179,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
         rgba(theme::TRANSPARENT).into(),
         theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::INK).into(),
+        rgb(theme::INK_STRONG).into(),
         cx,
     )
     .h(px(theme::CONTROL_H))
@@ -1187,7 +1187,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
     .child(
         text_ui()
             .font_weight(theme::W_BODY)
-            .text_color(rgb(theme::INK))
+            .text_color(rgb(theme::INK_STRONG))
             .child(label.into()),
     )
 }
@@ -1336,7 +1336,11 @@ pub struct RowInks {
     pub ground: Option<u32>,
 }
 
-/// The row state table, as data: rest, cursor, disabled, armed. A
+/// The row state table, as data: rest, cursor, disabled, armed — every
+/// menu row's inks (`menu::row_face`, `menu_row_content`). The name is
+/// content (`INK_STRONG`) in every live state, as Claude's menus; the
+/// description and key are meta (`INK_SUBTLE`), lifted to `INK_STRONG` on
+/// the filled cursor (or armed) row, where meta falls under its floor. A
 /// destructive row reads like any other until it arms; armed, it holds the
 /// cursor's `paint::FLOAT_SEL` ground and its label alone turns `BLOCKED` —
 /// colour on the word, never a wash (rule 2.2.4).
@@ -1349,26 +1353,24 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
             ground: None,
         };
     }
-    if armed {
-        return RowInks {
-            label: theme::BLOCKED,
-            detail: theme::INK_SUBTLE,
-            shortcut: theme::INK_SUBTLE,
-            ground: Some(theme::paint::FLOAT_SEL.rgba()),
-        };
-    }
-    let label = if item.attention {
+    let filled = cursor || armed;
+    let label = if armed {
+        theme::BLOCKED
+    } else if item.attention {
         theme::MODE_ATTENTION_INK
-    } else if cursor {
+    } else {
+        theme::INK_STRONG
+    };
+    let meta = if filled {
         theme::INK_STRONG
     } else {
-        theme::INK
+        theme::INK_SUBTLE
     };
     RowInks {
         label,
-        detail: theme::INK_SUBTLE,
-        shortcut: theme::INK_SUBTLE,
-        ground: cursor.then_some(theme::paint::FLOAT_SEL.rgba()),
+        detail: meta,
+        shortcut: meta,
+        ground: filled.then_some(theme::paint::FLOAT_SEL.rgba()),
     }
 }
 
@@ -1396,13 +1398,6 @@ pub fn match_highlights(
             )
         })
         .collect()
-}
-
-/// An aligned name column (the `/command` names, code text) for `chars`
-/// characters, clamped between `MENU_NAME_MIN_W` and `MENU_NAME_MAX_W`.
-/// The row sets names in such a column in the code face.
-pub fn code_column_w(chars: usize) -> f32 {
-    (chars as f32 * theme::CODE_CELL).clamp(theme::MENU_NAME_MIN_W, theme::MENU_NAME_MAX_W)
 }
 
 /// What an armed destructive row adds to its label.
@@ -1447,11 +1442,8 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                 .min_w_0()
                 .truncate()
                 .when_some(item.label_w, |label, width| {
-                    // An aligned column holds names that are code.
-                    label
-                        .w(px(width))
-                        .flex_shrink_0()
-                        .font_family(theme::FONT_CODE)
+                    // An aligned column, in the row's own face.
+                    label.w(px(width)).flex_shrink_0()
                 })
                 .child(gpui::StyledText::new(label).with_highlights(highlights)),
         )
@@ -1480,7 +1472,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             )
         })
         .when(item.checked, |row| {
-            row.child(glyph("\u{2713}", theme::INK_STRONG))
+            row.child(glyph("\u{2713}", theme::MENU_CHECK_INK))
         })
 }
 
@@ -2041,7 +2033,7 @@ mod tests {
                 theme::FONT_UI,
                 theme::FS_UI,
                 theme::LH_UI,
-                theme::INK,
+                theme::INK_STRONG,
             ),
             (
                 text_meta(),
@@ -2103,19 +2095,25 @@ mod tests {
         assert_eq!(
             row_inks(&rest, false, false),
             RowInks {
-                label: theme::INK,
+                label: theme::INK_STRONG,
                 detail: theme::INK_SUBTLE,
                 shortcut: theme::INK_SUBTLE,
                 ground: None
             }
         );
+        // The cursor row lifts its meta to content on its fill.
         let cursor = row_inks(&rest, true, false);
         assert_eq!(
-            (cursor.label, cursor.ground),
-            (theme::INK_STRONG, Some(fill))
+            cursor,
+            RowInks {
+                label: theme::INK_STRONG,
+                detail: theme::INK_STRONG,
+                shortcut: theme::INK_STRONG,
+                ground: Some(fill)
+            }
         );
         let delete = MenuItem::new("Delete thread").destructive();
-        assert_eq!(row_inks(&delete, false, false).label, theme::INK);
+        assert_eq!(row_inks(&delete, false, false).label, theme::INK_STRONG);
         assert_eq!(row_inks(&delete, true, false).label, theme::INK_STRONG);
         let armed = row_inks(&delete, false, true);
         assert_eq!((armed.label, armed.ground), (theme::BLOCKED, Some(fill)));
@@ -2143,8 +2141,6 @@ mod tests {
         );
         let mut dead = menu_row("d", &MenuItem::new("Reveal").disabled(true), false, false);
         assert_eq!(dead.style().mouse_cursor, None);
-        assert_eq!(code_column_w(1), theme::MENU_NAME_MIN_W);
-        assert_eq!(code_column_w(400), theme::MENU_NAME_MAX_W);
     }
 
     #[test]

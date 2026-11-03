@@ -673,8 +673,9 @@ pub fn step_cursor(enabled: &[bool], at: usize, step: isize) -> usize {
 
 // ------------------------------------------------------------------ frame
 
-/// The Decision box (SPEC §5.9 item 3, Claude's card): `DECISION` ground at
-/// `R_CARD` inside a 1px `DECISION_RING`, in Geist 13/20, across the
+/// The Decision box (SPEC §5.9 item 3, Claude's card): on the plane, no
+/// ground of its own, at `R_CARD` inside the transcript cards' 1px
+/// `CARD_RING`, in Geist 13/20, across the
 /// transcript column. Its first child is its head (`head`,
 /// `question_head`), laid as a band across the top; the rest are its body,
 /// padded `DECISION_PAD`, `DECISION_GAP` apart. It keeps the
@@ -711,14 +712,13 @@ fn frame(
         .when_some(max_w, |card, w| card.max_w(px(w)))
         .cursor_default()
         .border_1()
-        .border_color(rgba(theme::DECISION_RING))
+        .border_color(theme::paint::CARD_RING)
         .rounded(px(theme::R_CARD))
-        .bg(theme::paint::DECISION)
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::INK))
+        .text_color(rgb(theme::INK_STRONG))
         .children(head)
         .child(
             div()
@@ -879,14 +879,15 @@ pub fn question_text(text: impl Into<SharedString>) -> Div {
 }
 
 /// What an approval asks, in prose — a reason the command does not say:
-/// `INK` on the grid, on the prose measure.
+/// `INK_SUBTLE` (Claude's description ink) on the grid, on the prose
+/// measure.
 pub fn prose(text: impl Into<SharedString>) -> Div {
     div()
         .w_full()
         .min_w_0()
         .flex_shrink_0()
         .max_w(px(theme::MEASURE_CH * theme::CH))
-        .text_color(rgb(theme::INK))
+        .text_color(rgb(theme::INK_SUBTLE))
         .child(text.into())
 }
 
@@ -964,7 +965,7 @@ pub struct Row {
 /// Enter/Space, focus ring): `DECISION_OPTION_H` at `R_CONTROL`, padded
 /// `DECISION_OPTION_PAD_X`; the key in Geist Mono 12 `INK_SUBTLE` in a
 /// one-cell column, `DECISION_OPTION_GAP` before the label in Geist 13
-/// `INK` (`INK_STRONG` under the cursor, `INK_SUBTLE` disabled), a pattern
+/// `INK_STRONG` (`INK_SUBTLE` disabled), a pattern
 /// in Geist Mono 12. The cursor's row is `SELECTED` (selector
 /// `decision-cursor`); under the pointer `RAISED`. No `❯`, no keycaps.
 /// The key and the trailing word stand on the label's first line, as a
@@ -974,8 +975,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     let hover = ferrite_ui::pointer::hover_key(&id);
     let ink = match (row.enabled, row.cursor) {
         (false, _) => theme::INK_SUBTLE,
-        (true, true) => theme::INK_STRONG,
-        (true, false) => theme::INK,
+        (true, _) => theme::INK_STRONG,
     };
     let accessibility = SharedString::from(format!(
         "{}{}",
@@ -1122,7 +1122,7 @@ pub fn note_row(field: impl IntoElement) -> Div {
                 .flex()
                 .flex_1()
                 .min_w_0()
-                .text_color(rgb(theme::INK))
+                .text_color(rgb(theme::INK_STRONG))
                 .child(field),
         )
 }
@@ -1251,8 +1251,8 @@ fn labelled(label: SharedString, key: Option<SharedString>, primary: bool) -> Di
         }))
 }
 
-/// `Deny` (Claude's): a secondary on `paint::RAISED`, `INK_STRONG`, its
-/// key (`esc`) after the word. Full width when the actions stack.
+/// `Deny` (Claude's): a secondary on `paint::SECONDARY`, a clear step over
+/// the plane, `INK_STRONG`. Full width when the actions stack.
 pub fn deny_button(
     id: impl Into<ElementId>,
     stacked: bool,
@@ -1262,9 +1262,9 @@ pub fn deny_button(
     use gpui::component::Disableable as _;
     components::faded_button(
         id,
-        theme::paint::RAISED.into(),
-        theme::paint::SELECTED.into(),
-        theme::paint::PRESS.into(),
+        theme::paint::SECONDARY.into(),
+        theme::paint::SECONDARY_HOVER.into(),
+        theme::paint::SECONDARY_HOVER.into(),
         rgb(theme::INK_STRONG).into(),
         cx,
     )
@@ -1323,8 +1323,9 @@ pub fn more_button(
 
 /// The approval's answer row: `deny`, then the split primary (`allow`,
 /// `more`) — inline at the card's right, or `stacked` full width (a narrow
-/// column, Claude's), Deny over the primary. `menu` hangs under the split
-/// button while it is open, deferred so it escapes the card's clip.
+/// column, Claude's), Deny over the primary — `DECISION_ACTIONS_GAP` under
+/// the well. `menu` hangs under the split button while it is open,
+/// deferred so it escapes the card's clip.
 pub fn approval_actions(
     deny: AnyElement,
     allow: AnyElement,
@@ -1356,6 +1357,7 @@ pub fn approval_actions(
         .flex_shrink_0()
         .w_full()
         .min_w_0()
+        .mt(px(theme::DECISION_ACTIONS_GAP - theme::DECISION_GAP))
         .gap(px(theme::DECISION_ACTION_GAP))
         .map(|row| {
             if stacked {
@@ -1422,7 +1424,7 @@ pub fn skip_button(
 
 /// An L2 quick answer — `y allow` — pressable (the prototype's `.qa
 /// button`): a 1px `paint::LINE` edge, one cell inside, the key dim and
-/// the verb in `INK`; under the pointer the hover face and `INK_STRONG`.
+/// the verb in `INK_STRONG`; under the pointer the hover face and `INK_STRONG`.
 /// A narrow cell drops the verb and keeps the key (`verb` false): pairs go
 /// whole, never cut. No keycaps.
 #[cfg(any(test, feature = "test-support"))]
@@ -1445,7 +1447,7 @@ pub fn key_action(
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::INK))
+        .text_color(rgb(theme::INK_STRONG))
         .hover_raised(id)
         .press_row()
         .child(div().text_color(rgb(theme::INK_SUBTLE)).child(key))

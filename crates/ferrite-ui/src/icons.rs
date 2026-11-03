@@ -12,7 +12,7 @@
 //! `stroke-linecap`/`linejoin` attributes on their root element. In the
 //! prototype those come from a `.stroke` class in the page's stylesheet;
 //! resvg parses a standalone file and never sees it, so an icon without
-//! them renders as a filled blob. Every line icon strokes 1px at 16px
+//! them renders as a filled blob. Every line icon strokes 1.33px at 16px
 //! (`theme::ICON_STROKE`), its `stroke-width` scaled to its viewBox.
 //! `codex.svg` and `claude.svg` are fill
 //! logomarks with no stroke at all, their path data copied verbatim from
@@ -103,7 +103,7 @@ icons![
     // (end title bar)
     "update",
     // ---- UI refresh icons (SPEC §3.7): Lucide's shapes on a 24 grid,
-    // stroked 2.25 — the family's 1.5px at 16px.
+    // stroked 2 — the family's 1.33px at 16px.
     "panel-right",
     "search",
     "inbox",
@@ -159,7 +159,7 @@ pub const GEAR: &str = "icons/gear.svg";
 #[allow(dead_code)]
 pub const SUBAGENTS: &str = "icons/subagents.svg";
 /// The four caption marks the Windows titlebar draws (`titlebar.rs`). They
-/// are 10px chrome, not 16px UI: on a 10-unit viewBox the line family's 1.5
+/// are 10px chrome, not 16px UI: on a 10-unit viewBox the line family's
 /// stroke would render a blob, so these carry the 1px hairline Windows' own
 /// caption glyphs use, with a square cap — every one of them is an unjoined
 /// straight run.
@@ -326,7 +326,7 @@ pub fn ferrite_icon(size: f32) -> AnyElement {
             .path(path)
             // GPUI skips `paint_svg` without a concrete text color, even
             // where the SVG paints only its own gradient.
-            .text_color(rgb(theme::INK))
+            .text_color(rgb(theme::INK_STRONG))
     };
     div()
         .relative()
@@ -377,7 +377,7 @@ impl RenderOnce for FerriteSnap {
                 .path(path)
                 // GPUI skips `paint_svg` entirely without a concrete text
                 // color, even when the SVG paints only its own gradient.
-                .text_color(rgb(theme::INK))
+                .text_color(rgb(theme::INK_STRONG))
                 .with_transformation(Transformation::translate(point(
                     px(x * size * displacement),
                     px(y * size * displacement),
@@ -555,7 +555,7 @@ mod tests {
             let svg = std::str::from_utf8(&bytes).unwrap();
             assert!(svg.contains(r#"fill="none""#), "{key} does not fill");
             assert!(svg.contains(r#"stroke="currentColor""#), "{key} strokes");
-            // One drawn weight whatever the viewBox: 1px at 16px.
+            // One drawn weight whatever the viewBox: 1.33px at 16px.
             assert!(
                 (effective_stroke(svg) - theme::ICON_STROKE).abs() < 0.01,
                 "{key} draws {} at 16px, not {}",

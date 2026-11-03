@@ -237,7 +237,7 @@ fn contract_permission_and_mcp_auth_controls_are_native(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn contract_native_accounting_and_cost_are_visible(cx: &mut TestAppContext) {
+fn contract_native_accounting_is_visible(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("native-usage-details-ui", 1);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
@@ -270,13 +270,16 @@ fn contract_native_accounting_and_cost_are_visible(cx: &mut TestAppContext) {
         "usage-cached-input-20",
         "usage-output-30",
         "usage-reasoning-output-10",
-        "usage-cost-0.04",
     ] {
         assert!(
             cx.debug_bounds(selector).is_some(),
             "missing native accounting field: {selector}"
         );
     }
+    assert!(
+        cx.debug_bounds("usage-cost-0.04").is_none(),
+        "the cost is kept, not shown"
+    );
 }
 
 #[gpui::test]

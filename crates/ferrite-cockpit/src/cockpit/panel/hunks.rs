@@ -389,11 +389,11 @@ fn hunks_element(index: usize, shown: &Shown) -> Div {
         for line in hunk.iter().take(left) {
             let (glyph, sign_ink, ink, wash) = match line.sign {
                 Sign::Context => ("", INK_SUBTLE, INK_SUBTLE, None),
-                Sign::Added => ("+", DIFF_ADDED_SIGN, DIFF_ADDED_INK, Some(DIFF_ADDED_WASH)),
+                Sign::Added => ("+", DIFF_ADDED_SIGN, SYN_PLAIN, Some(DIFF_ADDED_WASH)),
                 Sign::Removed => (
                     "\u{2212}",
                     DIFF_REMOVED_SIGN,
-                    DIFF_REMOVED_INK,
+                    SYN_PLAIN,
                     Some(DIFF_REMOVED_WASH),
                 ),
             };

@@ -237,22 +237,24 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool) -> Div {
             .flex_col()
             .gap(px(theme::DECISION_PILL_GAP))
             .overflow_hidden()
+            // The card's ring hangs `CARD_OUTSET` past the transcript
+            // column, as every transcript card's does (one left edge).
             .when(overlay, |frame| {
                 frame
                     .bg(theme::paint::CARD)
                     // The transcript column's inset, Solo's or a Group
                     // Pane's.
-                    .px(px(theme::tx_inset(solo)))
+                    .pl(px(theme::tx_inset(solo) - theme::CARD_OUTSET))
+                    .pr(px(theme::tx_inset(solo)))
                     .py(px(theme::DECISION_PAD_Y))
             })
+            .when(!overlay, |frame| frame.ml(px(-theme::CARD_OUTSET)))
             // Every card waits on the operator: Claude's pill says so over
-            // it, the one place its state takes a hue.
-            // Every card waits on the operator: Claude's pill says so over
-            // it, the one place its state takes a hue. In a Group Pane its
-            // head and ring say it already (rule 7), and the room is the
-            // card's.
+            // it, on the column, the one place its state takes a hue. In a
+            // Group Pane its head and ring say it already (rule 7), and the
+            // room is the card's.
             .when(solo && !overlay, |frame| {
-                frame.child(decision::needs_input())
+                frame.child(decision::needs_input().ml(px(theme::CARD_OUTSET)))
             })
             .child(card),
     )
@@ -1712,7 +1714,7 @@ impl Cards {
                     let id = field.id.clone();
                     move || format!("form-field-{id}")
                 })
-                .child(div().text_color(rgb(theme::INK)).child(field.label.clone()));
+                .child(div().text_color(rgb(theme::INK_STRONG)).child(field.label.clone()));
             if !field.description.is_empty() {
                 section = section.child(decision::note(field.description.clone()));
             }
@@ -2166,7 +2168,7 @@ impl Cards {
                                     .py(px(0.))
                                     .font_family(theme::FONT_UI)
                                     .text_size(px(theme::FS_UI))
-                                    .text_color(rgb(theme::INK)),
+                                    .text_color(rgb(theme::INK_STRONG)),
                                 ),
                         ),
                 );

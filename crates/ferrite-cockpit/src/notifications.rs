@@ -658,8 +658,8 @@ fn quick_pill(key: &'static str, word: &'static str, ink: gpui::Hsla) -> Div {
         .child(components::glyph(key, INK_SUBTLE))
 }
 
-/// A quick answer in a toast: its pill, under the pointer a step up and
-/// the word `INK_STRONG`, over the one blend (`hover_quick`).
+/// A quick answer in a toast: its pill, its word `INK_STRONG`, under the
+/// pointer a step up over the one blend (`hover_quick`).
 fn quick_button(
     id: impl Into<gpui::ElementId>,
     key: &'static str,
@@ -667,8 +667,7 @@ fn quick_button(
 ) -> Stateful<Div> {
     let id = id.into();
     let blend = ferrite_ui::pointer::hover_key(&id);
-    let ink = ferrite_ui::motion::hover_blend(&blend, rgb(INK).into(), rgb(INK_STRONG).into());
-    quick_pill(key, word, ink)
+    quick_pill(key, word, rgb(INK_STRONG).into())
         .id(id)
         .hover_quick(blend)
         .press_float()
@@ -703,7 +702,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
                 div()
                     .flex_shrink_0()
                     .whitespace_nowrap()
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child(format!("{tool} wants to run\u{a0}")),
             )
             .child(
@@ -717,7 +716,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
         detail => div()
             .min_w_0()
             .truncate()
-            .text_color(rgb(INK))
+            .text_color(rgb(INK_STRONG))
             .child(SharedString::from(detail.text()))
             .into_any_element(),
     };
@@ -741,7 +740,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
     answers.push(("toast-open", "\u{23ce}", "Open", row.open_verb()));
     let buttons = answers.into_iter().map(|(name, key, word, verb)| {
         let Some(handle) = handle.clone() else {
-            return quick_pill(key, word, rgb(INK).into()).into_any_element();
+            return quick_pill(key, word, rgb(INK_STRONG).into()).into_any_element();
         };
         quick_button((name, thread), key, word)
             .debug_selector(move || format!("{name}-{thread}"))

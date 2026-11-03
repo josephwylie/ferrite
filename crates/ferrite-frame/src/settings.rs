@@ -320,7 +320,7 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
 
 /// A sidebar row, a menu row of the sheet's float: inset `FLOAT_PAD` from
 /// its edges, radius `R_CONTROL`, the page's name. The page shown is
-/// `FLOAT_SEL` in `INK_STRONG`; the rest `INK`, `FLOAT_HOVER` under the
+/// `FLOAT_SEL` in `INK_STRONG`; the rest `INK_STRONG`, `FLOAT_HOVER` under the
 /// pointer — the float's own steps, which read on every platform (the
 /// frame's `RAISED` is the float's own grey once opaque). While a search
 /// runs, a page with no match reads `INK_SUBTLE`.
@@ -330,10 +330,10 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     } else {
         (gpui::rgba(TRANSPARENT).into(), paint::FLOAT_HOVER.into())
     };
-    let ink = match (selected, hit) {
-        (true, _) => INK_STRONG,
-        (false, true) => INK,
-        (false, false) => INK_SUBTLE,
+    let ink = if selected || hit {
+        INK_STRONG
+    } else {
+        INK_SUBTLE
     };
     components::faded_button(
         key.selector(),
@@ -539,9 +539,9 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                         div()
                             .min_w_0()
                             .truncate()
-                            .child(components::form_label(selected.clone(), INK)),
+                            .child(components::form_label(selected.clone(), INK_STRONG)),
                     )
-                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, ICON_INK).flex_shrink_0()),
+                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, INK_STRONG).flex_shrink_0()),
             )
             .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
                 options.iter().enumerate().fold(
@@ -578,7 +578,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             change,
         } => {
             let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
-            components::faded_button(id, none, none, none, rgb(INK).into(), cx)
+            components::faded_button(id, none, none, none, rgb(INK_STRONG).into(), cx)
                 .tab_stop(true)
                 .selected(checked)
                 .debug_selector(move || id.into())
@@ -608,7 +608,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
         } => {
             let button = |at: usize, label: &'static str, delta: i32, live: bool| {
                 let step = step.clone();
-                let ink = if live { INK } else { TEXT_FAINT };
+                let ink = if live { INK_STRONG } else { TEXT_FAINT };
                 let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
                 let (hover, press): (gpui::Hsla, gpui::Hsla) = if live {
                     (paint::HOVER.into(), paint::PRESS.into())
@@ -638,7 +638,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                         .min_w(px(SETTINGS_STEPPER_VALUE_W))
                         .flex()
                         .justify_center()
-                        .child(components::form_label(value.clone(), INK)),
+                        .child(components::form_label(value.clone(), INK_STRONG)),
                 ))
                 .child(button(1, "\u{203a}", 1, can_up))
                 .into_any_element()
@@ -814,7 +814,7 @@ fn segment(id: (&'static str, usize), label: SharedString, selected: bool, cx: &
 }
 
 /// An action on a row (`Copy`, `Restart`, `Add`, `Remove`): the quiet
-/// bordered button — `INK` on nothing in a `FLOAT_EDGE` ring, radius
+/// bordered button — `INK_STRONG` on nothing in a `FLOAT_EDGE` ring, radius
 /// `R_CONTROL`, `paint::HOVER` under the pointer. Settings has no filled
 /// button; what changes state is a switch or a segment.
 fn quiet_button(id: impl Into<gpui::ElementId>, label: SharedString, cx: &App) -> Button {
@@ -823,7 +823,7 @@ fn quiet_button(id: impl Into<gpui::ElementId>, label: SharedString, cx: &App) -
         gpui::rgba(TRANSPARENT).into(),
         paint::HOVER.into(),
         paint::PRESS.into(),
-        rgb(INK).into(),
+        rgb(INK_STRONG).into(),
         cx,
     )
     .tab_stop(true)
@@ -832,7 +832,7 @@ fn quiet_button(id: impl Into<gpui::ElementId>, label: SharedString, cx: &App) -
     .rounded(px(R_CONTROL))
     .border_1()
     .border_color(paint::FLOAT_EDGE)
-    .child(components::form_label(label, INK))
+    .child(components::form_label(label, INK_STRONG))
 }
 
 /// A path fact's hover reaches its copy mark through this group.

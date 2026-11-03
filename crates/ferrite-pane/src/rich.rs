@@ -289,7 +289,7 @@ pub struct Markdown {
     source: SharedString,
     cache: TextCache,
     muted: bool,
-    /// Body ink in place of `INK` (a prompt's `INK_STRONG`).
+    /// Body ink in place of the default content ink.
     ink: Option<u32>,
     /// The work's tier (`quiet`): muted, its code plain.
     quiet: bool,
@@ -453,7 +453,7 @@ impl gpui::RenderOnce for Markdown {
         let text_style = if self.quiet {
             text_style
                 .with_inline_code(gpui::HighlightStyle {
-                    color: Some(rgb(theme::INK).into()),
+                    color: Some(rgb(theme::INK_SUBTLE).into()),
                     font_weight: Some(theme::W_BODY),
                     ..Default::default()
                 })
@@ -641,17 +641,6 @@ struct CodeActions {
     key: SharedString,
 }
 
-/// A fence's language id as the overlay names it: none for plain text.
-fn code_language(language: Option<&SharedString>) -> Option<SharedString> {
-    language
-        .filter(|lang| {
-            !["text", "txt", "plaintext"]
-                .iter()
-                .any(|plain| lang.eq_ignore_ascii_case(plain))
-        })
-        .cloned()
-}
-
 impl gpui::Render for CodeActions {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let code = self.code.clone();
@@ -671,11 +660,10 @@ impl gpui::Render for CodeActions {
         if shown > 0. && shown < 1. {
             cx.notify();
         }
-        // The prototype's `.code .lang` and `.code .copy`: the language tag
-        // always shows, dim, at the block's top right; the actions before it
-        // blend in under the pointer. The row stands on the code's first
-        // line — the block's padding down, the code's own inset in from the
-        // right — and the tag is set as the code is, on its baseline.
+        // The block's actions at its top right blend in under the pointer;
+        // nothing stands there at rest (no language tag: the code says what
+        // it is). The row stands on the code's first line — the block's
+        // padding down, the code's own inset in from the right.
         let code_size = window.text_style().font_size.to_pixels(window.rem_size());
         let code_line = window.line_height();
         let mut actions = gpui::div()
@@ -761,20 +749,7 @@ impl gpui::Render for CodeActions {
                         })),
                 ),
         );
-        actions = actions.child(hovered).when_some(
-            code_language(self.language.as_ref()),
-            |actions, language| {
-                actions.child(
-                    gpui::div()
-                        .debug_selector(|| "code-language".into())
-                        .flex_shrink_0()
-                        .font_family(theme::FONT_CODE)
-                        .text_size(code_size)
-                        .line_height(code_line)
-                        .child(language),
-                )
-            },
-        );
+        actions = actions.child(hovered);
         gpui::div()
             .id(SharedString::from(format!("{}-overlay", self.key)))
             .debug_selector(|| "code-overlay".into())
@@ -871,7 +846,7 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
             font_weight: Some(theme::W_STRONG),
             ..Default::default()
         })
-        // A fence is the diff's block box (`pane::block_box`): `BLOCK`,
+        // A fence is the block box: `BLOCK`,
         // `R_CONTROL` corners, a 1px `BLOCK_RING`, `BLOCK_PAD_Y` above and
         // below, the code `CODE_PAD_CELLS` in, a half step under the prose.
         .with_code_background(gpui::transparent_black())
@@ -879,13 +854,15 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
             gpui::StyleRefinement::default()
                 .px(px(theme::CODE_PAD_CELLS * code_cell))
                 .py(px(theme::BLOCK_PAD_Y))
-                // A fence holds to the measure too (`max-width: 108ch`): its
-                // language word sits at that edge.
+                // A fence holds to the measure too (`max-width: 108ch`).
                 .max_w(px(theme::MEASURE_CH * cell))
                 // Auto, not the vendor's full width, so the margin narrows
                 // it rather than pushing it past the view.
                 .w_auto()
                 .mr(px(hang))
+                // Its ring hangs `CARD_OUTSET` past the column, as every
+                // transcript card's does.
+                .ml(px(-theme::CARD_OUTSET))
                 .bg(theme::paint::BLOCK)
                 .border_1()
                 .border_color(theme::paint::BLOCK_RING)
@@ -1202,7 +1179,7 @@ pub fn reading_dialog(
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_PROSE))
                 .line_height(px(theme::LH_PROSE))
-                .text_color(rgb(theme::INK))
+                .text_color(rgb(theme::INK_STRONG))
                 .max_h(px(theme::READING_DIALOG_MAX_H))
                 .overflow_y_scroll()
                 .child(body),
@@ -1821,11 +1798,13 @@ mod file_link_tests {
         );
     }
 
-    /// A fence's language tag stands on its code's first line: the block's
+    /// A fence's actions stand on its code's first line: the block's
     /// padding down, the code's own inset in from the right, one code line
-    /// high, so it shares that line's baseline.
+    /// high. No language tag stands there at rest.
     #[gpui::test]
-    fn a_fence_sets_its_language_on_its_first_line(cx: &mut TestAppContext) {
+    fn a_fences_actions_stand_on_its_first_line_with_no_language_tag(
+        cx: &mut TestAppContext,
+    ) {
         let (_, cx) = fixture(
             cx,
             "```rust
@@ -1838,7 +1817,7 @@ let count = 2;
             .debug_bounds("code-overlay")
             .expect("the block's overlay");
         let row = cx.debug_bounds("code-actions").expect("the actions row");
-        let language = cx.debug_bounds("code-language").expect("the language");
+        assert!(cx.debug_bounds("code-language").is_none(), "no `rust`");
         let code_size = theme::FS_PROSE - theme::TX_BLOCK_STEP;
         assert_eq!(row.top() - block.top(), px(theme::BLOCK_PAD_Y));
         let inset = block.right() - row.right();
@@ -1848,11 +1827,7 @@ let count = 2;
             (inset - px(theme::CODE_PAD_CELLS * theme::tx_cell(code_size))).abs() < px(0.5),
             "the actions sit the code's inset from the block's edge: {inset:?}"
         );
-        assert_eq!(language.right(), row.right());
-        assert_eq!(
-            (language.top(), language.size.height),
-            (row.top(), px(theme::prose_line_height(code_size)))
-        );
+        assert_eq!(row.size.height, px(theme::prose_line_height(code_size)));
     }
 
     #[gpui::test]
@@ -2864,7 +2839,7 @@ mod style_tests {
                 * theme::tx_cell(theme::FS_PROSE))
             .round()))
         );
-        // A fence holds to the measure (its language word at that edge); a
+        // A fence holds to the measure; a
         // table keeps the column.
         assert_eq!(
             style.code_block().max_size.width,
@@ -2883,6 +2858,11 @@ mod style_tests {
             let cell = Some(px(theme::tx_cell(base)).into());
             let hung = hung_style(px(theme::FS_UI), px(base));
             assert_eq!(hung.code_block().margin.right, cell, "fence at {base}");
+            assert_eq!(
+                hung.code_block().margin.left,
+                Some(px(-theme::CARD_OUTSET).into()),
+                "a fence's ring hangs past the column, as every card's"
+            );
             assert_eq!(hung.table().margin.right, cell, "table at {base}");
             assert_eq!(hung.rule().margin.right, cell, "rule at {base}");
             let flush = style_at(px(theme::FS_UI), px(base));

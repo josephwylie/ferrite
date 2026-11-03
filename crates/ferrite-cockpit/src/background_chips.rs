@@ -108,7 +108,7 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_META))
         .whitespace_nowrap()
-        .text_color(rgb(theme::INK))
+        .text_color(rgb(theme::INK_STRONG))
         .tooltip(ferrite_ui::menu::tooltip(tooltip))
         // Working is the normal state: a still dot (theme rule 8 — one
         // thing moves, and it is the working line).

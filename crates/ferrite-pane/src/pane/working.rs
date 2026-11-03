@@ -349,12 +349,12 @@ impl WorkingLine {
             // the spinner's (a working glyph, rule 6).
             let caption = SharedString::from(caption);
             let text = if live {
-                components::shimmer(caption, INK)
+                components::shimmer(caption, INK_STRONG)
             } else {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child(caption)
                     .into_any_element()
             };
@@ -491,7 +491,8 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
         .flex()
         .flex_col()
         .gap(px(theme::TASK_ROW_GAP))
-        .w_full()
+        // Stretched, hanging `CARD_OUTSET` past the column (one left edge).
+        .ml(px(-theme::CARD_OUTSET))
         .min_w_0()
         .p(px(theme::TASK_CARD_PAD))
         .rounded(px(theme::R_CARD))
@@ -512,7 +513,7 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
                 ),
                 TaskState::ToDo => (
                     icon(icons::CIRCLE_DASHED, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
-                    INK,
+                    INK_STRONG,
                 ),
             };
             div()

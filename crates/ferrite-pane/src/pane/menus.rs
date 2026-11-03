@@ -9,7 +9,8 @@ pub struct MenuRow {
     /// What lands in the line on ↵ — a command name, or a file's relative
     /// path.
     pub insert: SharedString,
-    /// The row's leading text: `/name`, or the file's name.
+    /// The row's leading text: a command's bare name (Claude's: no `/`),
+    /// or the file's name.
     pub name: SharedString,
     /// Matched byte ranges inside `name`, painted `INK_STRONG` at `W_LABEL`
     /// (`components::match_highlights`; one face, so nothing reflows).
@@ -37,8 +38,8 @@ pub fn menu_popover() -> Div {
 
 /// A `/` or `@` row in the float grammar: the cursor row's fill, the name with
 /// its matches in `INK_STRONG`, the detail muted in its own column
-/// (`label_w` aligns the slash commands' descriptions), `↵` on the cursor
-/// row.
+/// (`label_w` aligns the slash commands' descriptions). No `↵`: the
+/// cursor row's fill says what enter picks (Claude's).
 pub fn menu_row(
     id: impl Into<gpui::ElementId>,
     row: &MenuRow,
@@ -48,14 +49,14 @@ pub fn menu_row(
     // A description or a path cut at the popover's width keeps its whole
     // text one hover away.
     let detail = (!row.detail.is_empty()).then(|| row.detail.clone());
-    ferrite_ui::menu::item_row(id, &menu_item(row, cursor, label_w), cursor, false)
+    ferrite_ui::menu::item_row(id, &menu_item(row, label_w), cursor, false)
         .when_some(detail, |row, detail| {
             row.tooltip(ferrite_ui::menu::tooltip(detail))
         })
 }
 
 /// A `MenuRow` as the shared menu row's content.
-pub fn menu_item(row: &MenuRow, cursor: bool, label_w: Option<f32>) -> components::MenuItem {
+pub fn menu_item(row: &MenuRow, label_w: Option<f32>) -> components::MenuItem {
     let mut item = components::MenuItem::new(row.name.clone())
         .matched(row.matched.clone())
         .disabled(row.inert);
@@ -69,11 +70,6 @@ pub fn menu_item(row: &MenuRow, cursor: bool, label_w: Option<f32>) -> component
             head_truncated(&row.detail, theme::MENU_PATH_TAIL)
         };
         item = item.detail(detail).mono(!row.prose_detail);
-    }
-    // No ↵ on an inert row: enter only dismisses there, and the key would
-    // advertise an offer the row does not make.
-    if cursor && !row.inert {
-        item = item.shortcut("↵");
     }
     item
 }

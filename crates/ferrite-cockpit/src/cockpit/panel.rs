@@ -275,7 +275,7 @@ impl CockpitView {
             .font_family(FONT_UI)
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
-            .text_color(rgb(INK))
+            .text_color(rgb(INK_STRONG))
             .whitespace_nowrap()
             .child(self.panel_head(owner, previewing, cx));
         let content = match owner.thread() {
@@ -371,7 +371,7 @@ impl CockpitView {
                 if active {
                     face.hover_carried(key).text_color(rgb(INK_STRONG))
                 } else {
-                    face.text_color(rgb(INK)).hover_raised(key).press_raised()
+                    face.text_color(rgb(INK_STRONG)).hover_raised(key).press_raised()
                 }
             })
             .child("Overview")

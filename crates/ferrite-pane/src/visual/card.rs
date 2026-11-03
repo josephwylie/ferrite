@@ -28,7 +28,7 @@ use super::element::{WebView, PLACEHOLDER_HEIGHT};
 use super::{Visual, VisualStatus};
 use crate::pane::{self, Grid};
 use crate::select::TextRuns;
-use ferrite_ui::theme::{self, BLOCKED, INK, INK_SUBTLE, TEXT_FAINT};
+use ferrite_ui::theme::{self, BLOCKED, INK_STRONG, INK_SUBTLE, TEXT_FAINT};
 
 /// The call line's name for every visual.
 pub(crate) const NAME: &str = "Visual";
@@ -143,7 +143,7 @@ pub(crate) fn render(
             vec![(
                 title,
                 gpui::HighlightStyle {
-                    color: Some(rgb(INK).into()),
+                    color: Some(rgb(INK_STRONG).into()),
                     ..Default::default()
                 },
             )],
@@ -250,7 +250,7 @@ fn action_line(id: &str, actions: Actions, grid: Grid) -> Div {
             .whitespace_nowrap()
             .cursor_pointer()
             .text_color(rgb(INK_SUBTLE))
-            .group_hover(id, |style| style.text_color(rgb(INK)))
+            .group_hover(id, |style| style.text_color(rgb(INK_STRONG)))
             .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                 cx.stop_propagation();
                 run(window, cx);

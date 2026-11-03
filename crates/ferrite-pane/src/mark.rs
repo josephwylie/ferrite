@@ -5,7 +5,7 @@
 
 use ferrite_core::Attention;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, AnyElement, SharedString};
+use gpui::{div, px, rgb, AnyElement, SharedString};
 
 use crate::pane::WallState;
 use ferrite_ui::components;
@@ -149,8 +149,7 @@ impl RowStatus {
 
 /// A row's mark (§6), at its natural size: a working Thread's running
 /// spinner in `RUNNING` (`BLOCKED` while its tests fail) — the one thing in
-/// the column that moves — a blocked Thread's `ATTENTION` dot with its
-/// halo, a failed one's `BLOCKED` dot, background work's `RUNNING` ring, a
+/// the column that moves — a blocked Thread's solid `ATTENTION` dot, a failed one's `BLOCKED` dot, background work's `RUNNING` ring, a
 /// finish not yet seen `check-circle`, idle `terminal`, parked `terminal`
 /// at half ink. `small` is a member row's: 6px dots, 13px icons.
 pub fn mark(status: RowStatus, small: bool) -> AnyElement {
@@ -165,10 +164,9 @@ fn marked(status: RowStatus, ink: u32, small: bool) -> AnyElement {
     }
 }
 
-/// A Group Pane head's mark (SPEC §5.9): the row's face with its 7px dots
-/// and 13px icons, laid out at the width the mockup's box takes
-/// (`PANE_HEAD_DOT_W`: a dot's halo overflows it), so the title starts
-/// where it is drawn.
+/// A Group Pane head's mark (SPEC §5.9): the row's face with its 8px dots
+/// and 14px icons, a dot laid out at the width the mockup's box takes
+/// (`PANE_HEAD_DOT_W`), so the title starts where it is drawn.
 pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
     let face = mark_sized(
         status,
@@ -195,19 +193,13 @@ pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
 /// `RowStatus::ink` (`ink`, at the shell's step there). `dot` and `glyph`
 /// are the surface's sizes.
 fn mark_sized(status: RowStatus, ink: u32, dot: f32, glyph: f32) -> AnyElement {
-    let solid = || div().size(px(dot)).rounded_full().bg(rgb(ink));
     match status {
         RowStatus::Working | RowStatus::Failing => components::running_spinner(glyph, ink),
-        RowStatus::NeedsYou => div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(nav_halo_box(dot)))
+        RowStatus::NeedsYou | RowStatus::Failed => div()
+            .size(px(dot))
             .rounded_full()
-            .bg(rgba(NAV_HALO_FILL))
-            .child(solid())
+            .bg(rgb(ink))
             .into_any_element(),
-        RowStatus::Failed => solid().into_any_element(),
         RowStatus::Background => div()
             .size(px(dot))
             .rounded_full()

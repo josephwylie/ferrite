@@ -1815,7 +1815,7 @@ mod tests {
         let base = TextRun {
             len: 0,
             font: gpui::font(ferrite_ui::theme::FONT_CODE),
-            color: rgb(ferrite_ui::theme::INK).into(),
+            color: rgb(ferrite_ui::theme::INK_STRONG).into(),
             background_color: None,
             underline: None,
             strikethrough: None,

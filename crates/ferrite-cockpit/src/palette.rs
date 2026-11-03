@@ -712,7 +712,7 @@ impl Palette {
 }
 
 /// The footer's hints: each word in `INK_SUBTLE`, its key after it in
-/// `INK`, `PALETTE_HINT_GAP` apart — plain text, no keycaps.
+/// `INK_STRONG`, `PALETTE_HINT_GAP` apart — plain text, no keycaps.
 fn hint_line(hints: &[(&'static str, &'static str)]) -> gpui::Div {
     hints.iter().fold(
         div()
@@ -727,7 +727,7 @@ fn hint_line(hints: &[(&'static str, &'static str)]) -> gpui::Div {
                     .items_center()
                     .gap(px(SPACE_1_5))
                     .child(*word)
-                    .child(components::glyph(*key, INK)),
+                    .child(components::glyph(*key, INK_STRONG)),
             )
         },
     )
@@ -887,15 +887,15 @@ fn mark(row: &Row) -> Option<gpui::AnyElement> {
     match (row.status, &row.act) {
         (Some(status), _) => Some(crate::nav::mark(status, false)),
         (None, Act::Command(command)) => command.icon().map(|icon| {
-            ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_SUBTLE).into_any_element()
+            ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_STRONG).into_any_element()
         }),
         _ => None,
     }
 }
 
 /// One palette row (SPEC §5.8): `PALETTE_ROW_H`, radius `R_CONTROL`, its
-/// parts `PALETTE_GAP` apart — the mark column, the name (`INK`, its
-/// matches 600 `INK_STRONG`), the context at the right in 12 `INK_SUBTLE`,
+/// parts `PALETTE_GAP` apart — the mark column, the name (`INK_STRONG`, its
+/// matches 600), the context at the right in 12 `INK_SUBTLE`,
 /// then the key column, `PALETTE_KEYS_W` on every row so the contexts end
 /// on one edge: the chord as plain 12 `INK_SUBTLE` text, or, on a chordless
 /// cursor row (`SELECTED`, its name all `INK_STRONG`), `corner-down-left`.
@@ -907,7 +907,6 @@ fn row_element(
 ) -> gpui::Stateful<gpui::Div> {
     let id = gpui::ElementId::from(("palette-row", at));
     let key = ferrite_ui::pointer::hover_key(&id);
-    let ink = if cursor { INK_STRONG } else { INK };
     let name =
         StyledText::new(row.name.clone()).with_highlights(components::match_highlights(lit, false));
     let meta = || div().text_size(px(FS_META)).text_color(rgb(INK_SUBTLE));
@@ -923,7 +922,7 @@ fn row_element(
         .px(px(PALETTE_ROW_PAD_X))
         .rounded(px(R_CONTROL))
         .whitespace_nowrap()
-        .text_color(rgb(ink))
+        .text_color(rgb(INK_STRONG))
         .child(
             div()
                 .flex()

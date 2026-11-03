@@ -7,31 +7,33 @@
 //! diffstat, and `Create PR` at the right until a pull request exists),
 //! which folds and unfolds every file at once; one block per file, whose
 //! hunks fold under its head (`hunks`); `Review changes`; and the pull
-//! request's row once there is one. With no edits, `No changes yet`.
+//! request's row once there is one. With neither, no section at all.
 
-use super::sections::quiet_line;
 use super::*;
 use ferrite_core::docview::FileChange;
 use ferrite_core::workspace::{CheckState, PrState, PullRequest};
 
 impl CockpitView {
-    /// The Changes section (see the module doc).
-    pub(super) fn changes_section(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
+    /// The Changes section (see the module doc): none with no edits and no
+    /// pull request.
+    pub(super) fn changes_section(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<Div> {
         use ferrite_ui::theme::*;
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(SPACE_0_5))
-            .child(panel_section_head("panel-changes-head", "Changes"));
         let files = self
             .facts
             .get(thread)
             .map(|facts| facts.changed_files.as_slice())
             .unwrap_or_default();
-        if files.is_empty() {
-            section = section.child(quiet_line("panel-no-changes").child("No changes yet"));
-        } else {
-            let create_pr = self.facts.pr(thread).is_none();
+        let pr = self.facts.pr(thread);
+        if files.is_empty() && pr.is_none() {
+            return None;
+        }
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_0_5))
+            .child(panel_section_head("panel-changes-head", "Changes"));
+        if !files.is_empty() {
+            let create_pr = pr.is_none();
             section = section.child(self.changes_summary(thread, files, create_pr, cx));
             let cwd = self.thread_path(thread);
             for (index, file) in files.iter().enumerate() {
@@ -40,13 +42,13 @@ impl CockpitView {
             }
             section = section.child(review_changes(cx));
         }
-        section.children(self.facts.pr(thread).map(|pr| pr_row(thread, pr, cx)))
+        Some(section.children(pr.map(|pr| pr_row(thread, pr, cx))))
     }
 
     /// The summary line: `N files changed` and the diffstat, folding and
     /// unfolding every file at once, its chevron on the content edge and
     /// its words on the text column. Under the pointer its words blend up
-    /// to `INK`, as the nav's fold headings do; a press lands at
+    /// to `INK_STRONG`, as the nav's fold headings do; a press lands at
     /// `INK_STRONG`. With `create_pr`, Claude's `Create PR` ends it.
     fn changes_summary(
         &self,
@@ -77,7 +79,7 @@ impl CockpitView {
             .text_color(ferrite_ui::motion::hover_blend(
                 &section_key,
                 rgb(INK_SUBTLE).into(),
-                rgb(INK).into(),
+                rgb(INK_STRONG).into(),
             ))
             .on_hover(ferrite_ui::motion::hover_listener(section_key))
             .active(|style| style.text_color(rgb(INK_STRONG)))
@@ -183,7 +185,7 @@ impl CockpitView {
                     .absolute()
                     .inset_0()
                     .group_hover(group.clone(), |style| style.invisible())
-                    .child(icon(icons::FILE, PANEL_ROW_ICON, INK)),
+                    .child(icon(icons::FILE, PANEL_ROW_ICON, INK_SUBTLE)),
             )
             .child(
                 div()
@@ -195,7 +197,7 @@ impl CockpitView {
                         format!("panel-fold-turn-{}-{}", thread.get(), file.path),
                         unfolded,
                         PANEL_ROW_ICON,
-                        INK,
+                        INK_SUBTLE,
                     )),
             );
         let fold_path = file.path.clone();
@@ -459,7 +461,7 @@ fn file_actions(
             .on_hover(ferrite_ui::motion::hover_listener(key))
             .press_control()
             .tooltip(ferrite_ui::menu::tooltip(tooltip))
-            .child(icon(glyph, PANEL_FILE_ACTION_GLYPH, INK))
+            .child(icon(glyph, PANEL_FILE_ACTION_GLYPH, INK_STRONG))
     };
     div()
         .absolute()

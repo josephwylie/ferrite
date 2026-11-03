@@ -71,7 +71,7 @@ pub(super) fn compact_composer(
         .when(empty, |line| line.child(ghost_row(ghost, 0.)));
     // The focused Pane's controls: its send circle and the queue's acts.
     let (send, actions) = match toolbar.filter(|_| focused) {
-        Some(controls) => (Some(controls.send), controls.queue),
+        Some(controls) => (controls.send, controls.queue),
         None => (None, Vec::new()),
     };
     // The queue is the focused Pane's to see and act on; the others count
@@ -138,7 +138,7 @@ pub(super) fn compact_composer(
         .font_weight(theme::W_BODY)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(INK))
+        .text_color(rgb(INK_STRONG))
         .when(decision.is_some(), |field| field.key_context("Decision"))
         // Its ring takes no layout, so the box keeps its 38.
         .child(components::outer_ring(theme::R_FLOAT, rgba(ring)))

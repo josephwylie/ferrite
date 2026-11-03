@@ -94,11 +94,11 @@
 - [x] gpui-base lib tests compile again (pre-existing breakage at HEAD): `indoc!` → `concat!` (a patched non-member's dev-dependencies never resolve), missing test imports in inline.rs, `Styled::font_weight` in style.rs. `cargo test -p gpui-base` is refused (non-member with dev-dependencies); run them with `cargo build -p gpui-base --lib --tests` and the printed binary.
 
 ## Open tool row (no box in box) follow-ups
-- [ ] Diffs inside an open group still use the filled `block_box` — give them the same hairline-well treatment as Claude's diff.
+- [x] Diffs inside an open group still use the filled `block_box` — give them the same hairline-well treatment as Claude's diff (polish lane A: `pane::diff_well`, `CARD_RING`, no fill).
 - [ ] Decide: standalone call card shows Claude's "Bash" label? (left out for consistency); command syntax colour (left in INK).
 
 ## Wave 2 lane T follow-ups
-- [ ] Menu row height 30 → Claude's 28 (`FLOAT_ROW_H`, ~30 uses) — polish pass.
+- [x] Menu row height 30 → Claude's 28 (`FLOAT_ROW_H`, ~30 uses) — polish pass (note rows 48 → 46).
 - [x] Panel Connectors row icon: `BLOCKS` (Claude) instead of `PLUG` (lane P).
 - [ ] thinking_tokens estimate: new non-persisted Live event (session_event, protocol, engine, store skip, claude wire, codex match, transcript) → working.rs shows max(reported, estimate). After lane R lands.
 - [ ] Plugins: per-plugin submenus need nested submenus.

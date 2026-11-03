@@ -58,7 +58,7 @@ fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut Test
             .as_ref()
             .expect("/ offers import on a fresh Thread");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-        assert_eq!(names, ["/model", "/effort", "/import"]);
+        assert_eq!(names, ["model", "effort", "import"]);
         assert_eq!(
             menu.rows[0].detail.as_ref(),
             "Switch model or hand over to the other provider"
@@ -82,7 +82,7 @@ fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut Test
     view.read_with(cx, |view, _| {
         let menu = view.popover.as_ref().expect("open");
         let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-        assert_eq!(names, ["/code-review", "/commit", "/compact"]);
+        assert_eq!(names, ["code-review", "commit", "compact"]);
     });
     cx.simulate_keystrokes("backspace backspace");
     cx.run_until_parked();
@@ -92,13 +92,13 @@ fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut Test
         assert_eq!(
             names,
             [
-                "/model",
-                "/effort",
-                "/import",
-                "/code-review",
-                "/commit",
-                "/compact",
-                "/to-tickets"
+                "model",
+                "effort",
+                "import",
+                "code-review",
+                "commit",
+                "compact",
+                "to-tickets"
             ],
             "the local entries ride atop the provider's own menu"
         );
@@ -116,16 +116,16 @@ fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut Test
     view.read_with(cx, |view, _| {
         let menu = view.popover.as_ref().expect("the model menu still lists");
         assert!(
-            menu.rows.iter().any(|row| row.name.as_ref() == "/import"),
+            menu.rows.iter().any(|row| row.name.as_ref() == "import"),
             "a Thread with history still offers import, alongside"
         );
-        assert_eq!(menu.rows[0].name.as_ref(), "/model");
+        assert_eq!(menu.rows[0].name.as_ref(), "model");
         assert!(!menu.rows[0].inert, "the model door stays open");
         assert_eq!(
             menu.rows[0].detail.as_ref(),
             "Switch model or hand over to the other provider"
         );
-        assert_eq!(menu.rows[1].name.as_ref(), "/effort");
+        assert_eq!(menu.rows[1].name.as_ref(), "effort");
         assert_eq!(menu.rows.len(), 7);
     });
 }
@@ -696,7 +696,7 @@ fn a_foreign_file_pick_surfaces_the_refusal_in_the_transcript(cx: &mut TestAppCo
     view.read_with(cx, |view, _| {
         let menu = view.popover.as_ref().expect("the menu reopens");
         assert!(
-            menu.rows.iter().any(|row| row.name.as_ref() == "/import"),
+            menu.rows.iter().any(|row| row.name.as_ref() == "import"),
             "the import door stays open"
         );
     });

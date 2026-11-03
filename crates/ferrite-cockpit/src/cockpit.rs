@@ -1082,10 +1082,9 @@ impl NavChip {
                 nav::RowPlace::ROOT,
                 None,
                 false,
-                0,
             ),
             NavChip::Group(group) => {
-                nav::group_row_with_title(group, group.title.clone(), nav::group_fold(group), 0, 0)
+                nav::group_row_with_title(group, group.title.clone(), nav::group_fold(group), 0)
             }
         })
     }
@@ -3170,7 +3169,7 @@ impl CockpitView {
     /// The plan card (`open_plan`): the float grammar's head (`plan · 3/4`),
     /// then one row per step — done `INK_SUBTLE` behind a dim check, the
     /// step being worked `INK_STRONG` behind the strong `❯`, the rest
-    /// `INK` behind a faint ring.
+    /// `INK_STRONG` behind a faint ring.
     fn plan_card_element(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
         let thread = self.plan_card?;
@@ -3230,13 +3229,7 @@ impl CockpitView {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_color(rgb(if done {
-                                INK_SUBTLE
-                            } else if working {
-                                INK_STRONG
-                            } else {
-                                INK
-                            }))
+                            .text_color(rgb(if done { INK_SUBTLE } else { INK_STRONG }))
                             .child(SharedString::from(step.text.clone())),
                     ),
             );
@@ -5823,9 +5816,10 @@ impl CockpitView {
         self.cockpit.roster().focused_thread()
     }
 
-    /// The one plane's seams (theme rule 2): a `LINE` hairline the
-    /// window's width closing the head row, and from it down to the
-    /// window's foot, one at the nav's edge and one at the panel's. They
+    /// The one plane's seams (theme rule 2): a `LINE` hairline closing the
+    /// head row from the nav's edge across (Claude's: the sidebar's head
+    /// has none), and from it down to the window's foot, one at the nav's
+    /// edge and one at the panel's. They
     /// paint over the regions and take no pointer, so a region needs no
     /// edge of its own.
     fn plane_seams(&self, panel_w: f32) -> gpui::Div {
@@ -5838,7 +5832,7 @@ impl CockpitView {
             .inset_0()
             .child(
                 line()
-                    .left_0()
+                    .left(px(self.board_left() - HAIRLINE_W))
                     .right_0()
                     .top(px(WIN_CHROME_H - HAIRLINE_W))
                     .h(px(HAIRLINE_W)),
@@ -8419,16 +8413,11 @@ impl CockpitView {
         let draft = self.panes[index].draft()?;
         let provider = draft.binding.provider().provider;
         let model = draft.binding.provider().model.as_deref();
-        // The provider's own word until a model is chosen; the model's name
-        // after — one spelling, wherever it shows.
-        let model_label = match model {
-            Some(model) => SharedString::from(ferrite_core::providers::models::label(
-                model,
-                &self.cockpit.model_catalog(provider),
-            )),
-            None => SharedString::from(provider_title(provider)),
-        };
         let announced = self.cockpit.announced_models(provider);
+        // The model's name, the provider's default until one is chosen.
+        let model_label = SharedString::from(ferrite_core::providers::models::footer_name(
+            provider, model, &announced,
+        ));
         let effort = (!ferrite_core::providers::models::efforts_for(provider, model, &announced)
             .is_empty())
         .then(|| {
@@ -8582,10 +8571,17 @@ impl CockpitView {
     }
 
     /// The send circle: Enter's act — or, while a turn runs
-    /// (`turn_running`) and the line is empty, `stop`, Esc's. The
-    /// `compact` Composer's always sends (queued behind a running turn):
-    /// its placeholder says `↵ to send, esc to stop`.
-    fn send_button(&self, index: usize, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// (`turn_running`) and the line is empty, `stop`, Esc's. The box's
+    /// stands only once there is something to send or stop (Claude's: an
+    /// empty box shows no send). The `compact` Composer's always stands and
+    /// always sends (queued behind a running turn): its placeholder says
+    /// `↵ to send, esc to stop`.
+    fn send_button(
+        &self,
+        index: usize,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let pane = &self.panes[index];
         let running = pane
             .thread()
@@ -8593,7 +8589,10 @@ impl CockpitView {
             .is_some_and(|open| turn_running(&open));
         let empty = pane.composer.read(cx).is_empty();
         let stop = pane::send_is_stop(running, empty, compact);
-        pane::send_button(stop, empty, compact, cx)
+        if empty && !stop && !compact {
+            return None;
+        }
+        let button = pane::send_button(stop, empty, compact, cx)
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 view.focus_pane(index);
@@ -8608,7 +8607,8 @@ impl CockpitView {
                     _ => view.submit(&Submit, window, cx),
                 }
             }))
-            .into_any_element()
+            .into_any_element();
+        Some(button)
     }
 
     /// The box's `+` and its menu (Claude's): add files or photos, add a
@@ -8626,7 +8626,7 @@ impl CockpitView {
         .enumerate()
         .map(|(at, (label, mark))| ferrite_ui::components::Choice {
             label: label.into(),
-            icon: Some((mark, ferrite_ui::theme::INK_SUBTLE)),
+            icon: Some((mark, ferrite_ui::theme::INK_STRONG)),
             // The key that does it from anywhere (the menu's digits are
             // the modes'; this one is a chord).
             shortcut: (at == 0)
@@ -8641,6 +8641,7 @@ impl CockpitView {
         ferrite_ui::menu::ChoiceMenu {
             submenus: self.attach_submenus(index, cx),
             width: Some(ferrite_ui::theme::ATTACH_MENU_W),
+            hang_left: true,
             id: SharedString::from(format!("attach-menu-{index}")),
             trigger: pane::attach_button(cx),
             choices,
@@ -8673,7 +8674,8 @@ impl CockpitView {
                     cx.notify();
                 });
             }),
-            // Over the box, as the `/` menu stands: the `+` is in it.
+            // Over the box, as the `/` menu stands, hanging from the `+`'s
+            // left edge (Claude's), never out over the sidebar.
             place: Some(match self.panes[index].geometry.get().composer {
                 Some(field) => ferrite_ui::components::FloatPlace {
                     floor: f32::from(field.top()),
@@ -8751,7 +8753,7 @@ impl CockpitView {
                 .collect();
             let view = cx.entity().downgrade();
             submenus.push(ferrite_ui::menu::Submenu {
-                icon: Some((ferrite_ui::icons::BLOCKS, ferrite_ui::theme::INK_SUBTLE)),
+                icon: Some((ferrite_ui::icons::BLOCKS, ferrite_ui::theme::INK_STRONG)),
                 label: "Connectors".into(),
                 value: SharedString::default(),
                 choices,
@@ -8780,7 +8782,7 @@ impl CockpitView {
                 .collect();
             let view = cx.entity().downgrade();
             submenus.push(ferrite_ui::menu::Submenu {
-                icon: Some((ferrite_ui::icons::PLUG, ferrite_ui::theme::INK_SUBTLE)),
+                icon: Some((ferrite_ui::icons::PLUG, ferrite_ui::theme::INK_STRONG)),
                 label: "Plugins".into(),
                 value: SharedString::default(),
                 choices,
@@ -8938,15 +8940,17 @@ impl CockpitView {
                 .into_any_element()
         }
         // Slash commands align their descriptions in one column sized to
-        // the longest name shown (clamped, so a long `mcp__…` name cuts).
+        // the longest name shown, measured in the row's face (a match
+        // draws at `W_LABEL`), so no name is ever cut.
         let label_w = matches!(open.kind, Kind::Commands).then(|| {
-            ferrite_ui::components::code_column_w(
-                open.rows
-                    .iter()
-                    .map(|row| row.name.chars().count())
-                    .max()
-                    .unwrap_or(0),
-            )
+            let measure = nav::Measure::Text(cx);
+            open.rows
+                .iter()
+                .map(|row| {
+                    measure.ui(&row.name, ferrite_ui::theme::FS_UI, ferrite_ui::theme::W_LABEL)
+                })
+                .fold(0., f32::max)
+                .ceil()
         });
         if !open.revealed.replace(true) {
             open.scroll.scroll_to_item(open.selected);
@@ -9976,12 +9980,10 @@ fn command_rows(commands: &[ferrite_core::SessionCommand], filter: &str) -> Vec<
                 score,
                 pane::MenuRow {
                     insert: SharedString::from(command.name.clone()),
-                    name: SharedString::from(format!("/{}", command.name)),
-                    // Shifted past the `/` the row draws in front.
-                    matched: matched
-                        .into_iter()
-                        .map(|range| range.start + 1..range.end + 1)
-                        .collect(),
+                    // The bare name, as Claude's menu lists it: the `/` is
+                    // already on the line.
+                    name: SharedString::from(command.name.clone()),
+                    matched,
                     detail: SharedString::from(command.description.clone()),
                     prose_detail: true,
                     inert: false,
@@ -10097,7 +10099,7 @@ const IMPORT_ROWS_MAX: usize = 200;
 
 /// One Ferrite-local `/` row (#11's `import`, #25's `provider`) — never
 /// the provider's, which its description says out loud. The same fuzzy
-/// filter as every row; highlights shifted past the drawn `/`.
+/// filter as every row.
 fn local_row(
     filter: &str,
     name: &'static str,
@@ -10107,11 +10109,8 @@ fn local_row(
     let (_, matched) = crate::fuzzy::matches(filter, name)?;
     Some(pane::MenuRow {
         insert: SharedString::from(name),
-        name: SharedString::from(format!("/{name}")),
-        matched: matched
-            .into_iter()
-            .map(|range| range.start + 1..range.end + 1)
-            .collect(),
+        name: SharedString::from(name),
+        matched,
         detail: SharedString::from(detail),
         prose_detail: true,
         inert,
@@ -12118,6 +12117,7 @@ impl CockpitView {
             ferrite_ui::menu::ChoiceMenu {
                 submenus: Vec::new(),
                 width: Some(ferrite_ui::theme::MODE_MENU_W),
+                hang_left: false,
                 id: format!("mode-picker-{key}").into(),
                 trigger,
                 choices,
@@ -12249,7 +12249,7 @@ impl CockpitView {
             .child(ferrite_ui::components::text_meta().child(verb))
         };
         // A card-wide verb is a whole float row: one row, the rows' inset,
-        // `INK`, `FLOAT_HOVER` under the pointer.
+        // `INK_STRONG`, `FLOAT_HOVER` under the pointer.
         let action_row = |id: SharedString, verb: &'static str| {
             ferrite_ui::components::form_button(id, cx)
                 .h(px(ferrite_ui::theme::FLOAT_ROW_H))
@@ -12262,7 +12262,7 @@ impl CockpitView {
                         .w_full()
                         .text_size(px(ferrite_ui::theme::FS_UI))
                         .line_height(px(ferrite_ui::theme::LH_UI))
-                        .text_color(rgb(ferrite_ui::theme::INK))
+                        .text_color(rgb(ferrite_ui::theme::INK_STRONG))
                         .child(verb),
                 )
         };
@@ -12329,11 +12329,7 @@ impl CockpitView {
                                 // row reads at the UI size like every menu.
                                 .text_size(px(ferrite_ui::theme::FS_UI))
                                 .line_height(px(ferrite_ui::theme::LH_UI))
-                                .text_color(rgb(if checked {
-                                    ferrite_ui::theme::INK_STRONG
-                                } else {
-                                    ferrite_ui::theme::INK
-                                }))
+                                .text_color(rgb(ferrite_ui::theme::INK_STRONG))
                                 .child(mode.label),
                         )
                         .children(checked.then(|| {
@@ -12399,7 +12395,7 @@ impl CockpitView {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(ferrite_ui::theme::INK))
+                        .text_color(rgb(ferrite_ui::theme::INK_STRONG))
                         // A long server name gives way to its state and
                         // actions; the whole of it is one hover away.
                         .tooltip(ferrite_ui::menu::tooltip(server.name.clone()))
@@ -12551,7 +12547,7 @@ impl CockpitView {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(ferrite_ui::theme::INK))
+                        .text_color(rgb(ferrite_ui::theme::INK_STRONG))
                         .child(task.label.clone()),
                 );
             if working && open.supports_control(ferrite_core::ControlKind::StopTask) {
@@ -12714,14 +12710,13 @@ impl CockpitView {
         let provider = open.provider();
         let hold = tuning_hold(&open);
         // The standing choice names the chip; else what the Session's own
-        // Init said is serving; until either, the Provider's own name — and
-        // always the name a person says, never the id on the wire.
-        let label = match open.model().or(open.transcript().model()) {
-            Some(model) => {
-                SharedString::from(ferrite_core::providers::models::label(model, open.models()))
-            }
-            None => SharedString::from(provider_title(provider)),
-        };
+        // Init said is serving; until either, the provider's default model —
+        // never the provider, and never the id on the wire.
+        let label = SharedString::from(ferrite_core::providers::models::footer_name(
+            provider,
+            open.model().or(open.transcript().model()),
+            open.models(),
+        ));
         let ladder =
             ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
         let effort = (!ladder.is_empty())
@@ -12846,6 +12841,7 @@ impl CockpitView {
         });
         ferrite_ui::menu::ChoiceMenu {
             submenus,
+            hang_left: false,
             width: Some(if effort {
                 ferrite_ui::theme::EFFORT_MENU_W
             } else {
@@ -13706,7 +13702,6 @@ impl CockpitView {
                     .children(nav::edge_fades(&self.nav_scroll))
                     .child(nav::scrollbar(&self.nav_scroll, self.nav_hovered)),
             )
-            .children(self.view_switcher(cx))
             .child(nav::foot(
                 &self.shown_user,
                 &self.shown_version,
@@ -13753,69 +13748,6 @@ impl CockpitView {
             .track_focus(&self.nav_view_focus)
             .key_context("NavView")
             .child(nav::activity_list(priority, today))
-    }
-
-    /// The view switcher in the nav's foot (`nav::view_tabs`, the bottom
-    /// bar's tabs moved): `Solo` and one tab per Group in the nav's order,
-    /// open or not — the current view's selected (none on the empty
-    /// board), each with its roll-up mark — a press on `Solo` showing Solo
-    /// (the loose Thread used last, else the empty board) and on a Group
-    /// entering it. None while there is no Group: Solo alone is no choice.
-    fn view_switcher(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let groups = self.cockpit.groups();
-        groups.iter().next()?;
-        let view = self.cockpit.roster().view();
-        let empty = self.empty_board_shown();
-        // Solo's one Thread: the one it shows while it is the view, else
-        // the loose Thread used last, where a press on the tab lands. (The
-        // Thread written last is not always the one on screen: the current
-        // tab's mark must not speak for another, nor its press move off it.)
-        let solo = (!empty && view == View::Solo)
-            .then(|| self.focused_thread())
-            .flatten()
-            .or_else(|| {
-                self.panes
-                    .iter()
-                    .filter_map(|pane| pane.thread())
-                    .filter(|thread| groups.of(*thread).is_none())
-                    .max_by_key(|thread| self.last_used(*thread))
-            });
-        // A tab's mark rolls up the Threads its view shows: Solo's one
-        // Thread, a Group's members.
-        let status = |threads: &mut dyn Iterator<Item = ThreadId>| {
-            let rows: Vec<nav::ThreadRow> = threads.map(|thread| self.thread_row(thread)).collect();
-            nav::roll_up(&rows)
-        };
-        let mut tabs = vec![nav::view_tab(&nav::ViewTab {
-            key: "nav-view-tab-solo".into(),
-            label: "Solo".into(),
-            current: !empty && view == View::Solo,
-            status: status(&mut solo.into_iter()),
-        })
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| match solo {
-            Some(thread) => {
-                view.empty_shown = false;
-                view.focus_thread(thread, cx);
-            }
-            None => view.show_empty_board(cx),
-        }))
-        .into_any_element()];
-        for group in groups.iter() {
-            let id = group.id;
-            tabs.push(
-                nav::view_tab(&nav::ViewTab {
-                    key: SharedString::from(format!("nav-view-tab-{}", id.get())),
-                    label: group.display_title().into(),
-                    current: !empty && view == View::Group(id),
-                    status: status(&mut group.members.iter().copied()),
-                })
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.enter_group(id, cx);
-                }))
-                .into_any_element(),
-            );
-        }
-        Some(nav::view_tabs(tabs))
     }
 
     /// The sidebar toggle (§5.1.1): in the head, or at the rail's top.
@@ -13918,10 +13850,9 @@ impl CockpitView {
                     &thread,
                     thread.name.clone(),
                     None,
-                    nav::RowPlace::ROOT,
+                    nav::RowPlace::Inbox,
                     None,
                     false,
-                    0,
                 );
                 div()
                     .id(("notice-row", index))
@@ -13954,8 +13885,8 @@ impl CockpitView {
         }
         let sections = self.view_tree(state.parked.clone());
         list = list.children(
-            self.view_sections(&sections, cx, |view, row, place, ends, cx| {
-                view.thread_element(row, None, place, ends, cx)
+            self.view_sections(&sections, cx, |view, row, place, cx| {
+                view.thread_element(row, None, place, cx)
             }),
         );
         let list = if self.machine_lost() {
@@ -14014,41 +13945,32 @@ impl CockpitView {
     }
 
     /// A view's sections drawn as the tree draws its own: each a plain
-    /// Project heading over its rows, one level in with the Project's
-    /// guide, each Group's row (a press opens it, its chevron folds it as
-    /// the tree's does) over its members, one level further with the
-    /// Group's guide. `thread` draws a row (its place, and how many of its
-    /// guides end at it) and wires its press, which differs by view.
+    /// Project heading over its rows, on its label, each Group's row (a
+    /// press opens it, its chevron folds it as the tree's does) over its
+    /// members, one level in. `thread` draws a row at its place and wires
+    /// its press, which differs by view.
     fn view_sections(
         &self,
         sections: &[nav::ViewSection],
         cx: &mut Context<Self>,
-        thread: impl Fn(&Self, &nav::ThreadRow, nav::RowPlace, usize, &mut Context<Self>) -> AnyElement,
+        thread: impl Fn(&Self, &nav::ThreadRow, nav::RowPlace, &mut Context<Self>) -> AnyElement,
     ) -> Vec<AnyElement> {
         sections
             .iter()
             .enumerate()
             .map(|(index, section)| {
-                let loose = section.solos.len();
                 let mut rows: Vec<AnyElement> = section
                     .solos
                     .iter()
-                    .enumerate()
-                    .map(|(at, row)| {
-                        let ends = usize::from(at + 1 == loose && section.groups.is_empty());
-                        thread(self, row, nav::RowPlace::Row(1), ends, cx)
-                    })
+                    .map(|row| thread(self, row, nav::RowPlace::Row(0), cx))
                     .collect();
-                for (at, group) in section.groups.iter().enumerate() {
+                for group in &section.groups {
                     let id = group.id;
-                    let last = at + 1 == section.groups.len();
-                    let shut = group.folded || group.members.is_empty();
                     let head = nav::group_row_with_title(
                         group,
                         group.title.clone(),
                         self.group_fold(group, cx),
-                        1,
-                        usize::from(last && shut),
+                        0,
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -14058,15 +13980,10 @@ impl CockpitView {
                     );
                     let mut block = nav::group_block(id).child(head);
                     if !group.folded {
-                        let count = group.members.len();
                         let members = group
                             .members
                             .iter()
-                            .enumerate()
-                            .map(|(at, row)| {
-                                let ends = member_ends(last, at, count);
-                                thread(self, row, nav::RowPlace::Row(2), ends, cx)
-                            })
+                            .map(|row| thread(self, row, nav::RowPlace::Row(1), cx))
                             .collect();
                         block = block.child(nav::members(members));
                     }
@@ -14287,37 +14204,20 @@ impl CockpitView {
             };
             first = false;
             if !section.folded {
-                // A Project's rows sit one level under its heading; the
-                // Groups section and Recents have no folder to hang from.
-                let depth = usize::from(!section.mixed && !recents);
+                // Every section's rows start on its heading's label.
                 let mut rows: Vec<AnyElement> = Vec::new();
                 if !section.drawn.is_empty() {
-                    let loose = section.drawn.len();
-                    let closes = section.groups.is_empty();
                     let mut solos: Vec<AnyElement> = section
                         .drawn
                         .iter()
-                        .enumerate()
-                        .map(|(at, row)| {
-                            let last = at + 1 == loose && closes && section.more.is_none();
-                            self.thread_element(
-                                &state.solos[*row],
-                                None,
-                                nav::RowPlace::Row(depth),
-                                usize::from(last),
-                                cx,
-                            )
+                        .map(|row| {
+                            self.thread_element(&state.solos[*row], None, nav::RowPlace::ROOT, cx)
                         })
                         .collect();
                     if let Some(more) = section.more {
                         let key = section.project;
                         solos.push(
-                            nav::show_more(
-                                index,
-                                more,
-                                nav::RowPlace::Row(depth),
-                                usize::from(closes),
-                            )
+                            nav::show_more(index, more, nav::RowPlace::ROOT)
                             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                                 if !view.nav_more.remove(&key) {
                                     view.nav_more.insert(key);
@@ -14330,9 +14230,8 @@ impl CockpitView {
                     rows.push(self.loose_run(zones, solos, cx));
                     zones += 1;
                 }
-                for (at, group) in section.groups.iter().enumerate() {
-                    let last = at + 1 == section.groups.len();
-                    rows.push(self.group_element(&state.groups[*group], depth, last, origin, cx));
+                for group in &section.groups {
+                    rows.push(self.group_element(&state.groups[*group], origin, cx));
                 }
                 block = if section.mixed || recents {
                     block.children(rows)
@@ -14414,7 +14313,7 @@ impl CockpitView {
             state
                 .pinned
                 .iter()
-                .map(|row| self.thread_element(row, None, nav::RowPlace::ROOT, 0, cx))
+                .map(|row| self.thread_element(row, None, nav::RowPlace::ROOT, cx))
                 .collect()
         };
         nav::section(true)
@@ -14423,16 +14322,18 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The `Projects` heading (§5.1.3), its `+` a new Project.
-    fn projects_heading(&self, cx: &mut Context<Self>) -> Div {
-        nav::heading("nav-projects-heading", "Projects").child(
+    /// The `Projects` heading (§5.1.3), its `+` a new Project, under the
+    /// pointer only.
+    fn projects_heading(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        nav::heading_with_action("nav-projects-heading", "Projects", || {
             nav::heading_button("nav-new-project", ferrite_ui::icons::PLUS)
                 .tooltip(ferrite_ui::menu::tooltip("New project"))
                 .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_project_creator(cx);
-                })),
-        )
+                }))
+                .into_any_element()
+        })
     }
 
     /// A Project heading (N-12): a plain row whose press folds or unfolds
@@ -14533,14 +14434,11 @@ impl CockpitView {
     /// One Group block: the header — the drag handle, the rename target and
     /// the way in, its triangle the fold (N-4) — then, unfolded, the member
     /// rows; and over the header's top edge the "insert before this Group"
-    /// drop band, laid last so it is the topmost target there. Its row is
-    /// `depth` levels into the tree, its members one further; `last` says
-    /// it closes its section, so the section's guide ends at its last row.
+    /// drop band, laid last so it is the topmost target there. Its row
+    /// starts on its heading's label, its members one level in.
     fn group_element(
         &self,
         group: &nav::GroupBlock,
-        depth: usize,
-        last: bool,
         origin: View,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -14557,8 +14455,7 @@ impl CockpitView {
         let folded = group.folded;
         let fold = self.group_fold(group, cx);
         let title = self.editable_group_title(id, group.title.clone(), cx);
-        let shut = folded || group.members.is_empty();
-        let head = nav::group_row_with_title(group, title, fold, depth, usize::from(last && shut))
+        let head = nav::group_row_with_title(group, title, fold, 0)
             .children(self.cursor_reveal(nav::NavItem::Group(id)));
         let chip = NavChip::Group(group.clone());
         let lifted = self.nav_dragging == Some(Drag::Group(id));
@@ -14602,23 +14499,19 @@ impl CockpitView {
             // Pane's title strong (§5.1.6); any other Group's are two-line
             // rows, nested under it.
             let focused = self.cockpit.roster().focused_thread();
-            let count = group.members.len();
             let rows = group
                 .members
                 .iter()
-                .enumerate()
-                .map(|(at, row)| {
-                    let ends = member_ends(last, at, count);
+                .map(|row| {
                     if group.selected {
                         let member = nav::ThreadRow {
                             selected: focused == Some(row.thread),
                             ..row.clone()
                         };
-                        let place = nav::RowPlace::Member(depth);
-                        self.thread_element(&member, Some(id), place, ends, cx)
+                        let place = nav::RowPlace::Member(0);
+                        self.thread_element(&member, Some(id), place, cx)
                     } else {
-                        let place = nav::RowPlace::Row(depth + 1);
-                        self.thread_element(row, Some(id), place, ends, cx)
+                        self.thread_element(row, Some(id), nav::RowPlace::Row(1), cx)
                     }
                 })
                 .collect();
@@ -14681,7 +14574,6 @@ impl CockpitView {
         row: &nav::ThreadRow,
         group: Option<GroupId>,
         place: nav::RowPlace,
-        ends: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thread = row.thread;
@@ -14723,7 +14615,7 @@ impl CockpitView {
                 .into_any_element(),
         );
         let item = nav::NavItem::Thread(thread, group);
-        let head = nav::thread_row_with_title(row, title, action, place, group, editing, ends)
+        let head = nav::thread_row_with_title(row, title, action, place, group, editing)
             .children(self.cursor_reveal(item));
         let face = self.thread_ghost(thread);
         let nav_edge = self.nav_width();
@@ -14770,19 +14662,6 @@ impl CockpitView {
                 }),
             )
             .into_any_element()
-    }
-}
-
-/// How many of a nav member row's guides end at it (`nav::guides`),
-/// innermost first: none above its Group's last member; there its Group's,
-/// and its section's too when its Group is the section's last (`last`).
-/// The row clamps the count to the levels it has (a Group at the root has
-/// no section guide).
-fn member_ends(last: bool, at: usize, count: usize) -> usize {
-    if at + 1 == count {
-        1 + usize::from(last)
-    } else {
-        0
     }
 }
 

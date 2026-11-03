@@ -663,20 +663,6 @@ impl TranscriptView {
             .map(|row| &**row)
     }
 
-    /// The thread's latest answer, once written (none while a turn runs):
-    /// its actions stand under it at rest.
-    fn latest_answer(&self) -> Option<&RowId> {
-        if self.input.working.is_some() {
-            return None;
-        }
-        self.rows
-            .rows()
-            .iter()
-            .rev()
-            .find(|row| row.kind() == RowKind::Answer { narration: false })
-            .map(|row| row.id())
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub fn scroll(&self) -> &TranscriptScroll {
         &self.scroll
@@ -1011,8 +997,11 @@ impl TranscriptView {
                     .newest_content()
                     .is_some_and(|last| last.id() == row.id());
             let actions = (!narration && !streaming).then(|| {
-                message_actions(self.latest_answer() == Some(row.id()))
+                message_actions()
                     .debug_selector(|| "answer-actions".into())
+                    // The first icon's ink, not its box, on the prose's
+                    // edge (one left edge).
+                    .ml(px(-(theme::MESSAGE_ACTION - theme::MESSAGE_ACTION_GLYPH) / 2.))
                     .child(self.copy_action(row.id(), source.to_owned()))
                     .children(
                         blocks
@@ -1077,7 +1066,7 @@ impl TranscriptView {
                 .as_ref()
                 .zip(self.input.rewind.as_ref())
                 .zip(view.as_ref());
-            let actions = message_actions(false)
+            let actions = message_actions()
                 .children(
                     block
                         .sent_at
@@ -1641,7 +1630,7 @@ impl TranscriptView {
                         .child(ferrite_ui::icons::icon(
                             ferrite_ui::icons::ARROW_DOWN,
                             theme::ICON_BUTTON_GLYPH,
-                            theme::INK,
+                            theme::INK_STRONG,
                         )),
                 )
                 .into_any_element(),
@@ -1663,21 +1652,18 @@ fn arrival_fade(kind: RowKind) -> ferrite_ui::motion::MotionSpec {
 /// anywhere on it.
 const MESSAGE_GROUP: &str = "transcript-message";
 
-/// A message's actions (`MESSAGE_ACTION`s in a row), laid out at rest:
-/// `shown` (the thread's latest answer), always; else under the pointer
-/// anywhere on the message.
-fn message_actions(shown: bool) -> gpui::Div {
+/// A message's actions (`MESSAGE_ACTION`s in a row), laid out at rest but
+/// shown only under the pointer anywhere on the message, the latest
+/// answer's too (Claude's: actions, not content, never stand at rest).
+fn message_actions() -> gpui::Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::SPACE_0_5))
         .h(px(theme::MESSAGE_ACTION))
-        .when(!shown, |actions| {
-            actions
-                .opacity(0.)
-                .group_hover(MESSAGE_GROUP, |style| style.opacity(1.))
-        })
+        .opacity(0.)
+        .group_hover(MESSAGE_GROUP, |style| style.opacity(1.))
 }
 
 /// A message's time among its actions (`7:31 pm`, as core stamps it): meta
@@ -2306,7 +2292,7 @@ impl Render for TranscriptView {
             .font_family(theme::FONT_UI)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
-            .text_color(gpui::rgb(theme::INK))
+            .text_color(gpui::rgb(theme::INK_STRONG))
             .hover_text()
             .track_focus(&self.transcript_focus)
             .child(list)

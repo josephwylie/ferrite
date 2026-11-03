@@ -272,27 +272,18 @@ fn the_palette_toggles_the_panel(cx: &mut TestAppContext) {
 }
 
 /// The panel is one scroll of sections, Claude's, with no tabs:
-/// Environment, Changes, Context. Opening it from hidden shows it.
+/// Environment, then Changes and Context once they have something to say
+/// (no filler line stands in for them). Opening it from hidden shows it.
 #[gpui::test]
 fn the_panel_is_one_scroll_of_sections(cx: &mut TestAppContext) {
     let (view, cx) = solo("panel-sections", 1, 1600., cx);
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
-    for section in [
-        "panel-environment-head",
-        "panel-environment-machine",
-        "panel-changes-head",
-        "panel-no-changes",
-        "panel-context-head",
-    ] {
+    for section in ["panel-environment-head", "panel-environment-machine"] {
         assert!(cx.debug_bounds(section).is_some(), "{section}");
     }
-    let environment = cx.debug_bounds("panel-environment-head").unwrap();
-    let changes = cx.debug_bounds("panel-changes-head").unwrap();
-    let context = cx.debug_bounds("panel-context-head").unwrap();
-    assert!(
-        environment.top() < changes.top() && changes.top() < context.top(),
-        "in Claude's order"
-    );
+    for section in ["panel-changes-head", "panel-context-head"] {
+        assert!(cx.debug_bounds(section).is_none(), "empty: {section}");
+    }
     for tab in ["panel-tab-Overview", "panel-tab-Preview"] {
         assert!(cx.debug_bounds(tab).is_none(), "no tabs: {tab}");
     }
@@ -358,13 +349,15 @@ fn the_context_section_reads_the_shown_threads_context(cx: &mut TestAppContext) 
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some());
     assert!(
-        cx.debug_bounds("panel-no-context").is_some(),
+        cx.debug_bounds("panel-context-head").is_none(),
         "an unshown Thread's usage is not the panel's"
     );
     view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
-    assert!(cx.debug_bounds("panel-context").is_some());
-    assert!(cx.debug_bounds("panel-no-context").is_none());
+    let head = cx.debug_bounds("panel-context-head").expect("its head");
+    let context = cx.debug_bounds("panel-context").expect("its reading");
+    let environment = cx.debug_bounds("panel-environment-head").unwrap();
+    assert!(environment.top() < head.top() && head.top() < context.top());
 }
 
 /// Connectors folds, as Claude's: its head says how many are connected,

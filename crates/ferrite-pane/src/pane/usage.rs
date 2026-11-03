@@ -218,15 +218,6 @@ pub fn compact_count(count: u64) -> String {
     }
 }
 
-/// A turn's cost as the card reads it: cents, or `<$0.01` below one.
-pub(crate) fn cost_label(cost: f64) -> String {
-    if cost < 0.005 {
-        "<$0.01".into()
-    } else {
-        format!("${cost:.2}")
-    }
-}
-
 /// A context category's ink in the card's stacked bar and in its legend
 /// (`CTX_*`: the palette's own quiet hues). The categories a provider
 /// usually reports keep one ink each; any other name takes the next from a
@@ -320,12 +311,11 @@ pub fn context_meter_segments(
 /// but taking no share; and the lists behind the categories that have
 /// them (`MCP tools`, `Skills`, `Memory files`), each folding open to its
 /// items. Counts are reported values, never estimates. The turn's usage
-/// and its cost close it when the provider reports them.
+/// closes it when the provider reports it.
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
     details: Option<&ContextDetails>,
     usage_details: Option<&ferrite_core::UsageDetails>,
-    last_cost: Option<f64>,
 ) -> impl IntoElement {
     let maximum = usage.context_window.filter(|limit| *limit > 0);
     let current = usage.total_tokens;
@@ -484,7 +474,7 @@ pub fn context_usage(
         .px(px(theme::PANEL_ROW_ICON_X))
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(INK))
+        .text_color(rgb(INK_STRONG))
         .child(head)
         .children(bar)
         .child(held)
@@ -508,10 +498,6 @@ pub fn context_usage(
             )
             .child(components::tabular(div().flex_shrink_0().child(value)))
     };
-    let cost = last_cost.map(|cost| {
-        row("Last turn".into(), cost_label(cost))
-            .debug_selector(move || format!("usage-cost-{cost}"))
-    });
     if let Some(details) = usage_details {
         let scope = match details.scope {
             ferrite_core::UsageScope::Message => ("message", "This message"),
@@ -543,11 +529,9 @@ pub fn context_usage(
                     .debug_selector(move || format!("usage-{key}-{count}")),
             );
         }
-        card = card.child(section.children(cost));
-    } else if let Some(cost) = cost {
-        card = card.child(cost.mt(px(theme::USAGE_CARD_GAP)));
+        card = card.child(section);
     }
-    // Counts, percentages and the cost tick while the panel is open.
+    // Counts and percentages tick while the panel is open.
     components::tabular(card)
 }
 
@@ -634,7 +618,7 @@ fn mcp_tool_name(name: &str) -> String {
 
 /// A list behind a category (`MCP tools 197`): a row that folds open to
 /// its items, its chevron in the name column's gutter and its count at the
-/// right. Under the pointer its words blend up to `INK`. The fold is this
+/// right. Under the pointer its words blend up to `INK_STRONG`. The fold is this
 /// element's own, kept while the panel shows.
 #[derive(IntoElement)]
 struct ContextList {
@@ -664,7 +648,7 @@ impl RenderOnce for ContextList {
             .text_color(ferrite_ui::motion::hover_blend(
                 &hover,
                 rgb(INK_SUBTLE).into(),
-                rgb(INK).into(),
+                rgb(INK_STRONG).into(),
             ))
             .on_hover(ferrite_ui::motion::hover_listener(hover))
             .child(
@@ -727,7 +711,7 @@ impl RenderOnce for ContextList {
     }
 }
 
-/// A usage reading's ink: neutral `INK` until the window runs tight
+/// A usage reading's ink: neutral `INK_STRONG` until the window runs tight
 /// (`USAGE_TIGHT`), then `ATTENTION`. There is no `BLOCKED` step: a full
 /// window stops nothing until the provider says so. Colour is state; a
 /// context half full is not one.
@@ -735,7 +719,7 @@ pub fn usage_ink(fraction: f32) -> u32 {
     if fraction >= theme::USAGE_TIGHT {
         ATTENTION
     } else {
-        INK
+        INK_STRONG
     }
 }
 

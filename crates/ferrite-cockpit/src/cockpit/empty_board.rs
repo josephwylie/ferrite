@@ -88,9 +88,10 @@ fn home_row(
 }
 
 impl CockpitView {
-    /// Show the empty board while Threads stay open (the `1 solo` tab with
-    /// no loose Thread, a palette command). The next landing on a Pane
-    /// leaves it.
+    /// Show the empty board while Threads stay open — a fixture's door
+    /// (tests, visual references): the app reaches it only when no Pane is
+    /// visible. The next landing on a Pane leaves it.
+    #[cfg(any(test, feature = "visual-reference"))]
     pub(crate) fn show_empty_board(&mut self, cx: &mut Context<Self>) {
         self.empty_shown = true;
         self.empty_cursor = 0;
@@ -313,13 +314,12 @@ impl CockpitView {
                 ..
             } = row;
             let selected = at == cursor;
-            let ink = if selected { INK_STRONG } else { INK };
             let keys = Self::key_label(action);
             let row = home_row(
                 ("empty-board-command", at),
-                ferrite_ui::icons::icon(glyph, NAV_ICON, if selected { INK } else { INK_SUBTLE })
+                ferrite_ui::icons::icon(glyph, NAV_ICON, INK_STRONG)
                     .into_any_element(),
-                div().text_color(rgb(ink)).child(verb),
+                div().text_color(rgb(INK_STRONG)).child(verb),
                 div().children(keys.map(|keys| {
                     ferrite_ui::components::key_combo(&keys, INK_SUBTLE)
                         .font_family(FONT_UI)
@@ -358,7 +358,7 @@ impl CockpitView {
             home_row(
                 ("empty-board-recent", thread.get() as usize),
                 nav::mark(row.status, false),
-                div().text_color(rgb(INK)).child(row.name.clone()),
+                div().text_color(rgb(INK_STRONG)).child(row.name.clone()),
                 div()
                     .children(row.project.clone())
                     .children(age.filter(|age| !age.is_empty())),
@@ -420,7 +420,7 @@ impl CockpitView {
             .font_family(FONT_UI)
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
-            .text_color(rgb(INK))
+            .text_color(rgb(INK_STRONG))
             // Centred, a touch above the middle (`EMPTY_LIFT`), and pinned
             // to the top once it no longer fits.
             .child(div().flex_1().min_h_0())

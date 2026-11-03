@@ -113,33 +113,6 @@ pub fn section(
 const ARMED_SEAM: &str = " \u{b7} ";
 const ARMED_ASK: &str = "press again";
 
-/// A row's inks: its label (`MODE_ATTENTION_INK` on an attention choice in every live
-/// state), and the ground (`FLOAT_SEL` on the cursor and an armed row). Its
-/// description and key are `INK_SUBTLE` (`detail_ink`).
-fn label_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
-    if item.disabled {
-        INK_SUBTLE
-    } else if armed {
-        BLOCKED
-    } else if item.attention {
-        MODE_ATTENTION_INK
-    } else if cursor {
-        INK_STRONG
-    } else {
-        INK
-    }
-}
-
-/// A row's description and key: `INK_SUBTLE`, lifted to `INK` on
-/// the filled cursor row so they keep their floor on its step.
-fn detail_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
-    if armed || (cursor && !item.disabled) {
-        INK
-    } else {
-        INK_SUBTLE
-    }
-}
-
 /// A key as a row draws it: a key table's spelling (`cmd-F`) through
 /// `components::key_combo`, so the command key is a glyph box; anything
 /// else (`↵`, `esc`) as its own word.
@@ -162,10 +135,10 @@ pub fn key_label(keys: &str, ink: u32) -> AnyElement {
 /// float's sides, radius `R_CONTROL`; a leading mark, the label (strong on
 /// its fuzzy matches), the description after it, a `✓` on the standing
 /// choice in `MENU_CHECK_INK`, and the key hard right (Claude's `✓ 5`). The cursor (or an
-/// armed) row is `FLOAT_SEL` with its label `INK_STRONG`.
+/// armed) row is `FLOAT_SEL`; its inks are `components::row_inks`.
 pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
-    let ink = label_ink(item, cursor, armed);
-    let dim = detail_ink(item, cursor, armed);
+    let inks = components::row_inks(item, cursor, armed);
+    let (ink, dim) = (inks.label, inks.detail);
     let (label, highlights): (SharedString, _) = if armed {
         let at = item.label.len();
         let text = format!("{}{ARMED_SEAM}{ARMED_ASK}", item.label);
@@ -273,14 +246,16 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         })
 }
 
-/// A row's tag (`Recommended`, `Default`): the badge size in `INK_SUBTLE` on
-/// a hairline fill at `R_CONTROL` — a word set apart, not a button.
+/// A row's tag (`Recommended`, `Default`): the badge size in `INK_SUBTLE` in
+/// a `TAG_RING` hairline at `R_CONTROL`, no fill (Claude's) — a word set
+/// apart, not a button.
 fn badge_face(text: SharedString) -> Div {
     div()
         .flex_shrink_0()
         .px(px(SPACE_1_5))
         .rounded(px(R_CONTROL))
-        .bg(gpui::rgba(BADGE_FILL))
+        .border_1()
+        .border_color(rgb(TAG_RING))
         .text_size(px(FS_BADGE))
         .line_height(px(LH_META))
         .text_color(rgb(INK_SUBTLE))
@@ -563,6 +538,10 @@ pub struct ChoiceMenu {
     /// first frame; else it hugs its rows between `CHOICE_MENU_MIN_W` and
     /// `SLASH_MENU_W`.
     pub width: Option<f32>,
+    /// A placed menu hangs by its left edge at the trigger's left instead
+    /// (Claude's `+` menu, which opens over the box, never over the
+    /// sidebar).
+    pub hang_left: bool,
 }
 
 /// A picker's trigger that never wears the kit's selected face while its
@@ -649,6 +628,7 @@ struct ChoiceContent {
     on_open: OpenChanged,
     return_focus: gpui::FocusHandle,
     place: Option<components::FloatPlace>,
+    hang_left: bool,
     state: gpui::Entity<ChoiceState>,
     focus: gpui::FocusHandle,
     /// The view that draws the menu, redrawn when the menu's own state
@@ -919,10 +899,16 @@ impl ChoiceContent {
         // drawn before it can open its menu — so the menu stands in place
         // on its first frame.
         let width = self.width.unwrap_or(CHOICE_MENU_MIN_W);
-        let left = trigger
+        let right = trigger
             .map_or(place.limit_right, |trigger| f32::from(trigger.right()))
-            .min(place.limit_right)
-            - width;
+            .min(place.limit_right);
+        let left = match trigger {
+            // Hung from the trigger's left edge, as far as the limit lets.
+            Some(trigger) if self.hang_left => {
+                f32::from(trigger.left()).min(place.limit_right - width)
+            }
+            _ => right - width,
+        };
         let floor = place.floor - MODEL_PICKER_GAP;
         gpui::anchored()
             .anchor(gpui::Anchor::BottomLeft)
@@ -972,11 +958,11 @@ impl ChoiceContent {
                         .flex_shrink_0()
                         .items_center()
                         .gap(px(SPACE_1))
-                        .text_color(rgb(if lit { INK } else { INK_SUBTLE }))
+                        .text_color(rgb(if lit { INK_STRONG } else { INK_SUBTLE }))
                         .when(!submenu.value.is_empty(), |cell| {
                             cell.child(submenu.value.clone())
                         })
-                        .child(icons::icon(icons::CHEVRON_RIGHT, ROW_ICON, INK_SUBTLE)),
+                        .child(icons::icon(icons::CHEVRON_RIGHT, ICON_CHEVRON, INK_SUBTLE)),
                 )
                 .on_mouse_move(move |_, _, cx| {
                     if !open {
@@ -1074,6 +1060,7 @@ impl RenderOnce for ChoiceMenu {
                 on_open: self.on_open,
                 return_focus: self.return_focus,
                 place: self.place,
+                hang_left: self.hang_left,
                 state,
                 focus: focus.clone(),
                 owner: window.current_view(),
@@ -1220,7 +1207,7 @@ mod tests {
         assert_eq!(calm.style().background, None);
         assert_eq!(
             components::row_inks(&delete, false, false).label,
-            INK,
+            INK_STRONG,
             "a destructive verb reads like any row before it arms"
         );
         assert_eq!(

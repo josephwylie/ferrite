@@ -6,10 +6,11 @@
 //!   folder in the system's file browser), and its branch, with where it
 //!   branched from and the checkout's drift and dirt when git has said.
 //! - **Changes**: what it edited, and its pull request once one exists
-//!   (`changes`).
+//!   (`changes`); left out with neither.
 //! - **Context**: what fills its context window, by category, and the
-//!   lists behind the categories (`pane::context_usage`). The one place
-//!   context is read: the Composer's ring reads plan usage.
+//!   lists behind the categories (`pane::context_usage`); left out until
+//!   the provider reports it. The one place context is read: the
+//!   Composer's ring reads plan usage.
 //! - **Connectors**: `N connected` at its head, which folds its MCP servers
 //!   open, each with how it stands; left out with none.
 //!
@@ -32,51 +33,52 @@ impl CockpitView {
             return div().into_any_element();
         };
         let transcript = open.transcript();
+        // A section with nothing to say is not drawn (Claude's): Changes
+        // waits for an edit or a pull request, Context for the provider's
+        // reading, Connectors for a server.
+        let mut sections = vec![self.environment_section(thread)];
+        sections.extend(self.changes_section(thread, cx));
+        if let Some(usage) = transcript.usage() {
+            let error = self
+                .session_control_error
+                .as_ref()
+                .filter(|(shown, generation, _)| {
+                    *shown == thread && *generation == open.generation()
+                })
+                .map(|(_, _, error)| error.clone());
+            sections.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(panel_section_head("panel-context-head", "Context"))
+                    .child(div().debug_selector(|| "panel-context".into()).child(
+                        pane::context_usage(
+                            usage,
+                            transcript.context_details(),
+                            transcript.usage_details(),
+                        ),
+                    ))
+                    .children(
+                        error.map(|error| pane::card_error(error).id("session-control-error")),
+                    ),
+            );
+        }
+        let servers = transcript.mcp_servers();
+        if !servers.is_empty() {
+            sections.push(connectors(servers, window, cx));
+        }
+
         let mut body = div()
             .debug_selector(|| "panel-sections".into())
             .flex()
             .flex_col()
-            .pb(px(SPACE_2))
-            .child(self.environment_section(thread))
-            .child(section_rule())
-            .child(self.changes_section(thread, cx))
-            .child(section_rule());
-
-        // Context.
-        body = body.child(panel_section_head("panel-context-head", "Context"));
-        body = match transcript.usage() {
-            Some(usage) => {
-                let error = self
-                    .session_control_error
-                    .as_ref()
-                    .filter(|(shown, generation, _)| {
-                        *shown == thread && *generation == open.generation()
-                    })
-                    .map(|(_, _, error)| error.clone());
-                body.child(div().debug_selector(|| "panel-context".into()).child(
-                    pane::context_usage(
-                        usage,
-                        transcript.context_details(),
-                        transcript.usage_details(),
-                        transcript.last_cost(),
-                    ),
-                ))
-                .children(error.map(|error| pane::card_error(error).id("session-control-error")))
+            .pb(px(SPACE_2));
+        for (index, section) in sections.into_iter().enumerate() {
+            if index > 0 {
+                body = body.child(section_rule());
             }
-            None => body.child(
-                quiet_line("panel-no-context")
-                    .child("Shows once the provider reports what fills the window"),
-            ),
-        };
-
-        // Connectors.
-        let servers = transcript.mcp_servers();
-        if !servers.is_empty() {
-            body = body
-                .child(section_rule())
-                .child(connectors(servers, window, cx));
+            body = body.child(section);
         }
-
         body.into_any_element()
     }
 
@@ -202,7 +204,7 @@ pub(super) fn detail_row(
                 .absolute()
                 .left(px(PANEL_ROW_ICON_X))
                 .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
-                .child(icon(glyph, PANEL_ROW_ICON, INK)),
+                .child(icon(glyph, PANEL_ROW_ICON, INK_SUBTLE)),
         )
         .child(
             div()
@@ -210,7 +212,7 @@ pub(super) fn detail_row(
                 .max_w_full()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(INK))
+                .text_color(rgb(INK_STRONG))
                 .child(label.into()),
         )
         .children(meta.map(|meta| {
@@ -318,14 +320,14 @@ fn connector_row(index: usize, server: &McpServer) -> Div {
                 .absolute()
                 .left(px(PANEL_ROW_ICON_X))
                 .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
-                .child(icon(icons::BLOCKS, PANEL_ROW_ICON, INK)),
+                .child(icon(icons::BLOCKS, PANEL_ROW_ICON, INK_SUBTLE)),
         )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(INK))
+                .text_color(rgb(INK_STRONG))
                 .child(SharedString::from(server.name.clone())),
         )
         .child(
@@ -335,21 +337,6 @@ fn connector_row(index: usize, server: &McpServer) -> Div {
                 .text_color(rgb(ink))
                 .child(word),
         )
-}
-
-/// A quiet line on the content edge: one `PANEL_SECTION_H` row, its words
-/// wrapping within the panel's padding when they run long.
-pub(super) fn quiet_line(selector: &'static str) -> Div {
-    use ferrite_ui::theme::*;
-    div()
-        .debug_selector(move || selector.into())
-        .flex_shrink_0()
-        .whitespace_normal()
-        .py(px((PANEL_SECTION_H - LH_META) / 2.))
-        .px(px(PANEL_ROW_ICON_X))
-        .line_height(px(LH_META))
-        .text_size(px(FS_META))
-        .text_color(rgb(INK_SUBTLE))
 }
 
 #[cfg(test)]

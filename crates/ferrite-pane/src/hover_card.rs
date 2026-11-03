@@ -350,7 +350,7 @@ impl gpui::Render for HoverCard {
             .font_family(theme::FONT_CODE)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
-            .text_color(rgb(theme::INK))
+            .text_color(rgb(theme::INK_STRONG))
             .child(head)
             .children(rows)
             .children(foot)

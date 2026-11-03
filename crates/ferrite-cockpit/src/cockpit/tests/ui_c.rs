@@ -655,7 +655,7 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
 /// are never on the line, so a long branch can never squeeze the title.
 #[gpui::test]
 fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_ROW_H, NAV_TITLE_X, NAV_TREE_INDENT};
+    use ferrite_ui::theme::{NAV_ROW_H, NAV_ROW_PAD_X, NAV_TREE_INDENT};
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -704,7 +704,7 @@ fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
             let facts = view.facts.get(*thread);
             (
                 facts.map_or(0, |facts| facts.subagents),
-                facts.and_then(|facts| facts.off_default_branch()),
+                facts.and_then(|facts| facts.status.as_ref()?.branch.clone()),
             )
         });
         assert_eq!(subagents, 5);
@@ -712,12 +712,12 @@ fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
         let title = bounds(cx, format!("nav-title-{id}"));
         let whole_row = bounds(cx, format!("nav-thread-{id}"));
         assert_eq!(whole_row.size.height, px(NAV_ROW_H), "one line");
-        // The shown Group hangs one level into its Project's tree, its
+        // The shown Group starts on its Project's label, its
         // members a step further; a member's title takes the line but for
         // the room its mark needs.
-        let member_x = NAV_TITLE_X + NAV_TREE_INDENT;
+        let member_x = NAV_ROW_PAD_X + NAV_TREE_INDENT;
         let marked = crate::nav::state_mark(row.status).is_some();
-        let expected = crate::nav::title_w(crate::nav::RowPlace::Member(1), marked);
+        let expected = crate::nav::title_w(crate::nav::RowPlace::Member(0), marked);
         assert!(
             (title.size.width - px(expected)).abs() < px(0.5),
             "the title takes what its mark leaves: {title:?}, {expected}"

@@ -358,13 +358,18 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
             answer.top() - tools.bottom(),
             px(ferrite_ui::theme::tx_work_prose(line))
         );
-        // Its actions stand under it, on the prose's edge.
+        // Its actions stand under it, the first icon's ink on the prose's
+        // edge.
         let actions = cx.debug_bounds("answer-actions").unwrap();
         assert_eq!(
             actions.top() - answer.bottom(),
             px(ferrite_ui::theme::MESSAGE_ACTIONS_GAP)
         );
-        assert_eq!(actions.left(), answer.left());
+        use ferrite_ui::theme::{MESSAGE_ACTION, MESSAGE_ACTION_GLYPH};
+        assert_eq!(
+            actions.left(),
+            answer.left() - px((MESSAGE_ACTION - MESSAGE_ACTION_GLYPH) / 2.)
+        );
         // One content edge: the group's summary and the answer's prose
         // start on the content column (the prompt's bubble keeps to the
         // right).

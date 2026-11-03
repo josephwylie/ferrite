@@ -1675,7 +1675,7 @@ impl ReviewView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(comment.text.clone())),
             )
             .child(
@@ -1776,7 +1776,7 @@ impl ReviewView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(commit.subject.clone())),
             )
             .when(!commit.author.is_empty(), |row| {
@@ -1861,7 +1861,7 @@ impl ReviewView {
             body = body.child(
                 div()
                     .mt(px(self.grid.half()))
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(pr.body.clone())),
             );
         }
@@ -1888,7 +1888,7 @@ impl ReviewView {
                         )
                         .child(
                             div()
-                                .text_color(rgb(INK))
+                                .text_color(rgb(INK_STRONG))
                                 .child(SharedString::from(check.name.clone())),
                         ),
                 );
@@ -1931,7 +1931,7 @@ impl ReviewView {
                 )))
                 .child(
                     div()
-                        .text_color(rgb(INK))
+                        .text_color(rgb(INK_STRONG))
                         .child(SharedString::from(comment.body.clone())),
                 );
             for reply in &comment.replies {
@@ -1941,7 +1941,7 @@ impl ReviewView {
                         .child(muted(reply.author.clone()))
                         .child(
                             div()
-                                .text_color(rgb(INK))
+                                .text_color(rgb(INK_STRONG))
                                 .child(SharedString::from(reply.body.clone())),
                         ),
                 );
@@ -2030,7 +2030,7 @@ impl ReviewView {
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
-                                        .text_color(rgb(INK))
+                                        .text_color(rgb(INK_STRONG))
                                         .child(
                                             StyledText::new(SharedString::from(text))
                                                 .with_highlights(marks),
@@ -2114,7 +2114,7 @@ impl ReviewView {
                         let ink = if entries[*index].annotation.is_some() {
                             INK_STRONG
                         } else {
-                            INK
+                            INK_SUBTLE
                         };
                         (row.name.clone(), ink)
                     }

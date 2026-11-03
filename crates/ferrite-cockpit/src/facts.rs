@@ -89,26 +89,6 @@ pub struct ThreadFacts {
     branch_asked: bool,
 }
 impl ThreadFacts {
-    /// Whether `branch` is the Project's default, which the view head leaves
-    /// unsaid.
-    pub fn is_default_branch(&self, branch: &str) -> bool {
-        match &self.default_branch {
-            Some(default) => branch == default.as_ref(),
-            None => matches!(branch, "main" | "master"),
-        }
-    }
-
-    /// The checkout's branch, only when it says something: not the
-    /// Project's default. The live status's branch wins over the cached one.
-    pub fn off_default_branch(&self) -> Option<SharedString> {
-        self.status
-            .as_ref()
-            .and_then(|status| status.branch.clone())
-            .map(SharedString::from)
-            .or_else(|| self.branch.clone())
-            .filter(|branch| !self.is_default_branch(branch))
-    }
-
     pub fn wall_for(&self, subject: &Subject) -> Option<&WallCard> {
         match subject {
             Subject::Main => Some(&self.wall),
@@ -875,22 +855,5 @@ mod tests {
     fn a_future_stamp_says_nothing() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
         assert_eq!(since_label(now + Duration::from_secs(500), now), "");
-    }
-
-    /// The Project's default is left unsaid; anything else is named. With
-    /// no default read, `main` and `master` stand in for it.
-    #[test]
-    fn only_a_branch_off_the_default_is_named() {
-        let mut facts = ThreadFacts {
-            branch: Some("feat/nav".into()),
-            ..ThreadFacts::default()
-        };
-        assert_eq!(facts.off_default_branch().as_deref(), Some("feat/nav"));
-        facts.branch = Some("master".into());
-        assert_eq!(facts.off_default_branch(), None);
-        facts.default_branch = Some("trunk".into());
-        assert_eq!(facts.off_default_branch().as_deref(), Some("master"));
-        facts.branch = Some("trunk".into());
-        assert_eq!(facts.off_default_branch(), None);
     }
 }

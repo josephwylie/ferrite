@@ -218,6 +218,23 @@ pub fn label(model: &str, announced: &[ModelInfo]) -> String {
         .unwrap_or_else(|| display_name(model))
 }
 
+/// The model as the Composer's footer names it (Claude's `Opus 5.5`):
+/// `model`, else the provider's default row, the model it resolves to
+/// where the provider says (`Default · Opus 5 (1M)` → `Opus 5`), never
+/// the provider's own name. The context tag (`(1M)`) is the menu's, not
+/// the footer's.
+pub fn footer_name(provider: Provider, model: Option<&str>, announced: &[ModelInfo]) -> String {
+    let name = match model {
+        Some(model) => label(model, announced),
+        None => catalog(provider, announced)
+            .first()
+            .map(|row| row.display.clone())
+            .unwrap_or_default(),
+    };
+    let name = name.rsplit(" \u{b7} ").next().unwrap_or(&name);
+    capitalize(name.split(" (").next().unwrap_or(name).trim())
+}
+
 /// A person's name for a raw model id or alias: `claude-fable-5-1` →
 /// `Fable 5.1`, `claude-haiku-4-5-20251001` → `Haiku 4.5`,
 /// `claude-opus-5[1m]` → `Opus 5 (1M)`, `gpt-5.6-sol` → `GPT-5.6 Sol`,
@@ -309,6 +326,24 @@ fn capitalize(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The footer says the model, never the provider, and leaves the
+    /// context tag to the menu.
+    #[test]
+    fn the_footer_names_the_model_without_its_context_tag() {
+        let announced = [ModelInfo {
+            display: "Default \u{b7} Opus 5 (1M)".into(),
+            ..ModelInfo::bare("default")
+        }];
+        assert_eq!(
+            footer_name(Provider::Claude, Some("claude-opus-5-5[1m]"), &[]),
+            "Opus 5.5"
+        );
+        assert_eq!(footer_name(Provider::Claude, Some("opus[1m]"), &[]), "Opus 5.5");
+        assert_eq!(footer_name(Provider::Claude, None, &announced), "Opus 5");
+        assert_eq!(footer_name(Provider::Claude, None, &[]), "Default");
+        assert_eq!(footer_name(Provider::Codex, None, &[]), "GPT-6 Astra");
+    }
 
     #[test]
     fn raw_ids_become_names_a_person_would_say() {

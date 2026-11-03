@@ -181,7 +181,7 @@ fn exit_line(printed: &str) -> (Option<i64>, &str) {
 /// tools-expanded.png), the same in a group's card or a call's own: no
 /// box of its own, no label. Its input in a quiet well — a command's `$ cmd`
 /// (the `$` in `INK_SUBTLE`), another call's input where its line could not
-/// show it whole — in `INK`; then a failed command's `Exit code 1` in
+/// show it whole — in `INK_STRONG`; then a failed command's `Exit code 1` in
 /// `BLOCKED`, in the row's words; then what it printed, plain `INK_SUBTLE`
 /// mono (a failure's own message in `BLOCKED`), its structured result, what
 /// was not kept. Each part `SPACE_3` under the last, the printed text
@@ -225,7 +225,7 @@ pub(super) fn call_body(
                 .child(
                     output_block(block, "command", &shell.command, selection)
                         .flex_1()
-                        .text_color(rgb(INK)),
+                        .text_color(rgb(INK_STRONG)),
                 ),
         );
         exit = shell.exit;
@@ -236,7 +236,7 @@ pub(super) fn call_body(
     } else {
         if text::shows_input(tool) {
             input =
-                Some(output_block(block, "command", &tool.summary, selection).text_color(rgb(INK)));
+                Some(output_block(block, "command", &tool.summary, selection).text_color(rgb(INK_STRONG)));
         }
         if let Some(output) = text::disclosed_output(tool) {
             part("result", &output.text, output.omitted_bytes, INK_SUBTLE);
@@ -880,9 +880,9 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
     (syntax, words)
 }
 
-/// A diff under its call (SPEC §5.4; the mockup's `.diff`): one block box
-/// (`block_box`) on the content column — a header naming the file in the
-/// app's words with its size (`+4 −1`) hard right over a 1px `paint::LINE`,
+/// A diff under its call (SPEC §5.4; the mockup's `.diff`): one hairline
+/// well (`diff_well`) on the content column — a header naming the file in the
+/// app's words with its size (`+4 −1`) hard right over a 1px `paint::CARD_RING`,
 /// then the unified diff set `TX_BLOCK_STEP` under the transcript. A
 /// `INK_SUBTLE` hunk header opens a hunk that names a section (none
 /// otherwise); each row is `[number][sign][code]`: the number
@@ -945,7 +945,7 @@ pub(super) fn render_diff(
         .w_full()
         .min_w_0()
         .py(px(theme::BLOCK_PAD_Y))
-        .text_color(rgb(INK));
+        .text_color(rgb(INK_STRONG));
     for row in diff_rows(diff, cap) {
         lines = lines.child(match &row {
             DiffRow::Hunk(header) => note("diff-hunk", header.clone()),
@@ -1023,10 +1023,10 @@ pub(super) fn render_diff(
         .px(px(pad))
         .py(px(theme::BLOCK_PAD_Y))
         .border_b_1()
-        .border_color(theme::paint::LINE)
+        .border_color(theme::paint::CARD_RING)
         .font_family(theme::FONT_UI)
         .text_size(px(small.size))
-        .text_color(rgb(INK))
+        .text_color(rgb(INK_STRONG))
         .child(div().min_w_0().truncate().child(SharedString::from(name)))
         .child(div().flex_1())
         .child(
@@ -1037,7 +1037,7 @@ pub(super) fn render_diff(
                 .child(trail_diff_stat(diff.added, diff.removed)),
         );
     content_row(content).pt(px(theme::BLOCK_MARGIN_T)).child(
-        on_cells(block_box(grid))
+        on_cells(diff_well(grid))
             .debug_selector(|| "diff-box".into())
             .py(px(0.))
             .overflow_hidden()
@@ -1361,14 +1361,14 @@ impl DiffKind {
                 sign: "+",
                 sign_color: theme::DIFF_ADDED_SIGN,
                 number_color: theme::DIFF_ADDED_NUMBER,
-                code_color: DIFF_ADDED_INK,
+                code_color: SYN_PLAIN,
                 wash: Some(DIFF_ADDED_WASH),
             },
             Self::Removed => DiffPaint {
                 sign: "-",
                 sign_color: theme::DIFF_REMOVED_SIGN,
                 number_color: theme::DIFF_REMOVED_NUMBER,
-                code_color: DIFF_REMOVED_INK,
+                code_color: SYN_PLAIN,
                 wash: Some(DIFF_REMOVED_WASH),
             },
             Self::Context => DiffPaint {

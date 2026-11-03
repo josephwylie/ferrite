@@ -94,7 +94,12 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
         near(head.size.height, px(48.)),
         "the band is 48 tall: {head:?}"
     );
-    assert!(near(pill.left(), card.left()), "{pill:?} / {card:?}");
+    // One left edge: the pill on the column, the box's ring `CARD_OUTSET`
+    // outside it.
+    assert!(
+        near(pill.left() - card.left(), px(ferrite_ui::theme::CARD_OUTSET)),
+        "{pill:?} / {card:?}"
+    );
     // The band spans the box inside its 1px ring.
     assert!(near(head.top() - card.top(), px(1.)), "{card:?} / {head:?}");
     assert!(

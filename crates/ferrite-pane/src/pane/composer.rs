@@ -15,15 +15,18 @@ pub fn model_label(model: &str) -> SharedString {
 }
 
 /// The model and its effort as one footer chip (Claude's `Opus 5.5
-/// Medium`): the model in `INK`, cut first in a narrow Pane, then the
-/// effort in `INK_SUBTLE`, `FOOTER_WORD_GAP` after it and never cut. A
-/// model that takes no effort shows its name alone.
+/// Medium`): the model in `INK_STRONG` at `W_LABEL`, a step above the
+/// body, cut first in a narrow Pane, then the effort in `INK_SUBTLE` at
+/// `W_BODY`, `FOOTER_WORD_GAP` after it and never cut. A model that takes
+/// no effort shows its name alone.
 pub fn model_effort_chip(model: SharedString, effort: Option<SharedString>) -> Div {
-    chip_face(model, INK)
+    chip_face(model, INK_STRONG)
+        .font_weight(theme::W_LABEL)
         .gap(px(theme::FOOTER_WORD_GAP))
         .children(effort.map(|effort| {
             div()
                 .flex_shrink_0()
+                .font_weight(theme::W_BODY)
                 .text_color(rgb(INK_SUBTLE))
                 .child(effort)
         }))
@@ -85,7 +88,7 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
         .flex_shrink_0()
         .rounded(px(theme::R_CONTROL))
         .tip("Attach files")
-        .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, ICON_INK))
+        .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK_STRONG))
 }
 
 /// Whether the send circle shows stop: Solo's (not `compact`), while the
@@ -119,8 +122,8 @@ pub fn send_button(
     let (rest, hover, press, ink): (gpui::Hsla, gpui::Hsla, gpui::Hsla, u32) = if lit {
         (
             rgb(theme::PRIMARY).into(),
-            rgb(INK).into(),
-            rgb(INK).into(),
+            rgb(theme::PRIMARY_HOVER).into(),
+            rgb(theme::PRIMARY_HOVER).into(),
             theme::ON_PRIMARY,
         )
     } else {
@@ -197,7 +200,8 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
 /// `queued_close`).
 pub struct ComposerControls {
     pub attach: Option<AnyElement>,
-    pub send: AnyElement,
+    /// The send circle; none while the box has nothing to send or stop.
+    pub send: Option<AnyElement>,
     pub footer: Option<AnyElement>,
     pub env: Option<AnyElement>,
     pub queue: Vec<AnyElement>,
@@ -232,7 +236,7 @@ pub fn env_strip(chips: Vec<AnyElement>) -> Div {
 }
 
 /// An env strip chip's face: its mark in `INK_SUBTLE`, then its words in
-/// `INK`, cut at their end.
+/// `INK_STRONG`, cut at their end.
 pub(crate) fn env_face(mark: &'static str, label: SharedString) -> Div {
     div()
         .flex()
@@ -244,9 +248,9 @@ pub(crate) fn env_face(mark: &'static str, label: SharedString) -> Div {
             div()
                 .flex()
                 .flex_shrink_0()
-                .child(icon(mark, theme::ENV_MARK, INK_SUBTLE)),
+                .child(icon(mark, theme::ENV_MARK, INK_STRONG)),
         )
-        .child(chip_face(label, INK))
+        .child(chip_face(label, INK_STRONG))
 }
 
 /// An env strip word that is not a control (an empty Thread's Project and
@@ -407,7 +411,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(INK))
+        .text_color(rgb(INK_STRONG))
         .when(decision.is_some(), |field| field.key_context("Decision"))
         .child(ring(theme::paint::FIELD_RING.rgba()));
     let mut field = components::on_bounds(field, move |bounds, _, _| {
@@ -430,8 +434,8 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
             .gap(px(theme::SPACE_2))
             .rounded(px(theme::R_FLOAT))
             .bg(theme::paint::FIELD)
-            .text_color(rgb(INK))
-            .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK))
+            .text_color(rgb(INK_STRONG))
+            .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK_STRONG))
             .child("Drop files to attach")
     });
     if drop_target {
@@ -496,7 +500,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     let (attach, send, footer, env, actions) = match toolbar {
         Some(controls) => (
             controls.attach,
-            Some(controls.send),
+            controls.send,
             controls.footer,
             controls.env,
             controls.queue,
@@ -670,7 +674,7 @@ pub(super) fn queue_card(
                     .debug_selector(move || format!("queued-count-{count}"))
                     .flex_shrink_0()
                     .font_weight(theme::W_LABEL)
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_STRONG))
                     .child(queued_count(count)),
             ))
             .child(
@@ -727,7 +731,7 @@ pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
 }
 
 /// One of the strip's actions: a `QUEUED_ACTION` square at `R_CONTROL`, its
-/// icon in `ICON_INK`, `paint::HOVER` under the pointer. The cockpit wires
+/// icon in `INK_STRONG`, `paint::HOVER` under the pointer. The cockpit wires
 /// its click.
 fn queued_action(
     id: &'static str,
@@ -742,7 +746,7 @@ fn queued_action(
         .flex_shrink_0()
         .rounded(px(theme::R_CONTROL))
         .tip(tip)
-        .child(icon(path, theme::QUEUED_ICON, ICON_INK))
+        .child(icon(path, theme::QUEUED_ICON, INK_STRONG))
 }
 
 /// A quiet control's button: no ground at rest, `paint::HOVER` under the

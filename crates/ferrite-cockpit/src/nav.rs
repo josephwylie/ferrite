@@ -23,7 +23,7 @@
 //! **A list on the sidebar.** The column is `paint::SIDEBAR` (a step over
 //! the plane) from the window's top. Rows are rounded, wear
 //! `paint::SIDEBAR_HOVER` under the pointer (the one 100ms hover blend) and
-//! `paint::SIDEBAR_SELECTED` with an inset `LINE` ring when they stand for what the
+//! `paint::SIDEBAR_SELECTED` (no ring) when they stand for what the
 //! board shows: the Solo Thread's row, or the shown Group's. A Thread row
 //! is one quiet line, as Claude's list: its title, and at its right one
 //! mark when a state is worth saying (`state_mark`). Under the pointer a
@@ -32,13 +32,13 @@
 //! and Claude give their lists. Section headings are small and quiet, a
 //! caret after the label; the foot is the account row.
 //!
-//! **A tree with guides** (§5.1.4). Everything inside a Project hangs one
-//! `NAV_TREE_INDENT` under its heading and a Group's members one more
-//! under the Group (`RowPlace`), each level with a hairline guide down its
-//! left, which each row draws down its own height (`guides`) so a fill
-//! can take its stretch away. Only content moves in; the fills keep the
-//! width. The Parked view groups its rows the same way (`ViewSection`);
-//! the Inbox and the Activity view stay flat.
+//! **One left edge** (§5.1.4, Claude's). A Project heads its rows as a
+//! quiet label with no icon, and its rows' titles start on that label, as
+//! every heading's do; a Group's members hang one `NAV_TREE_INDENT` in,
+//! on its title past its chevron (`RowPlace`). No guides: the indent says
+//! the nesting. Only content moves in; the fills keep the width. The
+//! Parked view groups its rows the same way (`ViewSection`); the Inbox and
+//! the Activity view stay flat.
 //!
 //! Colour is state (ADR 0033): the mark, a folded Project's roll-up word,
 //! the needs-you pill. One thing moves: a working
@@ -506,48 +506,32 @@ pub fn roll_up<'a>(rows: impl IntoIterator<Item = &'a ThreadRow>) -> Option<RowS
 }
 
 /// Where a Thread row hangs in the tree (§5.1.4): `Row(depth)` is its row
-/// `depth` levels in — 0 in a flat list (the Inbox), 1 inside a Project,
-/// 2 under a Group inside a Project — and `Member(depth)` a member of the
-/// shown Group whose own row is `depth` levels in. The first level keeps
-/// the title on the Project's label (`NAV_TITLE_X`); each further one is
-/// `NAV_TREE_INDENT`. Only the content moves in: the row's fills keep the
-/// column's width.
+/// `depth` Groups in — 0 under a heading (a Project's, `Pinned`), 1 under
+/// a Group — and `Member(depth)` a member of the shown Group whose own row
+/// is `depth` in. A row's title starts on its heading's label
+/// (`NAV_ROW_PAD_X`), each Group level `NAV_TREE_INDENT` further. `Inbox`
+/// is a row among the Inbox's Notices, its title on theirs past their mark
+/// column (`NAV_TITLE_X`). Only the content moves in: the row's fills keep
+/// the column's width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowPlace {
     Row(usize),
     Member(usize),
+    Inbox,
 }
 
 impl RowPlace {
-    /// A flat list's row, at the tree's root.
+    /// A row under a heading, on its label.
     pub const ROOT: RowPlace = RowPlace::Row(0);
-
-    /// How many levels of the tree it hangs under, each with its guide: a
-    /// row's own depth, a member's Group's and the Group's own.
-    fn levels(self) -> usize {
-        match self {
-            RowPlace::Row(depth) => depth,
-            RowPlace::Member(depth) => depth + 1,
-        }
-    }
-
-    /// How far its content is indented past the first level: a member
-    /// hangs where a row one level under its Group would.
-    fn indent(self) -> f32 {
-        match self {
-            RowPlace::Row(depth) => indent(depth.saturating_sub(1)),
-            RowPlace::Member(depth) => indent(depth),
-        }
-    }
-
-    /// How far in its mark column starts (a Notice's, a machine row's).
-    fn mark_x(self) -> f32 {
-        self.indent() + NAV_ROW_PAD_X
-    }
 
     /// Where its title starts.
     fn title_x(self) -> f32 {
-        self.indent() + NAV_TITLE_X
+        match self {
+            RowPlace::Row(depth) => indent(depth) + NAV_ROW_PAD_X,
+            // A member hangs where a row under its Group would.
+            RowPlace::Member(depth) => indent(depth + 1) + NAV_ROW_PAD_X,
+            RowPlace::Inbox => NAV_TITLE_X,
+        }
     }
 
     /// The width its lines have, from the title to the row's right padding.
@@ -659,8 +643,8 @@ fn trailing(text: impl Into<SharedString>, size: f32, ink: u32) -> Div {
 
 /// The nav's one pointer role: nothing at rest, `paint::SIDEBAR_HOVER`
 /// under the pointer reaching full in 100ms, and the selected row
-/// `paint::SIDEBAR_SELECTED`
-/// whatever the pointer does (its ring is `selection_ring`). The pointer
+/// `paint::SIDEBAR_SELECTED` whatever the pointer does: no ring, the fill
+/// alone (Claude's, +32 over the column to the hover's +8). The pointer
 /// stays the arrow.
 fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selected: bool) -> E {
     if selected {
@@ -683,17 +667,6 @@ fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selec
     element
 }
 
-/// The selected row's inset 1px `LINE` ring, laid over the row so it moves
-/// nothing.
-fn selection_ring() -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .rounded(px(R_CONTROL))
-        .border_1()
-        .border_color(paint::LINE)
-}
-
 /// The frame every row shares: rounded, washed under the pointer.
 fn row_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool) -> Stateful<Div> {
     wash(
@@ -709,7 +682,6 @@ fn row_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool) 
         key,
         selected,
     )
-    .when(selected, |row| row.child(selection_ring()))
 }
 
 /// A one-line row's frame: 30 high, its items centred, `NAV_ROW_PAD_X` in.
@@ -751,15 +723,10 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
         MarkSeat::TwoLine => NAV_ICON_AT,
         MarkSeat::Member => NAV_ICON_AT_LINE,
     };
-    let halo = if status == RowStatus::NeedsYou {
-        NAV_HALO
-    } else {
-        0.0
-    };
     div()
         .absolute()
-        .left(px(x + left - halo))
-        .top(px(top - halo))
+        .left(px(x + left))
+        .top(px(top))
         .child(mark(status, small))
 }
 
@@ -781,7 +748,7 @@ pub fn shell(width: f32) -> Div {
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(NAV_LINE))
-        .text_color(rgb(INK))
+        .text_color(rgb(INK_STRONG))
 }
 
 /// The column's ground: `paint::SIDEBAR`, top to bottom — what the host's
@@ -843,8 +810,8 @@ pub fn head(
 }
 
 /// An icon button of the column (the toggle, the gear, the heading's `+`):
-/// `size` square, its glyph `INK_SUBTLE`, under the pointer `paint::RAISED`
-/// and the glyph `INK`, both over 100ms.
+/// `size` square, its glyph `INK_STRONG` (Claude's header icons), under the
+/// pointer `paint::RAISED` over 100ms.
 pub fn icon_button(
     key: impl Into<SharedString>,
     glyph: &'static str,
@@ -872,11 +839,7 @@ pub fn icon_button(
             ))
         })
         .on_hover(motion::hover_listener(blend))
-        .child(icon(glyph, glyph_size, INK_SUBTLE).text_color(motion::mix(
-            rgb(INK_SUBTLE).into(),
-            rgb(INK).into(),
-            t,
-        )))
+        .child(icon(glyph, glyph_size, INK_STRONG))
 }
 
 /// The sidebar toggle (§5.1.1): the sidebar glyph in a 28px door, its
@@ -935,7 +898,7 @@ pub fn search_button() -> Stateful<Div> {
 /// What a view row says at its right (§5.1.2).
 pub enum Trailing {
     None,
-    /// A chord, as the keymap binds it (`⌘K`).
+    /// A chord, as the keymap binds it (`⌘K`), shown under the pointer.
     Chord(String),
     /// A dim count, hidden at 0.
     Count(usize),
@@ -951,7 +914,7 @@ pub fn views(rows: Vec<AnyElement>) -> Div {
         .children(rows)
 }
 
-/// One view row: its 15px icon in `ICON_INK`, its label in primary ink
+/// One view row: its 16px icon in `INK_STRONG`, its label in primary ink
 /// (`INK_STRONG`, as the reference app's rows) and its trailing item;
 /// under the pointer `paint::RAISED`, the active view `SELECTED`.
 pub fn view_row(
@@ -964,6 +927,8 @@ pub fn view_row(
     let blend = SharedString::from(key);
     let end: Option<AnyElement> = match tail {
         Trailing::None => None,
+        // A chord is an action's hint, not content: under the pointer only.
+        Trailing::Chord(_) if !hovered(&blend) => None,
         Trailing::Chord(keys) => Some(
             trailing(chord_glyphs(&keys), FS_META, INK_SUBTLE)
                 .debug_selector(move || format!("{key}-chord"))
@@ -992,9 +957,9 @@ pub fn view_row(
         .children(end)
 }
 
-/// A view row's icon, in `ICON_INK` beside its primary label.
+/// A view row's icon, in `INK_STRONG` beside its primary label.
 pub fn view_icon(path: &'static str) -> AnyElement {
-    icon(path, NAV_ICON, ICON_INK).into_any_element()
+    icon(path, NAV_ICON, INK_STRONG).into_any_element()
 }
 
 /// A chord as it is drawn, its key a capital: `cmd-k` → `⌘K`.
@@ -1013,6 +978,23 @@ pub fn heading(key: &'static str, label: &'static str) -> Div {
         .child(div().flex_1().child(label))
 }
 
+/// A heading with an action at its right (`Projects`' `+`) that stands only
+/// while the pointer is over the heading, as Claude's add buttons do.
+pub fn heading_with_action(
+    key: &'static str,
+    label: &'static str,
+    action: impl FnOnce() -> AnyElement,
+) -> Stateful<Div> {
+    let blend = SharedString::from(key);
+    let shown = hovered(&blend);
+    heading_frame(key)
+        .id(key)
+        .text_color(rgb(INK_SUBTLE))
+        .on_hover(motion::hover_listener(blend))
+        .child(div().flex_1().child(label))
+        .when(shown, |heading| heading.child(action()))
+}
+
 /// A heading's line, its label's slot left to the caller.
 fn heading_frame(key: &'static str) -> Div {
     div()
@@ -1028,7 +1010,7 @@ fn heading_frame(key: &'static str) -> Div {
 }
 
 /// A heading whose press folds what it heads (`Groups`): `heading`'s line,
-/// its label blending to `INK` under the pointer, and right after the
+/// its label blending to `INK_STRONG` under the pointer, and right after the
 /// label its caret (`components::fold_chevron`
 /// at `NAV_HEADING_CARET`): `▸` shut, `▾` open, turning as the fold flips.
 /// The cockpit wires the press.
@@ -1037,7 +1019,7 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
     let t = motion::hover_t(&blend);
     heading_frame(key)
         .id(key)
-        .text_color(motion::mix(rgb(INK_SUBTLE).into(), rgb(INK).into(), t))
+        .text_color(motion::mix(rgb(INK_SUBTLE).into(), rgb(INK_STRONG).into(), t))
         .on_hover(motion::hover_listener(blend))
         .child(
             div()
@@ -1081,11 +1063,10 @@ fn hovered(key: &SharedString) -> bool {
     motion::hover_t(key) > 0.0
 }
 
-/// A Project heading (§5.1.4): its `folder` icon in `INK_SUBTLE`, the label
-/// in 13/500 `INK` with its fold's caret right after it (Claude's `▾`,
-/// `▸` folded), and at its right the shared branch's drift. Folded, it
-/// is one quiet row: the label in `INK` at 400, and at its right
-/// what `ProjectSection::folded_summary` says. Under the pointer its
+/// A Project heading (§5.1.4, Claude's): the label alone, no icon, in the
+/// headings' quiet face (13/400 `INK_SUBTLE`) with its fold's caret right
+/// after it (`▾`, `▸` folded), and at its right the shared branch's drift.
+/// Folded, at its right what `ProjectSection::folded_summary` says. Under the pointer its
 /// `action` (a new Thread in the Project, `row_action`) stands at its right
 /// instead. The cockpit wires its press to the fold.
 pub fn project_section(
@@ -1128,12 +1109,6 @@ fn project_row(
     fold: Option<bool>,
     measure: &Measure,
 ) -> Stateful<Div> {
-    let folded = fold == Some(true);
-    let (ink, weight) = if folded {
-        (INK, W_BODY)
-    } else {
-        (INK_STRONG, W_LABEL)
-    };
     let blend = SharedString::from(format!("{key}-{index}"));
     let action = action.filter(|_| hovered(&blend));
     let right = right.filter(|_| action.is_none());
@@ -1143,13 +1118,13 @@ fn project_row(
         (Some((text, _)), None) => measure.ui(text, FS_META, W_BODY) + NAV_ICON_GAP,
         (None, None) => 0.0,
     };
-    let title_w = INNER_W - 2.0 * NAV_ROW_PAD_X - NAV_ICON - NAV_ICON_GAP - right_w;
+    let title_w = INNER_W - 2.0 * NAV_ROW_PAD_X - right_w;
     // The caret follows the label itself, so the label's box is its own
     // width, out to what the caret leaves of the title's.
     let (label_w, caret) = match fold {
         Some(folded) => (
             measure
-                .ui(&label, FS_UI, weight)
+                .ui(&label, FS_META, W_BODY)
                 .min(title_w - SPACE_1 - NAV_HEADING_CARET),
             Some(
                 div()
@@ -1169,14 +1144,13 @@ fn project_row(
     line_frame((key, index), blend, false)
         .debug_selector(move || format!("{key}-{index}"))
         .gap(px(NAV_ICON_GAP))
-        .child(icon(icons::FOLDER, NAV_ICON, ICON_INK))
         .child(
             div()
                 .flex()
                 .flex_shrink_0()
                 .items_center()
                 .gap(px(SPACE_1))
-                .child(fitted(label_w, FS_UI, ink, weight, label))
+                .child(fitted(label_w, FS_META, INK_SUBTLE, W_BODY, label))
                 .children(caret),
         )
         .children(right.map(|(right, right_ink)| {
@@ -1323,22 +1297,21 @@ pub fn member_tail(id: GroupId) -> Stateful<Div> {
 /// in with it.
 #[cfg(test)]
 pub fn group_row(row: &GroupBlock, depth: usize) -> Stateful<Div> {
-    group_row_with_title(row, row.title.clone(), group_fold(row), depth, 0)
+    group_row_with_title(row, row.title.clone(), group_fold(row), depth)
 }
 
 /// `group_row` with the title leaf and the chevron supplied by the caller
 /// — the cockpit hands in a click-to-rename wrapper, or the live editor
 /// while renaming, and wires the chevron's press. The row lays the chevron
-/// at its own depth. The title box is pinned
-/// (`fitted`), so the title truncates and renaming never moves the row.
-/// It draws the guides of the `depth` levels it hangs under (`guides`),
-/// the innermost `ends` of them ending at it.
+/// at its own depth, on the title column of a row there, and its title
+/// `NAV_TREE_INDENT` past it, where its members' titles start. The title
+/// box is pinned (`fitted`), so the title truncates and renaming never
+/// moves the row.
 pub fn group_row_with_title(
     row: &GroupBlock,
     title: impl IntoElement,
     fold: Stateful<Div>,
     depth: usize,
-    ends: usize,
 ) -> Stateful<Div> {
     let id = row.id;
     let key = SharedString::from(format!("nav-group-{}", id.get()));
@@ -1351,12 +1324,7 @@ pub fn group_row_with_title(
     } else {
         (INK_STRONG, W_BODY)
     };
-    let cover = if row.selected {
-        1.0
-    } else {
-        motion::hover_t(&key)
-    };
-    let guides = guides(&format!("nav-guide-group-{}", id.get()), depth, ends, cover);
+    let place = RowPlace::Row(depth);
     pitched(row_frame(
         ("nav-group", id.get() as usize),
         key,
@@ -1366,12 +1334,11 @@ pub fn group_row_with_title(
     .flex_row()
     .items_center()
     .h(px(NAV_ROW_H))
-    .pl(px(RowPlace::Row(depth).title_x()))
+    .pl(px(place.title_x() + NAV_TREE_INDENT))
     .pr(px(NAV_ROW_PAD_X))
-    .children(guides)
-    .child(div().absolute().top_0().left(px(indent(depth))).child(fold))
+    .child(div().absolute().top_0().left(px(place.title_x())).child(fold))
     .child(fitted(
-        RowPlace::Row(depth).text_w() - right_w,
+        place.text_w() - NAV_TREE_INDENT - right_w,
         FS_UI,
         ink,
         weight,
@@ -1385,9 +1352,9 @@ pub fn group_row_with_title(
     }))
 }
 
-/// A Group row's chevron, at x 11 from where its row's content starts:
+/// A Group row's chevron, on its row's title column:
 /// the shared fold chevron (`components::fold_chevron`), turned down while
-/// open (`INK` on the shown Group, `INK_SUBTLE` otherwise). A control
+/// open (`INK_STRONG` on the shown Group, `INK_SUBTLE` otherwise). A control
 /// of its own — the cockpit wires its press to the fold, which stops
 /// there, so the rest of the row still opens the Group.
 pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
@@ -1397,7 +1364,7 @@ pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
         .id(("nav-group-fold", id.get() as usize))
         .debug_selector(move || format!("nav-group-fold-{}", id.get()))
         .absolute()
-        .left(px(NAV_CHEVRON_X + NAV_CHEVRON / 2.0 - hit / 2.0))
+        .left(px((NAV_CHEVRON - hit) / 2.0))
         .top(px(SPACE_1))
         .size(px(hit))
         .flex()
@@ -1407,85 +1374,30 @@ pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
             format!("nav-group-chevron-{}", id.get()),
             !row.folded,
             NAV_CHEVRON,
-            if row.selected { INK } else { INK_SUBTLE },
+            if row.selected { INK_STRONG } else { INK_SUBTLE },
         ))
 }
 
-/// A Project's rows (its loose Threads and its Groups) one level under
-/// its heading. The rows draw the Project's guide themselves (`guides`).
+/// A Project's rows (its loose Threads and its Groups) under its heading.
 pub fn project_rows(rows: Vec<AnyElement>) -> Div {
     branch(rows)
 }
 
-/// The members container: the member rows under their Group. They draw
-/// the Group's guide themselves (`guides`).
+/// The members container: the member rows under their Group.
 pub fn members(rows: Vec<AnyElement>) -> Div {
     branch(rows)
 }
 
 /// One level of the tree (§5.1.4): `rows` flush under the row above them
-/// — a Project's heading, a Group's row — so the stretches of guide each
-/// row draws (`guides`) join into one line down their left.
+/// — a Project's heading, a Group's row.
 fn branch(rows: Vec<AnyElement>) -> Div {
     div().flex().flex_col().flex_shrink_0().children(rows)
-}
-
-/// The guides down one row's height (§5.1.4): one per level of the tree
-/// the row hangs under (`levels`) — the Project's under its folder icon
-/// (`NAV_PROJECT_GUIDE_X`), a Group's under its chevron, each level
-/// `NAV_TREE_INDENT` further in — and the innermost `ends` of them, whose
-/// branch ends at this row, stopping `NAV_GUIDE_TAIL` short of its foot.
-/// Consecutive rows' stretches join into the tree's lines.
-///
-/// A row draws its own stretch so it can take it away under its fill:
-/// `cover` is how much fill the row wears (1 selected, its hover blend
-/// under the pointer), and the guides fade by as much. A guide is the row's
-/// own child, painted over its fill, so unfaded it would show straight through
-/// (§5.1.4: "rows keep their full-width hover and selected fills, which
-/// cover the guide"). `key` names the stretches for tests
-/// (`{key}-{level}`).
-fn guides(key: &str, levels: usize, ends: usize, cover: f32) -> Option<Div> {
-    let shown = 1.0 - cover.clamp(0.0, 1.0);
-    (levels > 0 && shown > 0.0).then(|| {
-        // Across the row's share of the gap too, so a run of rows' guides
-        // join into one line.
-        div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .top(px(-NAV_ROW_GAP / 2.0))
-            .bottom(px(-NAV_ROW_GAP / 2.0))
-            .opacity(shown)
-            .children((0..levels).map(|level| {
-                let name = format!("{key}-{level}");
-                div()
-                    .debug_selector(move || name.clone())
-                    .absolute()
-                    .left(px(guide_x(level)))
-                    .top_0()
-                    .bottom(px(if level + ends >= levels {
-                        NAV_GUIDE_TAIL
-                    } else {
-                        0.0
-                    }))
-                    .w(px(NAV_GUIDE_W))
-                    .bg(paint::LINE)
-            }))
-    })
-}
-
-/// Where level `level`'s guide runs, from the column's inner edge: a
-/// Project's under its folder icon, a Group's under its chevron, which
-/// the theme seats on the same x so the levels step by the indent.
-fn guide_x(level: usize) -> f32 {
-    const _: () = assert!(NAV_PROJECT_GUIDE_X == NAV_GROUP_GUIDE_X);
-    indent(level) + NAV_GROUP_GUIDE_X
 }
 
 /// The Thread row at root — see `thread_row_with_title`.
 #[cfg(test)]
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
-    thread_row_with_title(row, row.name.clone(), None, RowPlace::ROOT, None, false, 0)
+    thread_row_with_title(row, row.name.clone(), None, RowPlace::ROOT, None, false)
 }
 
 /// A title's ink and weight (§5.1.5): primary ink (`INK_STRONG`), as
@@ -1496,7 +1408,7 @@ fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
     if row.selected || row.status == RowStatus::Done {
         (INK_STRONG, W_LABEL)
     } else if row.status == RowStatus::Parked {
-        (INK, W_BODY)
+        (INK_SUBTLE, W_BODY)
     } else {
         (INK_STRONG, W_BODY)
     }
@@ -1510,9 +1422,7 @@ fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
 /// dot, a failure's, the working spinner); under the pointer its `action`
 /// (`row_action`, the cockpit's `⋯`) stands there instead. `group` scopes
 /// the row's blend when the Thread is listed under several Groups.
-/// `editing` is a rename in progress: the field takes the title's box. A
-/// tree row draws the guides of the levels it hangs under (`guides`), the innermost
-/// `ends` of them ending at it.
+/// `editing` is a rename in progress: the field takes the title's box.
 pub fn thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
@@ -1520,7 +1430,6 @@ pub fn thread_row_with_title(
     place: RowPlace,
     group: Option<GroupId>,
     editing: bool,
-    ends: usize,
 ) -> Stateful<Div> {
     let thread = row.thread;
     let key = SharedString::from(format!(
@@ -1536,18 +1445,11 @@ pub fn thread_row_with_title(
         (ink, _) if member => (ink, W_BODY),
         face => face,
     };
-    let cover = if filled { 1.0 } else { motion::hover_t(&key) };
     let action = action.filter(|_| !editing && hovered(&key));
     let mark = (!editing && action.is_none())
         .then(|| state_mark(row.status))
         .flatten();
     let title_w = title_w(place, action.is_some() || mark.is_some());
-    let guides = guides(
-        &format!("nav-guide-{}", thread.get()),
-        place.levels(),
-        ends,
-        cover,
-    );
     pitched(row_frame(
         ("nav-thread", thread.get() as usize),
         key,
@@ -1559,7 +1461,6 @@ pub fn thread_row_with_title(
     .h(px(NAV_ROW_H))
     .pl(px(place.title_x()))
     .pr(px(NAV_ROW_PAD_X))
-    .children(guides)
     .child(
         fitted(title_w, FS_UI, ink, weight, title)
             .debug_selector(move || format!("nav-title-{}", thread.get())),
@@ -1576,7 +1477,7 @@ pub fn thread_row_with_title(
 /// What a row says at its right, where its `⋯` stands under the pointer:
 /// the needs-you dot (the one orange on the list), a failure's red dot,
 /// background work's dot, the working spinner (the one thing that moves),
-/// or for a finish not yet seen a smaller dot in the default ink
+/// or for a finish not yet seen a smaller dot in the content ink
 /// (`NAV_UNREAD_DOT`), cleared once seen. Idle and parked rows say nothing.
 pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
     let face = match status {
@@ -1589,7 +1490,7 @@ pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
             .debug_selector(|| "nav-unread-dot".into())
             .size(px(NAV_UNREAD_DOT))
             .rounded_full()
-            .bg(rgb(INK))
+            .bg(rgb(INK_STRONG))
             .into_any_element(),
         RowStatus::Idle | RowStatus::Parked => return None,
     };
@@ -1712,7 +1613,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         NoticeState::Failed => BLOCKED,
         NoticeState::Done => {
             if cursor {
-                NAV_LINE2_SELECTED
+                INK_STRONG
             } else {
                 INK_SUBTLE
             }
@@ -1724,7 +1625,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
     } else {
         format!("{} \u{b7} {detail}", row.word())
     };
-    let text_w = RowPlace::ROOT.text_w();
+    let text_w = RowPlace::Inbox.text_w();
     // In its first minute a Notice has no age to say: the title takes the
     // line.
     let age = (!row.when.is_empty()).then(|| row.when.clone());
@@ -1740,7 +1641,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         .h(px(NAV_ROW2_H))
         .pl(px(NAV_TITLE_X))
         .pr(px(NAV_ROW_PAD_X))
-        .child(mark_at(status, RowPlace::ROOT.mark_x(), MarkSeat::TwoLine))
+        .child(mark_at(status, NAV_ROW_PAD_X, MarkSeat::TwoLine))
         .child(
             div()
                 .flex()
@@ -1772,17 +1673,9 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
 
 /// A long section's `Show more` / `Show less` (Codex's): one line on the
 /// title column in `INK_SUBTLE`, washed under the pointer as a row is. It
-/// hangs at `place` with the section's guides (`ends` of them ending at
-/// it). The cockpit wires its press.
-pub fn show_more(index: usize, more: ShowMore, place: RowPlace, ends: usize) -> Stateful<Div> {
+/// hangs at `place`. The cockpit wires its press.
+pub fn show_more(index: usize, more: ShowMore, place: RowPlace) -> Stateful<Div> {
     let key = SharedString::from(format!("nav-show-more-{index}"));
-    let cover = motion::hover_t(&key);
-    let guides = guides(
-        &format!("nav-guide-more-{index}"),
-        place.levels(),
-        ends,
-        cover,
-    );
     pitched(row_frame(("nav-show-more", index), key, false))
         .debug_selector(move || format!("nav-show-more-{index}"))
         .flex_row()
@@ -1791,7 +1684,6 @@ pub fn show_more(index: usize, more: ShowMore, place: RowPlace, ends: usize) -> 
         .pl(px(place.title_x()))
         .pr(px(NAV_ROW_PAD_X))
         .text_color(rgb(INK_SUBTLE))
-        .children(guides)
         .child(more.label())
 }
 
@@ -1901,14 +1793,14 @@ pub fn empty_filter(project: Option<&str>, parked: Option<AnyElement>) -> Div {
 }
 
 /// An empty tree's way to its parked Threads: `Show parked threads`, in
-/// the empty line's `INK_SUBTLE` blending up to `INK` under the pointer, a
+/// the empty line's `INK_SUBTLE` blending up to `INK_STRONG` under the pointer, a
 /// link in that line's voice.
 pub fn parked_link() -> Stateful<Div> {
     const KEY: &str = "nav-empty-parked";
     let blend = SharedString::from(KEY);
     let ink = motion::mix(
         rgb(INK_SUBTLE).into(),
-        rgb(INK).into(),
+        rgb(INK_STRONG).into(),
         motion::hover_t(&blend),
     );
     div()
@@ -2035,7 +1927,7 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
         .pr(px(NAV_ROW_PAD_X))
         .child(mark_at(
             status,
-            RowPlace::ROOT.mark_x() - 1.0,
+            NAV_ROW_PAD_X - 1.0,
             MarkSeat::Member,
         ))
         .child(div().flex_1().min_w_0().truncate().child(title))
@@ -2044,70 +1936,8 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
 
 // ------------------------------------------------------------- the foot
 
-/// One view in the foot's switcher: `Solo`, or a Group by its title.
-pub struct ViewTab {
-    pub key: SharedString,
-    pub label: SharedString,
-    /// The board shows this view.
-    pub current: bool,
-    /// What the Threads it shows roll up to (`roll_up`), said as a row's
-    /// mark is (`state_mark`).
-    pub status: Option<RowStatus>,
-}
-
-/// The view switcher (the bottom bar's tabs, moved to the foot): `Solo`
-/// and a tab per Group, wrapping, over the account row. Each is
-/// `NAV_VIEW_TAB_H` high at `R_CONTROL`, its label in `INK` and its
-/// roll-up mark after it; the current view's sits on `paint::SELECTED`
-/// with its label `INK_STRONG`, the rest wash under the pointer. The
-/// cockpit wires the presses, and leaves the switcher out while Solo is
-/// the only view.
-pub fn view_tabs(tabs: Vec<AnyElement>) -> Div {
-    div()
-        .debug_selector(|| "nav-view-tabs".into())
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .flex_shrink_0()
-        .gap(px(NAV_VIEW_TAB_GAP))
-        .pt(px(NAV_FOOT_PAD_T))
-        .children(tabs)
-}
-
-/// One tab of the view switcher (`view_tabs`).
-pub fn view_tab(tab: &ViewTab) -> Stateful<Div> {
-    let key = tab.key.clone();
-    let selector = key.clone();
-    wash(
-        div()
-            .id(gpui::ElementId::Name(key.clone()))
-            .debug_selector(move || selector.to_string())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1_5))
-            .max_w(px(INNER_W))
-            .h(px(NAV_VIEW_TAB_H))
-            .px(px(NAV_VIEW_TAB_PAD_X))
-            .rounded(px(R_CONTROL))
-            .text_size(px(FS_META))
-            .whitespace_nowrap(),
-        key,
-        tab.current,
-    )
-    .map(|face| {
-        if tab.current {
-            face.text_color(rgb(INK_STRONG)).font_weight(W_LABEL)
-        } else {
-            face.text_color(rgb(INK))
-        }
-    })
-    .child(div().min_w_0().truncate().child(tab.label.clone()))
-    .children(tab.status.and_then(state_mark))
-}
-
 /// The foot (§5.1.8), Claude's account row: who is at the machine — their
-/// initial on a `NAV_AVATAR` disc and their name in 13 `INK` — then free
+/// initial on a `NAV_AVATAR` disc and their name in 13 `INK_STRONG` — then free
 /// disk once it runs low (`frame::free_disk_words`, in its ink), and the
 /// gear. The version shows under the pointer, as an app's About would.
 pub fn foot(user: &str, version: &str, disk: Option<(String, u32)>, gear: impl IntoElement) -> Div {
@@ -2148,7 +1978,7 @@ pub fn foot(user: &str, version: &str, disk: Option<(String, u32)>, gear: impl I
                         .bg(paint::SELECTED)
                         .text_size(px(FS_AVATAR))
                         .font_weight(W_LABEL)
-                        .text_color(rgb(INK))
+                        .text_color(rgb(INK_STRONG))
                         .child(initial),
                 )
                 .child(
@@ -2157,7 +1987,7 @@ pub fn foot(user: &str, version: &str, disk: Option<(String, u32)>, gear: impl I
                         .min_w_0()
                         .truncate()
                         .text_size(px(FS_UI))
-                        .text_color(rgb(INK))
+                        .text_color(rgb(INK_STRONG))
                         .child(SharedString::from(user.to_string())),
                 ),
         )
@@ -2292,7 +2122,7 @@ pub fn drag_row(row: Stateful<Div>) -> Div {
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(NAV_LINE))
-        .text_color(rgb(INK))
+        .text_color(rgb(INK_STRONG))
         .bg(paint::FLOAT)
         .rounded(px(R_CONTROL))
         .border_1()
@@ -2350,7 +2180,7 @@ mod tests {
     }
 
     /// The row grammar (§5.1): rounded rows, a Thread one quiet line at 30
-    /// stepping 32 with its title at 35, a Group and a Project heading one
+    /// stepping 32 with its title on its heading's label, a Group and a Project heading one
     /// line too, a Project section 6px below the one above it.
     #[test]
     fn nav_rows_are_rounded_two_line_and_one_line() {
@@ -2364,7 +2194,7 @@ mod tests {
         assert_eq!(style.size.height, Some(px(NAV_ROW_H).into()));
         assert_eq!(style.margin.top, Some(px(1.0).into()), "pitch 32");
         assert_eq!(style.margin.bottom, Some(px(1.0).into()));
-        assert_eq!(style.padding.left, Some(px(NAV_TITLE_X).into()));
+        assert_eq!(style.padding.left, Some(px(NAV_ROW_PAD_X).into()));
         assert_eq!(style.padding.right, Some(px(NAV_ROW_PAD_X).into()));
         let mut row = group_row(&group(false, false), 0);
         assert_eq!(row.style().size.height, Some(px(NAV_ROW_H).into()));
@@ -2378,15 +2208,15 @@ mod tests {
         assert_eq!((NAV_ROW_H, NAV_ROW2_H, NAV_SECTION_GAP), (30.0, 44.0, 6.0));
         assert_eq!(WIDTH, 256.0, "Claude's 256px sidebar");
         assert_eq!(INNER_W, 240.0, "padding 0 8 8");
-        assert_eq!(RowPlace::ROOT.text_w(), 195.0);
-        assert_eq!(NAV_TITLE_X, 35.0, "on the Project's label");
+        assert_eq!(RowPlace::ROOT.text_w(), 220.0);
         assert_eq!(
-            RowPlace::Row(1).title_x(),
             RowPlace::ROOT.title_x(),
-            "a Project's rows start on its label"
+            NAV_ROW_PAD_X,
+            "a heading's rows start on its label (Claude's 18 from the edge)"
         );
-        assert_eq!(RowPlace::Row(2).title_x(), NAV_TITLE_X + NAV_TREE_INDENT);
-        assert_eq!(RowPlace::Member(1).title_x(), RowPlace::Row(2).title_x());
+        assert_eq!(RowPlace::Inbox.title_x(), NAV_TITLE_X, "past the mark column");
+        assert_eq!(RowPlace::Row(1).title_x(), NAV_ROW_PAD_X + NAV_TREE_INDENT);
+        assert_eq!(RowPlace::Member(0).title_x(), RowPlace::Row(1).title_x());
     }
 
     /// The Activity view's row (Codex's): the title with the spinner at
@@ -2413,22 +2243,6 @@ mod tests {
         let _ = activity_row(&quiet);
     }
 
-    /// §5.1.4: a row draws its stretch of the guides only where nothing
-    /// covers it — none at the root, none under a fill, fading under the
-    /// pointer's blend.
-    #[test]
-    fn a_rows_guides_give_way_to_its_fill() {
-        assert!(
-            guides("k", 0, 0, 0.0).is_none(),
-            "the root hangs under none"
-        );
-        assert!(guides("k", 2, 1, 1.0).is_none(), "a filled row draws none");
-        let mut fading = guides("k", 2, 1, 0.25).expect("a quarter covered: still drawn");
-        assert_eq!(fading.style().opacity, Some(0.75));
-        let mut rest = guides("k", 1, 0, 0.0).expect("at rest");
-        assert_eq!(rest.style().opacity, Some(1.0));
-    }
-
     /// N-5, the selection rule: one selection, on the row of what the board
     /// shows — `SELECTED`, never a coloured outline.
     #[test]
@@ -2445,7 +2259,6 @@ mod tests {
                 RowPlace::Member(0),
                 Some(GroupId::new(1)),
                 false,
-                0,
             )),
             None,
             "an unfocused member carries no fill"
@@ -2454,8 +2267,8 @@ mod tests {
         assert_eq!(fill(thread_row(&thread())), None);
     }
 
-    /// §5.1.5: a title is `INK`, `INK_STRONG` 500 when selected,
-    /// `INK_STRONG` while its finish is unseen, a step down when parked.
+    /// §5.1.5: a title is `INK_STRONG`, 500 when selected,
+    /// `INK_STRONG` while its finish is unseen, `INK_SUBTLE` when parked.
     #[test]
     fn titles_follow_selection_unread_and_parked() {
         assert_eq!(title_face(&thread()), (INK_STRONG, W_BODY));
@@ -2469,7 +2282,7 @@ mod tests {
             status: RowStatus::Parked,
             ..thread()
         };
-        assert_eq!(title_face(&parked), (INK, W_BODY));
+        assert_eq!(title_face(&parked), (INK_SUBTLE, W_BODY));
     }
 
     /// N-13: the pointer stays the arrow over every row.
@@ -2584,7 +2397,6 @@ mod tests {
             RowPlace::Member(0),
             None,
             false,
-            0,
         );
         assert_eq!(height(member), one);
         let rail = RailRow {
@@ -2742,8 +2554,8 @@ mod tests {
         }
     }
 
-    /// The marks (§6): a spinner for work, the blocked dot's halo, a red
-    /// dot for a failure, a ring for background work, icons at rest.
+    /// The marks (§6): a spinner for work, a solid dot for needs-you and
+    /// a failure, a ring for background work, icons at rest.
     #[test]
     fn status_marks_say_state_and_green_only_means_live() {
         assert_eq!(RowStatus::Working.ink(), RUNNING);
@@ -2754,11 +2566,11 @@ mod tests {
         assert_eq!(RowStatus::Done.ink(), IDLE);
         assert_eq!(RowStatus::Idle.ink(), IDLE);
         assert_eq!(RowStatus::Parked.ink(), IDLE);
-        let mut halo = mark_at(RowStatus::NeedsYou, NAV_ROW_PAD_X, MarkSeat::TwoLine);
+        let mut dot = mark_at(RowStatus::NeedsYou, NAV_ROW_PAD_X, MarkSeat::TwoLine);
         assert_eq!(
-            halo.style().inset.left,
-            Some(px(NAV_ROW_PAD_X + 4.0 - NAV_HALO).into()),
-            "the dot at 14, its halo 3px around it"
+            dot.style().inset.left,
+            Some(px(NAV_ROW_PAD_X + 3.0).into()),
+            "the 8px dot centred where an icon is, no halo"
         );
     }
 

@@ -421,81 +421,19 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 
-/// The view switcher in the nav's foot (the bottom bar's tabs, moved;
-/// components.md cut 9): `Solo` and a tab per Group, open or not, and
-/// none at all while Solo is the only view. A press on a Group's tab
-/// enters it, and on `Solo` with no loose Thread shows the empty board.
-/// No bar is left under the board.
+/// The nav's foot is Claude's account row alone: no view switcher over it,
+/// even with Groups (the tree's rows reach every view), and no bar under
+/// the board.
 #[gpui::test]
-fn the_foot_switches_between_solo_and_every_group(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("frame-view-tabs-lone", 1);
-    let (_view, lone) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(lone);
-    assert!(
-        lone.debug_bounds("nav-view-tabs").is_none(),
-        "Solo alone is no choice"
-    );
-    assert!(lone.debug_bounds("bottom-bar").is_none(), "no bottom bar");
-
-    let (mut core, _fake) = cockpit("frame-view-tabs", 2);
-    let group = group_all(&mut core);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+fn the_foot_is_the_account_row_alone(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("frame-foot-alone", 2);
+    group_all(&mut core);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    let foot = bounds(cx, "nav-foot".to_string());
-    let tabs = bounds(cx, "nav-view-tabs".to_string());
-    assert!(tabs.bottom() <= foot.top(), "over the account row");
-    let tab = bounds(cx, format!("nav-view-tab-{}", group.get()));
-    assert_eq!(tab.size.height, px(ferrite_ui::theme::NAV_VIEW_TAB_H));
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
-    tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().view(), View::Group(group))
-    });
-    let solo = bounds(cx, "nav-view-tab-solo".to_string());
-    cx.simulate_click(solo.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(
-        cx.debug_bounds("empty-board").is_some(),
-        "no loose Thread: `Solo` is the empty board"
-    );
-}
-
-/// The `Solo` tab's roll-up mark speaks for the Thread Solo shows while it
-/// is the view — not for whichever loose Thread was written last, which
-/// may be another — so the current tab's mark never contradicts the board
-/// under it.
-#[gpui::test]
-fn the_solo_tabs_mark_follows_the_thread_it_shows(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("frame-solo-mark", 4);
-    let threads = core.threads();
-    // A Group of the last two, so the switcher shows.
-    core.apply_group(GroupChange::Create {
-        first: threads[2],
-        second: threads[3],
-    })
-    .unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let working = threads[0];
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "thinking".into(),
-        })
-        .unwrap();
-    tick(cx);
-    let solo_tab = |cx: &mut gpui::VisualTestContext| bounds(cx, "nav-view-tab-solo".to_string());
-    view.update(cx, |view, cx| view.focus_thread(working, cx));
-    tick(cx);
-    let marked = solo_tab(cx);
-    view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
-    tick(cx);
-    let quiet = solo_tab(cx);
-    assert!(
-        marked.size.width > quiet.size.width,
-        "Solo shows the working Thread: its spinner; the idle one: none"
-    );
+    assert!(cx.debug_bounds("nav-foot").is_some());
+    assert!(cx.debug_bounds("nav-view-tabs").is_none(), "no switcher");
+    assert!(cx.debug_bounds("bottom-bar").is_none(), "no bottom bar");
 }
 
 /// Free disk shows in the nav's foot only under 20 GB, and never while
