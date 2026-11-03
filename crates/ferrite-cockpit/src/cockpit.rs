@@ -249,6 +249,15 @@ fn turn_running(open: &ThreadView) -> bool {
     open.busy() || open.activity().main_operator_turn()
 }
 
+/// The id of the latest queued prompt while it can still be taken back:
+/// what ↑, ⌫ and the queue strip's edit and remove act on.
+fn queued_to_take_back(open: &ThreadView) -> Option<String> {
+    open.queue()
+        .first()
+        .filter(|item| pane::queued_takes_back(item))
+        .map(|item| item.id.clone())
+}
+
 /// Why a Thread's model and effort cannot change now, in the words the
 /// pickers show; `None` while they can.
 fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
@@ -5914,7 +5923,14 @@ impl CockpitView {
         if !self.panes[self.focused()].composer.read(cx).is_empty() {
             return;
         }
-        self.cockpit.cancel_queued(thread, false);
+        let Some(id) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| queued_to_take_back(&open))
+        else {
+            return;
+        };
+        self.cockpit.remove_queued_item(thread, &id, false);
         cx.notify();
     }
 
@@ -6839,13 +6855,13 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return;
         };
-        if self
+        if let Some(id) = self
             .cockpit
             .thread(thread)
-            .is_some_and(|open| open.queued().is_some())
+            .and_then(|open| queued_to_take_back(&open))
         {
             if matches!(direction, HistoryDirection::Older) {
-                self.cockpit.edit_queued(thread);
+                self.cockpit.edit_queued_item(thread, &id);
                 cx.notify();
             }
             return;
@@ -6875,11 +6891,11 @@ impl CockpitView {
         !self.panes[index].has_tool_target()
             && self.rename.is_none()
             && self.popover.is_none()
-            && ((self.panes[index].is_main() && open.queued().is_some())
+            && ((self.panes[index].is_main() && queued_to_take_back(&open).is_some())
                 || (open.has_prompt_history()
                     && !open.busy()
                     && open.pending().is_none()
-                    && open.queued().is_none()))
+                    && open.queue().is_empty()))
     }
 
     /// Clamp-step the open popover's selection.
@@ -8356,37 +8372,39 @@ impl CockpitView {
         if !pane.is_main() {
             return None;
         }
-        // The queue strip's acts on the latest held prompt, each a key's:
-        // send now is Escape's "stop, and do what I queued now" (offered
-        // only while a turn runs, which is what it stops); edit is ↑'s;
-        // remove is ⌫'s.
+        // The queue strip's acts, each a key's: send now is Escape's "stop,
+        // and do what I queued now" (offered only while a turn runs, which
+        // is what it stops); edit is ↑'s and remove ⌫'s, aimed at the
+        // latest by its id and gone while Codex steers it.
         let queue: Vec<AnyElement> = pane.thread().map_or_else(Vec::new, |thread| {
-            let running = self
-                .cockpit
-                .thread(thread)
-                .is_some_and(|open| turn_running(&open));
-            type Act = fn(&mut Cockpit, ThreadId);
+            let open = self.cockpit.thread(thread);
+            let running = open.as_ref().is_some_and(turn_running);
+            let take_back = open.as_ref().and_then(queued_to_take_back);
+            type Act = fn(&mut Cockpit, ThreadId, &str);
             let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
                 (
                     running.then(|| pane::queued_send_now(cx)),
-                    |cockpit, thread| cockpit.interrupt(thread),
+                    |cockpit, thread, _| cockpit.interrupt(thread),
                 ),
-                (Some(pane::queued_edit(cx)), |cockpit, thread| {
-                    cockpit.edit_queued(thread)
-                }),
-                (Some(pane::queued_close(cx)), |cockpit, thread| {
-                    cockpit.cancel_queued(thread, false)
-                }),
+                (
+                    take_back.is_some().then(|| pane::queued_edit(cx)),
+                    |cockpit, thread, id| cockpit.edit_queued_item(thread, id),
+                ),
+                (
+                    take_back.is_some().then(|| pane::queued_close(cx)),
+                    |cockpit, thread, id| cockpit.remove_queued_item(thread, id, false),
+                ),
             ];
             acts.into_iter()
                 .filter_map(|(button, act)| {
+                    let id = take_back.clone().unwrap_or_default();
                     let button =
                         button?.on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                             cx.stop_propagation();
                             view.focus_pane(index);
                             let focus = view.panes[index].composer.read(cx).focus_handle(cx);
                             window.focus(&focus, cx);
-                            act(&mut view.cockpit, thread);
+                            act(&mut view.cockpit, thread, &id);
                             view.facts.acted(&view.cockpit, thread);
                             cx.notify();
                         }));
@@ -10255,7 +10273,7 @@ impl CockpitView {
                     let queued = pane
                         .thread()
                         .and_then(|thread| self.cockpit.thread(thread))
-                        .map_or(0, |thread| thread.queued_all().len());
+                        .map_or(0, |thread| thread.queue().len());
                     pane::composer_row_limit(rect.h, self.grid_board(), queued)
                 })
                 .unwrap_or(ferrite_pane::composer::MAX_ROWS);

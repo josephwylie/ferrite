@@ -21,6 +21,7 @@ use crate::{
         TableActionsFn, TextFind, TextViewStyle,
         document::ParsedDocument,
         find::FindTally,
+        fresh::{FreshTally, TextFresh},
         format,
         node::{self, NodeContext},
         selection_adapter::TextViewSelectionAdapter,
@@ -111,6 +112,9 @@ pub struct TextViewState {
     // Ferrite: a find bar's marks, and their ordinals as this frame paints.
     pub(super) find: Option<TextFind>,
     pub(super) find_tally: std::cell::RefCell<FindTally>,
+    // Ferrite: streamed text fading in, and where this frame's runs fall.
+    pub(super) fresh: Option<TextFresh>,
+    pub(super) fresh_tally: std::cell::RefCell<FreshTally>,
 
     pub(super) is_selecting: bool,
     multi_click_selection: Option<TextViewMultiClickSelection>,
@@ -214,6 +218,8 @@ impl TextViewState {
             markdown_extensions: Arc::default(),
             find: None,
             find_tally: Default::default(),
+            fresh: None,
+            fresh_tally: Default::default(),
             is_selecting: false,
             auto_scroll: AutoScroll::default(),
             selection_adapter,

@@ -423,7 +423,7 @@ impl gpui::RenderOnce for PathText {
 }
 
 /// Wire an inline file chip (`attachments::inline_file`) as a path target
-/// with its underline: `ink` is the name's own.
+/// with its underline in the chip's own ink, `INLINE_CODE_INK`.
 pub(crate) fn wire_inline(
     element: gpui::Stateful<gpui::Div>,
     target: PathTarget,
@@ -432,7 +432,7 @@ pub(crate) fn wire_inline(
 ) -> gpui::Stateful<gpui::Div> {
     let key = target.key("inline");
     wire_target(
-        element.child(underline(&key, theme::LINK_INK, size, line)),
+        element.child(underline(&key, theme::INLINE_CODE_INK, size, line)),
         target,
         key,
     )

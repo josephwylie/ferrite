@@ -18,6 +18,20 @@ use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 use super::CockpitView;
 use ferrite_pane::transcript::{ScrollTarget, TranscriptTail};
 
+/// What the failure strip says of a failed turn: the provider's reason,
+/// its first line (the strip is one line), in the operator's words where
+/// Ferrite wrote it — a Session that closed mid-turn says so plainly.
+fn failure_words(message: &str) -> SharedString {
+    use ferrite_core::transcript::TurnEnd;
+    if message == TurnEnd::UNFINISHED {
+        return "The session ended before this turn finished".into();
+    }
+    match message.lines().map(str::trim).find(|line| !line.is_empty()) {
+        Some(line) => line.to_owned().into(),
+        None => "This turn failed".into(),
+    }
+}
+
 impl CockpitView {
     /// The row after a transcript's last: the pending Decision, as its
     /// card is built for the tail (`CockpitView::decision_tail`, the
@@ -28,10 +42,9 @@ impl CockpitView {
     }
 
     /// The failure strip (SPEC §5.9 item 4) under Main's transcript when the
-    /// Thread's last turn failed: `Stopped <age> ago`, the age the nav row
-    /// reads (the Thread's last act), and `Retry`, which re-sends the
-    /// failed turn's prompt (`retry_failed_turn`) — none for a closed
-    /// Session, which has nothing to send to.
+    /// Thread's last turn failed: why (`failure_words`), and `Retry`, which
+    /// re-sends the failed turn's prompt (`retry_failed_turn`) — none for a
+    /// closed Session, which has nothing to send to.
     fn failure_tail(&self, index: usize) -> Option<TranscriptTail> {
         use ferrite_core::transcript::Status;
         let pane = self.panes.get(index)?;
@@ -40,22 +53,14 @@ impl CockpitView {
         }
         let thread = pane.thread()?;
         let turn = self.cockpit.thread(thread)?.turn();
-        if turn.status == Status::Streaming
-            || !matches!(turn.outcome, Some(ferrite_core::TurnOutcome::Error(_)))
-        {
+        let Some(ferrite_core::TurnOutcome::Error(message)) = &turn.outcome else {
+            return None;
+        };
+        if turn.status == Status::Streaming {
             return None;
         }
         let closed = turn.status == Status::Closed;
-        let age = self
-            .facts
-            .last_used(thread)
-            .map(|at| crate::facts::since_label(at, ferrite_core::clock::system_time()))
-            .unwrap_or_default();
-        let words = SharedString::from(if age.is_empty() {
-            "Stopped just now".to_string()
-        } else {
-            format!("Stopped {age} ago")
-        });
+        let words = failure_words(message);
         let key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -204,5 +209,28 @@ impl CockpitView {
         if let Some(transcript) = self.panes.get(index).and_then(|pane| pane.transcript()) {
             transcript.update(cx, |transcript, cx| transcript.scroll_to(target, cx));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::failure_words;
+    use ferrite_core::transcript::TurnEnd;
+
+    #[test]
+    fn the_strip_says_why_the_turn_failed() {
+        assert_eq!(
+            failure_words("API Error: 529 overloaded").as_ref(),
+            "API Error: 529 overloaded"
+        );
+        assert_eq!(
+            failure_words("\nAPI Error: 500\n{\"type\":\"error\"}").as_ref(),
+            "API Error: 500"
+        );
+        assert_eq!(failure_words("  ").as_ref(), "This turn failed");
+        assert_eq!(
+            failure_words(TurnEnd::UNFINISHED).as_ref(),
+            "The session ended before this turn finished"
+        );
     }
 }

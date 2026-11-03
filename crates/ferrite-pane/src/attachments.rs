@@ -279,10 +279,10 @@ impl RenderOnce for Attachments {
     }
 }
 
-/// A file link in prose (the prototype's `.path`): the path as the prose
-/// wrote it in `LINK_INK` with no chip, a `:line` suffix in `INK_SUBTLE`. It
-/// is a path target (`file_links::wire_inline`): a `LINK_INK` underline only
-/// under the pointer, the hover card while it is there (hosted by `scope`,
+/// A file link in prose: the path as the prose wrote it on the inline-code
+/// chip (`rich::code_chip`, as neither reference app colours a path), a
+/// `:line` suffix in `INK_SUBTLE`. It is a path target
+/// (`file_links::wire_inline`): an underline only under the pointer, the hover card while it is there (hosted by `scope`,
 /// the transcript it sits in), ⌘-click to the Thread's preview; a plain
 /// click opens it in the Pane's preview too, at its `:line`. The native Markdown flow
 /// reserves the returned size and wraps the link atomically, so the width is
@@ -326,10 +326,13 @@ pub fn inline_file(
     // The line reserves the path's exact advance, as the prototype's inline
     // span takes it; the link's own box keeps its pixel to spare and hangs
     // past it, so the words after it stand where the browser sets them.
+    // The chip's padding is room on the line, either side of the path.
+    let pad = px(2.0 * theme::INLINE_CODE_PAD_X);
     let size = gpui::size(
-        inline_file_advance(&name, &location, link_w, size_px, window),
+        inline_file_advance(&name, &location, link_w, size_px, window) + pad,
         line_h,
     );
+    let link_w = link_w + pad;
     let host = preview.cloned();
     let selector = format!("file-attachment-{}", file.path.display());
     let accessibility = format!("Open {name}");
@@ -362,28 +365,21 @@ pub fn inline_file(
             _ => file.open(window, cx),
         }
     };
-    let link = gpui::div()
+    let link = crate::rich::code_chip(gpui::div())
         .id("inline-file-chip")
         .flex()
         .items_center()
         .w(link_w)
-        .h_full()
+        .mt(px(theme::INLINE_CODE_INSET_Y))
+        .h(line_h - px(2.0 * theme::INLINE_CODE_INSET_Y))
         .min_w_0()
-        .font_family(theme::FONT_CODE)
-        .font_weight(theme::W_BODY)
         .not_italic()
         .child(
             // The path gives way to an ellipsis; the `:line` never does.
             gpui::div()
                 .flex()
                 .min_w_0()
-                .child(
-                    gpui::div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(theme::LINK_INK))
-                        .child(name),
-                )
+                .child(gpui::div().min_w_0().truncate().child(name))
                 .when(!location.is_empty(), |title| {
                     title.child(
                         gpui::div()
@@ -399,7 +395,7 @@ pub fn inline_file(
     let button = ferrite_ui::components::button("inline-file-action")
         .custom(ferrite_ui::pointer::button_variant(
             clear,
-            rgb(theme::LINK_INK).into(),
+            rgb(theme::INLINE_CODE_INK).into(),
             clear,
             cx,
         ))

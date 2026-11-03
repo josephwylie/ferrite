@@ -84,19 +84,17 @@ mod tests {
 
     #[test]
     fn test_word_range() {
-        use indoc::indoc;
-
-        let rope = Rope::from(indoc! {
-            r#"
-            test text:
-            abcde 中文🎉 test
-            hello[()]
-            test_connector ____
-            Rope
-            rök
-            grande île
-            "#
-        });
+        // Ferrite: `concat!`, not `indoc!` — a patched, non-member crate's
+        // dev-dependencies never resolve in the workspace.
+        let rope = Rope::from(concat!(
+            "test text:\n",
+            "abcde 中文🎉 test\n",
+            "hello[()]\n",
+            "test_connector ____\n",
+            "Rope\n",
+            "rök\n",
+            "grande île\n",
+        ));
 
         let tests = vec![
             (0, 0, Some("test")),

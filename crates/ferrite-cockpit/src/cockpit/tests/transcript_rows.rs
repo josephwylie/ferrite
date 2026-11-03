@@ -341,17 +341,30 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         let answer = cx.debug_bounds("transcript-answer").unwrap();
         // A quick turn closes on no stamp (`TURN_STAMP_MIN_MS`).
         assert!(cx.debug_bounds("turn-stamp").is_none());
-        // Blocks stand a line and a half apart; consecutive calls fold
-        // into one summary line.
+        // The work stands the prompt step under the bubble; consecutive
+        // calls fold into one summary line.
         let line = pane::Grid::pane(Default::default(), true).line;
-        let block = px((line * 1.5).round());
-        assert_eq!(tools.top() - prompt.bottom(), block);
+        assert_eq!(
+            tools.top() - prompt.bottom(),
+            px(ferrite_ui::theme::tx_after_prompt(line))
+        );
         assert!(
             cx.debug_bounds("tool-row-spacing-1").is_none(),
             "a shut group draws no call rows"
         );
-        // The turn's last prose is its answer, a block under the work.
-        assert_eq!(answer.top() - tools.bottom(), block);
+        // The turn's last prose is its answer, the prose step under the
+        // work.
+        assert_eq!(
+            answer.top() - tools.bottom(),
+            px(ferrite_ui::theme::tx_work_prose(line))
+        );
+        // Its actions stand under it, on the prose's edge.
+        let actions = cx.debug_bounds("answer-actions").unwrap();
+        assert_eq!(
+            actions.top() - answer.bottom(),
+            px(ferrite_ui::theme::MESSAGE_ACTIONS_GAP)
+        );
+        assert_eq!(actions.left(), answer.left());
         // One content edge: the group's summary and the answer's prose
         // start on the content column (the prompt's bubble keeps to the
         // right).

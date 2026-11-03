@@ -1270,13 +1270,14 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
         })
     };
     // Measured, not just declared: the first turn's answer (its actions
-    // row under it) to the second prompt is the turn step.
-    let block = (ferrite_pane::pane::Grid::pane(Default::default(), true).line * 1.5).round();
-    let actions = ferrite_ui::theme::MESSAGE_ACTIONS_GAP + ferrite_ui::theme::MESSAGE_ACTION;
+    // row under it, counted in) to the second prompt is the turn step.
+    let turn = ferrite_ui::theme::tx_turn_gap(
+        ferrite_pane::pane::Grid::pane(Default::default(), true).line,
+    );
     assert_eq!(
         line(prompts[1]).top() - answer.bottom(),
-        px(actions + block + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
-        "turns sit the answer's actions, a block and the bubble's padding apart"
+        px(turn + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
+        "turns sit the turn step and the bubble's padding apart"
     );
 }
 

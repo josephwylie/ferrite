@@ -28,8 +28,17 @@ fn queued_prompts_pile_up_with_the_latest_on_top(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, _| {
         let open = view.cockpit.thread(thread).unwrap();
-        assert_eq!(open.queued_all(), ["second thing", "first thing"]);
-        assert_eq!(open.queued(), Some("second thing"));
+        assert_eq!(
+            open.queue()
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            ["second thing", "first thing"]
+        );
+        assert_eq!(
+            open.queue().first().map(|item| item.text.as_str()),
+            Some("second thing")
+        );
     });
     let top = cx
         .debug_bounds("queued-0")
@@ -76,7 +85,9 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.queued()),
+            view.cockpit
+                .thread(thread)
+                .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("also this")
         );
     });
@@ -90,7 +101,9 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
             "backspace with text is still an editing key"
         );
         assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.queued()),
+            view.cockpit
+                .thread(thread)
+                .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("also this")
         );
     });
@@ -100,7 +113,9 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].composer.read(cx).is_empty());
         assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.queued()),
+            view.cockpit
+                .thread(thread)
+                .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("also this")
         );
     });
@@ -108,7 +123,9 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.queued()),
+            view.cockpit
+                .thread(thread)
+                .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             None,
             "backspace on the empty line unqueues the held prompt"
         );
@@ -168,7 +185,12 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued(),
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .queue()
+                .first()
+                .map(|item| item.text.as_str()),
             Some("edit queued")
         );
         assert_eq!(view.panes[0].composer.read(cx).text(), "draft\nsecond row");
@@ -177,12 +199,68 @@ fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) 
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued(),
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .queue()
+                .first()
+                .map(|item| item.text.as_str()),
             Some("earlier queued")
         );
         assert_eq!(
             view.panes[0].composer.read(cx).text(),
             "edit queued\n\ndraft\nsecond row"
         );
+    });
+}
+
+/// A prompt Codex is already steering into the running turn can no longer
+/// be taken back: the strip says `Steering` where its edit and remove sat,
+/// and ⌫ on the empty line leaves it be. Send now still stops the turn.
+#[gpui::test]
+fn a_steering_prompt_offers_no_edit_or_remove(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("queued-steering", 1);
+    cx.update(|cx| {
+        cx.bind_keys([KeyBinding::new(
+            "backspace",
+            ferrite_pane::composer::Backspace,
+            None,
+        )]);
+    });
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let stream = fake.streams.borrow()[0].clone();
+    stream
+        .send(SessionEvent::TextDelta {
+            text: "working".into(),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::Queue(ferrite_core::QueueEvent::Accepted(
+            ferrite_core::QueuedPrompt {
+                id: "steer:fold-in".into(),
+                client_id: "fold-in".into(),
+                text: "fold this in".into(),
+            },
+        )))
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("queued-count-1").is_some(),
+        "the strip is up"
+    );
+    assert!(cx.debug_bounds("queued-steering").is_some(), "it says so");
+    assert!(cx.debug_bounds("queued-edit").is_none(), "no edit");
+    assert!(cx.debug_bounds("queued-close").is_none(), "no remove");
+    assert!(
+        cx.debug_bounds("queued-send-now").is_some(),
+        "send now stays"
+    );
+    cx.simulate_keystrokes("backspace");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.thread(thread).unwrap().queue().len(), 1);
     });
 }

@@ -57,8 +57,8 @@
 //!    (`components::float_shadow`); a modal adds `VEIL`.
 //! 3. **Neutral greys, steps over the plane.** Darkest first: `SUNKEN` (a
 //!    command well) < `CARD` = `FRAME` (the plane) < `DECISION` <
-//!    `FIELD_COMPACT` < `RAISED` #242424 (an active tab or chip, inline
-//!    code, secondary buttons) < `BLOCK` #262626 (diff and fence blocks) <
+//!    `FIELD_COMPACT` < `RAISED` #242424 (an active tab or chip, secondary
+//!    buttons) < `BLOCK` #262626 (diff and fence blocks; `PROMPT_BUBBLE`) <
 //!    `SELECTED` #2a2a2a (**the one selected fill**: the selected row, tab,
 //!    option) < `SELECTION_HOVER` (every press) < `SEND` < `FIELD` #303030
 //!    (the Composer, the prompt band, a search field). `FLOAT` #303030
@@ -255,9 +255,13 @@ pub const SUNKEN: u32 = 0x171717;
 pub const DECISION: u32 = 0x1e1e1e;
 /// `#1f1f1f` — the compact Composer in a Group Pane.
 pub const FIELD_COMPACT: u32 = 0x1f1f1f;
-/// `#242424` — raised a step: an active tab or chip, inline code,
-/// secondary buttons, the panel's file block.
+/// `#242424` — raised a step: an active tab or chip, secondary buttons,
+/// the panel's file block.
 pub const RAISED: u32 = 0x242424;
+/// `#262626` — the prompt's bubble, matching Claude (typecolour.md).
+pub const PROMPT_BUBBLE: u32 = 0x262626;
+/// `#2a2a2a` — the inline-code chip, matching Claude (typecolour.md).
+pub const INLINE_CODE_CHIP: u32 = 0x2a2a2a;
 /// `#262626` — diff and code-fence blocks, under a `BLOCK_RING`: a fence
 /// reads as a block at a glance.
 pub const BLOCK: u32 = 0x262626;
@@ -353,6 +357,8 @@ pub mod paint {
     pub const BLOCK: Paint = Paint::solid(super::BLOCK);
     pub const FIELD: Paint = Paint::solid(super::FIELD);
     pub const RAISED: Paint = Paint::solid(super::RAISED);
+    pub const PROMPT_BUBBLE: Paint = Paint::solid(super::PROMPT_BUBBLE);
+    pub const INLINE_CODE_CHIP: Paint = Paint::solid(super::INLINE_CODE_CHIP);
     pub const SELECTED: Paint = Paint::solid(super::SELECTED);
     pub const SUNKEN: Paint = Paint::solid(super::SUNKEN);
     pub const DECISION: Paint = Paint::solid(super::DECISION);
@@ -1289,7 +1295,7 @@ pub fn init_components(cx: &mut gpui::App) {
 //   the Thread and its Project, the Panel its branch (ADR 0014's banner is
 //   retired).
 // - **The prompt bubble.** The prompt echo is a right-aligned
-//   `paint::RAISED` bubble (`R_CARD`) shrinking to its words in SF Pro
+//   `paint::PROMPT_BUBBLE` bubble (`R_CARD`) shrinking to its words in SF Pro
 //   `INK_STRONG`, its non-image files' chips inline after them, its
 //   images as thumbnails under it; its send time and `Copy` left of it
 //   while the pointer is on it (the message actions). A turn's answer
@@ -1403,6 +1409,30 @@ pub fn tx_half(line: f32) -> f32 {
     (line / 2.0).floor()
 }
 
+/// **The transcript's turn rhythm** at a line of `line` (21 at Standard),
+/// as Claude spaces it (`docs/research/craft/geometry.md`), scaling with the
+/// reading size: 40 from a prompt's bubble to whatever answers it, 22
+/// between a turn's prose and its calls (either way), 56 from a turn's last
+/// block to the next prompt.
+pub fn tx_after_prompt(line: f32) -> f32 {
+    (line * 40. / 21.).round()
+}
+pub fn tx_work_prose(line: f32) -> f32 {
+    (line * 22. / 21.).round()
+}
+pub fn tx_turn_gap(line: f32) -> f32 {
+    (line * 56. / 21.).round()
+}
+/// The space between an answer's paragraphs (and its other blocks): 12 on
+/// the 21 line, Claude's 11 rounded to the grid, so an answer reads as one
+/// piece rather than as terminal output with a blank line between blocks.
+pub fn tx_paragraph_gap(line: f32) -> f32 {
+    (line * 12. / 21.).round()
+}
+/// A tight list's items stand this much further apart than their lines
+/// (Claude's 24 pitch on a 21 line).
+pub const TX_LIST_ITEM_GAP: f32 = 3.0;
+
 /// The transcript column's inset from the card's edges, left and right
 /// (SPEC §5.4): 28px in Solo, 18px in a Group Pane. Off the space scale:
 /// the mockups' `padding: 0 28px` / `0 18px`. The right inset clears the
@@ -1411,9 +1441,9 @@ pub const TX_INSET_SOLO: f32 = 28.0;
 pub const TX_INSET_GROUP: f32 = 18.0;
 
 /// The reading column's widest: the transcript centres in the card with
-/// this at most between its edges (the Claude app's ~720px column), the
-/// insets the least room either side.
-pub const TX_COLUMN_MAX_W: f32 = 720.0;
+/// this at most between its edges (Codex's 736 column; Claude's is 732),
+/// the insets the least room either side.
+pub const TX_COLUMN_MAX_W: f32 = 736.0;
 
 /// The reading column's width in a transcript `width` wide: the width less
 /// the insets, at most `TX_COLUMN_MAX_W`.
@@ -1432,10 +1462,10 @@ pub fn tx_inset(solo: bool) -> f32 {
 
 /// **The prompt bubble** (the prototype's `.bubble`): right-aligned,
 /// shrinking to its words, never wider than `PROMPT_BUBBLE_MAX_W` of the
-/// column; `paint::RAISED` at `R_CARD`, `PROMPT_BUBBLE_PAD_X` either side
+/// column; `paint::PROMPT_BUBBLE` at `R_CARD`, `PROMPT_BUBBLE_PAD_X` either side
 /// and `PROMPT_BUBBLE_PAD_Y` above and below; `PROMPT_BUBBLE_GAP` between
 /// it, its thumbnails and its send time.
-pub const PROMPT_BUBBLE_MAX_W: f32 = 0.8;
+pub const PROMPT_BUBBLE_MAX_W: f32 = 0.84;
 pub const PROMPT_BUBBLE_PAD_X: f32 = SPACE_4;
 pub const PROMPT_BUBBLE_PAD_Y: f32 = 10.0;
 pub const PROMPT_BUBBLE_GAP: f32 = SPACE_1_5;
@@ -1537,16 +1567,18 @@ pub const TURN_STAMP_MIN_MS: u64 = 30_000;
 /// The turn stamp's rule runs from its words to the column's end, this far
 /// after them.
 pub const TURN_STAMP_RULE_GAP: f32 = SPACE_3;
-/// **Message actions**: a prompt's (its send time and `Copy`, left of its
-/// bubble) and a turn's answer's (`Copy`, under it) show under the pointer
-/// anywhere on the message. Each is a `MESSAGE_ACTION` square at `R_CONTROL`,
-/// its `MESSAGE_ACTION_GLYPH` icon in `INK_SUBTLE`, the raised hover blend;
-/// a copy turns to a check for `COPIED_HOLD_MS`. An answer's row
-/// stands `MESSAGE_ACTIONS_GAP` under its prose, laid out at rest so the
-/// pointer never moves the transcript.
+/// **Message actions**: a prompt's (its send time and `Copy`, under its
+/// bubble's right edge) and a turn's answer's (`Copy` and the time it
+/// finished, under its left edge), `MESSAGE_ACTIONS_GAP` under the message,
+/// laid out at rest so the pointer never moves the transcript. They show
+/// under the pointer anywhere on the message, and always under the
+/// thread's latest answer (Codex: the last answer is where you act). Each is
+/// a `MESSAGE_ACTION` square at `R_CONTROL`, its `MESSAGE_ACTION_GLYPH` icon
+/// in `INK_SUBTLE`, the raised hover blend; a copy turns to a check for
+/// `COPIED_HOLD_MS`. The time is meta type in `INK_SUBTLE`.
 pub const MESSAGE_ACTION: f32 = SPACE_6;
 pub const MESSAGE_ACTION_GLYPH: f32 = 14.0;
-pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_1;
+pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_2;
 pub const COPIED_HOLD_MS: u64 = 1_500;
 /// **The edge fades**: what scrolls under the top of the transcript (or
 /// under its pinned prompt) fades out over this height into the card, so no
@@ -1563,9 +1595,11 @@ pub const EDGE_FADE_KNEE: f32 = 0.85;
 pub const PINNED_PROMPT_LINES: usize = 2;
 pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
 /// **Jump to latest**: while the reader is scrolled away from the tail, a
-/// round `ICON_BUTTON` (`paint::RAISED`, the down arrow) floats centred
-/// `JUMP_LATEST_INSET` above the transcript's foot; a click glides back to
-/// the tail and follows it again.
+/// `JUMP_LATEST` circle (the plane's fill in a 1px `LINE` ring, no shadow:
+/// Codex's flat button) with the down arrow floats centred
+/// `JUMP_LATEST_INSET` above the transcript's foot; a click snaps to the
+/// tail and follows it again.
+pub const JUMP_LATEST: f32 = 32.0;
 pub const JUMP_LATEST_INSET: f32 = SPACE_3;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
@@ -1591,7 +1625,7 @@ pub const TASK_ICON: f32 = 14.0;
 /// `MEASURE_CH` cells; code, tables and rules keep the whole column. Blocks
 /// sit one blank line apart; headings are the body size in `W_STRONG`
 /// `INK_STRONG`, `**strong**` the same. Inline code is `INLINE_CODE_INK`
-/// on its `RAISED` chip; links and file paths are `LINK_INK`, underlined
+/// on its `INLINE_CODE_CHIP`; links and file paths are `LINK_INK`, underlined
 /// at rest (`PATH_UNDERLINE_*` for a path's own run). A list's `•` is `INK_SUBTLE`, hanging in the first
 /// of two cells. A fence is the diff's block box (`BLOCK_*`), the code
 /// `CODE_PAD_CELLS` in, `TX_BLOCK_STEP` under the prose, in full syntax
@@ -1614,7 +1648,7 @@ pub const PROSE_GAP: f32 = SPACE_3;
 /// 0033). The Markdown path paints both; the plain-text fallback carries
 /// the ink alone.
 pub const INLINE_CODE_INK: u32 = INK_STRONG;
-/// The inline-code chip (`rich::inline_code_wash`): a `paint::RAISED`
+/// The inline-code chip (`rich::inline_code_wash`): a `paint::INLINE_CODE_CHIP`
 /// ground at `R_CONTROL`, with `INLINE_CODE_PAD_X` of room laid out either
 /// side of the code (the text after a chip moves along, as the mockups'
 /// `padding: 1px 5px` moves it; the copied text is unchanged) and
@@ -1954,10 +1988,12 @@ pub const DRAFT_SUGGESTIONS_MAX: usize = 2;
 /// Any pad or line change here must update `pane::composer_fixed_height` in
 /// the same commit.
 pub const COMPOSER_ROW_H: f32 = LH_UI;
-/// How far a table cell's text sits under the cell's top (`rich::style`):
-/// the prototype's 19px line centred in its 20px cell, rounded down to the
-/// whole pixel.
-pub const TABLE_TEXT_DROP: f32 = 1.0;
+/// A Markdown table's rows (`rich::style`): it runs the full column, its
+/// head `TABLE_HEAD_H` tall at `W_STRONG`, each body row `TABLE_ROW_H`, a
+/// `LINE` hairline under every row but the last; a one-line cell's text is
+/// centred in its row (Claude: 41 / 37 with the hairline).
+pub const TABLE_HEAD_H: f32 = 40.0;
+pub const TABLE_ROW_H: f32 = 36.0;
 /// The context meter's state steps (`pane::ctx_meter_ink`):
 /// `ATTENTION` from `CTX_METER_WARN`, `BLOCKED` from `CTX_METER_FULL`.
 pub const CTX_METER_WARN: f32 = 0.60;
@@ -2715,9 +2751,10 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   everywhere: a nav row, an icon button, a menu row, a seam's line.
 //   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
 //   changes, a Send becoming ready) and a press land on the same frame.
-//   A transcript row appended live rises in (`MOTION_FADE_IN_MS` 500, 4px);
-//   first paint and scroll-back never animate. Nothing on a high-frequency
-//   interaction scales, slides or staggers.
+//   What arrives on its own fades in, opacity only: streamed text by the
+//   run (`MOTION_STREAM_FADE_MS`), the operator's sent bubble
+//   (`MOTION_BUBBLE_FADE_MS`); first paint and scroll-back never animate.
+//   Nothing on a high-frequency interaction scales, slides or staggers.
 // - **Little moves at once** (theme rule 8). The loops: the running spinner
 //   (`MOTION_SPINNER_TURN_MS`) in place of a working Thread's dot and as the
 //   working line's mark, its caption's shimmer (`MOTION_SHIMMER_MS`) on the
@@ -2745,6 +2782,8 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 /// CSS `ease`: quick fades, menu and sheet entrances.
 pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
+/// CSS `ease-out`: what arrives on its own (streamed text, the sent bubble).
+pub const MOTION_EASE_OUT: [f32; 4] = [0.0, 0.0, 0.58, 1.0];
 /// CSS `transition-colors`' default curve: every hover blend.
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 /// A drawer's ease-out (the iOS sheet's curve): it leaves at speed and
@@ -2754,10 +2793,15 @@ pub const MOTION_EASE_SLIDE: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a line arriving inside a card already open (the usage card's legend).
 pub const MOTION_ROW_IN_MS: u64 = 180;
-/// Zeron's `fade-in`: a transcript row appended live fades up over 500ms
-/// while rising `MOTION_FADE_IN_RISE` into place.
-pub const MOTION_FADE_IN_MS: u64 = 500;
-pub const MOTION_FADE_IN_RISE: f32 = 4.0;
+/// Streamed text: each run the provider delivers (a row appended live, or
+/// words growing an answer) fades in over 300ms on `MOTION_EASE_OUT`,
+/// opacity only, nothing rising (Claude's measured 300-350ms per chunk,
+/// `docs/research/craft/motion-measured.md`). A run still fading when its
+/// turn ends lands at full.
+pub const MOTION_STREAM_FADE_MS: u64 = 300;
+/// The operator's sent bubble fades in over 250ms on `MOTION_EASE_OUT`,
+/// opacity only (Claude's measured ≈230ms, no slide).
+pub const MOTION_BUBBLE_FADE_MS: u64 = 250;
 /// The sidebar's width between column and rail (cmd-B), and the panel's
 /// between shown and hidden (⌥⌘B) — the board's width rides it every
 /// frame.

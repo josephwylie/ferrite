@@ -821,7 +821,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         serde_json::json!({
             "type": "control_request",
             "request_id": "req_1",
-            "request": {"subtype": "initialize", "perTaskStopAffordance": true},
+            "request": {"subtype": "initialize", "perTaskStopAffordance": true, "agentProgressSummaries": true},
         })
     );
     assert_eq!(

@@ -64,3 +64,31 @@
 - [ ] Lane C: WorkKind::of -> tools::policy(name).kind; rows.rs groups()/OWN_ROW -> policy().grouping (StandsAlone/OwnRow break groups); draws_nothing gets !tool.draws_row(); show caption + failure suffix; is_command_run from transcript::tools (pane.rs:3846, :4128, text.rs:669), then delete the docview re-export.
 - [ ] Lane D: failure strip now shows for a session closed mid-turn (TurnOutcome::Error(UNFINISHED)); check wording.
 - Commit order: Step 0, then pure move (snapshot in scratchpad/pure-move/), then lane B rest.
+
+## Transcript step 2, lane C follow-ups
+- [x] pane.rs `argument_is_path` / `PATH_TOOLS` → `matches!(policy(name).kind, ToolKind::Read | Edit | Write)`.
+- [ ] Run cockpit transcript_rows.rs / core_transcript_parity.rs at checkpoint 2.
+
+## Subagents lane (after step 2)
+- Group agent calls into Claude's "Ran N agents" card (policy: Agent → RollsUp-within-agents, or a dedicated agents group) with per-row task, spinner, done/failed, summary.
+- Open a subagent from its row (match Claude's behaviour — capture needed); replace the Main/agent tab strip and "Back to Main".
+- No duplicate running row (agent row + working line).
+- Designed subagent view states; rows use §13 data (progress summaries, last tool, usage).
+
+## Provider options (audit) — applied / pending
+- [x] Claude spawn env: EMIT_TOOL_USE_SUMMARIES, EMIT_SESSION_STATE_EVENTS, ENABLE_TODO_TOOLS; initialize agentProgressSummaries.
+- [x] activity.rs: invalidate after the Closed append, so a mid-turn close fails its turn (lane D test frame_parity::a_session_closed_mid_turn_leaves_the_strip_without_retry).
+- [ ] thinking_tokens estimate in the live line (working.rs).
+- [ ] Later: supportedDialogKinds (refusal_fallback_prompt), question previews (CLAUDE_CODE_QUESTION_PREVIEW_FORMAT=markdown + pane render), --include-hook-events with hook UI; Codex approvalsReviewer auto_review, collaborationMode plan, thread/compact/start, review/start.
+- [ ] Lane D leftovers: turn_stamp Interrupted / None for failed latest Main turn (needs row context); "N background agents completed" row (core block on background-origin turn + quiet row).
+
+## Transcript step 2, lane E follow-ups
+- [x] `pane::queued_takes_back` must exclude `Sending` (core can't cancel unacknowledged items by id) — or make core cancellable. (Excludes `Sending`; core cancellation still open.)
+- [ ] Checkpoint 2 must run: core `native_queue_history_records_consumption_once` (rewritten, not rerun), cockpit escape/queue tests, lifecycle/notifications/subagent_cockpit.
+- [x] rustfmt on pane/text.rs. (`cargo fmt --all` at checkpoint 2.)
+
+## Checkpoint 2 (integrator)
+- [x] `RowCx::narration` deleted (always false), with render_block's grey/narrow narration branches and `prose`'s quiet path.
+- [x] `file_links::wire_inline`: the path chip's hover underline is `INLINE_CODE_INK`, not `LINK_INK`.
+- [x] theme: `PROMPT_BUBBLE` #262626 and `INLINE_CODE_CHIP` #2a2a2a split from `RAISED` #242424 (typecolour.md).
+- [x] gpui-base lib tests compile again (pre-existing breakage at HEAD): `indoc!` → `concat!` (a patched non-member's dev-dependencies never resolve), missing test imports in inline.rs, `Styled::font_weight` in style.rs. `cargo test -p gpui-base` is refused (non-member with dev-dependencies); run them with `cargo build -p gpui-base --lib --tests` and the printed binary.

@@ -172,14 +172,12 @@ fn activity_line(tool: &ToolBlock) -> String {
     line.chars().take(ACTIVITY_CHARS).chain(['…']).collect()
 }
 
-pub use crate::transcript::tools::is_command_run;
-
 /// A tool row that ran a test suite. Gated on the tool actually being a
 /// command run: an Edit of `tests/foo.rs` or a Read under `tests/` would
 /// otherwise clear a red suite that nobody had rerun. Public because the
 /// tool row's pass badge asks the same question the instruments do.
 pub fn is_test_run(tool: &ToolBlock) -> bool {
-    if !is_command_run(&tool.name) {
+    if !crate::transcript::tools::is_command_run(&tool.name) {
         return false;
     }
     let command = tool.summary.to_lowercase();

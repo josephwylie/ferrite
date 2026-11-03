@@ -242,6 +242,17 @@ impl ClaudeSession {
         check_version(&program)?;
 
         let mut command = super::launched(&config.launcher, &program);
+        // Print mode emits these only when asked; the SDK sets them for its
+        // hosts (docs/research/provider-options-audit.md). Set first so a
+        // Thread's own env can override them.
+        command.envs([
+            ("CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES", "1"),
+            ("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"),
+            ("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1"),
+            // File checkpoints for rewind (docs/research/edit-rewind.md):
+            // on from now so later rewinds can restore files.
+            ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "1"),
+        ]);
         command.envs(config.env.iter().cloned());
         command.args([
             "-p",
@@ -388,8 +399,13 @@ impl ClaudeSession {
         // CLI fails closed: an interrupt also kills every background agent and
         // workflow (2.1.299, `per_task_stop_sparing`, confirmed by capture).
         // With it, an interrupt aborts only Main's turn.
-        let mut initialize =
-            serde_json::json!({"subtype": "initialize", "perTaskStopAffordance": true});
+        // `agentProgressSummaries`: a periodic model-written line per running
+        // agent (~30 s), shown as the task's progress summary.
+        let mut initialize = serde_json::json!({
+            "subtype": "initialize",
+            "perTaskStopAffordance": true,
+            "agentProgressSummaries": true,
+        });
         if visuals {
             // The in-band server (`mcp`): the CLI tunnels its MCP traffic
             // back over this pipe, starting before it answers this request.

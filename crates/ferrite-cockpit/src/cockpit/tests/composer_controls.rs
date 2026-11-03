@@ -180,7 +180,13 @@ fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppCo
     assert_eq!(fake.sent.borrow().as_slice(), ["first"]);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued_all(),
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .queue()
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
             ["follow up"]
         );
         assert!(view.panes[0].composer.read(cx).is_empty());
@@ -199,7 +205,13 @@ fn composer_escape_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppCo
     );
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued_all(),
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .queue()
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
             ["follow up"],
             "the interrupt keeps the queue"
         );
@@ -528,19 +540,24 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].composer.read(cx).is_empty());
-        assert_eq!(view.cockpit.thread(thread).unwrap().queued_all().len(), 7);
+        assert_eq!(view.cockpit.thread(thread).unwrap().queue().len(), 7);
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued(),
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .queue()
+                .first()
+                .map(|item| item.text.as_str()),
             Some("Queued follow-up 6")
         );
-        assert_eq!(view.cockpit.thread(other).unwrap().queued_all().len(), 8);
+        assert_eq!(view.cockpit.thread(other).unwrap().queue().len(), 8);
     });
     cx.simulate_keystrokes("enter");
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.panes[0].composer.read(cx).text(), "Queued follow-up 6");
-        assert_eq!(view.cockpit.thread(thread).unwrap().queued_all().len(), 6);
-        assert_eq!(view.cockpit.thread(other).unwrap().queued_all().len(), 8);
+        assert_eq!(view.cockpit.thread(thread).unwrap().queue().len(), 6);
+        assert_eq!(view.cockpit.thread(other).unwrap().queue().len(), 8);
     });
     assert_eq!(fake.sent.borrow().as_slice(), ["Working", "Other work"]);
 }
@@ -733,7 +750,13 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.cockpit.thread(thread).unwrap().queued_all(),
+            view.cockpit
+                .thread(thread)
+                .unwrap()
+                .queue()
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
             ["First follow-up"],
             "the close button drops the top of the pile"
         );
@@ -807,7 +830,7 @@ fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
     cx.simulate_click(edit.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert!(view.cockpit.thread(thread).unwrap().queued().is_none());
+        assert!(view.cockpit.thread(thread).unwrap().queue().is_empty());
         assert_eq!(view.panes[0].composer.read(cx).text(), "Held follow-up");
     });
 }
@@ -837,9 +860,12 @@ fn the_focused_group_pane_shows_its_queue_and_backspace_drops_it(cx: &mut TestAp
     focus(&view, cx, threads[0]);
     let queued = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
-            view.cockpit
-                .thread(threads[0])
-                .and_then(|open| open.queued().map(str::to_string))
+            view.cockpit.thread(threads[0]).and_then(|open| {
+                open.queue()
+                    .first()
+                    .map(|item| item.text.as_str())
+                    .map(str::to_string)
+            })
         })
     };
     // The focused Pane's live input line.

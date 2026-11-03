@@ -913,7 +913,9 @@ fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(cx: &mut
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.queued()),
+            view.cockpit
+                .thread(thread)
+                .and_then(|open| open.queue().first().map(|item| item.text.as_str())),
             Some("fix the tests too")
         );
         assert!(

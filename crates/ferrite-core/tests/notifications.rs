@@ -340,7 +340,12 @@ fn a_native_pending_prompt_suppresses_finish_until_provider_consumption() {
         "the operator queued more work and waits for that"
     );
     assert_eq!(
-        h.cockpit.thread(second).unwrap().queued(),
+        h.cockpit
+            .thread(second)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
         Some("and then this")
     );
     // An authoritative snapshot says the provider consumed its pending entry.

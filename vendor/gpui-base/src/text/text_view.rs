@@ -11,6 +11,7 @@ use gpui::{
 use crate::StyledExt;
 use crate::text::TextViewFormat;
 use crate::text::find::TextFind;
+use crate::text::fresh::TextFresh;
 use crate::text::markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
 use crate::text::node::{CodeBlock, NodeContext, TableData};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
@@ -148,6 +149,7 @@ pub struct TextView {
     markdown_extensions: Arc<MarkdownExtensions>,
     selection_document: Option<(TextSelectionDocument, SharedString)>,
     find: Option<TextFind>,
+    fresh: Option<TextFresh>,
 }
 
 /// A plugin that can configure a [`TextView`].
@@ -213,6 +215,7 @@ impl TextView {
             markdown_extensions: Arc::default(),
             selection_document: None,
             find: None,
+            fresh: None,
         }
     }
 
@@ -238,6 +241,7 @@ impl TextView {
             markdown_extensions: Arc::default(),
             selection_document: None,
             find: None,
+            fresh: None,
         }
     }
 
@@ -263,6 +267,7 @@ impl TextView {
             markdown_extensions: Arc::default(),
             selection_document: None,
             find: None,
+            fresh: None,
         }
     }
 
@@ -291,6 +296,13 @@ impl TextView {
     /// Ferrite: mark a find bar's occurrences in this view's text.
     pub fn find(mut self, find: Option<TextFind>) -> Self {
         self.find = find;
+        self
+    }
+
+    /// Ferrite: fade newly streamed text in (see [`TextFresh`]); `None`
+    /// lands any fade at once and forgets what the view saw.
+    pub fn fresh(mut self, fresh: Option<TextFresh>) -> Self {
+        self.fresh = fresh;
         self
     }
 
@@ -660,6 +672,7 @@ impl Element for TextView {
             state.scrollable = self.scrollable;
             state.max_lines = max_lines;
             state.find = self.find.clone();
+            state.fresh = self.fresh.clone();
             if state.text_view_style != text_view_style {
                 state.selection_revision = state.selection_revision.wrapping_add(1);
             }
@@ -796,8 +809,10 @@ impl Element for TextView {
         if self.selectable {
             state.update(cx, |state, _| state.selection_adapter.begin_frame());
         }
-        // Ferrite: the occurrences count afresh in this frame's paint order.
+        // Ferrite: the occurrences (and the streamed runs) count afresh in
+        // this frame's paint order.
         state.read(cx).find_tally.borrow_mut().clear();
+        state.read(cx).fresh_tally.borrow_mut().begin_frame();
 
         GlobalState::global_mut(cx)
             .text_view_state_stack
@@ -815,6 +830,14 @@ impl Element for TextView {
             request_layout.element.paint(window, cx);
         }
         GlobalState::global_mut(cx).text_view_state_stack.pop();
+        {
+            let now = cx.background_executor().now();
+            let state = state.read(cx);
+            state
+                .fresh_tally
+                .borrow_mut()
+                .end_frame(state.fresh.as_ref(), now);
+        }
 
         if self.selectable {
             let (adapter, scroll_offset, content_bounds) = {

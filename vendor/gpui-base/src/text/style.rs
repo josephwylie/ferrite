@@ -41,10 +41,10 @@ pub struct TextViewStyle {
     list_ordinal: StyleRefinement,
     prose_max_width: Option<Pixels>,
     list_hang: Option<ListHang>,
+    list_item_gap: Pixels,
     link_underline_on_hover: bool,
     numeric_columns_right: bool,
     image: StyleRefinement,
-    table_fit: Option<Pixels>,
 }
 
 /// A fixed hang for list text: markers right-aligned in a box `width` wide,
@@ -116,10 +116,10 @@ impl PartialEq for TextViewStyle {
             && self.list_ordinal == other.list_ordinal
             && self.prose_max_width == other.prose_max_width
             && self.list_hang == other.list_hang
+            && self.list_item_gap == other.list_item_gap
             && self.link_underline_on_hover == other.link_underline_on_hover
             && self.numeric_columns_right == other.numeric_columns_right
             && self.image == other.image
-            && self.table_fit == other.table_fit
     }
 }
 
@@ -179,10 +179,10 @@ impl TextViewStyle {
             list_ordinal: StyleRefinement::default(),
             prose_max_width: None,
             list_hang: None,
+            list_item_gap: px(0.),
             link_underline_on_hover: false,
             numeric_columns_right: false,
             image: StyleRefinement::default(),
-            table_fit: None,
         }
     }
 
@@ -346,21 +346,6 @@ impl TextViewStyle {
         self
     }
 
-    /// Sizes a table to its content, like CSS `width: auto` with
-    /// `border-collapse`: each column exactly its widest cell plus `pad` a
-    /// side (the first column's left pad dropped, so its text sits on the
-    /// table's edge), no column floor, no stretch to the frame, cells on one
-    /// line. `None` (the default) keeps upstream's frame-filling layout.
-    pub fn with_table_fit(mut self, pad: Option<Pixels>) -> Self {
-        self.table_fit = pad;
-        self
-    }
-
-    /// The content-sized table's cell padding, when on.
-    pub fn table_fit(&self) -> Option<Pixels> {
-        self.table_fit
-    }
-
     /// Refines the frame a Markdown image is drawn in (its border, width,
     /// ground), after the defaults. The image fills the frame at its own
     /// proportions.
@@ -416,6 +401,18 @@ impl TextViewStyle {
     pub fn with_list_hang(mut self, hang: Option<ListHang>) -> Self {
         self.list_hang = hang;
         self
+    }
+
+    /// Ferrite: the space between a tight list's items (a loose list's
+    /// items stand the paragraph gap apart). `0` (the default) is upstream.
+    pub fn with_list_item_gap(mut self, gap: Pixels) -> Self {
+        self.list_item_gap = gap;
+        self
+    }
+
+    /// The space between a tight list's items.
+    pub fn list_item_gap(&self) -> Pixels {
+        self.list_item_gap
     }
 
     /// The prose measure, when set.
@@ -628,10 +625,7 @@ mod tests {
         assert_eq!(base.inline_code_font(), None);
         assert_eq!(base.inline_code_highlight().fade_out, None);
         assert!(base.clone() == base);
-        let heading = StyleRefinement {
-            font_weight: Some(FontWeight::SEMIBOLD),
-            ..Default::default()
-        };
+        let heading = gpui::Styled::font_weight(StyleRefinement::default(), FontWeight::SEMIBOLD);
         assert!(base != base.clone().with_heading(2, heading.clone()));
         assert_eq!(base.clone().with_heading(2, heading.clone()).heading(2), &heading);
         assert!(base != base.clone().with_heading_spacing(rems(1.), None));
@@ -648,6 +642,8 @@ mod tests {
         assert!(base != base.clone().with_list_markers(heading.clone(), Default::default()));
         assert_eq!(base.prose_max_width(), None);
         assert_eq!(base.list_hang(), None);
+        assert_eq!(base.list_item_gap(), px(0.));
+        assert!(base != base.clone().with_list_item_gap(px(4.)));
         assert!(base != base.clone().with_prose_max_width(Some(px(570.))));
         assert!(
             base != base.clone().with_list_hang(Some(ListHang {

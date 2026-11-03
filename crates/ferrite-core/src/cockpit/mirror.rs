@@ -55,7 +55,6 @@ struct Facts {
     starting: bool,
     tuning: bool,
     native_queue_pending: bool,
-    queued: Vec<String>,
     queue: Vec<QueueItem>,
     suggestion: Option<String>,
     commands: Vec<SessionCommand>,
@@ -105,7 +104,6 @@ impl From<ThreadState> for Facts {
             tuning: state.tuning,
             native_queue_pending: state.native_queue_pending,
             queue: queue_of(state.queue, &state.queued),
-            queued: state.queued,
             suggestion: state.suggestion,
             commands: state.commands.iter().map(Into::into).collect(),
             models: state.models,
@@ -693,18 +691,6 @@ impl<'a> ThreadView<'a> {
             Some(held) => held.digest.working_descendants,
             None => self.activity.working_descendants(),
         }
-    }
-
-    /// The prompt held back while the turn runs — the latest, which is
-    /// the one `⌫ unqueue` and Up act on.
-    pub fn queued(&self) -> Option<&'a str> {
-        self.facts.queued.first().map(String::as_str)
-    }
-
-    /// Every prompt held back, newest first: the latest sits on top of the
-    /// pile and what was said before it reads underneath.
-    pub fn queued_all(&self) -> Vec<&'a str> {
-        self.facts.queued.iter().map(String::as_str).collect()
     }
 
     /// Every prompt not yet picked up, newest first: where each stands on

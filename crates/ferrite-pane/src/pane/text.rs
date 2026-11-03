@@ -3,6 +3,7 @@
 //! Keep disclosure/order rules aligned with the row renderer. The native
 //! rendering tests compare both projections, including hidden tool details.
 use super::*;
+use ferrite_core::transcript::tools::{self, ToolKind};
 
 /// What a call whose result never came says after its call line.
 pub(super) const NO_RESULT: &str = "no result";
@@ -26,44 +27,31 @@ pub(crate) fn turn_stamp(end: &ferrite_core::transcript::TurnEnd) -> Option<Stri
 }
 
 /// What kind of work a call did, for its call line's verb and its group's
-/// summary. Classified by the tool alone: a command is a command
-/// whatever it ran — `cat` is not read as a read without knowing what the
-/// shell made of it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum WorkKind {
-    Command,
-    Read,
-    Edit,
-    Write,
-    Search,
-    List,
-    Fetch,
-    WebSearch,
-    Agent,
-    /// An MCP call, by its server (`mcp__github__get_issue` → `github`).
-    Mcp(String),
-    Other(String),
+/// summary: core's [`ToolKind`] (decided by the tool alone: a command is a
+/// command whatever it ran — `cat` is not read as a read without knowing
+/// what the shell made of it), and the name a call with no verb of its own
+/// goes by (`github`, `TodoWrite`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Work<'a> {
+    kind: ToolKind<'a>,
+    /// An MCP call's server; the shown name of a call with no verb; empty
+    /// for the rest.
+    name: &'a str,
 }
 
-impl WorkKind {
-    fn of(tool: &ToolBlock) -> Self {
-        match tool.name.as_str() {
-            "Bash" | "commandExecution" | "BashOutput" => Self::Command,
-            "Read" | "NotebookRead" | "read_file" | "imageView" => Self::Read,
-            "Edit" | "MultiEdit" | "NotebookEdit" | "fileChange" => Self::Edit,
-            "Write" => Self::Write,
-            "Task" | "Agent" => Self::Agent,
-            "Grep" | "Glob" => Self::Search,
-            "LS" => Self::List,
-            "WebFetch" => Self::Fetch,
-            "WebSearch" | "webSearch" => Self::WebSearch,
-            name => match name
-                .strip_prefix("mcp__")
-                .and_then(|rest| rest.split_once("__"))
-            {
-                Some((server, _)) if !server.is_empty() => Self::Mcp(server.to_owned()),
-                _ => Self::Other(ferrite_core::transcript::display_tool_name(name).to_owned()),
-            },
+impl<'a> Work<'a> {
+    fn of(tool: &'a ToolBlock) -> Self {
+        let policy = tools::policy(&tool.name);
+        let name = match policy.kind {
+            ToolKind::Mcp(server) => server,
+            ToolKind::Todo | ToolKind::Question | ToolKind::Visual | ToolKind::Other => {
+                policy.display
+            }
+            _ => "",
+        };
+        Self {
+            kind: policy.kind,
+            name,
         }
     }
 
@@ -74,58 +62,73 @@ impl WorkKind {
             let verb = if running { active } else { done };
             format!("{verb} {count} {}", if count == 1 { one } else { many })
         };
-        match self {
-            Self::Command => counted("Running", "Ran", "command", "commands"),
-            Self::Read => counted("Reading", "Read", "file", "files"),
-            Self::Edit => counted("Editing", "Edited", "file", "files"),
-            Self::Write => counted("Writing", "Wrote", "file", "files"),
-            Self::Search => counted("Searching for", "Searched for", "pattern", "patterns"),
-            Self::List => counted("Listing", "Listed", "directory", "directories"),
-            Self::Fetch => counted("Fetching", "Fetched", "page", "pages"),
-            Self::WebSearch => counted("Running", "Ran", "web search", "web searches"),
-            Self::Agent => counted("Running", "Ran", "agent", "agents"),
-            Self::Mcp(server) | Self::Other(server) => {
-                let verb = match (self, running) {
-                    (Self::Mcp(_), true) => "Calling",
-                    (Self::Mcp(_), false) => "Called",
-                    (_, true) => "Using",
-                    (_, false) => "Used",
-                };
-                match count {
-                    1 => format!("{verb} {server}"),
-                    count => format!("{verb} {server} {count} times"),
-                }
+        let verb = match self.kind {
+            ToolKind::Command => return counted("Running", "Ran", "command", "commands"),
+            ToolKind::Read => return counted("Reading", "Read", "file", "files"),
+            ToolKind::Edit => return counted("Editing", "Edited", "file", "files"),
+            ToolKind::Write => return counted("Writing", "Wrote", "file", "files"),
+            ToolKind::Search => {
+                return counted("Searching for", "Searched for", "pattern", "patterns")
             }
+            ToolKind::List => return counted("Listing", "Listed", "directory", "directories"),
+            ToolKind::Fetch => return counted("Fetching", "Fetched", "page", "pages"),
+            ToolKind::WebSearch => return counted("Running", "Ran", "web search", "web searches"),
+            ToolKind::Agent => return counted("Running", "Ran", "agent", "agents"),
+            ToolKind::Mcp(_) if running => "Calling",
+            ToolKind::Mcp(_) => "Called",
+            ToolKind::Todo | ToolKind::Question | ToolKind::Visual | ToolKind::Other if running => {
+                "Using"
+            }
+            ToolKind::Todo | ToolKind::Question | ToolKind::Visual | ToolKind::Other => "Used",
+        };
+        match count {
+            1 => format!("{verb} {}", self.name),
+            count => format!("{verb} {} {count} times", self.name),
         }
     }
 
     /// One call's verb, in the present tense while it runs: `Ran`, `Read`,
     /// `Edited`; a tool with no verb of its own is named (`Agent`, `github`,
     /// `TodoWrite`).
-    fn verb(&self, running: bool) -> &str {
+    fn verb(&self, running: bool) -> &'a str {
         let tense = |active, done| if running { active } else { done };
-        match self {
-            Self::Command => tense("Running", "Ran"),
-            Self::Read => tense("Reading", "Read"),
-            Self::Edit => tense("Editing", "Edited"),
-            Self::Write => tense("Writing", "Wrote"),
-            Self::Search => tense("Searching for", "Searched for"),
-            Self::List => tense("Listing", "Listed"),
-            Self::Fetch => tense("Fetching", "Fetched"),
-            Self::WebSearch => tense("Searching the web for", "Searched the web for"),
-            Self::Agent => "Agent",
-            Self::Mcp(name) | Self::Other(name) => name,
+        match self.kind {
+            ToolKind::Command => tense("Running", "Ran"),
+            ToolKind::Read => tense("Reading", "Read"),
+            ToolKind::Edit => tense("Editing", "Edited"),
+            ToolKind::Write => tense("Writing", "Wrote"),
+            ToolKind::Search => tense("Searching for", "Searched for"),
+            ToolKind::List => tense("Listing", "Listed"),
+            ToolKind::Fetch => tense("Fetching", "Fetched"),
+            ToolKind::WebSearch => tense("Searching the web for", "Searched the web for"),
+            ToolKind::Agent => "Agent",
+            ToolKind::Mcp(_)
+            | ToolKind::Todo
+            | ToolKind::Question
+            | ToolKind::Visual
+            | ToolKind::Other => self.name,
         }
     }
 
     /// Whether a call of this kind takes a literal argument (a command, a
-    /// path, a pattern, a URL), set in Geist Mono; an agent's task or a
-    /// web query is words, set as the line is.
+    /// path, a pattern, a URL), set in Geist Mono; an agent's task, a web
+    /// query or another tool's subject is words, set as the line is.
     fn literal(&self) -> bool {
-        !matches!(
-            self,
-            Self::WebSearch | Self::Agent | Self::Mcp(_) | Self::Other(_)
+        matches!(
+            self.kind,
+            ToolKind::Command
+                | ToolKind::Read
+                | ToolKind::Edit
+                | ToolKind::Write
+                | ToolKind::Search
+                | ToolKind::List
+                | ToolKind::Fetch
         )
+    }
+
+    /// An edit or a write: what its group's summary leads with and names.
+    fn changes_files(&self) -> bool {
+        matches!(self.kind, ToolKind::Edit | ToolKind::Write)
     }
 }
 
@@ -244,9 +247,9 @@ fn code_span(text: &str) -> String {
 /// otherwise the verb and the argument, a command less a leading `cd <dir>
 /// &&` (the shell card keeps it).
 pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
-    let kind = WorkKind::of(tool);
+    let work = Work::of(tool);
     let result = call_result(tool).map(|result| format!("{RESULT_SEAM}{result}"));
-    if kind == WorkKind::Command {
+    if work.kind == ToolKind::Command {
         if let Some(description) = tool.title.as_deref().filter(|words| !words.is_empty()) {
             return CallLine {
                 verb: String::new(),
@@ -257,19 +260,19 @@ pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
         }
     }
     let argument = tool.argument();
-    let argument = if kind == WorkKind::Command {
+    let argument = if work.kind == ToolKind::Command {
         without_cd(&argument).to_owned()
     } else {
         argument.into_owned()
     };
-    let mut verb = kind.verb(tool.state == ToolState::Running).to_owned();
+    let mut verb = work.verb(tool.state == ToolState::Running).to_owned();
     if !argument.is_empty() {
         verb.push(' ');
     }
     CallLine {
         verb,
         argument,
-        literal: kind.literal(),
+        literal: work.literal(),
         result,
     }
 }
@@ -306,19 +309,21 @@ fn call_result(tool: &ToolBlock) -> Option<String> {
     }
 }
 
-/// A group's summary line, as it reads and copies: what its calls did by
-/// kind, the first phrase capitalised (`Ran 12 commands, read 1 file`) — an
-/// edit or a write of one file names it (`edited notes.md`), and either says
-/// what its diffs changed (`+5 −1`) — then what went wrong, in the same
-/// words' grey (`(1 failed)`, `(1 failed, 1 without a result)`). Edits and
-/// writes lead (the named file is the summary's most useful word); the rest
-/// keep the order they first appear. At most `SUMMARY_KINDS` kinds are
-/// named; the other calls fold into `and 2 more`. `marks` are the ranges
-/// that wear their own ink: a named file and its counts.
+/// A group's summary line, as it reads and copies: the provider's own
+/// caption of its calls (`ToolBlock::caption`) where its newest call carries
+/// one, else what its calls did by kind, the first phrase capitalised (`Ran
+/// 12 commands, read 1 file`) — an edit or a write of one file names it
+/// (`edited notes.md`), and either says what its diffs changed (`+5 −1`).
+/// Either way, then what went wrong, in the same words' grey (`(1 failed)`,
+/// `(1 failed, 1 without a result)`). Edits and writes lead (the named file
+/// is the summary's most useful word); the rest keep the order they first
+/// appear. At most `SUMMARY_KINDS` kinds are named; the other calls fold
+/// into `and 2 more`. `marks` are the ranges that wear their own ink: a
+/// named file and its counts.
 ///
-/// Provenance: this summary is Ferrite's own, built from the group's calls
-/// (never a provider's or a model's caption), and its failure count is
-/// always said, so no caption can read a failed group as a clean one.
+/// Provenance: the failure count is Ferrite's own, built from the group's
+/// calls, and always said, so no caption can read a failed group as a clean
+/// one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GroupSummary {
     pub text: String,
@@ -338,8 +343,8 @@ const SUMMARY_KINDS: usize = 2;
 
 /// One kind's share of a group: its calls, whether one runs, the files it
 /// touched (an edit's or a write's) and what their diffs added and removed.
-struct KindTally {
-    kind: WorkKind,
+struct KindTally<'a> {
+    work: Work<'a>,
     count: usize,
     running: bool,
     files: Vec<String>,
@@ -348,16 +353,52 @@ struct KindTally {
 }
 
 pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
+    let caption = group_tools(members)
+        .last()
+        .and_then(|tool| tool.caption.as_deref())
+        .map(str::trim)
+        .filter(|caption| !caption.is_empty());
+    let (mut text, marks) = match caption {
+        Some(caption) => (caption.to_owned(), Vec::new()),
+        None => kinds_summary(members),
+    };
+    let tools: Vec<&ToolBlock> = group_tools(members).collect();
+    let failed = tools.iter().filter(|tool| call_failed(tool)).count();
+    let unanswered = tools
+        .iter()
+        .filter(|tool| tool.state == ToolState::Unavailable)
+        .count();
+    let mut wrong = Vec::new();
+    if failed > 0 {
+        wrong.push(format!("{failed} {}", theme::words::FAILED));
+    }
+    if unanswered > 0 {
+        wrong.push(format!(
+            "{unanswered} without {}",
+            if unanswered == 1 {
+                "a result"
+            } else {
+                "results"
+            }
+        ));
+    }
+    if !wrong.is_empty() {
+        text.push_str(&format!(" ({})", wrong.join(", ")));
+    }
+    GroupSummary { text, marks }
+}
+
+/// What a group's calls did by kind, as [`GroupSummary`] words it, and its
+/// marks.
+fn kinds_summary(members: &[Block]) -> (String, Vec<(std::ops::Range<usize>, SummaryMark)>) {
     let mut kinds: Vec<KindTally> = Vec::new();
-    let (mut failed, mut unanswered) = (0, 0);
     for tool in group_tools(members) {
-        let kind = WorkKind::of(tool);
-        let running = tool.state == ToolState::Running;
-        let at = match kinds.iter().position(|tally| tally.kind == kind) {
+        let work = Work::of(tool);
+        let at = match kinds.iter().position(|tally| tally.work == work) {
             Some(at) => at,
             None => {
                 kinds.push(KindTally {
-                    kind,
+                    work,
                     count: 0,
                     running: false,
                     files: Vec::new(),
@@ -369,8 +410,8 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
         };
         let tally = &mut kinds[at];
         tally.count += 1;
-        tally.running |= running;
-        if matches!(tally.kind, WorkKind::Edit | WorkKind::Write) {
+        tally.running |= tool.state == ToolState::Running;
+        if tally.work.changes_files() {
             let paths: Vec<&str> = if tool.diffs.is_empty() {
                 vec![tool.summary.as_str()]
             } else {
@@ -386,15 +427,9 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
                 tally.removed += diff.removed;
             }
         }
-        if call_failed(tool) {
-            failed += 1;
-        }
-        if tool.state == ToolState::Unavailable {
-            unanswered += 1;
-        }
     }
     // Stable: edits and writes first, the rest in their first order.
-    kinds.sort_by_key(|tally| !matches!(tally.kind, WorkKind::Edit | WorkKind::Write));
+    kinds.sort_by_key(|tally| !tally.work.changes_files());
     let mut text = String::new();
     let mut marks = Vec::new();
     let mut mark = |text: &mut String, words: &str, kind: SummaryMark| {
@@ -404,13 +439,13 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
     };
     for (index, tally) in kinds.iter().take(SUMMARY_KINDS).enumerate() {
         // One file edited or written is named, as the app's summary does.
-        let named = match (&tally.kind, tally.files.as_slice()) {
-            (WorkKind::Edit | WorkKind::Write, [file]) => Some(file_name(file)),
+        let named = match tally.files.as_slice() {
+            [file] if tally.work.changes_files() => Some(file_name(file)),
             _ => None,
         };
         let phrase = match &named {
-            Some(_) => format!("{} ", tally.kind.verb(tally.running)),
-            None => tally.kind.phrase(tally.count, tally.running),
+            Some(_) => format!("{} ", tally.work.verb(tally.running)),
+            None => tally.work.phrase(tally.count, tally.running),
         };
         if index > 0 {
             // Only the verb lowers: a server's name keeps its case.
@@ -447,24 +482,7 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
     if more > 0 {
         text.push_str(&format!(" and {more} more"));
     }
-    let mut wrong = Vec::new();
-    if failed > 0 {
-        wrong.push(format!("{failed} {}", theme::words::FAILED));
-    }
-    if unanswered > 0 {
-        wrong.push(format!(
-            "{unanswered} without {}",
-            if unanswered == 1 {
-                "a result"
-            } else {
-                "results"
-            }
-        ));
-    }
-    if !wrong.is_empty() {
-        text.push_str(&format!(" ({})", wrong.join(", ")));
-    }
-    GroupSummary { text, marks }
+    (text, marks)
 }
 
 /// A path's last component (`src/notes.md` → `notes.md`).
@@ -666,7 +684,7 @@ fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection
     if !expanded {
         return;
     }
-    if ferrite_core::docview::is_command_run(&tool.name) {
+    if tools::is_command_run(&tool.name) {
         let shell = super::output::shell(tool);
         collect_output_text(block, "command", &shell.command, selection);
         if let Some(output) = shell.output {
@@ -697,5 +715,51 @@ fn collect_diff_text(block: BlockId, diff: &Diff, selection: &TextRuns) {
         if let DiffRow::Line(side) = row {
             let _ = selection.line(block, side.body, Vec::new());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrite_core::{
+        transcript::{Input, Transcript},
+        SessionEvent,
+    };
+
+    fn read(transcript: &mut Transcript, id: &str, is_error: bool) {
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": id }),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: "x".into(),
+            is_error,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+    }
+
+    /// The provider's caption on a group's newest call stands for Ferrite's
+    /// tally, and the group's failures are still said after it; a caption
+    /// on an older call does not speak for the calls after it.
+    #[test]
+    fn a_provider_caption_reads_with_the_failure_suffix() {
+        let mut transcript = Transcript::default();
+        read(&mut transcript, "a", true);
+        read(&mut transcript, "b", false);
+        transcript.apply(Input::Event(SessionEvent::ToolSummary {
+            ids: vec!["a".into(), "b".into()],
+            summary: "Read the two configs".into(),
+        }));
+        let summary = group_summary(transcript.blocks());
+        assert_eq!(summary.text, "Read the two configs (1 failed)");
+        assert!(summary.marks.is_empty());
+
+        read(&mut transcript, "c", false);
+        assert_eq!(
+            group_summary(transcript.blocks()).text,
+            "Read 3 files (1 failed)"
+        );
     }
 }

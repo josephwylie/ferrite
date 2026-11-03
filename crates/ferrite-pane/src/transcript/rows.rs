@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, hash::Hash, ops::Range, rc::Rc};
 
-use ferrite_core::transcript::{Block, BlockId, Body, ToolBlock, ToolState};
+use ferrite_core::transcript::{tools, Block, BlockId, Body, ToolBlock, ToolState};
 
 /// A stable semantic-row identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -85,29 +85,37 @@ impl RowKind {
 
 /// The space above a row, from the row before it (`None`: the first row),
 /// its own kind and the answer size `reading`: the transcript's one table
-/// of vertical rhythm (the transcript grammar in `theme.rs`). The work of a
-/// turn — its calls, groups, visuals and the narration between them — reads
-/// as one list, its rows half a line apart; every other block (a prompt, an
-/// answer, the stamp, the Decision) stands a line and a half from its
-/// neighbours. A row that answers the one above it (a decision record, an
-/// interrupted or failed turn's end) sits flush under it. A first row is
-/// flush to the top when it is a prompt and a line down otherwise (both
-/// under the body's own top padding, `RowShape::top_pad`).
+/// of vertical rhythm (the turn rhythm in `theme.rs`, Claude's measured
+/// spacing). A prompt's bubble stands `tx_after_prompt` above whatever
+/// answers it and `tx_turn_gap` under the turn before it, each counting the
+/// message's actions row laid out at rest between them (the prompt's under
+/// its bubble, an answer's under its prose). A turn's calls and
+/// groups read as one list, half a line apart; its prose stands
+/// `tx_work_prose` from the calls on either side. Every other block (the
+/// stamp, a thought, the Decision) stands a line and a half off. A row
+/// that answers the one above it (a decision record, an interrupted or
+/// failed turn's end) sits flush under it. A first row is flush to the top
+/// when it is a prompt and a line down otherwise (both under the body's own
+/// top padding, `RowShape::top_pad`).
 pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32) -> f32 {
+    use ferrite_ui::theme;
     use RowKind::*;
-    let line = ferrite_ui::theme::prose_line_height(reading);
+    let line = theme::prose_line_height(reading);
     let Some(previous) = previous else {
         return if kind == Prompt { 0. } else { line };
     };
-    let work = |kind| {
-        matches!(
-            kind,
-            Activity | Group | Visual | Notice | Working | Answer { narration: true }
-        )
-    };
+    let call = |kind| matches!(kind, Activity | Group | Visual | Notice);
+    let work = |kind| call(kind) || matches!(kind, Working | Answer { narration: true });
     match (previous, kind) {
         (_, TurnEnd { hangs: true } | Meta) => 0.,
-        (previous, kind) if work(previous) && work(kind) => ferrite_ui::theme::tx_half(line),
+        (Prompt, _) => (theme::tx_after_prompt(line) - theme::MESSAGE_ACTION).max(0.),
+        (Answer { narration: false }, Prompt) => {
+            theme::tx_turn_gap(line) - theme::MESSAGE_ACTIONS_GAP - theme::MESSAGE_ACTION
+        }
+        (_, Prompt) => theme::tx_turn_gap(line),
+        (previous, Answer { .. }) if call(previous) => theme::tx_work_prose(line),
+        (Answer { narration: true }, kind) if call(kind) => theme::tx_work_prose(line),
+        (previous, kind) if work(previous) && work(kind) => theme::tx_half(line),
         _ => (line * 1.5).round(),
     }
 }
@@ -304,17 +312,19 @@ pub fn gated(call: &str, pending: &str) -> bool {
 }
 
 /// Whether a call folds into a group with the calls beside it: a command,
-/// a read, a search, an edit (`Edited 3 files`), an MCP call. A subagent
-/// has a transcript of its own and keeps its own row, between groups.
-/// Decided by the tool, never by a result still to come.
+/// a read, a search, an edit (`Edited 3 files`), an MCP call. A subagent, a
+/// question or a visual keeps a row of its own and ends the group before
+/// it, as does a checklist call that failed. Decided by the tool's policy,
+/// never by a result still to come.
 pub(crate) fn groups(tool: &ToolBlock) -> bool {
-    const OWN_ROW: &[&str] = &["Task", "Agent", "collabAgentToolCall"];
-    !OWN_ROW.contains(&tool.name.as_str())
+    tools::policy(&tool.name).grouping == tools::Grouping::RollsUp
 }
 
 /// A block that projects to no row: blank or hidden thinking, an answered
 /// request's record, the `opened in` note, the call a pending Decision
-/// gates, a quick turn's end (`pane::turn_stamp`). A group of calls reads across it.
+/// gates, a checklist call that did not fail (the plan draws what it did:
+/// `ToolBlock::draws_row`), a quick turn's end (`pane::turn_stamp`). A group
+/// of calls reads across it.
 fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
     if block.markdown.is_some() {
         return false;
@@ -323,7 +333,7 @@ fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
         Body::Thinking(text) => text.trim().is_empty() || !shape.thinking,
         Body::Meta(text) => ferrite_core::transcript::is_decision_record(text),
         Body::Notice(text) => ferrite_core::transcript::is_opened_notice(text),
-        Body::Tool(tool) => is_gated(tool, shape),
+        Body::Tool(tool) => is_gated(tool, shape) || !tool.draws_row(),
         Body::TurnEnd(end) => crate::pane::turn_stamp(end).is_none(),
         _ => false,
     }
@@ -349,15 +359,12 @@ fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, us
     let mut index = end;
     while let Some(block) = blocks.get(index) {
         match &block.body {
-            Body::Tool(tool) if block.markdown.is_none() && !is_gated(tool, shape) => {
-                if !groups(tool) {
-                    break;
-                }
+            _ if draws_nothing(block, shape) => index += 1,
+            Body::Tool(tool) if block.markdown.is_none() && groups(tool) => {
                 members.push(index);
                 index += 1;
                 end = index;
             }
-            _ if draws_nothing(block, shape) => index += 1,
             _ => break,
         }
     }
@@ -412,7 +419,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 ));
             }
             Body::Tool(tool) => {
-                if is_gated(tool, shape) {
+                if draws_nothing(block, shape) {
                     continue;
                 }
                 if groups(tool) {
@@ -768,11 +775,8 @@ mod tests {
             }]
         );
         // The old head is now a later turn's prompt: its gap grew from
-        // flush to a block's, so only it is re-measured.
-        assert_eq!(
-            rows.get(2).unwrap().gap(),
-            (ferrite_ui::theme::prose_line_height(READING) * 1.5).round()
-        );
+        // flush to a turn's, so only it is re-measured.
+        assert_eq!(rows.get(2).unwrap().gap(), after_answer(READING));
         assert_eq!(delta.remeasure, vec![2]);
         assert!(Rc::ptr_eq(&old[1], rows.get(3).unwrap()));
     }
@@ -964,33 +968,134 @@ mod tests {
         );
     }
 
-    /// The reference's rhythm: a turn's work — calls, groups, visuals,
-    /// notices, narration — reads as one list, half a line apart; every
-    /// other block stands a line and a half off; a row that answers the one
-    /// above it hangs flush; a leading prompt sits flush to the top.
+    fn call(transcript: &mut Transcript, id: &str, name: &str) {
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: name.into(),
+            input: serde_json::json!({ "subject": "x" }),
+        }));
+    }
+
+    fn calls(rows: &TranscriptRows) -> Vec<(RowKind, Vec<String>)> {
+        rows.rows()
+            .iter()
+            .map(|row| {
+                let calls = row
+                    .blocks()
+                    .iter()
+                    .filter_map(|block| match &block.body {
+                        Body::Tool(tool) => Some(tool.call.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                (row.kind(), calls)
+            })
+            .collect()
+    }
+
+    /// A checklist call draws no row (the plan shows what it did), and a
+    /// group reads across it; one that failed keeps a row of its own and
+    /// ends the group before it.
+    #[test]
+    fn checklist_calls_draw_a_row_only_when_they_fail() {
+        let mut transcript = Transcript::default();
+        bash(&mut transcript, "a");
+        call(&mut transcript, "t1", "TaskCreate");
+        settle(&mut transcript, "t1", false);
+        bash(&mut transcript, "b");
+        call(&mut transcript, "t2", "TodoWrite");
+        settle(&mut transcript, "t2", true);
+        bash(&mut transcript, "c");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let owned = |kind: RowKind, ids: &[&str]| -> (RowKind, Vec<String>) {
+            (kind, ids.iter().map(|id| id.to_string()).collect())
+        };
+        assert_eq!(
+            calls(&rows),
+            [
+                owned(RowKind::Group, &["a", "b"]),
+                owned(RowKind::Activity, &["t2"]),
+                owned(RowKind::Activity, &["c"]),
+            ]
+        );
+    }
+
+    /// A question put to the operator stands alone: the group before it
+    /// ends, another starts after it.
+    #[test]
+    fn a_question_breaks_the_group_around_it() {
+        let mut transcript = Transcript::default();
+        bash(&mut transcript, "a");
+        bash(&mut transcript, "b");
+        call(&mut transcript, "q", "AskUserQuestion");
+        bash(&mut transcript, "c");
+        bash(&mut transcript, "d");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let owned = |kind: RowKind, ids: &[&str]| -> (RowKind, Vec<String>) {
+            (kind, ids.iter().map(|id| id.to_string()).collect())
+        };
+        assert_eq!(
+            calls(&rows),
+            [
+                owned(RowKind::Group, &["a", "b"]),
+                owned(RowKind::Activity, &["q"]),
+                owned(RowKind::Group, &["c", "d"]),
+            ]
+        );
+    }
+
+    /// The gap between a prompt's row and what answers it: the prompt step
+    /// less the actions row under its bubble.
+    fn after_prompt(reading: f32) -> f32 {
+        use ferrite_ui::theme;
+        theme::tx_after_prompt(theme::prose_line_height(reading)) - theme::MESSAGE_ACTION
+    }
+
+    /// The gap between a finished answer and the next prompt: the turn's
+    /// gap less the answer's actions row, which stands under it at rest.
+    fn after_answer(reading: f32) -> f32 {
+        use ferrite_ui::theme;
+        theme::tx_turn_gap(theme::prose_line_height(reading))
+            - theme::MESSAGE_ACTIONS_GAP
+            - theme::MESSAGE_ACTION
+    }
+
+    /// Claude's rhythm (`docs/research/craft/geometry.md`, at the 21 line):
+    /// a prompt stands 40 over what answers it and 56 under the turn before
+    /// (its answer's actions row counted in); a turn's calls read as one
+    /// list, half a line apart, its prose 22 from them; every other block
+    /// stands a line and a half off; a row that answers the one above it
+    /// hangs flush; a leading prompt sits flush to the top.
     #[test]
     fn the_gap_table_lists_the_work_and_spaces_the_blocks() {
         use RowKind::*;
         let line = ferrite_ui::theme::prose_line_height(READING);
+        assert_eq!(line, 21.);
         let half = ferrite_ui::theme::tx_half(line);
         let block = (line * 1.5).round();
         let answer = Answer { narration: false };
         let narration = Answer { narration: true };
         let stamp = TurnEnd { hangs: false };
         let hung = TurnEnd { hangs: true };
+        assert_eq!(after_answer(READING) + 32., 56.);
+        assert_eq!(after_prompt(READING) + 24., 40.);
         for (previous, kind, gap) in [
             (None, Prompt, 0.),
             (None, Activity, line),
-            (Some(stamp), Prompt, block),
-            (Some(answer), Prompt, block),
-            (Some(Prompt), narration, block),
-            (Some(Prompt), Activity, block),
+            (Some(stamp), Prompt, 56.),
+            (Some(Activity), Prompt, 56.),
+            (Some(answer), Prompt, after_answer(READING)),
+            (Some(Prompt), narration, after_prompt(READING)),
+            (Some(Prompt), Activity, after_prompt(READING)),
+            (Some(Prompt), answer, after_prompt(READING)),
+            (Some(Prompt), Working, after_prompt(READING)),
             (Some(Activity), Activity, half),
             (Some(Group), Activity, half),
-            (Some(narration), Activity, half),
-            (Some(Activity), narration, half),
+            (Some(narration), Activity, 22.),
+            (Some(Activity), narration, 22.),
+            (Some(narration), Working, half),
             (Some(Visual), Group, half),
-            (Some(Activity), answer, block),
+            (Some(Activity), answer, 22.),
             (Some(Activity), Reasoning, block),
             (Some(Activity), stamp, block),
             (Some(answer), hung, 0.),
@@ -1021,9 +1126,16 @@ mod tests {
             let reading = answer_text_size(size);
             // The type table's line for the size (`TX_LINE_RATIO`).
             let line = ferrite_ui::theme::prose_line_height(reading);
-            let block = (line * 1.5f32).round();
-            assert_eq!(gap_before(Some(prose), Prompt, reading), block, "{size:?}");
-            assert_eq!(gap_before(Some(Prompt), prose, reading), block, "{size:?}");
+            assert_eq!(
+                gap_before(Some(prose), Prompt, reading),
+                after_answer(reading),
+                "{size:?}"
+            );
+            assert_eq!(
+                gap_before(Some(Prompt), prose, reading),
+                after_prompt(reading),
+                "{size:?}"
+            );
             assert_eq!(
                 gap_before(Some(call), call, reading),
                 ferrite_ui::theme::tx_half(line)
@@ -1053,10 +1165,7 @@ mod tests {
             Rc::ptr_eq(&first, rows.get(0).unwrap()),
             "the body padding does not scale"
         );
-        assert_eq!(
-            rows.get(2).unwrap().gap(),
-            (ferrite_ui::theme::prose_line_height(large) * 1.5).round()
-        );
+        assert_eq!(rows.get(2).unwrap().gap(), after_answer(large));
     }
 
     #[test]
@@ -1082,8 +1191,12 @@ mod tests {
         let line = ferrite_ui::theme::prose_line_height(READING);
         assert_eq!(
             gaps,
-            vec![0., (line * 1.5).round(), ferrite_ui::theme::tx_half(line)],
-            "the narration and the work under it read as one list"
+            vec![
+                0.,
+                after_prompt(READING),
+                ferrite_ui::theme::tx_work_prose(line)
+            ],
+            "the narration stands off the prompt, and the work off the narration"
         );
     }
 

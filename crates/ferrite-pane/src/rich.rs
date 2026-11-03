@@ -304,6 +304,9 @@ pub struct Markdown {
     document: Option<gpui::base::TextSelectionDocument>,
     /// A find's occurrences to mark (`crate::find`).
     find: Option<gpui::base::text::TextFind>,
+    /// The answer is streaming: each run of words that arrives fades in
+    /// (`motion::STREAM_FADE`, `TextView::fresh`).
+    streaming: bool,
 }
 
 impl Markdown {
@@ -317,6 +320,13 @@ impl Markdown {
 
     pub fn find(mut self, find: Option<gpui::base::text::TextFind>) -> Self {
         self.find = find;
+        self
+    }
+
+    /// Fade each run of words that streams in (`streaming`), from the
+    /// transcript's ground; off, any fade still running lands at once.
+    pub fn streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
         self
     }
 
@@ -376,6 +386,7 @@ impl Markdown {
             chips: None,
             document: None,
             find: None,
+            streaming: false,
         }
     }
 }
@@ -511,6 +522,11 @@ impl gpui::RenderOnce for Markdown {
                 view.selection_document(document, self.id)
             })
             .find(self.find)
+            .fresh(self.streaming.then(|| gpui::base::text::TextFresh {
+                fade: ferrite_ui::motion::STREAM_FADE.duration(),
+                ease: Rc::new(|t| ferrite_ui::motion::STREAM_FADE.progress(t)),
+                ground: theme::paint::CARD.hsla(),
+            }))
             .font_family(face)
             // A line's trailing space hangs past its edge, as CSS lets it:
             // GPUI counts it when wrapping, so a word that ends within a
@@ -843,9 +859,6 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         .with_link_underline_on_hover(false)
         // A column of numbers reads right-aligned, as a terminal table does.
         .with_numeric_columns_right(true)
-        // A table is as wide as its cells, its first column on the prose
-        // edge (the prototype's `table.t`, `.clean … :first-child`).
-        .with_table_fit(Some(px(cell)))
         // An image in an answer sits in the prompt image's frame:
         // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE` edge.
         .with_image(
@@ -886,7 +899,7 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
                 .text_color(rgb(theme::SYN_PLAIN)),
         )
         // Inline code is a chip (SPEC §5.4): `INK_STRONG` at body weight
-        // on a `RAISED` wash, `R_CONTROL` corners, `INLINE_CODE_PAD_X` of
+        // on an `INLINE_CODE_CHIP` wash, `R_CONTROL` corners, `INLINE_CODE_PAD_X` of
         // room either side.
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
@@ -895,7 +908,9 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         })
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
         .with_inline_code_wash(Some(inline_code_wash()))
-        // A table's rules, head and rows alike, are the one `LINE`.
+        // A table runs the full column (Claude's and Codex's), its columns
+        // shared by their content; its rules, the head's and the rows', are
+        // the one `LINE`.
         .with_border(theme::paint::LINE.into())
         .with_table({
             // No box and no ground.
@@ -909,24 +924,26 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
             table.overflow.x = Some(gpui::Overflow::Scroll);
             table
         })
-        // A row is a line and its rule, the text a pixel down: the
-        // prototype's `td` is a line tall (`height: lh`) with a line a pixel
-        // shorter (`line-height: lh - 1px`) centred in it, which the browser
-        // sets on the next whole pixel — its baseline 15px into the cell.
-        // The full line, a pixel down inside the cell's own height, puts it
-        // there.
+        // A row is `TABLE_ROW_H` (the head `TABLE_HEAD_H`) with a one-line
+        // cell's text centred in it; a cell that wraps grows its row. A
+        // column's text starts on the column's edge (the first on the
+        // prose's), two cells of room after it.
         .with_table_cell(ferrite_ui::components::tabular(
             gpui::StyleRefinement::default()
                 .border_r_0()
-                .px(px(cell))
-                .pt(px(theme::TABLE_TEXT_DROP))
-                .pb(px(0.))
-                .h(px(line))
+                .pl(px(0.))
+                .pr(px(2.0 * cell))
+                .py(px(0.))
+                .min_h(px(theme::TABLE_ROW_H))
+                .flex()
+                .flex_col()
+                .justify_center()
                 .text_size(px(size))
                 .line_height(px(line)),
         ))
         .with_table_head(
             gpui::StyleRefinement::default()
+                .min_h(px(theme::TABLE_HEAD_H))
                 .bg(gpui::transparent_black())
                 .text_color(rgb(theme::INK_STRONG))
                 .font_weight(theme::W_STRONG)
@@ -965,9 +982,12 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
                 gpui::StyleRefinement::default().text_color(rgb(theme::INK_SUBTLE)),
             ),
         )
-        // One blank line between blocks, as a terminal prints them; a
-        // heading takes the same.
-        .with_paragraph_gap(rem(line))
+        // Blocks stand `tx_paragraph_gap` apart (12 on the 21 line), so an
+        // answer reads as one piece; a heading takes the same. A tight
+        // list's items stand `TX_LIST_ITEM_GAP` further apart than their
+        // lines.
+        .with_paragraph_gap(rem(theme::tx_paragraph_gap(line)))
+        .with_list_item_gap(px(theme::TX_LIST_ITEM_GAP))
         .with_heading_spacing(rem(0.), None)
         .with_heading_base_font_size(base)
         .with_heading_font_size(|level, base| px(heading_size(level, f32::from(base))));
@@ -977,12 +997,27 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
     style
 }
 
+/// The inline-code chip as an element's look (a prose path,
+/// `attachments::inline_file`): `INLINE_CODE_INK` mono at body weight on
+/// the `INLINE_CODE_CHIP` ground at `R_CONTROL`, `INLINE_CODE_PAD_X` either side —
+/// the chip the Markdown flow paints from `inline_code_wash` around a code
+/// span.
+pub(crate) fn code_chip<E: Styled>(element: E) -> E {
+    element
+        .px(px(theme::INLINE_CODE_PAD_X))
+        .bg(theme::paint::INLINE_CODE_CHIP)
+        .rounded(px(theme::R_CONTROL))
+        .font_family(theme::FONT_CODE)
+        .font_weight(theme::W_BODY)
+        .text_color(rgb(theme::INLINE_CODE_INK))
+}
+
 /// The inline-code chip's wash (SPEC §5.4's `padding: 1px 5px`): its
 /// horizontal padding laid out as room either side of the run, so the
 /// text after it moves along, and the ground painted over that room.
 pub fn inline_code_wash() -> gpui::base::text::InlineCodeWash {
     gpui::base::text::InlineCodeWash {
-        color: theme::paint::RAISED.hsla(),
+        color: theme::paint::INLINE_CODE_CHIP.hsla(),
         radius: px(theme::R_CONTROL),
         // The wash covers the laid-out room either side and no more, so
         // it meets neither neighbouring space.
@@ -1993,7 +2028,11 @@ let count = 2;
             )
         });
         assert!(want < px(theme::INLINE_FILE_MAX_W), "{want:?}");
-        assert_eq!(chip.size.width, want, "the chip is its measured width");
+        assert_eq!(
+            chip.size.width,
+            want + px(2.0 * theme::INLINE_CODE_PAD_X),
+            "the chip is its measured width and its padding"
+        );
         // The name box holds its whole shaped width: nothing to ellipsize.
         let name = cx.update(|window, _| {
             let mut face = window.text_style();
@@ -2241,9 +2280,9 @@ mod spacing_tests {
                 });
                 let mut height = |ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
                 let gap = height(2) - height(0) - height(1);
-                // Terminal-native: every boundary, a heading's included, is
-                // one blank line.
-                let want = theme::LH_PROSE;
+                // Every boundary, a heading's included, is the one
+                // paragraph gap.
+                let want = theme::tx_paragraph_gap(theme::LH_PROSE);
                 assert!(
                     (gap - px(want)).abs() < px(0.5),
                     "{combined:?}: gap {gap:?}, want {want}"
@@ -2437,9 +2476,10 @@ mod spacing_tests {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        // Tight unordered, ordered, task and nested lists gain no inter-item
-        // gap. Actual paragraphs and loose lists retain two blank lines.
-        let g = theme::LH_PROSE;
+        // Tight unordered, ordered, task and nested lists keep their item
+        // gap either way. Actual paragraphs and loose lists gain two
+        // paragraph gaps.
+        let g = theme::tx_paragraph_gap(theme::LH_PROSE);
         let extra_space = [0., 0., 0., 0., 2. * g, 2. * g, 2. * g, 2. * g, g];
         for (ix, before) in compact.into_iter().enumerate() {
             let after = cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
@@ -2517,15 +2557,18 @@ mod spacing_tests {
             let _ = window.draw(cx);
         });
         let mut height = |ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
+        // A hard break is a new line; a paragraph pair is the same two
+        // lines with the paragraph gap between them.
         let paragraph_pair = height(2);
+        let gap = px(theme::tx_paragraph_gap(theme::LH_PROSE));
         assert_eq!(
             height(0),
-            paragraph_pair - px(theme::LH_PROSE),
+            paragraph_pair - gap,
             "two-space hard break must start a line"
         );
         assert_eq!(
             height(1),
-            paragraph_pair - px(theme::LH_PROSE),
+            paragraph_pair - gap,
             "backslash hard break must start a line"
         );
         assert_eq!(
@@ -2752,11 +2795,11 @@ mod style_tests {
                 );
             }
         }
-        // Terminal-native: blocks sit one blank line apart at every
-        // reading size, a heading too.
+        // Blocks sit `tx_paragraph_gap` apart at every reading size (12 on
+        // the 21 line), a heading too.
         let rem = px(theme::FS_UI);
         for base in [14., 16., 18.] {
-            let gap = theme::prose_line_height(base);
+            let gap = theme::tx_paragraph_gap(theme::prose_line_height(base));
             let style = style_at(rem, px(base));
             let near = |value: gpui::Rems, want: f32| {
                 (f32::from(value.to_pixels(rem)) - want).abs() < 0.01
@@ -2768,13 +2811,13 @@ mod style_tests {
     }
 
     /// SPEC §5.4: inline code is `INK_STRONG` (`INLINE_CODE_INK`) at body
-    /// weight on its `RAISED` chip, `R_CONTROL` round.
+    /// weight on its `INLINE_CODE_CHIP`, `R_CONTROL` round.
     #[test]
     fn inline_code_is_a_strong_chip_at_body_weight() {
         use ferrite_core::settings::ReadingSize;
         assert_eq!(theme::INLINE_CODE_INK, theme::INK_STRONG);
         let wash = inline_code_wash();
-        assert_eq!(wash.color, theme::paint::RAISED.hsla());
+        assert_eq!(wash.color, theme::paint::INLINE_CODE_CHIP.hsla());
         assert_eq!(wash.radius, px(theme::R_CONTROL));
         // The same chip at every reading size.
         for size in [
@@ -2848,13 +2891,18 @@ mod style_tests {
         }
     }
 
-    /// Terminal-native (clean): a `W_STRONG` head over a `LINE` rule, row
-    /// rules in `LINE`, each row one prose line, no box.
+    /// Claude's table: a `W_STRONG` head `TABLE_HEAD_H` tall over a `LINE`
+    /// rule, `TABLE_ROW_H` rows under `LINE` rules, no box.
     #[test]
     fn tables_are_rows_on_the_grid_under_a_strong_header_rule() {
         let style = style(px(theme::FS_UI));
         assert_eq!(style.border(), theme::paint::LINE.into(), "row rules");
         let cell = style.table_cell();
+        assert_eq!(cell.min_size.height, Some(px(theme::TABLE_ROW_H).into()));
+        assert_eq!(
+            style.table_head().min_size.height,
+            Some(px(theme::TABLE_HEAD_H).into())
+        );
         assert_eq!(cell.text.font_size, Some(px(theme::FS_PROSE).into()));
         assert_eq!(cell.text.line_height, Some(px(theme::LH_PROSE).into()));
         assert_eq!(

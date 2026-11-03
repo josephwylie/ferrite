@@ -2450,13 +2450,25 @@ fn native_queue_history_records_consumption_once() {
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     cockpit.send(thread, "sent".into());
     assert!(cockpit.queue(thread, "held".into()));
+    let delivery = |cockpit: &Cockpit| {
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .iter()
+            .map(|item| (item.text.clone(), item.delivery))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        cockpit.thread(thread).unwrap().queued(),
-        None,
+        delivery(&cockpit),
+        [("held".into(), crate::engine::Delivery::Sending)],
         "pipe write is not admission"
     );
     cockpit.pump();
-    assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("held"));
+    assert_eq!(
+        delivery(&cockpit),
+        [("held".into(), crate::engine::Delivery::Queued)]
+    );
     fake.streams.borrow()[0].send(ended()).unwrap();
     cockpit.pump();
     assert_eq!(
@@ -2479,7 +2491,15 @@ fn native_queue_history_records_consumption_once() {
             .unwrap();
     }
     cockpit.pump();
-    assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
+    assert_eq!(
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
+        None
+    );
     assert_eq!(
         cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
         Some("held".into())
@@ -3266,7 +3286,12 @@ fn native_pending_prompts_survive_turn_end_without_client_dispatch() {
     assert!(fake.sent.borrow().is_empty());
     assert_eq!(fake.native.borrow().len(), 1);
     assert_eq!(
-        cockpit.thread(thread).unwrap().queued(),
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
         Some("and then run the tests")
     );
 }
@@ -3320,8 +3345,18 @@ fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
     assert!(cockpit.queue(thread, "second".into()));
     cockpit.pump();
     let open = cockpit.thread(thread).unwrap();
-    assert_eq!(open.queued_all(), ["second", "first"], "newest on top");
-    assert_eq!(open.queued(), Some("second"));
+    assert_eq!(
+        open.queue()
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<_>>(),
+        ["second", "first"],
+        "newest on top"
+    );
+    assert_eq!(
+        open.queue().first().map(|item| item.text.as_str()),
+        Some("second")
+    );
 
     cockpit.interrupt(thread);
     cockpit.pump();
@@ -3342,7 +3377,7 @@ fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
         ["start", "first\n\nsecond"],
         "the pile goes out as one prompt, oldest first"
     );
-    assert!(cockpit.thread(thread).unwrap().queued_all().is_empty());
+    assert!(cockpit.thread(thread).unwrap().queue().is_empty());
 
     // A resent id that the provider still reports as started is not a
     // second prompt; nor does its cancellation receipt say anything.
@@ -3393,7 +3428,15 @@ fn escape_on_claude_leaves_the_native_queue_to_the_provider() {
         .unwrap();
     cockpit.pump();
     assert_eq!(fake.sent.borrow().as_slice(), ["start"]);
-    assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("held"));
+    assert_eq!(
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
+        Some("held")
+    );
 }
 
 #[test]
@@ -3405,7 +3448,12 @@ fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
     assert_eq!(cockpit.unqueue(thread), None);
     assert_eq!(cockpit.take_retrieved_prompt(thread), None);
     assert_eq!(
-        cockpit.thread(thread).unwrap().queued(),
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
         Some("run the tets")
     );
     cockpit.pump();
@@ -3416,7 +3464,15 @@ fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
             .as_deref(),
         Some("run the tets")
     );
-    assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
+    assert_eq!(
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
+        None
+    );
     assert!(fake.sent.borrow().is_empty());
 }
 

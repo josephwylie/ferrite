@@ -851,6 +851,39 @@ fn retry_re_sends_the_failed_turns_prompt(cx: &mut TestAppContext) {
     assert_eq!(sent(&fake), 2, "Retry sent the prompt again");
 }
 
+/// A Session that closes mid-turn failed that turn: the strip says so,
+/// and offers no `Retry`, there being no Session to send to.
+#[gpui::test]
+fn a_session_closed_mid_turn_leaves_the_strip_without_retry(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board_of("frame-closed-mid-turn", 2, cx);
+    let thread = view.read_with(cx, |view, _| view.panes[1].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.cockpit.send(thread, "build the range sheet".into());
+        cx.notify();
+    });
+    tick(cx);
+    fake.streams.borrow()[1]
+        .send(SessionEvent::TextDelta {
+            text: "Working on it".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[1]
+        .send(SessionEvent::Closed {
+            reason: "exited".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let key = thread.get();
+    assert!(
+        debug_bounds(cx, format!("failure-strip-{key}")).is_some(),
+        "the strip stands under the unfinished turn"
+    );
+    assert!(
+        debug_bounds(cx, format!("failure-retry-{key}")).is_none(),
+        "a closed Session has nothing to retry on"
+    );
+}
+
 /// A transcript shorter than its viewport reads down from the top, as a new
 /// conversation does, the empty space under it — in a Group Pane and in
 /// Solo alike.

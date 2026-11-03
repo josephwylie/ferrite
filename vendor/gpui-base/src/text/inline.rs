@@ -677,6 +677,46 @@ impl Inline {
         );
     }
 
+    /// Ferrite: the veil over this inline's slice of its source run (`root`,
+    /// `offset` into it) still fading in (`TextFresh`).
+    fn paint_fresh(
+        &self,
+        text_layout: &TextLayout,
+        root: &Weak<Mutex<InlineState>>,
+        offset: usize,
+        window: &mut Window,
+        cx: &App,
+    ) {
+        let Some(view) = GlobalState::global(cx).text_view_state() else {
+            return;
+        };
+        let view = view.read(cx);
+        if view.fresh.is_none() {
+            return;
+        }
+        let root_len = if std::ptr::eq(root.as_ptr(), Arc::as_ptr(&self.state)) {
+            self.text.len()
+        } else {
+            let Some(len) = root
+                .upgrade()
+                .and_then(|root| root.try_lock().ok().map(|root| root.text.len()))
+            else {
+                return;
+            };
+            len
+        };
+        let line_height = text_layout.line_height();
+        super::fresh::paint_veil(
+            view,
+            root.as_ptr() as usize,
+            root_len,
+            offset..offset + self.text.len(),
+            |range| code_line_bounds(&self.text, text_layout, range, line_height),
+            cx.background_executor().now(),
+            window,
+        );
+    }
+
     /// Ferrite: each underline, one stroke per wrapped line, from its first
     /// glyph to the right edge of its last non-whitespace glyph, on the
     /// baseline offset gpui's own line painter uses.
@@ -963,6 +1003,8 @@ impl Element for Inline {
             .text_view_state()
             .is_some_and(|state| state.read(cx).text_view_style.link_underline_on_hover());
         self.paint_underlines(&text_layout, hover_only, window);
+        // Ferrite: streamed words still fading in, veiled over the text.
+        self.paint_fresh(&text_layout, &source_root, source_offset, window, cx);
 
         let (document_range, ordinal, source_offset) = GlobalState::global(cx)
             .text_view_state()
@@ -1317,10 +1359,10 @@ fn point_in_text_selection(
 mod tests {
     use super::{
         InlineSelectionProjection, InlineState, highlight_fits, point_in_text_selection,
-        selection_for_document_range,
+        selection_for_document_range, underline_spans,
     };
     use crate::{TextSelectionContentKey, text_selection::TextSelectionDocumentRange};
-    use gpui::{Bounds, point, px};
+    use gpui::{Bounds, Pixels, Point, point, px};
     use std::sync::{Arc, Mutex};
 
     /// "a `code` b" laid out as `apply_padding_to_layout` lays it: each

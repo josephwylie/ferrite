@@ -433,7 +433,15 @@ fn effort_waits_for_startup_without_losing_the_pending_prompt() {
         Err(ProvisionError::Busy)
     ));
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
-    assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("waiting"));
+    assert_eq!(
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
+        Some("waiting")
+    );
     provider.ready();
     until(|| {
         cockpit.pump();
@@ -471,7 +479,15 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
         Err(ProvisionError::Busy)
     ));
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
-    assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("after"));
+    assert_eq!(
+        cockpit
+            .thread(thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
+        Some("after")
+    );
     let prompt = cockpit.unqueue(thread).unwrap();
     replacement.ready();
     until(|| {

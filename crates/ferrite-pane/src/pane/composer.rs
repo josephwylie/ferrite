@@ -2,6 +2,7 @@
 //! footer's chips and the send button.
 
 use super::*;
+use ferrite_core::engine::{Delivery, QueueItem};
 
 /// The name a model shows under, from any spelling the wire uses:
 /// `claude-sonnet-4-5` → `Sonnet 4.5`, `gpt-5.4-mini` → `GPT-5.4 Mini`.
@@ -271,9 +272,9 @@ pub(super) struct ComposerStack<'a> {
     /// shelf and queue; the others keep their input band.
     pub(super) grid: bool,
     pub(super) decision: Option<&'a Decision>,
-    /// Prompts held back while the turn runs, newest first: they pile up
-    /// above the line, the latest on top.
-    pub(super) queued: Vec<&'a str>,
+    /// Prompts not yet picked up, newest first (`ThreadView::queue`): the
+    /// strip shows the latest and counts the rest.
+    pub(super) queued: &'a [QueueItem],
     pub(super) empty: bool,
     /// How many files the draft holds: what the flat line counts while
     /// the shelf (`attachments`) waits for the live Composer.
@@ -462,7 +463,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         ),
         None => (None, None, None, Vec::new()),
     };
-    let queue = queue_card(&queued, &namespace, actions);
+    let queue = queue_card(queued, &namespace, actions);
     let slot = |control: AnyElement| {
         div()
             .flex()
@@ -583,15 +584,24 @@ pub(super) fn in_column(inset: f32, column: bool, row: impl IntoElement) -> Div 
 /// The queue strip (Claude's): its own card over the box, `QUEUE_CARD_H`
 /// high at `R_CARD` on `paint::RAISED` — `N messages queued`, the latest
 /// on one cut line in `INK_SUBTLE`, then `actions` (send now, edit,
-/// remove), which act on the latest as ↑ and ⌫ do. None with nothing
-/// queued. Snaps in and out (motion-measured: Claude's strip leaves in one
-/// frame).
+/// remove), which the cockpit aims at the latest by its id, as ↑ and ⌫ do.
+/// A latest that Codex is already folding into the running turn says
+/// `Steering` there, and the cockpit offers no edit or remove for it
+/// (`queued_takes_back`). None with nothing queued. Snaps in and out
+/// (motion-measured: Claude's strip leaves in one frame).
 pub(super) fn queue_card(
-    queued: &[&str],
+    queued: &[QueueItem],
     namespace: &str,
     actions: Vec<AnyElement>,
 ) -> Option<Div> {
     let latest = queued.first()?;
+    let steering = (latest.delivery == Delivery::Steering).then(|| {
+        div()
+            .debug_selector(|| "queued-steering".into())
+            .flex_shrink_0()
+            .text_color(rgb(INK_SUBTLE))
+            .child("Steering")
+    });
     let count = queued.len();
     let selector = format!("composer-queue-{namespace}");
     Some(
@@ -628,8 +638,9 @@ pub(super) fn queue_card(
                     .min_w_0()
                     .truncate()
                     .text_color(rgb(INK_SUBTLE))
-                    .child(SharedString::from(queued_preview(latest))),
+                    .child(SharedString::from(queued_preview(&latest.text))),
             )
+            .children(steering)
             .child(
                 div()
                     .flex()
@@ -639,6 +650,13 @@ pub(super) fn queue_card(
                     .children(actions),
             ),
     )
+}
+
+/// Whether a queued prompt can still be edited or removed: not while the
+/// provider has it unacknowledged (core can't cancel it by id yet), nor
+/// once Codex is steering it into the running turn.
+pub fn queued_takes_back(item: &QueueItem) -> bool {
+    !matches!(item.delivery, Delivery::Steering | Delivery::Sending)
 }
 
 /// The strip's count: `1 message queued`, `3 messages queued`.

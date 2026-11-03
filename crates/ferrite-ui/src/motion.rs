@@ -26,7 +26,8 @@
 //! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | switch | [`FADE_QUICK`] 150ms | a Settings on/off switch (`components::switch`): its knob slides to the other end and its track blends between off and on ([`settled`]) |
-//! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
+//! | stream fade | [`STREAM_FADE`] 300ms CSS `ease-out`, opacity only | every transcript row appended at the tail while the operator watches, and each run of words streaming into an answer (`TextView::fresh`); never first paint, a history window growing at its head, or scroll-back |
+//! | bubble fade | [`BUBBLE_FADE`] 250ms CSS `ease-out`, opacity only | the operator's prompt bubble appended at the tail |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 100ms, and widens 4 → 6px under the pointer over [`HOVER_FADE`] (`scrollbar::step_widen`); idle, nothing is drawn |
 //!
@@ -182,6 +183,7 @@ impl CubicBezier {
 
 pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
+pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
 pub const EASE_SLIDE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_SLIDE);
 
@@ -223,7 +225,8 @@ impl MotionSpec {
 }
 
 pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
-pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_OUT_EXPO);
+pub const STREAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_STREAM_FADE_MS, EASE_OUT);
+pub const BUBBLE_FADE: MotionSpec = MotionSpec::new(theme::MOTION_BUBBLE_FADE_MS, EASE_OUT);
 /// The sidebar's ride (cmd-B) and the board riding with it: the
 /// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
 /// (`cubic-bezier(.25,.1,.25,1)`), not `ease-out`.
@@ -528,16 +531,6 @@ fn play(origin: Origin, spec: MotionSpec, window: &mut Window, cx: &mut App) -> 
     }
     request_frame(window);
     spec.progress_at(elapsed)
-}
-
-/// `fade-in` at progress `t`: opacity with a `MOTION_FADE_IN_RISE` rise,
-/// for a caller that drives `t` itself (a live-appended transcript row).
-/// The rise is a relative inset, so the rows around it never move.
-pub fn fade_in_at<E: Styled>(element: E, t: f32) -> E {
-    element
-        .opacity(t)
-        .relative()
-        .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1522,9 +1515,10 @@ mod tests {
     fn the_catalog_keeps_zerons_numbers() {
         assert_eq!(ROW_IN.duration_ms, 180);
         assert_eq!(ROW_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
-        assert_eq!(FADE_IN.duration_ms, 500);
-        assert_eq!(FADE_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
-        assert_eq!(theme::MOTION_FADE_IN_RISE, 4.0);
+        assert_eq!(STREAM_FADE.duration_ms, 300);
+        assert_eq!(STREAM_FADE.curve, CubicBezier::new(0.0, 0.0, 0.58, 1.0));
+        assert_eq!(BUBBLE_FADE.duration_ms, 250);
+        assert_eq!(BUBBLE_FADE.curve, CubicBezier::new(0.0, 0.0, 0.58, 1.0));
         assert_eq!(RESIZE.duration_ms, 200);
         assert_eq!(RESIZE.curve, CubicBezier::new(0.25, 0.1, 0.25, 1.0));
         assert_eq!(FADE_QUICK.duration_ms, 150);

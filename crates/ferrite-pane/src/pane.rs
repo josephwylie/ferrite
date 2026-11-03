@@ -27,7 +27,8 @@ pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, flat_facts_text, footer_word, mode_chip,
     model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
-    queued_edit, queued_send_now, send_button, send_is_stop, toolbar_chip, ComposerControls,
+    queued_edit, queued_send_now, queued_takes_back, send_button, send_is_stop, toolbar_chip,
+    ComposerControls,
 };
 use composer::{
     chip_face, composer_region, composer_stack, ghost_row, in_column, placeholder, queue_card,
@@ -830,7 +831,7 @@ pub(crate) struct PaneCtx<'a> {
     /// Activity requests (or a question expander) exist for this Pane, so
     /// the plain Decision card steps aside.
     pub has_activity_decisions: bool,
-    pub queued: Vec<&'a str>,
+    pub queued: &'a [ferrite_core::engine::QueueItem],
     pub composer_empty: bool,
     pub composer_files: usize,
     pub suggestion: Option<&'a str>,
@@ -1022,7 +1023,7 @@ pub fn render_pane(
         focused,
         decision,
         has_activity_decisions,
-        queued: thread.map(|thread| thread.queued_all()).unwrap_or_default(),
+        queued: thread.map_or(&[], |thread| thread.queue()),
         composer_empty,
         composer_files,
         suggestion: thread.and_then(|thread| thread.suggestion()),
@@ -1153,7 +1154,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
             ComposerStack {
                 grid: cx.grid,
                 decision: cx.decision,
-                queued: std::mem::take(&mut cx.queued),
+                queued: cx.queued,
                 empty: cx.composer_empty,
                 files: cx.composer_files,
                 attachments: cx.attachments.take(),
@@ -1363,7 +1364,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         ComposerStack {
             grid: show_focus,
             decision: None,
-            queued: Vec::new(),
+            queued: &[],
             empty: composer_empty,
             files: composer_files,
             attachments,
@@ -2299,8 +2300,9 @@ pub fn fill_button(key: u64) -> Stateful<Div> {
 /// The failure strip (SPEC §5.9 item 4), the transcript's tail row under
 /// a failed turn's failure line, Solo's and a Group Pane's alike:
 /// `FAILURE_STRIP_H` at `R_CARD` on `FAILURE_WASH`, an `x-circle` in
-/// `BLOCKED`, `Stopped 3m ago` in `INK`, and at the right the wired
-/// `Retry` (`retry_button`), which a closed Session goes without.
+/// `BLOCKED`, why it failed (`API Error: 529 overloaded`) in `INK`, cut to
+/// one line, and at the right the wired `Retry` (`retry_button`), which a
+/// closed Session goes without.
 pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -> Div {
     div()
         .debug_selector(move || format!("failure-strip-{key}"))
@@ -3052,9 +3054,6 @@ pub(crate) struct RowCx<'a> {
     pub preview: &'a crate::preview::Preview,
     pub grid: Grid,
     pub scope: &'a SharedString,
-    /// The row is narration (`RowKind::Answer { narration }`): fallback
-    /// prose reads with the work, muted.
-    pub narration: bool,
 }
 
 impl RowCx<'_> {
@@ -3086,14 +3085,7 @@ pub(crate) fn render_block(
 ) -> AnyElement {
     let grid = row_cx.grid();
     let selection = row_cx.selection;
-    let prose_ink = if row_cx.narration { INK_SUBTLE } else { INK };
-    let row = div()
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .when(row_cx.narration, |row| {
-            row.text_size(px(grid.activity().size))
-        });
+    let row = div().w_full().min_w_0().flex_shrink_0();
     match &block.body {
         // A visual's row owns a live page, so the transcript's `Shelf`
         // draws it (`TranscriptView::render_row`); it never reaches here.
@@ -3103,13 +3095,11 @@ pub(crate) fn render_block(
         // answer does, on the content column.
         Body::Paragraph { spans } => row
             .child(
-                content_row(grid).text_color(rgb(prose_ink)).child(
-                    div().flex_1().min_w_0().child(prose(
-                        block.id,
-                        spans,
-                        selection,
-                        row_cx.narration,
-                    )),
+                content_row(grid).text_color(rgb(INK)).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(prose(block.id, spans, selection)),
                 ),
             )
             .into_any_element(),
@@ -3117,17 +3107,13 @@ pub(crate) fn render_block(
             .child(
                 content_row(grid)
                     .font_weight(theme::W_STRONG)
-                    .text_color(rgb(if row_cx.narration {
-                        INK_SUBTLE
-                    } else {
-                        INK_STRONG
-                    }))
-                    .child(div().flex_1().min_w_0().child(prose(
-                        block.id,
-                        spans,
-                        selection,
-                        row_cx.narration,
-                    ))),
+                    .text_color(rgb(INK_STRONG))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(prose(block.id, spans, selection)),
+                    ),
             )
             .into_any_element(),
         // A fallback list item: a dim `•` hanging in two cells, its text
@@ -3135,7 +3121,7 @@ pub(crate) fn render_block(
         Body::Bullet { spans } => row
             .child(
                 content_row(grid)
-                    .text_color(rgb(prose_ink))
+                    .text_color(rgb(INK))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -3143,12 +3129,12 @@ pub(crate) fn render_block(
                             .text_color(rgb(INK_SUBTLE))
                             .child("\u{2022}"),
                     )
-                    .child(div().flex_1().min_w_0().child(prose(
-                        block.id,
-                        spans,
-                        selection,
-                        row_cx.narration,
-                    ))),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(prose(block.id, spans, selection)),
+                    ),
             )
             .into_any_element(),
         // A blank thought from an older log (redacted thinking, before the
@@ -3409,12 +3395,12 @@ fn prompt_gallery(files: &[std::path::PathBuf]) -> std::sync::Arc<[std::path::Pa
 }
 
 /// The prompt echo (the prototype's `.me`): right-aligned, the operator's
-/// words in a `paint::RAISED` bubble at `R_CARD` that shrinks to them
+/// words in a `paint::PROMPT_BUBBLE` bubble at `R_CARD` that shrinks to them
 /// (never wider than `PROMPT_BUBBLE_MAX_W` of the column), Geist
 /// `INK_STRONG` at body weight with its non-image files' chips flowing
 /// inline after them; its images as thumbnails in a wrapping row under it.
-/// `actions` (the transcript's: its send time, `Copy`) stand left of the
-/// bubble, on its foot.
+/// `actions` (the transcript's: its send time, `Copy`) stand under it all,
+/// on its right edge, as Claude's and Codex's do.
 pub(crate) fn prompt_row(
     block: &Block,
     line: &str,
@@ -3433,20 +3419,7 @@ pub(crate) fn prompt_row(
         .enumerate()
         .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview))
         .collect();
-    let bubble = bubble.map(|bubble| {
-        div()
-            .flex()
-            .justify_end()
-            .items_end()
-            .gap(px(theme::SPACE_1))
-            .w_full()
-            .min_w_0()
-            .children(actions)
-            .child(bubble)
-    });
-    div()
-        .id(SharedString::from(format!("prompt-{:?}", block.id)))
-        .relative()
+    let message = div()
         .flex()
         .flex_col()
         .items_end()
@@ -3464,7 +3437,17 @@ pub(crate) fn prompt_row(
                     .max_w_full()
                     .children(images),
             )
-        })
+        });
+    div()
+        .id(SharedString::from(format!("prompt-{:?}", block.id)))
+        .relative()
+        .flex()
+        .flex_col()
+        .items_end()
+        .w_full()
+        .min_w_0()
+        .child(message)
+        .children(actions)
         .into_any_element()
 }
 
@@ -3499,7 +3482,7 @@ pub(crate) fn pinned_prompt(block: &Block, line: &str, row_cx: &RowCx, lines: us
         )
 }
 
-/// The prompt's bubble (the prototype's `.me`): `paint::RAISED` at
+/// The prompt's bubble (the prototype's `.me`): `paint::PROMPT_BUBBLE` at
 /// `R_CARD`, shrinking to its words in Geist `INK_STRONG` at body
 /// weight, never wider than `PROMPT_BUBBLE_MAX_W` of the column. One face
 /// for the echo in its row and its pinned copy.
@@ -3509,7 +3492,7 @@ fn prompt_bubble() -> Div {
         .min_w_0()
         .py(px(theme::PROMPT_BUBBLE_PAD_Y))
         .px(px(theme::PROMPT_BUBBLE_PAD_X))
-        .bg(theme::paint::RAISED)
+        .bg(theme::paint::PROMPT_BUBBLE)
         .rounded(px(theme::R_CARD))
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
@@ -3852,20 +3835,16 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
 /// Whether a call's argument is a file path (`Read crates/x.rs`): a path
 /// target.
 pub(crate) fn argument_is_path(tool: &ToolBlock) -> bool {
-    const PATH_TOOLS: &[&str] = &[
-        "Read",
-        "Edit",
-        "Write",
-        "Update",
-        "MultiEdit",
-        "NotebookEdit",
-        "NotebookRead",
-    ];
+    use ferrite_core::transcript::tools::{self, ToolKind};
+    let file_tool = matches!(
+        tools::policy(&tool.name).kind,
+        ToolKind::Read | ToolKind::Edit | ToolKind::Write
+    );
     !tool.summary.is_empty()
         && tool.title.is_none()
         && !tool.summary.contains(char::is_whitespace)
-        && !ferrite_core::docview::is_command_run(&tool.name)
-        && (PATH_TOOLS.contains(&tool.name.as_str()) || !tool.diffs.is_empty())
+        && !tools::is_command_run(&tool.name)
+        && (file_tool || !tool.diffs.is_empty())
 }
 
 /// A change's size in a call's trail: `+7 −3`, the whole `+7` in `RUNNING`
@@ -4146,7 +4125,7 @@ pub(crate) fn render_tool(
         card = card.child(running_tests(&tool.call, progress, grid));
     }
     if expanded {
-        if ferrite_core::docview::is_command_run(&tool.name) {
+        if ferrite_core::transcript::tools::is_command_run(&tool.name) {
             card = card.child(shell_card(block, tool, grid, selection));
         } else {
             let details = tool_details(block, tool, selection);
@@ -4501,26 +4480,9 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
 /// A prose Block's text: one wrapping run, so a sentence breaks where the
 /// terminal's does. Narration (`quiet`) takes its row's ink: its bold and
 /// links keep their weight, its code a step brighter.
-fn prose(block: BlockId, spans: &[Span], selection: &TextRuns, quiet: bool) -> AnyElement {
-    let (text, mut highlights) = inline(spans);
-    if quiet {
-        for (range, style) in &mut highlights {
-            let code = spans_style_at(spans, range.start) == Some(Style::Code);
-            style.color = code.then(|| rgb(INK).into());
-        }
-    }
+fn prose(block: BlockId, spans: &[Span], selection: &TextRuns) -> AnyElement {
+    let (text, highlights) = inline(spans);
     selection.line(block, text, highlights).into_any_element()
-}
-
-/// The style of the span holding byte `at` of `inline(spans)`'s text.
-fn spans_style_at(spans: &[Span], at: usize) -> Option<Style> {
-    let mut start = 0;
-    spans.iter().find_map(|span| {
-        let end = start + span.text.len();
-        let hit = (start..end).contains(&at).then_some(span.style);
-        start = end;
-        hit
-    })
 }
 
 /// A fenced block's rows: the whole block as one literal run, so a copy

@@ -335,7 +335,10 @@ fn child_completion_cannot_release_mains_prompt_or_pending_decision() {
     let updates = h.cockpit.pump();
     let view = h.cockpit.thread(h.thread).unwrap();
     assert!(view.busy(), "Main still owns its unfinished turn");
-    assert_eq!(view.queued(), Some("queued main prompt"));
+    assert_eq!(
+        view.queue().first().map(|item| item.text.as_str()),
+        Some("queued main prompt")
+    );
     assert_eq!(
         h.control.sent(0).len(),
         1,
@@ -364,7 +367,12 @@ fn child_completion_cannot_release_mains_prompt_or_pending_decision() {
         "Main's turn end also cannot dispatch native pending work"
     );
     assert_eq!(
-        h.cockpit.thread(h.thread).unwrap().queued(),
+        h.cockpit
+            .thread(h.thread)
+            .unwrap()
+            .queue()
+            .first()
+            .map(|item| item.text.as_str()),
         Some("queued main prompt")
     );
 }
@@ -400,7 +408,10 @@ fn autonomous_background_completion_does_not_retire_mains_live_work() {
         view.busy(),
         "an autonomous notification result cannot retire Main's turn"
     );
-    assert_eq!(view.queued(), Some("queued main prompt"));
+    assert_eq!(
+        view.queue().first().map(|item| item.text.as_str()),
+        Some("queued main prompt")
+    );
     assert_eq!(h.control.sent(0).len(), 1);
     assert!(view
         .activity()

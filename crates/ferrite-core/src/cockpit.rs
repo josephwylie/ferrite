@@ -1107,7 +1107,7 @@ mod parity {
                 view.title(),
                 view.suggestion(),
                 view.pending(),
-                view.queued_all(),
+                view.queue(),
                 view.starting(),
                 view.busy(),
                 view.working(),
@@ -1979,27 +1979,21 @@ impl Cockpit {
         )
     }
 
-    pub fn cancel_queued(&mut self, thread: ThreadId, restore: bool) {
-        self.take_back_queued(thread, None, restore, false);
-    }
-
-    /// Up edits the visible queued prompt ahead of the current draft.
-    pub fn edit_queued(&mut self, thread: ThreadId) {
-        self.take_back_queued(thread, None, true, true);
-    }
-
     /// Remove the queued prompt `id` names (`QueueItem::id`), back to the
     /// Composer when `restore`.
     pub fn remove_queued_item(&mut self, thread: ThreadId, id: &str, restore: bool) {
-        self.take_back_queued(thread, Some(id), restore, false);
+        self.take_back_queued(thread, id, restore, false);
     }
 
     /// Edit the queued prompt `id` names, ahead of the current draft.
     pub fn edit_queued_item(&mut self, thread: ThreadId, id: &str) {
-        self.take_back_queued(thread, Some(id), true, true);
+        self.take_back_queued(thread, id, true, true);
     }
 
-    fn take_back_queued(&mut self, thread: ThreadId, id: Option<&str>, restore: bool, edit: bool) {
+    fn take_back_queued(&mut self, thread: ThreadId, id: &str, restore: bool, edit: bool) {
+        // A Server too old to send ids listed its queue by text alone
+        // (`mirror::queue_of`): its items take back the latest.
+        let id = (!id.is_empty()).then_some(id);
         self.act(
             |engine| {
                 if edit {

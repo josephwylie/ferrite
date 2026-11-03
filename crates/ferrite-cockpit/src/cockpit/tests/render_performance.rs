@@ -1279,8 +1279,8 @@ fn a_pulse_tick_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) 
     assert_eq!(display_frames(cx), 0, "and asked the display for nothing");
 }
 
-/// A row appended while the operator watches rises in over
-/// `motion::FADE_IN` and then asks for nothing.
+/// A row appended while the operator watches fades in over
+/// `motion::STREAM_FADE` and then asks for nothing.
 #[gpui::test]
 fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -1309,9 +1309,10 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     assert_eq!(arrivals(cx), 1, "the appended row is stamped");
-    assert!(display_frames(cx) > 0, "and rises in");
-    cx.executor()
-        .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_FADE_IN_MS));
+    assert!(display_frames(cx) > 0, "and fades in");
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_STREAM_FADE_MS,
+    ));
     settle(cx);
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }

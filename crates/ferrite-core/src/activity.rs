@@ -1275,13 +1275,6 @@ impl Activity {
             self.main_operator_turn = false;
             self.remove_subject_decisions(&Subject::Main, &mut update);
         }
-        if live && closed {
-            let invalid = self.invalidate();
-            update.changed.extend(invalid.changed);
-            update.blocks.extend(invalid.blocks);
-            update.attention_changed |= invalid.attention_changed;
-            self.connected = false;
-        }
         let blocks = self
             .main
             .append(input, None, None, self.sequence, at, live, self.limits);
@@ -1289,6 +1282,15 @@ impl Activity {
             self.main.busy = previous_busy;
         }
         update.blocks.push((Subject::Main, blocks));
+        // After the append: the transcript must see the close while its turn
+        // is still running, so a mid-turn close ends that turn as failed.
+        if live && closed {
+            let invalid = self.invalidate();
+            update.changed.extend(invalid.changed);
+            update.blocks.extend(invalid.blocks);
+            update.attention_changed |= invalid.attention_changed;
+            self.connected = false;
+        }
         update
     }
 

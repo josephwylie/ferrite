@@ -341,9 +341,9 @@ fn the_amend_note_follows_an_allow_as_the_next_prompt(cx: &mut TestAppContext) {
         view.cockpit
             .thread(thread)
             .unwrap()
-            .queued_all()
-            .into_iter()
-            .map(str::to_string)
+            .queue()
+            .iter()
+            .map(|item| item.text.clone())
             .collect()
     });
     assert_eq!(queued, ["then run clippy"], "the note reached the Session");
