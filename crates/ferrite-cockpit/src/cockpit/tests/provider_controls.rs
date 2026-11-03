@@ -4,7 +4,7 @@ use super::*;
 fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("native-context-ui", 1);
     *fake.native_controls.borrow_mut() = true;
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     for event in [
         SessionEvent::TokenUsage {
@@ -30,8 +30,9 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    let tab = cx.debug_bounds("panel-tab-Details").unwrap();
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    // Opening the panel asks the Session for a fresh reading.
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    view.update(cx, |view, cx| view.open_panel(thread, cx));
     cx.run_until_parked();
     assert_eq!(
         fake.controls.borrow().as_slice(),
@@ -47,12 +48,11 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
     assert!(cx.debug_bounds("context-usable-150000").is_some());
     assert!(cx.debug_bounds("context-compaction-140000").is_some());
     assert!(cx.debug_bounds("context-category-0-12000").is_some());
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert_eq!(
         fake.controls.borrow().len(),
         1,
-        "pressing the open tab again must not request another refresh"
+        "drawing the open panel again must not request another refresh"
     );
 }
 
@@ -245,8 +245,6 @@ fn contract_native_accounting_and_cost_are_visible(cx: &mut TestAppContext) {
         fake.streams.borrow()[0].send(event).unwrap();
     }
     tick(cx);
-    let tab = cx.debug_bounds("panel-tab-Details").unwrap();
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     for selector in [
         "usage-scope-turn",
@@ -319,8 +317,9 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     });
     // Anchored BottomLeft, the menu rests above its chip (SPEC §5.5),
     // clear of it; its one item is the pick.
+    // Row 0 is the menu's `Mode` heading.
     let item = cx
-        .debug_bounds("choice-row-0")
+        .debug_bounds("choice-row-1")
         .expect("the mode menu's item is drawn");
     assert!(item.bottom() <= chip.top(), "{item:?} over {chip:?}");
     cx.simulate_click(item.center(), gpui::Modifiers::none());

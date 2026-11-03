@@ -1,12 +1,12 @@
 //! The compact Composer (SPEC §5.9 item 5): a Group Pane's input box.
 //!
 //! Solo's Composer (`box_composer`) carries its controls; a Group Pane's is
-//! the input, and on the focused Pane the queued row. One 38px input row,
+//! the input, and on the focused Pane the queue strip. One 38px input row,
 //! `COMPACT_COMPOSER_INSET` in from the card's sides and foot, at `R_FLOAT`
 //! on `FIELD_COMPACT`, inside a 1px ring just outside it (`LINE`,
 //! `COMPACT_RING_FOCUSED` on the focused Pane). While something is queued
-//! the focused Pane's box grows by Solo's queued row (`queued_row`, its
-//! hairline under it) above the input. The input is Geist 13; its
+//! the focused Pane shows Solo's queue strip (`queue_card`) over the box,
+//! `QUEUE_CARD_GAP` above it. The input is Geist 13; its
 //! placeholder is the state's (`placeholder`), or on an unfocused Pane its
 //! flat facts (`1 attachment · 2 queued`) when it has any. The focused Pane
 //! alone shows the 24px send circle (`send_button`). No chips: the mode,
@@ -35,7 +35,6 @@ pub(super) fn compact_composer(
         focused,
         drop_target,
         toolbar,
-        unqueue,
         ..
     } = stack;
     // Only the focused cell's Composer is live (C4): the others say what
@@ -70,10 +69,15 @@ pub(super) fn compact_composer(
             line.debug_selector(|| "composer-flat-facts".into())
         })
         .when(empty, |line| line.child(ghost_row(ghost, 0.)));
-    // The queue is the focused Pane's to see and drop; the others count it
-    // in their placeholder.
+    // The focused Pane's controls: its send circle and the queue's acts.
+    let (send, actions) = match toolbar.filter(|_| focused) {
+        Some(controls) => (Some(controls.send), controls.queue),
+        None => (None, Vec::new()),
+    };
+    // The queue is the focused Pane's to see and act on; the others count
+    // it in their placeholder.
     let queue = focused
-        .then(|| queued_row(&queued, &namespace, unqueue))
+        .then(|| queue_card(&queued, &namespace, actions))
         .flatten();
     let input = div()
         .debug_selector(move || {
@@ -107,8 +111,7 @@ pub(super) fn compact_composer(
         // The send circle, wired in the cockpit: the focused Pane's only.
         // It rides a row-high slot (overflowing it), so focus never
         // changes the box's height.
-        .children(toolbar.filter(|_| focused).map(|controls| {
-            let send = controls.send;
+        .children(send.map(|send| {
             div()
                 .flex()
                 .flex_shrink_0()
@@ -139,7 +142,6 @@ pub(super) fn compact_composer(
         .when(decision.is_some(), |field| field.key_context("Decision"))
         // Its ring takes no layout, so the box keeps its 38.
         .child(components::outer_ring(theme::R_FLOAT, rgba(ring)))
-        .children(queue)
         .child(row);
     let mut field = components::on_bounds(field, move |bounds, _, _| {
         geometry.set(PaneGeometry {
@@ -178,5 +180,11 @@ pub(super) fn compact_composer(
                 .child(error)
         }))
         .pb(px(theme::COMPACT_COMPOSER_INSET))
+        .children(queue.map(|queue| {
+            div()
+                .mx(px(theme::COMPACT_COMPOSER_INSET))
+                .mb(px(theme::QUEUE_CARD_GAP))
+                .child(queue)
+        }))
         .child(field)
 }

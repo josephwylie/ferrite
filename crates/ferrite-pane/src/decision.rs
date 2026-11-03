@@ -2,16 +2,16 @@
 //! anywhere. Owned by WP-F.
 //!
 //! A Decision is the transcript's tail row, drawn as a box (SPEC §5.9):
-//! the `shield` head (a question's `?`), the command well, the options and,
-//! as the box's last section on the Pane that holds the keyboard, a dim
-//! hint line (a question's beside its Skip and Send).
+//! the head band, the command well, then the answers (an approval's `Deny`
+//! and split `Allow once`, a question's options over its Skip and Send).
+//! The keys live on the buttons and the option rows, never in a hint line.
 //! Every approval offers exactly three options — `1 Allow`, `2 Allow
 //! <pattern> for this thread`, `3 Deny, and tell <Provider> what to do
 //! instead` — and the first is pre-selected: the cursor's row `SELECTED`.
 //!
 //! Presentation and pure rules only — no cockpit state. The cockpit's
-//! answer paths (`cockpit::decisions`) read the rows, the patterns and the
-//! hint from here, so what the row shows is what the keys do.
+//! answer paths (`cockpit::decisions`) read the rows and the patterns from
+//! here, so what the row shows is what the keys do.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -205,29 +205,6 @@ pub fn split_recommended(label: &str) -> (&str, bool) {
         }
         _ => (label, false),
     }
-}
-
-/// A question's hint: its digits reach `keys` rows.
-pub fn question_hints(keys: usize) -> Vec<String> {
-    let pick = match keys {
-        0 | 1 => "1 pick".to_string(),
-        n => format!("1\u{2013}{n} pick"),
-    };
-    vec![
-        "\u{2191}\u{2193} select".into(),
-        pick,
-        "esc dismiss".into(),
-        "tab amend".into(),
-    ]
-}
-
-/// A hint line's words, `·`-joined with a space either side.
-pub fn hint_text<S: AsRef<str>>(parts: &[S]) -> String {
-    parts
-        .iter()
-        .map(AsRef::as_ref)
-        .collect::<Vec<_>>()
-        .join(" \u{b7} ")
 }
 
 // ------------------------------------------------------------ the command
@@ -702,10 +679,27 @@ pub fn step_cursor(enabled: &[bool], at: usize, step: isize) -> usize {
 /// `question_head`), laid as a band across the top; the rest are its body,
 /// padded `DECISION_PAD`, `DECISION_GAP` apart. It keeps the
 /// `question-island` selector every kind has always answered to.
-pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stateful<Div> {
+pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> AnyElement {
+    frame(serial, None, children)
+}
+
+/// An approval's box (Claude's): `card`, at most `DECISION_CARD_W` wide,
+/// on the column's left edge.
+pub fn approval_card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> AnyElement {
+    frame(serial, Some(theme::DECISION_CARD_W), children)
+}
+
+/// The box, fading in once as it mounts (`FADE_QUICK`: 150ms on `ease`,
+/// opacity only, nothing moves): it arrives on its own, so it is the one
+/// entrance on the transcript's tail.
+fn frame(
+    serial: u64,
+    max_w: Option<f32>,
+    children: impl IntoIterator<Item = AnyElement>,
+) -> AnyElement {
     let mut children = children.into_iter();
     let head = children.next();
-    div()
+    let card = div()
         .id(("question-island", serial as usize))
         .debug_selector(|| "question-island".into())
         .relative()
@@ -714,6 +708,7 @@ pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stat
         .flex_shrink_0()
         .w_full()
         .min_w_0()
+        .when_some(max_w, |card, w| card.max_w(px(w)))
         .cursor_default()
         .border_1()
         .border_color(rgba(theme::DECISION_RING))
@@ -736,7 +731,14 @@ pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stat
                 // The ring is inset: its pixel is the padding's first.
                 .p(px(theme::DECISION_PAD - 1.0))
                 .children(children),
-        )
+        );
+    ferrite_ui::motion::fade_in(
+        ("decision-in", serial as usize),
+        card,
+        ferrite_ui::motion::FADE_QUICK,
+        1.0,
+    )
+    .into_any_element()
 }
 
 /// A section of the box: the box's gap spaces it.
@@ -1158,44 +1160,21 @@ pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
         )
 }
 
-/// The hint line (`↑↓ select · 1–3 pick · esc deny · tab amend`): one
-/// 12px `INK_SUBTLE` run, its `·` seams the same ink, no keycaps.
-pub fn hint_line<S: AsRef<str>>(parts: &[S]) -> Div {
-    div()
-        .debug_selector(|| "decision-hints".into())
-        .flex_shrink_0()
-        .min_w_0()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_META))
-        .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::INK_SUBTLE))
-        .child(SharedString::from(hint_text(parts)))
-}
-
-/// The answer row of a form: the hint line on the left, actions on the
-/// right.
-pub fn footer<S: AsRef<str>>(parts: &[S], actions: impl IntoIterator<Item = AnyElement>) -> Div {
+/// The answer row of a form or a question: its actions at the right.
+pub fn footer(actions: impl IntoIterator<Item = AnyElement>) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
+        .justify_end()
         .gap(px(theme::SPACE_2))
         .min_w_0()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .children((!parts.is_empty()).then(|| hint_line(parts))),
-        )
         .children(actions)
 }
 
 /// The completing action (`Send`, `Complete`): the primary, its label at
 /// `W_BODY`. `enter` adds the key that sends — a mono `↵` at
-/// `ON_PRIMARY` 70% — so the key lives on the button, not in the hints.
+/// `ON_PRIMARY` 70% — so the key lives on the button.
 pub fn send_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -1298,9 +1277,11 @@ pub fn deny_button(
     .child(labelled("Deny".into(), None, false).text_color(rgb(theme::INK_STRONG)))
 }
 
-/// The split primary's face: `Always allow` and its chord on `PRIMARY`,
-/// rounded at the left; its `▾` half (`more_button`) closes the right.
-pub fn always_button(
+/// The split primary's face: `Allow once` and its chord (`⌘⏎`) on
+/// `PRIMARY`, rounded at the left; its `▾` half (`more_button`) closes the
+/// right. The narrow answer is the default; the standing one waits in the
+/// menu.
+pub fn allow_button(
     id: impl Into<ElementId>,
     stacked: bool,
     disabled: bool,
@@ -1313,13 +1294,13 @@ pub fn always_button(
         .rounded_r(px(0.))
         .when(stacked, |button| button.flex_1())
         .child(labelled(
-            "Always allow".into(),
-            decision_chord("cockpit::AlwaysAllow"),
+            "Allow once".into(),
+            decision_chord("cockpit::AllowOnce"),
             true,
         ))
 }
 
-/// The split primary's `▾` half: it opens the menu of the other allows.
+/// The split primary's `▾` half: it opens the menu of the broader allows.
 pub fn more_button(
     id: impl Into<ElementId>,
     disabled: bool,
@@ -1340,13 +1321,13 @@ pub fn more_button(
         ))
 }
 
-/// The approval's answer row: `deny`, then the split primary (`always`,
+/// The approval's answer row: `deny`, then the split primary (`allow`,
 /// `more`) — inline at the card's right, or `stacked` full width (a narrow
 /// column, Claude's), Deny over the primary. `menu` hangs under the split
 /// button while it is open, deferred so it escapes the card's clip.
 pub fn approval_actions(
     deny: AnyElement,
-    always: AnyElement,
+    allow: AnyElement,
     more: AnyElement,
     menu: Option<AnyElement>,
     stacked: bool,
@@ -1356,7 +1337,7 @@ pub fn approval_actions(
         .flex()
         .flex_shrink_0()
         .when(stacked, |split| split.w_full())
-        .child(always)
+        .child(allow)
         .child(more)
         .children(menu.map(|menu| {
             deferred(
@@ -1398,8 +1379,9 @@ pub fn allow_menu(rows: Vec<AnyElement>) -> Div {
 }
 
 /// One row of the allow menu: its verb, its chord at the right, and a
-/// one-line note under it when the verb needs one (`Allow and switch to
-/// Accept edits` — what the switch does).
+/// one-line note under it when the verb needs one (`Always allow gh issue
+/// *` — what the pattern covers; `Allow and switch to Accept edits` — what
+/// the switch does).
 pub fn allow_menu_row(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -1412,6 +1394,19 @@ pub fn allow_menu_row(
     }
     item.note = note;
     ferrite_ui::menu::item_row(id, &item, false, false)
+}
+
+/// The menu's standing answer: `Always allow <pattern>` (bare `Always
+/// allow` when there is no pattern) and the note saying what it covers.
+pub fn always_allow_words(pattern: &str) -> (SharedString, SharedString) {
+    let label = match pattern {
+        "" => "Always allow".to_string(),
+        pattern => format!("Always allow {pattern}"),
+    };
+    (
+        label.into(),
+        "Matching calls run without asking for the rest of this thread.".into(),
+    )
 }
 
 /// The declining action (`Skip`, `Cancel`): a ghost with no key.
@@ -1781,14 +1776,18 @@ mod tests {
         assert_eq!(context_label(Provider::Claude, Some("plan"), None), "plan");
     }
 
-    /// D-5: a question's hint, exactly (an approval's keys are on its
-    /// buttons).
+    /// The standing answer waits in the split's menu, named with its
+    /// pattern; its note says what that covers.
     #[test]
-    fn the_hints_read_as_the_prototype() {
+    fn always_allow_names_its_pattern() {
         assert_eq!(
-            hint_text(&question_hints(4)),
-            "\u{2191}\u{2193} select \u{b7} 1\u{2013}4 pick \u{b7} esc dismiss \u{b7} tab amend"
+            always_allow_words("gh issue *").0,
+            "Always allow gh issue *"
         );
+        assert_eq!(always_allow_words("").0, "Always allow");
+        assert!(always_allow_words("gh issue *")
+            .1
+            .contains("for the rest of this thread"));
     }
 
     /// A forbidden plain Allow leaves its row unable to act, and the cursor

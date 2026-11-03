@@ -60,8 +60,9 @@ fn near(a: gpui::Pixels, b: gpui::Pixels) -> bool {
 
 /// D-1, D-3 (Claude's card): `Needs your input` over the box; the ask on
 /// the head band across the box's top; the command well 10px under it on
-/// the body's 12px edge; then `Deny` and the split `Always allow`, inline
-/// at the body's right edge in Solo, the box's last section.
+/// the body's 16px edge; then `Deny` and the split `Allow once`, inline
+/// at the body's right edge in Solo, the box's last section. The box is
+/// Claude's 480 wide, on the column's left; its band is 48 tall.
 #[gpui::test]
 fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     let (view, _fake, cx) = waiting(
@@ -79,20 +80,34 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
         .expect("the pill over the box");
     let head = cx.debug_bounds("decision-head").expect("the head");
     let well = cx.debug_bounds("approval-well").expect("the command well");
-    let always = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
+    let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
     let more = bounds(cx, format!("request-more-{}-{serial}", thread.get()));
     let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
     let gap = px(ferrite_ui::theme::DECISION_GAP);
     let pad = px(ferrite_ui::theme::DECISION_PAD);
     assert!(pill.bottom() <= card.top(), "{pill:?} / {card:?}");
+    assert!(
+        near(card.size.width, px(ferrite_ui::theme::DECISION_CARD_W)),
+        "Claude's 480: {card:?}"
+    );
+    assert!(
+        near(head.size.height, px(48.)),
+        "the band is 48 tall: {head:?}"
+    );
     assert!(near(pill.left(), card.left()), "{pill:?} / {card:?}");
     // The band spans the box inside its 1px ring.
     assert!(near(head.top() - card.top(), px(1.)), "{card:?} / {head:?}");
-    assert!(near(head.left() - card.left(), px(1.)), "{card:?} / {head:?}");
-    assert!(near(card.right() - head.right(), px(1.)), "{card:?} / {head:?}");
+    assert!(
+        near(head.left() - card.left(), px(1.)),
+        "{card:?} / {head:?}"
+    );
+    assert!(
+        near(card.right() - head.right(), px(1.)),
+        "{card:?} / {head:?}"
+    );
     assert!(
         near(well.left() - card.left(), pad),
-        "the body keeps the box's 12px edge: {well:?} / {card:?}"
+        "the body keeps the box's 16px edge: {well:?} / {card:?}"
     );
     assert!(
         near(well.top() - head.bottom(), pad - px(1.)),
@@ -107,27 +122,34 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     );
     // Inline in Solo: Deny, then the split button, ending at the body's
     // right edge, one row, the box's last section.
-    assert!(deny.right() <= always.left() && near(always.right(), more.left()));
+    assert!(deny.right() <= allow.left() && near(allow.right(), more.left()));
     assert!(near(more.right(), well.right()), "{more:?} / {well:?}");
-    assert!(near(deny.top(), always.top()) && near(always.top(), more.top()));
+    assert!(near(deny.top(), allow.top()) && near(allow.top(), more.top()));
     assert!(
         near(deny.size.height, px(ferrite_ui::theme::CONTROL_H)),
         "{deny:?}"
     );
     assert!(deny.top() - well.bottom() >= gap - px(0.5));
-    assert!(near(card.bottom() - more.bottom(), pad), "{more:?} / {card:?}");
+    assert!(
+        near(card.bottom() - more.bottom(), pad),
+        "{more:?} / {card:?}"
+    );
     assert!(
         cx.debug_bounds("decision-hints").is_none(),
         "the keys are on the buttons"
     );
-    // Allow once waits in the split button's menu.
+    // `Always allow <pattern>` waits in the split button's menu; no body
+    // line explains it.
     assert!(cx
-        .debug_bounds(format!("request-allow-{}-{serial}", thread.get()).leak())
+        .debug_bounds(format!("request-always-{}-{serial}", thread.get()).leak())
         .is_none());
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
-    assert!(allow.top() >= more.bottom(), "the menu hangs under the button");
+    let always = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
+    assert!(
+        always.top() >= more.bottom(),
+        "the menu hangs under the button"
+    );
 }
 
 /// D-2: the head's words — the tool as the transcript names it, the
@@ -415,7 +437,10 @@ fn a_question_answers_from_its_cursor(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     fake.streams.borrow()[0].send(question("keys")).unwrap();
     tick(cx);
-    assert!(cx.debug_bounds("decision-hints").is_some());
+    assert!(
+        cx.debug_bounds("decision-hints").is_none(),
+        "the digits are on the rows: no hint footer"
+    );
     cx.dispatch_action(ferrite_pane::decision::SelectNext);
     tick(cx);
     assert_eq!(cursor(&view, cx), Some(1));

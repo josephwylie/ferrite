@@ -246,9 +246,10 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds(row(threads[2])).is_some());
 }
 
-/// §5.1.4, the tree with guides: everything inside a Project hangs one
-/// `NAV_TREE_INDENT` under its heading — its loose rows, its Group rows —
-/// and a Group's members one more under the Group, while every row keeps
+/// §5.1.4, the tree with guides: everything inside a Project hangs under
+/// its heading — its loose rows' titles on the Project's label, its Group
+/// rows' chevrons one `NAV_TREE_INDENT` in — and a Group's members one
+/// more under the Group, rows stepping 32 (`NAV_ROW_GAP`), while every row keeps
 /// the column's full width for its fills. A guide runs down from under the
 /// Project's folder icon, and one from under the Group's chevron, each to
 /// `NAV_GUIDE_TAIL` short of its last row's foot — drawn a row at a time,
@@ -258,7 +259,7 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     use ferrite_ui::theme::{
-        NAV_GROUP_GUIDE_X, NAV_GUIDE_TAIL, NAV_GUIDE_W, NAV_MEMBER_X, NAV_PROJECT_GUIDE_X,
+        NAV_GROUP_GUIDE_X, NAV_GUIDE_TAIL, NAV_GUIDE_W, NAV_PROJECT_GUIDE_X, NAV_ROW_GAP,
         NAV_ROW_H, NAV_TITLE_X, NAV_TREE_INDENT,
     };
     let (mut core, _fake) = cockpit("nav-tree-guides", 3);
@@ -294,11 +295,7 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
         (row, f32::from(title.left() - row.left()))
     };
     let (loose, x) = indent(cx, threads[2]);
-    close(
-        px(x),
-        NAV_TITLE_X + NAV_TREE_INDENT,
-        "a loose row, one level in",
-    );
+    close(px(x), NAV_TITLE_X, "a loose row, on the Project's label");
     let group_row = at(cx, format!("nav-group-{}", group.get()));
     let chevron = at(cx, format!("nav-group-fold-{}", group.get()));
     assert!(
@@ -306,11 +303,7 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
         "the Group's chevron, one level in, over its guide: {chevron:?}"
     );
     let (first, x) = indent(cx, threads[0]);
-    close(
-        px(x),
-        NAV_TITLE_X + 2.0 * NAV_TREE_INDENT,
-        "a member, two in",
-    );
+    close(px(x), NAV_TITLE_X + NAV_TREE_INDENT, "a member, a step in");
     let (last, _) = indent(cx, threads[1]);
     assert!(loose.top() < group_row.top() && group_row.bottom() <= first.top());
 
@@ -318,8 +311,8 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     // the guide, so it draws no stretch of it.
     assert_eq!(
         loose.top(),
-        heading.bottom(),
-        "the first row, under the heading"
+        heading.bottom() + px(NAV_ROW_GAP),
+        "the first row, a row's gap under the heading"
     );
     assert!(
         cx.debug_bounds(format!("nav-guide-{}-0", threads[2].get()).leak())
@@ -336,10 +329,11 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
         "the Project's guide",
     );
     close(on_group.size.width, NAV_GUIDE_W, "1px");
+    let half = px(NAV_ROW_GAP / 2.0);
     assert_eq!(
         (on_group.top(), on_group.bottom()),
-        (group_row.top(), group_row.bottom()),
-        "down the whole Group row"
+        (group_row.top() - half, group_row.bottom() + half),
+        "down the whole Group row and its share of the gaps"
     );
     let on_first = stretch(cx, threads[0].get().to_string(), 0);
     assert_eq!(on_first.top(), on_group.bottom(), "the stretches join");
@@ -347,7 +341,7 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     let on_last = stretch(cx, threads[1].get().to_string(), 0);
     close(
         on_last.bottom(),
-        f32::from(last.bottom()) - NAV_GUIDE_TAIL,
+        f32::from(last.bottom() + half) - NAV_GUIDE_TAIL,
         "to short of the Project's last row",
     );
     let group_guide = stretch(cx, threads[0].get().to_string(), 1);
@@ -358,17 +352,17 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     );
     assert_eq!(
         group_guide.top(),
-        group_row.bottom(),
+        group_row.bottom() + half,
         "from under the Group row"
     );
     close(
         stretch(cx, threads[1].get().to_string(), 1).bottom(),
-        f32::from(last.bottom()) - NAV_GUIDE_TAIL,
+        f32::from(last.bottom() + half) - NAV_GUIDE_TAIL,
         "to short of its last member",
     );
     assert_eq!(
         on_first.bottom(),
-        first.bottom(),
+        first.bottom() + half,
         "a member above the last runs the guide to its foot"
     );
 
@@ -382,8 +376,8 @@ fn a_project_is_drawn_as_a_tree_with_guides(cx: &mut TestAppContext) {
     );
     close(
         px(x),
-        NAV_MEMBER_X + NAV_TREE_INDENT,
-        "and moves in with its Group",
+        NAV_TITLE_X + NAV_TREE_INDENT,
+        "and hangs where its Group's rows do",
     );
 }
 
@@ -429,12 +423,12 @@ fn the_parked_view_groups_by_project_then_group(cx: &mut TestAppContext) {
         f32::from(title.left() - row.left())
     };
     let one = level(cx, threads[2]);
-    assert!((one - (NAV_TITLE_X + NAV_TREE_INDENT)).abs() < 0.5, "{one}");
+    assert!((one - NAV_TITLE_X).abs() < 0.5, "{one}");
     for member in [threads[0], threads[1]] {
         let two = level(cx, member);
         assert!(
-            (two - (NAV_TITLE_X + 2.0 * NAV_TREE_INDENT)).abs() < 0.5,
-            "a member, two levels in: {two}"
+            (two - (NAV_TITLE_X + NAV_TREE_INDENT)).abs() < 0.5,
+            "a member, a step in: {two}"
         );
         assert!(at(cx, format!("nav-thread-{}", member.get())).top() >= group_row.bottom());
     }

@@ -208,8 +208,16 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("a".into(), "cockpit::Always", Some("Decision")),
         // The approval card's buttons (Claude's): ⌘⏎ allows once, ⇧⌘⏎
         // always allows — they act with text on the line too.
-        (with_primary("enter"), "cockpit::AllowOnce", Some("Decision")),
-        (with_primary("shift-enter"), "cockpit::AlwaysAllow", Some("Decision")),
+        (
+            with_primary("enter"),
+            "cockpit::AllowOnce",
+            Some("Decision"),
+        ),
+        (
+            with_primary("shift-enter"),
+            "cockpit::AlwaysAllow",
+            Some("Decision"),
+        ),
         // A question Decision's options, by number — digits again with
         // text on the line, the y/n/a rule.
         ("1".into(), "cockpit::PickOption1", Some("Decision")),

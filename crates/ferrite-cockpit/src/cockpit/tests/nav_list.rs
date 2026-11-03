@@ -1,9 +1,9 @@
-//! The nav: thread rows, the attention list and the parked list.
+//! The nav: thread rows, the Activity view and the parked list.
 #[allow(unused_imports)]
 use super::*;
 
-/// A Thread row is one quiet line (§5.1.5): the title at 35 (one tree
-/// level further in, under its Project), 30 high, nothing under it and no
+/// A Thread row is one quiet line (§5.1.5): the title at 35 (on its
+/// Project's label, geometry.md), 30 high, nothing under it and no
 /// provider logo.
 #[gpui::test]
 fn a_thread_row_is_one_quiet_line(cx: &mut TestAppContext) {
@@ -19,12 +19,8 @@ fn a_thread_row_is_one_quiet_line(cx: &mut TestAppContext) {
     let title = cx.debug_bounds(id("nav-title")).expect("its title");
     assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_ROW_H));
     assert!(
-        (title.left()
-            - (row.left()
-                + px(ferrite_ui::theme::NAV_TITLE_X + ferrite_ui::theme::NAV_TREE_INDENT)))
-        .abs()
-            < px(0.5),
-        "the title at 35, a level in: {title:?} in {row:?}"
+        (title.left() - (row.left() + px(ferrite_ui::theme::NAV_TITLE_X))).abs() < px(0.5),
+        "the title at 35, on its Project's label: {title:?} in {row:?}"
     );
     assert!(
         cx.debug_bounds(id("nav-mark")).is_none(),
@@ -228,298 +224,97 @@ fn a_thread_keeps_its_row_through_working_and_done(cx: &mut TestAppContext) {
     assert_eq!(order(&view, cx), before, "nor does finishing");
 }
 
-/// The Attention list (§5.1.2): always on, no setting. Nothing in
-/// flight and it is gone. Then `Needs you` (oldest request first), `Done`
-/// (newest finish first) and `Working` (creation order), in that order
-/// over `Projects`, each head with its count, each row one line; and a
-/// Thread's own row stays in the tree throughout.
+/// The Activity view (the bell, Codex's): `Priority` holds what needs the
+/// operator, oldest request first, then what works, in creation order; a
+/// finish moves a Thread on to `Today`. The bell shows it in the tree's
+/// place, filled, and again gives the tree back; a row says its title and
+/// its mark, and a press lands on its Thread. The tree carries no status
+/// sections of its own.
 #[gpui::test]
-fn the_attention_list_lists_needs_you_then_done_then_working(cx: &mut TestAppContext) {
-    use nav::ListSection::{Done, NeedsYou, Working};
-    let (core, fake) = cockpit("attention-list", 6);
+fn the_activity_view_lists_priority_then_today(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("activity-view", 5);
     let threads = core.threads();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    assert_eq!(listed(&view, cx), vec![], "nothing in flight");
-    assert!(cx.debug_bounds("nav-list").is_none(), "and no list at all");
-
-    // threads[0] is focused; the others are out of sight.
-    assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
-        Some(threads[0])
-    );
+    assert!(activity(&view, cx).0.is_empty(), "nothing in flight");
     let send = |index: usize, event: SessionEvent| {
         fake.streams.borrow()[index].send(event).unwrap();
-    };
-    let finish = || SessionEvent::TurnEnded {
-        outcome: ferrite_core::TurnOutcome::Completed,
-        cost_usd: None,
     };
     let working = || SessionEvent::TextDelta {
         text: "thinking".into(),
     };
-    // Two working, the later-created first to start.
-    send(5, working());
+    send(4, working());
     send(1, working());
     tick(cx);
-    assert_eq!(
-        listed(&view, cx),
-        vec![(Working, vec![threads[1], threads[5]])]
-    );
-    // Two finishing, threads[2] first; two asking, threads[4] first.
+    assert_eq!(activity(&view, cx).0, vec![threads[1], threads[4]]);
     send(2, working());
-    send(3, working());
     tick(cx);
-    send(2, finish());
+    send(
+        2,
+        SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        },
+    );
     tick(cx);
-    send(3, finish());
-    send(4, decision("perm-a"));
+    send(3, decision("perm-a"));
     tick(cx);
     send(1, decision("perm-b"));
     tick(cx);
-    assert_eq!(
-        listed(&view, cx),
-        vec![
-            (NeedsYou, vec![threads[4], threads[1]]),
-            (Done, vec![threads[3], threads[2]]),
-            (Working, vec![threads[5]]),
-        ],
-    );
+    let (priority, today) = activity(&view, cx);
+    assert_eq!(priority, vec![threads[3], threads[1], threads[4]]);
+    assert!(today.contains(&threads[2]), "a finish moves on to Today");
+    assert!(today.iter().all(|thread| !priority.contains(thread)));
 
+    // The tree says no section of status; the bell swaps it for the view.
+    assert!(cx.debug_bounds("nav-activity-list").is_none());
+    assert!(cx.debug_bounds("nav-projects-heading").is_some());
+    let bell = cx.debug_bounds("nav-activity").expect("the bell");
+    cx.simulate_click(bell.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.nav_view),
+        nav::NavView::Activity
+    );
+    assert!(
+        cx.debug_bounds("nav-projects-heading").is_none(),
+        "in the tree's place"
+    );
     let at = |cx: &mut gpui::VisualTestContext, key: String| {
         cx.debug_bounds(key.clone().leak())
             .unwrap_or_else(|| panic!("{key} drawn"))
     };
-    let heads: Vec<_> = ["nav-list-needs-you", "nav-list-done", "nav-list-working"]
-        .into_iter()
-        .map(|key| at(cx, key.into()))
-        .collect();
-    assert!(heads[0].bottom() <= heads[1].top() && heads[1].bottom() <= heads[2].top());
-    let parked = at(cx, "nav-view-parked".into());
-    let projects = at(cx, "nav-projects-heading".into());
-    assert!(parked.bottom() <= heads[0].top(), "under the views");
+    let (head, later) = (
+        at(cx, "nav-activity-priority".into()),
+        at(cx, "nav-activity-today".into()),
+    );
+    assert!(head.bottom() <= later.top(), "Priority over Today");
+    let running = at(cx, format!("nav-activity-row-{}", threads[4].get()));
+    let mark = at(cx, format!("nav-activity-state-{}", threads[4].get()));
+    assert!(mark.left() > running.center().x, "its spinner at the right");
     assert!(
-        at(cx, "nav-list".into()).bottom() <= projects.top(),
-        "over Projects"
-    );
-    // One line each; its own row stays below.
-    for thread in [threads[4], threads[3], threads[5]] {
-        let row = at(cx, format!("nav-list-row-{}", thread.get()));
-        assert_eq!(
-            row.size.height,
-            px(ferrite_ui::theme::NAV_ROW_H),
-            "one line"
-        );
-        assert!(at(cx, format!("nav-thread-{}", thread.get())).top() >= projects.bottom());
-    }
-    // A request's row says so at its right, in its dot.
-    let mark = at(cx, format!("nav-state-{}", threads[4].get()));
-    let row = at(cx, format!("nav-list-row-{}", threads[4].get()));
-    assert!(mark.right() <= row.right() && mark.left() > row.center().x);
-}
-
-/// Each section folds to its head, the fold held as the
-/// nav's others are; the other sections stay open.
-#[gpui::test]
-fn an_attention_list_section_folds_to_its_head(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("attention-list-fold", 3);
-    let threads = core.threads();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    for stream in [1, 2] {
-        fake.streams.borrow()[stream]
-            .send(SessionEvent::TextDelta {
-                text: "thinking".into(),
-            })
-            .unwrap();
-    }
-    tick(cx);
-    let row = |cx: &mut gpui::VisualTestContext, thread: ThreadId| {
-        cx.debug_bounds(format!("nav-list-row-{}", thread.get()).leak())
-    };
-    assert!(row(cx, threads[1]).is_some());
-    let head = cx.debug_bounds("nav-list-working").expect("its head");
-    cx.simulate_click(head.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(view.read_with(cx, |view, _| view
-        .nav_folds
-        .contains(&NavFold::List(nav::ListSection::Working))));
-    assert!(row(cx, threads[1]).is_none() && row(cx, threads[2]).is_none());
-    assert!(
-        cx.debug_bounds("nav-list-working-chevron").is_some(),
-        "its caret stays"
-    );
-    // A request arriving opens a section of its own, unfolded.
-    fake.streams.borrow()[1]
-        .send(decision("perm-fold"))
-        .unwrap();
-    tick(cx);
-    assert!(row(cx, threads[1]).is_some(), "under Needs you");
-    assert!(row(cx, threads[2]).is_none(), "Working still folded");
-
-    let head = cx.debug_bounds("nav-list-working").expect("its head");
-    cx.simulate_click(head.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(row(cx, threads[2]).is_some(), "open again");
-}
-
-/// Done's exit rule (CONTEXT.md "Attention list"): opening a done
-/// Thread from the list reads its Notice, yet its row stays under
-/// `Done` while it is the focused Thread, and leaves once focus moves
-/// to another — by a press on a tree row or by the keyboard (⌘]). One
-/// that finishes while focused is held under Done the same way.
-#[gpui::test]
-fn a_done_thread_stays_in_done_until_focus_moves_on(cx: &mut TestAppContext) {
-    use nav::ListSection::{Done, Working};
-    let (mut core, fake) = cockpit("attention-list-done", 4);
-    let threads = core.threads();
-    // threads[2] shares a Group with threads[0], so ⌘] can walk from it.
-    core.apply_group(GroupChange::Create {
-        first: threads[0],
-        second: threads[2],
-    })
-    .unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    for stream in [1, 2] {
-        fake.streams.borrow()[stream]
-            .send(SessionEvent::TextDelta {
-                text: "thinking".into(),
-            })
-            .unwrap();
-    }
-    tick(cx);
-    for stream in [1, 2] {
-        fake.streams.borrow()[stream]
-            .send(SessionEvent::TurnEnded {
-                outcome: ferrite_core::TurnOutcome::Completed,
-                cost_usd: None,
-            })
-            .unwrap();
-        tick(cx);
-    }
-    assert_eq!(
-        listed(&view, cx),
-        vec![(Done, vec![threads[2], threads[1]])]
+        running.size.height > px(ferrite_ui::theme::NAV_ROW_H),
+        "title, then the Project"
     );
 
-    let row = cx
-        .debug_bounds(format!("nav-list-row-{}", threads[1].get()).leak())
-        .expect("its list row");
-    cx.simulate_click(row.center(), gpui::Modifiers::none());
-    tick(cx);
-    let status = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext, at: usize| {
-        view.read_with(cx, |view, _| view.thread_row(threads[at]).status)
-    };
-    assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
-        Some(threads[1]),
-        "the press lands on it"
-    );
-    assert_ne!(status(&view, cx, 1), nav::RowStatus::Done, "seen: read");
-    assert_eq!(
-        listed(&view, cx),
-        vec![(Done, vec![threads[2], threads[1]])],
-        "and still in Done, where the operator clicked it"
-    );
-    let selected = cx
-        .debug_bounds(format!("nav-list-row-{}", threads[1].get()).leak())
-        .expect("its list row, drawn");
-    assert!(
-        selected.contains(&row.center()),
-        "not moved from under the pointer"
-    );
-
-    // A press on a tree row moves focus on: it leaves.
-    let tree_row = cx
-        .debug_bounds(format!("nav-thread-{}", threads[3].get()).leak())
-        .expect("a tree row");
-    cx.simulate_click(tree_row.center(), gpui::Modifiers::none());
+    // A press lands on the Thread.
+    let done = at(cx, format!("nav-activity-row-{}", threads[2].get()));
+    cx.simulate_click(done.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        listed(&view, cx),
-        vec![(Done, vec![threads[2]])],
-        "it leaves"
-    );
-
-    // Focused from the tree, the other one is held too, and the
-    // keyboard's ⌘] moving on to its Group's other member lets it go.
-    // (Entering the Group puts both members on screen: both are seen.)
-    let tree_row = cx
-        .debug_bounds(format!("nav-thread-{}", threads[2].get()).leak())
-        .expect("a tree row");
-    cx.simulate_click(tree_row.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_ne!(status(&view, cx, 2), nav::RowStatus::Done);
-    assert_eq!(listed(&view, cx), vec![(Done, vec![threads[2]])], "held");
-    view.update_in(cx, |view, window, cx| view.next_pane(&NextPane, window, cx));
-    tick(cx);
-    assert_ne!(
         view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
         Some(threads[2])
     );
-    assert_eq!(
-        listed(&view, cx),
-        vec![],
-        "focus moved on: gone, and so is the list"
-    );
-    assert!(cx.debug_bounds("nav-list").is_none());
 
-    // A Thread that finishes while the operator watches it is seen at
-    // once, and held under Done, not Working: the finish is the news.
-    let on = view
-        .read_with(cx, |view, _| view.cockpit.roster().focused_thread())
-        .unwrap();
-    let stream = threads.iter().position(|thread| *thread == on).unwrap();
-    let send = |event: SessionEvent| fake.streams.borrow()[stream].send(event).unwrap();
-    send(SessionEvent::TextDelta {
-        text: "thinking".into(),
-    });
+    // The bell again: the tree.
+    let bell = cx.debug_bounds("nav-activity").expect("the bell");
+    cx.simulate_click(bell.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(listed(&view, cx), vec![(Working, vec![on])]);
-    send(SessionEvent::TurnEnded {
-        outcome: ferrite_core::TurnOutcome::Completed,
-        cost_usd: None,
-    });
-    tick(cx);
-    assert_ne!(
-        view.read_with(cx, |view, _| view.thread_row(on).status),
-        nav::RowStatus::Done,
-        "seen at once"
+    assert_eq!(
+        view.read_with(cx, |view, _| view.nav_view),
+        nav::NavView::Tree
     );
-    assert_eq!(listed(&view, cx), vec![(Done, vec![on])], "held under Done");
-    // Work again moves it back at once; an interrupt is no finish, so
-    // with no Notice it leaves rather than being held.
-    send(SessionEvent::TextDelta {
-        text: "again".into(),
-    });
-    tick(cx);
-    assert_eq!(listed(&view, cx), vec![(Working, vec![on])]);
-    send(SessionEvent::TurnEnded {
-        outcome: ferrite_core::TurnOutcome::Interrupted,
-        cost_usd: None,
-    });
-    tick(cx);
-    assert_eq!(listed(&view, cx), vec![], "interrupted: not held");
-    // Finished and held, it leaves when focus moves on.
-    send(SessionEvent::TextDelta {
-        text: "once more".into(),
-    });
-    tick(cx);
-    send(SessionEvent::TurnEnded {
-        outcome: ferrite_core::TurnOutcome::Completed,
-        cost_usd: None,
-    });
-    tick(cx);
-    assert_eq!(listed(&view, cx), vec![(Done, vec![on])]);
-    let tree_row = cx
-        .debug_bounds(format!("nav-thread-{}", threads[3].get()).leak())
-        .expect("a tree row");
-    cx.simulate_click(tree_row.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(listed(&view, cx), vec![], "focus moved on: it leaves");
 }
 
 /// C8 under `sort: recent`: the tree never re-sorts under the pointer.
@@ -703,10 +498,7 @@ fn a_project_section_draws_one_row_grammar_and_no_filter_row(cx: &mut TestAppCon
     );
 
     let title_id: &'static str = format!("nav-title-{}", thread.get()).leak();
-    assert!(
-        cx.debug_bounds(title_id).is_some(),
-        "the one row grammar"
-    );
+    assert!(cx.debug_bounds(title_id).is_some(), "the one row grammar");
     for gone in [
         format!("nav-subagents-{}", thread.get()),
         format!("nav-mark-{}", thread.get()),
@@ -1422,7 +1214,7 @@ fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
     hold_nav_open(&view, cx);
     // Sized so the Transcript threshold sits between the two nav
     // widths: a wall tile beside the full column, Transcript without it.
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    cx.simulate_resize(gpui::size(px(550.), px(700.)));
     tick(cx);
     let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
     assert_eq!(
@@ -1478,7 +1270,10 @@ fn a_press_on_a_row_leaves_the_keys_with_the_composer(cx: &mut TestAppContext) {
         .expect("its tree row");
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.focused_thread()), Some(other));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.focused_thread()),
+        Some(other)
+    );
     assert!(
         !view.update_in(cx, |view, window, _| view.nav_view_focus.is_focused(window)),
         "the tree did not take the keys"
@@ -1538,7 +1333,10 @@ fn left_on_a_loose_row_folds_its_project(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-shift-e");
     tick(cx);
     let start = view.read_with(cx, |view, _| view.nav_cursor.clone().map(|c| c.item));
-    assert!(matches!(start, Some(nav::NavItem::Thread(_, None))), "{start:?}");
+    assert!(
+        matches!(start, Some(nav::NavItem::Thread(_, None))),
+        "{start:?}"
+    );
     cx.simulate_keystrokes("left");
     tick(cx);
     let project = view

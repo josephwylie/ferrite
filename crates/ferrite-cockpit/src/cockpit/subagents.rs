@@ -47,7 +47,10 @@ impl RequestForms {
 
     /// Whether `handle`'s split-button menu is open.
     pub(super) fn menu(&self, handle: &DecisionHandle) -> bool {
-        self.1.borrow().get(handle).is_some_and(|cursor| cursor.menu)
+        self.1
+            .borrow()
+            .get(handle)
+            .is_some_and(|cursor| cursor.menu)
     }
 
     pub(super) fn set_menu(&self, handle: &DecisionHandle, open: bool) {
@@ -947,10 +950,7 @@ impl CockpitView {
             // The strip runs across the card's top: with no place, the list
             // drops below it.
             place: None,
-            lead: 0.,
-            head: None,
-            ladder: None,
-            hints: Vec::new(),
+            submenu: None,
             width: None,
             trigger: components::button(("subject-overflow", thread.get()))
                 .tab_stop(true)
@@ -1258,14 +1258,8 @@ impl CockpitView {
         // The Composer's slot: its box's inset from the card's foot (the
         // Pane sets it in the Composer's column, sides and all).
         Some(
-            native_keys(
-                div()
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .pb(px(inset))
-                    .child(footer),
-            )
-            .into_any_element(),
+            native_keys(div().flex_shrink_0().min_w_0().pb(px(inset)).child(footer))
+                .into_any_element(),
         )
     }
 
@@ -2041,11 +2035,12 @@ impl Cards {
     }
 
     /// An approval (D-1…D-7), as Claude's card: the ask on the head band,
-    /// the prose, the command band (or the edit's diff), what `Always allow`
-    /// covers, the amend note while it is open, then `Deny` and the split
-    /// `Always allow` whose menu holds `Allow once` and `Allow and switch
-    /// to …` — inline in Solo, stacked in a Group Pane's narrow column. The
-    /// keys are on the buttons (⌘⏎, ⇧⌘⏎, esc); 1–3, ↑↓ and ⏎ still act.
+    /// the prose, the command band (or the edit's diff), the amend note
+    /// while it is open, then `Deny` and the split `Allow once` whose menu
+    /// holds `Always allow <pattern>` (its note says what that covers) and
+    /// `Allow and switch to …` — inline in Solo, stacked in a Group Pane's
+    /// narrow column. The keys are on the buttons (⌘⏎ on `Allow once`, ⇧⌘⏎
+    /// on the menu's `Always allow`, esc); 1–3, ↑↓ and ⏎ still act.
     fn approval_card(&self, request: PendingDecision, cx: &gpui::App) -> AnyElement {
         let thread = self.thread;
         let handle = request.handle.clone();
@@ -2097,22 +2092,8 @@ impl Cards {
         let rows =
             decision::approval_rows(&request.decision, self.provider, self.workspace.as_deref());
         let enabled = |choice: decision::ApprovalChoice| {
-            !request.submitting
-                && rows
-                    .iter()
-                    .any(|row| row.choice == choice && row.enabled)
+            !request.submitting && rows.iter().any(|row| row.choice == choice && row.enabled)
         };
-        // What `Always allow` covers, in one quiet line (Claude's card says
-        // what its standing answer does before you press it).
-        let pattern = decision::option_two_pattern(&request.decision, self.workspace.as_deref());
-        if !pattern.is_empty() && !self.short {
-            children.push(
-                decision::section(decision::note(format!(
-                    "\u{201c}Always allow\u{201d} allows {pattern} for the rest of this thread."
-                )))
-                .into_any_element(),
-            );
-        }
         if let Some(note) = self.forms.note(&handle) {
             children.push(self.note_field(&handle, note));
         }
@@ -2140,14 +2121,14 @@ impl Cards {
                 .inset_0()
                 .debug_selector(|| "decision-deny".into()),
         );
-        let always = decision::always_button(
-            SharedString::from(format!("request-always-{}-{serial}", thread.get())),
+        let allow = decision::allow_button(
+            SharedString::from(format!("request-allow-{}-{serial}", thread.get())),
             stacked,
-            !enabled(decision::ApprovalChoice::AllowForThread),
+            !enabled(decision::ApprovalChoice::Allow),
             cx,
         )
-        .debug_selector(move || format!("request-always-{}-{serial}", thread.get()))
-        .on_click(answer(decision::ApprovalChoice::AllowForThread));
+        .debug_selector(move || format!("request-allow-{}-{serial}", thread.get()))
+        .on_click(answer(decision::ApprovalChoice::Allow));
         let open = self.forms.menu(&handle);
         let forms = self.forms.clone();
         let toggled = handle.clone();
@@ -2165,21 +2146,25 @@ impl Cards {
         });
         let menu = open.then(|| {
             let mut rows = Vec::new();
-            if enabled(decision::ApprovalChoice::Allow) {
+            if enabled(decision::ApprovalChoice::AllowForThread) {
                 let forms = self.forms.clone();
                 let closing = handle.clone();
-                let allow = answer(decision::ApprovalChoice::Allow);
+                let always = answer(decision::ApprovalChoice::AllowForThread);
+                let (label, note) = decision::always_allow_words(&decision::option_two_pattern(
+                    &request.decision,
+                    self.workspace.as_deref(),
+                ));
                 rows.push(
                     decision::allow_menu_row(
-                        SharedString::from(format!("request-allow-{}-{serial}", thread.get())),
-                        "Allow once",
-                        decision::decision_chord("cockpit::AllowOnce"),
-                        None,
+                        SharedString::from(format!("request-always-{}-{serial}", thread.get())),
+                        label,
+                        decision::decision_chord("cockpit::AlwaysAllow"),
+                        Some(note),
                     )
-                    .debug_selector(move || format!("request-allow-{}-{serial}", thread.get()))
+                    .debug_selector(move || format!("request-always-{}-{serial}", thread.get()))
                     .on_click(move |event, window, cx| {
                         forms.set_menu(&closing, false);
-                        allow(event, window, cx);
+                        always(event, window, cx);
                     })
                     .into_any_element(),
                 );
@@ -2233,7 +2218,7 @@ impl Cards {
         children.push(
             decision::section(decision::approval_actions(
                 deny.into_any_element(),
-                always.into_any_element(),
+                allow.into_any_element(),
                 more.into_any_element(),
                 menu,
                 stacked,
@@ -2241,7 +2226,7 @@ impl Cards {
             .into_any_element(),
         );
         request_frame(
-            decision::card(serial, children),
+            decision::approval_card(serial, children),
             self.overlay,
             self.solo,
         )
@@ -2380,11 +2365,7 @@ impl Cards {
                     let id = field.id.clone();
                     move || format!("form-field-{id}")
                 })
-                .child(
-                    div()
-                        .text_color(rgb(theme::INK))
-                        .child(field.label.clone()),
-                );
+                .child(div().text_color(rgb(theme::INK)).child(field.label.clone()));
             if !field.description.is_empty() {
                 section = section.child(decision::note(field.description.clone()));
             }
@@ -2539,30 +2520,29 @@ impl Cards {
         }));
         let sending = request.submitting;
         children.push(
-            decision::section(decision::footer::<&str>(
-                &[],
-                [
-                    decision::skip_button("form-cancel", "Cancel", cx)
-                        .disabled(!request.decision.policy.deny || sending)
-                        .debug_selector(|| "form-cancel".into())
-                        .on_click(self.act(move |view, _, cx| {
-                            view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
-                        }))
-                        .into_any_element(),
-                    decision::send_button(
-                        "form-send",
-                        if sending { "Sending…" } else { "Send" },
-                        !request.decision.policy.allow || sending,
-                        false,
-                        cx,
-                    )
-                    .debug_selector(move || selector.clone())
+            decision::section(decision::footer([
+                decision::skip_button("form-cancel", "Cancel", cx)
+                    .disabled(!request.decision.policy.deny || sending)
+                    .debug_selector(|| "form-cancel".into())
                     .on_click(self.act(move |view, _, cx| {
-                        view.send_form(thread, &submit_handle, &fields, cx)
+                        view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)
                     }))
                     .into_any_element(),
-                ],
-            ))
+                decision::send_button(
+                    "form-send",
+                    if sending { "Sending…" } else { "Send" },
+                    !request.decision.policy.allow || sending,
+                    false,
+                    cx,
+                )
+                .debug_selector(move || selector.clone())
+                .on_click(
+                    self.act(move |view, _, cx| {
+                        view.send_form(thread, &submit_handle, &fields, cx)
+                    }),
+                )
+                .into_any_element(),
+            ]))
             .into_any_element(),
         );
         request_frame(
@@ -2641,7 +2621,7 @@ impl Cards {
         children.extend(error.map(|error| {
             decision::section(decision::error_line("could not send", error)).into_any_element()
         }));
-        children.push(decision::section(decision::footer::<&str>(&[], actions)).into_any_element());
+        children.push(decision::section(decision::footer(actions)).into_any_element());
         request_frame(
             decision::card(handle.serial, children),
             self.overlay,
@@ -2902,49 +2882,39 @@ impl Cards {
         if let Some(note) = self.forms.note(&handle) {
             children.push(self.note_field(&handle, note));
         }
-        let keys = target
-            .map(|qi| {
-                (questions[qi].options.len() + usize::from(questions[qi].allow_other))
-                    .min(decision::DIGIT_KEYS)
-            })
-            .unwrap_or(0);
-        let hints = decision::question_hints(keys);
         // The form keeps its Skip and Send for the pointer (several
-        // questions, several picks, typed words); the keys say the rest.
+        // questions, several picks, typed words); the rows carry their digits.
         let skip_handle = handle.clone();
         let submit_handle = handle.clone();
         let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
         children.push(
-            decision::section(decision::footer(
-                hints.as_slice(),
-                [
-                    decision::skip_button("question-skip", "Skip", cx)
-                        .disabled(sending)
-                        .on_click(self.act(move |view, _, cx| {
-                            view.respond_exact(
-                                thread,
-                                &skip_handle,
-                                DecisionAnswer::Deny {
-                                    message: decision::QUESTION_SKIPPED.into(),
-                                },
-                                cx,
-                            )
-                        }))
-                        .into_any_element(),
-                    decision::send_button(
-                        "question-send",
-                        if sending { "Sending\u{2026}" } else { "Send" },
-                        sending,
-                        !sending,
-                        cx,
-                    )
-                    .debug_selector(move || selector.clone())
+            decision::section(decision::footer([
+                decision::skip_button("question-skip", "Skip", cx)
+                    .disabled(sending)
                     .on_click(self.act(move |view, _, cx| {
-                        view.send_question_form(thread, &submit_handle, false, cx);
+                        view.respond_exact(
+                            thread,
+                            &skip_handle,
+                            DecisionAnswer::Deny {
+                                message: decision::QUESTION_SKIPPED.into(),
+                            },
+                            cx,
+                        )
                     }))
                     .into_any_element(),
-                ],
-            ))
+                decision::send_button(
+                    "question-send",
+                    if sending { "Sending\u{2026}" } else { "Send" },
+                    sending,
+                    !sending,
+                    cx,
+                )
+                .debug_selector(move || selector.clone())
+                .on_click(self.act(move |view, _, cx| {
+                    view.send_question_form(thread, &submit_handle, false, cx);
+                }))
+                .into_any_element(),
+            ]))
             .into_any_element(),
         );
         // The frame is the island QuestionFit measures: it carries the dock

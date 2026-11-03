@@ -33,8 +33,8 @@ use super::tokens::{self, Scheme};
 use super::web::Page;
 use super::{Visual, VisualStatus};
 use crate::pane::Grid;
-use ferrite_ui::theme;
 use crate::select::TextRuns;
+use ferrite_ui::theme;
 
 /// Keep views live within this many viewport heights of the screen: they open
 /// (or reload) here, before they scroll in.
@@ -206,8 +206,7 @@ impl Shelf {
         if span <= 0. || rows.is_empty() {
             return;
         }
-        let content =
-            (f32::from(viewport.size.width) - 2.0 * inset).min(theme::TX_COLUMN_MAX_W);
+        let content = (f32::from(viewport.size.width) - 2.0 * inset).min(theme::TX_COLUMN_MAX_W);
         let width = page_width(content);
         let live_width = width >= MIN_LIVE_WIDTH;
         if live_width {

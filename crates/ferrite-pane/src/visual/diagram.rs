@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(vars["background"], token("bg"));
         assert_eq!(vars["primaryColor"], token("band2"));
         assert_eq!(vars["lineColor"], token("muted"));
-        assert_eq!(vars["fontSize"], "13px");
+        assert_eq!(vars["fontSize"], "14px");
         assert_eq!(vars["pie1"], token("chart-1"));
     }
 

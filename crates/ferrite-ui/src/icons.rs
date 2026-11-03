@@ -94,6 +94,7 @@ icons![
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
+    "bell-fill",
     // (end WP-G)
     "update",
     // ---- UI refresh icons (SPEC §3.7): Lucide's shapes on a 24 grid,
@@ -196,6 +197,8 @@ pub const PLUG: &str = "icons/plug.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
+/// The bell filled: the nav's Activity view while it shows.
+pub const BELL_FILL: &str = "icons/bell-fill.svg";
 // (end WP-G)
 
 // ---- UI refresh icon names (SPEC §3.7; the phases after 0 draw them)
@@ -437,6 +440,7 @@ mod tests {
         for key in [
             SIDEBAR,
             BELL,
+            BELL_FILL,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
             CLOSE,
@@ -475,7 +479,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            29 + REFRESH_ICONS.len(),
+            30 + REFRESH_ICONS.len(),
             "the prototype and app controls, including close, the four \
              Windows caption glyphs, the image mark, the CLI update mark and the board door; every glyph \
              Geist Mono lacks is typed in the face the platform falls back to (theme rule 10)"

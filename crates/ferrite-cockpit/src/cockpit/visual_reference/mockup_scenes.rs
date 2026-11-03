@@ -5,14 +5,13 @@
 //!
 //! The world is built for the scene's `Look` and pull request; the setup
 //! then does only what the operator would have done on the way to that
-//! view: open the panel on a tab, or the palette with a query.
+//! view: open the panel, or the palette with a query.
 
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::BranchStatus;
 use ferrite_core::ThreadId;
 use gpui::{Context, Window};
 
-use super::super::panel::PanelTab;
 use super::{CockpitView, HeldLoops, Home, Scene, Setup};
 use crate::demo::mockup::{self, Look, Pr, World, CAPTURE};
 use crate::demo::world::{self, Clock, Fixture};
@@ -24,33 +23,31 @@ use ferrite_ui::platform_text::disable_font_smoothing;
 /// `<state>-refresh.png`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shot {
-    /// solo.png: Ferrite idle memory usage, the panel on its PR tab, the
-    /// pull request open with its checks running.
+    /// solo.png: Ferrite idle memory usage, the panel open, the pull
+    /// request open with its checks running.
     Solo,
-    /// solo-changes.png: the same, the panel on its Changes tab.
+    /// solo-changes.png: the same, a changed file unfolded.
     SoloChanges,
     /// group.png: WORK's four Panes, Supplier Price Review focused, Find
     /// all calls asking.
     Group,
-    /// pr-states.png, first column: the PR tab, a check failed and the
-    /// branch conflicting with main.
+    /// pr-states.png, first column: the panel's pull request row, a check
+    /// failed and the branch conflicting with main.
     PrFailing,
-    /// pr-states.png, second column: the PR tab, merged.
+    /// pr-states.png, second column: the row, merged.
     PrMerged,
-    /// pr-states.png, third column: the PR tab with no pull request.
+    /// pr-states.png, third column: the panel with no pull request.
     PrNone,
-    /// No mockup: the PR tab on a pull request with a description, folded
-    /// to its first lines, and a head branch too long for its line.
+    /// No mockup: the row for a pull request with a description and a head
+    /// branch too long for its line.
     PrDescribed,
-    /// The same, its description unfolded.
-    PrDescribedOpen,
     /// command-search.png: the palette over WORK with `supp` typed, the
     /// cursor on Supplier Price Review.
     Palette,
 }
 
 /// Every refresh state, with the shot it takes.
-const SHOTS: [(&str, Shot); 9] = [
+const SHOTS: [(&str, Shot); 8] = [
     ("refresh-solo", Shot::Solo),
     ("refresh-solo-changes", Shot::SoloChanges),
     ("refresh-group", Shot::Group),
@@ -58,7 +55,6 @@ const SHOTS: [(&str, Shot); 9] = [
     ("refresh-pr-merged", Shot::PrMerged),
     ("refresh-pr-none", Shot::PrNone),
     ("refresh-pr-described", Shot::PrDescribed),
-    ("refresh-pr-described-open", Shot::PrDescribedOpen),
     ("refresh-palette", Shot::Palette),
 ];
 
@@ -76,8 +72,7 @@ impl Shot {
             | Shot::PrFailing
             | Shot::PrMerged
             | Shot::PrNone
-            | Shot::PrDescribed
-            | Shot::PrDescribedOpen => Look::Solo,
+            | Shot::PrDescribed => Look::Solo,
         }
     }
 
@@ -87,23 +82,14 @@ impl Shot {
             Shot::PrFailing => Pr::Failing,
             Shot::PrMerged => Pr::Merged,
             Shot::PrNone => Pr::None,
-            Shot::PrDescribed | Shot::PrDescribedOpen => Pr::Described,
+            Shot::PrDescribed => Pr::Described,
             Shot::Solo | Shot::SoloChanges | Shot::Group | Shot::Palette => Pr::Open,
         }
     }
 
-    /// The panel tab the scene opens; none on a Group.
-    fn panel(self) -> Option<PanelTab> {
-        match self {
-            Shot::SoloChanges => Some(PanelTab::Changes),
-            Shot::Solo
-            | Shot::PrFailing
-            | Shot::PrMerged
-            | Shot::PrNone
-            | Shot::PrDescribed
-            | Shot::PrDescribedOpen => Some(PanelTab::Pr),
-            Shot::Group | Shot::Palette => None,
-        }
+    /// Whether the scene opens the panel; not on a Group.
+    fn panel(self) -> bool {
+        !matches!(self, Shot::Group | Shot::Palette)
     }
 }
 
@@ -185,14 +171,11 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         for group in shut {
             view.set_nav_fold(NavFold::Group(group), true, cx);
         }
-        if let Some(tab) = shot.panel() {
-            open_panel(view, cast.memory, tab, cx);
+        if shot.panel() {
+            view.open_panel(cast.memory, cx);
         }
         if shot == Shot::SoloChanges {
             unfold_file(view, cast.memory, "scheduled_work.rs", cx);
-        }
-        if shot == Shot::PrDescribedOpen {
-            view.fixture_unfold_description(cast.memory);
         }
         if shot == Shot::Palette {
             view.open_palette(PaletteScope::All, "supp", window, cx);
@@ -238,19 +221,6 @@ fn prepare(
     if active {
         window.activate_window();
     }
-}
-
-/// The Solo panel on `tab` for `thread` (SPEC §5.6): the Changes tab, or
-/// the PR tab reading the forge's fixture (`Cockpit::fixture_forge`, which
-/// answers both PR reads of the crash fix's worktree: the tab's snapshot,
-/// and the nav label's, so the tab reads `PR #146`).
-fn open_panel(
-    view: &mut CockpitView,
-    thread: ThreadId,
-    tab: PanelTab,
-    cx: &mut Context<CockpitView>,
-) {
-    view.open_panel_tab(thread, tab, cx);
 }
 
 /// The Changes tab's block for `name` unfolded, as solo-changes.png draws

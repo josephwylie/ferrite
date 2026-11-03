@@ -2125,10 +2125,14 @@ mod tests {
                 assert!(now - was <= tick, "a fade frame waited {:?}", now - was);
             }
         }
+        // The blink starts shown, so the first half's hide lands too.
+        let shown: Vec<f32> = std::iter::once(1.0)
+            .chain(alphas.iter().map(|(_, alpha)| *alpha))
+            .collect();
         let landings = |value: f32| {
-            alphas
+            shown
                 .windows(2)
-                .filter(|pair| pair[0].1 != value && pair[1].1 == value)
+                .filter(|pair| pair[0] != value && pair[1] == value)
                 .count()
         };
         assert!(landings(low) >= 3, "every turn hides the caret");

@@ -2,9 +2,9 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Two prompts sent while the turn runs: Solo's queued row shows the top
-/// of the pile — the latest, what ↑ takes back and ⌫ drops — and `+1`
-/// for the one under it (SPEC §5.5).
+/// Two prompts sent while the turn runs: Solo's queue strip counts them
+/// (`2 messages queued`) and shows the top of the pile — the latest, what
+/// ↑ takes back and ⌫ drops (Claude's strip).
 #[gpui::test]
 fn queued_prompts_pile_up_with_the_latest_on_top(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("queued-pile", 1);
@@ -34,8 +34,10 @@ fn queued_prompts_pile_up_with_the_latest_on_top(cx: &mut TestAppContext) {
     let top = cx
         .debug_bounds("queued-0")
         .expect("the latest prompt is drawn");
-    let more = cx.debug_bounds("queued-more").expect("+1 counts the rest");
-    assert!(more.left() >= top.right(), "{more:?} follows {top:?}");
+    let count = cx
+        .debug_bounds("queued-count-2")
+        .expect("the strip counts both");
+    assert!(top.left() >= count.right(), "{top:?} follows {count:?}");
     assert!(cx.debug_bounds("queued-1").is_none(), "one row, not a pile");
 }
 

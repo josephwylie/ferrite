@@ -3,10 +3,10 @@
 use super::*;
 
 /// Solo has no Pane head: the view head in the head row names the Thread
-/// (SPEC §5.2), as the nav's row does. The plan's meter sits at the tab
-/// strip's right (SPEC §5.3); the PR/CI chip is not chrome (F-11).
+/// (SPEC §5.2), as the nav's row does. A plan draws no meter in the
+/// chrome (its task list carries it); the PR/CI chip is not chrome (F-11).
 #[gpui::test]
-fn the_solo_thread_is_named_by_the_view_head_and_meters_its_plan(cx: &mut TestAppContext) {
+fn the_solo_thread_is_named_by_the_view_head_and_meters_no_plan(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("head-one-row", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
@@ -43,9 +43,10 @@ fn the_solo_thread_is_named_by_the_view_head_and_meters_its_plan(cx: &mut TestAp
         head.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
         "in the head row"
     );
-    let meter = cx.debug_bounds("tasks-meter-1").expect("the plan's meter");
-    let strip = cx.debug_bounds("pane-tabs-1").expect("the tab strip");
-    assert!(strip.contains(&meter.center()), "on the tab strip");
+    // The plan reads in the task list alone, and a lone `Main` tab costs
+    // no strip.
+    assert!(cx.debug_bounds("tasks-meter-1").is_none(), "no plan meter");
+    assert!(cx.debug_bounds("pane-tabs-1").is_none(), "no tab strip");
     assert!(
         cx.debug_bounds("ci-mark-1").is_none(),
         "no PR/CI chip in the chrome"
@@ -655,7 +656,7 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
 /// are never on the line, so a long branch can never squeeze the title.
 #[gpui::test]
 fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_MEMBER_X, NAV_ROW_H};
+    use ferrite_ui::theme::{NAV_ROW_H, NAV_TITLE_X, NAV_TREE_INDENT};
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -712,9 +713,10 @@ fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
         let title = bounds(cx, format!("nav-title-{id}"));
         let whole_row = bounds(cx, format!("nav-thread-{id}"));
         assert_eq!(whole_row.size.height, px(NAV_ROW_H), "one line");
-        // The shown Group hangs one level into its Project's tree; a
-        // member's title takes the line but for the room its mark needs.
-        let member_x = NAV_MEMBER_X + ferrite_ui::theme::NAV_TREE_INDENT;
+        // The shown Group hangs one level into its Project's tree, its
+        // members a step further; a member's title takes the line but for
+        // the room its mark needs.
+        let member_x = NAV_TITLE_X + NAV_TREE_INDENT;
         let marked = crate::nav::state_mark(row.status).is_some();
         let expected = crate::nav::title_w(crate::nav::RowPlace::Member(1), marked);
         assert!(

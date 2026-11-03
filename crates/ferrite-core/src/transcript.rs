@@ -104,9 +104,10 @@ impl TurnEnd {
         match &self.outcome {
             TurnOutcome::Completed => {
                 parts.extend(elapsed.map(crate::progress::settled_duration_label));
-                parts.extend(self.output_tokens.map(|output| {
-                    format!("{} tokens", crate::progress::token_label(output))
-                }));
+                parts.extend(
+                    self.output_tokens
+                        .map(|output| format!("{} tokens", crate::progress::token_label(output))),
+                );
                 if parts.is_empty() {
                     parts.push("Done".into());
                 }

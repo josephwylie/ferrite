@@ -40,12 +40,14 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     );
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     ring(cx);
-    let toast = cx.debug_bounds(selector).expect("the nav folded: it toasts");
+    let toast = cx
+        .debug_bounds(selector)
+        .expect("the nav folded: it toasts");
     use ferrite_ui::theme::{
         PANEL_PAD_L, PANEL_PAD_R, PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_TOP, TOAST_W, WIN_CHROME_H,
     };
     let window = cx.update(|window, _| window.viewport_size());
-    let panel = view.read_with(cx, |view, _| view.panel_rest_column_w());
+    let panel = view.read_with(cx, |view, _| view.panel_column_w());
     // Over the panel's content column under the window's head, or with no
     // panel `TOAST_W` wide under the Pane heads.
     let (width, right, top) = if panel > 0. {
@@ -55,7 +57,11 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
             WIN_CHROME_H + TOAST_TOP,
         )
     } else {
-        (TOAST_W, TOAST_BOX_RIGHT, WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP)
+        (
+            TOAST_W,
+            TOAST_BOX_RIGHT,
+            WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP,
+        )
     };
     assert!(
         (toast.size.width - px(width)).abs() <= px(1.),

@@ -533,10 +533,10 @@ impl PullRequest {
         Some(Self::of_wire(&(**pr).clone().into()))
     }
 
-    /// The label's reading of the Review's whole snapshot (the panel's PR
-    /// tab): its number, state and checks. The snapshot names no check's
-    /// page, so no run has a url.
-    pub fn of_wire(pr: &crate::protocol::WirePr) -> Self {
+    /// The label's reading of the Review's whole snapshot: its number,
+    /// state and checks. The snapshot names no check's page, so no run has
+    /// a url.
+    fn of_wire(pr: &crate::protocol::WirePr) -> Self {
         use crate::protocol::{WireCheckStatus as Status, WirePrState as Wire};
         let runs: Vec<Check> = pr
             .checks

@@ -413,7 +413,10 @@ impl gpui::RenderOnce for Markdown {
             (1..=6).fold(
                 text_style.with_foreground(rgb(theme::INK_SUBTLE).into()),
                 |style, level| {
-                    style.with_heading(level, heading(level, base).text_color(rgb(theme::INK_SUBTLE)))
+                    style.with_heading(
+                        level,
+                        heading(level, base).text_color(rgb(theme::INK_SUBTLE)),
+                    )
                 },
             )
         } else {
@@ -718,8 +721,7 @@ impl gpui::Render for CodeActions {
                             cx.notify();
                             // `Copied` holds a moment, then the block's
                             // `Copy` is ready again.
-                            let hold =
-                                std::time::Duration::from_millis(theme::COPIED_HOLD_MS);
+                            let hold = std::time::Duration::from_millis(theme::COPIED_HOLD_MS);
                             cx.spawn(async move |view, cx| {
                                 cx.background_executor().timer(hold).await;
                                 let _ = view.update(cx, |view, cx| {
@@ -2168,8 +2170,12 @@ mod spacing_tests {
     impl Render for SpacingRoot {
         fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             window.set_rem_size(px(theme::FS_UI));
+            // The prose's own size and line, as every host sets them: the
+            // window's default line (1.618em) is fractional at 14px.
             div()
                 .w(px(360.))
+                .text_size(px(theme::FS_PROSE))
+                .line_height(px(theme::LH_PROSE))
                 .children(self.samples.iter().enumerate().map(|(ix, source)| {
                     div()
                         .debug_selector(move || format!("spacing-{ix}"))

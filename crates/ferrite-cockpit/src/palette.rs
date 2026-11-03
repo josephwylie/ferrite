@@ -518,9 +518,9 @@ fn filter(rows: &[Row], query: &str, scope: PaletteScope, tab: Tab) -> Vec<Shown
         // Stable: Threads never used keep their tree order, last.
         recents.sort_by_key(|index| std::cmp::Reverse(rows[*index].used));
         recents.truncate(RECENTS_MAX);
-        let actions = (0..rows.len()).filter(|index| {
-            matches!(&rows[*index].act, Act::Command(command) if command.primary())
-        });
+        let actions = (0..rows.len()).filter(
+            |index| matches!(&rows[*index].act, Act::Command(command) if command.primary()),
+        );
         return recents.into_iter().chain(actions).map(whole).collect();
     }
     let (query, status) = match status_filter(scope, query) {
@@ -658,9 +658,11 @@ impl Render for Palette {
                 .debug_selector(|| "palette".into())
                 // A press inside never reaches the veil or the board under it.
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_action(cx.listener(|palette, _: &NextType, window, cx| {
-                    palette.step_tab(1, window, cx)
-                }))
+                .on_action(
+                    cx.listener(|palette, _: &NextType, window, cx| {
+                        palette.step_tab(1, window, cx)
+                    }),
+                )
                 .on_action(cx.listener(|palette, _: &PreviousType, window, cx| {
                     palette.step_tab(-1, window, cx)
                 }))
@@ -676,7 +678,12 @@ impl Render for Palette {
 impl Palette {
     /// One type tab: its word on a `PALETTE_TAB_H` pill, the chosen one
     /// `SELECTED`; a press picks it.
-    fn tab_element(&self, at: usize, tab: Tab, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+    fn tab_element(
+        &self,
+        at: usize,
+        tab: Tab,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let chosen = tab == self.tab;
         let id = gpui::ElementId::from(("palette-tab", at));
         let key = ferrite_ui::pointer::hover_key(&id);
@@ -1045,7 +1052,12 @@ mod tests {
             ]
         );
         // Under a tab the same query keeps that type alone.
-        let commands = filter(&rows, "par", PaletteScope::All, Tab::Only(Section::Commands));
+        let commands = filter(
+            &rows,
+            "par",
+            PaletteScope::All,
+            Tab::Only(Section::Commands),
+        );
         assert_eq!(names(&rows, &commands), ["park thread", "show parked"]);
     }
 

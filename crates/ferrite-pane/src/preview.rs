@@ -120,9 +120,6 @@ impl Text {
 #[derive(Default)]
 struct State {
     document: Option<Document>,
-    /// The document just closed, still drawn while the Panel rides out
-    /// with it; the cockpit lets it go once nothing draws it (`let_go`).
-    closing: Option<Document>,
     /// Counts every open, so the cockpit tells a new one from the last.
     opened: u64,
 }
@@ -252,23 +249,12 @@ impl Preview {
     fn set(&self, document: Document) {
         let mut state = self.state.lock().unwrap();
         state.document = Some(document);
-        state.closing = None;
         state.opened += 1;
     }
 
-    /// Close the preview (esc in it, its ×, ⌘W while it holds focus). It
-    /// is closed at once — `document` is `None` — while the document it
-    /// showed stays drawable (`shown`) until the cockpit lets it go.
+    /// Close the preview (esc in it, its ×, ⌘W while it holds focus).
     pub fn close(&self) {
-        let mut state = self.state.lock().unwrap();
-        if let Some(document) = state.document.take() {
-            state.closing = Some(document);
-        }
-    }
-
-    /// Nothing draws the closed document any more: stop holding it.
-    pub fn let_go(&self) {
-        self.state.lock().unwrap().closing = None;
+        self.state.lock().unwrap().document = None;
     }
 
     pub fn document(&self) -> Option<Document> {
@@ -278,12 +264,6 @@ impl Preview {
     /// Whether a document is open.
     pub fn is_open(&self) -> bool {
         self.state.lock().unwrap().document.is_some()
-    }
-
-    /// The open document, else the one just closed.
-    pub fn shown(&self) -> Option<Document> {
-        let state = self.state.lock().unwrap();
-        state.document.clone().or_else(|| state.closing.clone())
     }
 
     /// Which open this is, and which document for telling one opening over
@@ -434,7 +414,7 @@ pub fn head_suffix(text: String) -> Div {
 /// the pointer is on it (`hover`, its blend's key). A press here acts; it
 /// must not also pick the slot up as a drag.
 pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::Stateful<Div> {
-    use ferrite_ui::theme::{ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL, INK_SUBTLE};
+    use ferrite_ui::theme::{ICON_BUTTON, ICON_BUTTON_GLYPH, INK_SUBTLE, R_CONTROL};
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -446,7 +426,11 @@ pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::
         .rounded(px(R_CONTROL))
         .hover_control(hover)
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(ferrite_ui::icons::icon(glyph, ICON_BUTTON_GLYPH, INK_SUBTLE))
+        .child(ferrite_ui::icons::icon(
+            glyph,
+            ICON_BUTTON_GLYPH,
+            INK_SUBTLE,
+        ))
 }
 
 /// The OS opens the original file in its own viewer, where it can be

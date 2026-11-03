@@ -318,11 +318,11 @@ fn a_draft_close_button_discards_it_and_restores_the_original_thread(cx: &mut Te
 }
 
 /// ADR 0014: the titlebar band says nothing — no location, no build
-/// badge, no doors. The window's one bar at its foot keeps only views
-/// and vitals (SPEC §5.7): the sidebar toggle, the bell, the gear,
-/// `ferrite` and `?` have left it.
+/// badge, no doors — and there is no bar at the window's foot
+/// (components.md cut 9). The sidebar toggle and the Activity bell are the
+/// nav head's (§5.1.1).
 #[gpui::test]
-fn the_titlebar_band_says_nothing_and_the_bar_keeps_views_and_vitals(cx: &mut TestAppContext) {
+fn the_titlebar_band_says_nothing_and_no_bar_is_left(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("titlebar-says-nothing", 1);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -332,34 +332,19 @@ fn the_titlebar_band_says_nothing_and_the_bar_keeps_views_and_vitals(cx: &mut Te
         "titlebar-commands",
         "titlebar-dev-badge",
         "nav-chrome",
+        "bottom-bar",
+        "notifications-bell",
+        "settings-gear",
     ] {
         assert!(cx.debug_bounds(gone).is_none(), "{gone} is gone");
     }
-    let bar = cx.debug_bounds("bottom-bar").expect("the bottom bar");
-    for kept in ["bottom-bar-tabs", "bottom-bar-vitals", "bottom-bar-clock"] {
-        let at = cx.debug_bounds(kept).unwrap_or_else(|| panic!("{kept}"));
+    for door in ["nav-collapse", "nav-activity"] {
+        let at = cx.debug_bounds(door).unwrap_or_else(|| panic!("{door}"));
         assert!(
-            at.top() >= bar.top() && at.bottom() <= bar.bottom(),
-            "{kept} rides the bar: {at:?} in {bar:?}"
+            at.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
+            "{door} is the nav head's (§5.1.1): {at:?}"
         );
     }
-    for gone in [
-        "notifications-bell",
-        "settings-gear",
-        "bottom-bar-session",
-        "bottom-bar-help",
-    ] {
-        assert!(
-            cx.debug_bounds(gone)
-                .is_none_or(|at| at.bottom() <= bar.top()),
-            "{gone} left the bar"
-        );
-    }
-    let toggle = cx.debug_bounds("nav-collapse").expect("the sidebar toggle");
-    assert!(
-        toggle.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
-        "the toggle is the nav head's (§5.1.1): {toggle:?}"
-    );
 }
 
 /// Pressing new-thread with a draft already up re-aims that draft

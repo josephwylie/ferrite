@@ -493,7 +493,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    // Open the fold: the call line says the first line, the well all of them.
+    // Open the call: its shell card holds what it printed, exactly.
     view.update(cx, |view, cx| {
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
         cx.notify();
@@ -502,11 +502,16 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
     cx.update(|_, cx| ferrite_pane::rich::testing::select_all(cx));
     cx.simulate_keystrokes("cmd-c");
     let copied = clipboard(cx).unwrap();
-    // Open, the well holds every non-blank line, the one its call line says
-    // too: a long command cuts that line off the header (`command_open`).
+    // The shut line previews nothing; the card keeps the blank line and
+    // the trailing spaces.
+    assert!(copied.contains("Ran fixture"), "the call line: {copied:?}");
     assert!(
-        copied.contains("Ran fixture \u{b7} first\n\nfirst\nlast"),
-        "the call line and the fold's copy as shown: {copied:?}"
+        !copied.contains("Ran fixture \u{b7}"),
+        "no preview: {copied:?}"
+    );
+    assert!(
+        copied.contains("first  \n\nlast   "),
+        "the card's output, exactly: {copied:?}"
     );
 }
 
@@ -686,12 +691,14 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             .serial
     });
     let mut previous = None;
-    for width in [900., 740., 900.] {
+    // The box stops at `DECISION_CARD_W`, so the narrow width must cut
+    // well under it before the title wraps again.
+    for width in [900., 640., 900.] {
         cx.simulate_resize(gpui::size(px(width), px(600.)));
         tick(cx);
         let island = cx.debug_bounds("question-island").unwrap();
         let input = cx.debug_bounds("approval-input").unwrap();
-        let allow = bounds(cx, format!("request-always-{}-{serial}", thread.get()));
+        let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
         let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
         let title = bounds(cx, format!("request-title-{}-{serial}", thread.get()));
         assert!(
@@ -719,11 +726,10 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             input.top() >= well.top() && well.bottom() <= input.bottom() + px(8.),
             "the command starts in its well: {well:?} / {input:?}"
         );
-        // Under the well: what `Always allow` covers, one line, then the
-        // buttons, each a section gap on.
+        // Under the well, one section gap on: the buttons (what `Always
+        // allow` covers is the menu row's note, not a body line).
         let gap = allow.top() - well.bottom();
-        // (The line may wrap once in a narrow column.)
-        let most = 2. * ferrite_ui::theme::DECISION_GAP + 2. * ferrite_ui::theme::LH_UI + 1.;
+        let most = ferrite_ui::theme::DECISION_GAP + 1.;
         assert!(
             gap >= px(0.) && gap <= px(most),
             "the command-to-Allow gap must stay near the well's design gap: {gap:?}"
@@ -736,7 +742,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         // In Solo the answers share one row, Deny first.
         assert!(
             (deny.top() - allow.top()).abs() <= px(1.) && deny.right() <= allow.left(),
-            "Deny stands beside Always allow: {deny:?} / {allow:?}"
+            "Deny stands beside Allow once: {deny:?} / {allow:?}"
         );
         if let Some((previous_width, previous_island)) = previous {
             let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;

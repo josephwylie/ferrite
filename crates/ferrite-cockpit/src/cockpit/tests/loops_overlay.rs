@@ -172,15 +172,17 @@ fn an_open_palettes_caret_blinks_in_the_overlay_over_its_float(cx: &mut TestAppC
             _ => None,
         })
         .collect();
-    assert!(
-        alphas.len() > 2,
+    // A hard blink: the caret is drawn shown and hidden, nothing between.
+    assert_eq!(
+        alphas,
+        [0f32.to_bits(), 1f32.to_bits()].into(),
         "the palette's caret blinks over its float: {draws:?}"
     );
 }
 
 /// Turned off (`FERRITE_LOOPS_OVERLAY=0`), every loop is drawn in the
-/// Cockpit again, uncached: the caret's fades redraw it as before the
-/// overlay (the A-1 cadence, at most 37 in 5s).
+/// Cockpit again, uncached: the caret's hard blink redraws it on each of
+/// its steps (two a second: about 10 in 5s, and the focusing frame).
 #[gpui::test]
 fn turned_off_the_overlay_leaves_every_loop_in_the_cockpit(cx: &mut TestAppContext) {
     crate::cockpit_window::testing::disable();
@@ -191,8 +193,8 @@ fn turned_off_the_overlay_leaves_every_loop_in_the_cockpit(cx: &mut TestAppConte
     let rendered = renders() - before;
     eprintln!("OVERLAY_OFF cockpit_renders_5s={rendered}");
     assert!(
-        (20..=37).contains(&rendered),
-        "the caret's fades redraw the Cockpit: {rendered} in 5s"
+        (9..=12).contains(&rendered),
+        "the caret's blink redraws the Cockpit: {rendered} in 5s"
     );
 }
 

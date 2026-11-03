@@ -1,9 +1,9 @@
-//! The window's frame around the Cockpit: the titlebar, the bottom bar,
-//! the Settings sheet, the key table's binding and the menu bar (ADR
-//! 0035). The app owns them (`ferrite-frame`) and installs them at launch;
-//! the Cockpit fills them through `Frame` with what only it knows (the
-//! views, the vitals, which settings exist and what they change), so an
-//! edit to the frame rebuilds no Cockpit.
+//! The window's frame around the Cockpit: the titlebar, the Settings
+//! sheet, the key table's binding and the menu bar (ADR 0035). The app
+//! owns them (`ferrite-frame`) and installs them at launch; the Cockpit
+//! fills them through `Frame` with what only it knows (which settings
+//! exist and what they change), so an edit to the frame rebuilds no
+//! Cockpit.
 //!
 //! The Cockpit still draws the frame in its own render, in the slots its
 //! layout gives it, so the frame rides the Cockpit's cached frame
@@ -11,7 +11,7 @@
 
 use std::sync::OnceLock;
 
-use gpui::{AnyElement, App, ClickEvent, Entity, FocusHandle, SharedString, Window};
+use gpui::{AnyElement, App, Entity, FocusHandle, Window};
 
 use crate::keymap::Binding;
 use gpui::component::input::InputState;
@@ -25,8 +25,6 @@ pub trait Frame: Send + Sync {
     fn titlebar(&self, board_left: f32, draggable: bool, maximized: bool) -> AnyElement;
     /// The stretch the nav head drags the window by.
     fn head_drag(&self, draggable: bool, maximized: bool) -> AnyElement;
-    /// The window's one bar (ADR 0014).
-    fn bottom_bar(&self, bar: Bar) -> AnyElement;
     /// The Settings sheet over the Cockpit.
     fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement;
     /// Bind `table` in place of the key table bound before (ADR 0024), and
@@ -60,76 +58,17 @@ pub fn board_top() -> f32 {
     crate::theme::WIN_CHROME_H
 }
 
-// ------------------------------------------------------------ bottom bar
+// ------------------------------------------------------------ free disk
 
-/// A press on something the frame draws for the Cockpit.
-pub type Press = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-
-/// What the bottom bar shows (SPEC §5.7): the view tabs, then the vitals.
-pub struct Bar {
-    pub tabs: Vec<BarTab>,
-    /// The need-you count and what a press on it does; nothing at zero.
-    pub needs_you: Option<(usize, Press)>,
-    /// Each provider's account limits, in bar order.
-    pub usage: Vec<(
-        ferrite_core::store::Provider,
-        ferrite_core::transcript::RateLimits,
-    )>,
-    /// Free bytes on the Threads' volume, when read.
-    pub free_disk: Option<u64>,
-    pub clock: SharedString,
-}
-
-/// One view's tab: `1 Solo`, `2 Work`.
-pub struct BarTab {
-    pub id: SharedString,
-    pub ordinal: usize,
-    pub label: SharedString,
-    pub current: bool,
-    pub roll_up: Option<RollUp>,
-    pub press: Press,
-}
-
-/// A view's roll-up dot (SPEC §5.7): `ATTENTION` when anything it shows is
-/// blocked, else `RUNNING` when anything is working, else none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RollUp {
-    Working,
-    Blocked,
-}
-
-impl RollUp {
-    /// The roll-up of `attentions`: blocked wins over working.
-    pub fn of(attentions: impl IntoIterator<Item = ferrite_core::Attention>) -> Option<Self> {
-        use ferrite_core::Attention;
-        let mut working = false;
-        for attention in attentions {
-            match attention {
-                Attention::Blocked => return Some(RollUp::Blocked),
-                Attention::Working => working = true,
-                _ => {}
-            }
-        }
-        working.then_some(RollUp::Working)
-    }
-
-    pub fn ink(self) -> u32 {
-        match self {
-            RollUp::Working => crate::theme::RUNNING,
-            RollUp::Blocked => crate::theme::ATTENTION,
-        }
-    }
-}
-
-/// Free space under which the bar shows it, and under which it asks for
-/// attention (SPEC §5.7), in the bar's decimal bytes.
+/// Free space under which the nav's foot shows it, and under which it asks
+/// for attention (SPEC §5.7), in decimal bytes.
 const DISK_SHOWN_UNDER: u64 = 20 * GB;
 const DISK_LOW_UNDER: u64 = 5 * GB;
 const GB: u64 = 1_000_000_000;
 
 /// `7.5 GB free` and its ink, for `bytes` free on the Threads' volume:
 /// one decimal under ten gigabytes, whole ones from there. `None` from
-/// 20 GB up: the bar says nothing while space is plentiful.
+/// 20 GB up: the foot says nothing while space is plentiful.
 pub fn free_disk_words(bytes: u64) -> Option<(String, u32)> {
     if bytes >= DISK_SHOWN_UNDER {
         return None;
@@ -190,22 +129,6 @@ mod tests {
         assert_eq!(
             free_disk_words(4_990_000_000),
             Some(("5.0 GB free".into(), ATTENTION))
-        );
-    }
-
-    /// SPEC §5.7: a view's dot says blocked over working, and nothing for
-    /// a view at rest.
-    #[test]
-    fn a_tab_rolls_up_blocked_over_working() {
-        use ferrite_core::Attention;
-        assert_eq!(RollUp::of([Attention::Idle, Attention::Done]), None);
-        assert_eq!(
-            RollUp::of([Attention::Done, Attention::Working]),
-            Some(RollUp::Working)
-        );
-        assert_eq!(
-            RollUp::of([Attention::Working, Attention::Blocked, Attention::Idle]),
-            Some(RollUp::Blocked)
         );
     }
 

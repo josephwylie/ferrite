@@ -421,24 +421,38 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 
-/// SPEC §5.7: the bottom bar always shows `1 Solo` and a tab per Group,
-/// open or not; a press on a Group's tab enters it, and on `Solo` with no
-/// loose Thread it shows the empty board.
+/// The view switcher in the nav's foot (the bottom bar's tabs, moved;
+/// components.md cut 9): `Solo` and a tab per Group, open or not, and
+/// none at all while Solo is the only view. A press on a Group's tab
+/// enters it, and on `Solo` with no loose Thread shows the empty board.
+/// No bar is left under the board.
 #[gpui::test]
-fn the_bottom_bar_has_solo_and_every_group(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("frame-bottom-bar", 2);
+fn the_foot_switches_between_solo_and_every_group(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("frame-view-tabs-lone", 1);
+    let (_view, lone) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(lone);
+    assert!(
+        lone.debug_bounds("nav-view-tabs").is_none(),
+        "Solo alone is no choice"
+    );
+    assert!(lone.debug_bounds("bottom-bar").is_none(), "no bottom bar");
+
+    let (mut core, _fake) = cockpit("frame-view-tabs", 2);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    assert!(cx.debug_bounds("bottom-bar-tab-solo").is_some());
-    let tab = bounds(cx, format!("bottom-bar-tab-{}", group.get()));
+    let foot = bounds(cx, "nav-foot".to_string());
+    let tabs = bounds(cx, "nav-view-tabs".to_string());
+    assert!(tabs.bottom() <= foot.top(), "over the account row");
+    let tab = bounds(cx, format!("nav-view-tab-{}", group.get()));
+    assert_eq!(tab.size.height, px(ferrite_ui::theme::NAV_VIEW_TAB_H));
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(view.cockpit.roster().view(), View::Group(group))
     });
-    let solo = bounds(cx, "bottom-bar-tab-solo".to_string());
+    let solo = bounds(cx, "nav-view-tab-solo".to_string());
     cx.simulate_click(solo.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(
@@ -447,14 +461,20 @@ fn the_bottom_bar_has_solo_and_every_group(cx: &mut TestAppContext) {
     );
 }
 
-/// SPEC §5.7: the `Solo` tab's roll-up dot speaks for the Thread Solo
-/// shows while it is the view — not for whichever loose Thread was written
-/// last, which may be another — so the current tab's dot never contradicts
-/// the board under it.
+/// The `Solo` tab's roll-up mark speaks for the Thread Solo shows while it
+/// is the view — not for whichever loose Thread was written last, which
+/// may be another — so the current tab's mark never contradicts the board
+/// under it.
 #[gpui::test]
-fn the_solo_tabs_dot_follows_the_thread_it_shows(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("frame-solo-dot", 2);
+fn the_solo_tabs_mark_follows_the_thread_it_shows(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("frame-solo-mark", 4);
     let threads = core.threads();
+    // A Group of the last two, so the switcher shows.
+    core.apply_group(GroupChange::Create {
+        first: threads[2],
+        second: threads[3],
+    })
+    .unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
@@ -465,98 +485,24 @@ fn the_solo_tabs_dot_follows_the_thread_it_shows(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let dot =
-        |cx: &mut gpui::VisualTestContext| cx.debug_bounds("bottom-bar-tab-solo-dot").is_some();
+    let solo_tab = |cx: &mut gpui::VisualTestContext| bounds(cx, "nav-view-tab-solo".to_string());
     view.update(cx, |view, cx| view.focus_thread(working, cx));
     tick(cx);
-    assert!(dot(cx), "Solo shows the working Thread: green");
+    let marked = solo_tab(cx);
     view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
-    assert!(!dot(cx), "Solo shows the idle one: no dot");
+    let quiet = solo_tab(cx);
+    assert!(
+        marked.size.width > quiet.size.width,
+        "Solo shows the working Thread: its spinner; the idle one: none"
+    );
 }
 
-/// SPEC §5.7: the bar is 30 high and full width, 14px in at each end:
-/// the views' tabs (22 high, centred: 4 over and 4 under) at its left, the
-/// vitals at its right ending in the clock. Its hairline lies on the
-/// frame's last row above it, as the mockups draw it. `N need you` shows
-/// only while a Thread waits, and opens the nav's Inbox; free
-/// disk only under 20 GB, and never while unknown.
+/// Free disk shows in the nav's foot only under 20 GB, and never while
+/// unknown.
 #[gpui::test]
-fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
-    let (view, fake, cx, group) = board_of("frame-bar-vitals", 2, cx);
-    let bar = cx.debug_bounds("bottom-bar").unwrap();
-    let window = cx.update(|window, _| window.viewport_size());
-    assert_eq!(bar.size.height, px(ferrite_ui::theme::STATUS_BAR_H));
-    assert_eq!(ferrite_ui::theme::STATUS_BAR_H, 30.0);
-    assert_eq!(
-        (bar.left(), bar.right()),
-        (px(0.), window.width),
-        "full width"
-    );
-    assert_eq!(bar.bottom(), window.height);
-    let tabs = cx.debug_bounds("bottom-bar-tabs").unwrap();
-    assert_eq!(tabs.left(), bar.left() + px(14.));
-    let solo = bounds(cx, "bottom-bar-tab-solo".to_string());
-    let work = bounds(cx, format!("bottom-bar-tab-{}", group.get()));
-    assert_eq!(solo.size.height, px(22.));
-    assert_eq!(
-        solo.top() - bar.top(),
-        bar.bottom() - solo.bottom(),
-        "the tabs centred in the bar"
-    );
-    let rule = cx
-        .debug_bounds("bottom-bar-rule")
-        .expect("the bar's hairline");
-    assert_eq!(
-        (rule.top(), rule.bottom(), rule.size.width),
-        (bar.top() - px(1.), bar.top(), window.width),
-        "on the row above the bar, full width"
-    );
-    if let Some(panel) = cx.debug_bounds("panel") {
-        assert!(
-            panel.bottom() <= rule.top(),
-            "nothing later covers the rule"
-        );
-    }
-    assert_eq!(work.left() - solo.right(), px(2.), "tabs 2px apart");
-    let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
-    let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
-    assert_eq!(vitals.right(), bar.right() - px(14.));
-    assert_eq!(clock.right(), vitals.right(), "the clock ends the bar");
-
-    assert!(
-        cx.debug_bounds("bottom-bar-needs-you").is_none(),
-        "none waits"
-    );
-    fake.streams.borrow()[0]
-        .send(SessionEvent::DecisionRequested {
-            decision: Decision {
-                delivery: Default::default(),
-                kind: Default::default(),
-                policy: Default::default(),
-                id: "req0".into(),
-                tool_use_id: "toolu_req0".into(),
-                tool_name: "Bash".into(),
-                description: "ls".into(),
-                input: serde_json::json!({ "command": "ls" }),
-                suggestions: vec![],
-            },
-        })
-        .unwrap();
-    tick(cx);
-    let needs = cx
-        .debug_bounds("bottom-bar-needs-you")
-        .expect("one waits: `1 needs you`");
-    let vitals = cx.debug_bounds("bottom-bar-vitals").unwrap();
-    let clock = cx.debug_bounds("bottom-bar-clock").unwrap();
-    assert!(needs.left() >= vitals.left() && needs.right() <= clock.left());
-    cx.simulate_click(needs.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(
-        view.read_with(cx, |view, _| view.needs_you_shown()),
-        "the Inbox is up"
-    );
-
+fn the_foot_says_free_disk_only_when_it_runs_low(cx: &mut TestAppContext) {
+    let (view, _fake, cx, _group) = board_of("frame-foot-disk", 2, cx);
     for (free, shown) in [
         (None, false),
         (Some(30_000_000_000), false),
@@ -565,7 +511,7 @@ fn the_bar_holds_the_views_and_the_vitals(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| view.free_disk_landed(free, cx));
         tick(cx);
         assert_eq!(
-            cx.debug_bounds("bottom-bar-disk").is_some(),
+            cx.debug_bounds("nav-free-disk").is_some(),
             shown,
             "{free:?} free"
         );
@@ -611,7 +557,7 @@ fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
     assert_eq!(line, Some(3));
     // The Panel widens to read it (SPEC §5.6.3): the board gives up what
     // it gains.
-    let wide = view.read_with(cx, |view, _| view.board_right_rest());
+    let wide = view.read_with(cx, |view, _| view.board_right());
     assert!(wide > ferrite_ui::theme::PANEL_W);
     assert!(
         (narrowed - (whole - (wide - ferrite_ui::theme::PANEL_W))).abs() <= 1.0,
@@ -700,12 +646,12 @@ fn dragging_the_vertical_seam_moves_both_rows(cx: &mut TestAppContext) {
 }
 
 /// Theme rule 2: the Solo Pane is the plane itself, flush right of the
-/// nav, under the 46px head row, down to the 30px bar and to the panel's
-/// column (§5.6), which runs from the window's top to the bar's hairline —
+/// nav, under the 44px head row, down to the window's foot (no bottom bar)
+/// and to the panel's column (§5.6), which runs from the window's top —
 /// at the mockups' 1600×960.
 #[gpui::test]
 fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{HAIRLINE_W, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
+    use ferrite_ui::theme::{HAIRLINE_W, PANEL_W, WIN_CHROME_H};
     let (core, _fake) = cockpit("frame-solo-card", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -715,22 +661,23 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
     let card = rects[0].1;
     assert_eq!((card.x, card.y), (nav::WIDTH, WIN_CHROME_H));
     assert_eq!(card.x + card.w, 1600. - PANEL_W);
-    assert_eq!(card.y + card.h, 960. - STATUS_BAR_H, "no gutter under it");
-    assert_eq!((card.x, card.y, card.w, card.h), (264., 46., 1032., 884.));
+    assert_eq!(card.y + card.h, 960., "no gutter under it");
+    assert_eq!(
+        (card.x, card.y, card.w, card.h),
+        (256., 44., 1600. - 256. - PANEL_W, 916.)
+    );
     let panel = cx.debug_bounds("panel").expect("the panel");
     assert_eq!(
         panel,
         gpui::Bounds::new(
-            gpui::point(px(1296.), px(0.)),
-            gpui::size(px(PANEL_W), px(960. - STATUS_BAR_H - HAIRLINE_W))
+            gpui::point(px(1600. - PANEL_W), px(0.)),
+            gpui::size(px(PANEL_W), px(960. - HAIRLINE_W))
         )
     );
     let key = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
     let root = bounds(cx, format!("pane-root-{key}"));
     assert!((root.left() - px(card.x)).abs() < px(1.) && (root.top() - px(card.y)).abs() < px(1.));
-    let bar = cx.debug_bounds("bottom-bar").expect("the bar");
-    assert_eq!(bar.size.height, px(STATUS_BAR_H));
-    assert_eq!(bar.size.width, px(1600.), "full width");
+    assert!(cx.debug_bounds("bottom-bar").is_none(), "no bottom bar");
 }
 
 /// SPEC §5.9: a 2×2 Group is four equal cards `GRID_GAP` apart on the
@@ -738,9 +685,7 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
 /// `SEAM_LINE_W` line, both centred in the 8px gutter.
 #[gpui::test]
 fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{
-        BOARD_PAD, GRID_GAP, PANEL_W, SEAM_LINE_W, STATUS_BAR_H, WIN_CHROME_H,
-    };
+    use ferrite_ui::theme::{BOARD_PAD, GRID_GAP, PANEL_W, SEAM_LINE_W, WIN_CHROME_H};
     let (view, _fake, cx, _group) = board_of("frame-group-cards", 4, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(960.)));
     tick(cx);
@@ -759,7 +704,7 @@ fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
     assert!(near(bl.y - (tl.y + tl.h), GRID_GAP), "{tl:?} {bl:?}");
     // The focused Pane's panel stands right of the board (SPEC §5.6).
     assert!(near(br.x + br.w, 1600. - PANEL_W), "{br:?}");
-    assert!(near(br.y + br.h, 960. - STATUS_BAR_H - BOARD_PAD), "{br:?}");
+    assert!(near(br.y + br.h, 960. - BOARD_PAD), "{br:?}");
     assert!(
         near(tl.w, tr.w) && near(tl.h, bl.h),
         "equal cards: {rects:?}"

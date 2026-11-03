@@ -67,9 +67,8 @@ fn a_turn_ends_with_its_time_and_its_tokens() {
     assert_eq!(older.text(), "3m 12s");
 }
 
-/// A test run's elbow: `ok · 38 passed`; an early failure prints its first
-/// line and its first three test lines; a late one its tally and its
-/// `FAILED` lines without `test `; the rest folds.
+/// A test run's verdict: `ok · 38 passed`; a failed run its tally,
+/// `failed · 5 passed; 1 failed`, however early its failure came.
 #[test]
 fn a_test_run_reads_its_verdict_on_its_elbow() {
     let passing = call(
@@ -80,8 +79,6 @@ fn a_test_run_reads_its_verdict_on_its_elbow() {
     );
     let elbow = pane::test_elbow(&passing).expect("a test run");
     assert_eq!(elbow.line(), "ok \u{b7} 38 passed");
-    assert!(elbow.preview.is_empty());
-    assert_eq!(elbow.hidden, 0);
 
     let early = "running 3 tests\ntest a ... FAILED\ntest b ... ok\ntest c ... ok\n\
                  failures:\n---- a stdout ----\npanicked\n\
@@ -93,12 +90,7 @@ fn a_test_run_reads_its_verdict_on_its_elbow() {
         early,
     );
     let elbow = pane::test_elbow(&early).expect("a test run");
-    assert_eq!(elbow.line(), "failed \u{b7} running 3 tests");
-    assert_eq!(
-        elbow.preview,
-        ["test a ... FAILED", "test b ... ok", "test c ... ok"]
-    );
-    assert_eq!(elbow.hidden, 4);
+    assert_eq!(elbow.line(), "failed \u{b7} 2 passed; 1 failed");
 
     let late = "running 6 tests\ntest a ... ok\ntest b ... ok\ntest c ... ok\ntest d ... ok\n\
                 test e ... FAILED\ntest f ... ok\ntest result: FAILED. 5 passed; 1 failed";
@@ -110,8 +102,6 @@ fn a_test_run_reads_its_verdict_on_its_elbow() {
     );
     let elbow = pane::test_elbow(&late).expect("a test run");
     assert_eq!(elbow.line(), "failed \u{b7} 5 passed; 1 failed");
-    assert_eq!(elbow.preview, ["e ... FAILED"]);
-    assert_eq!(elbow.hidden, 6);
 
     assert!(pane::test_elbow(&call("Bash", "ls", ToolState::Ok, "a")).is_none());
 
@@ -143,30 +133,6 @@ fn a_test_run_reads_its_verdict_on_its_elbow() {
     assert_eq!(elbow.line(), "failed \u{b7} 341 passed; 1 failed");
 }
 
-/// A command's output folds whole behind its first line: `Ran cargo clippy
-/// · 7 issues + 2 lines`.
-#[test]
-fn a_commands_output_folds_behind_its_first_line() {
-    let lint = call("Bash", "cargo clippy", ToolState::Ok, "7 issues\nA\n\nB\n");
-    assert_eq!(
-        pane::command_fold(&lint),
-        Some((
-            "7 issues".to_string(),
-            vec!["A".to_string(), "B".to_string()]
-        ))
-    );
-    assert_eq!(
-        pane::command_fold(&call("Bash", "pwd", ToolState::Ok, "/x")),
-        None,
-        "one line is all on the call line"
-    );
-    assert_eq!(
-        pane::command_fold(&call("Read", "a.rs", ToolState::Ok, "1\n2")),
-        None,
-        "a read is not a command"
-    );
-}
-
 /// A prompt's files flow after its words as inline chips: its words
 /// escaped (they are never markup), then one chip link per file; an image
 /// is its thumbnail, never a chip.
@@ -192,7 +158,9 @@ fn a_prompts_files_flow_inline_after_its_words() {
         "Look",
         &[std::path::PathBuf::from("/tmp/nav-jitter.png")],
     );
-    assert!(matches!(pane::prompt_text(&line).0, pane::PromptText::Literal(words) if words == "Look"));
+    assert!(
+        matches!(pane::prompt_text(&line).0, pane::PromptText::Literal(words) if words == "Look")
+    );
     let (plain, files) = pane::prompt_text("Just words");
     assert!(files.is_empty());
     assert!(matches!(plain, pane::PromptText::Literal(words) if words == "Just words"));
@@ -287,7 +255,9 @@ fn edits_fold_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("tool-group-edit-1").is_some(), "one group");
     let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
     assert!(
-        !runs.iter().any(|(_, _, _, text)| text == "new one" || text == "new two"),
+        !runs
+            .iter()
+            .any(|(_, _, _, text)| text == "new one" || text == "new two"),
         "no diff shows until its call is opened"
     );
     view.update(cx, |view, cx| {
@@ -442,6 +412,9 @@ fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
             "at {width}px the `›` stays in the row: {chevron:?} / {row:?}"
         );
         let head = cx.debug_bounds("tool-call").expect("the call line");
-        assert!(head.right() <= chevron.left(), "{head:?} before {chevron:?}");
+        assert!(
+            head.right() <= chevron.left(),
+            "{head:?} before {chevron:?}"
+        );
     }
 }

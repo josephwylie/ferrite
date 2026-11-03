@@ -514,7 +514,8 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
                 progress.bottom() <= editor.top(),
                 "the complete live status stays above the box: {progress:?} / {editor:?}"
             );
-            assert!(progress.size.height <= px(ferrite_ui::theme::COMPOSER_ROW_H));
+            // One transcript line: the working line sits on the prose grid.
+            assert!(progress.size.height <= px(ferrite_ui::theme::LH_PROSE));
         }
     }
     view.update(cx, |view, cx| {
@@ -592,8 +593,9 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
         view.read_with(cx, |view, _| {
             assert!(view.mode_picker.is_some(), "the mode chip opens its menu");
         });
+        // Row 0 is the menu's `Mode` heading.
         let item = cx
-            .debug_bounds("choice-row-0")
+            .debug_bounds("choice-row-1")
             .expect("the mode menu is drawn");
         assert!(item.bottom() <= mode.top(), "{item:?} rests above {mode:?}");
         view.update(cx, |view, cx| {
@@ -601,24 +603,27 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
             cx.notify();
         });
         tick(cx);
-        // The model, then the effort: each opens its part of the picker.
-        for (name, effort) in [("model-picker", false), ("effort-picker", true)] {
-            let at = chip(name, cx);
-            cx.simulate_click(at.center(), gpui::Modifiers::none());
-            cx.run_until_parked();
-            tick(cx);
-            view.read_with(cx, |view, _| {
-                let open = view.popover.as_ref().expect("the chip opens its picker");
-                assert_eq!(open.kind.picker_slot(), Some((effort, false)), "{name}");
-            });
-            let row = cx.debug_bounds("choice-menu").expect("the picker is drawn");
-            assert!(row.bottom() <= at.top(), "{name}: {row:?} above {at:?}");
-            view.update(cx, |view, cx| {
-                view.popover = None;
-                cx.notify();
-            });
-            tick(cx);
-        }
+        // The model and its effort are one chip: it opens the model
+        // picker, the effort a submenu row there.
+        let at = chip("model-picker", cx);
+        cx.simulate_click(at.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let open = view.popover.as_ref().expect("the chip opens its picker");
+            assert_eq!(open.kind.picker_slot(), Some((false, false)));
+        });
+        let menu = cx.debug_bounds("choice-menu").expect("the picker is drawn");
+        assert!(menu.bottom() <= at.top(), "{menu:?} above {at:?}");
+        assert!(
+            cx.debug_bounds("choice-submenu-row").is_some(),
+            "the effort rides the model picker as a submenu row"
+        );
+        view.update(cx, |view, cx| {
+            view.popover = None;
+            cx.notify();
+        });
+        tick(cx);
     }
 }
 
@@ -643,8 +648,7 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
         let send = cx.debug_bounds("composer-send").expect("the send circle");
         assert!(
             send.left() >= field.left()
-                && send.right()
-                    <= field.right() - px(ferrite_ui::theme::COMPOSER_ROW_PAD - 0.5),
+                && send.right() <= field.right() - px(ferrite_ui::theme::COMPOSER_ROW_PAD - 0.5),
             "at {width}px send stands inside the box: {send:?} / {field:?}"
         );
         let mode = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");
@@ -656,7 +660,7 @@ fn the_send_circle_stays_inside_a_narrow_box(cx: &mut TestAppContext) {
     }
 }
 
-/// In a narrow box the model's label (`Default · Opus 5.5 (1M)`) cuts
+/// In a narrow box the model's label (`Opus 5.5 (1M) High`) cuts
 /// before the permission mode's word does: the mode chip keeps its whole
 /// width while the model chip has any label left to give.
 #[gpui::test]
@@ -698,8 +702,8 @@ fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
     );
 }
 
-/// SPEC §5.5: the queued row says what waits — the top of the pile, `+N`
-/// for the rest — and its close button drops it, as ⌫ does. The send circle
+/// SPEC §5.5: the queue strip says what waits — how many, the top of the
+/// pile — and its remove button drops the top, as ⌫ does. The send circle
 /// sends what is typed; with a turn running and nothing typed it is `stop`,
 /// and interrupts.
 #[gpui::test]
@@ -719,8 +723,8 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
         .unwrap();
     tick(cx);
     assert!(
-        cx.debug_bounds("queued-more").is_some(),
-        "+1 counts the rest"
+        cx.debug_bounds("queued-count-2").is_some(),
+        "the strip counts both"
     );
     let close = cx
         .debug_bounds("queued-close")
@@ -734,7 +738,7 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
             "the close button drops the top of the pile"
         );
     });
-    assert!(cx.debug_bounds("queued-more").is_none());
+    assert!(cx.debug_bounds("queued-count-1").is_some());
     // A running turn and an empty line: the circle stops it.
     let stop = cx
         .debug_bounds("composer-stop")
@@ -754,6 +758,57 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].composer.read(cx).is_empty(), "sent");
+    });
+}
+
+/// Claude's queue strip: a card of its own over the box (44 high, 8 above
+/// it), whose edit takes the latest back into the Composer as ↑ does and
+/// whose send now stops the running turn so the queue goes out, as Escape
+/// does.
+#[gpui::test]
+fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("queue-strip-acts", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Working".into());
+    assert!(core.queue(thread, "Held follow-up".into()));
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "working".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
+    let strip = cx
+        .debug_bounds(format!("composer-queue-{namespace}").leak())
+        .expect("the strip");
+    let block = cx.debug_bounds("composer-block").expect("the box");
+    assert_eq!(strip.size.height, px(ferrite_ui::theme::QUEUE_CARD_H));
+    assert_eq!(
+        block.top() - strip.bottom(),
+        px(ferrite_ui::theme::QUEUE_CARD_GAP),
+        "its own card, over the box"
+    );
+    assert_eq!(
+        (strip.left(), strip.size.width),
+        (block.left(), block.size.width)
+    );
+
+    let send_now = cx
+        .debug_bounds("queued-send-now")
+        .expect("send now while the turn runs");
+    cx.simulate_click(send_now.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1, "send now is Escape's act");
+
+    let edit = cx.debug_bounds("queued-edit").expect("edit");
+    cx.simulate_click(edit.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.cockpit.thread(thread).unwrap().queued().is_none());
+        assert_eq!(view.panes[0].composer.read(cx).text(), "Held follow-up");
     });
 }
 

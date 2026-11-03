@@ -100,7 +100,7 @@
 //!    link blue (`LINK_INK`), underlined in prose — the owner's spec. Hue
 //!    is for state only: `RUNNING` green (working, `ok`, diff `+`),
 //!    `ATTENTION` yellow (needs you), `RISKY_INK` amber (a permission mode
-//!    that runs without asking, `mode_is_default`), `BLOCKED` red (failed, diff
+//!    that never asks, `mode_is_risky`), `BLOCKED` red (failed, diff
 //!    `−`). Done is a shape (`check-circle`) in `INK_SUBTLE`, not a hue. A
 //!    provider's brand colour (`PROVIDER_CLAUDE`, `PROVIDER_CODEX`) is only
 //!    on its logomark and its working glyphs. Syntax colour (`SYN_*`) is for
@@ -335,8 +335,6 @@ pub mod paint {
     pub const FRAME: Paint = Paint::solid(super::FRAME);
     /// The right panel: the frame's grey.
     pub const PANEL: Paint = FRAME;
-    /// The bottom bar: the frame's grey, one shell plane (rule 4).
-    pub const BAR: Paint = FRAME;
     /// A diff's or a code fence's box, on a reading surface (the card, the
     /// panel).
     pub const BLOCK: Paint = Paint::solid(super::BLOCK);
@@ -351,10 +349,8 @@ pub mod paint {
     pub const PRESS: Paint = SELECTION_HOVER;
     /// The hover face of a groundless control or row (`HOVER_WASH`).
     pub const HOVER: Paint = Paint(super::HOVER_WASH);
-    /// The send circle (a PR comment's avatar wears it too).
+    /// The send circle.
     pub const SEND: Paint = Paint::solid(super::SEND);
-    /// An open pull request's pill: a hue overlay.
-    pub const PR_OPEN_PILL: Paint = Paint(super::PR_OPEN_PILL);
     /// A float's ground, its edge (and the rules inside it), a row under
     /// the pointer and the cursor row (FL-14).
     pub const FLOAT: Paint = Paint::solid(super::FLOAT);
@@ -382,8 +378,6 @@ pub const INPUT_EDGE: u32 = 0x7c7c7c;
 /// pointer (the Claude app's thumb and its picker's).
 pub const SCROLLBAR: u32 = 0x5e5e5e;
 pub const SCROLLBAR_HOVER: u32 = 0x6d6d6d;
-/// `#ffffff1a` — an unlit meter segment and the usage lines' tracks.
-pub const METER_OFF: u32 = 0xffffff1a;
 /// Black at 35% — the veil behind a modal sheet.
 pub const VEIL: u32 = 0x00000059;
 
@@ -461,11 +455,11 @@ pub const BLOCKED_WASH: u32 = 0xf3767b1f;
 /// check-circle, in this ink too: no hue, ADR 0033.)
 pub const IDLE: u32 = INK_SUBTLE;
 
-/// Whether a permission mode is its provider's default posture (Claude's
-/// `default`, Codex's `on-request`): the Composer's footer says any other
-/// in `RISKY_INK`, as Claude's does.
-pub fn mode_is_default(mode: &str) -> bool {
-    matches!(mode, "" | "default" | "on-request")
+/// Whether a permission mode lets work run without asking at all (Claude's
+/// `bypassPermissions`, Codex's `never`): the one kind the mode menu, and
+/// the footer word, draw in `RISKY_INK` (Codex's orange full access).
+pub fn mode_is_risky(mode: &str) -> bool {
+    matches!(mode, "bypassPermissions" | "never")
 }
 
 /// A permission mode's one-line description in the mode menu, by its id
@@ -853,23 +847,23 @@ pub const R_TIGHT: f32 = 2.0;
 
 // --------------------------------------------------------- shell and board
 
-/// 264px — the navigation column (SPEC §5.1); folded it is the rail.
+/// 256px — the navigation column (SPEC §5.1); folded it is the rail.
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
-/// of the semantic-zoom input. Off the space scale: the mockups' column.
-pub const NAV_WIDTH: f32 = 264.0;
-/// 46px — the head row (SPEC §4), ADR 0014's titlebar grown into the row
+/// of the semantic-zoom input. Off the space scale: Claude's sidebar
+/// (geometry.md "Sidebar width").
+pub const NAV_WIDTH: f32 = 256.0;
+/// 44px — the head row (SPEC §4), ADR 0014's titlebar grown into the row
 /// that holds the traffic lights over the nav, the view head over the board
 /// and the panel's tabs over the panel. The host traffic lights centre here
 /// (`TRAFFIC_Y`), the row drags the window outside its controls, and the
 /// board's cards start below it (`titlebar::board_top`). Off the space
-/// scale: a 28px control and 9px of frame either side.
+/// scale: a 28px control and 8px of frame either side, closed by the
+/// plane's `LINE` hairline (geometry.md "Title bar height").
 pub const WIN_CHROME_H: f32 = TITLEBAR_H;
-/// 46px — the head row, and `STATUS_BAR_H` 30 the bottom bar (full width,
-/// `paint::BAR` under a `LINE`). Off the scale: the mockups' rows.
-pub const TITLEBAR_H: f32 = 46.0;
-pub const STATUS_BAR_H: f32 = 30.0;
+/// 44px — the head row, as Claude's and Codex's title bars. Off the scale.
+pub const TITLEBAR_H: f32 = 44.0;
 /// The view head in the head row over the board (SPEC §5.2): padded
-/// `VIEW_HEAD_PAD_X` (6) inside the board's column at both ends (the
+/// `VIEW_HEAD_PAD_X` (20, geometry.md "Title text x") inside the board's column at both ends (the
 /// title over the cards' left edge, `New thread` over their right, clear
 /// of the panel's tabs), its parts
 /// `VIEW_HEAD_GAP` (10) apart — the title (`FS_TITLE` 600), the Project in
@@ -878,7 +872,7 @@ pub const STATUS_BAR_H: f32 = 30.0;
 /// `R_CONTROL` on `RAISED`, padded `CONTROL_CHIP_PAD_X` (10), its icon
 /// and label `CONTROL_CHIP_GAP` (6) apart, the icon `CONTROL_CHIP_ICON`
 /// (13). Off the scale: the mockups' head.
-pub const VIEW_HEAD_PAD_X: f32 = SPACE_1_5;
+pub const VIEW_HEAD_PAD_X: f32 = 20.0;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
 pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
 pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
@@ -900,21 +894,20 @@ pub const BOARD_PAD: f32 = SPACE_2;
 
 // ----------------------------------------------------------------- panel
 
-/// 304px — the right panel (SPEC §5.6), a fixed column on the
-/// frame outside the board; padding 0 10 8 8 (`PANEL_PAD_*`, the right a
-/// step wider than the gutter, as the nav's). Off the space scale: the
-/// mockups' column.
-pub const PANEL_W: f32 = 304.0;
-pub const PANEL_PAD_L: f32 = SPACE_2;
-pub const PANEL_PAD_R: f32 = 10.0;
+/// 320px — the right panel (SPEC §5.6), a fixed column on the frame
+/// outside the board, Claude's: 1 hairline and 319; padding 16 either side
+/// (`geometry.md`), 8 under it.
+pub const PANEL_W: f32 = 320.0;
+pub const PANEL_PAD_L: f32 = SPACE_4;
+pub const PANEL_PAD_R: f32 = SPACE_4;
 pub const PANEL_PAD_B: f32 = SPACE_2;
 /// The panel body's scrollbar lies in the column's right padding
 /// (`PANEL_PAD_R`), beside the rows rather than over them, as the nav's
-/// does: a 10px hit strip, the 6px hovered thumb 2px from either side.
-pub const PANEL_SCROLLBAR_INSET: f32 = 2.0;
+/// does: a 16px hit strip, the 6px hovered thumb 5px from either side.
+pub const PANEL_SCROLLBAR_INSET: f32 = 5.0;
 const _: () = assert!(PANEL_PAD_R == 2. * PANEL_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
-/// 28px — a panel tab in the head row (r7, 12.5/500), 10px inline padding,
-/// 6px to its count; 2px between tabs.
+/// 28px — a panel tab in the head row (`Overview` and a preview's), 10px
+/// inline padding; 2px between tabs.
 pub const PANEL_TAB_H: f32 = 28.0;
 pub const PANEL_TAB_PAD_X: f32 = 10.0;
 /// The Preview tab's label, the file's name cut from its start, is never
@@ -932,16 +925,21 @@ pub const PANEL_PREVIEW_SHARE: f32 = 0.42;
 pub const PANEL_PREVIEW_MIN_W: f32 = 420.0;
 pub const PANEL_PREVIEW_MAX_W: f32 = 820.0;
 pub const PANEL_PREVIEW_BOARD_MIN: f32 = NAV_AUTO_RAIL_BOARD_W + NAV_AUTO_RAIL_HYSTERESIS;
-/// 48px — a two-line panel row (the branch row, a file block's head): its
-/// 14px icon at x 10, y 9; its text at x 34 (SPEC §4's panel rows).
+/// A panel row's 14px icon on the content edge (x 0), its text at x 30,
+/// Claude's (`geometry.md`: icon x1619, text x1647 off a 1617 edge). A file
+/// block's head is a two-line row (48), its icon at y 9, the whole row
+/// inset `PANEL_CARD_PAD_X` in its `RAISED` card.
 pub const PANEL_ROW_H: f32 = 48.0;
 pub const PANEL_ROW_ICON: f32 = 14.0;
-pub const PANEL_ROW_ICON_X: f32 = 10.0;
+pub const PANEL_ROW_ICON_X: f32 = 0.0;
 pub const PANEL_ROW_ICON_Y: f32 = 9.0;
-pub const PANEL_ROW_TEXT_X: f32 = 34.0;
-/// 30px — a panel section line (`N files changed`, diffstat right), 8px
-/// below the row over it.
-pub const PANEL_SECTION_H: f32 = 30.0;
+pub const PANEL_ROW_TEXT_X: f32 = 30.0;
+pub const PANEL_CARD_PAD_X: f32 = SPACE_2;
+/// 32px — a panel line (a section head, an Environment row, a connector,
+/// `N files changed`): Claude's row pitch.
+pub const PANEL_SECTION_H: f32 = 32.0;
+/// 16px — clear above and below the hairline between two sections.
+pub const PANEL_SECTION_GAP: f32 = SPACE_4;
 /// 32px — the panel's full-width secondary buttons (`Review changes`).
 pub const PANEL_BUTTON_H: f32 = 32.0;
 /// A changed file's actions (copy its path, open it in its app), laid
@@ -957,92 +955,17 @@ pub const PANEL_HUNK_PAD_T: f32 = SPACE_1;
 pub const PANEL_HUNK_PAD_B: f32 = SPACE_1_5;
 pub const PANEL_HUNK_INSET_CELLS: f32 = 1.0;
 pub const PANEL_HUNK_SIGN_CELLS: f32 = 2.5;
-/// The foot's context meter: 6px high, 2px between segments, radius 2,
-/// over an empty track of `PANEL_METER_TRACK`; the foot's padding is
-/// 14 10 4 with 10px between its line and the meter (off the scale: the
-/// mockup's foot).
-pub const PANEL_METER_H: f32 = 6.0;
-pub const PANEL_METER_TRACK: u32 = 0x333333;
-pub const PANEL_FOOT_PAD_T: f32 = 14.0;
-pub const PANEL_FOOT_GAP: f32 = 10.0;
-pub const PANEL_FOOT_PAD_B: f32 = SPACE_1;
 
-// ------------------------------------------------------------ PR tab
+// ------------------------------------------------------------ checks
 
-//
-// Off the space scale where the mockup's PR tab is (`pr-states.html`): its
-// 10px row gaps and paddings, the pill's 5 · 7 · 9, the empty state's 36.
-
-/// 14px — between the PR tab's sections (SPEC §5.6.2), and under its head.
-pub const PR_SECTION_GAP: f32 = 14.0;
-/// The state pill: 22 high, round (r11), padding 0 9 0 7, a 13px icon 5px
-/// from its word.
-pub const PR_PILL_H: f32 = 22.0;
-pub const PR_PILL_PAD_L: f32 = 7.0;
-pub const PR_PILL_PAD_R: f32 = 9.0;
-pub const PR_PILL_GAP: f32 = 5.0;
-pub const PR_PILL_ICON: f32 = 13.0;
-/// `RUNNING` at 14% — an open pull request's pill (`paint::PR_OPEN_PILL`).
-pub const PR_OPEN_PILL: u32 = 0x93cf8c24;
-/// The pull request's title: 14/20 600, at most three lines, 10px under
-/// the head's line.
-pub const FS_PR_TITLE: f32 = 14.0;
-pub const PR_TITLE_GAP: f32 = 10.0;
-/// 10px — a check or readiness row's mark to its text.
-pub const PR_ROW_GAP: f32 = 10.0;
-/// 10px — a comment card's block padding (12px inline, `SPACE_3`).
-pub const PR_COMMENT_PAD_Y: f32 = 10.0;
-/// Every Panel tab's empty state (`panel::panel_empty`: no changes, no
-/// pull request, no `gh`, no context reading): its parts 10px apart, a
-/// 36px badge (r10, `RAISED`) holding a 17px icon, its explanation at most
-/// `PANEL_EMPTY_W` wide; the block centred in the room the tab leaves it,
-/// raised `PANEL_EMPTY_LIFT` so it reads at the eye's middle, not the
-/// column's.
-pub const PANEL_EMPTY_GAP: f32 = 10.0;
-pub const PANEL_EMPTY_BADGE: f32 = 36.0;
-pub const PANEL_EMPTY_ICON: f32 = 17.0;
-pub const PANEL_EMPTY_W: f32 = 240.0;
-pub const PANEL_EMPTY_LIFT: f32 = 2. * SPACE_6;
-/// 26px — the head's `refresh` and `external` buttons (r6), a 14px icon.
-pub const PR_ICON_BUTTON: f32 = 26.0;
-pub const ICON_PR_BUTTON_GLYPH: f32 = 14.0;
 /// 15px — a CI check's mark wherever one is drawn (`components::CheckMark`:
-/// the checks card, the PR tab's checks and its readiness rows); a queued
+/// the checks card); a queued
 /// or skipped check's hollow ring is 11 inside it, a skipped one's crossed
 /// by a `CHECK_SKIP_DASH` dash (off the scale: the ring's inner width less
 /// a pixel each side).
 pub const CHECK_MARK: f32 = 15.0;
 pub const CHECK_MARK_RING: f32 = 11.0;
 pub const CHECK_SKIP_DASH: f32 = 5.0;
-/// 40px — a readiness row (icon 15, 10px gaps). Its padding, a comment
-/// card's, the heads', the rows' and the description's are all
-/// `PANEL_ROW_ICON_X`: every Panel tab shares one content edge.
-pub const PR_READY_ROW_H: f32 = 40.0;
-/// The checks listed before `Show N more`.
-pub const PR_CHECKS_SHOWN: usize = 8;
-/// A comment card's avatar: an 18px circle on `paint::SEND`'s grey, its
-/// initial at 12px.
-pub const PR_AVATAR: f32 = 18.0;
-pub const FS_PR_AVATAR: f32 = 12.0;
-/// Inline code in a comment card, a step over the card's `RAISED`.
-pub const PR_CODE_CHIP: u32 = 0x333333;
-/// 18px — a comment body's line (12.5 type).
-pub const PR_BODY_LH: f32 = 18.0;
-/// The lines a folded comment body shows.
-pub const PR_BODY_LINES: usize = 3;
-/// 16px — where a list item's text starts in a comment or the description,
-/// its marker hanging dim in the box before it, 6px short of the text.
-pub const PR_LIST_HANG: f32 = 16.0;
-/// The lines the folded description shows: its opening heading, if it has
-/// one, and the first lines under it.
-pub const PR_DESCRIPTION_LINES: usize = 5;
-/// 26px — a reply's indent under its comment.
-pub const PR_REPLY_INDENT: f32 = 26.0;
-/// The ink a resolved comment card keeps.
-pub const PR_RESOLVED_OPACITY: f32 = 0.6;
-/// A turn of the `refresh` icon while a read is out, in steps.
-pub const PR_SPIN_MS: u64 = 900;
-pub const PR_SPIN_STEPS: usize = 18;
 
 /// A toast's widest: over the right panel it takes the panel's content
 /// column instead, when that is narrower (`cockpit::toast_float`).
@@ -1291,7 +1214,7 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.notification.margins = gpui::base::Edges {
         top: px(WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP),
         right: px(TOAST_BOX_RIGHT),
-        bottom: px(STATUS_BAR_H + TOAST_TOP),
+        bottom: px(TOAST_TOP),
         left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
@@ -1433,6 +1356,14 @@ pub const HUNK_MAX_ROWS: usize = 24;
 /// 20px — an invisible hit area, not a drawn thing: a disclosure's gutter
 /// target (the whole row toggles too) and a prompt action's button.
 pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
+/// **The tool group's card** (`pane::render_tool_group`, Claude's measured
+/// card, geometry.md "Tool group (open)"): each call's row
+/// `TOOL_CARD_ROW_H` for its line, its words `TOOL_CARD_INSET` in from the
+/// card's edges, the card hanging `TOOL_CARD_OUTSET` past the column's left
+/// edge so its rows' words sit a step inside the prose.
+pub const TOOL_CARD_ROW_H: f32 = 36.0;
+pub const TOOL_CARD_INSET: f32 = SPACE_3;
+pub const TOOL_CARD_OUTSET: f32 = SPACE_1;
 /// One cell of the transcript grid at reading size `size`: Geist Mono's
 /// advance (`CODE_ADVANCE`), 7.8px at Standard.
 pub fn tx_cell(size: f32) -> f32 {
@@ -1513,9 +1444,6 @@ pub const DIFF_REMOVED_NUMBER: u32 = 0x8a6460;
 /// The gap between a diff line's number and its sign: the mockups'
 /// `padding-right: 1.5ch`, inside the number's `DIFF_NUMBER_CELLS`.
 pub const DIFF_NUMBER_PAD_CELLS: f32 = 1.5;
-/// Long tool output folds to this many lines under its elbow, then a
-/// `+ N lines` line that unfolds it in place.
-pub const OUTPUT_PREVIEW_LINES: usize = 3;
 /// A diff's line-number column, in cells (its 1-cell pad included), and its
 /// sign column.
 pub const DIFF_NUMBER_CELLS: f32 = 5.0;
@@ -1567,9 +1495,6 @@ pub const TEST_BAR_CELLS: f32 = 20.0;
 pub const TEST_BAR_H: f32 = 6.0;
 pub const TEST_BAR_R: f32 = 1.0;
 pub const TEST_BAR_EASE_MS: u64 = 300;
-/// A fold's height eases open or shut over this long (the prototype's
-/// `.fold{transition:grid-template-rows .22s}`); reduced motion snaps.
-pub const FOLD_EASE_MS: u64 = 220;
 /// **The hover card** (the prototype's `#hover`): `HOVER_CARD_CELLS` chrome
 /// cells wide (780px), `HOVER_CARD_GAP` below the hovered path (above when
 /// it would overflow), at most `HOVER_CARD_EDGE` from the cockpit's right
@@ -1636,8 +1561,8 @@ pub const JUMP_LATEST_INSET: f32 = SPACE_3;
 pub const WORKING_DOT: f32 = 5.0;
 pub const WORKING_DOT_GAP: f32 = 3.0;
 pub const WORKING_DOT_REST: f32 = 0.3;
-pub const MOTION_WORKING_DOTS_MS: u64 = 1_200;
-pub const WORKING_DOTS_STEPS: usize = 12;
+pub const MOTION_WORKING_DOTS_MS: u64 = 600;
+pub const WORKING_DOTS_STEPS: usize = 18;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —
@@ -1731,10 +1656,9 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // Owner: WP-C (the pane shell, head, wall tiles, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
 //
-// **One plane** (theme rule 2, SPEC §4). The window is two rows: the nav
-// and the board column over the head row (`WIN_CHROME_H`), and the
-// full-width bottom bar (`STATUS_BAR_H`), all the plane's grey, parted by
-// the Cockpit's seams (`plane_seams`). The board column starts at the
+// **One plane** (theme rule 2, SPEC §4). The window is the nav and the
+// board column under the head row (`WIN_CHROME_H`), all the plane's grey,
+// parted by the Cockpit's seams (`plane_seams`). The board column starts at the
 // nav's seam; its left edge rides the nav's width every frame while cmd-B
 // folds it (`motion::RESIZE`). A Solo Pane fills it flush, square and
 // unringed; a Group's cells stand `BOARD_PAD` in from the bar and the
@@ -1775,13 +1699,8 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 //
 // **The window chrome** (ADR 0014, SPEC §4). The head row is the nav's top
 // chrome, the traffic lights' row and the window's drag strip, and the slot
-// the view head and the panel's tabs fill; the cards start below it. The window's one
-// bar is the bottom bar (`STATUS_BAR_H`), on the chrome under a
-// `paint::LINE` rule: the sidebar toggle and the bell, the session in
-// `INK_STRONG` at the strong weight, `1 solo` and a tab per Group (the current
-// view's `INK_STRONG` on `paint::RAISED`), the focused Pane's status line
-// (mode, model, `ctx`, changed files), each provider's usage behind its
-// mark, `?` and the clock. No state counts.
+// the view head and the panel's tabs fill; the cards start below it. There
+// is no bottom bar: the view switcher sits in the nav's foot.
 //
 // **Text rasterisation** (F-17). The prototype's glyphs are greyscale with
 // no stem darkening (`-webkit-font-smoothing: antialiased`); gpui-pre-macos
@@ -1882,16 +1801,6 @@ pub const HEAD_TITLE_MIN_W: f32 = 96.0;
 /// How much readier a Group head's title is to shrink than its state word
 /// (flex shrink factors): the title ellipsizes to its floor first.
 pub const HEAD_TITLE_SHRINK: f32 = 64.0;
-/// The tasks meter: 6 × 3 segments, 1px radius, 2px apart (an 8px pitch).
-/// Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track.
-pub const METER_SEG_W: f32 = 6.0;
-pub const METER_SEG_H: f32 = 3.0;
-pub const METER_SEG_GAP: f32 = SPACE_0_5;
-pub const METER_SEG_R: f32 = 0.0;
-pub const METER_SEG_CAP: usize = 12;
-pub const METER_TRACK_W: f32 = 48.0;
-/// Between the meter and its `3/4` count.
-pub const METER_GAP: f32 = CH;
 /// The checks card (`open_checks`, a palette command): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
@@ -1975,27 +1884,22 @@ pub const EMPTY_RECENT_MAX: usize = 4;
 
 /// The provider mark on the empty board's provider rows.
 pub const BAR_MARK: f32 = 11.0;
-/// 14px — the bottom bar's inset at each end (SPEC §5.7; off the space
-/// scale, as the mockup draws it).
-pub const BAR_PAD_X: f32 = 14.0;
-/// 18px — between the bottom bar's items (SPEC §5.7; off the space scale,
-/// the mockup's).
-pub const BAR_GAP: f32 = 18.0;
-/// 22px — a view tab in the bottom bar, `SPACE_2` in from each side.
-pub const BAR_TAB_H: f32 = 22.0;
-pub const BAR_TAB_PAD_X: f32 = SPACE_2;
-/// 5px — a view tab's roll-up dot (off the scale: a mark, the mockup's).
-pub const BAR_TAB_DOT: f32 = 5.0;
-/// 6px — the need-you count's dot.
-pub const BAR_NEED_DOT: f32 = SPACE_1_5;
 
 /// An empty draft's mark, flat, in a quiet ink a step over the plane.
 pub const EMBOSS_ON_PANE: u32 = LINE;
-/// 44px — an empty draft's mark at its body's centre, the Composer at the
-/// foot as its Thread will keep it (a quiet start, as the Claude app's new
-/// session): the Pane is ready, and the Composer's placeholder says what
-/// to do.
+/// 44px — an empty draft's mark over its start card, the Composer at the
+/// foot as its Thread will keep it.
 pub const DRAFT_MARK: f32 = 44.0;
+/// An empty draft's start card, Claude's new session (`components.md`):
+/// 320 wide at the body's centre, its groups `R_CARD` cards ringed in
+/// `CARD_RING`, `DRAFT_CARD_GAP` apart and under the mark; the setup
+/// rows (project, workspace) 40 high and split by a hairline, the
+/// suggestion rows 34; a row's 14px icon `SPACE_3` in, its words 8 after.
+pub const DRAFT_CARD_W: f32 = 320.0;
+pub const DRAFT_CARD_GAP: f32 = SPACE_3;
+pub const DRAFT_SETUP_ROW_H: f32 = 40.0;
+pub const DRAFT_SUGGESTION_ROW_H: f32 = 34.0;
+pub const DRAFT_SUGGESTIONS_MAX: usize = 2;
 // (end WP-C) — append above this line only
 
 // ======================================== WP-D · composer, pickers, usage, draft
@@ -2014,11 +1918,11 @@ pub const DRAFT_MARK: f32 = 44.0;
 /// - **The shelf** stands `SHELF_GAP` above the box its files are for:
 ///   pending files at left, background tasks at right, chips
 ///   `SHELF_CHIP_H` high at `R_CONTROL` on `paint::RAISED`, `FS_META`.
-/// - **The queued row** (`QUEUED_ROW_H`, when anything is queued): `Queued`
-///   in `FS_META`/`W_LABEL` `INK_SUBTLE`, the top of the pile in
-///   `INK` on one cut line, `+N` in `INK_SUBTLE`, and a
-///   `QUEUED_CLOSE` icon button that drops it. ↑ and ⌫ still act on it;
-///   they are not printed. A `FIELD_RING` rule follows.
+/// - **The queue strip** (Claude's, when anything is queued): its own card
+///   `QUEUE_CARD_H` high at `R_CARD` on `paint::RAISED`, as wide as the box
+///   and `QUEUE_CARD_GAP` over it. `N messages queued` at `W_LABEL`, the
+///   latest in `INK_SUBTLE` on one cut line, then `QUEUED_ACTION` icon
+///   buttons: send now, edit, remove. ↑ and ⌫ still act on it.
 /// - **The input** is SF Pro `FS_COMPOSER` on `COMPOSER_ROW_H`, padded
 ///   `COMPOSER_INPUT_PAD_T` / `COMPOSER_INPUT_PAD_X` / `COMPOSER_INPUT_PAD_B`,
 ///   growing to `composer::MAX_ROWS` rows. No `❯`: the box says "type
@@ -2028,8 +1932,7 @@ pub const DRAFT_MARK: f32 = 44.0;
 ///   `components::caret_blink`) in Solo and the focused board Pane whoever
 ///   holds the keyboard; an unfocused board Pane draws none (SPEC §5.9).
 ///   Typing restarts the blink solid.
-/// - **The toolbar** (`COMPOSER_TOOLBAR_H`, `COMPOSER_TOOLBAR_PAD_X`,
-///   `COMPOSER_TOOLBAR_GAP`): the `+` attach button (`COMPOSER_ATTACH`), a
+/// - **The toolbar** (`COMPOSER_TOOLBAR_H`, `COMPOSER_TOOLBAR_PAD_X`): the `+` attach button (`COMPOSER_ATTACH`), a
 ///   draft's Project and Workspace chips, the permission mode chip, a
 ///   spacer, the model chip, the effort chip, and the send circle
 ///   (`COMPOSER_SEND`, `paint::SEND`, `COMPOSER_SEND_GAP` after the chips).
@@ -2047,7 +1950,7 @@ pub const COMPOSER_ROW_H: f32 = LH_UI;
 /// the prototype's 19px line centred in its 20px cell, rounded down to the
 /// whole pixel.
 pub const TABLE_TEXT_DROP: f32 = 1.0;
-/// The context meter's state steps (the panel's foot, `pane::ctx_meter_ink`):
+/// The context meter's state steps (`pane::ctx_meter_ink`):
 /// `ATTENTION` from `CTX_METER_WARN`, `BLOCKED` from `CTX_METER_FULL`.
 pub const CTX_METER_WARN: f32 = 0.60;
 pub const CTX_METER_FULL: f32 = 0.85;
@@ -2147,37 +2050,36 @@ pub const ATTACH_REMOVE_ICON: f32 = 10.0;
 /// `COMPOSER_INPUT_PAD_X` in and `COMPOSER_INPUT_PAD_T` under its top (or
 /// the queued row), `ATTACH_ROW_GAP` over the text.
 pub const ATTACH_ROW_GAP: f32 = SPACE_2;
-/// The model picker hangs off the model chip: its left edge 8px left of
-/// the chip's (so its section logo sits left of the chip's logo), its foot
-/// 5px over the chip.
-pub const MODEL_PICKER_NUDGE: f32 = 8.0;
+/// A Composer chip's menu hangs off its chip, its foot 5px over it.
 pub const MODEL_PICKER_GAP: f32 = 5.0;
-/// The Solo Composer's box: `COMPOSER_INSET` (14, off the scale: the
-/// mockup's inset, between `SPACE_3` and `SPACE_4`) from the card's sides
-/// and foot.
-pub const COMPOSER_INSET: f32 = 14.0;
+/// The Solo Composer's box stands `COMPOSER_OUTSET` past the reading
+/// column's text at each side (Claude's: the box frames the column), so at
+/// most `COMPOSER_MAX_W` wide and `COMPOSER_INSET` in from the card's sides
+/// — the text's own inset less the outset.
+pub const COMPOSER_OUTSET: f32 = SPACE_4;
+pub const COMPOSER_MAX_W: f32 = TX_COLUMN_MAX_W + 2.0 * COMPOSER_OUTSET;
+pub const COMPOSER_INSET: f32 = TX_INSET_SOLO - COMPOSER_OUTSET;
 /// A shelf chip: 24 high.
 pub const SHELF_CHIP_H: f32 = SPACE_6;
-/// The queued row: 34 high (the mockup's; a 20px line in 7px of air), its
-/// words `QUEUED_PAD_L` in, its close button `QUEUED_PAD_R` from the end.
-pub const QUEUED_ROW_H: f32 = 34.0;
-pub const QUEUED_PAD_L: f32 = COMPOSER_INPUT_PAD_X;
-pub const QUEUED_PAD_R: f32 = SPACE_2;
-/// Between the queued row's parts: 10 (the mockup's).
-pub const QUEUED_GAP: f32 = 10.0;
-/// The queued row's close button, and its `close` icon.
-pub const QUEUED_CLOSE: f32 = SPACE_6;
-pub const QUEUED_CLOSE_ICON: f32 = SPACE_3;
-/// The input's padding: 14 above and at the sides (`COMPOSER_INSET`'s
-/// measure), 8 under.
-pub const COMPOSER_INPUT_PAD_T: f32 = COMPOSER_INSET;
-pub const COMPOSER_INPUT_PAD_X: f32 = COMPOSER_INSET;
+/// The queue strip (Claude's `queued`): a 44 card, 8 over the box, its
+/// words `QUEUED_PAD_X` in, the count `QUEUED_GAP` before the message, its
+/// action buttons (`QUEUED_ACTION`, icons `QUEUED_ICON`) `QUEUED_ACTION_GAP`
+/// apart.
+pub const QUEUE_CARD_H: f32 = 44.0;
+pub const QUEUE_CARD_GAP: f32 = SPACE_2;
+pub const QUEUED_PAD_X: f32 = SPACE_4;
+pub const QUEUED_GAP: f32 = SPACE_1_5;
+pub const QUEUED_ACTION: f32 = SPACE_6;
+pub const QUEUED_ACTION_GAP: f32 = SPACE_2;
+pub const QUEUED_ICON: f32 = 14.0;
+/// The input's padding: 14 above and at the sides, 8 under.
+pub const COMPOSER_INPUT_PAD_T: f32 = 14.0;
+pub const COMPOSER_INPUT_PAD_X: f32 = 14.0;
 pub const COMPOSER_INPUT_PAD_B: f32 = SPACE_2;
 /// The toolbar row: 42 high (a 28px chip in 7px of air), 8 in from the
-/// box's sides, its controls 2 apart.
+/// box's sides.
 pub const COMPOSER_TOOLBAR_H: f32 = 42.0;
 pub const COMPOSER_TOOLBAR_PAD_X: f32 = SPACE_2;
-pub const COMPOSER_TOOLBAR_GAP: f32 = SPACE_0_5;
 /// The `+` attach button (30, off the scale: the mockup's) and its icon.
 pub const COMPOSER_ATTACH: f32 = 30.0;
 pub const COMPOSER_ATTACH_ICON: f32 = SPACE_4;
@@ -2200,20 +2102,27 @@ pub const COMPOSER_SEND: f32 = 28.0;
 pub const COMPOSER_SEND_ICON: f32 = 14.0;
 /// The Solo box is one row, as Claude's: the `+` (`COMPOSER_ATTACH`), the
 /// line, the send circle, `COMPOSER_ROW_GAP` apart, `COMPOSER_ROW_PAD`
-/// inside the box. The line sits `COMPOSER_TEXT_PAD_Y` down so a single
-/// row centres on the buttons; as it grows the buttons keep to its foot.
-pub const COMPOSER_ROW_PAD: f32 = SPACE_1_5;
-pub const COMPOSER_ROW_GAP: f32 = SPACE_1_5;
+/// inside the box — 44 high at one row, the `+` glyph 14 in and the line
+/// 44 in. The line sits `COMPOSER_TEXT_PAD_Y` down so a single row centres
+/// on the buttons; as it grows the buttons keep to its foot.
+pub const COMPOSER_ROW_PAD: f32 = 7.0;
+pub const COMPOSER_ROW_GAP: f32 = 7.0;
 pub const COMPOSER_TEXT_PAD_Y: f32 = (COMPOSER_ATTACH - COMPOSER_ROW_H) / 2.0;
-/// Under the box, the footer (Claude's): the model, effort and mode as
-/// plain words in `FS_META` (`FOOTER_CHIP_H` high, `FOOTER_CHIP_PAD_X`
-/// each side, a fill only under the pointer) and the context ring
-/// (`CONTEXT_RING` round, its stroke `CONTEXT_RING_STROKE`), on a
-/// `COMPOSER_FOOTER_H` row, `COMPOSER_FOOTER_PAD_B` over the card's foot.
-pub const COMPOSER_FOOTER_H: f32 = 30.0;
-pub const COMPOSER_FOOTER_PAD_B: f32 = SPACE_1_5;
+/// Under the box, the footer (Claude's): the model and effort as one chip
+/// (its words `FOOTER_WORD_GAP` apart), the mode, as plain words in
+/// `FS_META` (`FOOTER_CHIP_H` high, `FOOTER_CHIP_PAD_X` each side, a fill
+/// only under the pointer, `FOOTER_CHIP_GAP` between chips: 18 from word to
+/// word) and the plan-usage ring (`CONTEXT_RING` round, its stroke
+/// `CONTEXT_RING_STROKE`), centred on the `COMPOSER_FOOTER_H` row that is
+/// all there is between the box and the card's foot (41, Claude's).
+pub const COMPOSER_FOOTER_H: f32 = 41.0;
 pub const FOOTER_CHIP_H: f32 = 24.0;
 pub const FOOTER_CHIP_PAD_X: f32 = SPACE_1_5;
+pub const FOOTER_CHIP_GAP: f32 = SPACE_1_5;
+pub const FOOTER_WORD_GAP: f32 = 10.0;
+/// The plan-usage card the ring opens on hover (Claude's): `USAGE_TIP_W`
+/// wide, each window's bar `USAGE_CARD_BAR_H`.
+pub const USAGE_TIP_W: f32 = 344.0;
 pub const CONTEXT_RING: f32 = 14.0;
 pub const CONTEXT_RING_STROKE: f32 = 1.75;
 // (end WP-D) — append above this line only
@@ -2255,9 +2164,15 @@ pub const TOKEN_PAD_X: f32 = SPACE_2;
 /// The `/` and `@` menus: at most the palette's width, hung over the
 /// Composer.
 pub const SLASH_MENU_W: f32 = PALETTE_W;
-/// The model picker: a model's name, its description and the `✓` on one
-/// row.
-pub const MODEL_PICKER_W: f32 = 520.0;
+/// The Composer's menus at Claude's widths: the model picker (names only,
+/// a model's description in its tooltip), its effort submenu, the
+/// permission-mode menu (a name and its one line), and the `+` menu. The
+/// submenu opens `SUBMENU_GAP` beside its menu.
+pub const MODEL_PICKER_W: f32 = 260.0;
+pub const EFFORT_MENU_W: f32 = 318.0;
+pub const MODE_MENU_W: f32 = 316.0;
+pub const ATTACH_MENU_W: f32 = 228.0;
+pub const SUBMENU_GAP: f32 = 2.0;
 /// A form field or a sheet's text button: one row in a cell of padding,
 /// inside a 1px edge at `R_CONTROL` (a field's the `FIELD_RING` hairline,
 /// `CONTROL_FOCUS` while it holds the caret).
@@ -2467,11 +2382,10 @@ pub const SWITCH_OFF: Paint = Paint::solid(0x4a4a4a);
 /// at `R_CONTROL`, Geist Mono 12.5, a `INK_SUBTLE` `$ `), then the options:
 /// `DECISION_OPTION_H` rows at `R_CONTROL`, the key in Geist Mono 12 `INK_SUBTLE`,
 /// the label in SF Pro 13, the cursor's row `SELECTED` and `INK_STRONG`.
-/// The hint line (`↑↓ select · 1–3 pick · esc deny · tab amend`, 12
-/// `INK_SUBTLE`) is the box's last section, on the Pane that holds the
-/// keyboard only — every kind says its keys in the same place, a
-/// question's beside its Skip and Send. Head 20 · gap 10 · well 32 · gap
-/// 10 · options 3 × 30 · gap 10 · hints 20, inside 12 of padding.
+/// No hint line: the keys are on the buttons and the option rows. An
+/// approval's box is at most `DECISION_CARD_W` wide, on the column's left
+/// (Claude's 480); its head band is 48 (`LH_UI` and `DECISION_HEAD_PAD_Y`
+/// above and below), its body inside 16 of padding.
 ///
 /// Where a card still docks over the transcript's foot (the requests
 /// overlay) it lies on the plane, `DECISION_PAD_Y` inside.
@@ -2479,22 +2393,23 @@ pub const DECISION_PAD_Y: f32 = HALF_ROW;
 /// The card's head band (Claude's): white at 4% over the card's ground,
 /// `DECISION_HEAD_PAD_Y` above and below its line.
 pub const DECISION_HEAD: u32 = 0xffffff0a;
-pub const DECISION_HEAD_PAD_Y: f32 = SPACE_2;
+pub const DECISION_HEAD_PAD_Y: f32 = 14.0;
+pub const DECISION_CARD_W: f32 = 480.0;
 /// The `Needs your input` pill over a waiting card: 22 high, its outline
 /// `ATTENTION` at 45%; `DECISION_PILL_GAP` above the card.
 pub const NEEDS_INPUT_H: f32 = 22.0;
 pub const NEEDS_INPUT_RING: u32 = 0xe6c47c73;
 pub const DECISION_PILL_GAP: f32 = SPACE_2;
 /// The approval's answers (Claude's): `Deny` quiet and the split primary
-/// `Always allow ⇧⌘⏎` with its `▾` menu (`Allow once ⌘⏎`, `Allow and switch
-/// to …`), `CONTROL_H` high, `DECISION_ACTION_GAP` apart — inline at the
+/// `Allow once ⌘⏎` with its `▾` menu (`Always allow <pattern> ⇧⌘⏎`, `Allow
+/// and switch to …`), `CONTROL_H` high, `DECISION_ACTION_GAP` apart — inline at the
 /// card's right in Solo, stacked full width in a Group Pane. The menu is
 /// `DECISION_MENU_W` wide.
 pub const DECISION_ACTION_GAP: f32 = SPACE_2;
 /// The seam between the split primary's halves: `ON_PRIMARY` at 15%.
 pub const PRIMARY_SEAM: u32 = 0x16161626;
 pub const DECISION_MENU_W: f32 = 300.0;
-pub const DECISION_PAD: f32 = SPACE_3;
+pub const DECISION_PAD: f32 = SPACE_4;
 pub const DECISION_GAP: f32 = 10.0;
 pub const DECISION_HEAD_ICON: f32 = 14.0;
 pub const DECISION_OPTION_H: f32 = 30.0;
@@ -2616,6 +2531,10 @@ pub const NAV_ROW_PAD_X: f32 = 10.0;
 /// 30px — a one-line row: a view, a Project heading, a Group, a shown
 /// Group's member, and a Thread row with nothing for line 2.
 pub const NAV_ROW_H: f32 = 30.0;
+/// 2px — between two rows, half above and half below each, so rows step
+/// 32 (geometry.md "Sidebar row height / pitch": Claude's 4 is airier, 2
+/// keeps a multi-project tree dense). A row's guides reach across it.
+pub const NAV_ROW_GAP: f32 = SPACE_0_5;
 /// 44px — a two-line Thread row: its title, then its branch or reason.
 pub const NAV_ROW2_H: f32 = 44.0;
 /// 20px — one line of a row (line 1, line 2, a task's extra lines).
@@ -2634,18 +2553,16 @@ pub const NAV_HEADING_GLYPH: f32 = 13.0;
 /// 16px — the sidebar toggle's and the gear's glyph, in an `ICON_BUTTON`;
 /// the panel toggle, the sidebar toggle's twin, shares it.
 pub const NAV_TOGGLE_GLYPH: f32 = 16.0;
-/// 35px — where a Thread row's title starts (`padding: 0 10 0 35`); its
-/// mark sits in the 10–24 column before it.
-pub const NAV_TITLE_X: f32 = 35.0;
-/// 54px — where a shown Group's member title starts at the tree's root;
-/// its mark at 35. One level in, both move `NAV_TREE_INDENT` with it.
-pub const NAV_MEMBER_X: f32 = 54.0;
-/// 14px — one level of the tree (§5.1.4): everything inside a Project
-/// (its Threads, its Group rows and their members) sits one level under
-/// its heading, and a Group's members one more under the Group. Only a
-/// row's content moves in; its hover and selected fills keep the full
-/// width.
-pub const NAV_TREE_INDENT: f32 = 14.0;
+/// 35px — where a Thread row's title starts: on a Project heading's label
+/// (`NAV_ROW_PAD_X` + `NAV_ICON` + `NAV_ICON_GAP`), as Codex aligns its
+/// threads (geometry.md "Thread title x within the row"), at the root and
+/// one level in alike. A Notice's mark sits in the 10–24 column before it.
+pub const NAV_TITLE_X: f32 = NAV_ROW_PAD_X + NAV_ICON + NAV_ICON_GAP;
+/// 8px — one level of the tree past the first (§5.1.4): a Group's members
+/// sit one step right of the Group, whose chevron (`NAV_CHEVRON_X` past the
+/// level) stays clear of the title column. Only a row's content moves in;
+/// its hover and selected fills keep the full width.
+pub const NAV_TREE_INDENT: f32 = SPACE_2;
 /// A tree guide (`paint::LINE`) down a Project's (or a Group's) children
 /// is `NAV_GUIDE_W` wide: structure, not state, so a hairline (rule 2).
 pub const NAV_GUIDE_W: f32 = 1.0;
@@ -2723,6 +2640,18 @@ pub const NAV_PR_MARK: f32 = 12.0;
 pub const NAV_PR_DOT: f32 = 6.0;
 /// 36px — the foot: `Ferrite 0.5` and the gear, 8px under the tree.
 pub const NAV_FOOT_PAD_T: f32 = SPACE_2;
+/// The foot's view switcher (the bottom bar's tabs, moved): `Solo` and a
+/// tab per Group, `NAV_VIEW_TAB_H` high, `NAV_VIEW_TAB_PAD_X` in, at
+/// `R_CONTROL`, `NAV_VIEW_TAB_GAP` apart and wrapping, over the account row.
+pub const NAV_VIEW_TAB_H: f32 = 22.0;
+pub const NAV_VIEW_TAB_PAD_X: f32 = SPACE_2;
+pub const NAV_VIEW_TAB_GAP: f32 = SPACE_0_5;
+/// The Activity view's row (Codex's): the title on `NAV_LINE` with its
+/// mark at the right, then the Project and `NAV_ACTIVITY_PREVIEW_LINES` of
+/// the last message on `LH_META`, all `FS_META` `INK_SUBTLE`, padded
+/// `NAV_ACTIVITY_PAD_Y` top and bottom.
+pub const NAV_ACTIVITY_PAD_Y: f32 = SPACE_1_5;
+pub const NAV_ACTIVITY_PREVIEW_LINES: usize = 2;
 /// The most characters a folded Project's branch takes before it is cut.
 pub const NAV_BRANCH_MAX_CH: usize = 24;
 /// 4px — a drop target that takes no layout of its own ("insert above this
@@ -2818,11 +2747,6 @@ pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 /// spends its second half settling the last few pixels, so a slot sliding
 /// across half the board reads as one physical move rather than a jump.
 pub const MOTION_EASE_SLIDE: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
-/// `swap`: the board settling on what it now shows (Solo's Thread, the
-/// view): 120ms on `MOTION_EASE_OUT_EXPO` up from 50%, quicker and gentler
-/// than `row-in`, since it follows a keyboard-rate switch.
-pub const MOTION_SWAP_MS: u64 = 120;
-pub const MOTION_SWAP_FROM_OPACITY: f32 = 0.5;
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a line arriving inside a card already open (the usage card's legend).
 pub const MOTION_ROW_IN_MS: u64 = 180;
@@ -3028,11 +2952,8 @@ mod tests {
         ("SUNKEN", SUNKEN),
     ];
     /// The raised grounds: a chip, a float, the selected row.
-    const RAISED_GROUNDS: &[(&str, u32)] = &[
-        ("RAISED", RAISED),
-        ("FLOAT", FLOAT),
-        ("SELECTED", SELECTED),
-    ];
+    const RAISED_GROUNDS: &[(&str, u32)] =
+        &[("RAISED", RAISED), ("FLOAT", FLOAT), ("SELECTED", SELECTED)];
 
     #[test]
     fn ink_clears_its_floor_on_every_ground() {
@@ -3210,16 +3131,19 @@ mod tests {
             [FIELD_RING, FLOAT_EDGE, BLOCK_RING],
             [0x404040, 0x383838, 0x333333]
         );
-        for (edge, ground) in [(FIELD_RING, FIELD), (FLOAT_EDGE, FLOAT), (BLOCK_RING, BLOCK)] {
-            assert!(luminance(edge) > luminance(ground), "{edge:06x} on {ground:06x}");
+        for (edge, ground) in [
+            (FIELD_RING, FIELD),
+            (FLOAT_EDGE, FLOAT),
+            (BLOCK_RING, BLOCK),
+        ] {
+            assert!(
+                luminance(edge) > luminance(ground),
+                "{edge:06x} on {ground:06x}"
+            );
         }
         // The state rings and washes are white at their stated opacities.
         let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
-        for (line, opacity) in [
-            (FOCUS_RING, 0.22),
-            (DROP_EDGE, 0.22),
-            (DROP_WASH, 0.06),
-        ] {
+        for (line, opacity) in [(FOCUS_RING, 0.22), (DROP_EDGE, 0.22), (DROP_WASH, 0.06)] {
             assert_eq!(line >> 8, 0xffffff, "{line:08x} is white");
             assert!((alpha(line) - opacity).abs() < 0.005, "{line:08x}");
         }
@@ -3256,9 +3180,11 @@ mod tests {
         // path, so a link.
         assert_ne!(LINK_INK, INK_STRONG, "links wear the link blue");
         assert_eq!(MENTION_INK, LINK_INK);
-        assert!(!mode_is_default("bypassPermissions"));
-        assert!(!mode_is_default("acceptEdits"));
-        assert!(mode_is_default("on-request"));
+        assert!(mode_is_risky("bypassPermissions"));
+        assert!(
+            !mode_is_risky("acceptEdits"),
+            "accept edits still asks for commands"
+        );
         assert_eq!(IDLE, INK_SUBTLE, "done and idle wear no hue");
     }
 
@@ -3289,7 +3215,6 @@ mod tests {
         }
         assert_eq!(paint::WINDOW, paint::CARD);
         assert_eq!(paint::PANEL, paint::FRAME);
-        assert_eq!(paint::BAR, paint::FRAME, "the shell is one plane");
         assert_eq!(FRAME, CARD, "one plane");
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
@@ -3370,8 +3295,6 @@ mod tests {
             FS_PALETTE,
             FS_PANEL_DIFF,
             FS_CHROME_CODE,
-            FS_PR_TITLE,
-            FS_PR_AVATAR,
             FS_HOME_TITLE,
             NAV_SPINNER_FS,
             NAV_RAIL_KEY_FS,
@@ -3389,8 +3312,8 @@ mod tests {
         assert!(near(CODE_CELL, 7.8) && near(CH, CODE_CELL));
         assert!(near(GLYPH_GUTTER, 2.0 * CH));
         assert_eq!((ROW, HALF_ROW), (20.0, 10.0));
-        assert_eq!((TITLEBAR_H, STATUS_BAR_H), (46.0, 30.0));
-        assert_eq!((NAV_WIDTH, BOARD_PAD, GRID_GAP), (264.0, 8.0, 8.0));
+        assert_eq!(TITLEBAR_H, 44.0);
+        assert_eq!((NAV_WIDTH, BOARD_PAD, GRID_GAP), (256.0, 8.0, 8.0));
         assert_eq!(WIN_CHROME_H, TITLEBAR_H);
         assert_eq!(TRAFFIC_Y, (WIN_CHROME_H - 14.0) / 2.0);
     }

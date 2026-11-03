@@ -557,7 +557,7 @@ fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     super::hold_nav_open(&view, cx);
-    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    cx.simulate_resize(gpui::size(px(550.), px(700.)));
     fake.streams.borrow()[0]
         .send(SessionEvent::ToolStarted {
             id: "long".into(),
@@ -587,7 +587,7 @@ fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
 
 /// A draft in a narrow Pane keeps its whole controls row inside the
 /// Composer: the Project and branch chips truncate first, and the model
-/// and effort pair stays whole and in the block.
+/// chip (its effort beside the model) stays in the block.
 #[gpui::test]
 fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("narrow-draft-controls", 1);
@@ -601,15 +601,13 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     let block = cx
         .debug_bounds("composer-block")
         .expect("the draft Composer");
-    let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
     let model = cx.debug_bounds("draft-model-picker").expect("model");
-    // SPEC §5.5: the pair rides the footer under the box, within its
+    // SPEC §5.5: the chip rides the footer under the box, within its
     // edges.
     assert!(
-        effort.right() <= block.right() + px(0.5),
-        "effort {effort:?} stays inside the box {block:?}"
+        model.right() <= block.right() + px(0.5),
+        "the model chip {model:?} stays inside the box {block:?}"
     );
-    assert!(model.right() <= effort.left());
     let toolbar = cx.debug_bounds("composer-footer").expect("the toolbar");
     for chip in ["band-chip-0", "band-chip-1"] {
         let chip = cx.debug_bounds(chip).expect("a setup chip");
@@ -1258,8 +1256,12 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
         "prose size"
     );
     let answer = cx.update(|_, cx| {
-        ferrite_pane::rich::testing::bounds(&format!("markdown-{namespace}-{:?}", answers[0]), 0, cx)
-            .unwrap()
+        ferrite_pane::rich::testing::bounds(
+            &format!("markdown-{namespace}-{:?}", answers[0]),
+            0,
+            cx,
+        )
+        .unwrap()
     });
     let mut line = |id| {
         cx.update(|_, cx| {

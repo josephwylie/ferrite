@@ -27,7 +27,6 @@ mod panel;
 mod panel_preview;
 mod parking;
 mod pr;
-mod pr_tab;
 mod project_picker;
 mod provider_controls;
 mod provider_forms;
@@ -302,8 +301,8 @@ fn group_all(cockpit: &mut Cockpit) -> GroupId {
 }
 
 /// Hold this test's wall clock still, for a test that counts renders. The
-/// executor's clock is stepped, but a nav row's age, a notice's and the
-/// bottom bar's minute turn on the wall clock, at the machine's pace: one
+/// executor's clock is stepped, but a nav row's age and a notice's turn
+/// on the wall clock, at the machine's pace: one
 /// turning inside a counted window (a loaded machine stretches the window
 /// into real seconds) redraws until the real clock catches the stepped
 /// one. Install before the Cockpit, so every stamp reads this time.
@@ -325,20 +324,16 @@ fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     (cockpit, fake)
 }
 
-/// The Attention list's sections, as `attention_list` builds them.
-fn listed(
+/// The Activity view's rows, as `activity` builds them: `Priority`'s,
+/// then `Today`'s.
+fn activity(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
-) -> Vec<(nav::ListSection, Vec<ThreadId>)> {
+) -> (Vec<ThreadId>, Vec<ThreadId>) {
     view.read_with(cx, |view, _| {
-        view.attention_list(&view.nav_state())
-            .sections
-            .into_iter()
-            .map(|block| {
-                let rows = block.rows.iter().map(|row| row.thread).collect();
-                (block.section, rows)
-            })
-            .collect()
+        let activity = view.activity(&view.nav_state());
+        let ids = |rows: &[nav::ActivityRow]| rows.iter().map(|entry| entry.row.thread).collect();
+        (ids(&activity.priority), ids(&activity.today))
     })
 }
 

@@ -478,7 +478,7 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
         assert!(
-            !view.model_chips(0, cx).is_empty(),
+            view.model_chip(0, cx).is_some(),
             "pre-lock the Composer offers the control"
         );
     });
@@ -510,7 +510,7 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
             "this Provider's models are live"
         );
         assert!(
-            !view.model_chips(0, cx).is_empty(),
+            view.model_chip(0, cx).is_some(),
             "and the control itself stays — every Pane draws one"
         );
         view.popover = None;
@@ -763,24 +763,52 @@ fn ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured(
     );
 }
 
-/// The draft band's effort chip: its rows are the model's ladder under
-/// the operator's default, a pick names the chip, and the first send
-/// starts the Thread on that effort.
+/// A draft's model chip is the live Thread's (Claude's new-session `Opus
+/// 5.5 Medium`): one chip, the effort in force beside the model, opening
+/// the model menu with its effort a submenu there. A pick in the submenu
+/// names the chip and closes the menu, and the first send starts the
+/// Thread on that effort.
 #[gpui::test]
-fn the_effort_chip_starts_the_thread_on_its_pick(cx: &mut TestAppContext) {
+fn the_draft_model_chip_sets_its_effort_in_a_submenu(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("draft-effort", 0);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
     tick(cx);
-    view.update_in(cx, |view, window, cx| {
-        view.open_band_popover(pane::BandChip::Effort, cx);
-        let band = view.popover.as_ref().expect("the effort popover");
-        assert!(matches!(band.kind, Kind::Band(pane::BandChip::Effort)));
-        let names: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
-        assert_eq!(names[0], "Default");
-        assert!(names.contains(&"High"), "{names:?}");
-        let high = names.iter().position(|name| *name == "High").unwrap();
-        view.pick(high, window, cx);
+    assert!(
+        cx.debug_bounds("draft-effort-picker").is_none(),
+        "no effort chip of its own"
+    );
+    let steps = view.read_with(cx, |view, _| {
+        let (steps, _, chosen) = view
+            .draft_effort_ladder(view.focused())
+            .expect("the premise: the default model takes an effort");
+        assert!(chosen.is_some(), "the chip names the level in force");
+        steps
+    });
+    let chip = cx.debug_bounds("draft-model-picker").expect("the model chip");
+    cx.simulate_click(chip.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let band = view.popover.as_ref().expect("the model menu");
+        assert!(matches!(band.kind, Kind::Band(pane::BandChip::Provider)));
+    });
+    let row = cx
+        .debug_bounds("choice-submenu-row")
+        .expect("the effort row rides the draft's model menu");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let high = steps
+        .iter()
+        .position(|step| step == "high")
+        .expect("the ladder offers high");
+    let pick = cx
+        .debug_bounds(Box::leak(format!("choice-sub-{high}").into_boxed_str()))
+        .expect("every level is a row");
+    cx.simulate_click(pick.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.popover.is_none(), "a pick closes the menu");
         let draft = view.panes[view.focused()].draft().expect("still a draft");
         assert_eq!(draft.binding.effort(), Some("high"));
     });
@@ -795,7 +823,7 @@ fn the_effort_chip_starts_the_thread_on_its_pick(cx: &mut TestAppContext) {
 
 /// #25: the mouse door — a click on the model chip opens the picker.
 /// The sweep covers the Composer's toolbar from its right (where the
-/// model and effort chips ride, left of send) so the test does not
+/// model chip rides, left of send) so the test does not
 /// encode the chip's exact position.
 #[gpui::test]
 fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
@@ -824,10 +852,9 @@ fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
         }
     }
     assert!(opened, "the sweep never found the chip");
-    // The sweep runs right to left and the effort chip sits right of
-    // the model chip: either picker proves the mouse door.
+    // One chip carries the model and its effort.
     view.read_with(cx, |view, _| {
         let picker = view.popover.as_ref().expect("open");
-        assert!(matches!(picker.kind, Kind::Provider | Kind::Effort));
+        assert!(matches!(picker.kind, Kind::Provider));
     });
 }

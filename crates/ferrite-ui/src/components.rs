@@ -548,7 +548,11 @@ mod loops {
             });
             let lift = |index: usize| -> f32 {
                 let Some(phase) = phase else {
-                    return if index == 1 { 1. } else { theme::WORKING_DOT_REST };
+                    return if index == 1 {
+                        1.
+                    } else {
+                        theme::WORKING_DOT_REST
+                    };
                 };
                 // A triangle pulse, a third of a turn wide, a third apart.
                 let at = (phase - index as f32 / 3.).rem_euclid(1.);
@@ -562,13 +566,10 @@ mod loops {
                 .items_center()
                 .gap(px(theme::WORKING_DOT_GAP))
                 .children((0..3).map(|index| {
-                    div()
-                        .size(px(theme::WORKING_DOT))
-                        .rounded_full()
-                        .bg(Hsla {
-                            a: ink.a * lift(index),
-                            ..ink
-                        })
+                    div().size(px(theme::WORKING_DOT)).rounded_full().bg(Hsla {
+                        a: ink.a * lift(index),
+                        ..ink
+                    })
                 }))
         }
     }
@@ -1343,6 +1344,9 @@ pub struct MenuItem {
     /// Arms before it runs: at rest it reads like any row; armed, its label
     /// turns `BLOCKED` and asks for the second press.
     pub destructive: bool,
+    /// A choice that lets work run without asking (a bypass permission
+    /// mode): its label in `RISKY_INK`, as its footer word is.
+    pub risky: bool,
     pub disabled: bool,
 }
 
@@ -1432,7 +1436,9 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
             ground: Some(theme::paint::FLOAT_SEL.rgba()),
         };
     }
-    let label = if cursor {
+    let label = if item.risky {
+        theme::RISKY_INK
+    } else if cursor {
         theme::INK_STRONG
     } else {
         theme::INK
@@ -1558,7 +1564,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
 }
 
 /// A fold's chevron, every surface's (the nav's sections and Groups, the
-/// panel's file blocks and the PR tab): `chevron-right` while folded, a
+/// panel's file blocks): `chevron-right` while folded, a
 /// quarter turn down while open. The turn eases over `motion::CHEVRON`
 /// when the fold flips under it (`key` holds its clock); drawn first
 /// already open, it is simply turned.
@@ -1630,28 +1636,6 @@ pub fn menu_section(
                 .child(div().font_weight(theme::W_LABEL).child(title.into()))
                 .children(note),
         )
-}
-
-/// The cards' settle (`motion::Swap`): each card (window coordinates, its
-/// corners at `radius`) under the plane's grey at `opacity`, so what it
-/// now shows comes up out of the plane. Paints only; the pointer passes
-/// through.
-pub fn card_veil(
-    cards: Vec<gpui::Bounds<gpui::Pixels>>,
-    radius: f32,
-    opacity: f32,
-) -> impl IntoElement {
-    let ink = theme::paint::CARD.hsla().opacity(opacity);
-    gpui::canvas(
-        |_, _, _| {},
-        move |_, _, window, _| {
-            for card in &cards {
-                window.paint_quad(gpui::fill(*card, ink).corner_radii(px(radius)));
-            }
-        },
-    )
-    .absolute()
-    .inset_0()
 }
 
 /// Reports `element`'s laid-out bounds, unrounded, to `record` in
@@ -1766,6 +1750,8 @@ pub struct Choice {
     pub badge: Option<SharedString>,
     /// The key that picks it, at the right edge (a mode's `1`…`5`).
     pub shortcut: Option<SharedString>,
+    /// A choice that lets work run without asking (`MenuItem::risky`).
+    pub risky: bool,
 }
 
 impl Choice {
@@ -1780,6 +1766,7 @@ impl Choice {
         item.note = self.note.clone();
         item.badge = self.badge.clone();
         item.shortcut = self.shortcut.clone();
+        item.risky = self.risky;
         if let (true, Some((path, ink))) = (marked, self.icon) {
             item = item.leading(path, ink);
         }
@@ -1871,8 +1858,7 @@ pub fn scrollbar_bar(
 }
 
 /// A CI check's state, one vocabulary for every surface that lists checks
-/// (the Pane head's checks card, the PR tab's checks and its readiness
-/// row), so a state reads the same a click apart. Colour is state (rule 6):
+/// (the Pane head's checks card), so a state reads the same a click apart. Colour is state (rule 6):
 /// a failure is `BLOCKED`; a run still going the braille spinner in
 /// `RUNNING`; a pass is done, a shape (`check-circle`) in `INK_SUBTLE`, never
 /// the green a running one wears; a queued run a hollow ring and a skipped
@@ -1920,10 +1906,12 @@ impl CheckMark {
                 .border_color(rgb(ink))
         };
         let drawn = match self {
-            CheckMark::Failed => icons::icon(icons::X_CIRCLE, theme::CHECK_MARK, ink)
-                .into_any_element(),
-            CheckMark::Passed => icons::icon(icons::CHECK_CIRCLE, theme::CHECK_MARK, ink)
-                .into_any_element(),
+            CheckMark::Failed => {
+                icons::icon(icons::X_CIRCLE, theme::CHECK_MARK, ink).into_any_element()
+            }
+            CheckMark::Passed => {
+                icons::icon(icons::CHECK_CIRCLE, theme::CHECK_MARK, ink).into_any_element()
+            }
             CheckMark::Running => div()
                 .font_family(theme::FONT_CODE)
                 .text_size(px(theme::FS_META))
@@ -2256,6 +2244,16 @@ mod tests {
             row_inks(&dead.item(true), false, false).label,
             theme::INK_SUBTLE
         );
+        let risky = Choice {
+            label: "Bypass permissions".into(),
+            risky: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            row_inks(&risky.item(false), true, false).label,
+            theme::RISKY_INK,
+            "a mode that runs without asking reads amber, on the cursor too"
+        );
     }
 
     /// The loops' frame arithmetic: ten frames a turn, wrapping, never out
@@ -2270,7 +2268,10 @@ mod tests {
         assert_eq!(frame_at(0.9999999, 10), 9);
         // The braille spinner's 66ms frames land on the pulse grid.
         assert_eq!(theme::MOTION_BRAILLE_FRAME_MS, 66);
-        assert_eq!(theme::MOTION_BRAILLE_FRAME_MS % theme::MOTION_PULSE_TICK_MS, 0);
+        assert_eq!(
+            theme::MOTION_BRAILLE_FRAME_MS % theme::MOTION_PULSE_TICK_MS,
+            0
+        );
     }
 
     /// The shimmer's crest travels left to right across the run, peaks at
@@ -2316,7 +2317,11 @@ mod tests {
         for step in 0..100_000 {
             let p = step as f32 / 100_000.0;
             let first = (frame_at(p, steps) as f32) / steps as f32;
-            assert_eq!(caret_blink(p), caret_blink(first), "moved at {p} inside a step");
+            assert_eq!(
+                caret_blink(p),
+                caret_blink(first),
+                "moved at {p} inside a step"
+            );
         }
     }
 

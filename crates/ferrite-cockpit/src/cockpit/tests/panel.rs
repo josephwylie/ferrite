@@ -1,8 +1,7 @@
 //! The right panel (SPEC §5.6): it follows the focused Thread in every
-//! view, with no size rules; the one toggle and its setting; the tab each
-//! Thread remembers.
+//! view, with no size rules; the one toggle and its setting; one scroll of
+//! sections with no tabs.
 use super::*;
-use crate::cockpit::panel::PanelTab;
 
 /// A Solo window of `count` Threads at `width`, the nav held open.
 fn solo<'a>(
@@ -86,8 +85,8 @@ fn the_panel_never_hides_for_width(cx: &mut TestAppContext) {
 }
 
 /// In a Group the panel is the focused Pane's Thread's: focusing another
-/// Pane switches it, each Thread keeps its last tab, and a fullscreen Pane
-/// keeps it. A draft has no Thread, so no panel and no toggle.
+/// Pane switches it, and a fullscreen Pane keeps it. A draft has no
+/// Thread, so no panel and no toggle.
 #[gpui::test]
 fn the_panel_follows_the_focused_group_pane(cx: &mut TestAppContext) {
     let (view, cx) = group("panel-group", 2, cx);
@@ -95,19 +94,10 @@ fn the_panel_follows_the_focused_group_pane(cx: &mut TestAppContext) {
     focus(&view, threads[0], cx);
     assert!(cx.debug_bounds("panel").is_some(), "a Group shows it");
     assert_eq!(shown(&view, cx), Some(threads[0]));
-    let pr = cx.debug_bounds("panel-tab-Pr").expect("the PR tab");
-    cx.simulate_click(pr.center(), gpui::Modifiers::none());
-    tick(cx);
 
     focus(&view, threads[1], cx);
     assert_eq!(shown(&view, cx), Some(threads[1]), "focus switches it");
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panel_tab(threads[1]), PanelTab::Changes, "a new one");
-    });
     focus(&view, threads[0], cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.panel_tab(threads[0]), PanelTab::Pr, "remembered");
-    });
 
     cx.simulate_keystrokes("cmd-shift-enter");
     tick(cx);
@@ -281,53 +271,73 @@ fn the_palette_toggles_the_panel(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| !view.prefs.settings.panel_shown));
 }
 
-/// Each Thread keeps its last tab; a new one opens on Changes; opening a
-/// tab from hidden shows the panel on it.
+/// The panel is one scroll of sections, Claude's, with no tabs:
+/// Environment, Changes, Context. Opening it from hidden shows it.
 #[gpui::test]
-fn the_tab_each_thread_keeps(cx: &mut TestAppContext) {
-    let (view, cx) = solo("panel-tabs", 2, 1600., cx);
-    let threads = view.read_with(cx, |view, _| view.cockpit.threads());
-    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
-    tick(cx);
-    let tab = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext, thread| {
-        view.read_with(cx, |view, _| view.panel_tab(thread))
-    };
-    assert_eq!(tab(&view, cx, threads[0]), PanelTab::Changes);
-    let pr = cx.debug_bounds("panel-tab-Pr").expect("the PR tab");
-    cx.simulate_click(pr.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(tab(&view, cx, threads[0]), PanelTab::Pr);
+fn the_panel_is_one_scroll_of_sections(cx: &mut TestAppContext) {
+    let (view, cx) = solo("panel-sections", 1, 1600., cx);
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    for section in [
+        "panel-environment-head",
+        "panel-environment-machine",
+        "panel-changes-head",
+        "panel-no-changes",
+        "panel-context-head",
+    ] {
+        assert!(cx.debug_bounds(section).is_some(), "{section}");
+    }
+    let environment = cx.debug_bounds("panel-environment-head").unwrap();
+    let changes = cx.debug_bounds("panel-changes-head").unwrap();
+    let context = cx.debug_bounds("panel-context-head").unwrap();
     assert!(
-        cx.debug_bounds("panel-no-pr").is_some(),
-        "no pull request for the branch"
+        environment.top() < changes.top() && changes.top() < context.top(),
+        "in Claude's order"
     );
-    view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
-    tick(cx);
-    assert_eq!(tab(&view, cx, threads[1]), PanelTab::Changes, "a new one");
-    view.update(cx, |view, cx| view.focus_thread(threads[0], cx));
-    tick(cx);
-    assert_eq!(tab(&view, cx, threads[0]), PanelTab::Pr, "remembered");
+    for tab in ["panel-tab-Overview", "panel-tab-Preview"] {
+        assert!(cx.debug_bounds(tab).is_none(), "no tabs: {tab}");
+    }
+    assert!(cx.debug_bounds("panel-pr").is_none(), "no pull request yet");
 
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none());
-    view.update(cx, |view, cx| {
-        view.open_panel_tab(threads[0], PanelTab::Changes, cx)
-    });
+    view.update(cx, |view, cx| view.open_panel(thread, cx));
     tick(cx);
-    assert!(cx.debug_bounds("panel").is_some(), "opening a tab shows it");
-    assert_eq!(tab(&view, cx, threads[0]), PanelTab::Changes);
-    assert!(
-        cx.debug_bounds("panel-no-changes").is_some(),
-        "nothing edited yet"
-    );
+    assert!(cx.debug_bounds("panel").is_some(), "opening it shows it");
 }
 
-/// The foot reads the shown Thread's context, live: another Thread's usage
-/// is not this panel's, and showing that Thread brings its reading.
+/// The pull request is a row in Changes once one exists, and the panel
+/// snaps open and shut: its width is its own or nothing, from the first
+/// frame.
 #[gpui::test]
-fn the_foot_reads_the_shown_threads_context(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("panel-foot", 2);
+fn the_pull_request_is_a_row_in_changes(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::PANEL_W;
+    let (view, cx) = solo("panel-pr-row", 1, 1600., cx);
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    view.update(cx, |view, cx| {
+        view.facts.pr_answered(thread, Some(pr_with_checks()));
+        cx.notify();
+    });
+    tick(cx);
+    let row = cx.debug_bounds("panel-pr").expect("the PR row");
+    let changes = cx.debug_bounds("panel-changes-head").unwrap();
+    assert!(row.top() > changes.top(), "under Changes");
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("panel").is_none(), "shut at once");
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    cx.run_until_parked();
+    let panel = cx.debug_bounds("panel").expect("open at once");
+    assert_eq!(panel.size.width, px(PANEL_W));
+}
+
+/// The Context section reads the shown Thread's context, live: another
+/// Thread's usage is not this panel's, and showing that Thread brings its
+/// reading. It is the one context meter: the panel has no foot.
+#[gpui::test]
+fn the_context_section_reads_the_shown_threads_context(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("panel-context", 2);
     let threads = core.threads().to_vec();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -348,10 +358,11 @@ fn the_foot_reads_the_shown_threads_context(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("panel").is_some());
     assert!(
-        cx.debug_bounds("panel-foot-99000").is_none(),
+        cx.debug_bounds("panel-no-context").is_some(),
         "an unshown Thread's usage is not the panel's"
     );
     view.update(cx, |view, cx| view.focus_thread(threads[1], cx));
     tick(cx);
-    assert!(cx.debug_bounds("panel-foot-99000").is_some());
+    assert!(cx.debug_bounds("panel-context").is_some());
+    assert!(cx.debug_bounds("panel-no-context").is_none());
 }

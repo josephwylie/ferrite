@@ -1,6 +1,5 @@
 //! Scenes for the features the first references predate: the Review slot (ADR
-//! 0021) at rest and mid-slide, a file in the Panel's preview at rest and
-//! mid-ride, find in a
+//! 0021) at rest and mid-slide, a file in the Panel's preview, find in a
 //! transcript (ADR 0020), the nav's PR labels and the four
 //! states (ADR 0015), a mermaid diagram (ADR 0016) and a finish toast (ADR
 //! 0017). Every one is seeded: no network, no provider CLI, no `gh`, and
@@ -30,7 +29,6 @@ pub(super) const STATES: &[&str] = &[
     "review-pr",
     "review-search",
     "reader-line",
-    "reader-slide",
     "review-slide",
     "review-comment",
     "review-notices",
@@ -51,8 +49,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "review-commits" => review(Staged::Commits),
         "review-pr" => review(Staged::Pr),
         "review-search" => review(Staged::Search),
-        "reader-line" => reader(None),
-        "reader-slide" => reader(Some(0.5)),
+        "reader-line" => reader(),
         "review-slide" => {
             // The Review halfway through its slide in beside the Pane.
             let (scene, setup) = review(Staged::Uncommitted);
@@ -378,10 +375,8 @@ fn search_results() -> SearchResults {
 // -------------------------------------------------------------------- reader
 
 /// The conversation scene's Thread with a file open in the Panel's
-/// Preview tab at a line: at rest, or held `held` of the way through the
-/// Panel's ride out to its preview width (the board giving way, the
-/// preview laid out at its final width and pinned to the board's edge).
-fn reader(held: Option<f32>) -> (Scene, Setup) {
+/// Preview tab at a line.
+fn reader() -> (Scene, Setup) {
     let scene = conversation("reader");
     let file = scene
         .root
@@ -392,7 +387,6 @@ fn reader(held: Option<f32>) -> (Scene, Setup) {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, NAV_RS).unwrap();
         view.empty_shown = false;
-        view.fixture_hold_panel(held);
         view.open_preview(file.clone(), Some(14), window, cx);
     });
     (scene, setup)

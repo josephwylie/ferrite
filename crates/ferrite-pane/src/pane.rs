@@ -25,29 +25,23 @@ mod working;
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{
-    attach_button, composer_footer, composer_row_limit, effort_chip, flat_facts_text, mode_chip,
-    model_chip, offers_import, permission_mode_label, queued_close, send_button, send_is_stop,
-    toolbar_chip, ComposerControls,
+    attach_button, composer_footer, composer_row_limit, flat_facts_text, footer_word,
+    mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
+    queued_edit, queued_send_now, send_button, send_is_stop, toolbar_chip, ComposerControls,
 };
 use composer::{
-    chip_face, composer_region, composer_stack, ghost_row, in_column, placeholder, queued_row,
+    chip_face, composer_region, composer_stack, ghost_row, in_column, placeholder, queue_card,
     ComposerStack, Ghost,
 };
-pub use menus::{
-    menu_item, menu_popover, menu_row, picker_row, picker_section, popover_footer, MenuRow,
-};
-pub use output::{command_fold, diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
+pub use menus::{menu_item, menu_popover, menu_row, picker_row, picker_section, MenuRow};
+pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
 use output::{
-    command_open, diff_rows, eased_fold, failed_excerpt, failed_rest, fold_label, fold_open,
-    hunk_rows, more_lines, output_box, output_fold, output_lines_run, render_diff, running_tests,
-    test_rest, tool_details, DiffRow,
+    diff_rows, hunk_rows, output_box, render_diff, running_tests, shell_card, tool_details, DiffRow,
 };
-pub(crate) use text::{
-    collect_block_text, collect_group_text, group_live, turn_stamp,
-};
+pub(crate) use text::{collect_block_text, collect_group_text, group_live, turn_stamp};
 pub use usage::{
-    compact_count, context_meter_segments, context_ring, context_segments, context_usage,
-    ctx_meter_ink, usage_ink,
+    compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
+    plan_usage_fraction, plan_usage_ring, usage_ink,
 };
 pub use working::{working_tail, WorkingFacts};
 #[cfg(test)]
@@ -67,7 +61,7 @@ use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
-    Block, BlockId, Body, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState, Transcript,
+    Block, BlockId, Body, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
 };
 use ferrite_core::workspace::{Check, CheckState, PullRequest, WorkspaceBinding};
 use ferrite_core::{Decision, ThreadId};
@@ -200,11 +194,11 @@ pub struct DraftBinding {
     pub error: Option<SharedString>,
 }
 
-/// The band's four chips, in tab order.
+/// The band's three chips, in tab order: the model (its effort a
+/// submenu there), the Project, the Workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandChip {
     Provider,
-    Effort,
     Project,
     Workspace,
 }
@@ -214,8 +208,7 @@ impl BandChip {
     pub fn next(current: Option<BandChip>) -> Option<BandChip> {
         match current {
             None => Some(BandChip::Provider),
-            Some(BandChip::Provider) => Some(BandChip::Effort),
-            Some(BandChip::Effort) => Some(BandChip::Project),
+            Some(BandChip::Provider) => Some(BandChip::Project),
             Some(BandChip::Project) => Some(BandChip::Workspace),
             Some(BandChip::Workspace) => None,
         }
@@ -658,11 +651,9 @@ pub struct PaneWiring {
     /// approval's verbs or the question's options, each a boxed word wired
     /// to its answer in the cockpit.
     pub quick_answers: Option<AnyElement>,
-    /// The Solo Composer's controls and its queued row's close button,
-    /// wired in the cockpit (SPEC §5.5); on a board, the focused Pane's
-    /// send circle alone.
+    /// The Solo Composer's controls, wired in the cockpit (SPEC §5.5); on
+    /// a board, the focused Pane's send circle alone.
     pub toolbar: Option<ComposerControls>,
-    pub unqueue: Option<AnyElement>,
     /// The Group head's fill button (`fill_button`), wired to fill the
     /// board with this Pane; None in Solo.
     pub fill: Option<AnyElement>,
@@ -866,9 +857,8 @@ pub(crate) struct PaneCtx<'a> {
     pub activity_decisions: Option<AnyElement>,
     /// The docked Decision merges into this Pane's Composer (one block).
     pub decision_joined: bool,
-    /// `l1_composer`: the Solo box's controls and queued-row close button.
+    /// `l1_composer`: the Solo box's controls.
     pub toolbar: Option<ComposerControls>,
-    pub unqueue: Option<AnyElement>,
 }
 
 /// The group name every Pane root carries (`.group(PANE_GROUP)`): what a
@@ -916,7 +906,6 @@ pub fn render_pane(
         head_drag,
         quick_answers,
         toolbar,
-        unqueue,
         fill,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
@@ -1045,17 +1034,16 @@ pub fn render_pane(
         activity_decisions: None,
         decision_joined,
         toolbar,
-        unqueue,
     };
 
     // Solo (fullscreen included) has no head: the nav's row names the
     // Thread (C2, ADR 0014), and the body starts at the Pane's own top edge. A
     // Group's Pane wears the one head. Subagent tabs keep a strip of their
     // own either way.
-    let mut pane = shell.children(head(title));
-    if let Some(agents) = agents {
-        pane = pane.child(tab_strip(key, agents, l1_tasks(&mut cx), split));
-    }
+    let subagents = thread.map_or(0, |thread| thread.activity().children().len());
+    let mut pane = shell
+        .children(head(title))
+        .children(agents.and_then(|agents| tab_strip(key, agents, split, subagents)));
     match transcript {
         Some(_) => {
             view.rich
@@ -1113,26 +1101,6 @@ pub fn render_pane(
 // Each slot's body belongs to one package; its signature and `PaneCtx` are
 // the integrator's.
 
-/// WP-C · the plan's meter beside the subagent tabs.
-fn l1_tasks(cx: &mut PaneCtx) -> Option<AnyElement> {
-    tasks_meter(cx.view.thread()?, cx.transcript?)
-}
-
-/// The plan's meter (`tasks_strip`) for a Thread working to one: beside the
-/// subagent tabs.
-pub(crate) fn tasks_meter(thread: ThreadId, transcript: &Transcript) -> Option<AnyElement> {
-    let todos = transcript.todos()?;
-    Some(
-        tasks_strip(
-            thread.get(),
-            todos,
-            transcript.current_task(),
-            transcript.status() == Status::Streaming,
-        )
-        .into_any_element(),
-    )
-}
-
 /// WP-F · between the body and the Composer. Every L1 request — Main's
 /// plain approval included — is the one Decision card in the body's
 /// requests overlay (`activity_decisions`), and a failed send is that
@@ -1181,7 +1149,6 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 drop_target: cx.drop_target,
                 joined: cx.decision_joined,
                 toolbar: cx.toolbar.take(),
-                unqueue: cx.unqueue.take(),
             },
         )
         .into_any_element(),
@@ -1265,12 +1232,12 @@ impl PaneEdge {
 /// edges and a state change moves nothing. Every Pane root is `PANE_GROUP`.
 fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
     let overlay = match edge {
-        PaneEdge::Focused => Some(
-            card_ring(edge.ink()).debug_selector(move || format!("pane-focus-edge-{key}")),
-        ),
-        PaneEdge::Attention => Some(
-            card_ring(edge.ink()).debug_selector(move || format!("pane-waiting-edge-{key}")),
-        ),
+        PaneEdge::Focused => {
+            Some(card_ring(edge.ink()).debug_selector(move || format!("pane-focus-edge-{key}")))
+        }
+        PaneEdge::Attention => {
+            Some(card_ring(edge.ink()).debug_selector(move || format!("pane-waiting-edge-{key}")))
+        }
         PaneEdge::Rest => Some(card_ring(edge.ink())),
         PaneEdge::Flush => None,
     };
@@ -1323,6 +1290,10 @@ pub struct DraftState<'a> {
     pub show_focus: bool,
     /// The Solo box's controls (`PaneWiring::toolbar`).
     pub toolbar: Option<ComposerControls>,
+    /// The start card's groups (`draft_card_group`), wired in the cockpit:
+    /// the project and workspace pickers, then the suggestions. Empty on a
+    /// board, where the cell has no room for them.
+    pub start: Vec<AnyElement>,
 }
 
 /// What a draft is called until its first send names the Thread — in its
@@ -1347,6 +1318,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         drop_target,
         show_focus,
         toolbar,
+        start,
     } = state;
     // A draft wears the live Pane's edge: transparent at rest or, beside
     // other Panes, the focus ink. It has no state to announce.
@@ -1388,16 +1360,26 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             drop_target,
             joined: false,
             toolbar,
-            unqueue: None,
         },
     );
-    // A quiet start, as the Claude app's new session is: the body holds
-    // only the embossed mark at its centre — the Composer's placeholder
-    // says what to do, once (rule 2.11.4) — and the Composer stands at the
-    // foot, where the Thread it becomes keeps it, so the first send moves
-    // nothing.
-    let mark = (level == Level::Transcript)
-        .then(|| components::embossed_mark(theme::DRAFT_MARK, theme::EMBOSS_ON_PANE));
+    // The Claude app's new session: at the body's centre the mark over the
+    // start card (where the work runs, then a suggestion or two), and the
+    // Composer at the foot, where the Thread it becomes keeps it, so the
+    // first send moves nothing.
+    let card = (level == Level::Transcript).then(|| {
+        div()
+            .debug_selector(|| "draft-start".into())
+            .flex()
+            .flex_col()
+            .w_full()
+            .max_w(px(theme::DRAFT_CARD_W))
+            .gap(px(theme::DRAFT_CARD_GAP))
+            .child(div().flex().justify_end().child(components::embossed_mark(
+                theme::DRAFT_MARK,
+                theme::EMBOSS_ON_PANE,
+            )))
+            .children(start)
+    });
     let body = div()
         .debug_selector(|| "draft-empty".into())
         .flex_1()
@@ -1407,7 +1389,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         .flex_col()
         .items_center()
         .justify_center()
-        .children(mark);
+        .px(px(theme::SPACE_4))
+        .children(card);
     pane_frame(
         shell
             .child(body)
@@ -1418,6 +1401,76 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         edge,
         u64::MAX - key,
     )
+}
+
+/// One group of the draft's start card: an `R_CARD` card ringed in
+/// `CARD_RING`, its rows split by hairlines when `ruled` (the setup rows),
+/// or not (the suggestions).
+pub fn draft_card_group(
+    selector: &'static str,
+    rows: impl IntoIterator<Item = AnyElement>,
+    ruled: bool,
+) -> Div {
+    div()
+        .debug_selector(move || selector.into())
+        .flex()
+        .flex_col()
+        .rounded(px(theme::R_CARD))
+        .border_1()
+        .border_color(theme::paint::CARD_RING)
+        .overflow_hidden()
+        .children(rows.into_iter().enumerate().map(|(at, row)| {
+            div()
+                .when(ruled && at > 0, |row| {
+                    row.border_t_1().border_color(theme::paint::CARD_RING)
+                })
+                .child(row)
+        }))
+}
+
+/// One row of the draft's start card: its icon, its words, and a chevron
+/// after them when it opens a picker. A setup row is
+/// `DRAFT_SETUP_ROW_H`, a suggestion `DRAFT_SUGGESTION_ROW_H`; the caller
+/// wires the press.
+pub fn draft_card_row(
+    id: impl Into<gpui::ElementId>,
+    glyph: &'static str,
+    label: impl Into<SharedString>,
+    picker: bool,
+) -> Stateful<Div> {
+    let id = id.into();
+    let key = ferrite_ui::pointer::hover_key(&id);
+    let selector = format!("{id}");
+    div()
+        .id(id)
+        .debug_selector(move || selector.clone())
+        .flex()
+        .items_center()
+        .gap(px(theme::SPACE_2))
+        .h(px(if picker {
+            theme::DRAFT_SETUP_ROW_H
+        } else {
+            theme::DRAFT_SUGGESTION_ROW_H
+        }))
+        .px(px(theme::SPACE_3))
+        .min_w_0()
+        .cursor_pointer()
+        .hover_row(key)
+        .press_row()
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_UI))
+        .text_color(rgb(INK))
+        .child(icon(glyph, theme::PANEL_ROW_ICON, INK))
+        .child(
+            div()
+                .flex_shrink(1.)
+                .min_w_0()
+                .truncate()
+                .child(label.into()),
+        )
+        .when(picker, |row| {
+            row.child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, INK_SUBTLE))
+        })
 }
 
 /// A Draft is disposable state, so its Pane advertises the same close action
@@ -2246,13 +2299,7 @@ pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -
         .line_height(px(theme::LH_UI))
         .whitespace_nowrap()
         .child(icon(icons::X_CIRCLE, theme::FAILURE_STRIP_ICON, BLOCKED))
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_color(rgb(INK))
-                .child(words),
-        )
+        .child(div().min_w_0().truncate().text_color(rgb(INK)).child(words))
         .child(div().flex_1())
         .children(retry)
 }
@@ -2309,15 +2356,19 @@ pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div
 /// The card's tab strip (SPEC §5.3), under the head on a board and at the
 /// card's top edge in Solo: one `SUBJECT_STRIP_H` row padded
 /// `SUBJECT_STRIP_PAD_X`, closed by a `LINE` — the tabs and their menu
-/// taking the width, then the plan's meter in 12 `INK_SUBTLE` and the split
-/// button at the right.
+/// taking the width, then the split button at the right. Only a Thread with
+/// Subagents has one: a lone `Main` tab is no choice, so it costs no row.
+/// The plan's progress is the task list's (`working::task_list`), not here.
 fn tab_strip(
     key: u64,
     agents: AnyElement,
-    tasks: Option<AnyElement>,
     split: Option<AnyElement>,
-) -> Div {
-    div()
+    subagents: usize,
+) -> Option<Div> {
+    if subagents == 0 {
+        return None;
+    }
+    let strip = div()
         .debug_selector(move || format!("pane-tabs-{key}"))
         .flex()
         .flex_shrink_0()
@@ -2332,14 +2383,8 @@ fn tab_strip(
         .line_height(px(theme::LH_UI))
         .text_color(rgb(INK_SUBTLE))
         .child(agents)
-        .children(tasks.map(|tasks| {
-            div()
-                .flex_shrink_0()
-                .px(px(theme::SPACE_2))
-                .text_size(px(theme::FS_META))
-                .child(tasks)
-        }))
-        .children(split)
+        .children(split);
+    Some(strip)
 }
 
 /// The floor a head title keeps however narrow its head: `HEAD_TITLE_MIN_W`,
@@ -2353,8 +2398,8 @@ fn title_floor(name: &str) -> f32 {
         .min(theme::HEAD_TITLE_MIN_W)
 }
 
-/// A run's mark in the shared check vocabulary (`components::CheckMark`,
-/// the PR tab's too), from its rollup state and the forge's own detail:
+/// A run's mark in the shared check vocabulary (`components::CheckMark`),
+/// from its rollup state and the forge's own detail:
 /// a pending run is running unless the forge says it waits.
 pub fn check_mark(state: CheckState, detail: &str) -> components::CheckMark {
     use components::CheckMark;
@@ -2557,103 +2602,6 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
 /// tooltip.
 pub fn head_title(name: SharedString) -> Div {
     div().min_w_0().truncate().child(name)
-}
-
-/// How the tasks meter draws a plan: one segment per step up to
-/// `METER_SEG_CAP`, past it one continuous track filled to the fraction.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum MeterLayout {
-    Segments { done: usize, total: usize },
-    Track { fraction: f32 },
-}
-
-pub(crate) fn meter_layout(done: usize, total: usize) -> MeterLayout {
-    let done = done.min(total);
-    if total <= theme::METER_SEG_CAP {
-        MeterLayout::Segments { done, total }
-    } else {
-        MeterLayout::Track {
-            fraction: done as f32 / total as f32,
-        }
-    }
-}
-
-/// The painted plan meter beside the subagent tabs (neither face has
-/// `▰▱`): done steps in `INK_SUBTLE`, the rest unlit. `live` lights the
-/// step being run in `RUNNING` — the one colour on a meter, because a step
-/// in progress is live state. Finishing a plan is not a status: a full
-/// meter is all `INK_SUBTLE`, no check and no green.
-fn meter_bar(done: usize, total: usize, live: bool) -> Div {
-    let segment = |ink: gpui::Hsla| {
-        div()
-            .flex_shrink_0()
-            .w(px(theme::METER_SEG_W))
-            .h(px(theme::METER_SEG_H))
-            .rounded(px(theme::METER_SEG_R))
-            .bg(ink)
-    };
-    match meter_layout(done, total) {
-        MeterLayout::Segments { done, total } => div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(theme::METER_SEG_GAP))
-            .children((0..total).map(|index| {
-                segment(if index < done {
-                    rgb(INK_SUBTLE).into()
-                } else if index == done && live {
-                    rgb(RUNNING).into()
-                } else {
-                    rgba(METER_OFF).into()
-                })
-            })),
-        MeterLayout::Track { fraction } => div()
-            .flex_shrink_0()
-            .w(px(theme::METER_TRACK_W))
-            .h(px(theme::METER_SEG_H))
-            .rounded(px(theme::METER_SEG_R))
-            .bg(rgba(METER_OFF))
-            .child(
-                div()
-                    .h_full()
-                    .w(px(theme::METER_TRACK_W * fraction))
-                    .rounded(px(theme::METER_SEG_R))
-                    .bg(rgb(INK_SUBTLE)),
-            ),
-    }
-}
-
-/// The painted meter and its `3/4` count, in one row.
-fn meter(done: usize, total: usize, live: bool) -> Div {
-    let done = done.min(total);
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::METER_GAP))
-        .child(meter_bar(done, total, live))
-        .child(components::tabular(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(INK_SUBTLE))
-                .child(SharedString::from(format!("{done}/{total}"))),
-        ))
-}
-
-/// The tasks meter in the head's right cluster (it replaced the tasks
-/// row): segments and count, the step being run lit while the transcript
-/// streams, and that step's words in a tooltip — the working line and the
-/// plan's own tool rows carry them in the body.
-fn tasks_strip(key: u64, todos: Todos, current: Option<&str>, streaming: bool) -> Stateful<Div> {
-    let done = todos.done.min(todos.total);
-    let tip = SharedString::from(match current {
-        Some(current) => format!("{done}/{} · {current}", todos.total),
-        None => format!("{done}/{}", todos.total),
-    });
-    meter(done, todos.total, streaming && current.is_some())
-        .id(("tasks-meter", key as usize))
-        .debug_selector(move || format!("tasks-meter-{key}"))
-        .tooltip(ferrite_ui::menu::tooltip(tip))
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -3092,7 +3040,6 @@ impl RowCx<'_> {
     fn grid(&self) -> Grid {
         self.grid
     }
-
 }
 
 /// A tool row's disclosure state: whether its details (its output fold,
@@ -3123,7 +3070,9 @@ pub(crate) fn render_block(
         .w_full()
         .min_w_0()
         .flex_shrink_0()
-        .when(row_cx.narration, |row| row.text_size(px(grid.activity().size)));
+        .when(row_cx.narration, |row| {
+            row.text_size(px(grid.activity().size))
+        });
     match &block.body {
         // A visual's row owns a live page, so the transcript's `Shelf`
         // draws it (`TranscriptView::render_row`); it never reaches here.
@@ -3134,10 +3083,12 @@ pub(crate) fn render_block(
         Body::Paragraph { spans } => row
             .child(
                 content_row(grid).text_color(rgb(prose_ink)).child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(prose(block.id, spans, selection, row_cx.narration)),
+                    div().flex_1().min_w_0().child(prose(
+                        block.id,
+                        spans,
+                        selection,
+                        row_cx.narration,
+                    )),
                 ),
             )
             .into_any_element(),
@@ -3145,13 +3096,17 @@ pub(crate) fn render_block(
             .child(
                 content_row(grid)
                     .font_weight(theme::W_STRONG)
-                    .text_color(rgb(if row_cx.narration { INK_SUBTLE } else { INK_STRONG }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(prose(block.id, spans, selection, row_cx.narration)),
-                    ),
+                    .text_color(rgb(if row_cx.narration {
+                        INK_SUBTLE
+                    } else {
+                        INK_STRONG
+                    }))
+                    .child(div().flex_1().min_w_0().child(prose(
+                        block.id,
+                        spans,
+                        selection,
+                        row_cx.narration,
+                    ))),
             )
             .into_any_element(),
         // A fallback list item: a dim `•` hanging in two cells, its text
@@ -3167,12 +3122,12 @@ pub(crate) fn render_block(
                             .text_color(rgb(INK_SUBTLE))
                             .child("\u{2022}"),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(prose(block.id, spans, selection, row_cx.narration)),
-                    ),
+                    .child(div().flex_1().min_w_0().child(prose(
+                        block.id,
+                        spans,
+                        selection,
+                        row_cx.narration,
+                    ))),
             )
             .into_any_element(),
         // A blank thought from an older log (redacted thinking, before the
@@ -3228,7 +3183,9 @@ pub(crate) fn render_block(
                     ),
                 );
             }
-            row.text_color(rgb(INK_SUBTLE)).child(body).into_any_element()
+            row.text_color(rgb(INK_SUBTLE))
+                .child(body)
+                .into_any_element()
         }
         // A notice: an activity line, its words cut at the column's edge
         // with the whole of it one hover away. A Decision
@@ -3253,7 +3210,7 @@ pub(crate) fn render_block(
                     )),
             );
             row.child(activity_line(grid, None, words))
-            .into_any_element()
+                .into_any_element()
         }
         // A decision record (`allowed Write`) or a revival note, under the
         // row it answers.
@@ -3334,7 +3291,10 @@ fn prompt_text_chipping(
     if chipped.is_empty() {
         return (PromptText::Literal(text), files);
     }
-    (PromptText::Markdown(prompt_markdown(&text, &chipped)), files)
+    (
+        PromptText::Markdown(prompt_markdown(&text, &chipped)),
+        files,
+    )
 }
 
 /// The prompt's words with every Markdown character escaped (they are the
@@ -3492,12 +3452,7 @@ pub(crate) fn prompt_row(
 /// bubble at `R_CARD`, right-aligned, its words clamped to `lines` with
 /// all its files' chips (its images' too) flowing inline after them. Not
 /// part of the selection; the transcript makes it the way back to its turn.
-pub(crate) fn pinned_prompt(
-    block: &Block,
-    line: &str,
-    row_cx: &RowCx,
-    lines: usize,
-) -> Div {
+pub(crate) fn pinned_prompt(block: &Block, line: &str, row_cx: &RowCx, lines: usize) -> Div {
     let grid = row_cx.grid();
     let (text, files) = prompt_text_chipping(line, |_| true);
     let gallery = prompt_gallery(&files);
@@ -3816,32 +3771,22 @@ pub(crate) fn omitted_line(bytes: usize) -> Div {
 /// How a turn ended (`text::turn_stamp`), one selectable run that copies
 /// back as it reads. A completed turn that took a while closes on `Worked
 /// for 5m 22s` in `INK_SUBTLE`, a `LINE` running on from it to the
-/// column's end; an interrupted or failed one is an activity line, `failed
-/// · 0.1s · API Error: 529 overloaded`, its lead word the only coloured
-/// one — `interrupted` in `INK` (the operator did it; nothing failed),
-/// `failed` in `BLOCKED`. A quick completed turn has no row at all.
-fn turn_end(
-    block: BlockId,
-    end: &ferrite_core::transcript::TurnEnd,
-    row_cx: &RowCx,
-) -> AnyElement {
+/// column's end; an interrupted one is a muted activity line, all
+/// `INK_SUBTLE` (the operator did it; nothing failed); a failed one leads
+/// with `failed` in `BLOCKED`. A quick completed turn has no row at all.
+fn turn_end(block: BlockId, end: &ferrite_core::transcript::TurnEnd, row_cx: &RowCx) -> AnyElement {
     use ferrite_core::TurnOutcome;
     let Some(text) = text::turn_stamp(end) else {
         return div().into_any_element();
     };
     let mut highlights = separators(&text);
-    let lead = match &end.outcome {
-        TurnOutcome::Completed => None,
-        TurnOutcome::Interrupted => Some((INK, theme::words::INTERRUPTED.len())),
-        TurnOutcome::Error(_) => Some((BLOCKED, theme::words::FAILED.len())),
-    };
-    if let Some((ink, len)) = lead {
+    if matches!(end.outcome, TurnOutcome::Error(_)) && text.starts_with(theme::words::FAILED) {
         highlights.insert(
             0,
             (
-                0..len,
+                0..theme::words::FAILED.len(),
                 HighlightStyle {
-                    color: Some(rgb(ink).into()),
+                    color: Some(rgb(BLOCKED).into()),
                     ..Default::default()
                 },
             ),
@@ -4092,22 +4037,21 @@ pub(crate) fn activity_note(grid: Grid) -> Div {
         .text_color(rgb(INK_SUBTLE))
 }
 
-/// A tool call (the reference's `Built AcmeField ›`): one muted line in the
-/// app's words (`text::call_line`) — the verb, the argument (a literal one
-/// a step brighter on no chip, a path a link), what came of it after a `·`
-/// (`954 passed`, a command's first line) — and its `›` when it opens; a
-/// failed call's verdict after the cut (`text::call_verdict`), only its
-/// `failed` in `BLOCKED`. No icon, no time. Under it: a
-/// failure's own words (`text::call_failure`), a running suite's bar, and,
-/// once open, anything literal — a failure's output preview and its fold,
-/// an open command's output, disclosed details — in one output box
-/// (`output_box`), then its diffs. The whole line is the pointer's toggle;
-/// the keyboard's disclosure target wears `paint::RAISED`.
+/// A tool call (the reference's `List a directory that doesn't exist
+/// Failed ▸`): one muted line in the app's words (`text::call_line`) — the
+/// provider's description where it wrote one, else the verb and the
+/// argument (a literal one a step brighter on no chip, a path a link), and a
+/// test run's verdict after a `·` — then a failed call's `Failed` tag in
+/// `BLOCKED` (`text::call_verdict`), then its chevron. No icon, no time, no
+/// preview of what it printed: a shut row says only what it did and whether
+/// it failed. Under it while it runs: a suite's bar.
 ///
-/// Expanded from the keyboard, a call that is not a command shows the input
-/// where the call line could not show it whole, its output, and any
-/// structured result, none of them labelled; a command's expansion is its
-/// output fold opening.
+/// Open, a command shows its shell card (`shell_card`: `$ cmd`, its output,
+/// how it ended); any other call shows its input where the call line could
+/// not show it whole, its output and any structured result in one output
+/// box (`output_box`), then its diffs. Opening and shutting snap. The whole
+/// line is the pointer's toggle; the keyboard's disclosure target wears
+/// `paint::RAISED`.
 pub(crate) fn render_tool(
     block: BlockId,
     tool: &ToolBlock,
@@ -4121,57 +4065,34 @@ pub(crate) fn render_tool(
         expanded,
         disclosure,
     } = state;
-    let (overlay, chevron, targeted, toggle) = match disclosure {
-        Some(Disclosure {
-            overlay,
-            chevron,
-            targeted,
-            toggle,
-            ..
-        }) => (overlay, chevron, targeted, toggle),
-        None => (None, None, false, None),
-    };
-    let fold_id = SharedString::from(format!("tool-fold-{}", tool.call));
-    let label_id = |open: bool| {
-        SharedString::from(format!(
-            "tool-fold-{}-{}",
-            tool.call,
-            if open { "open" } else { "shut" }
-        ))
-    };
-    let fold_words = |open: bool, hidden: usize| {
-        if open {
-            "\u{2212} fold".to_string()
-        } else {
-            more_lines(hidden)
-        }
-    };
-    let command_open = command_open(tool);
+    let (overlay, chevron, targeted) = disclosure_parts(disclosure);
     // One run on one line at its own width, cut with `…` at the row's edge:
     // it selects and copies as one line, and never spills onto the rows
     // under it. The run hangs a cell past its box (`rich::Markdown`); the
-    // box makes room for it. A failed call's verdict follows the cut, its
-    // lead word in the failure ink (rule 6: colour on the word). Runs
-    // register as they are built: the call line first, then its verdict.
+    // box makes room for it. A failed call's tag follows the cut, its lead
+    // word in the failure ink (rule 6: colour on the word). Runs register
+    // as they are built: the call line first, then its tag.
     let call = selection
         .markdown(block, text::call_markdown(tool))
         .ink(INK_SUBTLE)
         .activity();
     let verdict = text::call_verdict(tool).map(|verdict| {
         let mut highlights = separators(&verdict);
-        if let Some(at) = verdict.find(theme::words::FAILED) {
-            highlights.push((
-                at..at + theme::words::FAILED.len(),
+        highlights.insert(
+            0,
+            (
+                0..text::FAILED_TAG.len(),
                 HighlightStyle {
                     color: Some(rgb(BLOCKED).into()),
                     ..Default::default()
                 },
-            ));
-        }
+            ),
+        );
         div()
             .debug_selector(|| "tool-verdict".into())
             .flex_shrink_0()
             .whitespace_nowrap()
+            .ml(px(theme::SPACE_2))
             .child(selection.line(block, verdict, highlights))
     });
     let words = div()
@@ -4194,92 +4115,24 @@ pub(crate) fn render_tool(
         .debug_selector(move || row_selector.clone())
         .group(DISCLOSURE_ROW)
         .children(overlay);
-    let line = target_ground(targeted, line);
-    let mut card = div().flex().flex_col().w_full().min_w_0().child(line);
-    if let Some(failure) = text::call_failure(tool) {
-        card = card.child(
-            on_cells(content_row(grid))
-                .debug_selector(|| "tool-failure".into())
-                .text_size(px(small.size))
-                .text_color(rgb(INK_SUBTLE))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(selection.line(block, failure, Vec::new())),
-                ),
-        );
-    }
+    let mut card = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .child(target_ground(targeted, line));
     if let Some(progress) = tool.progress.filter(|_| tool.state == ToolState::Running) {
         card = card.child(running_tests(&tool.call, progress, grid));
     }
-    // What the box holds, in order: a failure's preview and its fold, an
-    // open command's output, the disclosed details.
-    let box_line = grid.block().line;
-    let mut out: Vec<AnyElement> = Vec::new();
-    let mut shut_fold = None;
-    let fold = |out: &mut Vec<AnyElement>, rest: String, hidden: usize| {
-        let open = expanded.then(|| fold_open(block, tool, rest, selection));
-        let lines = open.as_ref().map_or(hidden, |(_, lines)| *lines);
-        out.push(eased_fold(
-            fold_id.clone(),
-            expanded,
-            lines,
-            box_line,
-            open.map(|(content, _)| content),
-        ));
-    };
-    let failed_test = test_elbow(tool).filter(|elbow| elbow.lead == theme::words::FAILED);
-    if let Some(elbow) = &failed_test {
-        if !elbow.preview.is_empty() {
-            out.push(
-                output_lines_run(block, elbow.preview.join("\n"), selection).into_any_element(),
-            );
-        }
-        if elbow.hidden > 0 {
-            fold(&mut out, test_rest(tool, elbow), elbow.hidden);
-            out.push(
-                fold_label(
-                    label_id(expanded),
-                    fold_words(expanded, elbow.hidden),
-                    toggle.clone(),
-                )
-                .into_any_element(),
-            );
-        }
-    } else if matches!(tool.state, ToolState::Failed(_)) {
-        if let Some((shown, hidden)) = output_fold(tool) {
-            out.push(output_lines_run(block, shown, selection).into_any_element());
-            if hidden > 0 {
-                fold(&mut out, failed_rest(tool, hidden), hidden);
-                out.push(
-                    fold_label(label_id(expanded), fold_words(expanded, hidden), toggle.clone())
-                        .into_any_element(),
-                );
+    if expanded {
+        if ferrite_core::docview::is_command_run(&tool.name) {
+            card = card.child(shell_card(block, tool, grid, selection));
+        } else {
+            let details = tool_details(block, tool, selection);
+            if !details.is_empty() {
+                card = card.child(output_box(grid, details));
             }
         }
-    } else if let Some((all, lines)) = command_open {
-        // Mounted shut too, so the next opening eases; the box shows only
-        // while it is open.
-        if expanded {
-            fold(&mut out, all, lines);
-        } else {
-            shut_fold = Some(eased_fold(fold_id.clone(), false, 0, box_line, None));
-        }
-    }
-    let details = match tool.state {
-        ToolState::Running => expanded,
-        ToolState::Ok => expanded && !ferrite_core::docview::is_command_run(&tool.name),
-        _ => false,
-    };
-    if details {
-        out.extend(tool_details(block, tool, selection));
-    }
-    if !out.is_empty() {
-        card = card.child(output_box(grid, out));
-    }
-    card = card.children(shut_fold);
-    if expanded {
         for each in &tool.diffs {
             card = card.child(render_diff(Some((selection, block)), each, grid));
         }
@@ -4292,34 +4145,33 @@ pub(crate) fn render_tool(
         .into_any_element()
 }
 
-/// A group's disclosure state: whether it is open, the keyboard's target
-/// and the pointer's toggle over its summary, whether the pointer just
-/// flipped it (its members ease in), and how its members draw — every call
-/// while open; while shut, the call still working (`text::group_live`).
-/// They draw after the summary, so their text registers after its own.
+/// A group's disclosure state: the keyboard's target and the pointer's
+/// toggle over its summary, and how its members draw —
+/// every call while open; while shut, the call still working
+/// (`text::group_live`). They draw after the summary, so their text
+/// registers after its own.
 pub(crate) struct GroupCx<'a> {
-    pub expanded: bool,
     pub disclosure: Option<Disclosure>,
     pub members: Box<dyn FnOnce() -> Vec<AnyElement> + 'a>,
 }
 
 /// A run of calls under one summary (`text::group_summary`), an activity
-/// line as a call's is (`activity_line`): `Edited 3 files, ran 2 commands ·
-/// 1 failed ›`. The summary reads in `INK_SUBTLE`, its failure count in
-/// `BLOCKED`. The whole line is the pointer's toggle — it lifts to `INK`
-/// under the pointer, its chevron always shown, a quarter turned when open
-/// — and the keyboard's (`ToolDisclosure`), wearing `paint::RAISED` when
-/// targeted.
+/// line as a call's is (`activity_line`): `Ran 2 commands (1 failed) ▸`,
+/// all in `INK_SUBTLE` — only a named file (`INK`) and its diff counts wear
+/// their own ink; the failure is red on its call's row, not here. The whole
+/// line is the pointer's toggle — it lifts to `INK` under the pointer, its
+/// chevron always shown, a quarter turned when open — and the keyboard's
+/// (`ToolDisclosure`), wearing `paint::RAISED` when targeted.
 ///
-/// Open, the calls hang under the summary one gutter in, each the row it
-/// would be on its own (its folds and details its own), on a 1px
-/// `paint::LINE` rail, easing in; shut, a working call
-/// hangs there alone so a live suite's bar and a command's live line stay
-/// in view.
+/// Under it, the calls stand in one card (Claude's): a `CARD_RING`
+/// hairline at `R_CARD`, no fill, hanging `TOOL_CARD_OUTSET` past the
+/// column; each call the row it would be alone, its words `TOOL_CARD_INSET`
+/// in, `TOOL_CARD_ROW_H` for its line, a `LINE` hairline between rows. Open,
+/// every call; shut, a working call alone, so a live suite's bar stays in
+/// view. Opening and shutting snap.
 pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupCx) -> AnyElement {
     let grid = row_cx.grid();
     let GroupCx {
-        expanded,
         disclosure,
         members: draw_members,
     } = state;
@@ -4342,13 +4194,11 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
     };
     let summary = text::group_summary(members);
     let mut highlights = separators(&summary.text);
-    // A named file a step brighter, the counts in the diff's hues, the
-    // failure count in the failure ink.
     for (range, mark) in &summary.marks {
         let ink = match mark {
             text::SummaryMark::File => INK,
             text::SummaryMark::Added => RUNNING,
-            text::SummaryMark::Removed | text::SummaryMark::Failed => BLOCKED,
+            text::SummaryMark::Removed => BLOCKED,
         };
         highlights.push((
             range.clone(),
@@ -4378,10 +4228,10 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         .children(chevron);
     let row_selector = format!("tool-group-{leader_call}");
     let mut header = activity_line(grid, None, words)
-    .id(SharedString::from(row_selector.clone()))
-    .debug_selector(move || row_selector.clone())
-    .group(DISCLOSURE_ROW)
-    .children(overlay);
+        .id(SharedString::from(row_selector.clone()))
+        .debug_selector(move || row_selector.clone())
+        .group(DISCLOSURE_ROW)
+        .children(overlay);
     if targeted {
         header = header.bg(theme::paint::RAISED).child(
             div()
@@ -4393,57 +4243,32 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
             header = header.track_focus(focus).key_context("ToolDisclosure");
         }
     }
-    let rail = |members: Vec<AnyElement>| {
+    let drawn = draw_members();
+    let pad_y = ((theme::TOOL_CARD_ROW_H - grid.line) / 2.).max(0.);
+    let card = (!drawn.is_empty()).then(|| {
         div()
             .debug_selector(|| "tool-group-members".into())
-            .relative()
             .flex()
             .flex_col()
-            .w_full()
             .min_w_0()
-            .pl(px(grid.gutter()))
-            .child(
+            .mt(px(theme::SPACE_1))
+            .ml(px(-theme::TOOL_CARD_OUTSET))
+            .rounded(px(theme::R_CARD))
+            .border_1()
+            .border_color(theme::paint::CARD_RING)
+            .overflow_hidden()
+            .children(drawn.into_iter().enumerate().map(|(at, member)| {
                 div()
-                    .debug_selector(|| "tool-group-rail".into())
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px((grid.cell() / 2.).floor()))
-                    .w(px(1.))
-                    .bg(theme::paint::LINE),
-            )
-            .children(members)
-    };
-    let drawn = draw_members();
-    let open_id = SharedString::from(format!("tool-group-open-{leader_call}"));
-    let spec = ferrite_ui::motion::MotionSpec::new(theme::FOLD_EASE_MS, ferrite_ui::motion::EASE);
-    let body = if expanded {
-        let members = rail(drawn);
-        ferrite_ui::motion::settled(open_id, true, spec, move |t| {
-            div()
-                .w_full()
-                .min_w_0()
-                .opacity(t.clamp(0., 1.))
-                .child(members)
-        })
-        .reveal_only()
-        .into_any_element()
-    } else {
-        // Mounted shut too, so the next opening eases.
-        let shut = ferrite_ui::motion::settled(open_id, false, spec, |_| div())
-            .reveal_only()
-            .into_any_element();
-        if drawn.is_empty() {
-            shut
-        } else {
-            div()
-                .w_full()
-                .min_w_0()
-                .child(shut)
-                .child(rail(drawn))
-                .into_any_element()
-        }
-    };
+                    .w_full()
+                    .min_w_0()
+                    .px(px(theme::TOOL_CARD_INSET))
+                    .py(px(pad_y))
+                    .when(at > 0, |row| {
+                        row.border_t_1().border_color(theme::paint::LINE)
+                    })
+                    .child(member)
+            }))
+    });
     div()
         .flex()
         .flex_col()
@@ -4452,17 +4277,14 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         .flex_shrink_0()
         .text_color(rgb(INK_SUBTLE))
         .child(header)
-        .child(body)
+        .children(card)
         .into_any_element()
 }
-
-/// Flip one disclosure from inside its row (a fold's `+ N lines`).
-pub type DisclosureToggle = std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>;
 
 /// A disclosable row's parts, built by the transcript for the row renderer:
 /// for a reasoning row the click target over its header and its chevron;
 /// for every row whether the keyboard targets it (and the focus a targeted
-/// tool row tracks), and the toggle a fold line inside the row calls.
+/// tool row tracks).
 pub struct Disclosure {
     /// The pointer's toggle: over a reasoning row's whole header, so its
     /// label toggles it too; over a tool row's icon cell alone, so its
@@ -4474,8 +4296,6 @@ pub struct Disclosure {
     /// ground so the operator sees which row Enter will toggle. The pointer
     /// never sets it, and no other row ever wears a ground.
     pub targeted: bool,
-    /// What a fold's toggle line calls.
-    pub toggle: Option<DisclosureToggle>,
     /// The focus a targeted tool row tracks (its keys' context).
     pub focus: Option<FocusHandle>,
 }
@@ -4562,31 +4382,19 @@ pub fn tool_disclosure_control(
         )
 }
 
-/// A reasoning row's trailing chevron: `ICON_CHEVRON` in `TEXT_FAINT`, its
+/// A disclosure's trailing chevron: `ICON_CHEVRON` in `TEXT_FAINT`, its
 /// box always reserved so nothing moves when it shows. It shows while the
 /// pointer is on the row (lifting to `INK_SUBTLE`) or while the keyboard
-/// targets the row, and it turns a quarter when open. The turn eases over
-/// `motion::CHEVRON` only when the pointer flipped it (`eased`); a keyboard
-/// toggle, reduced motion and a row drawn already open are simply turned.
-pub fn disclosure_chevron(expanded: bool, targeted: bool, eased: bool) -> AnyElement {
-    let chevron = |turn: f32| {
-        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_FAINT)
-            .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_SUBTLE)))
-            .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                std::f32::consts::FRAC_PI_2 * turn,
-            )))
-    };
-    let mark = if eased {
-        ferrite_ui::motion::settled(
-            "disclosure-turn",
-            expanded,
-            ferrite_ui::motion::CHEVRON,
-            chevron,
-        )
-        .into_any_element()
-    } else {
-        chevron(if expanded { 1. } else { 0. }).into_any_element()
-    };
+/// targets the row (or always, for a group's), and it is turned a quarter
+/// when open. The turn snaps, as the group and its folds do
+/// (motion-measured.md, "Tool group expand / collapse").
+pub fn disclosure_chevron(expanded: bool, targeted: bool) -> AnyElement {
+    let turn = if expanded { 1. } else { 0. };
+    let mark = icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_FAINT)
+        .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_SUBTLE)))
+        .with_transformation(gpui::Transformation::rotate(gpui::radians(
+            std::f32::consts::FRAC_PI_2 * turn,
+        )));
     div()
         .debug_selector(|| "disclosure-chevron".into())
         .flex()
@@ -4850,10 +4658,11 @@ mod tests {
         }
     }
 
+    /// The line says what runs: a running call's own words take the line,
+    /// on one row with its facts, over the thinking heading that came
+    /// before it, and with no key hint (the stop button says it).
     #[gpui::test]
-    fn progress_metadata_shares_the_caption_line_without_a_duplicate_command(
-        cx: &mut TestAppContext,
-    ) {
+    fn the_line_names_the_running_call_on_one_row(cx: &mut TestAppContext) {
         let (lexer, _) = Lexer::new();
         let mut transcript = Transcript::new(Arc::new(lexer));
         transcript.apply(Input::Prompt("Build".into()));
@@ -4875,72 +4684,19 @@ mod tests {
             cx.run_until_parked();
             let reasoning = cx.debug_bounds("progress-reasoning").unwrap();
             let metadata = cx.debug_bounds("progress-metadata").unwrap();
-            let footer = cx
+            let line = cx.debug_bounds("progress-call").expect("the call's words");
+            assert!(cx
                 .debug_bounds("progress-caption-Checking build progress")
-                .unwrap();
-            // One row, as the CLIs draw it: the caption, then its facts.
+                .is_none());
+            // One row, as the Claude app draws it: the step, then its facts.
             assert_eq!(metadata.top(), reasoning.top());
             assert!(metadata.left() >= reasoning.right());
             assert_eq!(
-                footer.size.height,
+                line.size.height,
                 px(Grid::pane(Default::default(), true).line),
                 "one line, and no command detail below it"
             );
             assert!(metadata.right() <= px(width), "the caption truncates first");
-            assert!(
-                cx.debug_bounds("progress-interrupt").is_none(),
-                "with the stop circle in view the line does not name the key"
-            );
-        }
-    }
-
-    /// A Solo line over a running turn and the box it stands over.
-    struct SoloOverBox {
-        transcript: Transcript,
-        empty: bool,
-    }
-
-    impl Render for SoloOverBox {
-        fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-            let stop = send_is_stop(true, self.empty, false);
-            div().w_full().child(working_line_for(
-                &self.transcript,
-                false,
-                true,
-                true,
-                !stop,
-                false,
-                true,
-                None,
-                0,
-            ))
-        }
-    }
-
-    /// Typing a follow-up during a turn turns Solo's stop circle into send,
-    /// so the line names `esc to interrupt` then — and only then: a way to
-    /// stop the turn is always in view, never two.
-    #[gpui::test]
-    fn the_line_names_the_key_whenever_the_circle_is_not_stop(cx: &mut TestAppContext) {
-        for (empty, named) in [(true, false), (false, true)] {
-            let (lexer, _) = Lexer::new();
-            let mut transcript = Transcript::new(Arc::new(lexer));
-            transcript.apply(Input::Prompt("Build".into()));
-            transcript.apply(Input::Event(SessionEvent::ReasoningSummaryDelta {
-                text: "**Checking build progress**".into(),
-                summary_index: 0,
-            }));
-            let (_, cx) = cx.add_window_view(|_, cx| {
-                gpui::component::init(cx);
-                SoloOverBox { transcript, empty }
-            });
-            cx.simulate_resize(size(px(740.), px(400.)));
-            cx.run_until_parked();
-            assert_eq!(
-                cx.debug_bounds("progress-interrupt").is_some(),
-                named,
-                "empty box: {empty}"
-            );
         }
     }
 
@@ -4952,7 +4708,7 @@ mod tests {
                 div().debug_selector(move || selector.into()).child(line)
             };
             let working =
-                |solo| working_line_for(&self.0, false, solo, false, false, false, true, None, 0);
+                |solo| working_line_for(&self.0, false, solo, false, false, true, None, 0);
             div()
                 .w_full()
                 .flex()
@@ -5425,10 +5181,10 @@ mod tests {
             panic!("expected tool")
         };
         assert_eq!(
-            tool.diffs.iter().map(|diff| (diff.added, diff.removed)).fold(
-                (0, 0),
-                |(a, r), (added, removed)| (a + added, r + removed)
-            ),
+            tool.diffs
+                .iter()
+                .map(|diff| (diff.added, diff.removed))
+                .fold((0, 0), |(a, r), (added, removed)| (a + added, r + removed)),
             (2, 2)
         );
     }
@@ -5437,16 +5193,17 @@ mod tests {
     /// the argument is the command's first line, cut with `…` at the row's
     /// edge, and the row under it starts where it ends (the overlap bug).
     #[gpui::test]
-    fn a_long_or_multi_line_command_keeps_its_call_line_one_line_tall(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_long_or_multi_line_command_keeps_its_call_line_one_line_tall(cx: &mut TestAppContext) {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Prompt("check".into()));
         let heredoc = format!(
             "python3 - <<'EOF'\nimport sys\n{}\nEOF",
             "print('a long line of the script')\n".repeat(20)
         );
-        let long = format!("grep -rn {} crates/", "\"paint::FRAME\\|paint::BAR\" ".repeat(12));
+        let long = format!(
+            "grep -rn {} crates/",
+            "\"paint::FRAME\\|paint::BAR\" ".repeat(12)
+        );
         for (id, command) in [("multi", heredoc.as_str()), ("long", long.as_str())] {
             transcript.apply(Input::Event(SessionEvent::ToolStarted {
                 id: id.into(),
@@ -5572,11 +5329,14 @@ mod tests {
         };
         let shut = copied(&view, cx);
         assert!(
-            shut.contains("Ran 2 commands, reading 1 file \u{b7} 1 failed"),
+            shut.contains("Ran 2 commands, reading 1 file (1 failed)"),
             "{shut}"
         );
         // Shut, it draws its working call alone.
-        assert!(shut.contains("Reading [notes\\.md](<ferrite-path:notes.md>)"), "{shut}");
+        assert!(
+            shut.contains("Reading [notes\\.md](<ferrite-path:notes.md>)"),
+            "{shut}"
+        );
         assert!(!shut.contains("python3 match.py"), "{shut}");
         assert!(cx.debug_bounds("tool-group-g1").is_some());
         assert!(cx.debug_bounds("tool-row-g1").is_none());
@@ -5590,27 +5350,33 @@ mod tests {
         let open = copied(&view, cx);
         for text in [
             "python3 match.py",
-            "12 matched",
             "grep -n adelaide",
+            "Failed",
             "Reading [notes\\.md](<ferrite-path:notes.md>)",
         ] {
             assert!(open.contains(text), "{text}: {open}");
         }
-        // Each call hangs one gutter in, on the rail under the icon.
+        // A shut call previews nothing it printed.
+        assert!(!open.contains("12 matched"), "{open}");
+        // The calls stand in a card hanging `TOOL_CARD_OUTSET` past the
+        // column, their words `TOOL_CARD_INSET` in from its edge.
         let summary = cx.debug_bounds("tool-group-g1").unwrap();
+        let card = cx.debug_bounds("tool-group-members").unwrap();
         let member = cx.debug_bounds("tool-row-g1").unwrap();
-        let rail = cx.debug_bounds("tool-group-rail").unwrap();
-        let gutter = px(Grid::of(Default::default()).gutter());
         assert!(
-            // Boxes round to the pixel; the gutter keeps its fraction.
-            ((member.left() - summary.left()) - gutter).abs() <= px(1.0),
-            "{member:?} {summary:?} {gutter:?}"
+            ((summary.left() - card.left()) - px(theme::TOOL_CARD_OUTSET)).abs() <= px(1.0),
+            "{card:?} {summary:?}"
         );
-        assert!(rail.left() > summary.left() && rail.left() < member.left());
-        assert_eq!(
-            member.top(),
-            summary.bottom(),
-            "the calls hang flush under it"
+        assert!(
+            ((member.left() - card.left()) - px(theme::TOOL_CARD_INSET + 1.)).abs() <= px(1.0),
+            "{member:?} {card:?}"
+        );
+        assert!(card.top() >= summary.bottom(), "the card hangs under it");
+        let second = cx.debug_bounds("tool-row-g2").unwrap();
+        assert!(
+            ((second.top() - member.top()) - px(theme::TOOL_CARD_ROW_H)).abs() <= px(1.5),
+            "rows {} apart: {member:?} {second:?}",
+            theme::TOOL_CARD_ROW_H
         );
     }
 
@@ -5660,16 +5426,19 @@ mod tests {
             None,
         );
         let blocks = transcript.blocks();
+        // Two kinds named, the other calls counted, the failure said in
+        // the same words.
         assert_eq!(
             text::group_summary(blocks).text,
-            "Searched for 1 pattern, read 2 files, called github 2 times, \
-             fetching 1 page \u{b7} 1 failed"
+            "Searched for 1 pattern, read 2 files and 3 more (1 failed)"
         );
         let summary = text::group_summary(&blocks[..2]);
         assert_eq!(summary.text, "Searched for 1 pattern, read 1 file");
-        assert_eq!(summary.failed(), None);
-        let failed = text::group_summary(&blocks[..3]);
-        assert_eq!(&failed.text[failed.failed().unwrap()], "1 failed");
+        assert!(summary.marks.is_empty());
+        assert_eq!(
+            text::group_summary(&blocks[..3]).text,
+            "Searched for 1 pattern, read 2 files (1 failed)"
+        );
         assert_eq!(
             text::group_live(blocks).map(|block| block.id),
             Some(blocks[5].id)
@@ -5757,11 +5526,15 @@ mod tests {
             0,
             "the edit's diff waits for its call to open: {all}"
         );
-        // A failure's line registers where it renders (Edit's); the test
-        // run says `· 42 passed` after its call line. No `└` elbow joins
-        // the run.
-        assert!(all.contains("applied"), "the result line: {all}");
-        assert!(all.contains("Ran `cargo test` \u{b7} 42 passed"), "the verdict: {all}");
+        // A shut failure registers its `Failed` tag, not what it printed
+        // (that waits for its call to open, below); the test run says
+        // `· 42 passed` after its call line. No `└` elbow joins the run.
+        assert!(all.contains("Failed"), "the failure's tag: {all}");
+        assert!(!all.contains("applied"), "a shut call previews nothing: {all}");
+        assert!(
+            all.contains("Ran `cargo test` \u{b7} 42 passed"),
+            "the verdict: {all}"
+        );
         assert!(!all.contains("└"), "no elbow: {all}");
 
         view.update(cx, |view, cx| {
@@ -5969,7 +5742,7 @@ mod tests {
     }
 
     /// C17: a mode id never renders raw — the known ids read as words in
-    /// sentence case, the default reads `Default`, and nothing shown
+    /// sentence case, the default reads `Manual`, and nothing shown
     /// carries a hump.
     #[test]
     fn the_mode_word_is_never_a_raw_id() {
@@ -5996,11 +5769,8 @@ mod tests {
             "Bypass permissions"
         );
         assert_eq!(permission_mode_label("plan", &[]).as_ref(), "Plan");
-        assert_eq!(
-            permission_mode_label("default", &claude).as_ref(),
-            "Default"
-        );
-        assert_eq!(permission_mode_label("", &[]).as_ref(), "Default");
+        assert_eq!(permission_mode_label("default", &claude).as_ref(), "Manual");
+        assert_eq!(permission_mode_label("", &[]).as_ref(), "Manual");
         assert_eq!(
             permission_mode_label("someNewMode", &[]).as_ref(),
             "Some new mode"
@@ -6178,9 +5948,44 @@ mod tests {
                 result: None,
             }
         );
+        // A failure is the row's tag, not a preview after a seam.
+        let make = tool("Bash", "make", failed);
+        assert_eq!(text::call_line(&make).result, None);
+        assert_eq!(text::call_verdict(&make).as_deref(), Some("Failed"));
         assert_eq!(
-            text::call_line(&tool("Bash", "make", failed)).result.as_deref(),
-            Some(" \u{b7} failed")
+            text::call_verdict(&tool("Bash", "make", ToolState::Ok)),
+            None
+        );
+        // A shut row previews nothing a command printed.
+        let printed = ToolBlock {
+            result_line: Some("16:HOLD={".into()),
+            ..tool("Bash", "python3 prep.py --hold", ToolState::Ok)
+        };
+        assert_eq!(text::call_line(&printed).result, None);
+        // Where the command ran is not the row's business.
+        assert_eq!(
+            text::call_line(&tool(
+                "Bash",
+                "cd outputs/x && python3 match.py",
+                ToolState::Ok
+            ))
+            .argument,
+            "python3 match.py"
+        );
+        // The provider's description leads, as words; the command waits
+        // behind the disclosure.
+        let described = ToolBlock {
+            title: Some("List a directory that doesn't exist".into()),
+            ..tool("Bash", "ls /definitely-missing-dir", ToolState::Ok)
+        };
+        assert_eq!(
+            text::call_line(&described),
+            text::CallLine {
+                verb: String::new(),
+                argument: "List a directory that doesn't exist".into(),
+                literal: false,
+                result: None,
+            }
         );
         // One Markdown run that reads exactly as written: words escaped, a
         // literal argument one code span, a path a file link.
@@ -6190,10 +5995,7 @@ mod tests {
             literal: true,
             result: Some(" \u{b7} [ok]".into()),
         };
-        assert_eq!(
-            line.markdown(false),
-            "Ran ``echo `a` *b*`` \u{b7} \\[ok\\]"
-        );
+        assert_eq!(line.markdown(false), "Ran ``echo `a` *b*`` \u{b7} \\[ok\\]");
         let read = text::CallLine {
             verb: "Read ".into(),
             argument: "src/a_b.rs".into(),
@@ -6220,33 +6022,50 @@ mod tests {
     }
 
     #[test]
-    fn a_long_command_output_folds_after_the_line_its_elbow_shows() {
-        let output = (1..=8)
-            .map(|line| format!("line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let tool = |name: &str, state: ToolState| ToolBlock {
+    fn a_commands_shell_card_says_how_it_ended() {
+        let tool = |state: ToolState, output: Option<&str>| ToolBlock {
             call: "c".into(),
-            name: name.into(),
+            name: "Bash".into(),
             title: None,
-            summary: "cargo test".into(),
+            summary: "bash -lc 'ls /missing'".into(),
             state,
             diffs: Vec::new(),
             structured_preview: None,
-            result_line: Some("line 1".into()),
-            output: Some(ferrite_core::transcript::ToolOutput {
-                text: output.clone(),
+            result_line: None,
+            output: output.map(|text| ferrite_core::transcript::ToolOutput {
+                text: text.into(),
                 omitted_bytes: 0,
             }),
             progress: None,
         };
-        let (shown, hidden) = output_fold(&tool("Bash", ToolState::Ok)).expect("a command folds");
-        assert_eq!(shown, "line 2\nline 3\nline 4");
-        assert_eq!(hidden, 4);
-        // A read's output is the file: it does not fold under the call.
-        assert!(output_fold(&tool("Read", ToolState::Ok)).is_none());
-        // A failure folds whatever the tool.
-        assert!(output_fold(&tool("Read", ToolState::Failed("boom".into()))).is_some());
+        // Claude's `Exit code N` line becomes the status; the rest is the
+        // output, the command out of its wrapper.
+        let failed = tool(
+            ToolState::Failed("Exit code 1\nls: /missing: No such file or directory".into()),
+            None,
+        );
+        let shell = output::shell(&failed);
+        assert_eq!(shell.command, "ls /missing");
+        assert_eq!(
+            shell.output,
+            Some("ls: /missing: No such file or directory")
+        );
+        assert_eq!(shell.status, Some(output::ShellStatus::Exit(1)));
+        assert_eq!(output::ShellStatus::Exit(1).words(), "Exit code 1");
+        // No code said: the status says it failed.
+        let bare = tool(ToolState::Failed("boom".into()), None);
+        assert_eq!(
+            output::shell(&bare).status,
+            Some(output::ShellStatus::Failed)
+        );
+        let ok = tool(ToolState::Ok, Some("a\nb"));
+        let shell = output::shell(&ok);
+        assert_eq!(
+            (shell.output, shell.status),
+            (Some("a\nb"), Some(output::ShellStatus::Success))
+        );
+        let running = tool(ToolState::Running, None);
+        assert_eq!(output::shell(&running).status, None);
     }
 
     #[test]
@@ -6458,30 +6277,6 @@ mod tests {
         assert_eq!(cost_label(1.5), "$1.50");
     }
 
-    /// The painted tasks meter stays glanceable: a segment per step up to
-    /// the cap, one continuous track past it, and done never overshoots.
-    /// Replaces the ▰▱ glyph run, which Geist Mono cannot draw.
-    #[test]
-    fn tasks_meter_draws_segments_until_the_cap_then_a_track() {
-        assert_eq!(
-            meter_layout(3, 4),
-            MeterLayout::Segments { done: 3, total: 4 }
-        );
-        assert_eq!(
-            meter_layout(5, 4),
-            MeterLayout::Segments { done: 4, total: 4 }
-        );
-        assert_eq!(
-            meter_layout(0, theme::METER_SEG_CAP),
-            MeterLayout::Segments {
-                done: 0,
-                total: theme::METER_SEG_CAP
-            }
-        );
-        assert_eq!(meter_layout(5, 20), MeterLayout::Track { fraction: 0.25 });
-        assert_eq!(meter_layout(30, 20), MeterLayout::Track { fraction: 1.0 });
-    }
-
     /// F-2: one attention edge. A waiting Pane draws `WAIT_RING` on a
     /// board whether it holds focus or not — no inner ring, no full-ink
     /// answer target, no red blocked edge; a calm focused Pane draws the
@@ -6655,21 +6450,56 @@ mod tests {
         assert!(!offers_import(Some(&streaming)), "not at rest");
     }
 
-    /// §D.7 (terminal-native, WP-D): the idle line says what the Pane is
-    /// waiting on — a Decision, a live Thread, a running turn or a closed
-    /// Session — in a couple of words, and, once a prediction lands, shows
-    /// it verbatim as the operator's own next line. None ends in an
-    /// ellipsis, a terminal placeholder's own grammar.
+    /// The queue strip counts what waits, Claude's words.
+    #[test]
+    fn the_queue_strip_counts_its_messages() {
+        assert_eq!(queued_count(1), "1 message queued");
+        assert_eq!(queued_count(3), "3 messages queued");
+    }
+
+    /// The footer ring reads the fullest account window, and nothing when
+    /// the provider reports none.
+    #[test]
+    fn the_usage_ring_reads_the_fullest_plan_window() {
+        use ferrite_core::transcript::RateLimits;
+        use ferrite_core::RateLimitWindow;
+        let window = |used_fraction| RateLimitWindow {
+            used_fraction,
+            resets_at: None,
+        };
+        assert_eq!(plan_usage_fraction(RateLimits::default()), None);
+        assert_eq!(
+            plan_usage_fraction(RateLimits {
+                five_hour: Some(window(0.2)),
+                weekly: Some(window(0.6)),
+            }),
+            Some(0.6)
+        );
+        assert_eq!(
+            plan_usage_fraction(RateLimits {
+                five_hour: Some(window(1.4)),
+                weekly: None,
+            }),
+            Some(1.0),
+            "clamped"
+        );
+    }
+
+    /// Claude's three placeholders: a draft's first prompt, a running
+    /// turn's keys, and else the way to the commands — a Decision and a
+    /// closed Session included, since the line still takes typing. Once a
+    /// prediction lands, it shows verbatim as the operator's own next
+    /// line. None ends in an ellipsis.
     #[test]
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
         let live = Transcript::default();
         assert_eq!(
             placeholder(false, false, Some(&live), None).text(),
-            "Steer this thread"
+            "Type / for commands"
         );
         assert_eq!(
             placeholder(true, false, Some(&live), None).text(),
-            "Answer above"
+            "Type / for commands"
         );
         let mut running = Transcript::default();
         running.apply(Input::Prompt("fix the decoder".into()));
@@ -6678,7 +6508,7 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&running), None).text(),
-            "Queue a follow-up"
+            "\u{21b5} to send, esc to stop"
         );
 
         let mut closed = Transcript::default();
@@ -6687,7 +6517,7 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&closed), None).text(),
-            "Revive and continue"
+            "Type / for commands"
         );
         assert_eq!(
             placeholder(false, true, None, None).text(),
@@ -6712,11 +6542,11 @@ mod tests {
         // A Decision and a dead Session both outrank it.
         assert_eq!(
             placeholder(true, false, Some(&answered), Some("Run the tests")).text(),
-            "Answer above"
+            "Type / for commands"
         );
         assert_eq!(
             placeholder(false, false, Some(&closed), Some("Run the tests")).text(),
-            "Revive and continue"
+            "Type / for commands"
         );
 
         // No line names a message or ends in an ellipsis.
@@ -6749,9 +6579,9 @@ mod tests {
     /// compact box — 9 above and below its one 20px row, 10 to the foot.
     #[test]
     fn the_fixed_height_follows_the_composer_tokens() {
-        // Solo: the row's 6 + 5 of air above and below one line, then the
-        // 30px footer and its 6 under it.
-        assert_eq!(composer_fixed_height(false), 2. * (6. + 5.) + 30. + 6.);
+        // Solo: the row's 7 + 5 of air above and below one line (a 44 box),
+        // then the 41px footer down to the card's foot.
+        assert_eq!(composer_fixed_height(false), 2. * (7. + 5.) + 41.);
         assert_eq!(composer_fixed_height(true), 9. + 9. + 10.);
         assert_eq!(
             theme::COMPACT_COMPOSER_H,
@@ -6767,10 +6597,13 @@ mod tests {
                     <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
             );
         }
-        // Solo's queue is one 34px row and its hairline, however many wait;
-        // the compact box shows none (its Pane says `2 queued` unfocused).
+        // Solo's queue is one 44px strip and its 8 gap, however many wait;
+        // the compact box counts none (its Pane says `2 queued` unfocused).
         assert_eq!(composer_queue_height(900., false, 0), 0.);
-        assert_eq!(composer_queue_height(900., false, 3), 35.);
+        assert_eq!(
+            composer_queue_height(900., false, 3),
+            theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
+        );
         assert_eq!(composer_queue_height(900., true, 3), 0.);
     }
 

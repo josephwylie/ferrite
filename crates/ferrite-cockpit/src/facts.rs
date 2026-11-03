@@ -261,12 +261,6 @@ impl Facts {
         self.threads.entry(thread).or_default().pr.answered(reading)
     }
 
-    /// Adopt the PR tab's read of the Thread's PR (`PrWatch::adopt`).
-    /// Whether its label moved.
-    pub fn pr_adopt(&mut self, thread: ThreadId, reading: PullRequest) -> bool {
-        self.threads.entry(thread).or_default().pr.adopt(reading)
-    }
-
     /// The Thread's last PR reading.
     pub fn pr(&self, thread: ThreadId) -> Option<&PullRequest> {
         self.get(thread)?.pr.reading.as_ref()
@@ -569,27 +563,6 @@ pub fn since_label_changes_in(last_used: SystemTime, now: SystemTime) -> Option<
     Some(rollover.min(secs(end) - elapsed))
 }
 
-/// How long until the wall clock's minute turns over (the bottom bar's
-/// `7:31 pm`).
-pub fn next_minute(now: SystemTime) -> Duration {
-    let since = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    ferrite_core::cadence::next_rollover(since, Duration::from_secs(60))
-}
-
-/// A comment's age (the PR tab's): the one unit `since_label` reads, with
-/// `now` for its first minute — a comment there always says how old it
-/// is.
-pub fn age_label(at: SystemTime, now: SystemTime) -> SharedString {
-    let label = since_label(at, now);
-    if label.is_empty() {
-        SharedString::from("now")
-    } else {
-        label
-    }
-}
-
 /// A Thread with no title and no prompt yet.
 pub const NEW_THREAD: &str = "New thread";
 
@@ -716,20 +689,6 @@ mod tests {
             since_label_changes_in(now + s(30), now),
             Some(s(90)),
             "a clock that moved back: a minute past the stamp"
-        );
-    }
-
-    /// The bottom bar's wall clock reads differently at the next whole
-    /// minute, never sooner.
-    #[test]
-    fn the_wall_clock_turns_over_on_the_minute() {
-        let minute = SystemTime::UNIX_EPOCH + Duration::from_secs(29_850_000 * 60);
-        let s = Duration::from_secs;
-        assert_eq!(next_minute(minute), s(60), "on the minute: the next one");
-        assert_eq!(next_minute(minute + s(1)), s(59));
-        assert_eq!(
-            next_minute(minute + Duration::from_millis(59_750)),
-            Duration::from_millis(250)
         );
     }
 
@@ -909,18 +868,6 @@ mod tests {
             Some(ferrite_core::workspace::default_branch(&checkout).as_str()),
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A comment's age says `now` in its first minute (a future stamp
-    /// too), and `since_label`'s one unit after.
-    #[test]
-    fn a_comments_age_starts_at_now() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
-        assert_eq!(age_label(now - Duration::from_secs(5), now), "now");
-        assert_eq!(age_label(now + Duration::from_secs(5), now), "now");
-        assert_eq!(age_label(now - Duration::from_secs(120), now), "2m");
-        assert_eq!(age_label(now - Duration::from_secs(43 * 60), now), "43m");
-        assert_eq!(age_label(now - Duration::from_secs(2 * 3600), now), "2h");
     }
 
     /// A clock that moved backwards must not print a negative age.

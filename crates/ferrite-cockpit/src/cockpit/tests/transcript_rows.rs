@@ -532,10 +532,14 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     });
 
     let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
-    // The call line says the first line; the rest folds behind it.
+    // Shut, the call line is the call alone: what it printed folds behind
+    // it, its first line too.
     assert!(collapsed
         .iter()
-        .any(|(_, _, _, text)| text == "Ran `echo hi` \u{b7} first line"));
+        .any(|(_, _, _, text)| text == "Ran `echo hi`"));
+    assert!(!collapsed
+        .iter()
+        .any(|(_, _, _, text)| text.contains("first line")));
     assert!(!collapsed
         .iter()
         .any(|(_, _, _, text)| text.starts_with("first line\n\n")));
@@ -786,9 +790,7 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
 }
 
 #[gpui::test]
-fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(
-    cx: &mut TestAppContext,
-) {
+fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut TestAppContext) {
     use ferrite_core::progress::{Phase, ProgressEvent};
     let (mut core, fake) = cockpit("native-progress", 1);
     let thread = core.threads()[0];

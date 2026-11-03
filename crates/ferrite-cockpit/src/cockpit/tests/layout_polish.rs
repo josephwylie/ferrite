@@ -6,9 +6,11 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
     let (mut core, fake) = cockpit("polish-question-containment", 4);
     let group = group_all(&mut core);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    // 830 tall: a 2×2 under the 46px head row and the 30px bar still
-    // reads as transcripts (R12: 360 tall).
-    cx.simulate_resize(gpui::size(px(1200.), px(830.)));
+    // 870 tall: a 2×2 under the 44px title bar still reads as transcripts
+    // (R12: 360 tall), and each cell holds Claude's question card (its 48
+    // head band and 16 padding) over a three-line Composer. The card is a
+    // transcript row: a shorter cell scrolls it with the rows.
+    cx.simulate_resize(gpui::size(px(1200.), px(870.)));
     view.update(cx, |view, cx| {
         view.enter_group(group, cx);
         view.focus_pane(0);

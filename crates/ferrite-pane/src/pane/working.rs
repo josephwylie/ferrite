@@ -13,11 +13,6 @@ pub struct WorkingFacts<'a> {
     pub solo: bool,
     /// The Pane holds the keyboard: only its line animates.
     pub focused: bool,
-    /// A turn runs (the cockpit's `turn_running`, what the send circle
-    /// reads too) and its Composer is empty: together, whether the send
-    /// circle shows stop (`send_is_stop`).
-    pub running: bool,
-    pub composer_empty: bool,
     pub reduce_motion: bool,
     /// The live reasoning caption's own row is in view.
     pub reasoning_visible: bool,
@@ -35,22 +30,17 @@ enum Working {
 /// conversation under its newest row. While the transcript streams, the
 /// line; while a Session starts with nothing streaming yet, its starting
 /// shape; otherwise nothing. Only the Pane holding the keyboard (`focused`)
-/// animates it. Where the send circle shows stop (Solo's, with nothing
-/// typed — `send_is_stop`) the line spends no words on the key; anywhere
-/// else (a draft typed during the turn, a Group Pane's compact box, a
-/// Subagent's footer) the focused line names `esc to interrupt`, so a way
-/// to stop the turn is always in view. Its key changes with its words and
-/// whole seconds, never per frame; the spinner and the shimmer are loops
-/// (the loops overlay), so they redraw nothing of the transcript.
+/// animates it. It names no key: the stop button and the placeholder say
+/// how to stop. Its key changes with its words and whole seconds, never per
+/// frame; the mark and the shimmer are loops (the loops overlay), so they
+/// redraw nothing of the transcript.
 pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::TranscriptTail> {
     let working = if facts.transcript.status() == Status::Streaming {
-        let stop_shown = send_is_stop(facts.running, facts.composer_empty, !facts.solo);
         Working::Line(WorkingLine::of(
             facts.transcript,
             false,
             facts.solo,
             facts.focused,
-            facts.focused && !stop_shown,
             facts.reasoning_visible,
             facts.reduce_motion,
             facts.provider,
@@ -133,9 +123,6 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
         .child(div().min_w_0().truncate().child("Starting"))
 }
 
-/// What a focused Group Pane's working line says at its right end.
-const INTERRUPT_HINT: &str = "esc to interrupt";
-
 /// The working line's mark: three dots in the provider's colour, a pulse
 /// running across them (`components::working_dots`, the Claude app's line);
 /// under reduced motion they sit still. Its selector says which.
@@ -201,7 +188,6 @@ pub(super) fn working_row(
         compact,
         true,
         focused,
-        false,
         received_reasoning_is_visible,
         reduce_motion,
         None,
@@ -209,27 +195,20 @@ pub(super) fn working_row(
     )
 }
 
-/// The working line (SPEC §5.4): one activity row in the app's face, a
-/// step under the prose on a Solo (`solo`) or a Group Pane's transcript
-/// line, the star spinner in the gutter, the provider's
-/// live caption in its colour — the turn's spinner verb (`Reticulating…`,
-/// `progress::spinner_verb`, held for the whole turn) unless the provider
-/// has something better to say (R16) — then `1m04s · ↑ 4.1k tokens` in
-/// `INK_SUBTLE`, and, where no stop button stands for the key (`interrupt`),
-/// `esc to interrupt` (`INK_SUBTLE`) at the line's right. Every working line's spinner cycles,
-/// on the one shared clock, so all of them show the same frame (the
-/// prototype's `.spin`); only the focused Pane's caption shimmers. The seconds
-/// are whole (`progress::live_seconds`), tabular, so the text changes once a
-/// second. The caption is
-/// what truncates; the facts keep
-/// their room. L2 (`compact`) draws the same row without the token count.
+/// The working line (SPEC §5.4), the Claude app's one line: the working
+/// dots in the provider's colour, then what the turn is doing, read off its
+/// execution state (`caption_of`), then `1m04s · ↑ 4.1k tokens` in
+/// `INK_SUBTLE`. Every line's dots cycle on the one shared clock; only the
+/// focused Pane's caption shimmers. The seconds are whole
+/// (`progress::live_seconds`), tabular, so the text changes once a second.
+/// The caption is what truncates; the facts keep their room. L2
+/// (`compact`) draws the same row without the token count.
 #[cfg(test)]
 pub(super) fn working_line_for(
     transcript: &Transcript,
     compact: bool,
     solo: bool,
     focused: bool,
-    interrupt: bool,
     received_reasoning_is_visible: bool,
     reduce_motion: bool,
     provider: Option<Provider>,
@@ -240,7 +219,6 @@ pub(super) fn working_line_for(
         compact,
         solo,
         focused,
-        interrupt,
         received_reasoning_is_visible,
         reduce_motion,
         provider,
@@ -258,7 +236,6 @@ pub(crate) struct WorkingLine {
     ink: u32,
     live: bool,
     spinning: bool,
-    interrupt: bool,
     solo: bool,
     /// When the turn began: its clock counts on its own (`LiveClock`), so
     /// the seconds never change this line's key while the clock is hosted.
@@ -290,7 +267,6 @@ impl WorkingLine {
         compact: bool,
         solo: bool,
         focused: bool,
-        interrupt: bool,
         received_reasoning_is_visible: bool,
         reduce_motion: bool,
         provider: Option<Provider>,
@@ -305,8 +281,8 @@ impl WorkingLine {
             .filter(|_| reduce_motion)
             .map(ferrite_core::progress::live_seconds);
         let tokens = transcript.turn_output_tokens();
-        let tokens = (tokens > 0 && !compact)
-            .then(|| format!("\u{2191} {} tokens", tokens_label(tokens)));
+        let tokens =
+            (tokens > 0 && !compact).then(|| format!("\u{2191} {} tokens", tokens_label(tokens)));
         let progress = transcript.progress();
         let plan = if progress.has_plan {
             progress
@@ -325,42 +301,15 @@ impl WorkingLine {
         } else {
             Vec::new()
         };
-        let generic = Phase::Working.label();
-        let caption = progress
-            .caption()
-            .map(|caption| {
-                if !compact && received_reasoning_is_visible {
-                    progress.phase.map(Phase::label).unwrap_or(generic).into()
-                } else {
-                    caption
-                }
-            })
-            .map(|caption| {
-                // The selector names what the line means (`Working`); the words
-                // are the turn's verb.
-                if caption == generic {
-                    (
-                        format!("progress-caption-{generic}"),
-                        format!(
-                            "{}\u{2026}",
-                            ferrite_core::progress::spinner_verb(thread, transcript.turn_count())
-                        ),
-                    )
-                } else {
-                    // R16: the caption always trails off (`Reticulating…`).
-                    let words = if caption.ends_with('\u{2026}') {
-                        caption.clone()
-                    } else {
-                        format!("{caption}\u{2026}")
-                    };
-                    (format!("progress-caption-{caption}"), words)
-                }
-            });
+        let caption = caption_of(
+            transcript,
+            !compact && received_reasoning_is_visible,
+            thread,
+        );
         Self {
             ink,
             live,
             spinning,
-            interrupt,
             solo,
             started,
             seconds,
@@ -375,7 +324,6 @@ impl WorkingLine {
             ink,
             live,
             spinning,
-            interrupt,
             solo,
             started,
             seconds: _,
@@ -449,18 +397,6 @@ impl WorkingLine {
                             .children(started.map(live_clock))
                             .children(rest),
                     ))
-                })
-                // Where no stop button stands for the key, the focused line
-                // names it at its right end.
-                .when(interrupt, |row| {
-                    row.child(div().flex_1().min_w(px(theme::SPACE_6))).child(
-                        div()
-                            .debug_selector(|| "progress-interrupt".into())
-                            .flex_shrink_0()
-                            .whitespace_nowrap()
-                            .text_color(rgb(INK_SUBTLE))
-                            .child(INTERRUPT_HINT),
-                    )
                 });
         }
         div()
@@ -473,6 +409,73 @@ impl WorkingLine {
             .children((!plan.is_empty()).then(|| task_list(&plan, grid)))
             .child(row)
     }
+}
+
+/// What the working line says, from what the turn is executing (the
+/// handoff's §10: derive the line from execution state), as its selector
+/// and its words:
+///
+/// - a phase that is not the model's own work — retrying, compacting,
+///   waiting — by name (`Retrying · Server busy…`);
+/// - else the call running now, in its call line's words (`Running cargo
+///   test`): the step itself, as the Claude app's line reads, so the call
+///   row and the line never say different things;
+/// - else, while the model thinks or writes, the provider's own heading
+///   (`Checking build progress…`), unless its reasoning row is in view
+///   (`heading_shown`);
+/// - else the turn's verb (`Reticulating…`, `progress::spinner_verb`, held
+///   for the whole turn): only when nothing more specific is known.
+///
+/// Words of the provider's or the turn's trail off (R16); a call's are its
+/// own and don't.
+fn caption_of(
+    transcript: &Transcript,
+    heading_shown: bool,
+    thread: u64,
+) -> Option<(String, String)> {
+    let progress = transcript.progress();
+    let generic = Phase::Working.label();
+    let working = progress.phase.is_none_or(|phase| phase.label() == generic);
+    if working {
+        if let Some(call) = running_call(transcript) {
+            let line = text::call_line(call);
+            return Some((
+                "progress-call".into(),
+                format!("{}{}", line.verb, line.argument),
+            ));
+        }
+    }
+    let caption = progress.caption()?;
+    let caption = if heading_shown && working {
+        generic.to_owned()
+    } else {
+        caption
+    };
+    // The selector names what the line means (`Working`); for the generic
+    // word, its words are the turn's verb.
+    let words = if caption == generic {
+        ferrite_core::progress::spinner_verb(thread, transcript.turn_count()).to_owned()
+    } else {
+        caption.trim_end_matches('\u{2026}').to_owned()
+    };
+    Some((
+        format!("progress-caption-{caption}"),
+        format!("{words}\u{2026}"),
+    ))
+}
+
+/// The call the turn runs now: its newest running call, looked for in the
+/// current turn only (back to its prompt).
+fn running_call(transcript: &Transcript) -> Option<&ToolBlock> {
+    transcript
+        .blocks()
+        .iter()
+        .rev()
+        .take_while(|block| !matches!(block.body, Body::Prompt(_)))
+        .find_map(|block| match &block.body {
+            Body::Tool(tool) if tool.state == ToolState::Running => Some(tool),
+            _ => None,
+        })
 }
 
 /// The task list (`TASK_*`): the plan the turn works to, a card on a
@@ -534,4 +537,45 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
 /// (`progress::token_label`, which the turn's stamp reads too).
 pub(super) fn tokens_label(tokens: u64) -> String {
     ferrite_core::progress::token_label(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrite_core::transcript::{Input, Lexer};
+    use ferrite_core::SessionEvent;
+    use std::sync::Arc;
+
+    /// With no call running, the line keeps the thinking heading, and with
+    /// nothing better known, the turn's verb.
+    #[test]
+    fn the_verb_holds_the_line_only_while_nothing_runs() {
+        let (lexer, _) = Lexer::new();
+        let mut transcript = Transcript::new(Arc::new(lexer));
+        transcript.apply(Input::Prompt("Build".into()));
+        transcript.apply(Input::Event(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking build progress**".into(),
+            summary_index: 0,
+        }));
+        let line = |transcript: &Transcript, heading_shown| {
+            WorkingLine::of(transcript, false, true, false, heading_shown, true, None, 7)
+                .caption
+                .map(|(selector, _)| selector)
+        };
+        assert_eq!(
+            line(&transcript, false).as_deref(),
+            Some("progress-caption-Checking build progress")
+        );
+        // The heading's own row in view: the line says the verb.
+        assert_eq!(
+            line(&transcript, true).as_deref(),
+            Some("progress-caption-Working")
+        );
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "build".into(),
+            name: "commandExecution".into(),
+            input: serde_json::json!({"command": "cargo build --release"}),
+        }));
+        assert_eq!(line(&transcript, true).as_deref(), Some("progress-call"));
+    }
 }

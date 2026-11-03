@@ -170,7 +170,12 @@ fn marked(status: RowStatus, ink: u32, small: bool) -> AnyElement {
 /// (`PANE_HEAD_DOT_W`: a dot's halo overflows it), so the title starts
 /// where it is drawn.
 pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
-    let face = mark_sized(status, status.ink(), NAV_DOT, ferrite_ui::theme::PANE_HEAD_ICON);
+    let face = mark_sized(
+        status,
+        status.ink(),
+        NAV_DOT,
+        ferrite_ui::theme::PANE_HEAD_ICON,
+    );
     match status {
         RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background => div()
             .flex()

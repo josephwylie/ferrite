@@ -1495,255 +1495,118 @@ fn solo_card_right(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestCo
     card.x + card.w
 }
 
-/// ⌥⌘B rides the panel's column over `motion::RESIZE`, as cmd-B rides the
-/// nav's: the board gives up or takes back the width every frame, the
-/// panel's content holds still against the window's edge (clipped, never
-/// re-laid), the toggle never moves, frames come only while it rides, and
-/// a flip mid-flight turns around from the width on screen.
+/// ⌥⌘B snaps the panel's column open and shut, as Claude's does
+/// (`motion-measured.md`): the board gives up or takes back the width on
+/// the next frame, the toggle never moves, and no frame is asked for.
 #[gpui::test]
-fn the_panel_rides_in_and_out_and_settles_without_frames(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{BOARD_PAD, PANEL_W};
+fn the_panel_snaps_in_and_out_without_frames(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::PANEL_W;
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel", cx);
-    assert_eq!(panel_width(cx), Some(PANEL_W), "first paint: no ride");
-    let tab = cx.debug_bounds("panel-tab-Details").expect("a tab");
+    assert_eq!(panel_width(cx), Some(PANEL_W), "first paint");
     let toggle = cx.debug_bounds("panel-toggle").expect("the toggle");
 
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(100));
-    assert!(display_frames(cx) > 0, "a riding column asks for frames");
-    let mid = panel_width(cx).expect("still drawn while it rides out");
-    assert!(mid > BOARD_PAD && mid < PANEL_W, "mid-ride at 100ms: {mid}");
-    assert!(
-        (solo_card_right(&view, cx) - (1600. - mid)).abs() <= 1.,
-        "the board takes the width back with it"
-    );
+    assert_eq!(panel_width(cx), None, "gone at once");
     assert_eq!(
-        cx.debug_bounds("panel-tab-Details"),
-        Some(tab),
-        "the content holds its layout against the window's edge"
+        solo_card_right(&view, cx),
+        1600.,
+        "flush to the window's edge"
     );
     assert_eq!(cx.debug_bounds("panel-toggle"), Some(toggle), "in place");
-    // The view head follows the board's edge, short of the toggle's room
-    // (the toggle, a gap): where its controls come to rest once hidden.
-    let room = 1600. - f32::from(toggle.left()) + ferrite_ui::theme::VIEW_HEAD_GAP;
-    let head = cx.debug_bounds("view-head").expect("the view head");
-    assert!(
-        (f32::from(head.right()) - (1600. - mid.max(room))).abs() <= 1.,
-        "the head rides with the board: {head:?} at {mid}"
-    );
+    assert_eq!(display_frames(cx), 0, "no ride asks for frames");
 
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     cx.run_until_parked();
-    let turned = panel_width(cx).expect("riding back in");
-    assert!(
-        (turned - mid).abs() < 1.,
-        "the flip starts from the width on screen: {mid} -> {turned}"
-    );
-
-    cx.executor()
-        .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_RESIZE_MS));
-    display_frames(cx);
-    assert_eq!(panel_width(cx), Some(PANEL_W), "settled on its target");
+    assert_eq!(panel_width(cx), Some(PANEL_W), "back at once");
     assert_eq!(solo_card_right(&view, cx), 1600. - PANEL_W);
-    assert_eq!(display_frames(cx), 0, "and asks for nothing more");
-
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    cx.executor()
-        .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_RESIZE_MS));
-    display_frames(cx);
-    assert_eq!(panel_width(cx), None, "gone once it has ridden out");
-    assert_eq!(solo_card_right(&view, cx), 1600., "flush to the window's edge");
     assert_eq!(cx.debug_bounds("panel-toggle"), Some(toggle), "still there");
     assert_eq!(display_frames(cx), 0);
 }
 
-/// Focus moving to a draft, which has no panel, takes the panel away on
-/// the same ride: the column keeps drawing the Thread it showed until it
-/// has gone, and the toggle, with no Thread to show the panel for, goes at
-/// once.
+/// Focus moving to a draft, which has no panel, takes the panel and the
+/// toggle away at once.
 #[gpui::test]
-fn the_panel_rides_out_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::PANEL_W;
+fn the_panel_goes_at_once_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-draft", cx);
     view.update(cx, |view, cx| {
         view.open_draft_with_provider(DraftTarget::Main, Provider::Claude, cx)
     });
     cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(100));
-    display_frames(cx);
-    let mid = panel_width(cx).expect("riding out");
-    assert!(mid < PANEL_W, "mid-ride: {mid}");
-    assert!(
-        cx.debug_bounds("panel-tab-Changes").is_some(),
-        "still the Thread's"
-    );
+    assert_eq!(panel_width(cx), None);
     assert!(
         cx.debug_bounds("panel-toggle").is_none(),
         "no Thread: no toggle"
     );
-    cx.executor()
-        .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_RESIZE_MS));
-    display_frames(cx);
-    assert_eq!(panel_width(cx), None);
-    assert_eq!(display_frames(cx), 0);
 }
 
-/// Reduced motion: the panel comes and goes at once, asking for no frame.
+/// A preview opening in a shown Panel snaps it to its wide width, its card
+/// laid out at that width against the board's edge, and closing snaps it
+/// back to the sections at the Panel's own width.
 #[gpui::test]
-fn reduced_motion_snaps_the_panel(cx: &mut TestAppContext) {
+fn a_preview_snaps_the_panel_wide_and_back(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{PANEL_PAD_L, PANEL_PAD_R, PANEL_W};
     ferrite_ui::motion::testing::drive();
-    let (view, cx) = panel_window("motion-panel-reduced", cx);
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    assert_eq!(panel_width(cx), None);
-    assert_eq!(display_frames(cx), 0);
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    assert_eq!(panel_width(cx), Some(ferrite_ui::theme::PANEL_W));
-    assert_eq!(display_frames(cx), 0);
-}
-
-/// A preview opening in a shown Panel rides it out to its wide width over
-/// `motion::RESIZE`, and closing rides it back: every frame the board gives
-/// the width up or takes it back, the preview's card keeps the width it
-/// rests at (laid out once, clipped, never re-wrapped) pinned to the board's
-/// edge, the nav is built no more than once a frame (as under ⌥⌘B), frames
-/// come only while it rides — about as many as the ride's 200ms holds —
-/// and none once it lands.
-#[gpui::test]
-fn a_preview_rides_the_panel_wide_and_back_and_settles_without_frames(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{MOTION_RESIZE_MS, PANEL_PAD_L, PANEL_PAD_R, PANEL_W};
-    ferrite_ui::motion::testing::drive();
-    let _clock = hold_wall_clock();
     let (view, cx) = panel_window("motion-panel-preview", cx);
     let dir = scratch("motion-panel-preview-file");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("notes.md");
-    std::fs::write(
-        &file,
-        "# Notes\n\n".to_string()
-            + &"A line of notes long enough to wrap in a card.\n\n".repeat(40),
-    )
-    .unwrap();
+    std::fs::write(&file, "# Notes\n\nA line of notes.\n").unwrap();
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.open_preview(file.clone(), None, window, cx)
         })
     });
     cx.run_until_parked();
-    let wide = view.read_with(cx, |view, _| view.board_right_rest());
+    let wide = view.read_with(cx, |view, _| view.board_right());
     assert!(wide > PANEL_W + 100., "a 1600 window previews wide: {wide}");
-    let card_w = wide - PANEL_PAD_L - PANEL_PAD_R;
-    let ride = |what: &str, widening: bool, cx: &mut gpui::VisualTestContext| {
-        let nav = crate::cockpit::drawn::nav_renders();
-        let mut frames = 0;
-        let mut last = panel_width(cx).expect("drawn");
-        for _ in 0..64 {
-            cx.executor().advance_clock(Duration::from_millis(8));
-            let asked = display_frames(cx);
-            let width = panel_width(cx).expect("drawn while it rides");
-            assert!(
-                if widening {
-                    width >= last
-                } else {
-                    width <= last
-                },
-                "{what}: one way only, {last} -> {width}"
-            );
-            last = width;
-            assert!(
-                (solo_card_right(&view, cx) - (1600. - width)).abs() <= 1.,
-                "{what}: the board rides with it"
-            );
-            if widening {
-                let card = cx
-                    .debug_bounds("panel-preview")
-                    .expect("the preview's card");
-                assert!(
-                    (f32::from(card.size.width) - card_w).abs() <= 0.5,
-                    "{what}: laid out at its width at rest: {card:?}"
-                );
-                assert!(
-                    (f32::from(card.left()) - (1600. - width + PANEL_PAD_L)).abs() <= 1.,
-                    "{what}: pinned to the board's edge: {card:?} at {width}"
-                );
-            }
-            if asked == 0 {
-                break;
-            }
-            frames += 1;
-        }
-        let most = (MOTION_RESIZE_MS / 8 + 3) as usize;
-        assert!(frames > 2 && frames <= most, "{what}: {frames} frames");
-        // Any Panel ride builds the nav once a frame, ⌥⌘B's as well: the
-        // preview's ride costs no more than that.
-        let nav = crate::cockpit::drawn::nav_renders() - nav;
-        assert!(
-            nav <= frames + 2,
-            "{what}: the nav built {nav} times in {frames} frames"
-        );
-        assert_eq!(display_frames(cx), 0, "{what}: landed, no frame");
-    };
-    ride("open", true, cx);
-    assert_eq!(panel_width(cx), Some(wide), "at rest, wide");
-    assert!(cx.debug_bounds("panel-tab-Preview").is_some());
+    assert_eq!(panel_width(cx), Some(wide), "wide at once");
+    assert!((solo_card_right(&view, cx) - (1600. - wide)).abs() <= 1.);
+    let card = cx
+        .debug_bounds("panel-preview")
+        .expect("the preview's card");
+    assert!(
+        (f32::from(card.size.width) - (wide - PANEL_PAD_L - PANEL_PAD_R)).abs() <= 0.5,
+        "laid out at its width: {card:?}"
+    );
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("panel-changes-section").is_some()
-            || cx.debug_bounds("panel-no-changes").is_some(),
-        "the tab it showed before, at once"
-    );
-    ride("close", false, cx);
     assert_eq!(panel_width(cx), Some(PANEL_W), "back to its own width");
+    assert!(
+        cx.debug_bounds("panel-sections").is_some(),
+        "the sections, at once"
+    );
     assert!(
         cx.debug_bounds("panel-tab-Preview").is_none(),
         "its tab is gone"
     );
 }
 
-/// A preview opened while the Panel is hidden shows it, riding in from
-/// nothing straight to its wide width, and closing it hides the Panel
-/// again — riding out with the preview still drawn — while the setting
-/// never changes. Reduced motion snaps both ways with no frame.
+/// A preview opened while the Panel is hidden shows it, at its wide width
+/// at once, and closing it hides the Panel again, the preview let go, while
+/// the setting never changes.
 #[gpui::test]
 fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::MOTION_RESIZE_MS;
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     cx.run_until_parked();
-    cx.executor()
-        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS + 50));
-    display_frames(cx);
     assert_eq!(panel_width(cx), None, "the premise: hidden");
     let dir = scratch("motion-panel-preview-hidden-file");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("lines.rs");
     std::fs::write(&file, "fn one() {}\nfn two() {}\n").unwrap();
-    let open = |cx: &mut gpui::VisualTestContext| {
-        let file = file.clone();
-        cx.update(|window, cx| {
-            view.update(cx, |view, cx| view.open_preview(file, Some(2), window, cx))
-        });
-        cx.run_until_parked();
-    };
-    open(cx);
-    cx.executor().advance_clock(Duration::from_millis(100));
-    assert!(display_frames(cx) > 0, "it rides in");
-    let mid = panel_width(cx).expect("riding in");
-    cx.executor()
-        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS));
-    display_frames(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_preview(file.clone(), Some(2), window, cx)
+        })
+    });
+    cx.run_until_parked();
     let wide = panel_width(cx).expect("shown");
-    assert!(mid < wide, "{mid} on the way to {wide}");
-    assert_eq!(wide, view.read_with(cx, |view, _| view.board_right_rest()));
+    assert_eq!(wide, view.read_with(cx, |view, _| view.board_right()));
     assert!(
         !view.read_with(cx, |view, _| view.prefs.settings.panel_shown),
         "still off"
@@ -1751,31 +1614,11 @@ fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(100));
-    display_frames(cx);
-    assert!(panel_width(cx).is_some(), "riding out");
-    assert!(
-        cx.debug_bounds("panel-preview").is_some(),
-        "the preview still drawn as it goes"
-    );
-    cx.executor()
-        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS));
-    display_frames(cx);
     assert_eq!(panel_width(cx), None, "hidden again");
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.shown().is_none()),
-        "and the preview let go"
+        view.read_with(cx, |view, _| !view.panes[0].preview.is_open()),
+        "and the preview closed"
     );
-    assert_eq!(display_frames(cx), 0);
-
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    open(cx);
-    assert_eq!(panel_width(cx), Some(wide), "reduced: in at once");
-    assert_eq!(display_frames(cx), 0);
-    view.update(cx, |view, cx| view.close_preview(0, cx));
-    cx.run_until_parked();
-    assert_eq!(panel_width(cx), None, "and out at once");
-    assert_eq!(display_frames(cx), 0);
 }
 
 /// Step a slide a 120Hz display frame at a time until the window asks
@@ -2080,14 +1923,14 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     assert_eq!(built, 0, "a hover in the nav rebuilt a Pane");
 }
 
-/// The Attention list costs nothing at rest: a row arrives at once, asking
+/// The Activity view costs nothing at rest: a row arrives at once, asking
 /// for no frame of its own, and a list with rows in it asks for no frame
 /// and rebuilds no nav however long it sits.
 #[gpui::test]
-fn the_attention_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
+fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let _clock = hold_wall_clock();
-    let (core, fake) = cockpit("attention-list-rest", 3);
+    let (core, fake) = cockpit("activity-view-rest", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
@@ -2107,14 +1950,13 @@ fn the_attention_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
-    let listed = view.read_with(cx, |view, _| {
-        view.attention_list(&view.nav_state())
-            .sections
-            .iter()
-            .map(|block| block.rows.len())
-            .sum::<usize>()
+    view.update(cx, |view, cx| {
+        view.show_nav_view(nav::NavView::Activity, None, cx)
     });
-    assert_eq!(listed, 2, "the premise: two rows under Done");
+    tick(cx);
+    let listed = view.read_with(cx, |view, _| view.activity(&view.nav_state()).today.len());
+    // The untouched first Thread was opened today too.
+    assert_eq!(listed, 3, "the premise: every Thread under Today");
     // Their toasts come and go.
     outlast_toasts(cx);
     settle(cx);
@@ -2778,32 +2620,8 @@ fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
     plays_beside_nav_rebuilds(&view, theme::MOTION_DIALOG_IN_MS, "settings sheet", cx);
 }
 
-/// The Panel's ride and a reader's slide with the nav rebuilt alone on
-/// every frame: each still moves on every frame until it lands, then asks
-/// for none.
-#[gpui::test]
-fn nav_rebuilds_starve_no_ride(cx: &mut TestAppContext) {
-    ferrite_ui::motion::testing::drive();
-    let (view, cx) = panel_window("nav-rebuild-panel", cx);
-    view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    cx.run_until_parked();
-    let mut widths = vec![ferrite_ui::theme::PANEL_W];
-    for _ in 0..(theme::MOTION_RESIZE_MS + 32) / 16 {
-        display_frame(&view, true, cx);
-        widths.extend(panel_width(cx));
-    }
-    assert!(
-        widths.len() + 2 >= (theme::MOTION_RESIZE_MS / 16) as usize,
-        "it rode out a frame at a time: {widths:?}"
-    );
-    assert!(
-        widths.windows(2).all(|pair| pair[1] < pair[0]),
-        "and moved on every frame: {widths:?}"
-    );
-    assert_eq!(panel_width(cx), None, "gone once it has ridden out");
-    assert_eq!(display_frame(&view, true, cx), 0, "landed, no frame");
-}
-
+/// A reader's slide with the nav rebuilt alone on every frame: it still
+/// moves on every frame until it lands, then asks for none.
 #[gpui::test]
 fn nav_rebuilds_starve_no_review_slide(cx: &mut TestAppContext) {
     let (view, _fake, _threads, cx) = group_board("nav-rebuild-review", &[], cx);
@@ -2846,9 +2664,9 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
 
-/// A Composer's choice menu opens where it measured itself to stand
-/// (`Opens::InPlace`), standing still once placed, and asks for nothing
-/// after.
+/// A Composer's choice menu opens in its place on its first frame — no
+/// frame drawn blank while it measures itself — stands still there, and
+/// asks for nothing after.
 #[gpui::test]
 fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
@@ -2864,12 +2682,10 @@ fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(16));
         cx.run_until_parked();
         display_frames(cx);
-        if ferrite_ui::menu::testing::drawn().placed {
-            stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
-        }
+        stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
     }
     assert_eq!(display_frames(cx), 0, "placed: no more frames");
-    assert!(!stood.is_empty(), "the premise: it was drawn placed");
+    assert!(!stood.is_empty(), "the premise: it was drawn");
     assert!(
         stood.windows(2).all(|pair| pair[0] == pair[1]),
         "it stood still once placed: {stood:?}"
@@ -2918,3 +2734,4 @@ fn the_wheel_takes_the_scroll_back_from_a_minimap_glide(cx: &mut TestAppContext)
     frames_over(cx, theme::MINIMAP_SCROLL_MS);
     assert_eq!(display_frames(cx), 0, "and nothing glides on");
 }
+

@@ -4,12 +4,7 @@
 //! history retention nor renders a row; it only preserves the identities a
 //! `ListState` needs to reconcile changing transcript content.
 
-use std::{
-    collections::HashMap,
-    hash::Hash,
-    ops::Range,
-    rc::Rc,
-};
+use std::{collections::HashMap, hash::Hash, ops::Range, rc::Rc};
 
 use ferrite_core::transcript::{Block, BlockId, Body, ToolBlock, ToolState};
 
@@ -466,14 +461,22 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         match row.kind {
             RowKind::Activity | RowKind::Group | RowKind::Visual => work_after = true,
             RowKind::Prompt | RowKind::TurnEnd { .. } => work_after = false,
-            RowKind::Answer { .. } => row.kind = RowKind::Answer { narration: work_after },
+            RowKind::Answer { .. } => {
+                row.kind = RowKind::Answer {
+                    narration: work_after,
+                }
+            }
             _ => {}
         }
     }
     let mut previous = None;
     for row in rows.iter_mut() {
         row.gap = gap_before(previous, row.kind, reading)
-            + if previous.is_none() { shape.top_pad } else { 0. };
+            + if previous.is_none() {
+                shape.top_pad
+            } else {
+                0.
+            };
         previous = Some(row.kind);
     }
     rows.into_iter().map(Rc::new).collect()
@@ -868,7 +871,10 @@ mod tests {
         );
         // Hidden thinking draws nothing, so the calls either side of it
         // read as one run.
-        assert_eq!(kinds(&RowShape::default())[2..], [narration, RowKind::Group]);
+        assert_eq!(
+            kinds(&RowShape::default())[2..],
+            [narration, RowKind::Group]
+        );
     }
 
     /// The turn's last prose — no work after it — is its answer; prose

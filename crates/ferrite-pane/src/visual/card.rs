@@ -179,8 +179,8 @@ pub(crate) fn render(
     }
     if let Some(failure) = failure(visual) {
         let lead = theme::words::FAILED.len();
-        row = row.child(pane::activity_note(grid).child(
-            div().flex_1().min_w_0().child(selection.line(
+        row = row.child(
+            pane::activity_note(grid).child(div().flex_1().min_w_0().child(selection.line(
                 block,
                 failure,
                 vec![(
@@ -190,8 +190,8 @@ pub(crate) fn render(
                         ..Default::default()
                     },
                 )],
-            )),
-        ));
+            ))),
+        );
     }
     let replaced = matches!(stage, Stage::Replaced);
     let body = match stage {

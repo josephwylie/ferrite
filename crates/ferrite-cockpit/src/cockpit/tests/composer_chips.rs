@@ -2,13 +2,13 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// The panel's Context tab reads the Session's reported usage: the
+/// The panel's Context section reads the Session's reported usage: the
 /// context window's counts and the account windows, following live
-/// readings and never inventing a window; the foot under every tab
-/// reads the same counts. With no account window reported, one line
+/// readings and never inventing a window. It is the panel's one context
+/// reading: no foot repeats it. With no account window reported, one line
 /// says so.
 #[gpui::test]
-fn the_context_tab_shows_context_and_subscription_windows(cx: &mut TestAppContext) {
+fn the_context_section_shows_context_and_subscription_windows(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("context-tab", 1);
     bind_production_keys(cx);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -25,18 +25,7 @@ fn the_context_tab_shows_context_and_subscription_windows(cx: &mut TestAppContex
         .send(usage(64_000, Some(200_000)))
         .unwrap();
     tick(cx);
-    assert!(
-        cx.debug_bounds("panel-foot-64000").is_some(),
-        "the foot reads the context on the Changes tab"
-    );
-    let tab = cx.debug_bounds("panel-tab-Details").expect("the tab");
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
-    tick(cx);
     assert!(cx.debug_bounds("context-usage-current-64000").is_some());
-    assert!(
-        cx.debug_bounds("panel-foot-64000").is_none(),
-        "the Context tab reads the meter whole: no foot under it"
-    );
     assert!(
         cx.debug_bounds("context-usage-limits-unknown").is_some(),
         "no account window reported: one line, no bars"
@@ -81,15 +70,11 @@ fn the_context_tab_shows_context_and_subscription_windows(cx: &mut TestAppContex
     tick(cx);
     assert!(
         cx.debug_bounds("context-usage-current-31000").is_some(),
-        "the tab follows live usage"
+        "the section follows live usage"
     );
     assert!(
         cx.debug_bounds("context-usage-maximum-unknown").is_some(),
         "unknown limit is not invented"
-    );
-    assert!(
-        cx.debug_bounds("panel-meter").is_none(),
-        "an unknown window draws no meter"
     );
 }
 
@@ -120,7 +105,7 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
     );
     assert!(
         (menu.size.width - px(ferrite_ui::theme::MODEL_PICKER_W)).abs() <= px(1.),
-        "66 cells: {menu:?}"
+        "Claude's compact model menu: {menu:?}"
     );
     assert!(menu.right() <= composer.right() + px(1.5));
     let row = cx
@@ -128,6 +113,62 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
         .expect("a live row under the section");
     // Terminal-native (WP-E): a float row is one grid row.
     assert_eq!(row.size.height, px(ferrite_ui::theme::FLOAT_ROW_H));
+}
+
+/// Claude's model menu: the effort is a row under the models, `Effort
+/// <level> ›`, its levels in a submenu that opens beside the menu (feet
+/// level, `SUBMENU_GAP` apart) — by → from the keys or the pointer resting
+/// on the row — and a pick there sets the Thread's effort and closes both.
+#[gpui::test]
+fn the_model_picker_opens_its_effort_as_a_submenu(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{EFFORT_MENU_W, SUBMENU_GAP};
+    let (core, _fake) = cockpit("model-picker-effort", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let ladder = view.read_with(cx, |view, _| view.effort_ladder(thread));
+    let Some((steps, _, _)) = ladder else {
+        panic!("the premise: the default model takes an effort");
+    };
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
+    let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
+    let row = cx
+        .debug_bounds("choice-submenu-row")
+        .expect("the effort row rides the model picker");
+    assert!(
+        cx.debug_bounds("choice-submenu").is_none(),
+        "shut until asked"
+    );
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let sub = cx
+        .debug_bounds("choice-submenu")
+        .expect("resting on the row opens the submenu");
+    assert!(
+        (sub.size.width - px(EFFORT_MENU_W)).abs() <= px(1.),
+        "{sub:?}"
+    );
+    assert!(
+        (sub.left() - menu.right() - px(SUBMENU_GAP)).abs() <= px(1.5),
+        "beside the menu: {sub:?} / {menu:?}"
+    );
+    assert!((sub.bottom() - menu.bottom()).abs() <= px(1.), "feet level");
+    let last = steps.len() - 1;
+    let pick = cx
+        .debug_bounds(Box::leak(format!("choice-sub-{last}").into_boxed_str()))
+        .expect("every level is a row");
+    cx.simulate_click(pick.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.popover.is_none(), "a pick closes the picker");
+        assert_eq!(
+            view.cockpit.thread(thread).unwrap().effort(),
+            Some(steps[last].as_str())
+        );
+    });
 }
 
 /// A Group Pane's Composer carries no chips (SPEC §5.9): the mode,

@@ -23,21 +23,18 @@
 //! to y = 0 would eat the top resize edge; `CAPTION_RESIZE_EDGE` is the
 //! inset that gives it back.
 //!
-//! The band says nothing (ADR 0014): no location, no doors. The nav's
-//! selected row names the Thread; the window's one bar is the bottom bar
-//! (`bottom_bar`, SPEC §5.7): `1 Solo` and a tab per Group, then the
-//! vitals — who needs you, usage, free disk and the clock.
+//! The band says nothing (ADR 0014): no location, no doors. The view head
+//! names the Thread over it; there is no bottom bar (the view switcher is
+//! the nav foot's).
 //!
 //! Drawing only: the Cockpit places these (`ferrite_ui::frame`) and owns
 //! the state they read.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, AnyElement, Div, MouseButton, SharedString, Stateful, WindowControlArea};
+use gpui::{div, px, rgb, Div, MouseButton, Stateful, WindowControlArea};
 
-use ferrite_ui::frame::{Bar, RollUp, CUSTOM};
-use ferrite_ui::theme::paint;
+use ferrite_ui::frame::CUSTOM;
 
-use ferrite_ui::components;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
@@ -135,289 +132,6 @@ fn drag_region(maximized: bool) -> Div {
         )
 }
 
-// ------------------------------------------------------------- bottom bar
-
-/// The bottom bar as the Cockpit fills it: its view tabs, then the
-/// vitals — who needs you, usage, free disk and the clock. A lone view
-/// (Solo, no Group yet) is a label, not a tab: with nothing to switch to,
-/// a selected ground would offer a choice that is not there.
-pub fn bar(bar: Bar) -> Div {
-    let lone = bar.tabs.len() == 1;
-    let tabs = bar
-        .tabs
-        .into_iter()
-        .map(|tab| {
-            if lone {
-                return bar_tab(tab.id, tab.ordinal, tab.label, Face::Lone, tab.roll_up)
-                    .into_any_element();
-            }
-            let face = if tab.current {
-                Face::Current
-            } else {
-                Face::Other
-            };
-            bar_tab(tab.id, tab.ordinal, tab.label, face, tab.roll_up)
-                .on_click(tab.press)
-                .into_any_element()
-        })
-        .collect();
-    let needs_you = bar.needs_you.and_then(|(count, press)| {
-        bar_needs_you(count).map(|count| count.on_click(press).into_any_element())
-    });
-    let usage = bar
-        .usage
-        .iter()
-        .filter_map(|(provider, limits)| bar_usage(*provider, limits))
-        .map(IntoElement::into_any_element);
-    let disk = bar
-        .free_disk
-        .and_then(bar_free_disk)
-        .map(IntoElement::into_any_element);
-    let items = needs_you
-        .into_iter()
-        .chain(usage)
-        .chain(disk)
-        .chain(Some(bar_clock(bar.clock).into_any_element()))
-        .collect();
-    bottom_bar(tabs, vitals(items).into_any_element())
-}
-
-/// The bottom bar (SPEC §5.7), the window's one bar (ADR 0014, amended by
-/// ADR 0033): full width on `paint::BAR`, closed above by a `LINE`
-/// hairline, `BAR_PAD_X` in from each end, `BAR_GAP` between its items,
-/// Geist `FS_META` in `INK_SUBTLE`.
-/// Left the view `tabs`; the `vitals` pushed to the right end.
-///
-/// The hairline lies on the frame's last row above the bar, as the
-/// mockups draw it, not inside the bar's 30px: inside, it would leave 29
-/// for the 22px tabs, and the half pixel the snap rounds down would seat
-/// them 4 under the line and 3 over the window's foot.
-fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
-    div()
-        .debug_selector(|| "bottom-bar".into())
-        .relative()
-        .flex_shrink_0()
-        .w_full()
-        .h(px(STATUS_BAR_H))
-        .bg(paint::BAR)
-        .child(
-            div()
-                .debug_selector(|| "bottom-bar-rule".into())
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(px(-HAIRLINE_W))
-                .h(px(HAIRLINE_W))
-                // On the frame's own grey: the row is the frame's under
-                // the nav and the board, but under the panel (which stops
-                // a hairline short) only the window's ground lies there.
-                .bg(paint::BAR)
-                .child(div().size_full().bg(paint::LINE)),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .size_full()
-                .px(px(BAR_PAD_X))
-                .gap(px(BAR_GAP))
-                .font_family(FONT_UI)
-                .text_size(px(FS_META))
-                .line_height(px(LH_META))
-                .text_color(rgb(INK_SUBTLE))
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .child(
-                    div()
-                        .debug_selector(|| "bottom-bar-tabs".into())
-                        .flex()
-                        .flex_row()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(px(SPACE_0_5))
-                        .children(tabs),
-                )
-                .child(div().flex_1())
-                .child(vitals),
-        )
-}
-
-/// The bar's right end, in order: the need-you count, a usage segment per
-/// provider, free disk, the clock — `BAR_GAP` apart, never shrunk.
-fn vitals(items: Vec<AnyElement>) -> Div {
-    div()
-        .debug_selector(|| "bottom-bar-vitals".into())
-        .flex()
-        .flex_row()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(BAR_GAP))
-        .children(items)
-}
-
-/// A round state dot `size` across in `ink`.
-fn bar_dot(size: f32, ink: u32) -> Div {
-    div()
-        .flex_shrink_0()
-        .size(px(size))
-        .rounded_full()
-        .bg(rgb(ink))
-}
-
-/// How a view's tab answers: the current one, another, or the only one.
-#[derive(Clone, Copy, PartialEq)]
-enum Face {
-    Current,
-    Other,
-    Lone,
-}
-
-/// One view's tab (SPEC §5.7): `1 Solo`, `2 Work` — `BAR_TAB_H` high,
-/// `BAR_TAB_PAD_X` in, radius `R_CONTROL`, the digit in `INK_SUBTLE` and the
-/// name in `INK`, then the view's roll-up dot. The current view's
-/// sits on `paint::SELECTED` with its name `INK_STRONG` at the label
-/// weight; the rest take the hover fill under the pointer. A lone view is
-/// its words alone, on no ground and answering no pointer. The cockpit
-/// wires the press.
-fn bar_tab(
-    id: SharedString,
-    ordinal: usize,
-    label: SharedString,
-    face: Face,
-    roll_up: Option<RollUp>,
-) -> Stateful<Div> {
-    let selector = id.clone();
-    let key = id.clone();
-    let key_dot = id.clone();
-    div()
-        .id(gpui::ElementId::Name(id))
-        .debug_selector(move || selector.to_string())
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(SPACE_1_5))
-        .h(px(BAR_TAB_H))
-        .px(px(BAR_TAB_PAD_X))
-        .rounded(px(R_CONTROL))
-        .map(|tab| match face {
-            Face::Current => tab
-                .cursor_pointer()
-                .bg(paint::SELECTED)
-                .text_color(rgb(INK_STRONG))
-                .font_weight(W_LABEL),
-            Face::Other => tab.hover_row(key).press_row().text_color(rgb(INK)),
-            Face::Lone => tab.text_color(rgb(INK)),
-        })
-        .child(
-            components::tabular(div().text_color(rgb(INK_SUBTLE)))
-                .child(SharedString::from(ordinal.to_string())),
-        )
-        .child(label)
-        .children(roll_up.map(|dot| {
-            bar_dot(BAR_TAB_DOT, dot.ink()).debug_selector(move || format!("{key_dot}-dot"))
-        }))
-}
-
-/// The need-you count (SPEC §5.7): a `BAR_NEED_DOT` `ATTENTION` dot and
-/// `words::needs_you` (`1 needs you`, `2 need you`) in `INK`. `None`
-/// at zero. The cockpit wires the press to the Inbox. A press target among the vitals, it answers the
-/// pointer as the nav's doors do — its words brighten to `INK_STRONG`
-/// over the hover blend — rather than with a ground: a ground would need
-/// padding the vitals' even gaps cannot spare.
-fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
-    (count > 0).then(|| {
-        let blend = SharedString::from("bottom-bar-needs-you");
-        let ink =
-            ferrite_ui::motion::hover_blend(&blend, rgb(INK).into(), rgb(INK_STRONG).into());
-        div()
-            .id("bottom-bar-needs-you")
-            .debug_selector(|| "bottom-bar-needs-you".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1_5))
-            .cursor_pointer()
-            .on_hover(ferrite_ui::motion::hover_listener(blend))
-            .child(bar_dot(BAR_NEED_DOT, ATTENTION))
-            .child(
-                components::tabular(div().text_color(ink))
-                    .child(SharedString::from(words::needs_you(count))),
-            )
-    })
-}
-
-/// The window a provider's usage segment reads and its words: the more
-/// used one, `this week` or `of 5h` (the five-hour window on a tie).
-/// `None` when it has reported neither.
-fn usage_window(limits: &ferrite_core::transcript::RateLimits) -> Option<(&'static str, f32)> {
-    let five = limits
-        .five_hour
-        .map(|window| window.used_fraction.clamp(0.0, 1.0));
-    let week = limits
-        .weekly
-        .map(|window| window.used_fraction.clamp(0.0, 1.0));
-    match (five, week) {
-        (Some(five), Some(week)) if week > five => Some(("this week", week)),
-        (Some(five), _) => Some(("of 5h", five)),
-        (None, Some(week)) => Some(("this week", week)),
-        (None, None) => None,
-    }
-}
-
-/// One provider's usage segment (SPEC §5.7): its glyph (`✻` Claude, `◉`
-/// Codex) in its ink, then `14% this week` or `41% of 5h`. `None` when the
-/// provider has reported no window.
-fn bar_usage(
-    provider: ferrite_core::store::Provider,
-    limits: &ferrite_core::transcript::RateLimits,
-) -> Option<Div> {
-    let (window, used) = usage_window(limits)?;
-    let (glyph, ink, name) = match provider {
-        ferrite_core::store::Provider::Claude => ("\u{273b}", PROVIDER_CLAUDE, "claude"),
-        ferrite_core::store::Provider::Codex => ("\u{25c9}", PROVIDER_CODEX, "codex"),
-    };
-    Some(
-        div()
-            .debug_selector(move || format!("bottom-bar-usage-{name}"))
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1_5))
-            .child(components::glyph(glyph, ink))
-            .child(components::tabular(div()).child(SharedString::from(format!(
-                "{}% {window}",
-                (used * 100.).round() as u32
-            )))),
-    )
-}
-
-/// The free-disk segment: `free_disk_words`, or `None` when it says
-/// nothing.
-fn bar_free_disk(bytes: u64) -> Option<Div> {
-    let (words, ink) = ferrite_ui::frame::free_disk_words(bytes)?;
-    Some(
-        components::tabular(
-            div()
-                .debug_selector(|| "bottom-bar-disk".into())
-                .flex_shrink_0()
-                .text_color(rgb(ink)),
-        )
-        .child(SharedString::from(words)),
-    )
-}
-
-/// The clock (`progress::clock_label`) in `INK`, tabular figures.
-fn bar_clock(clock: SharedString) -> Div {
-    components::tabular(
-        div()
-            .debug_selector(|| "bottom-bar-clock".into())
-            .flex_shrink_0()
-            .text_color(rgb(INK)),
-    )
-    .child(clock)
-}
-
 /// Minimise, maximise/restore and close, in the platform's order, flush to
 /// the corner. The maximise mark becomes the restore mark while the window
 /// is maximized — the button says what the click will do.
@@ -460,11 +174,7 @@ fn button(
     glyph: &'static str,
     close: bool,
 ) -> Stateful<Div> {
-    let hover_ink = if close {
-        CAPTION_CLOSE_INK
-    } else {
-        INK_STRONG
-    };
+    let hover_ink = if close { CAPTION_CLOSE_INK } else { INK_STRONG };
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -543,34 +253,6 @@ mod tests {
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });
-    }
-
-    /// SPEC §5.7: a usage segment reads the provider's more used window,
-    /// the five-hour one on a tie.
-    #[test]
-    fn a_usage_segment_reads_the_more_used_window() {
-        use ferrite_core::transcript::RateLimits;
-        use ferrite_core::RateLimitWindow;
-        let window = |used: f32| {
-            Some(RateLimitWindow {
-                used_fraction: used,
-                resets_at: None,
-            })
-        };
-        let limits = |five_hour, weekly| RateLimits { five_hour, weekly };
-        assert_eq!(
-            usage_window(&limits(window(0.41), window(0.12))),
-            Some(("of 5h", 0.41))
-        );
-        assert_eq!(
-            usage_window(&limits(window(0.10), window(0.12))),
-            Some(("this week", 0.12))
-        );
-        assert_eq!(
-            usage_window(&limits(window(0.3), window(0.3))),
-            Some(("of 5h", 0.3))
-        );
-        assert_eq!(usage_window(&limits(None, None)), None);
     }
 
     /// A restored window keeps its top resize edge, which is an inset the

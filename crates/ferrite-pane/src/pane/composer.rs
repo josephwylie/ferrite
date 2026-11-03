@@ -13,26 +13,29 @@ pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
 
-/// The model's word under the box (SPEC §5.5, Claude's footer): the model
-/// as the picker names it, plain, in `INK_SUBTLE`. Render-only; the cockpit
-/// gives it its button and its menu.
-pub fn model_chip(label: SharedString) -> Div {
-    chip_face(label, INK_SUBTLE)
+/// The model and its effort as one footer chip (Claude's `Opus 5.5
+/// Medium`): the model in `INK`, cut first in a narrow Pane, then the
+/// effort in `INK_SUBTLE`, `FOOTER_WORD_GAP` after it and never cut. A
+/// model that takes no effort shows its name alone.
+pub fn model_effort_chip(model: SharedString, effort: Option<SharedString>) -> Div {
+    chip_face(model, INK)
+        .gap(px(theme::FOOTER_WORD_GAP))
+        .children(effort.map(|effort| {
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(INK_SUBTLE))
+                .child(effort)
+        }))
 }
 
-/// The effort's word under the box: the level in force, sentence case.
-pub fn effort_chip(label: SharedString) -> Div {
-    chip_face(label, INK_SUBTLE)
-}
-
-/// The permission mode's word under the box: `INK_SUBTLE` in the provider's
-/// default mode, else in `RISKY_INK` — a mode that changes what runs
-/// without asking is worth seeing (`theme::mode_is_default`).
+/// The permission mode's word under the box: `INK_SUBTLE`, or `RISKY_INK`
+/// for a mode that never asks (`theme::mode_is_risky`), as its menu row
+/// draws it.
 pub fn mode_chip(label: SharedString, mode: &str) -> Div {
-    let ink = if theme::mode_is_default(mode) {
-        INK_SUBTLE
-    } else {
+    let ink = if theme::mode_is_risky(mode) {
         theme::RISKY_INK
+    } else {
+        INK_SUBTLE
     };
     chip_face(label, ink)
 }
@@ -86,8 +89,7 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
 
 /// Whether the send circle shows stop: Solo's (not `compact`), while the
 /// turn runs, with nothing in the box. The cockpit draws the circle from
-/// it and the working line drops its `esc to interrupt` by it, so the two
-/// never disagree about whether a stop is in view.
+/// it; the working line names no key.
 pub fn send_is_stop(running: bool, empty: bool, compact: bool) -> bool {
     !compact && running && empty
 }
@@ -162,20 +164,21 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
         stop,
         ferrite_ui::motion::FADE_QUICK,
         move |t| {
-            let face = |path: &'static str, shown: f32| {
-                let scale = theme::MOTION_SEND_GLYPH_FROM
-                    + (1.0 - theme::MOTION_SEND_GLYPH_FROM) * shown;
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .opacity(shown)
-                    .child(icon(path, extent, ink).with_transformation(
-                        gpui::Transformation::scale(gpui::size(scale, scale)),
-                    ))
-            };
+            let face =
+                |path: &'static str, shown: f32| {
+                    let scale = theme::MOTION_SEND_GLYPH_FROM
+                        + (1.0 - theme::MOTION_SEND_GLYPH_FROM) * shown;
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(shown)
+                        .child(icon(path, extent, ink).with_transformation(
+                            gpui::Transformation::scale(gpui::size(scale, scale)),
+                        ))
+                };
             div()
                 .relative()
                 .size(px(extent))
@@ -187,21 +190,24 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
 
 /// The Composer's controls, wired in the cockpit: Solo's `+` and send
 /// circle on the box's row and its footer under the box; a board Pane's
-/// send circle alone.
+/// send circle alone. Either's queue strip carries `queue`, its action
+/// buttons (`queued_send_now`, `queued_edit`, `queued_close`).
 pub struct ComposerControls {
     pub attach: Option<AnyElement>,
     pub send: AnyElement,
     pub footer: Option<AnyElement>,
+    pub queue: Vec<AnyElement>,
 }
 
 /// The Solo box's footer (`COMPOSER_FOOTER_H`, under the box, Claude's):
-/// `lead` at the left — a draft's Project and Workspace — and at the right
-/// the model, the effort and the permission mode as plain words, then the
-/// context ring. In a narrow box what matters least gives way: the model's
-/// word cuts first (the picker says it whole). The rest never give way to
-/// it, the mode — the permission in force, which matters for safety —
-/// least of all; a long one cuts at its own `TOOLBAR_LEAD_MAX_W`. Narrower
-/// still, the words clip at the row's start.
+/// `lead` at the left — where the work runs, a draft's Project and
+/// Workspace pickers or an empty Thread's words — and at the right the
+/// model and effort, then the permission mode as plain words, then the
+/// plan-usage ring. In a narrow box what matters least gives way: the
+/// model's word cuts first (the picker says it whole). The rest never give
+/// way to it, the mode — the permission in force, which matters for
+/// safety — least of all; a long one cuts at its own `TOOLBAR_LEAD_MAX_W`.
+/// Narrower still, the words clip at the row's start.
 pub fn composer_footer(
     lead: Vec<AnyElement>,
     model: Option<AnyElement>,
@@ -228,7 +234,7 @@ pub fn composer_footer(
         .min_w_0()
         .overflow_hidden()
         .items_center()
-        .gap(px(theme::COMPOSER_TOOLBAR_GAP))
+        .gap(px(theme::FOOTER_CHIP_GAP))
         .children(lead.into_iter().map(held))
         .child(div().flex_1().min_w_0())
         .children(model.map(give))
@@ -241,6 +247,19 @@ pub fn composer_footer(
                 .pl(px(theme::SPACE_1_5))
                 .child(ring)
         }))
+}
+
+/// A footer word that is not a control (an empty Thread's Project and
+/// branch): a chip's face at a chip's inset, so it lines up with the
+/// pickers beside it.
+pub fn footer_word(label: SharedString) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .h(px(theme::FOOTER_CHIP_H))
+        .px(px(theme::FOOTER_CHIP_PAD_X))
+        .child(chip_face(label, INK_SUBTLE))
 }
 
 // --------------------------------------------------------------- Composer
@@ -281,10 +300,9 @@ pub(super) struct ComposerStack<'a> {
     #[allow(dead_code)]
     pub(super) joined: bool,
     /// The Composer's controls, wired in the cockpit: Solo's `+`, send and
-    /// footer; on a board, the focused Pane's send circle.
+    /// footer; on a board, the focused Pane's send circle. Both carry the
+    /// queue strip's actions.
     pub(super) toolbar: Option<ComposerControls>,
-    /// The queued row's close button, wired to ⌫'s act in the cockpit.
-    pub(super) unqueue: Option<AnyElement>,
 }
 
 /// The Composer stack (theme WP-D): a board cell's compact box
@@ -295,7 +313,11 @@ pub(super) struct ComposerStack<'a> {
 /// here: it is the transcript's tail. While a Decision pends the input
 /// carries the `Decision` key context, so its keys answer with the
 /// keyboard in the Composer (#23).
-pub(super) fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
+pub(super) fn composer_region(
+    view: &PaneView,
+    transcript: Option<&Transcript>,
+    stack: ComposerStack,
+) -> Div {
     if stack.grid {
         compact_composer::compact_composer(view, transcript, stack)
     } else {
@@ -303,11 +325,12 @@ pub(super) fn composer_region(view: &PaneView, transcript: Option<&Transcript>, 
     }
 }
 
-/// The Solo Composer (SPEC §5.5): a box `COMPOSER_INSET` inside the card's
-/// sides and foot — `paint::FIELD` at `R_FLOAT`, its `FIELD_RING` laid
-/// outside it — holding the queued row, the pending files, the input
-/// (Geist, no `❯`) and the toolbar the cockpit wires. Files dragged over
-/// it light its edge and say `Drop files to attach` over its contents.
+/// The Solo Composer (SPEC §5.5): a box `COMPOSER_OUTSET` past the reading
+/// column at each side — `paint::FIELD` at `R_FLOAT`, its `FIELD_RING`
+/// laid outside it — holding the pending files, the input (no `❯`) and the
+/// toolbar the cockpit wires; the queue strip stands over it as its own
+/// card, the footer under it. Files dragged over it light its edge and say
+/// `Drop files to attach` over its contents.
 fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
         grid: _,
@@ -325,7 +348,6 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         drop_target,
         joined: _,
         toolbar,
-        unqueue,
     } = stack;
     let geometry = view.geometry.clone();
     let namespace = view.text_namespace();
@@ -358,25 +380,22 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     // so it paints over the contents) one line that says what letting go
     // does.
     let drop_hint = drop_target.then(|| {
-            div()
-                .debug_selector(|| "composer-drop-hint".into())
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(theme::SPACE_2))
-                .rounded(px(theme::R_FLOAT))
-                .bg(theme::paint::FIELD)
-                .text_color(rgb(INK))
-                .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK))
-                .child("Drop files to attach")
+        div()
+            .debug_selector(|| "composer-drop-hint".into())
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(theme::SPACE_2))
+            .rounded(px(theme::R_FLOAT))
+            .bg(theme::paint::FIELD)
+            .text_color(rgb(INK))
+            .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK))
+            .child("Drop files to attach")
     });
     if drop_target {
         field = field.child(ring(theme::DROP_EDGE));
-    }
-    if let Some(row) = queued_row(&queued, &namespace, unqueue) {
-        field = field.child(row);
     }
     if let Some(error) = draft_error {
         field = field.child(
@@ -434,10 +453,16 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     }
     // One row, as Claude's: the `+`, the line that grows, the send circle,
     // the buttons standing at the row's foot as the line grows over them.
-    let (attach, send, footer) = match toolbar {
-        Some(controls) => (controls.attach, Some(controls.send), controls.footer),
-        None => (None, None, None),
+    let (attach, send, footer, actions) = match toolbar {
+        Some(controls) => (
+            controls.attach,
+            Some(controls.send),
+            controls.footer,
+            controls.queue,
+        ),
+        None => (None, None, None, Vec::new()),
     };
+    let queue = queue_card(&queued, &namespace, actions);
     let slot = |control: AnyElement| {
         div()
             .flex()
@@ -485,8 +510,12 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         ));
     }
     composer_stack(None, background, true)
+        .children(queue.map(|queue| {
+            in_column(theme::COMPOSER_INSET, true, queue).pb(px(theme::QUEUE_CARD_GAP))
+        }))
         .child(in_column(theme::COMPOSER_INSET, true, field))
-        // The model, effort and mode under the box, as plain words.
+        // The model, effort and mode under the box, as plain words, the
+        // last one's ink ending where the column's text does.
         .child(in_column(
             theme::COMPOSER_INSET,
             true,
@@ -496,9 +525,9 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .items_center()
                 .min_w_0()
                 .h(px(theme::COMPOSER_FOOTER_H))
+                .px(px(theme::COMPOSER_OUTSET - theme::FOOTER_CHIP_PAD_X))
                 .children(footer),
         ))
-        .pb(px(theme::COMPOSER_FOOTER_PAD_B))
 }
 
 /// What stands over either Composer: `SHELF_GAP` over the box it belongs
@@ -516,12 +545,9 @@ pub(super) fn composer_stack(
     } else {
         theme::COMPACT_COMPOSER_INSET
     };
-    div()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .min_w_0()
-        .when(attachments.is_some() || background.is_some(), |stack| {
+    div().flex().flex_col().flex_shrink_0().min_w_0().when(
+        attachments.is_some() || background.is_some(),
+        |stack| {
             let shelf = div()
                 .debug_selector(|| "composer-shelf".into())
                 .flex()
@@ -535,36 +561,38 @@ pub(super) fn composer_stack(
                     shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
                 });
             stack.child(in_column(inset, boxed, shelf).pb(px(theme::SHELF_GAP)))
-        })
+        },
+    )
 }
 
 /// One row of the Composer stack, `inset` in from the card's sides — and in
-/// Solo (`column`) at most the reading column wide (`TX_COLUMN_MAX_W`),
-/// centred as the transcript is, so the box, the shelf and the working line
-/// stand under the messages they follow (as Claude's and Codex's do). A
+/// Solo (`column`) at most `COMPOSER_MAX_W`, the reading column and
+/// `COMPOSER_OUTSET` either side, centred as the transcript is, so the box,
+/// the queue and the shelf frame the messages they follow (Claude's). A
 /// Group Pane's rows keep the card's whole width.
 pub(super) fn in_column(inset: f32, column: bool, row: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .justify_center()
-        .min_w_0()
-        .px(px(inset))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .when(column, |row| row.max_w(px(theme::TX_COLUMN_MAX_W)))
-                .child(row),
-        )
+    div().flex().justify_center().min_w_0().px(px(inset)).child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .when(column, |row| row.max_w(px(theme::COMPOSER_MAX_W)))
+            .child(row),
+    )
 }
 
-/// The Solo box's queued row (`QUEUED_ROW_H`, a `FIELD_RING` rule under it):
-/// `Queued`, the top of the pile on one cut line — the prompt ↑ takes back
-/// and ⌫ drops — `+N` for the rest, and the close button that drops it.
-/// The keys act as ever; they are not printed. None with nothing queued.
-pub(super) fn queued_row(queued: &[&str], namespace: &str, close: Option<AnyElement>) -> Option<Div> {
+/// The queue strip (Claude's): its own card over the box, `QUEUE_CARD_H`
+/// high at `R_CARD` on `paint::RAISED` — `N messages queued`, the latest
+/// on one cut line in `INK_SUBTLE`, then `actions` (send now, edit,
+/// remove), which act on the latest as ↑ and ⌫ do. None with nothing
+/// queued. Snaps in and out (motion-measured: Claude's strip leaves in one
+/// frame).
+pub(super) fn queue_card(
+    queued: &[&str],
+    namespace: &str,
+    actions: Vec<AnyElement>,
+) -> Option<Div> {
     let latest = queued.first()?;
-    let more = queued.len() - 1;
+    let count = queued.len();
     let selector = format!("composer-queue-{namespace}");
     Some(
         div()
@@ -573,55 +601,88 @@ pub(super) fn queued_row(queued: &[&str], namespace: &str, close: Option<AnyElem
             .flex_shrink_0()
             .items_center()
             .gap(px(theme::QUEUED_GAP))
-            .h(px(theme::QUEUED_ROW_H + 1.))
+            .h(px(theme::QUEUE_CARD_H))
             .min_w_0()
-            .pl(px(theme::QUEUED_PAD_L))
-            .pr(px(theme::QUEUED_PAD_R))
-            .border_b_1()
-            .border_color(theme::paint::FIELD_RING)
+            .pl(px(theme::QUEUED_PAD_X))
+            .pr(px(
+                theme::QUEUED_PAD_X - (theme::QUEUED_ACTION - theme::QUEUED_ICON) / 2.
+            ))
+            .rounded(px(theme::R_CARD))
+            .bg(theme::paint::RAISED)
+            .font_family(theme::FONT_UI)
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
             .whitespace_nowrap()
-            .child(
+            .child(components::tabular(
                 div()
+                    .debug_selector(move || format!("queued-count-{count}"))
                     .flex_shrink_0()
-                    .text_size(px(theme::FS_META))
                     .font_weight(theme::W_LABEL)
-                    .text_color(rgb(INK_SUBTLE))
-                    .child("Queued"),
-            )
+                    .text_color(rgb(INK))
+                    .child(queued_count(count)),
+            ))
             .child(
                 div()
                     .debug_selector(|| "queued-0".into())
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(INK))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(queued_preview(latest))),
             )
-            .when(more > 0, |row| {
-                row.child(components::tabular(
-                    div()
-                        .debug_selector(|| "queued-more".into())
-                        .flex_shrink_0()
-                        .text_color(rgb(INK_SUBTLE))
-                        .child(format!("+{more}")),
-                ))
-            })
-            .children(close),
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(theme::QUEUED_ACTION_GAP))
+                    .children(actions),
+            ),
     )
 }
 
-/// The queued row's close button: a `QUEUED_CLOSE` square at `R_CONTROL`, the
-/// `close` icon in `INK_SUBTLE`, `paint::RAISED` under the pointer. The
-/// cockpit wires its click.
+/// The strip's count: `1 message queued`, `3 messages queued`.
+pub fn queued_count(count: usize) -> String {
+    format!(
+        "{count} message{} queued",
+        if count == 1 { "" } else { "s" }
+    )
+}
+
+/// The strip's send now (`corner-down-left`): stop the running turn so
+/// what is queued goes out now — Escape's own act with prompts held.
+pub fn queued_send_now(cx: &gpui::App) -> gpui::component::button::Button {
+    queued_action("queued-send-now", icons::CORNER_DOWN_LEFT, "Send now", cx)
+}
+
+/// The strip's edit (`pencil`): the latest back into the Composer, ahead of
+/// any draft — ↑'s act.
+pub fn queued_edit(cx: &gpui::App) -> gpui::component::button::Button {
+    queued_action("queued-edit", icons::PENCIL, "Edit", cx)
+}
+
+/// The strip's remove (`close`): the latest dropped — ⌫'s act.
 pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
-    chip_button("queued-close", cx)
-        .debug_selector(|| "queued-close".into())
+    queued_action("queued-close", icons::CLOSE, "Remove", cx)
+}
+
+/// One of the strip's actions: a `QUEUED_ACTION` square at `R_CONTROL`, its
+/// icon in `ICON_INK`, `paint::HOVER` under the pointer. The cockpit wires
+/// its click.
+fn queued_action(
+    id: &'static str,
+    path: &'static str,
+    tip: &'static str,
+    cx: &gpui::App,
+) -> gpui::component::button::Button {
+    chip_button(id, cx)
+        .debug_selector(move || id.into())
         .p_0()
-        .size(px(theme::QUEUED_CLOSE))
+        .size(px(theme::QUEUED_ACTION))
         .flex_shrink_0()
         .rounded(px(theme::R_CONTROL))
-        .tip("Remove queued message")
-        .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, ICON_INK))
+        .tip(tip)
+        .child(icon(path, theme::QUEUED_ICON, ICON_INK))
 }
 
 /// A quiet control's button: no ground at rest, `paint::HOVER` under the
@@ -675,9 +736,15 @@ impl Ghost {
 /// What follows a verbatim prediction.
 const ACCEPT_HINT: &str = "\u{21e5} accept";
 
-/// The placeholder for this line: a draft's first prompt, a Decision's
-/// reply, a dead Session's revival, a landed prediction, a follow-up queued
-/// behind a running turn, or steering a live Thread.
+/// The resting line's words, and a running turn's.
+const IDLE_PLACEHOLDER: &str = "Type / for commands";
+const RUNNING_PLACEHOLDER: &str = "\u{21b5} to send, esc to stop";
+
+/// The placeholder for this line, Claude's three: a draft's first prompt;
+/// while a turn runs, that ↵ still sends (into the running turn) and Esc
+/// stops it; else the way to the commands. A landed prediction shows
+/// verbatim instead. A Decision or a dead Session changes nothing here:
+/// the line still takes typing, and sending revives.
 pub(super) fn placeholder(
     pending: bool,
     draft: bool,
@@ -689,16 +756,12 @@ pub(super) fn placeholder(
     }
     let busy = transcript.is_some_and(|transcript| transcript.status() == Status::Streaming);
     match followup::suggest(pending, transcript, suggestion) {
-        // A docked Decision owns the block above this line; the line itself
-        // still steers, so it says so (rule 2.8.1: one input line).
-        Followup::Decision => Ghost::says("Answer above"),
-        Followup::Revive => Ghost::says("Revive and continue"),
         Followup::Suggested(text) => Ghost {
             head: SharedString::from(text),
             accept: true,
         },
-        Followup::Steer if busy => Ghost::says("Queue a follow-up"),
-        Followup::Steer => Ghost::says("Steer this thread"),
+        Followup::Steer if busy => Ghost::says(RUNNING_PLACEHOLDER),
+        Followup::Steer | Followup::Decision | Followup::Revive => Ghost::says(IDLE_PLACEHOLDER),
     }
 }
 
@@ -770,28 +833,32 @@ pub fn offers_import(transcript: Option<&Transcript>) -> bool {
     transcript.is_some_and(Transcript::offers_import)
 }
 
-/// The mode chip's label (SPEC §5.5): the Session's own label for `mode`
-/// when its list has one (`permission_modes`, already sentence case); else
-/// the mode's word (`theme::mode_word`), sentence case; `Default` at the
-/// default. Never a raw id.
+/// The mode chip's and its menu's label (SPEC §5.5): the ask-first default
+/// reads `Manual`, as Claude's app says it (the wire keeps `default`); else
+/// the Session's own label for `mode` when its list has one
+/// (`permission_modes`, already sentence case); else the mode's word
+/// (`theme::mode_word`), sentence case. Never a raw id.
 pub fn permission_mode_label(
     mode: &str,
     choices: &[ferrite_core::PermissionModeChoice],
 ) -> SharedString {
+    if matches!(mode, "" | "default") {
+        return "Manual".into();
+    }
     if let Some(choice) = choices.iter().find(|choice| choice.value == mode) {
         return choice.label.clone().into();
     }
     theme::mode_word(mode).map_or_else(|| "Default".into(), |word| sentence_case(&word).into())
 }
 
-/// The queue's share of the editor's pane-height budget: Solo's one
-/// queued row and its hairline whenever anything is queued; nothing in a
-/// board's compact box, which is input only.
+/// The queue's share of the editor's pane-height budget: Solo's strip
+/// and its gap whenever anything is queued; nothing on a board, whose
+/// compact box is input only.
 pub(crate) fn composer_queue_height(_height: f32, grid: bool, count: usize) -> f32 {
     if grid || count == 0 {
         0.
     } else {
-        theme::QUEUED_ROW_H + 1.
+        theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
     }
 }
 
@@ -804,9 +871,7 @@ pub(super) fn composer_fixed_height(grid: bool) -> f32 {
     if grid {
         theme::COMPACT_COMPOSER_H - theme::COMPOSER_ROW_H + theme::COMPACT_COMPOSER_INSET
     } else {
-        2.0 * (theme::COMPOSER_ROW_PAD + theme::COMPOSER_TEXT_PAD_Y)
-            + theme::COMPOSER_FOOTER_H
-            + theme::COMPOSER_FOOTER_PAD_B
+        2.0 * (theme::COMPOSER_ROW_PAD + theme::COMPOSER_TEXT_PAD_Y) + theme::COMPOSER_FOOTER_H
     }
 }
 
@@ -822,7 +887,7 @@ pub fn composer_row_limit(height: f32, grid: bool, queued: usize) -> usize {
         .min(crate::composer::MAX_ROWS as f32) as usize
 }
 
-/// A held prompt as one line: the queued row is a single line and
+/// A held prompt as one line: the queue strip is a single line and
 /// gpui's truncation still breaks at `\n`, so a multi-line prompt would
 /// stack its lines into the row and clip them both.
 pub(super) fn queued_preview(held: &str) -> String {

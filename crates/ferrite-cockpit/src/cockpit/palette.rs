@@ -1208,7 +1208,7 @@ impl CockpitView {
             }
             Command::ShowChanges => {
                 if let Some(thread) = thread {
-                    self.open_panel_tab(thread, super::panel::PanelTab::Changes, cx);
+                    self.open_panel(thread, cx);
                 }
             }
             Command::ShowChecks => self.open_checks(window, cx),
@@ -1457,9 +1457,8 @@ impl CockpitView {
         let viewport = window.viewport_size();
         // What it hangs under, at its width and right edge: the window's
         // head over the panel's content column, or the head and a Pane's
-        // head row over the board. Read where the panel will rest, not its
-        // riding width, so a ride moves the toast once, not every frame.
-        let panel = self.panel_rest_column_w();
+        // head row over the board.
+        let panel = self.panel_column_w();
         let (width, right, over) = if panel > 0. {
             (
                 TOAST_W.min(panel - PANEL_PAD_L - PANEL_PAD_R),

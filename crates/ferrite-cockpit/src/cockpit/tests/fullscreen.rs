@@ -15,10 +15,10 @@ fn the_fullscreen_chord_fullscreens_the_focused_pane_and_toggles_back(cx: &mut T
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     view.update(cx, |view, cx| view.enter_group(group, cx));
-    // Four Panes in this window are wall tiles (a 2×2 board of ~273px
-    // columns beside the nav, under R12's 300×360): a tile has no
+    // Four Panes in this window are wall tiles (a 2×2 board between the
+    // nav rail and the 320 panel, under R12's 300×360): a tile has no
     // Composer, so typing lands nowhere.
-    cx.simulate_resize(gpui::size(px(860.), px(500.)));
+    cx.simulate_resize(gpui::size(px(880.), px(500.)));
     tick(cx);
     cx.simulate_input("lost");
     let typed = view.update(cx, |view, cx| {

@@ -1,63 +1,185 @@
 //! Context and account usage: the Context tab, its bars and ink, and the
-//! composer's context ring.
+//! Composer footer's plan-usage ring and its card.
 
 use super::*;
 
-/// The context ring (Claude's): a `CONTEXT_RING` circle, its track a
-/// hairline, the share of the window used drawn round it from the top in
-/// `ctx_meter_ink` — calm until the window fills. `fraction` is clamped.
-pub fn context_ring(fraction: f32) -> Div {
+/// The footer's plan-usage ring (Claude's): the fullest account window
+/// the provider reported, drawn round a `CONTEXT_RING` circle, its card
+/// (`plan_usage_card`) on hover. None while the provider reports no
+/// window: no reading is invented. Context fill is the side panel's.
+pub fn plan_usage_ring(
+    id: impl Into<gpui::ElementId>,
+    limits: ferrite_core::transcript::RateLimits,
+) -> Option<Stateful<Div>> {
+    let fraction = plan_usage_fraction(limits)?;
+    Some(
+        div()
+            .id(id)
+            .debug_selector(|| "plan-usage-ring".into())
+            .flex()
+            .items_center()
+            .child(usage_ring(fraction))
+            .tooltip(move |window, cx| {
+                let now = ferrite_core::clock::system_time();
+                gpui::component::tooltip::Tooltip::element(move |_, _| plan_usage_card(limits, now))
+                    .font_family(theme::FONT_UI)
+                    .text_size(px(theme::FS_UI))
+                    .line_height(px(theme::LH_UI))
+                    .px(px(theme::TOOLTIP_PAD_X))
+                    .py(px(theme::TOOLTIP_PAD_Y))
+                    .w(px(theme::USAGE_TIP_W))
+                    .rounded(px(theme::R_FLOAT))
+                    .border_color(theme::paint::FLOAT_EDGE)
+                    .shadow(components::float_shadow())
+                    .build(window, cx)
+            }),
+    )
+}
+
+/// The ring's reading: the fullest window reported, or None.
+pub fn plan_usage_fraction(limits: ferrite_core::transcript::RateLimits) -> Option<f32> {
+    [limits.five_hour, limits.weekly]
+        .into_iter()
+        .flatten()
+        .map(|limit| limit.used_fraction.clamp(0., 1.))
+        .reduce(f32::max)
+}
+
+/// The ring's card (Claude's `Plan usage limits`): a quiet head, then each
+/// reported window — its name, when it resets, the share used in
+/// `usage_ink` — over its bar.
+fn plan_usage_card(limits: ferrite_core::transcript::RateLimits, now: SystemTime) -> Div {
+    let window = |label: &'static str, limit: ferrite_core::RateLimitWindow, span: Duration| {
+        let used = limit.used_fraction.clamp(0., 1.);
+        let percent = (used * 100.).round() as u32;
+        let reset = reset_label(limit.resets_at, span, now).map(|label| {
+            let mut chars = label.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+                .unwrap_or_default()
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::USAGE_CARD_ROW_GAP))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(theme::SPACE_3))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(rgb(INK))
+                            .child(label),
+                    )
+                    .children(reset.map(|reset| {
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(reset)
+                    }))
+                    .child(components::tabular(
+                        div()
+                            .debug_selector(move || format!("plan-usage-{percent}"))
+                            .flex_shrink_0()
+                            .text_color(rgb(usage_ink(used)))
+                            .child(format!("{percent}%")),
+                    )),
+            )
+            .child(usage_bar(used))
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(theme::USAGE_CARD_GAP))
+        .child(
+            div()
+                .text_size(px(theme::FS_META))
+                .text_color(rgb(INK_SUBTLE))
+                .child("Plan usage limits"),
+        )
+        .children(
+            limits
+                .five_hour
+                .map(|limit| window("5-hour", limit, Duration::from_secs(5 * 3_600))),
+        )
+        .children(
+            limits
+                .weekly
+                .map(|limit| window("Weekly", limit, Duration::from_secs(7 * 86_400))),
+        )
+}
+
+/// One `USAGE_CARD_BAR_H` bar, full width, on the meter's track in
+/// `usage_ink`.
+fn usage_bar(fraction: f32) -> Div {
+    let used = fraction.clamp(0., 1.);
+    div()
+        .w_full()
+        .h(px(theme::USAGE_CARD_BAR_H))
+        .bg(theme::paint::LINE)
+        .child(div().h_full().w(relative(used)).bg(rgb(usage_ink(used))))
+}
+
+/// A usage ring: a `CONTEXT_RING` circle, its track a hairline, `fraction`
+/// drawn round it from the top in `INK_SUBTLE`, `ATTENTION` once the
+/// window runs tight (`USAGE_TIGHT`). `fraction` is clamped.
+fn usage_ring(fraction: f32) -> Div {
     let fraction = fraction.clamp(0., 1.);
-    let ink: gpui::Hsla = rgb(if fraction < theme::CTX_METER_WARN {
+    let ink: gpui::Hsla = rgb(if fraction < theme::USAGE_TIGHT {
         INK_SUBTLE
     } else {
-        ctx_meter_ink(fraction)
+        ATTENTION
     })
     .into();
     let track: gpui::Hsla = theme::paint::LINE.into();
-    div()
-        .debug_selector(|| "context-ring".into())
-        .flex_shrink_0()
-        .size(px(theme::CONTEXT_RING))
-        .child(
-            gpui::canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    let stroke = px(theme::CONTEXT_RING_STROKE);
-                    let r = (bounds.size.width.min(bounds.size.height) - stroke) / 2.;
-                    let c = bounds.center();
-                    let at = |turn: f32| {
-                        let a = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
-                        gpui::point(c.x + r * a.cos(), c.y + r * a.sin())
-                    };
-                    let arc = |from: f32, to: f32| {
-                        let mut path = gpui::PathBuilder::stroke(stroke);
-                        path.move_to(at(from));
-                        // Two halves at most, so no arc spans a full turn.
-                        let mid = (from + to) / 2.;
-                        for end in [mid, to] {
-                            path.arc_to(gpui::point(r, r), px(0.), false, true, at(end));
-                        }
-                        path.build().ok()
-                    };
-                    if let Some(path) = arc(0., 1.) {
-                        window.paint_path(path, track);
+    div().flex_shrink_0().size(px(theme::CONTEXT_RING)).child(
+        gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let stroke = px(theme::CONTEXT_RING_STROKE);
+                let r = (bounds.size.width.min(bounds.size.height) - stroke) / 2.;
+                let c = bounds.center();
+                let at = |turn: f32| {
+                    let a = std::f32::consts::TAU * turn - std::f32::consts::FRAC_PI_2;
+                    gpui::point(c.x + r * a.cos(), c.y + r * a.sin())
+                };
+                let arc = |from: f32, to: f32| {
+                    let mut path = gpui::PathBuilder::stroke(stroke);
+                    path.move_to(at(from));
+                    // Two halves at most, so no arc spans a full turn.
+                    let mid = (from + to) / 2.;
+                    for end in [mid, to] {
+                        path.arc_to(gpui::point(r, r), px(0.), false, true, at(end));
                     }
-                    if fraction > 0.005 {
-                        if let Some(path) = arc(0., fraction) {
-                            window.paint_path(path, ink);
-                        }
+                    path.build().ok()
+                };
+                if let Some(path) = arc(0., 1.) {
+                    window.paint_path(path, track);
+                }
+                if fraction > 0.005 {
+                    if let Some(path) = arc(0., fraction) {
+                        window.paint_path(path, ink);
                     }
-                },
-            )
-            .size_full(),
+                }
+            },
         )
+        .size_full(),
+    )
 }
 
 /// A subscription window's plausible Unix reset instant in compact, useful
 /// units. Providers disagree on the field's units, so only a future value
 /// inside the window's own maximum span is safe to present as a countdown.
-pub(super) fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> Option<SharedString> {
+pub(super) fn reset_label(
+    resets_at: Option<u64>,
+    span: Duration,
+    now: SystemTime,
+) -> Option<SharedString> {
     let now = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     // A reset the provider did not report, one already past, or one
     // outside the window's span reads nothing: a guess is worse than none.
@@ -224,15 +346,7 @@ pub fn context_usage(
 ) -> impl IntoElement {
     let maximum = usage.context_window.filter(|limit| *limit > 0);
     let now = ferrite_core::clock::system_time();
-    // One 4px bar, full width, on the meter's track in its status ink.
-    let bar = |fraction: f32| {
-        let used = fraction.clamp(0., 1.);
-        div()
-            .w_full()
-            .h(px(theme::USAGE_CARD_BAR_H))
-            .bg(theme::paint::LINE)
-            .child(div().h_full().w(relative(used)).bg(rgb(usage_ink(used))))
-    };
+    let bar = usage_bar;
     // A window's heading: its name at the left, what it reads at the
     // right — the one line that answers the question at a glance. The
     // name is a row's label, not a title: `W_BODY`.
@@ -358,9 +472,7 @@ pub fn context_usage(
     // heading's percentage instead (rule 6: colour on the word).
     let by_category = context_segments(categories, denominator);
     let in_window = match maximum {
-        Some(maximum) if by_category.is_empty() => {
-            context_meter_segments(current, maximum, None)
-        }
+        Some(maximum) if by_category.is_empty() => context_meter_segments(current, maximum, None),
         _ => by_category,
     };
     let context_bar = if !in_window.is_empty() {
@@ -388,7 +500,7 @@ pub fn context_usage(
     // whole line is the hit row, lifting to the hover face like a menu row,
     // with the chevron after the reading. It reads as every Panel section's
     // head does (`panel::panel_section_head`: 30 high, 12/500 `INK_SUBTLE`,
-    // its reading at the right), so the Details tab's sections read alike.
+    // its reading at the right), so the sections read alike.
     let context_heading = div()
         .flex()
         .items_center()
@@ -404,27 +516,27 @@ pub fn context_usage(
                 .child("Context"),
         )
         .child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(theme::SPACE_1))
-            .children(context_fraction.map(context_percent))
-            // One chevron that turns a quarter as the legend opens, over
-            // `motion::CHEVRON` — the disclosures' turn.
-            .when(expandable, |reading| {
-                reading.child(ferrite_ui::motion::settled(
-                    "context-legend-turn",
-                    expanded,
-                    ferrite_ui::motion::CHEVRON,
-                    |turn| {
-                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, INK_SUBTLE)
-                            .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                                std::f32::consts::FRAC_PI_2 * turn,
-                            )))
-                    },
-                ))
-            })
-            .into_any_element(),
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SPACE_1))
+                .children(context_fraction.map(context_percent))
+                // One chevron that turns a quarter as the legend opens, over
+                // `motion::CHEVRON` — the disclosures' turn.
+                .when(expandable, |reading| {
+                    reading.child(ferrite_ui::motion::settled(
+                        "context-legend-turn",
+                        expanded,
+                        ferrite_ui::motion::CHEVRON,
+                        |turn| {
+                            icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, INK_SUBTLE)
+                                .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                                    std::f32::consts::FRAC_PI_2 * turn,
+                                )))
+                        },
+                    ))
+                })
+                .into_any_element(),
         );
     let context_heading = if expandable {
         let id = gpui::ElementId::from("context-window-toggle");
@@ -478,7 +590,12 @@ pub fn context_usage(
                         .text_color(rgb(INK))
                         .child(label),
                 )
-                .child(div().flex_shrink_0().text_color(rgb(INK_SUBTLE)).child(count))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(count),
+                )
                 .child(
                     div()
                         .flex()

@@ -217,10 +217,11 @@ fn cmd_plus_and_minus_step_the_reading_size_and_save_it(cx: &mut TestAppContext)
         })
     };
     for (keys, expected) in [
-        ("cmd-=", 14),
         ("cmd-=", 15),
         ("cmd-=", 16),
-        ("cmd-0", 13),
+        ("cmd-=", 18),
+        ("cmd-0", 14),
+        ("cmd--", 13),
         ("cmd--", 12),
         ("cmd--", 12),
     ]
@@ -341,7 +342,7 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
     cx.simulate_click(search.center(), gpui::Modifiers::none());
     cx.simulate_input("Text size");
     tick(cx);
-    // The stepper's `+` twice: 13 → 14 → 15.
+    // The stepper's `+` twice: 14 → 15 → 16.
     for _ in 0..2 {
         let larger = cx
             .debug_bounds("settings-text-size-1")
@@ -353,13 +354,13 @@ fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.prefs.settings.reading_size,
-            ferrite_core::settings::ReadingSize::nearest(15)
+            ferrite_core::settings::ReadingSize::nearest(16)
         );
         assert_eq!(
             ferrite_core::settings::Settings::load(&view.prefs.dir)
                 .unwrap()
                 .reading_size,
-            ferrite_core::settings::ReadingSize::nearest(15)
+            ferrite_core::settings::ReadingSize::nearest(16)
         );
     });
     cx.simulate_click(search.center(), gpui::Modifiers::none());

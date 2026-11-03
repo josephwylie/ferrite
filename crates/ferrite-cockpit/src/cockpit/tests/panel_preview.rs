@@ -1,14 +1,13 @@
 //! The Panel's Preview tab (`panel/preview.rs`, SPEC §5.6.3): a file opens
 //! there at its line, the Panel wide and the line in view; its × and esc
-//! close it, never the turn, and the Panel goes back to the tab it showed;
+//! close it, never the turn, and the Panel goes back to its sections;
 //! ⌘W in it closes it, not the Pane; each Thread keeps its own, the Panel
 //! showing the focused Pane's; focus moving to another Pane takes the
 //! keyboard out of an image; a draft previews in the Panel and keeps it
 //! through its first send.
 
 use super::*;
-use crate::cockpit::panel::PanelTab;
-use ferrite_ui::theme::{LH_UI, MOTION_RESIZE_MS, PANEL_W};
+use ferrite_ui::theme::{LH_UI, PANEL_W};
 
 /// A source file of `lines` numbered lines, in its own scratch directory.
 fn source(name: &str, lines: usize) -> std::path::PathBuf {
@@ -22,8 +21,7 @@ fn source(name: &str, lines: usize) -> std::path::PathBuf {
     file
 }
 
-/// Open `path` at `line` as a file link would, and let the Panel's ride
-/// land.
+/// Open `path` at `line` as a file link would, and draw.
 fn preview(
     view: &Entity<CockpitView>,
     path: &std::path::Path,
@@ -32,14 +30,6 @@ fn preview(
 ) {
     let path = path.to_path_buf();
     cx.update(|window, cx| view.update(cx, |view, cx| view.open_preview(path, line, window, cx)));
-    land(cx);
-}
-
-/// Draw until every ride has landed.
-fn land(cx: &mut gpui::VisualTestContext) {
-    tick(cx);
-    cx.executor()
-        .advance_clock(Duration::from_millis(MOTION_RESIZE_MS + 50));
     tick(cx);
 }
 
@@ -70,23 +60,23 @@ fn window<'a>(
     (view, fake, cx)
 }
 
-/// A file opened at a line from the PR tab: the Preview tab appears beside
-/// the Thread's and is shown, the Panel wide, the target line in view; its
-/// × closes it and the Panel goes back to the PR tab, at its own width.
+/// A file opened at a line: the Preview tab appears beside `Overview`
+/// and is shown, the Panel wide, the target line in view; its × closes it
+/// and the Panel goes back to its sections, tabless, at its own width.
 #[gpui::test]
-fn a_file_at_a_line_opens_wide_and_closes_back_to_the_tab_before(cx: &mut TestAppContext) {
+fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-line", 1, cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.open_panel_tab(thread, PanelTab::Pr, cx));
-    land(cx);
+    view.update(cx, |view, cx| view.open_panel(thread, cx));
+    tick(cx);
     assert_eq!(panel_w(cx), Some(PANEL_W));
     let file = source("preview-line-file", 200);
 
     preview(&view, &file, Some(150), cx);
     assert!(cx.debug_bounds("panel-tab-Preview").is_some(), "its tab");
     assert!(
-        cx.debug_bounds("panel-tab-Pr").is_some(),
-        "beside the Thread's"
+        cx.debug_bounds("panel-tab-Overview").is_some(),
+        "beside the sections'"
     );
     assert!(cx.debug_bounds("panel-preview").is_some(), "and shown");
     let wide = panel_w(cx).expect("shown");
@@ -108,21 +98,24 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_tab_before(cx: &mut TestAp
 
     let close = cx.debug_bounds("preview-close").expect("its ×");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
-    land(cx);
+    tick(cx);
     assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
     assert!(
         cx.debug_bounds("panel-tab-Preview").is_none(),
         "its tab goes"
     );
-    assert_eq!(
-        view.read_with(cx, |view, _| view.panel_tab(thread)),
-        PanelTab::Pr,
-        "back to the tab before"
+    assert!(
+        cx.debug_bounds("panel-tab-Overview").is_none(),
+        "no tabs without a preview"
+    );
+    assert!(
+        cx.debug_bounds("panel-sections").is_some(),
+        "back to the sections"
     );
     assert_eq!(panel_w(cx), Some(PANEL_W), "at the Panel's own width");
 }
 
-/// Another tab picked while a preview is open keeps the preview and its
+/// `Overview` picked while a preview is open keeps the preview and its
 /// tab, at the Panel's own width; its tab brings it back, wide.
 #[gpui::test]
 fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
@@ -130,14 +123,14 @@ fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let file = source("preview-tabs-file", 20);
     preview(&view, &file, None, cx);
     let wide = panel_w(cx).unwrap();
-    let changes = cx.debug_bounds("panel-tab-Changes").unwrap();
-    cx.simulate_click(changes.center(), gpui::Modifiers::none());
-    land(cx);
+    let overview = cx.debug_bounds("panel-tab-Overview").unwrap();
+    cx.simulate_click(overview.center(), gpui::Modifiers::none());
+    tick(cx);
     assert_eq!(panel_w(cx), Some(PANEL_W));
     assert!(cx.debug_bounds("panel-preview").is_none());
     let tab = cx.debug_bounds("panel-tab-Preview").expect("its tab stays");
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
-    land(cx);
+    tick(cx);
     assert_eq!(panel_w(cx), Some(wide));
     assert!(cx.debug_bounds("panel-preview").is_some());
 }
@@ -193,12 +186,12 @@ fn escape_and_cmd_w_in_the_preview_close_it_not_the_turn_or_the_pane(cx: &mut Te
         "x",
         "the keyboard is the Pane's already"
     );
-    land(cx);
+    tick(cx);
 
     preview(&view, &file, None, cx);
     select(cx);
     cx.simulate_keystrokes("cmd-w");
-    land(cx);
+    tick(cx);
     assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
     assert_eq!(
         view.read_with(cx, |view, _| view.panes.len()),
@@ -221,7 +214,7 @@ fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
             view.focus_pane(index);
             cx.notify();
         });
-        land(cx);
+        tick(cx);
     };
     focus(1, cx);
     assert_eq!(panel_w(cx), Some(PANEL_W), "the other Thread's Panel");
@@ -255,7 +248,7 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
         "the premise: the viewer holds the keyboard"
     );
     cx.simulate_keystrokes("cmd-]");
-    land(cx);
+    tick(cx);
     cx.simulate_input("x");
     let typed = |index: usize, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, cx| {
@@ -268,8 +261,8 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
 
 /// A draft, which has no Panel of its own, shows the Panel for its preview
 /// alone — the Preview tab, no other — and its first send, which makes it a
-/// Thread, keeps it as it was: no ride, the same document, the Thread's
-/// tabs joining it.
+/// Thread, keeps it as it was: the same width, the same document, the
+/// Thread's `Overview` joining it.
 #[gpui::test]
 fn a_draft_previews_in_the_panel_and_keeps_it_through_its_first_send(cx: &mut TestAppContext) {
     let base = scratch("preview-draft");
@@ -290,8 +283,8 @@ fn a_draft_previews_in_the_panel_and_keeps_it_through_its_first_send(cx: &mut Te
     preview(&view, &file, None, cx);
     assert!(cx.debug_bounds("panel-tab-Preview").is_some());
     assert!(
-        cx.debug_bounds("panel-tab-Changes").is_none(),
-        "no Thread's tabs"
+        cx.debug_bounds("panel-tab-Overview").is_none(),
+        "no Thread's sections"
     );
     let wide = panel_w(cx).expect("the Panel shows for it");
 
@@ -302,18 +295,14 @@ fn a_draft_previews_in_the_panel_and_keeps_it_through_its_first_send(cx: &mut Te
         view.read_with(cx, |view, _| view.panes[view.focused()].thread().is_some()),
         "the draft became a Thread"
     );
-    assert!(
-        !view.read_with(cx, |view, _| view.panel_riding()),
-        "no ride"
-    );
     assert_eq!(panel_w(cx), Some(wide));
     assert!(
         cx.debug_bounds("panel-preview").is_some(),
         "the same preview"
     );
     assert!(
-        cx.debug_bounds("panel-tab-Changes").is_some(),
-        "the Thread's tabs join"
+        cx.debug_bounds("panel-tab-Overview").is_some(),
+        "the Thread's sections join"
     );
 }
 
@@ -325,10 +314,10 @@ fn hiding_the_panel_puts_its_preview_away(cx: &mut TestAppContext) {
     let file = source("preview-hide-file", 20);
     preview(&view, &file, None, cx);
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    land(cx);
+    tick(cx);
     assert_eq!(panel_w(cx), None);
     assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
-    land(cx);
+    tick(cx);
     assert_eq!(panel_w(cx), Some(PANEL_W), "back on its own tab");
 }

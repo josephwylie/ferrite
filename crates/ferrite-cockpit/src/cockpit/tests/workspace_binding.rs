@@ -164,7 +164,6 @@ fn the_branch_chip_offers_the_checkout_its_other_branch_and_both_new_branch_mode
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
-    cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("enter");
 
     view.read_with(cx, |view, _| {
@@ -248,10 +247,9 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         );
     });
 
-    // tab tab tab: provider, effort, then the project chip; ↵ opens
+    // tab tab: the model chip, then the project chip; ↵ opens
     // its popover (bare enter — no popover is up yet, so Submit routes
     // it to the focused chip).
-    cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("enter");
@@ -312,8 +310,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
     // Flip the project back and the workspace rows follow — no global
     // list anywhere.
     cx.simulate_keystrokes("escape");
-    cx.simulate_keystrokes("tab"); // prompt → provider
-    cx.simulate_keystrokes("tab"); // → effort
+    cx.simulate_keystrokes("tab"); // prompt → model
     cx.simulate_keystrokes("tab"); // → project
     cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("up");
@@ -354,7 +351,6 @@ fn the_workspace_chip_lists_the_repos_other_worktrees_and_local_branches(cx: &mu
     view.update(cx, |view, _| view.aim_launch(&repo));
     tick(cx);
 
-    cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
@@ -404,9 +400,8 @@ fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppCon
     view.update(cx, |view, _| view.aim_launch(&repo));
     tick(cx);
 
-    // tab ×4 to the workspace chip, ↵ opens it; down reaches the
+    // tab ×3 to the workspace chip, ↵ opens it; down reaches the
     // worktree row, ↵ picks it.
-    cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
@@ -480,7 +475,6 @@ fn a_repo_without_a_main_branch_offers_no_main_row(cx: &mut TestAppContext) {
     view.update(cx, |view, _| view.aim_launch(&repo));
     tick(cx);
 
-    cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("tab");

@@ -336,13 +336,14 @@ impl Shortcuts {
 
 impl Render for Shortcuts {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = crate::palette::input_row("shortcuts-input", self.input.clone(), None, true).child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(FS_META))
-                .text_color(rgb(INK_SUBTLE))
-                .child("esc"),
-        );
+        let input = crate::palette::input_row("shortcuts-input", self.input.clone(), None, true)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("esc"),
+            );
         let query = self.input.read(cx).text().to_string();
         let shown = filter(&self.rows, &query);
         let mut list = div()
@@ -399,7 +400,10 @@ impl Render for Shortcuts {
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(input)
                 .child(list)
-                .child(crate::palette::footer_row(FOOTER, gpui::SharedString::default())),
+                .child(crate::palette::footer_row(
+                    FOOTER,
+                    gpui::SharedString::default(),
+                )),
             ferrite_ui::components::dialog_shadow,
         )
     }

@@ -11,6 +11,8 @@
 //! `empty_board::Next` / `Previous` move the selection, `Run` does what the
 //! row says (the floats package binds ↑ ↓ ⏎). A press does the same.
 //! `show_empty_board` shows it while Threads stay open.
+//!
+//! An empty draft's start card (`draft_start`) borrows its ways to start.
 
 use super::*;
 
@@ -154,6 +156,77 @@ impl CockpitView {
             Box::new(crate::palette::Toggle),
         ));
         rows
+    }
+
+    /// An empty draft's start card (`pane::render_draft`), Claude's new
+    /// session: where the work runs — the draft's Project and Workspace,
+    /// each a press from the picker its footer chip opens — then up to
+    /// `DRAFT_SUGGESTIONS_MAX` of the home's ways to start that are not a
+    /// new Thread (the draft is one already).
+    pub(super) fn draft_start(&self, index: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        use ferrite_ui::icons;
+        let Some(draft) = self.panes[index].draft() else {
+            return Vec::new();
+        };
+        let project = self
+            .cockpit
+            .registry()
+            .project(draft.binding.project())
+            .map(|project| SharedString::from(project.title.clone()))
+            .unwrap_or_else(|| "Project".into());
+        let workspace = match draft.binding.target() {
+            DraftTarget::Main => self.checked_out_branch(draft.binding.project(), cx),
+            DraftTarget::Branch { name } => SharedString::from(name.clone()),
+            DraftTarget::NewBranch => SharedString::from("New branch"),
+            DraftTarget::Existing { branch, .. } => SharedString::from(branch.clone()),
+            DraftTarget::New => SharedString::from("New worktree"),
+        };
+        let composer = self.panes[index].composer.clone();
+        let picker = |chip: pane::BandChip, glyph, label: SharedString| {
+            let composer = composer.clone();
+            pane::draft_card_row(format!("draft-start-{chip:?}"), glyph, label, true)
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    if let Some(at) = view.panes.iter().position(|pane| pane.composer == composer) {
+                        view.focus_pane(at);
+                    }
+                    view.open_band_popover(chip, cx);
+                }))
+                .into_any_element()
+        };
+        let setup = pane::draft_card_group(
+            "draft-start-setup",
+            [
+                picker(pane::BandChip::Project, icons::FOLDER, project),
+                picker(pane::BandChip::Workspace, icons::BRANCH, workspace),
+            ],
+            true,
+        );
+        let suggestions: Vec<AnyElement> = self
+            .start_rows()
+            .into_iter()
+            .filter(|row| {
+                !matches!(
+                    row.action,
+                    "cockpit::NewThread" | "cockpit::NewWorktreeThread"
+                )
+            })
+            .take(ferrite_ui::theme::DRAFT_SUGGESTIONS_MAX)
+            .enumerate()
+            .map(|(at, row)| {
+                let StartRow {
+                    icon, verb, run, ..
+                } = row;
+                pane::draft_card_row(("draft-start-suggestion", at), icon, verb, false)
+                    .on_click(move |_, window, cx| window.dispatch_action(run.boxed_clone(), cx))
+                    .into_any_element()
+            })
+            .collect();
+        let suggestions = (!suggestions.is_empty())
+            .then(|| pane::draft_card_group("draft-start-suggestions", suggestions, false));
+        std::iter::once(setup)
+            .chain(suggestions)
+            .map(IntoElement::into_any_element)
+            .collect()
     }
 
     fn step_empty(&mut self, delta: isize, cx: &mut Context<Self>) {

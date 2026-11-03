@@ -62,7 +62,11 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
         .flex_col()
         .pt(px(HALF_ROW))
         .child(components::section_label(title).pb(px(0.)))
-        .child(components::text_ui().text_color(rgb(INK_SUBTLE)).child(hint))
+        .child(
+            components::text_ui()
+                .text_color(rgb(INK_SUBTLE))
+                .child(hint),
+        )
 }
 
 /// The Project name row: its label as a `INK_SUBTLE` row over a field — a

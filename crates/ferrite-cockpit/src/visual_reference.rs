@@ -465,7 +465,6 @@ const STATES: &[(&str, &[&str])] = &[
     ("refresh-pr-merged", &["refresh"]),
     ("refresh-pr-none", &["refresh"]),
     ("refresh-pr-described", &["refresh"]),
-    ("refresh-pr-described-open", &["refresh"]),
     ("refresh-palette", &["refresh"]),
 ];
 
@@ -1102,7 +1101,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             }
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
-                view.open_panel_tab(thread, crate::cockpit::panel::PanelTab::Details, cx);
+                view.open_panel(thread, cx);
                 view.context_usage_expanded = true;
             });
             (scene, setup)
@@ -1127,14 +1126,13 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        // The Attention list with all three sections, and a done Thread
-        // the operator just opened from it: read, and still under `Done`
-        // while it is the focused Thread.
+        // The Activity view (the bell): `Priority` and `Today`, and a done
+        // Thread the operator just opened from it.
         "navlist" => {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.attention_list(&view.nav_state());
+                view.show_nav_view(crate::nav::NavView::Activity, None, cx);
                 let notes = view
                     .cockpit
                     .threads()
@@ -1167,26 +1165,18 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     format!("nav-thread-0-{}", review.get()),
                     format!("nav-project-section-{heading}"),
                 ] {
-                    ferrite_ui::motion::hover_listener(key.into())(
-                        &true, window, cx,
-                    );
+                    ferrite_ui::motion::hover_listener(key.into())(&true, window, cx);
                 }
                 cx.notify();
             });
             (scene, setup)
         }
         // The tree holding the keyboard (⌘⇧E), its cursor walked down onto
-        // a Project heading, and the Attention list's `Done` folded to its
-        // head, chevron and count.
+        // a row.
         "navkeys" => {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.set_nav_fold(
-                    crate::nav::NavFold::List(crate::nav::ListSection::Done),
-                    true,
-                    cx,
-                );
                 view.focus_nav(window, cx);
                 view.step_nav(2, window, cx);
             });

@@ -204,15 +204,15 @@ mod tests {
     #[test]
     fn the_dark_palette_is_the_app_theme() {
         let reading = ReadingSize::default();
-        assert_eq!(value("bg", Scheme::Dark, reading).unwrap(), hex(theme::CARD));
+        assert_eq!(
+            value("bg", Scheme::Dark, reading).unwrap(),
+            hex(theme::CARD)
+        );
         assert_eq!(
             value("accent", Scheme::Dark, reading).unwrap(),
             hex(theme::INK_STRONG)
         );
-        assert_eq!(
-            value("fg", Scheme::Dark, reading).unwrap(),
-            hex(theme::INK)
-        );
+        assert_eq!(value("fg", Scheme::Dark, reading).unwrap(), hex(theme::INK));
         assert_eq!(
             value("font-size", Scheme::Dark, reading).unwrap(),
             format!("{}px", theme::answer_text_size(reading))

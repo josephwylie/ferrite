@@ -406,8 +406,10 @@ pub fn token_label(tokens: u64) -> String {
     }
 }
 
-/// The working line's caption when the provider names no phase of its own:
-/// a Claude-Code-style verb, picked once per turn (`spinner_verb`).
+/// The working line's caption while the model thinks or writes with no
+/// call running and no heading of its own (a running call speaks in its
+/// own words): a Claude-Code-style verb, picked once per turn
+/// (`spinner_verb`).
 pub const SPINNER_VERBS: &[&str] = &[
     "Reticulating",
     "Instrumenting",

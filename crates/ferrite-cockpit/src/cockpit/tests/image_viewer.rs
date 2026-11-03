@@ -123,7 +123,7 @@ fn a_sent_image_opens_in_the_panels_preview(cx: &mut TestAppContext) {
     assert_eq!(gallery, 2, "it steps among the prompt's images");
     settle(cx);
     let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    let panel = view.read_with(cx, |view, _| view.board_right_rest());
+    let panel = view.read_with(cx, |view, _| view.board_right());
     assert!(
         panel > ferrite_ui::theme::PANEL_W,
         "the Panel is wide: {panel}"

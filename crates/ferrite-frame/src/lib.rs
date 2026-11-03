@@ -1,5 +1,5 @@
 // The window's frame around the Cockpit (ADR 0035): the titlebar, the
-// bottom bar, the Settings sheet and the key table's binding. The app
+// Settings sheet and the key table's binding. The app
 // installs `Frame` with its menu bar; the Cockpit fills it through
 // `ferrite_ui::frame` and depends on none of this.
 pub mod keys;
@@ -8,7 +8,7 @@ mod titlebar;
 
 use gpui::{AnyElement, App, IntoElement, Menu, Window};
 
-use ferrite_ui::frame::{Bar, SettingsSheet};
+use ferrite_ui::frame::SettingsSheet;
 use ferrite_ui::keymap::Binding;
 
 /// The frame, with the menu bar the app sets again whenever the keys are
@@ -24,10 +24,6 @@ impl ferrite_ui::frame::Frame for Frame {
 
     fn head_drag(&self, draggable: bool, maximized: bool) -> AnyElement {
         titlebar::head_drag(draggable, maximized).into_any_element()
-    }
-
-    fn bottom_bar(&self, bar: Bar) -> AnyElement {
-        titlebar::bar(bar).into_any_element()
     }
 
     fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement {

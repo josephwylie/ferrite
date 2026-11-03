@@ -101,8 +101,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     );
     let section = cx.debug_bounds("palette-section-0").expect("a heading");
     assert!(
-        (section.top() - (tabs.bottom() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs()
-            < px(0.5)
+        (section.top() - (tabs.bottom() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs() < px(0.5)
             && (section.size.height - px(ferrite_ui::theme::PALETTE_SECTION_H)).abs() < px(0.5),
         "the first heading 32 high, 6 under the tabs: {section:?}"
     );
@@ -549,7 +548,10 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
             "2 waiting; 3 unread completions never count"
         );
     });
-    assert!(cx.debug_bounds("bottom-bar-needs-you").is_some());
+    assert!(
+        cx.debug_bounds("nav-needs-you-pill").is_some(),
+        "the Inbox's pill"
+    );
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
     let column = cx.debug_bounds("nav-column").unwrap();

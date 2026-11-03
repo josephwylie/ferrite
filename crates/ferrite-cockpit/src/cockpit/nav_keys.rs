@@ -1,7 +1,7 @@
 //! The nav tree's keyboard (§5.1.10): ⌘⇧E hands the tree the keys, the
 //! way ⌘I hands them to the Inbox. ↑↓ walk the rows the tree draws, in the
-//! order it draws them — the Attention list's heads and rows, then each
-//! Project's heading, its loose Threads, its Groups and their members —
+//! order it draws them — each Project's heading, its loose Threads, its
+//! Groups and their members —
 //! ⏎ opens what the row stands for (a heading's ⏎ folds it), ← folds the
 //! fold the row heads, or from a row inside one moves to its head and
 //! folds it, and → unfolds what the row heads. Esc gives the keys back to
@@ -30,20 +30,7 @@ impl CockpitView {
     /// and all.
     fn nav_items(&self, cx: &App) -> Vec<Placed> {
         let state = self.nav_state();
-        let attention = self.attention_list(&state);
         let mut items = Vec::new();
-        for block in &attention.sections {
-            let head = NavCursor::heading(NavFold::List(block.section), block.section.key());
-            items.push(Placed::head(head.clone()));
-            if !block.folded {
-                items.extend(
-                    block
-                        .rows
-                        .iter()
-                        .map(|row| Placed::under(NavCursor::line(row.thread), Some(&head))),
-                );
-            }
-        }
         let machine_folded = self
             .machine_rows(cx)
             .and_then(|rows| rows.into_iter().find(|row| row.selected))
@@ -66,7 +53,10 @@ impl CockpitView {
                 continue;
             }
             items.extend(section.solos.iter().map(|row| {
-                Placed::under(NavCursor::thread(state.solos[*row].thread, None), head.as_ref())
+                Placed::under(
+                    NavCursor::thread(state.solos[*row].thread, None),
+                    head.as_ref(),
+                )
             }));
             for group in section.groups.iter().map(|at| &state.groups[*at]) {
                 let row = NavCursor::group(group.id);
@@ -95,7 +85,7 @@ impl CockpitView {
             .iter()
             .map(|placed| &placed.cursor)
             .find(|cursor| match cursor.item {
-                NavItem::Thread(thread, _) | NavItem::Line(thread) => Some(thread) == shown,
+                NavItem::Thread(thread, _) => Some(thread) == shown,
                 _ => false,
             })
             .or(items.first().map(|placed| &placed.cursor))
@@ -104,9 +94,11 @@ impl CockpitView {
         window.focus(&self.nav_view_focus, cx);
         // However the keys leave (Esc, a press on the board, ⌘K, ⌘I), the
         // cursor goes with them.
-        self.nav_blur = Some(cx.on_blur(&self.nav_view_focus, window, |view, window, cx| {
-            view.release_nav(window, cx)
-        }));
+        self.nav_blur = Some(
+            cx.on_blur(&self.nav_view_focus, window, |view, window, cx| {
+                view.release_nav(window, cx)
+            }),
+        );
         self.move_nav_cursor(start, window, cx);
     }
 
@@ -157,7 +149,9 @@ impl CockpitView {
                 .position(|placed| placed.cursor.item == cursor.item)
         });
         let next = match at {
-            Some(at) => at.saturating_add_signed(by).min(items.len().saturating_sub(1)),
+            Some(at) => at
+                .saturating_add_signed(by)
+                .min(items.len().saturating_sub(1)),
             None => 0,
         };
         let next = items.get(next).map(|placed| placed.cursor.clone());
@@ -175,12 +169,8 @@ impl CockpitView {
                 let folded = self.nav_folds.contains(&fold);
                 self.set_nav_fold(fold, !folded, cx);
             }
-            NavItem::Line(thread) => {
-                self.open_nav_row(thread, None, true, cx);
-                self.leave_nav(window, cx);
-            }
             NavItem::Thread(thread, group) => {
-                self.open_nav_row(thread, group, false, cx);
+                self.open_nav_row(thread, group, cx);
                 self.leave_nav(window, cx);
             }
             NavItem::Group(group) => {
@@ -201,7 +191,7 @@ impl CockpitView {
         };
         let head = match item {
             NavItem::Heading(_) | NavItem::Group(_) => self.nav_cursor.clone(),
-            NavItem::Thread(..) | NavItem::Line(_) if fold => {
+            NavItem::Thread(..) if fold => {
                 let parent = self
                     .nav_items(cx)
                     .into_iter()
@@ -212,7 +202,7 @@ impl CockpitView {
                 }
                 parent
             }
-            NavItem::Thread(..) | NavItem::Line(_) => None,
+            NavItem::Thread(..) => None,
         };
         let target = match head.map(|head| head.item) {
             Some(NavItem::Heading(target)) => target,
@@ -239,18 +229,20 @@ impl CockpitView {
                     }
                 }),
             )
-            .on_action(cx.listener(|view, _: &nav::SelectNext, window, cx| {
-                view.step_nav(1, window, cx)
-            }))
+            .on_action(
+                cx.listener(|view, _: &nav::SelectNext, window, cx| view.step_nav(1, window, cx)),
+            )
             .on_action(cx.listener(|view, _: &nav::SelectPrevious, window, cx| {
                 view.step_nav(-1, window, cx)
             }))
             .on_action(
                 cx.listener(|view, _: &nav::Open, window, cx| view.open_nav_cursor(window, cx)),
             )
-            .on_action(cx.listener(|view, _: &nav::Fold, window, cx| {
-                view.fold_nav_cursor(true, window, cx)
-            }))
+            .on_action(
+                cx.listener(|view, _: &nav::Fold, window, cx| {
+                    view.fold_nav_cursor(true, window, cx)
+                }),
+            )
             .on_action(cx.listener(|view, _: &nav::Unfold, window, cx| {
                 view.fold_nav_cursor(false, window, cx)
             }))
@@ -291,19 +283,15 @@ impl CockpitView {
         )
     }
 
-    /// A Thread row's press, and ⏎ on it: an Attention row lands on its
-    /// Thread; a member opens its Group on it; an open Thread takes focus;
-    /// a parked one revives.
+    /// A Thread row's press, and ⏎ on it: a member opens its Group on it;
+    /// an open Thread takes focus; a parked one revives.
     pub(super) fn open_nav_row(
         &mut self,
         thread: ThreadId,
         group: Option<GroupId>,
-        line: bool,
         cx: &mut Context<Self>,
     ) {
-        if line {
-            self.land_on_thread(thread, cx);
-        } else if let Some(group) = group {
+        if let Some(group) = group {
             self.enter_group(group, cx);
             self.focus_thread(thread, cx);
         } else if self.pane_for(thread).is_some() {

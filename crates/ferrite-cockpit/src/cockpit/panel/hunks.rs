@@ -1,4 +1,4 @@
-//! A changed file's hunks under its block in the panel's Changes tab
+//! A changed file's hunks under its block in the panel's Changes section
 //! (SPEC §5.6, phase 7b). Folded by default; the block's head unfolds them.
 //!
 //! An unfolded file reads the checkout's Uncommitted diff through the
@@ -13,6 +13,7 @@
 //! washes, no line numbers and no syntax colour.
 
 use super::*;
+use ferrite_core::docview::FileChange;
 use ferrite_reviewr::diff::Row;
 use ferrite_reviewr::ferrite::FileSides;
 use std::collections::{HashMap, HashSet};

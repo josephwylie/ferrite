@@ -16,12 +16,11 @@
 //! image stepping to the next does not, the viewer crossfading the two
 //! itself. Escape in it (the `Reader` key context, deeper than the Cockpit's
 //! interrupt), its × or ⌘W while it holds the keyboard closes it, and the
-//! Panel goes back to the tab it showed before. ⌘F finds in it
+//! Panel goes back to its sections. ⌘F finds in it
 //! (`PreviewFind`, the transcript's bar).
 //!
 //! While the Preview tab is the one shown the Panel is wide (`preview_w`,
-//! the theme's `PANEL_PREVIEW_*`), riding there and back with the board
-//! (`ride_panel`).
+//! the theme's `PANEL_PREVIEW_*`), snapping there and back with the board.
 //!
 //! Each Pane keeps its own preview (`PaneView::preview_tab`), and the Panel
 //! shows the focused Pane's: focus moving to another Thread leaves the
@@ -137,7 +136,7 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Another tab selected for `thread`'s Pane: its preview stays open,
+    /// `Overview` selected for `thread`'s Pane: its preview stays open,
     /// its tab still in the head, and coming back to it does not fade.
     pub(in crate::cockpit) fn deselect_preview_tab(&mut self, thread: ThreadId) {
         if let Some(index) = self.pane_for(thread) {
@@ -149,7 +148,7 @@ impl CockpitView {
 
     /// Close Pane `index`'s preview (escape in it, its ×, ⌘W while it holds
     /// focus): the keyboard is the Pane's, and the Panel goes back to the
-    /// tab it showed before — or, shown for the preview alone, hides.
+    /// sections — or, shown for the preview alone, hides.
     pub(in crate::cockpit) fn close_preview(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get(index) {
             pane.preview.close();
@@ -158,10 +157,10 @@ impl CockpitView {
         }
     }
 
-    /// Each frame, before the Panel rides: a preview that opened selects
+    /// Each frame, before the board is measured: a preview that opened selects
     /// the Preview tab (marked to fade in, after the first frame) and
     /// scrolls its line to the middle of the list; one that closed hands
-    /// the Panel back to the tab it showed before. A find bar closes with
+    /// the Panel back to its sections. A find bar closes with
     /// its document, and a Markdown reveal that is due settles.
     pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window) {
         let first = !std::mem::replace(&mut self.panel.tended, true);
@@ -206,7 +205,7 @@ impl CockpitView {
         &self,
         owner: PaneIdentity,
     ) -> Option<SharedString> {
-        let document = self.panes[self.index_of(owner)?].preview.shown()?;
+        let document = self.panes[self.index_of(owner)?].preview.document()?;
         let name = document.name.clone().unwrap_or_else(|| {
             document
                 .path
@@ -248,9 +247,7 @@ impl CockpitView {
                 if active {
                     face.hover_carried(key).text_color(rgb(INK_STRONG))
                 } else {
-                    face.text_color(rgb(INK))
-                        .hover_raised(key)
-                        .press_raised()
+                    face.text_color(rgb(INK)).hover_raised(key).press_raised()
                 }
             })
             .child(
@@ -284,7 +281,7 @@ impl CockpitView {
             return div().into_any_element();
         };
         let pane = &self.panes[index];
-        let Some(document) = pane.preview.shown() else {
+        let Some(document) = pane.preview.document() else {
             return div().into_any_element();
         };
         let tab = &pane.preview_tab;
@@ -860,6 +857,10 @@ mod tests {
             90. * cell,
             "already in view: it stays"
         );
-        assert_eq!(slide_to(&text, &(0..1), 90. * cell, 60. * cell), 0., "back to the head");
+        assert_eq!(
+            slide_to(&text, &(0..1), 90. * cell, 60. * cell),
+            0.,
+            "back to the head"
+        );
     }
 }

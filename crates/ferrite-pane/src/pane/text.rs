@@ -16,7 +16,9 @@ pub(crate) fn turn_stamp(end: &ferrite_core::transcript::TurnEnd) -> Option<Stri
     if !end.completed() {
         return Some(end.text());
     }
-    let elapsed = end.elapsed_ms.filter(|ms| *ms >= theme::TURN_STAMP_MIN_MS)?;
+    let elapsed = end
+        .elapsed_ms
+        .filter(|ms| *ms >= theme::TURN_STAMP_MIN_MS)?;
     Some(format!(
         "Worked for {}",
         ferrite_core::progress::settled_duration_label(std::time::Duration::from_millis(elapsed))
@@ -128,10 +130,11 @@ impl WorkKind {
 }
 
 /// A call line as it reads and copies, in three runs: the verb in the app's
-/// words (`Ran `, its space carried when an argument follows), the argument
-/// as written (`cargo test -p ferrite-core`, a path; empty when the call has
-/// none) — `literal` when it is a command, a path or a pattern — and what
-/// came of it after its seam (` · 954 passed`), if anything.
+/// words (`Ran `, its space carried when an argument follows; empty when the
+/// row leads with the provider's description), the argument as written
+/// (`cargo test -p ferrite-core`, a path; the description's words; empty when
+/// the call has none) — `literal` when it is a command, a path or a pattern —
+/// and what came of it after its seam (` · 954 passed`), if anything.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CallLine {
     pub verb: String,
@@ -142,6 +145,10 @@ pub(crate) struct CallLine {
 
 /// The seam before a call line's result.
 pub(crate) const RESULT_SEAM: &str = " \u{b7} ";
+
+/// The tag a failed call wears after its call line, shut or open: the one
+/// red word on the row, so the failure is never behind a click.
+pub(crate) const FAILED_TAG: &str = "Failed";
 
 impl CallLine {
     /// The call line as one Markdown run, so it selects and copies as the
@@ -187,11 +194,17 @@ pub(crate) fn call_markdown(tool: &ToolBlock) -> String {
     line.markdown(argument_is_path(tool))
 }
 
-/// A failed call's verdict after its call line (` · failed`, ` · failed ·
-/// 357 passed; 2 failed`): its own run, so its lead word alone wears the
-/// failure ink and it stays in view when a long command is cut.
+/// A failed call's tag after its call line (`Failed`, `Failed · 357 passed;
+/// 2 failed`): its own run, so its lead word alone wears the failure ink and
+/// it stays in view when a long line is cut.
 pub(crate) fn call_verdict(tool: &ToolBlock) -> Option<String> {
-    call_failed(tool).then(|| call_line(tool).result).flatten()
+    if !call_failed(tool) {
+        return None;
+    }
+    Some(match call_line(tool).result {
+        Some(result) => format!("{FAILED_TAG}{result}"),
+        None => FAILED_TAG.to_owned(),
+    })
 }
 
 /// Words as Markdown that reads them exactly: every ASCII punctuation mark
@@ -225,9 +238,30 @@ fn code_span(text: &str) -> String {
     format!("{fence}{pad}{text}{pad}{fence}")
 }
 
+/// A call's line. A command whose provider wrote what it is for (Claude's
+/// Bash `description`, carried as `ToolBlock::title`) leads with those
+/// words, the command behind its disclosure (`$ cmd` in its shell card);
+/// otherwise the verb and the argument, a command less a leading `cd <dir>
+/// &&` (the shell card keeps it).
 pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
-    let argument = tool.argument().into_owned();
     let kind = WorkKind::of(tool);
+    let result = call_result(tool).map(|result| format!("{RESULT_SEAM}{result}"));
+    if kind == WorkKind::Command {
+        if let Some(description) = tool.title.as_deref().filter(|words| !words.is_empty()) {
+            return CallLine {
+                verb: String::new(),
+                argument: description.to_owned(),
+                literal: false,
+                result,
+            };
+        }
+    }
+    let argument = tool.argument();
+    let argument = if kind == WorkKind::Command {
+        without_cd(&argument).to_owned()
+    } else {
+        argument.into_owned()
+    };
     let mut verb = kind.verb(tool.state == ToolState::Running).to_owned();
     if !argument.is_empty() {
         verb.push(' ');
@@ -236,57 +270,55 @@ pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
         verb,
         argument,
         literal: kind.literal(),
-        result: call_result(tool).map(|result| format!("{RESULT_SEAM}{result}")),
+        result,
     }
 }
 
-/// What came of a call, said once after its call line: a test run's verdict
-/// (`954 passed`, `failed · 357 passed; 2 failed`), a command's first line,
-/// a read's `412 lines`, `failed`, `no result`. A running suite says nothing
-/// here (its bar does), nor does a settled edit (its diff does).
+/// A command less a leading `cd <dir> &&`: where it ran is the thread's
+/// business, not the row's (`cd crates/x && cargo test` → `cargo test`).
+fn without_cd(command: &str) -> &str {
+    let trimmed = command.trim_start();
+    match trimmed
+        .strip_prefix("cd ")
+        .and_then(|rest| rest.split_once("&&"))
+    {
+        Some((_, rest)) if !rest.trim().is_empty() => rest.trim_start(),
+        _ => command,
+    }
+}
+
+/// What a shut call row says after its call line: a test run's verdict
+/// (`954 passed`; a failed run's `357 passed; 2 failed` after its tag) and a
+/// call whose result never came (`no result`). Nothing else previews on a
+/// shut row: a command's output, a read's size and a failure's words are
+/// behind its disclosure, the failure itself in the row's `Failed` tag.
 fn call_result(tool: &ToolBlock) -> Option<String> {
     match &tool.state {
-        ToolState::Running => tool
-            .result_line
-            .clone()
-            .filter(|_| tool.progress.is_none()),
+        ToolState::Running => None,
         ToolState::Unavailable => Some(NO_RESULT.to_owned()),
-        ToolState::Failed(_) => Some(
-            test_elbow(tool).map_or_else(|| theme::words::FAILED.to_owned(), |elbow| elbow.line()),
-        ),
-        ToolState::Ok => match test_elbow(tool) {
-            Some(elbow) if elbow.lead == theme::words::FAILED || elbow.rest.is_empty() => {
-                Some(elbow.line())
-            }
-            Some(elbow) => Some(elbow.rest),
-            None => match command_fold(tool) {
-                Some((first, _)) => Some(first),
-                None => tool.result_line.clone().filter(|_| tool.diffs.is_empty()),
-            },
-        },
+        ToolState::Failed(_) | ToolState::Ok => {
+            // A tally only: an early failure's elbow heads with the run's
+            // first line, which is no verdict.
+            test_elbow(tool)
+                .map(|elbow| elbow.rest)
+                .filter(|rest| rest.contains("passed"))
+        }
     }
-}
-
-/// A failed call's own words, on a line under its call line: its result
-/// line, else the first line of its error. `None` for a test run (its
-/// verdict and preview say it) or a failure that said nothing.
-pub(crate) fn call_failure(tool: &ToolBlock) -> Option<String> {
-    if !matches!(tool.state, ToolState::Failed(_)) || test_elbow(tool).is_some() {
-        return None;
-    }
-    tool.result_line
-        .clone()
-        .or_else(|| failed_excerpt(tool).map(str::to_owned))
-        .filter(|detail| !detail.trim().is_empty())
 }
 
 /// A group's summary line, as it reads and copies: what its calls did by
-/// kind, in the order the kinds first appear, the first phrase capitalised
-/// (`Ran 12 commands, read 1 file`) — an edit or a write of one file names
-/// it (`edited notes.md`), and either says what its diffs changed (`+5 −1`)
-/// — then what went wrong (`· 2 failed`, `· 1 without a result`). `marks`
-/// are the ranges that wear their own ink: a named file, the counts, the
-/// failure count.
+/// kind, the first phrase capitalised (`Ran 12 commands, read 1 file`) — an
+/// edit or a write of one file names it (`edited notes.md`), and either says
+/// what its diffs changed (`+5 −1`) — then what went wrong, in the same
+/// words' grey (`(1 failed)`, `(1 failed, 1 without a result)`). Edits and
+/// writes lead (the named file is the summary's most useful word); the rest
+/// keep the order they first appear. At most `SUMMARY_KINDS` kinds are
+/// named; the other calls fold into `and 2 more`. `marks` are the ranges
+/// that wear their own ink: a named file and its counts.
+///
+/// Provenance: this summary is Ferrite's own, built from the group's calls
+/// (never a provider's or a model's caption), and its failure count is
+/// always said, so no caption can read a failed group as a clean one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GroupSummary {
     pub text: String,
@@ -299,18 +331,10 @@ pub(crate) enum SummaryMark {
     File,
     Added,
     Removed,
-    Failed,
 }
 
-impl GroupSummary {
-    #[cfg(test)]
-    pub(crate) fn failed(&self) -> Option<std::ops::Range<usize>> {
-        self.marks
-            .iter()
-            .find(|(_, mark)| *mark == SummaryMark::Failed)
-            .map(|(range, _)| range.clone())
-    }
-}
+/// How many kinds a group's summary names before `and N more`.
+const SUMMARY_KINDS: usize = 2;
 
 /// One kind's share of a group: its calls, whether one runs, the files it
 /// touched (an edit's or a write's) and what their diffs added and removed.
@@ -369,6 +393,8 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
             unanswered += 1;
         }
     }
+    // Stable: edits and writes first, the rest in their first order.
+    kinds.sort_by_key(|tally| !matches!(tally.kind, WorkKind::Edit | WorkKind::Write));
     let mut text = String::new();
     let mut marks = Vec::new();
     let mut mark = |text: &mut String, words: &str, kind: SummaryMark| {
@@ -376,7 +402,7 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
         text.push_str(words);
         marks.push((start..text.len(), kind));
     };
-    for (index, tally) in kinds.iter().enumerate() {
+    for (index, tally) in kinds.iter().take(SUMMARY_KINDS).enumerate() {
         // One file edited or written is named, as the app's summary does.
         let named = match (&tally.kind, tally.files.as_slice()) {
             (WorkKind::Edit | WorkKind::Write, [file]) => Some(file_name(file)),
@@ -413,17 +439,21 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
             );
         }
     }
+    let more: usize = kinds
+        .iter()
+        .skip(SUMMARY_KINDS)
+        .map(|tally| tally.count)
+        .sum();
+    if more > 0 {
+        text.push_str(&format!(" and {more} more"));
+    }
+    let mut wrong = Vec::new();
     if failed > 0 {
-        text.push_str(" \u{b7} ");
-        mark(
-            &mut text,
-            &format!("{failed} {}", theme::words::FAILED),
-            SummaryMark::Failed,
-        );
+        wrong.push(format!("{failed} {}", theme::words::FAILED));
     }
     if unanswered > 0 {
-        text.push_str(&format!(
-            " \u{b7} {unanswered} without {}",
+        wrong.push(format!(
+            "{unanswered} without {}",
             if unanswered == 1 {
                 "a result"
             } else {
@@ -431,14 +461,18 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
             }
         ));
     }
+    if !wrong.is_empty() {
+        text.push_str(&format!(" ({})", wrong.join(", ")));
+    }
     GroupSummary { text, marks }
 }
 
 /// A path's last component (`src/notes.md` → `notes.md`).
 fn file_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map_or_else(|| path.to_owned(), |name| name.to_string_lossy().into_owned())
+    std::path::Path::new(path).file_name().map_or_else(
+        || path.to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// A group's calls, in order.
@@ -467,11 +501,11 @@ pub(crate) fn group_live(members: &[Block]) -> Option<&Block> {
         .find(|block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running))
 }
 
-/// Whether a disclosed call echoes its input: only where the call line
-/// could not already show it whole (`INPUT_ECHO_CHARS`), or where the input
-/// is all there is to disclose (a call still running). A command the call
-/// line shows whole is never echoed as `$ command` under it: one fact, one
-/// place.
+/// Whether an opened call that is not a command echoes its input: only
+/// where the call line could not already show it whole (`INPUT_ECHO_CHARS`,
+/// or a description stood in for it), or where the input is all there is to
+/// disclose (a call still running). A command's shell card always shows its
+/// `$ cmd`.
 pub(crate) fn shows_input(tool: &ToolBlock) -> bool {
     !tool.summary.is_empty()
         && (tool.title.is_some()
@@ -480,6 +514,18 @@ pub(crate) fn shows_input(tool: &ToolBlock) -> bool {
             || (tool.output.is_none()
                 && tool.structured_preview.is_none()
                 && tool.diffs.is_empty()))
+}
+
+/// A failed call's own message, where it kept no output to show instead.
+pub(crate) fn failure_message(tool: &ToolBlock) -> Option<&str> {
+    match &tool.state {
+        ToolState::Failed(message)
+            if disclosed_output(tool).is_none() && !message.trim().is_empty() =>
+        {
+            Some(message.as_str())
+        }
+        _ => None,
+    }
 }
 
 /// The word a settled edit's result says (`applied`, `The file … has been
@@ -580,9 +626,7 @@ pub(crate) fn collect_block_text(block: &Block, expanded: bool, selection: &Text
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }
-        Body::Tool(tool) => {
-            collect_tool_text(block.id, tool, expanded, selection)
-        }
+        Body::Tool(tool) => collect_tool_text(block.id, tool, expanded, selection),
     }
 }
 
@@ -612,75 +656,37 @@ pub(crate) fn collect_group_text(
 }
 
 /// A call's copy fragments, in the order `render_tool` registers them: its
-/// call line; a failure's own words; its output box (a failure's
-/// preview and open fold, an open command's output, its disclosed
-/// details); its diffs while it is open.
-fn collect_tool_text(
-    block: BlockId,
-    tool: &ToolBlock,
-    expanded: bool,
-    selection: &TextRuns,
-) {
-    let line = |text: String| {
-        let _ = selection.line(block, text, Vec::new());
-    };
+/// call line; a failure's tag; once open, a command's shell card (`$ cmd`,
+/// its output) or another call's details, then its diffs.
+fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection: &TextRuns) {
     let _ = selection.markdown(block, call_markdown(tool));
     if let Some(verdict) = call_verdict(tool) {
-        line(verdict);
+        let _ = selection.line(block, verdict, Vec::new());
     }
-    if let Some(failure) = call_failure(tool) {
-        line(failure);
+    if !expanded {
+        return;
     }
-    let failed_test = test_elbow(tool).filter(|elbow| elbow.lead == theme::words::FAILED);
-    if let Some(elbow) = &failed_test {
-        if !elbow.preview.is_empty() {
-            line(elbow.preview.join("\n"));
+    if ferrite_core::docview::is_command_run(&tool.name) {
+        let shell = super::output::shell(tool);
+        collect_output_text(block, "command", &shell.command, selection);
+        if let Some(output) = shell.output {
+            collect_output_text(block, "result", output, selection);
         }
-        if elbow.hidden > 0 && expanded {
-            collect_fold(block, tool, test_rest(tool, elbow), selection);
-        }
-    } else if matches!(tool.state, ToolState::Failed(_)) {
-        if let Some((shown, hidden)) = output_fold(tool) {
-            line(shown);
-            if hidden > 0 && expanded {
-                collect_fold(block, tool, failed_rest(tool, hidden), selection);
-            }
-        }
-    } else if let Some((all, _)) = command_open(tool).filter(|_| expanded) {
-        collect_fold(block, tool, all, selection);
-    }
-    let details = match tool.state {
-        ToolState::Running => expanded,
-        ToolState::Ok => expanded && !ferrite_core::docview::is_command_run(&tool.name),
-        _ => false,
-    };
-    if details {
+    } else {
         if shows_input(tool) {
             collect_output_text(block, "command", &tool.summary, selection);
         }
         if let Some(output) = disclosed_output(tool) {
             collect_output_text(block, "result", &output.text, selection);
+        } else if let Some(message) = failure_message(tool) {
+            collect_output_text(block, "result", message, selection);
         }
         if let Some(output) = tool.structured_preview.as_ref() {
             collect_output_text(block, "details", &output.text, selection);
         }
     }
-    if expanded {
-        for diff in &tool.diffs {
-            collect_diff_text(block, diff, selection);
-        }
-    }
-}
-
-/// An open fold's copy fragment (`fold_open`): the lines it held, or the
-/// call's whole output in its native viewer when that is past the inline
-/// cap.
-fn collect_fold(block: BlockId, tool: &ToolBlock, rest: String, selection: &TextRuns) {
-    let full = disclosed_output(tool).map_or("", |output| output.text.as_str());
-    if output_scrolls(full) {
-        let _ = selection.output(block, "result", full);
-    } else {
-        let _ = selection.line(block, rest, Vec::new());
+    for diff in &tool.diffs {
+        collect_diff_text(block, diff, selection);
     }
 }
 

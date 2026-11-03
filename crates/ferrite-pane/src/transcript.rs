@@ -232,9 +232,6 @@ pub struct TranscriptView {
     transcript_focus: FocusHandle,
     controls_end: FocusHandle,
     document: gpui::base::TextSelectionDocument,
-    /// The disclosure the pointer last flipped, and to which state: only
-    /// its chevron eases; a keyboard toggle turns it at once.
-    eased: Option<(DisclosureId, bool)>,
     /// The pinned prompt band's height, as of the last layout: the next
     /// turn's band pushes it up by what it overlaps.
     pinned_h: Rc<Cell<gpui::Pixels>>,
@@ -374,7 +371,6 @@ impl TranscriptView {
             // transcript instead of wrapping round the window.
             controls_end: cx.focus_handle().tab_stop(true),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
-            eased: None,
             pinned_h: Rc::new(Cell::new(gpui::px(0.))),
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
@@ -894,9 +890,8 @@ impl TranscriptView {
                     .rev()
                     .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::Tail))
                     .is_some_and(|last| last.id() == row.id());
-            let actions = (!narration && !streaming).then(|| {
-                message_actions().child(self.copy_action(row.id(), source.to_owned()))
-            });
+            let actions = (!narration && !streaming)
+                .then(|| message_actions().child(self.copy_action(row.id(), source.to_owned())));
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -907,9 +902,7 @@ impl TranscriptView {
                 .min_w_0()
                 .w_full()
                 .flex_shrink_0()
-                .when(narration, |row| {
-                    row.text_size(px(grid.activity().size))
-                })
+                .when(narration, |row| row.text_size(px(grid.activity().size)))
                 .when(actions.is_some(), |row| row.flex_col().group(MESSAGE_GROUP))
                 .child(
                     // The prose alone, its actions under it apart.
@@ -964,10 +957,9 @@ impl TranscriptView {
                 }))
                 // Its words, as the bubble shows them: the attachments'
                 // trailer is chips, never copied text.
-                .child(self.copy_action(
-                    row.id(),
-                    ferrite_core::prompt_files::split(line.clone()).0,
-                ));
+                .child(
+                    self.copy_action(row.id(), ferrite_core::prompt_files::split(line.clone()).0),
+                );
             return div()
                 .group(MESSAGE_GROUP)
                 .w_full()
@@ -1104,7 +1096,6 @@ impl TranscriptView {
             row.blocks(),
             row_cx,
             pane::GroupCx {
-                expanded,
                 disclosure,
                 members: Box::new(members),
             },
@@ -1166,20 +1157,6 @@ impl TranscriptView {
         stops
     }
 
-    /// A toggle that flips `call`'s disclosure from inside its row (a
-    /// fold's `+ N lines`).
-    fn toggle(&self, call: DisclosureId, view: Entity<Self>) -> pane::DisclosureToggle {
-        let weak = view.downgrade();
-        Rc::new(move |window, cx| {
-            gpui::base::TextSelection::clear(window, cx);
-            let _ = weak.update(cx, |view, cx| {
-                view.clear_output_selection(cx);
-                view.eased = Some((call.clone(), !view.input.expanded.contains(&call)));
-                cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
-            });
-        })
-    }
-
     /// A reasoning row's disclosure: its header toggles under the pointer,
     /// its chevron turning.
     fn control(
@@ -1205,7 +1182,6 @@ impl TranscriptView {
         let clicked = call.clone();
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
         let targeted = self.tool_targeted(&call);
-        let toggle = self.toggle(call.clone(), view.clone());
         let control = pane::tool_disclosure_control(
             &call,
             expanded,
@@ -1220,7 +1196,6 @@ impl TranscriptView {
             gpui::base::TextSelection::clear(window, cx);
             view.update(cx, |view, cx| {
                 view.clear_output_selection(cx);
-                view.eased = Some((clicked.clone(), !view.input.expanded.contains(&clicked)));
                 cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
             });
         });
@@ -1236,12 +1211,10 @@ impl TranscriptView {
                 }
             })
         };
-        let eased = self.eased.as_ref() == Some(&(call.clone(), expanded));
         pane::Disclosure {
             overlay: Some(control.into_any_element()),
-            chevron: Some(pane::disclosure_chevron(expanded, targeted || shown, eased)),
+            chevron: Some(pane::disclosure_chevron(expanded, targeted || shown)),
             targeted,
-            toggle: Some(toggle),
             focus: None,
         }
     }
@@ -1428,32 +1401,32 @@ impl TranscriptView {
                 .flex()
                 .justify_center()
                 .child(
-                        div()
-                            .id(id)
-                            .debug_selector(|| "jump-to-latest".into())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(theme::ICON_BUTTON))
-                            .rounded_full()
-                            .bg(ferrite_ui::motion::mix(
-                                theme::paint::RAISED.into(),
-                                theme::paint::SELECTION_HOVER.into(),
-                                t,
-                            ))
-                            .shadow(ferrite_ui::components::float_shadow())
-                            .cursor_pointer()
-                            .on_hover(ferrite_ui::motion::hover_listener(key))
-                            .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
-                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                cx.stop_propagation();
-                                let _ = weak.update(cx, |view, cx| view.glide_to_latest(cx));
-                            })
-                            .child(ferrite_ui::icons::icon(
-                                ferrite_ui::icons::ARROW_DOWN,
-                                theme::ICON_BUTTON_GLYPH,
-                                theme::INK,
-                            )),
+                    div()
+                        .id(id)
+                        .debug_selector(|| "jump-to-latest".into())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(theme::ICON_BUTTON))
+                        .rounded_full()
+                        .bg(ferrite_ui::motion::mix(
+                            theme::paint::RAISED.into(),
+                            theme::paint::SELECTION_HOVER.into(),
+                            t,
+                        ))
+                        .shadow(ferrite_ui::components::float_shadow())
+                        .cursor_pointer()
+                        .on_hover(ferrite_ui::motion::hover_listener(key))
+                        .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.stop_propagation();
+                            let _ = weak.update(cx, |view, cx| view.glide_to_latest(cx));
+                        })
+                        .child(ferrite_ui::icons::icon(
+                            ferrite_ui::icons::ARROW_DOWN,
+                            theme::ICON_BUTTON_GLYPH,
+                            theme::INK,
+                        )),
                 )
                 .into_any_element(),
         )
@@ -1880,10 +1853,7 @@ impl Render for TranscriptView {
                 // row's own gap above it (the first row's is the body's top
                 // padding: the list's own top padding flickers mid-scroll).
                 let gap = row.gap();
-                let wrapper = div()
-                    .w_full()
-                    .pt(px(gap))
-                    .px(px(theme::tx_inset(solo)));
+                let wrapper = div().w_full().pt(px(gap)).px(px(theme::tx_inset(solo)));
                 // A row appended live rises into place; its gap does not
                 // move, so the rows above it hold still.
                 let wrapper = match arrival {
@@ -1987,8 +1957,7 @@ impl Render for TranscriptView {
                 // A pinned band covers the list's top down to its foot; the
                 // rows pass under it into its fade.
                 let now = pinned_of(&gaps, scroll.list_state(), pinned_h.get());
-                let settled =
-                    scroll.set_top_mask(now.map(|(_, shift)| pinned_h.get() + shift));
+                let settled = scroll.set_top_mask(now.map(|(_, shift)| pinned_h.get() + shift));
                 // What the list measured feeds the minimap's estimates.
                 {
                     let state = scroll.list_state();
@@ -2137,15 +2106,21 @@ impl Render for TranscriptView {
             .child(list)
             // What scrolls under the top fades out into the card, under the
             // pinned prompt when there is one.
-            .children(pinned.is_none().then_some(scrolled).filter(|s| *s).map(|_| {
-                div()
-                    .debug_selector(|| "transcript-top-fade".into())
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .child(top_fade())
-            }))
+            .children(
+                pinned
+                    .is_none()
+                    .then_some(scrolled)
+                    .filter(|s| *s)
+                    .map(|_| {
+                        div()
+                            .debug_selector(|| "transcript-top-fade".into())
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .child(top_fade())
+                    }),
+            )
             .children(pinned)
             .children(latest.is_some().then(|| {
                 div()

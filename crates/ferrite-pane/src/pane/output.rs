@@ -3,73 +3,13 @@
 
 use super::*;
 
-/// A failed call's excerpt: the first non-blank line of its error, unless
-/// the result line already says exactly that.
-pub(super) fn failed_excerpt(tool: &ToolBlock) -> Option<&str> {
-    let ToolState::Failed(message) = &tool.state else {
-        return None;
-    };
-    let first = message
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("");
-    (!first.is_empty() && tool.result_line.as_deref() != Some(first)).then_some(first)
-}
-
-/// The output a call retained, line by line.
-fn output_text(tool: &ToolBlock) -> &str {
-    text::disclosed_output(tool).map_or("", |output| output.text.as_str())
-}
-
-/// A collapsed failed call's fold of its output (the prototype's `.out` and
-/// `.more`): up to `OUTPUT_PREVIEW_LINES` non-blank lines of what it printed
-/// after the line its failure line already shows, and how many non-blank lines
-/// that leaves out — the `+ N lines` sits directly under the last preview
-/// line. `None` when the call printed nothing worth a fold: only a
-/// command's output, or a failure's, folds.
-pub(super) fn output_fold(tool: &ToolBlock) -> Option<(String, usize)> {
-    let runs = ferrite_core::docview::is_command_run(&tool.name);
-    if !runs && !matches!(tool.state, ToolState::Failed(_)) {
-        return None;
-    }
-    text::disclosed_output(tool)?;
-    let mut lines = output_text(tool)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .peekable();
-    // The failure line already prints the first line (the result line, or
-    // a failure's first line): the fold continues after it.
-    let elbow = tool.result_line.as_deref().or_else(|| failed_excerpt(tool));
-    if let (Some(first), Some(shown)) = (lines.peek(), elbow) {
-        if first.trim() == shown.trim() {
-            lines.next();
-        }
-    }
-    let rest: Vec<&str> = lines.collect();
-    let shown: Vec<&str> = rest
-        .iter()
-        .copied()
-        .take(theme::OUTPUT_PREVIEW_LINES)
-        .collect();
-    if shown.is_empty() {
-        return None;
-    }
-    let hidden = rest.len() - shown.len();
-    Some((shown.join("\n"), hidden))
-}
-
-/// What a test run's elbow says, and the lines it previews (CT-14).
+/// What a test run's verdict says (CT-14).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestElbow {
-    /// `ok` or `failed`: the lead word, in its state ink.
+    /// `ok` or `failed`: the lead word.
     pub lead: &'static str,
-    /// The words after the lead's seam: `38 passed`, `running 38 tests`,
-    /// `357 passed; 2 failed`.
+    /// The words after the lead's seam: `38 passed`, `357 passed; 2 failed`.
     pub rest: String,
-    /// The lines shown under the elbow, verbatim.
-    pub preview: Vec<String>,
-    /// The non-blank retained lines a `+ N lines` fold holds.
-    pub hidden: usize,
 }
 
 impl TestElbow {
@@ -83,17 +23,9 @@ impl TestElbow {
     }
 }
 
-/// A settled test run's elbow (one rule for both pictures):
-///
-/// - passing: `ok · <N> passed`, no preview, no fold;
-/// - failing with every `FAILED` among its first three test lines: `failed ·
-///   <its first output line>` and those three test lines verbatim;
-/// - failing otherwise: `failed · <P> passed; <F> failed` (its `test
-///   result:` line, else counted) and its `FAILED` lines (at most three)
-///   without their leading `test `;
-///
-/// then `+ <N> lines` for the rest of its non-blank output. `None` for a
-/// call that is not a settled test run.
+/// A settled test run's verdict: `ok · <N> passed`, or `failed · <P>
+/// passed; <F> failed` (its `test result:` lines, else counted). `None` for
+/// a call that is not a settled test run.
 pub fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
     if !is_test_run(tool) {
         return None;
@@ -114,20 +46,18 @@ pub fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .collect();
-    let tests: Vec<(usize, &str, &str)> = lines
+    // Each test line's verdict (`ok`, `FAILED`).
+    let tests: Vec<&str> = lines
         .iter()
-        .enumerate()
-        .filter_map(|(at, line)| {
-            ferrite_core::transcript::test_result_line(line)
-                .map(|(name, verdict)| (at, name, verdict))
-        })
+        .filter_map(|line| ferrite_core::transcript::test_result_line(line))
+        .map(|(_, verdict)| verdict)
         .collect();
     let results: Vec<&str> = lines
         .iter()
         .copied()
         .filter(|line| line.trim_start().starts_with("test result:"))
         .collect();
-    let counted = |verdict: &str| tests.iter().filter(|(_, _, v)| *v == verdict).count();
+    let counted = |verdict: &str| tests.iter().filter(|v| **v == verdict).count();
     let summary_of = |line: &str| -> Option<(usize, usize)> {
         let passed = passed_count(line)?;
         let failed = line
@@ -177,7 +107,7 @@ pub fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
         || results
             .iter()
             .any(|line| line.trim_start().starts_with("test result: FAILED"))
-        || tests.iter().any(|(_, _, verdict)| *verdict == "FAILED");
+        || tests.contains(&"FAILED");
     if !failed {
         let passed = totals
             .map(|(passed, _)| passed)
@@ -186,188 +116,175 @@ pub fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
         return Some(TestElbow {
             lead: "ok",
             rest: passed.map_or_else(String::new, |passed| format!("{passed} passed")),
-            preview: Vec::new(),
-            hidden: 0,
         });
     }
-    let fails: Vec<&(usize, &str, &str)> = tests
-        .iter()
-        .filter(|(_, _, verdict)| *verdict == "FAILED")
-        .collect();
-    let early = !tests.is_empty()
-        && fails
-            .iter()
-            .all(|(at, _, _)| tests.iter().take(3).any(|(first, _, _)| first == at));
-    // The early form heads with the run's first line (`running 38 tests`);
-    // output a pipe cut to its test lines has no such line, and reads its
-    // tally instead.
-    let early = early && tests.first().is_some_and(|(at, _, _)| *at > 0);
-    if early {
-        let first = lines.first().map(|line| line.trim()).unwrap_or("");
-        let preview: Vec<String> = tests
-            .iter()
-            .take(3)
-            .map(|(at, _, _)| lines[*at].trim().to_string())
-            .collect();
-        let shown = 1 + preview.len();
-        return Some(TestElbow {
-            lead: theme::words::FAILED,
-            rest: first.to_string(),
-            hidden: lines.len().saturating_sub(shown),
-            preview,
-        });
-    }
-    let (passed, failed_count) = totals.unwrap_or_else(|| (counted("ok"), fails.len()));
-    let preview: Vec<String> = fails
-        .iter()
-        .take(3)
-        .map(|(at, _, _)| {
-            let line = lines[*at].trim();
-            line.strip_prefix("test ").unwrap_or(line).to_string()
-        })
-        .collect();
-    let shown = preview.len() + usize::from(!results.is_empty());
+    let (passed, failed_count) = totals.unwrap_or_else(|| (counted("ok"), counted("FAILED")));
     Some(TestElbow {
         lead: theme::words::FAILED,
         rest: format!("{passed} passed; {failed_count} failed"),
-        hidden: lines.len().saturating_sub(shown),
-        preview,
     })
 }
 
-/// A successful command's output folded whole behind its elbow (CT-26):
-/// `└ 7 issues · + 7 lines` — its first non-blank line, and the non-blank
-/// lines after it. `None` when it printed one line or none, or is a test
-/// run (which reads its own elbow) or not a command.
-pub fn command_fold(tool: &ToolBlock) -> Option<(String, Vec<String>)> {
-    if tool.state != ToolState::Ok
-        || !ferrite_core::docview::is_command_run(&tool.name)
-        || is_test_run(tool)
+/// What a command's shell card holds (Codex's card): the command as it ran
+/// (`$ cmd`, out of its `bash -lc` wrapper, its `cd` kept), what it printed —
+/// its retained output, else a failure's message, less a leading `Exit code
+/// N` line, which the status says — and how it ended.
+pub(crate) struct Shell<'a> {
+    pub command: std::borrow::Cow<'a, str>,
+    pub output: Option<&'a str>,
+    /// What the retained output left out.
+    pub omitted: usize,
+    pub status: Option<ShellStatus>,
+}
+
+/// How a command ended, at its shell card's foot. A call still running, or
+/// one whose result never came (its row says `no result`), has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShellStatus {
+    Success,
+    /// The provider said the exit code (Claude's `Exit code 1` line).
+    Exit(i64),
+    /// Failed with no code said.
+    Failed,
+}
+
+impl ShellStatus {
+    /// `Success`, `Exit code 1`, `Failed`.
+    pub(crate) fn words(self) -> String {
+        match self {
+            Self::Success => "Success".to_owned(),
+            Self::Exit(code) => format!("Exit code {code}"),
+            Self::Failed => text::FAILED_TAG.to_owned(),
+        }
+    }
+}
+
+/// A command's shell card contents. See [`Shell`].
+pub(crate) fn shell(tool: &ToolBlock) -> Shell<'_> {
+    let retained = text::disclosed_output(tool);
+    let printed = retained
+        .map(|output| output.text.as_str())
+        .or_else(|| text::failure_message(tool))
+        .filter(|printed| !printed.trim().is_empty());
+    let (code, output) = match printed.map(exit_line) {
+        Some((code, rest)) => (code, Some(rest).filter(|rest| !rest.trim().is_empty())),
+        None => (None, None),
+    };
+    let status = match &tool.state {
+        ToolState::Running | ToolState::Unavailable => None,
+        _ if text::call_failed(tool) => Some(code.map_or(ShellStatus::Failed, ShellStatus::Exit)),
+        _ => Some(ShellStatus::Success),
+    };
+    Shell {
+        command: ferrite_core::providers::shell::unwrap_shell(&tool.summary),
+        output,
+        omitted: retained.map_or(0, |output| output.omitted_bytes),
+        status,
+    }
+}
+
+/// A leading `Exit code N` line (how Claude's Bash reports a non-zero exit)
+/// and what follows it; the text whole, with no code, otherwise.
+fn exit_line(printed: &str) -> (Option<i64>, &str) {
+    let trimmed = printed.trim_start();
+    let (first, rest) = trimmed.split_once('\n').unwrap_or((trimmed, ""));
+    match first
+        .trim()
+        .strip_prefix("Exit code ")
+        .and_then(|code| code.trim().parse().ok())
     {
-        return None;
-    }
-    let mut lines = output_text(tool)
-        .lines()
-        .filter(|line| !line.trim().is_empty());
-    let first = lines.next()?.trim_end().to_string();
-    let rest: Vec<String> = lines.map(|line| line.trim_end().to_string()).collect();
-    (!rest.is_empty()).then_some((first, rest))
-}
-
-/// An open command's well: all of its output, its first line too. The
-/// header's ` · first` result is cut with a long command, so the well never
-/// leaves it to the header. With the count of its lines.
-pub(crate) fn command_open(tool: &ToolBlock) -> Option<(String, usize)> {
-    command_fold(tool).map(|(first, rest)| {
-        let lines: Vec<String> = std::iter::once(first).chain(rest).collect();
-        (lines.join("\n"), lines.len())
-    })
-}
-
-/// The clickable words of a fold (`+ 7 lines`, `− fold`):
-/// dim, lifting to `INK` under the pointer; a click flips the call's
-/// disclosure.
-pub(super) fn fold_label(id: SharedString, label: String, toggle: Option<DisclosureToggle>) -> Stateful<Div> {
-    let group = id.clone();
-    div()
-        .id(id)
-        .group(group.clone())
-        .debug_selector(|| "tool-fold".into())
-        .flex_shrink_0()
-        .whitespace_nowrap()
-        .cursor_pointer()
-        .text_color(rgb(INK_SUBTLE))
-        .group_hover(group, |style| style.text_color(rgb(INK)))
-        .child(SharedString::from(label))
-        .when_some(toggle, |line, toggle| {
-            line.on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                cx.stop_propagation();
-                toggle(window, cx);
-            })
-        })
-}
-
-/// `+ 1 line`, `+ 35 lines`.
-pub(super) fn more_lines(hidden: usize) -> String {
-    format!("+ {hidden} line{}", if hidden == 1 { "" } else { "s" })
-}
-
-/// A fold's content easing open over `FOLD_EASE_MS` (CT-26): the lines it
-/// holds grow in height from nothing, the rows above never move; a close
-/// lands at once, and reduced motion opens at once. Mounted shut too, so the
-/// next opening eases.
-pub(super) fn eased_fold(
-    id: SharedString,
-    open: bool,
-    lines: usize,
-    line: f32,
-    content: Option<AnyElement>,
-) -> AnyElement {
-    let spec = ferrite_ui::motion::MotionSpec::new(theme::FOLD_EASE_MS, ferrite_ui::motion::EASE);
-    match (open, content) {
-        (true, Some(content)) => ferrite_ui::motion::settled(id, true, spec, move |t| {
-            let full = lines as f32 * line;
-            div()
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .when(t < 1., |fold| fold.h(px(full * t.max(0.))))
-                .child(content)
-        })
-        .reveal_only()
-        .into_any_element(),
-        _ => ferrite_ui::motion::settled(id, false, spec, |_| div())
-            .reveal_only()
-            .into_any_element(),
+        Some(code) => (Some(code), rest),
+        None => (None, printed),
     }
 }
 
-/// Lines of output in a call's output box (one non-wrapping run, cut at
-/// the box's edge like a terminal's), in `INK_SUBTLE` with only their verdict
-/// words coloured.
-pub(super) fn output_lines_run(block: BlockId, text: String, selection: &TextRuns) -> Div {
-    div()
-        .debug_selector(|| "tool-fold-preview".into())
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_color(rgb(INK_SUBTLE))
-        .child(selection.line(block, text.clone(), result_highlights(&text)))
-}
-
-/// What an open fold shows and how many lines it eases open over: the
-/// lines it held (`rest`) as one run; or, when the call's whole output is
-/// past `OUTPUT_INLINE_BYTES`, the whole output in one bounded, selectable
-/// native viewer (`OUTPUT_MAX_LINES` high) — a copy from it takes
-/// everything the call printed. `pane/text.rs` mirrors it (`collect_fold`).
-pub(super) fn fold_open(
+/// An open command's card (the reference's shell card): a `Shell` label,
+/// the `$ cmd` line, what it printed (`output_block`: inline, or past
+/// `OUTPUT_INLINE_BYTES` a bounded native viewer), and its status at the
+/// foot's right — `✓ Success` in `INK_SUBTLE`, `Exit code 1` in `BLOCKED`.
+/// One `block_box` on the content column.
+pub(super) fn shell_card(
     block: BlockId,
     tool: &ToolBlock,
-    rest: String,
+    grid: Grid,
     selection: &TextRuns,
-) -> (AnyElement, usize) {
-    let full = output_text(tool);
-    if text::output_scrolls(full) {
-        let lines = text::output_lines(full).min(theme::OUTPUT_MAX_LINES);
-        let viewer = div()
-            .w_full()
-            .min_w_0()
-            .text_color(rgb(INK_SUBTLE))
-            .child(selection.output(block, "result", full))
-            .into_any_element();
-        return (viewer, lines);
-    }
-    let lines = rest.lines().count();
-    (
-        output_lines_run(block, rest, selection).into_any_element(),
-        lines,
+) -> Div {
+    let Shell {
+        command,
+        output,
+        omitted,
+        status,
+    } = shell(tool);
+    let cells = grid.block();
+    let label = div()
+        .font_family(theme::FONT_UI)
+        .text_size(px(grid.activity().size))
+        .text_color(rgb(INK_SUBTLE))
+        .child(SHELL_LABEL);
+    let command = div()
+        .flex()
+        .items_start()
+        .w_full()
+        .min_w_0()
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(2. * cells.cell()))
+                .text_color(rgb(TEXT_FAINT))
+                .child("$"),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(rgb(INK))
+                .child(output_block(block, "command", &command, selection)),
+        );
+    let status = status.map(|status| {
+        let ink = if status == ShellStatus::Success {
+            INK_SUBTLE
+        } else {
+            BLOCKED
+        };
+        div()
+            .debug_selector(|| "tool-shell-status".into())
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(px(theme::SPACE_1))
+            .font_family(theme::FONT_UI)
+            .text_size(px(grid.activity().size))
+            .text_color(rgb(ink))
+            .when(status == ShellStatus::Success, |line| {
+                line.child(icon(icons::CHECK, theme::ICON_CHEVRON, INK_SUBTLE))
+            })
+            .child(SharedString::from(status.words()))
+    });
+    content_row(grid).pt(px(theme::BLOCK_MARGIN_T)).child(
+        on_cells(block_box(cells))
+            .debug_selector(|| "tool-shell".into())
+            .flex()
+            .flex_col()
+            .gap(px(theme::SPACE_1))
+            .px(px(theme::CODE_PAD_CELLS * cells.cell()))
+            .child(label)
+            .child(command)
+            .children(output.map(|output| output_block(block, "result", output, selection)))
+            .when(omitted > 0, |card| card.child(omitted_line(omitted)))
+            .children(status),
     )
 }
 
+/// The label atop a shell card: the same word whichever provider ran it.
+const SHELL_LABEL: &str = "Shell";
+
 /// A running suite's line under its call (CT-25): `running 357 tests`, its
 /// bar, and `212/357` in tabular `INK_SUBTLE`.
-pub(super) fn running_tests(call: &str, progress: ferrite_core::transcript::TestProgress, grid: Grid) -> Div {
+pub(super) fn running_tests(
+    call: &str,
+    progress: ferrite_core::transcript::TestProgress,
+    grid: Grid,
+) -> Div {
     let small = grid.activity();
     let line = content_row(grid)
         .debug_selector(|| "tool-test-progress".into())
@@ -379,7 +296,12 @@ pub(super) fn running_tests(call: &str, progress: ferrite_core::transcript::Test
     if !progress.known() {
         return line
             .gap(px(theme::SPACE_2))
-            .child(div().flex_shrink_0().whitespace_nowrap().child("running tests"))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .child("running tests"),
+            )
             .child(components::tabular(
                 div()
                     .flex_shrink_0()
@@ -497,63 +419,14 @@ pub(super) fn output_box(grid: Grid, lines: Vec<AnyElement>) -> Div {
     )
 }
 
-/// The non-blank output lines a failed test run's fold holds: everything
-/// its elbow and preview did not show, in order.
-pub(super) fn test_rest(tool: &ToolBlock, elbow: &TestElbow) -> String {
-    let lines: Vec<&str> = output_text(tool)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    let shown: Vec<String> = std::iter::once(elbow.rest.clone())
-        .chain(elbow.preview.iter().cloned())
-        .collect();
-    let mut skipped = vec![false; lines.len()];
-    for shown in &shown {
-        if let Some(at) = lines.iter().enumerate().position(|(at, line)| {
-            !skipped[at] && {
-                let line = line.trim();
-                line == shown || line.strip_prefix("test ") == Some(shown.as_str())
-            }
-        }) {
-            skipped[at] = true;
-        }
-    }
-    // The summary line the elbow was read from counts as shown too.
-    if elbow.rest.contains("passed;") {
-        if let Some(at) = lines
-            .iter()
-            .rposition(|line| line.trim_start().starts_with("test result:"))
-        {
-            skipped[at] = true;
-        }
-    }
-    lines
-        .iter()
-        .zip(skipped)
-        .filter(|(_, skipped)| !skipped)
-        .map(|(line, _)| line.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// The non-blank output lines a failed command's fold holds after its
-/// preview (`hidden` of them).
-pub(super) fn failed_rest(tool: &ToolBlock, hidden: usize) -> String {
-    let lines: Vec<&str> = output_text(tool)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    lines[lines.len().saturating_sub(hidden)..]
-        .iter()
-        .map(|line| line.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// A call's disclosed details (keyboard-opened, not a command), for its
-/// output box: its input where the call line could not show it whole, its
-/// output, its structured result.
-pub(super) fn tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRuns) -> Vec<AnyElement> {
+/// A call's disclosed details (opened, not a command), for its output box:
+/// its input where the call line could not show it whole, its output (a
+/// failure's message where it kept none), its structured result.
+pub(super) fn tool_details(
+    block: BlockId,
+    tool: &ToolBlock,
+    selection: &TextRuns,
+) -> Vec<AnyElement> {
     let mut details = Vec::new();
     let mut part = |name: &str, text: &str, omitted: usize| {
         details.push(output_block(block, name, text, selection).into_any_element());
@@ -566,6 +439,8 @@ pub(super) fn tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRun
     }
     if let Some(output) = text::disclosed_output(tool) {
         part("result", &output.text, output.omitted_bytes);
+    } else if let Some(message) = text::failure_message(tool) {
+        part("result", message, 0);
     }
     if let Some(structured) = tool.structured_preview.as_ref() {
         part("details", &structured.text, structured.omitted_bytes);
@@ -722,7 +597,10 @@ fn diff_tokens(line: &str) -> Vec<std::ops::Range<usize>> {
 /// `live` past `if l`), the tokens it touches — and trimmed of whitespace
 /// at its edges. `None` when nothing is common (the whole line changed) or
 /// nothing differs.
-pub(super) fn changed_words(old: &str, new: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+pub(super) fn changed_words(
+    old: &str,
+    new: &str,
+) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
     // Common leading and trailing characters, in bytes, never splitting a
     // character and never overlapping.
     let prefix = old
@@ -1155,7 +1033,9 @@ pub(super) fn render_diff(
     }
     let name = std::path::Path::new(&diff.path)
         .file_name()
-        .map_or(diff.path.clone(), |name| name.to_string_lossy().into_owned());
+        .map_or(diff.path.clone(), |name| {
+            name.to_string_lossy().into_owned()
+        });
     let small = content.activity();
     let header = div()
         .debug_selector(|| "diff-header".into())

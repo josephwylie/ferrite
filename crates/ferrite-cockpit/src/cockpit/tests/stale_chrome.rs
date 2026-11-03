@@ -191,30 +191,6 @@ fn the_panes_ride_the_nav_fold(cx: &mut TestAppContext) {
     );
 }
 
-/// An account window lands in the bar's vitals, whichever Thread reported
-/// it: the frame around the parts redraws with the stream.
-#[gpui::test]
-fn an_account_window_reaches_the_bars_vitals(cx: &mut TestAppContext) {
-    let b = board("stale-usage", &[1], cx);
-    assert!(b.cx.debug_bounds("bottom-bar-usage-claude").is_none());
-    b.send(
-        1,
-        SessionEvent::RateLimits {
-            five_hour: Some(ferrite_core::RateLimitWindow {
-                used_fraction: 0.61,
-                resets_at: None,
-            }),
-            weekly: None,
-        },
-    );
-    tick(b.cx);
-    frames(b.cx, 200);
-    assert!(
-        b.cx.debug_bounds("bottom-bar-usage-claude").is_some(),
-        "the bar draws the new window"
-    );
-}
-
 /// The rename editor: opening it on a Pane's head draws it there; the name
 /// committed reaches the nav row, and the editor leaves the head.
 #[gpui::test]
@@ -390,7 +366,6 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
         .update(b.cx, |view, cx| view.open_provider_picker(thread, cx));
     frames(b.cx, 300);
     let drawn = ferrite_ui::menu::testing::drawn();
-    assert!(drawn.placed, "drawn placed, not left at zero opacity");
     let menu =
         b.cx.debug_bounds("choice-menu")
             .expect("the picker is open");

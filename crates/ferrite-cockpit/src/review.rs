@@ -1490,11 +1490,7 @@ impl ReviewView {
         // The numbers wear a tool row's diff ink (structure on a context
         // row, the sign's hue dimmed on a changed one); the pick's are the
         // keyboard's `INK_STRONG`.
-        let number_ink = if picked {
-            INK_STRONG
-        } else {
-            ink.number_color
-        };
+        let number_ink = if picked { INK_STRONG } else { ink.number_color };
         let number = |number: Option<u32>| {
             ferrite_ui::components::tabular(
                 div()

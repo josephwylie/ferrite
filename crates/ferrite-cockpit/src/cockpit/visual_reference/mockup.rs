@@ -591,7 +591,7 @@ fn crash_fix(s: &mut Script, who: ThreadId) {
     // The account's windows, as Claude last reported them: the week is the
     // fuller one, `14% this week`.
     s.ev(start, who, limits(0.05, 0.14));
-    // `Ran 7 commands · 1 failed`, back to back over 34 seconds.
+    // `Ran 7 commands`, back to back over 34 seconds.
     let mut at = start + 2;
     for (at_id, (command, secs, exit, stdout)) in INVESTIGATION.iter().enumerate() {
         s.bash(

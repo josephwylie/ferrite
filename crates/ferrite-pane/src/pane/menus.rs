@@ -90,7 +90,6 @@ fn head_truncated(path: &SharedString, tail: usize) -> SharedString {
     format!("…/{rest}").into()
 }
 
-
 /// The ✓-row the pickers share — the band popovers (#29) — so "what this
 /// Pane is on right now" can never be spelled two ways: the strong check on
 /// the standing choice, the muted tag ("checked out", "worktree · dir")
@@ -122,9 +121,4 @@ pub fn picker_section(provider: Provider, note: SharedString) -> Div {
         Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE, "claude"),
     };
     ferrite_ui::menu::section(title, Some((mark, ink)), (!note.is_empty()).then_some(note))
-}
-
-/// The popover's key-hint footer, each menu supplying its own verbs.
-pub fn popover_footer(hints: &[(&str, &str)]) -> Div {
-    ferrite_ui::menu::footer(hints)
 }
