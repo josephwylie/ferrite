@@ -3213,7 +3213,8 @@ pub enum PromptText {
 }
 
 /// A prompt line as its bubble draws (and copies) it, and the files it
-/// carries: an image is its thumbnail, so only its other files chip.
+/// carries: an image is its thumbnail, so only its other files chip. The
+/// quotes leading it are not its words: they draw as Quote rows over it.
 pub fn prompt_text(line: &str) -> (PromptText, Vec<std::path::PathBuf>) {
     prompt_text_chipping(line, |path| !crate::image_viewer::is_image(path))
 }
@@ -3223,7 +3224,8 @@ fn prompt_text_chipping(
     line: &str,
     chips: fn(&std::path::Path) -> bool,
 ) -> (PromptText, Vec<std::path::PathBuf>) {
-    let (text, files) = ferrite_core::prompt_files::split(String::from(line));
+    let words = crate::quote::split(line).1;
+    let (text, files) = ferrite_core::prompt_files::split(String::from(words));
     let chipped: Vec<_> = files.iter().filter(|path| chips(path)).cloned().collect();
     if chipped.is_empty() {
         return (PromptText::Literal(text), files);
@@ -3330,7 +3332,8 @@ fn prompt_gallery(files: &[std::path::PathBuf]) -> std::sync::Arc<[std::path::Pa
 /// `INK_STRONG` at body weight with its non-image files' chips flowing
 /// inline after them; its images as thumbnails in a wrapping row under it.
 /// `actions` (the transcript's: its send time, `Copy`) stand under it all,
-/// on its right edge, as Claude's and Codex's do.
+/// on its right edge, as Claude's and Codex's do. The passages it quoted
+/// stand over the bubble as their Quote rows.
 pub(crate) fn prompt_row(
     block: &Block,
     line: &str,
@@ -3339,6 +3342,18 @@ pub(crate) fn prompt_row(
 ) -> AnyElement {
     let (text, files) = prompt_text(line);
     let gallery = prompt_gallery(&files);
+    // The passages it replied to, as their Quote rows (Claude's).
+    let quotes: Vec<_> = crate::quote::split(line)
+        .0
+        .into_iter()
+        .enumerate()
+        .map(|(index, passage)| {
+            div()
+                .max_w(relative(theme::PROMPT_BUBBLE_MAX_W))
+                .min_w_0()
+                .child(crate::attachments::quote_row(index, passage, None))
+        })
+        .collect();
     let bubble = prompt_words(block, text, &gallery, row_cx, None).map(|words| {
         prompt_bubble()
             .debug_selector(|| "transcript-prompt".into())
@@ -3368,6 +3383,7 @@ pub(crate) fn prompt_row(
                     .children(images),
             )
         })
+        .children(quotes)
         .children(bubble);
     div()
         .id(SharedString::from(format!("prompt-{:?}", block.id)))
@@ -4800,6 +4816,7 @@ mod tests {
                 settled_at: Default::default(),
                 agents: Default::default(),
                 rewind: None,
+                quotes: true,
             };
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
@@ -4839,6 +4856,7 @@ mod tests {
                     settled_at: Default::default(),
                     agents: Default::default(),
                     rewind: None,
+                    quotes: true,
                 },
                 crate::rich::TextCache::default(),
                 selection.clone(),

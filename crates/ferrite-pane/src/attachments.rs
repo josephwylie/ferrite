@@ -3,7 +3,9 @@
 //! the image mark (or the file mark) and the name in `LINK_INK`. This module owns presentation and
 //! opening (in the Pane's preview, the Panel's Preview tab: `Preview::open`); callers
 //! only supply paths and, for a draft, a removal callback. The prompt codec owns persistence. A draft's review comments
-//! (ADR 0021) ride the same shelf as one more chip.
+//! (ADR 0021) ride the same shelf as one more chip. Its quotes (a
+//! selection's Reply, `crate::quote`) stand over the chips as Quote rows,
+//! the same row a sent prompt draws over its bubble (`quote_row`).
 
 use std::{path::PathBuf, rc::Rc};
 
@@ -18,6 +20,7 @@ pub fn init(_cx: &mut App) {}
 
 type Remove = Rc<dyn Fn(&PathBuf, &mut Window, &mut App)>;
 type DropReview = Rc<dyn Fn(&mut Window, &mut App)>;
+type RemoveQuote = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct Attachments {
@@ -27,6 +30,8 @@ pub struct Attachments {
     on_remove: Option<Remove>,
     review: usize,
     on_drop_review: Option<DropReview>,
+    quotes: Vec<String>,
+    on_remove_quote: Option<RemoveQuote>,
     island: bool,
 }
 
@@ -39,6 +44,8 @@ impl Attachments {
             on_remove: None,
             review: 0,
             on_drop_review: None,
+            quotes: Vec::new(),
+            on_remove_quote: None,
             island: false,
         }
     }
@@ -60,6 +67,21 @@ impl Attachments {
     /// `comments` review comments wait with the files: one chip for all.
     pub fn review(mut self, comments: usize) -> Self {
         self.review = comments;
+        self
+    }
+
+    /// The passages the draft quotes, as Quote rows over the chips.
+    pub fn quotes(mut self, quotes: Vec<String>) -> Self {
+        self.quotes = quotes;
+        self
+    }
+
+    /// A Quote row's ×: that quote (by index) goes.
+    pub fn on_remove_quote(
+        mut self,
+        callback: impl Fn(usize, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_remove_quote = Some(Rc::new(callback));
         self
     }
 
@@ -90,8 +112,11 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         on_remove,
         review,
         on_drop_review,
+        quotes,
+        on_remove_quote,
         island,
     } = attachments;
+    let files_empty = files.is_empty();
     let gallery: Vec<PathBuf> = files
         .iter()
         .filter(|path| crate::image_viewer::is_image(path))
@@ -189,11 +214,19 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             })
     });
     let review = (review > 0).then(|| review_chip(review, on_drop_review));
-    div()
-        .id(id)
-        .when(island, |shelf| {
-            shelf.debug_selector(|| "attachment-island-content".into())
+    let quotes: Vec<_> = quotes
+        .into_iter()
+        .enumerate()
+        .map(|(index, passage)| {
+            let remove = on_remove_quote.clone().map(|remove| {
+                Rc::new(move |window: &mut Window, cx: &mut App| remove(index, window, cx))
+                    as Rc<dyn Fn(&mut Window, &mut App)>
+            });
+            quote_row(index, passage, remove)
         })
+        .collect();
+    let has_chips = !files_empty || review.is_some();
+    let chips = div()
         .flex()
         .flex_wrap()
         .items_center()
@@ -201,8 +234,78 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .min_w_0()
         .max_w_full()
         .children(chips)
-        .children(review)
+        .children(review);
+    div()
+        .id(id)
+        .when(island, |shelf| {
+            shelf.debug_selector(|| "attachment-island-content".into())
+        })
+        .flex()
+        .flex_col()
+        .gap(px(theme::CH))
+        .min_w_0()
+        .max_w_full()
+        .children(quotes)
+        .when(has_chips, |shelf| shelf.child(chips))
         .into_any_element()
+}
+
+/// A quoted passage as Claude draws one, over a draft's line and over the
+/// sent prompt's bubble: the word Quote in `INK_SUBTLE`, then the passage
+/// cut at `QUOTE_ROW_LINES` lines, behind a `QUOTE_RULE_W` `LINE` rule
+/// (Markdown's quote rule); on a draft, the quiet `×` that removes it.
+pub fn quote_row(
+    index: usize,
+    passage: String,
+    on_remove: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+) -> gpui::Stateful<gpui::Div> {
+    use ferrite_ui::theme;
+    use gpui::{div, rgb, SharedString};
+    div()
+        .id(("quote", index))
+        .debug_selector(move || format!("quote-row-{index}"))
+        .flex()
+        .items_start()
+        .gap(px(theme::CH))
+        .min_w_0()
+        .border_l(px(theme::QUOTE_RULE_W))
+        .border_color(theme::paint::LINE)
+        .pl(px(theme::SPACE_2))
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
+        .font_weight(theme::W_BODY)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_color(rgb(theme::INK_SUBTLE))
+                        .child(SharedString::from("Quote")),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(theme::INK_STRONG))
+                        .line_clamp(theme::QUOTE_ROW_LINES)
+                        .text_ellipsis()
+                        .child(SharedString::from(passage)),
+                ),
+        )
+        .when_some(on_remove, |row, remove| {
+            row.child(
+                remove_button(("remove-quote", index))
+                    .debug_selector(move || format!("remove-quote-{index}"))
+                    .accessibility_label("Remove quote")
+                    .tooltip("Remove quote")
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        remove(window, cx);
+                    }),
+            )
+        })
 }
 
 /// The draft's review comments as one `.att` chip: the pencil, `N review

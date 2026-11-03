@@ -12,6 +12,7 @@ pub mod mark;
 pub mod pane;
 pub mod preview;
 pub mod prompt_drop;
+pub mod quote;
 pub mod rich;
 pub mod select;
 pub mod transcript;
@@ -38,6 +39,7 @@ mod tests {
             ("transcript.rs", include_str!("transcript.rs")),
             ("transcript/rows.rs", include_str!("transcript/rows.rs")),
             ("transcript/scroll.rs", include_str!("transcript/scroll.rs")),
+            ("transcript/reply.rs", include_str!("transcript/reply.rs")),
             ("rich.rs", include_str!("rich.rs")),
             ("mark.rs", include_str!("mark.rs")),
             ("composer.rs", include_str!("composer.rs")),

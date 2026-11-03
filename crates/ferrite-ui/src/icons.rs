@@ -127,6 +127,8 @@ icons![
     "paperclip",
     "square-slash",
     "blocks",
+    // Reply to a selection (Claude's bent-back arrow).
+    "reply",
     // (end UI refresh)
 ];
 
@@ -252,6 +254,8 @@ pub const ARROW_DOWN: &str = "icons/arrow-down.svg";
 pub const ARROW_RIGHT: &str = "icons/arrow-right.svg";
 /// The palette cursor row's enter hint.
 pub const CORNER_DOWN_LEFT: &str = "icons/corner-down-left.svg";
+/// Reply to a selection: quote it into the Composer.
+pub const REPLY: &str = "icons/reply.svg";
 /// An open, draft or closed pull request.
 pub const GIT_PULL_REQUEST: &str = "icons/git-pull-request.svg";
 /// A merged pull request.
@@ -453,7 +457,7 @@ mod tests {
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 27] = [
+    const REFRESH_ICONS: [&str; 28] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -481,6 +485,7 @@ mod tests {
         PAPERCLIP,
         SQUARE_SLASH,
         BLOCKS,
+        REPLY,
     ];
 
     /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.

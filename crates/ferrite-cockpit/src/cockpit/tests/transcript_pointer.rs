@@ -477,3 +477,181 @@ fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestA
         "copy the call line as it reads; omit the icon and the trail"
     );
 }
+
+/// A selection's Reply pill is offered once a drag has selected a passage,
+/// in the focused transcript.
+fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
+    view.read_with(cx, |view, cx| {
+        view.panes[0].transcript().unwrap().read(cx).reply_offered()
+    })
+}
+
+/// Drag from block `from`'s byte to block `to`'s, and let go.
+fn drag(
+    view: &gpui::Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+    from: (usize, usize),
+    to: (usize, usize),
+) -> (gpui::Point<gpui::Pixels>, gpui::Point<gpui::Pixels>) {
+    let from = caret(view, cx, from.0, from.1);
+    let to = caret(view, cx, to.0, to.1);
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+    tick(cx);
+    (from, to)
+}
+
+/// A selection's Reply (Claude's): a drag offers the pill centred over the
+/// selection; a press on it adds the passage as a Quote row over the
+/// Composer (the draft's words untouched), clears the selection and hands
+/// the Composer the keyboard. Quotes stack, each row's × removes it, and
+/// the sent prompt carries them ahead of its words as block quotes, its
+/// bubble drawing the same rows.
+#[gpui::test]
+fn a_selections_reply_quotes_it_over_the_draft_and_sends_it(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("selection-reply", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "alpha\n\nbravo\n\ncharlie\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set("Look:".into(), cx));
+    });
+
+    // A plain click selects nothing and offers nothing.
+    let at = caret(&view, cx, 0, 2);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    assert!(!offered(&view, cx));
+
+    // "al|ph|a" on one line: the pill centres over the run, above it.
+    let (from, to) = drag(&view, cx, (0, 2), (0, 4));
+    assert!(offered(&view, cx), "the drag offers its Reply");
+    let pill = cx.debug_bounds("selection-reply").expect("the pill draws");
+    assert!(
+        (pill.center().x - (from.x + to.x) / 2.).abs() < px(1.),
+        "centred over the selection: {pill:?} against {from:?}..{to:?}"
+    );
+    assert!(
+        pill.bottom() < from.y,
+        "above it: {pill:?} against {from:?}"
+    );
+
+    cx.simulate_click(pill.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(!offered(&view, cx));
+    cx.update(|window, cx| {
+        assert!(!gpui::base::TextSelection::has_selection(window, cx));
+        let composer = view.read(cx).panes[0].composer.clone();
+        assert!(
+            composer
+                .read(cx)
+                .focus_target(window, cx)
+                .is_focused(window),
+            "the Composer takes the keyboard"
+        );
+    });
+
+    // A second passage, across lines, stacks under the first.
+    drag(&view, cx, (1, 3), (2, 4));
+    let pill = cx.debug_bounds("selection-reply").expect("the pill draws");
+    cx.simulate_click(pill.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let composer = view.panes[0].composer.read(cx);
+        assert_eq!(composer.text(), "Look:", "the draft's words stay as typed");
+        assert_eq!(composer.quotes(), ["ph", "vo\nchar"]);
+    });
+    assert!(cx.debug_bounds("quote-row-0").is_some());
+    assert!(cx.debug_bounds("quote-row-1").is_some());
+
+    // Each row's × takes that quote alone.
+    let remove = cx
+        .debug_bounds("remove-quote-0")
+        .expect("a draft's row removes");
+    cx.simulate_click(remove.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].composer.read(cx).quotes(), ["vo\nchar"]);
+    });
+
+    // The send carries the quote ahead of the words, as block quotes (the
+    // ×'s press handed the line the keyboard back).
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        fake.sent.borrow().last().map(String::as_str),
+        Some("> vo\n> char\n\nLook:")
+    );
+    view.read_with(cx, |view, cx| {
+        let composer = view.panes[0].composer.read(cx);
+        assert!(composer.quotes().is_empty() && composer.text().is_empty());
+    });
+    assert!(
+        cx.debug_bounds("quote-row-0").is_some(),
+        "the sent prompt draws its Quote row"
+    );
+    assert!(cx.debug_bounds("remove-quote-0").is_none(), "with no ×");
+}
+
+/// The pill goes when its selection does (a press away), and fades out
+/// on a scroll. There is no esc:
+/// Claude's has none, and esc keeps its Interrupt.
+#[gpui::test]
+fn a_selections_reply_goes_with_its_selection_and_on_a_scroll(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("selection-reply-dismiss", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    for line in 0..60 {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: format!("line {line:03}\n\n"),
+            })
+            .unwrap();
+    }
+    tick(cx);
+
+    drag(&view, cx, (58, 1), (59, 4));
+    assert!(offered(&view, cx));
+    let away = caret(&view, cx, 57, 2);
+    cx.simulate_click(away, gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        !offered(&view, cx),
+        "a press away clears the selection and the pill"
+    );
+
+    drag(&view, cx, (58, 1), (59, 4));
+    assert!(offered(&view, cx));
+    let wheel = |cx: &mut gpui::VisualTestContext, dy: f32| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(px(500.), px(350.)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(dy))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        tick(cx);
+    };
+    // A scroll fades it out, then it goes (at once here: the suite runs
+    // under reduced motion, `motion::live`).
+    wheel(cx, 120.);
+    cx.executor()
+        .advance_clock(ferrite_ui::motion::FADE_QUICK.duration() * 2);
+    tick(cx);
+    assert!(!offered(&view, cx), "a scroll dismisses it");
+    assert!(cx.debug_bounds("selection-reply").is_none());
+}

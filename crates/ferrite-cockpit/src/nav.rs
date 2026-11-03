@@ -678,7 +678,7 @@ fn row_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool) 
             .flex_shrink_0()
             .rounded(px(R_CONTROL))
             .whitespace_nowrap()
-            .text_size(px(FS_UI))
+            .text_size(px(FS_NAV))
             .line_height(px(NAV_LINE)),
         key,
         selected,
@@ -747,7 +747,7 @@ pub fn shell(width: f32) -> Div {
         .w(px(width))
         .overflow_hidden()
         .font_family(FONT_UI)
-        .text_size(px(FS_UI))
+        .text_size(px(FS_NAV))
         .line_height(px(NAV_LINE))
         .text_color(rgb(INK_STRONG))
 }
@@ -1348,7 +1348,7 @@ pub fn group_row_with_title(
     )
     .child(fitted(
         place.text_w() - NAV_TREE_INDENT - right_w,
-        FS_UI,
+        FS_NAV,
         ink,
         weight,
         title,
@@ -1470,7 +1470,7 @@ pub fn thread_row_with_title(
     .pl(px(place.title_x()))
     .pr(px(NAV_ROW_PAD_X))
     .child(
-        fitted(title_w, FS_UI, ink, weight, title)
+        fitted(title_w, FS_NAV, ink, weight, title)
             .debug_selector(move || format!("nav-title-{}", thread.get())),
     )
     .children(mark.map(|mark| {
@@ -1586,7 +1586,7 @@ pub fn activity_row(activity: &ActivityRow) -> Stateful<Div> {
             .flex()
             .items_center()
             .h(px(NAV_LINE))
-            .child(fitted(title_w, FS_UI, ink, weight, row.name.clone()))
+            .child(fitted(title_w, FS_NAV, ink, weight, row.name.clone()))
             .children(mark.map(|mark| {
                 at_right(
                     mark.debug_selector(move || format!("nav-activity-state-{}", thread.get()))
@@ -1658,7 +1658,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
                 .h(px(NAV_LINE))
                 .child(fitted(
                     text_w - age_w,
-                    FS_UI,
+                    FS_NAV,
                     INK_STRONG,
                     title_weight,
                     row.title.clone(),
@@ -1986,7 +1986,7 @@ pub fn foot(user: &str, version: &str, disk: Option<(String, u32)>, gear: impl I
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(FS_UI))
+                        .text_size(px(FS_NAV))
                         .text_color(rgb(INK_STRONG))
                         .child(SharedString::from(user.to_string())),
                 ),
@@ -2120,7 +2120,7 @@ pub fn drag_row(row: Stateful<Div>) -> Div {
     div()
         .w(px(INNER_W))
         .font_family(FONT_UI)
-        .text_size(px(FS_UI))
+        .text_size(px(FS_NAV))
         .line_height(px(NAV_LINE))
         .text_color(rgb(INK_STRONG))
         .bg(paint::FLOAT)

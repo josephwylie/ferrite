@@ -140,6 +140,10 @@ pub struct Composer {
     files_focus: FocusHandle,
     line: Line,
     files: Vec<PathBuf>,
+    /// Transcript passages the operator is replying to (a selection's
+    /// Reply): Quote rows over the line, sent ahead of its words
+    /// (`crate::quote`).
+    quotes: Vec<String>,
     /// Review comments gathered from the Review beside this Pane (ADR
     /// 0021): one attachment on the shelf, sent after the line's text.
     review: CommentStore,
@@ -209,6 +213,7 @@ impl Composer {
             files_focus: cx.focus_handle(),
             line: Line::default(),
             files: Vec::new(),
+            quotes: Vec::new(),
             review: CommentStore::new(),
             mentions: Vec::new(),
             menu_open: false,
@@ -268,7 +273,7 @@ impl Composer {
     /// How many attachments the draft holds: its files, and its review
     /// comments as one.
     pub fn attachment_count(&self) -> usize {
-        self.files.len() + usize::from(!self.review.is_empty())
+        self.files.len() + self.quotes.len() + usize::from(!self.review.is_empty())
     }
 
     /// The review comments waiting for the next send, each with an id
@@ -300,9 +305,11 @@ impl Composer {
             return None;
         }
         let files = composer.files.clone();
+        let quotes = composer.quotes.clone();
         let comments = composer.review.len();
         let focus = composer.files_focus.clone();
         let remove_file = entity.downgrade();
+        let remove_quote = entity.downgrade();
         let drop_review = entity.downgrade();
         Some(
             div()
@@ -313,7 +320,17 @@ impl Composer {
                 .child(
                     crate::attachments::Attachments::new("prompt-attachments", files, preview)
                         .review(comments)
+                        .quotes(quotes)
                         .in_island()
+                        .on_remove_quote(move |index, window, cx| {
+                            let _ = remove_quote.update(cx, |composer, cx| {
+                                if index < composer.quotes.len() {
+                                    composer.quotes.remove(index);
+                                }
+                                composer.focus_handle.focus(window, cx);
+                                composer.edited(cx);
+                            });
+                        })
                         .on_remove(move |remove, window, cx| {
                             let _ = remove_file.update(cx, |composer, cx| {
                                 composer.files.retain(|path| path != remove);
@@ -392,8 +409,10 @@ impl Composer {
     /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
         let (text, files) = prompt_files::split(text);
+        let (quotes, text) = crate::quote::split(&text);
         self.files = files;
-        self.line.set(text);
+        self.line.set(text.to_string());
+        self.quotes = quotes;
         self.edited(cx);
     }
 
@@ -402,6 +421,7 @@ impl Composer {
         let text = self.prompt();
         self.line.take();
         self.files.clear();
+        self.quotes.clear();
         self.review.take_all();
         self.mentions.clear();
         self.edited(cx);
@@ -416,7 +436,7 @@ impl Composer {
 
     pub fn prompt(&self) -> String {
         prompt_files::compose(
-            &ferrite_reviewr::ferrite::attach(self.line.text(), &self.review),
+            &ferrite_reviewr::ferrite::attach(&self.quoted_line(), &self.review),
             &self.files,
         )
     }
@@ -425,7 +445,12 @@ impl Composer {
     /// takes back, so a round trip through history or a merged held
     /// prompt neither repeats the comments nor writes them into the line.
     pub fn editable(&self) -> String {
-        prompt_files::compose(self.line.text(), &self.files)
+        prompt_files::compose(&self.quoted_line(), &self.files)
+    }
+
+    /// The line with its quotes ahead of it.
+    fn quoted_line(&self) -> String {
+        crate::quote::compose(&self.quotes, self.line.text())
     }
 
     pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
@@ -495,6 +520,18 @@ impl Composer {
     pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
         self.line.replace(None, text);
         self.edited(cx);
+    }
+
+    /// Add a transcript passage as a Quote row over the line, under any
+    /// already there; the line stays as typed.
+    pub fn quote(&mut self, passage: String, cx: &mut Context<Self>) {
+        self.quotes.push(passage);
+        self.edited(cx);
+    }
+
+    /// The passages quoted, in order.
+    pub fn quotes(&self) -> &[String] {
+        &self.quotes
     }
 
     /// Remember a picked `@` token so its occurrences paint as pills.

@@ -246,12 +246,13 @@ pub const FRAME: u32 = CARD;
 /// the transcript `#191919`, the sidebar `#292428` under the window's
 /// vibrancy, ~14 levels over it; this is that grey without the wallpaper's
 /// tint), so the column reads as its own region and not by its hairline
-/// alone. Its rows step up from it: `SIDEBAR_HOVER` (+8) under the pointer,
-/// `SIDEBAR_SELECTED` (+32, Claude's `#494548` on `#292428`) selected, so a
+/// alone. The owner asked for it darker than Claude's: `#212121`, 8 levels
+/// over the transcript. Its rows step up from it: `SIDEBAR_HOVER` (+8) under
+/// the pointer, `SIDEBAR_SELECTED` (+32, Claude's step) selected, so a
 /// hovered row never reads as the selected one.
-pub const SIDEBAR: u32 = 0x272727;
-pub const SIDEBAR_HOVER: u32 = 0x2f2f2f;
-pub const SIDEBAR_SELECTED: u32 = 0x474747;
+pub const SIDEBAR: u32 = 0x212121;
+pub const SIDEBAR_HOVER: u32 = 0x292929;
+pub const SIDEBAR_SELECTED: u32 = 0x414141;
 /// The standing choice's `✓` in a menu: Claude's check blue
 /// (claude/model-menu.png x1266–1280, y744–755) — the owner's call, the one
 /// hue in a menu that is not state (rule 6).
@@ -402,6 +403,11 @@ pub mod paint {
     /// Composer's ring, a fence's ring.
     pub const LINE: Paint = Paint::solid(super::LINE);
     pub const CARD_RING: Paint = Paint::solid(super::CARD_RING);
+    /// A selection's Reply pill: its ground, its edge, and its ground
+    /// under the pointer (the edge's grey, Claude's white at 10%).
+    pub const SELECTION_REPLY_FILL: Paint = Paint::solid(super::SELECTION_REPLY_FILL);
+    pub const SELECTION_REPLY_EDGE: Paint = Paint::solid(super::SELECTION_REPLY_EDGE);
+    pub const SELECTION_REPLY_HOVER: Paint = Paint::solid(super::SELECTION_REPLY_EDGE);
     pub const FIELD_RING: Paint = Paint::solid(super::FIELD_RING);
     pub const BLOCK_RING: Paint = Paint::solid(super::BLOCK_RING);
 
@@ -727,6 +733,9 @@ pub const SHADOW_PALETTE_BLUR: f32 = 32.0;
 pub const FS_UI: f32 = 14.0;
 /// 20px — the grid's row.
 pub const LH_UI: f32 = 20.0;
+/// 13px — the sidebar's rows and headings, a step under the chrome, as
+/// Claude's sidebar sets them (measured: its row text spans 13px advances).
+pub const FS_NAV: f32 = 13.0;
 /// 14px — the Standard reading size (`ReadingSize::STANDARD`): agent prose
 /// and every Solo transcript row at the default zoom, on `LH_PROSE`.
 pub const FS_PROSE: f32 = 14.0;
@@ -1646,6 +1655,23 @@ pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
 /// tail and follows it again.
 pub const JUMP_LATEST: f32 = 32.0;
 pub const JUMP_LATEST_INSET: f32 = SPACE_3;
+/// **Reply to a selection** (Claude's `SelectionTooltip`): a drag that
+/// selects a passage ends with a pill centred over the selection, its foot
+/// `SELECTION_REPLY_GAP` above it: the word "Reply" (`FS_UI`, medium) then
+/// the `REPLY` arrow at `SELECTION_REPLY_GLYPH`, in `SELECTION_REPLY_INK`,
+/// `SELECTION_REPLY_PAD_X` either side and `SELECTION_REPLY_PAD_Y` above
+/// and below (Claude's 12 and 6). Claude's ground is black at 80% inside a
+/// white-at-10% hairline, lit white at 10% under the pointer: here those
+/// composited over the transcript's ground, as opaque greys (rule 4). Its
+/// radius is Claude's 8, the one pill off the three-radius family.
+pub const SELECTION_REPLY_GAP: f32 = SPACE_2;
+pub const SELECTION_REPLY_PAD_X: f32 = SPACE_3;
+pub const SELECTION_REPLY_PAD_Y: f32 = SPACE_1_5;
+pub const SELECTION_REPLY_GLYPH: f32 = 14.0;
+pub const SELECTION_REPLY_RADIUS: f32 = 8.0;
+pub const SELECTION_REPLY_FILL: u32 = 0x050505;
+pub const SELECTION_REPLY_EDGE: u32 = 0x1e1e1e;
+pub const SELECTION_REPLY_INK: u32 = INK_STRONG;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —
@@ -1706,6 +1732,9 @@ pub const INLINE_CODE_INSET_Y: f32 = 1.0;
 /// (`PROSE_HANG − QUOTE_RULE_W`, 26 at Standard), so quoted text starts
 /// where list text does.
 pub const QUOTE_RULE_W: f32 = 2.0;
+/// A Quote row (a selection's Reply, over the draft and the sent
+/// prompt) shows at most this many of its passage's lines.
+pub const QUOTE_ROW_LINES: usize = 2;
 /// 4px — a horizontal rule's own margin inside its block, so it sits 16px
 /// from its neighbours.
 pub const RULE_MARGIN_Y: f32 = SPACE_1;

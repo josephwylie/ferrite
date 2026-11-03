@@ -1913,6 +1913,8 @@ impl CockpitView {
         let working = working.flatten();
         let agents = transcript_glue::agent_faces(open.activity());
         let rewind = transcript_glue::rewind_gate(&open);
+        // A subagent's tab draws no Composer to quote into.
+        let quotes = self.panes[index].is_main();
         let key = ferrite_pane::transcript::TranscriptKey {
             namespace: namespace.clone(),
             content_revision: revision,
@@ -1928,6 +1930,7 @@ impl CockpitView {
             thinking: self.prefs.settings.show_thinking,
             agents: agents.clone(),
             rewind: rewind.clone(),
+            quotes,
         };
         let entity = self.panes[index]
             .ensure_transcript(cx)
@@ -1979,6 +1982,7 @@ impl CockpitView {
             settled_at: transcript.settled_at().clone(),
             agents,
             rewind,
+            quotes,
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
@@ -2085,6 +2089,15 @@ impl CockpitView {
             }
             ferrite_pane::transcript::TranscriptEvent::Prompt { block, action, at } => {
                 self.prompt_action(index, *block, *action, *at, cx);
+            }
+            // The quote lands as a Quote row over the Pane's Composer; with the selection
+            // gone, the focus pump hands it the keyboard.
+            ferrite_pane::transcript::TranscriptEvent::Quote(passage) => {
+                self.focus_pane(index);
+                self.panes[index]
+                    .composer
+                    .update(cx, |composer, cx| composer.quote(passage.clone(), cx));
+                cx.notify();
             }
         }
     }

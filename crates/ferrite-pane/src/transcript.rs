@@ -4,6 +4,7 @@
 //! per-Subject row snapshot, native text, selection document and viewport.
 
 mod find;
+mod reply;
 #[cfg(any(test, feature = "test-support"))]
 pub use find::FindState;
 mod rows;
@@ -147,6 +148,9 @@ pub struct TranscriptInput {
     /// `None` while its agent offers none (they are not drawn), `Err` with
     /// why not while they stand disabled.
     pub rewind: Option<Result<(), SharedString>>,
+    /// Whether a selected passage can be quoted into a Composer: the Pane
+    /// draws one (a subagent's tab does not), so a drag offers its Reply.
+    pub quotes: bool,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
@@ -167,6 +171,7 @@ pub struct TranscriptKey {
     pub thinking: bool,
     pub agents: pane::AgentFaces,
     pub rewind: Option<Result<(), SharedString>>,
+    pub quotes: bool,
 }
 
 impl TranscriptInput {
@@ -186,6 +191,7 @@ impl TranscriptInput {
             thinking: self.thinking,
             agents: self.agents.clone(),
             rewind: self.rewind.clone(),
+            quotes: self.quotes,
         }
     }
 
@@ -225,6 +231,9 @@ pub enum TranscriptEvent {
         action: PromptAction,
         at: gpui::Point<gpui::Pixels>,
     },
+    /// A press on a selection's Reply: quote this passage into the Pane's
+    /// Composer (`Composer::quote`) and give it the keyboard.
+    Quote(String),
 }
 
 /// What a sent prompt's actions ask of its Thread
@@ -317,6 +326,10 @@ pub struct TranscriptView {
     texts: Vec<(usize, RunText)>,
     /// The find bar, while it is open (⌘F).
     find: Option<find::TranscriptFind>,
+    /// The Reply pill a finished selection offers (`reply`), and where
+    /// the left press that may be selecting landed.
+    reply: Option<reply::SelectionReply>,
+    pressed_at: Option<gpui::Point<gpui::Pixels>>,
 }
 
 /// The scroll room a band jump adds under the last row: the jump's row and
@@ -367,6 +380,7 @@ impl TranscriptView {
                 settled_at: BTreeMap::new(),
                 agents: Default::default(),
                 rewind: None,
+                quotes: false,
             },
             rich,
             TranscriptText::default(),
@@ -440,6 +454,8 @@ impl TranscriptView {
             list_w: Rc::default(),
             texts: Vec::new(),
             find: None,
+            reply: None,
+            pressed_at: None,
         };
         view.register_scope(cx);
         view.sync_members(cx);
@@ -2242,6 +2258,10 @@ impl Render for TranscriptView {
             .text_color(gpui::rgb(theme::INK_STRONG))
             .hover_text()
             .track_focus(&self.transcript_focus)
+            .capture_any_mouse_down(cx.listener(Self::pressed))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::released))
+            // A scroll fades the Reply pill out.
+            .on_scroll_wheel(cx.listener(|view, _, _, cx| view.scrolled(cx)))
             .child(list)
             .child(
                 div()
@@ -2268,6 +2288,7 @@ impl Render for TranscriptView {
             cx.notify();
         }
         let card = self.hover_card(window, cx);
+        let reply = self.reply_float(window, cx);
         let find_bar = self.find_bar();
         div()
             .relative()
@@ -2310,6 +2331,7 @@ impl Render for TranscriptView {
             .children(latest)
             .children(minimap)
             .children(card)
+            .children(reply)
             .children(find_bar)
             .on_action(cx.listener(|view, _: &crate::find::Next, _, cx| view.find_step(true, cx)))
             .on_action(
