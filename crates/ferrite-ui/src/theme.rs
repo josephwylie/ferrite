@@ -2210,6 +2210,15 @@ pub const ATTACH_CHIP_MAX_W: f32 = 32.0 * CH;
 pub const ATTACH_THUMB: f32 = 12.0;
 pub const ATTACH_REMOVE: f32 = SPACE_4;
 pub const ATTACH_REMOVE_ICON: f32 = 10.0;
+/// An image waiting in the tray (Claude's ≈90px card): the picture
+/// covering a `COMPOSER_THUMB` square at `R_CARD` in a 1px `LINE` ring,
+/// its caption its tooltip. Under the pointer its `×` stands
+/// `THUMB_REMOVE_INSET` in from the top-right corner: a `THUMB_REMOVE`
+/// circle of `paint::FLOAT` in a `LINE` ring, the `close` icon at
+/// `ATTACH_REMOVE_ICON` in `INK_STRONG`.
+pub const COMPOSER_THUMB: f32 = 88.0;
+pub const THUMB_REMOVE: f32 = 20.0;
+pub const THUMB_REMOVE_INSET: f32 = SPACE_1;
 /// In Solo the pending files ride inside the box, a row of chips
 /// `COMPOSER_INPUT_PAD_X` in and `COMPOSER_INPUT_PAD_T` under its top (or
 /// the queued row), `ATTACH_ROW_GAP` over the text.

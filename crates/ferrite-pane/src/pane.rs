@@ -3522,12 +3522,11 @@ pub(crate) fn prompt_chip(
     (gpui::size(px(width), line), element.into_any_element())
 }
 
-/// A sent image over its prompt's bubble (Claude's): the picture
-/// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
-/// nor its own size (covering that box when its header cannot be read), at
-/// `R_CARD` in a 1px `LINE`; its caption (`name · W×H · 41 KB`) is
-/// its tooltip. A click opens it in the Pane's preview, among its
-/// prompt's `gallery`.
+/// A sent image over its prompt's bubble (Claude's): its card
+/// (`attachments::thumbnail`) at the picture's own proportions, no larger
+/// than `THUMB_MAX_W` × `THUMB_MAX_H` nor its own size (covering that box
+/// when its header cannot be read). A click opens it in the lightbox,
+/// among its prompt's `gallery`.
 fn inline_image(
     block: BlockId,
     index: usize,
@@ -3535,14 +3534,8 @@ fn inline_image(
     gallery: &std::sync::Arc<[std::path::PathBuf]>,
     preview: &crate::preview::Preview,
 ) -> AnyElement {
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let facts = image_facts(path);
     // Whole pixels, so the ring sits on the pixel grid.
-    let (width, height) = match facts {
+    let size = match image_facts(path) {
         Some(ImageFacts {
             width: w,
             height: h,
@@ -3558,32 +3551,21 @@ fn inline_image(
         }
         _ => (theme::THUMB_MAX_W, theme::THUMB_MAX_H),
     };
-    let caption = image_caption(&name, facts);
     let host = preview.clone();
     let gallery = gallery.clone();
     let open = path.to_path_buf();
-    div()
-        .id(SharedString::from(format!("sent-image-{block:?}-{index}")))
-        .debug_selector(|| "sent-image".into())
-        .flex_shrink_0()
-        .rounded(px(theme::R_CARD))
-        .border_1()
-        .border_color(theme::paint::LINE)
-        .overflow_hidden()
-        .cursor_pointer()
-        .tooltip(ferrite_ui::menu::tooltip(caption))
-        .on_click(move |_, window, cx| {
-            cx.stop_propagation();
-            open_file(&open, &gallery, &host, window, cx);
-        })
-        .child(
-            gpui::img(path.to_path_buf())
-                .w(px(width))
-                .h(px(height))
-                .rounded(px(theme::R_CARD - theme::HAIRLINE_W))
-                .object_fit(gpui::ObjectFit::Cover),
-        )
-        .into_any_element()
+    crate::attachments::thumbnail(
+        SharedString::from(format!("sent-image-{block:?}-{index}")),
+        path,
+        size,
+    )
+    .debug_selector(|| "sent-image".into())
+    .cursor_pointer()
+    .on_click(move |_, window, cx| {
+        cx.stop_propagation();
+        open_file(&open, &gallery, &host, window, cx);
+    })
+    .into_any_element()
 }
 
 /// An image's caption: `nav-jitter.png · 580×320 · 41 KB` (its name alone

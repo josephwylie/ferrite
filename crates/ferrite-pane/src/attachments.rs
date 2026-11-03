@@ -1,15 +1,21 @@
-//! The files a draft carries, as shelf chips over the Composer (SPEC §5.5):
+//! The files a draft carries, over the Composer (SPEC §5.5): an image as a
+//! thumbnail card (Claude's), any other file as a shelf chip —
 //! `SHELF_CHIP_H` high at `R_CONTROL` on `paint::RAISED`, Geist `FS_META`,
-//! the image mark (or the file mark) and the name in `LINK_INK`. This module owns presentation and
+//! the file mark and the name in `LINK_INK`. The card is the sent image's
+//! too (`thumbnail`). This module owns presentation and
 //! opening (in the Pane's preview, the Panel's Preview tab: `Preview::open`); callers
 //! only supply paths and, for a draft, a removal callback. The prompt codec owns persistence. A draft's review comments
 //! (ADR 0021) ride the same shelf as one more chip. Its quotes (a
 //! selection's Reply, `crate::quote`) stand over the chips as Quote rows,
 //! the same row a sent prompt draws over its bubble (`quote_row`).
 
-use std::{path::PathBuf, rc::Rc};
+use std::{
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+};
 
-use gpui::{prelude::*, px, App, ElementId, IntoElement, Window};
+use gpui::{prelude::*, px, App, ElementId, IntoElement, SharedString, Window};
 
 use crate::preview::Preview;
 
@@ -92,15 +98,14 @@ impl Attachments {
     }
 }
 
-/// The files as shelf chips, wrapping (`SHELF_CHIP_H` on `paint::RAISED`),
-/// a mark — an image's is a real button (a tab stop,
-/// Enter/Space) that opens it in the Pane's preview, among the shelf's
-/// images; any other file's the `FILE` mark (the chip opens it there too) —
-/// then the name in `LINK_INK` cut at `ATTACH_CHIP_MAX_W` (a file name is
-/// machine text), and, on a draft, a quiet `×` that removes it (a button
-/// too). The buttons sit in the `PromptAttachment` key context, so their
-/// Enter never sends. A click anywhere else on a chip opens the image
-/// or the file.
+/// The draft's files: each image as a thumbnail card (`image_card`) in a
+/// wrapping row, then the other files as shelf chips, wrapping
+/// (`SHELF_CHIP_H` on `paint::RAISED`) — the `FILE` mark, the name in
+/// `LINK_INK` cut at `ATTACH_CHIP_MAX_W` (a file name is machine text),
+/// and, on a draft, a quiet `×` that removes it (a button). The buttons
+/// sit in the `PromptAttachment` key context, so their Enter never sends.
+/// A click on a card or a chip opens the image in the lightbox, among the
+/// tray's images, or the file in the Pane's preview.
 fn chips(attachments: Attachments) -> gpui::AnyElement {
     use ferrite_ui::pointer::Pointer as _;
     use ferrite_ui::theme;
@@ -116,59 +121,24 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         on_remove_quote,
         island,
     } = attachments;
-    let files_empty = files.is_empty();
-    let gallery: Vec<PathBuf> = files
+    let (images, others): (Vec<_>, Vec<_>) = files
+        .into_iter()
+        .enumerate()
+        .partition(|(_, path)| crate::image_viewer::is_image(path));
+    let gallery: Arc<[PathBuf]> = images.iter().map(|(_, path)| path.clone()).collect();
+    let cards: Vec<_> = images
         .iter()
-        .filter(|path| crate::image_viewer::is_image(path))
-        .cloned()
+        .map(|(index, path)| image_card(*index, path, &gallery, &preview, on_remove.clone()))
         .collect();
-    let gallery: Rc<[PathBuf]> = gallery.into();
-    let chips = files.into_iter().enumerate().map(|(index, path)| {
+    let others_empty = others.is_empty();
+    let chips = others.into_iter().map(|(index, path)| {
         let name = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let image = crate::image_viewer::is_image(&path);
-        let mark = if image {
-            let host = preview.clone();
-            let open = path.clone();
-            let gallery = gallery.clone();
-            ferrite_ui::components::button(("preview-attachment", index))
-                .tab_stop(true)
-                .p_0()
-                .size(px(theme::ATTACH_THUMB))
-                .rounded(px(theme::R_TIGHT))
-                .key_context("PromptAttachment")
-                .accessibility_label(format!("Preview {name}"))
-                .tooltip("Preview image")
-                .child(ferrite_ui::icons::icon(
-                    ferrite_ui::icons::IMAGE,
-                    theme::ATTACH_THUMB,
-                    theme::LINK_INK,
-                ))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    host.open(open.clone(), None, &gallery, window, cx);
-                })
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .justify_center()
-                .size(px(theme::ATTACH_THUMB))
-                .child(ferrite_ui::icons::icon(
-                    ferrite_ui::icons::FILE,
-                    theme::ATTACH_THUMB,
-                    theme::LINK_INK,
-                ))
-                .into_any_element()
-        };
         let host = preview.clone();
         let open = path.clone();
-        let gallery = gallery.clone();
         div()
             .id(("attachment", index))
             .flex()
@@ -189,7 +159,19 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .font_weight(theme::W_BODY)
             .text_color(rgb(theme::LINK_INK))
             .whitespace_nowrap()
-            .child(mark)
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .size(px(theme::ATTACH_THUMB))
+                    .child(ferrite_ui::icons::icon(
+                        ferrite_ui::icons::FILE,
+                        theme::ATTACH_THUMB,
+                        theme::LINK_INK,
+                    )),
+            )
             .child(
                 div()
                     .min_w_0()
@@ -210,7 +192,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             })
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
-                host.open(open.clone(), None, &gallery, window, cx);
+                host.open(open.clone(), None, &[], window, cx);
             })
     });
     let review = (review > 0).then(|| review_chip(review, on_drop_review));
@@ -225,7 +207,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             quote_row(index, passage, remove)
         })
         .collect();
-    let has_chips = !files_empty || review.is_some();
+    let has_chips = !others_empty || review.is_some();
     let chips = div()
         .flex()
         .flex_wrap()
@@ -235,6 +217,14 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .max_w_full()
         .children(chips)
         .children(review);
+    let has_cards = !cards.is_empty();
+    let cards = div()
+        .flex()
+        .flex_wrap()
+        .gap(px(theme::SPACE_2))
+        .min_w_0()
+        .max_w_full()
+        .children(cards);
     div()
         .id(id)
         .when(island, |shelf| {
@@ -246,8 +236,127 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .min_w_0()
         .max_w_full()
         .children(quotes)
+        .when(has_cards, |shelf| shelf.child(cards))
         .when(has_chips, |shelf| shelf.child(chips))
         .into_any_element()
+}
+
+/// An image waiting in the tray as Claude shows one: the picture covering
+/// a `COMPOSER_THUMB` card (`thumbnail`), a button — a tab stop,
+/// Enter/Space — that opens it in the lightbox among the tray's images;
+/// on a draft, its `×` in the corner — shown under the pointer or on
+/// keyboard focus — removes it.
+fn image_card(
+    index: usize,
+    path: &Path,
+    gallery: &Arc<[PathBuf]>,
+    preview: &Preview,
+    on_remove: Option<Remove>,
+) -> gpui::AnyElement {
+    use ferrite_ui::theme;
+    use gpui::div;
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let group = SharedString::from(format!("tray-image-{index}"));
+    let host = preview.clone();
+    let open = path.to_path_buf();
+    let gallery = gallery.clone();
+    let card = ferrite_ui::components::button(("preview-attachment", index))
+        .tab_stop(true)
+        .p_0()
+        .size(px(theme::COMPOSER_THUMB))
+        .rounded(px(theme::R_CARD))
+        .key_context("PromptAttachment")
+        .accessibility_label(format!("Preview {name}"))
+        .child(thumbnail(
+            ("tray-image", index),
+            path,
+            (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
+        ))
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            host.open(open.clone(), None, &gallery, window, cx);
+        });
+    let remove = on_remove.map(|remove| {
+        let removed = path.to_path_buf();
+        div()
+            .debug_selector(move || format!("tray-image-{index}-remove"))
+            .absolute()
+            .top(px(theme::THUMB_REMOVE_INSET))
+            .right(px(theme::THUMB_REMOVE_INSET))
+            .child(
+                ferrite_ui::components::button(("remove-attachment", index))
+                    // Clear until the pointer is over the card or the
+                    // keyboard reaches it: a tab stop either way.
+                    .opacity(0.)
+                    .group_hover(group.clone(), |style| style.opacity(1.))
+                    .focus_visible(|style| ferrite_ui::components::control_focus(style).opacity(1.))
+                    .tab_stop(true)
+                    .p_0()
+                    .size(px(theme::THUMB_REMOVE))
+                    .rounded_full()
+                    .bg(theme::paint::FLOAT)
+                    .border_1()
+                    .border_color(theme::paint::LINE)
+                    .key_context("PromptAttachment")
+                    .accessibility_label(format!("Remove {name}"))
+                    .tooltip(format!("Remove {}", path.display()))
+                    .child(ferrite_ui::icons::icon(
+                        ferrite_ui::icons::CLOSE,
+                        theme::ATTACH_REMOVE_ICON,
+                        theme::INK_STRONG,
+                    ))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        remove(&removed, window, cx);
+                    }),
+            )
+    });
+    div()
+        .id(("tray-image-card", index))
+        .debug_selector(move || format!("tray-image-{index}"))
+        .group(group)
+        .relative()
+        .flex_shrink_0()
+        .child(card)
+        .children(remove)
+        .into_any_element()
+}
+
+/// An image as a card, in the tray and over a sent prompt (Claude's): the
+/// picture covering `width` × `height` at `R_CARD` in a 1px `LINE` ring,
+/// its caption (`name · W×H · 41 KB`, `pane::image_caption`) its tooltip.
+/// The caller wires what a click does.
+pub(crate) fn thumbnail(
+    id: impl Into<ElementId>,
+    path: &Path,
+    (width, height): (f32, f32),
+) -> gpui::Stateful<gpui::Div> {
+    use ferrite_ui::theme;
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let caption = crate::pane::image_caption(&name, crate::pane::image_facts(path));
+    gpui::div()
+        .id(id)
+        .flex_shrink_0()
+        .rounded(px(theme::R_CARD))
+        .border_1()
+        .border_color(theme::paint::LINE)
+        .overflow_hidden()
+        .tooltip(ferrite_ui::menu::tooltip(caption))
+        .child(
+            gpui::img(path.to_path_buf())
+                .w(px(width))
+                .h(px(height))
+                .rounded(px(theme::R_CARD - theme::HAIRLINE_W))
+                .object_fit(gpui::ObjectFit::Cover),
+        )
 }
 
 /// A quoted passage as Claude draws one, over a draft's line and over the

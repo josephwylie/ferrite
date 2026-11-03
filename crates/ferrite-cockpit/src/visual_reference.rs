@@ -2248,13 +2248,26 @@ fn subagents() -> (Scene, Setup) {
 
 /// Mid-turn with two prompts held for the next turn, a third being typed,
 /// and two files attached to it.
+/// The Composer carrying an image and a file, two prompts queued, under a
+/// sent prompt that carried an image too: the picture over its bubble,
+/// the tray's thumbnail card over the line (Claude's).
 fn composer() -> (Scene, Setup) {
     let mut scene = Scene::new("composer");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Composer queue polish");
-    scene
-        .core
-        .send(thread, "Tighten the queued prompt rows.".into());
+    let shot = scene.root.join("queued-rows.png");
+    let _ = std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/research/ferrite-transcript-implementation-2026-09-06/wide.png"),
+        &shot,
+    );
+    scene.core.send(
+        thread,
+        ferrite_core::prompt_files::compose(
+            "Tighten the queued prompt rows; this is how they stack now.",
+            &[shot.clone()],
+        ),
+    );
     feed.boot(Provider::Claude, 104_000)
         .tool(
             "read",
@@ -2271,12 +2284,6 @@ fn composer() -> (Scene, Setup) {
     );
     let notes = scene.root.join("queue-notes.md");
     std::fs::write(&notes, "# Queue notes\n").expect("write fixture attachment");
-    let shot = scene.root.join("queued-rows.png");
-    let _ = std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/research/ferrite-transcript-implementation-2026-09-06/wide.png"),
-        &shot,
-    );
     let setup: Setup = Box::new(move |view, _, cx| {
         let files: Vec<PathBuf> = [shot, notes].into_iter().filter(|p| p.exists()).collect();
         view.panes[0].composer.update(cx, |composer, cx| {

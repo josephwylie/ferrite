@@ -418,3 +418,71 @@ fn the_plus_menu_opens_each_plugins_commands(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// An image in the tray is its picture, a `COMPOSER_THUMB` card (Claude's),
+/// not a chip: a click opens it in the lightbox among the tray's images,
+/// and its corner `×` removes it alone. Any other file keeps its chip.
+#[gpui::test]
+fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("tray-thumbnail", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let files = [
+        std::path::PathBuf::from("/tmp/tray-a.png"),
+        std::path::PathBuf::from("/tmp/notes.md"),
+        std::path::PathBuf::from("/tmp/tray-b.jpg"),
+    ];
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.add_files(&files, cx));
+    });
+    tick(cx);
+    let card = cx
+        .debug_bounds("tray-image-0")
+        .expect("the first image's card");
+    let thumb = px(ferrite_ui::theme::COMPOSER_THUMB);
+    assert_eq!((card.size.width, card.size.height), (thumb, thumb));
+    assert!(cx.debug_bounds("tray-image-2").is_some(), "the second's");
+    assert!(
+        cx.debug_bounds("tray-image-1").is_none(),
+        "a file is no card"
+    );
+    let tray = cx
+        .debug_bounds("pending-attachment-tray")
+        .expect("the tray");
+    assert!(
+        tray.size.height > thumb,
+        "the file's chip rides under the cards"
+    );
+
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("image-viewer").is_some(),
+        "a click opens the lightbox"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let remove = cx
+        .debug_bounds("tray-image-0-remove")
+        .expect("the card's ×, under the pointer");
+    assert!(
+        remove.right() <= card.right() && remove.top() >= card.top(),
+        "in the corner: {remove:?} / {card:?}"
+    );
+    cx.simulate_click(remove.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let prompt = view.panes[0].composer.read(cx).prompt();
+        assert_eq!(
+            ferrite_core::prompt_files::paths(&prompt, None),
+            [files[1].clone(), files[2].clone()],
+            "the × removes that image alone"
+        );
+    });
+}
